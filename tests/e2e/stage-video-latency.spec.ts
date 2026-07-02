@@ -97,6 +97,27 @@ async function setNdiActive(page: Page, active: boolean): Promise<void> {
   }, active);
 }
 
+/** Drive the per-display dropped-frame + freeze counters (#523) — the SAME
+ * pair the getStats beacon writes. `null` clears them. */
+async function setDroppedFrames(
+  page: Page,
+  counts: { dropped: number; freeze: number } | null,
+): Promise<void> {
+  await page.evaluate((value) => {
+    (
+      window as unknown as {
+        __presenterStageSetDroppedFrames?: (
+          dropped: number | null,
+          freeze: number | null,
+        ) => void;
+      }
+    ).__presenterStageSetDroppedFrames?.(
+      value ? value.dropped : null,
+      value ? value.freeze : null,
+    );
+  }, counts);
+}
+
 test("stage shows true server→display latency as a separate readout, with honest n/a", async ({
   context,
 }) => {
@@ -148,6 +169,65 @@ test("stage shows true server→display latency as a separate readout, with hone
   await setNdiActive(stagePage, false);
   await expect(videoEl).toHaveCount(0);
   await expect(connectionEl).toBeVisible();
+
+  // browser-console-zero-errors: no errors/warnings the whole time.
+  expect(consoleMessages).toEqual([]);
+
+  await stagePage.close();
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// #523 — the stage shows per-display dropped-frame (+freeze) counts beside
+// the latency figure, so "how is this TV doing" is visible at a glance (a
+// low latency reading can otherwise hide a TV that is dropping frames to
+// achieve it). Sourced from the SAME getStats inbound-rtp sample the health
+// beacon already reads; this test drives it via the deterministic test hook
+// (`__presenterStageSetDroppedFrames`), the same signal the beacon path
+// writes. The append-format math (⬇N, +❄N only when nonzero) is unit-tested
+// in `status_bar.rs`.
+// ─────────────────────────────────────────────────────────────────────────
+
+test("stage shows dropped-frame + freeze count beside the video latency", async ({
+  context,
+}) => {
+  const consoleMessages: string[] = [];
+  const stagePage = await openVideoStage(context);
+  stagePage.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  const videoEl = stagePage.locator(".stage__video-latency");
+
+  await setNdiActive(stagePage, true);
+  await setVideoLatency(stagePage, 84);
+  await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms/);
+
+  // No beacon has landed yet → the readout shows the latency ALONE, no
+  // fabricated drop count.
+  await expect(videoEl).not.toContainText("⬇");
+
+  // A beacon lands with zero drops/freezes → shown as "⬇0" (honest zero, not
+  // hidden — the whole point is a per-TV health signal at a glance).
+  await setDroppedFrames(stagePage, { dropped: 0, freeze: 0 });
+  await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms\s*·\s*⬇0/);
+  await expect(videoEl).not.toContainText("❄");
+
+  // Drops accumulate → the count updates live.
+  await setDroppedFrames(stagePage, { dropped: 128, freeze: 0 });
+  await expect(videoEl).toContainText(/⬇128/);
+  await expect(videoEl).not.toContainText("❄");
+
+  // A freeze count is present too → shown alongside the drop count.
+  await setDroppedFrames(stagePage, { dropped: 128, freeze: 2 });
+  await expect(videoEl).toContainText(/⬇128\s*❄2/);
+
+  // Reconnect (or no getStats data) clears it → readout falls back to the
+  // latency alone, never a stale count.
+  await setDroppedFrames(stagePage, null);
+  await expect(videoEl).not.toContainText("⬇");
+  await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms/);
 
   // browser-console-zero-errors: no errors/warnings the whole time.
   expect(consoleMessages).toEqual([]);

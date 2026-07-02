@@ -15,7 +15,7 @@ use leptos::wasm_bindgen::{JsCast, JsValue};
 use leptos::web_sys::RtcPeerConnection;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_frame_stats::{snapshot_present_gaps, FrameStats};
+use super::ndi_frame_stats::{snapshot_present_gaps, DroppedFramesSetter, FrameStats};
 use super::ndi_profile::{local_storage, profile_mode_is_compat, profile_mode_name};
 
 /// localStorage key for the persistent per-display identity used in stats
@@ -55,6 +55,7 @@ pub(crate) fn post_stats_beacon(
     source_id: &str,
     stats: &FrameStats,
     clock_offset: Option<(f64, f64)>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     let (max_gap, over100, fps) = snapshot_present_gaps(stats);
     let video_latency_ms = stats.video_latency_ms.get();
@@ -70,6 +71,7 @@ pub(crate) fn post_stats_beacon(
                 fps,
                 video_latency_ms,
                 clock_offset,
+                dropped_frames_setter,
             )
             .await;
         }
@@ -85,12 +87,13 @@ pub(crate) fn maybe_post_beacon(
     source_id: &str,
     stats: &FrameStats,
     clock_offset: Option<(f64, f64)>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     tick_count.set(tick_count.get().wrapping_add(1));
     if tick_count.get() % 15 != 0 {
         return;
     }
-    post_stats_beacon(pc, source_id, stats, clock_offset);
+    post_stats_beacon(pc, source_id, stats, clock_offset, dropped_frames_setter);
 }
 
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
@@ -121,6 +124,12 @@ struct InboundVideoStats {
     // pre-first-SR gotcha), distinguished server-side.
     estimated_playout: Option<f64>,
     report_ts: Option<f64>,
+    // #525 (step 1) device-decode probe: is this display decoding H264 in
+    // HARDWARE or falling back to SOFTWARE? A software decode on a "smart TV"
+    // box is the prime suspect for a large decode+present residual (SD1 read
+    // ~90ms above sd2-4). Purely diagnostic — read-only, no playback change.
+    decoder_implementation: Option<String>,
+    power_efficient_decoder: Option<bool>,
 }
 
 /// One pass over the RtcStatsReport map: the inbound-rtp video entry's fields,
@@ -150,6 +159,8 @@ fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
                 codec_id = get("codecId").as_string();
                 out.estimated_playout = get("estimatedPlayoutTimestamp").as_f64();
                 out.report_ts = get("timestamp").as_f64();
+                out.decoder_implementation = get("decoderImplementation").as_string();
+                out.power_efficient_decoder = get("powerEfficientDecoder").as_bool();
             }
         }
     }
@@ -175,8 +186,27 @@ async fn post_client_stats(
     presented_fps: Option<f64>,
     video_latency_ms: Option<f64>,
     clock_offset: Option<(f64, f64)>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     let inbound = extract_inbound_video(report);
+
+    // #523: push this beacon's dropped-frame + freeze counts to the on-screen
+    // readout. `None` only when the browser's getStats reports NEITHER field
+    // (honest "no data" rather than a misleading 0); a report with at least
+    // one of the two fields present treats the other as 0 (freezeCount and
+    // framesDropped are both cumulative counters that start at 0, so an
+    // absent sibling field alongside a present one is "not yet incremented",
+    // not "unknown").
+    if let Some(setter) = &dropped_frames_setter {
+        let counts = match (inbound.frames_dropped, inbound.freeze_count) {
+            (None, None) => None,
+            (dropped, freeze) => Some((
+                dropped.unwrap_or(0.0).round() as u32,
+                freeze.unwrap_or(0.0).round() as u32,
+            )),
+        };
+        setter(counts);
+    }
 
     // #509 (T0): full userAgent — the exact WebView/Chrome version per real
     // stage TV, which decides whether the playout field is available there.
@@ -216,6 +246,11 @@ async fn post_client_stats(
         // #509 (T0) device-capability probe fields.
         "estimatedPlayoutTimestamp": inbound.estimated_playout,
         "reportTimestamp": inbound.report_ts,
+        // #525 (step 1) device-decode probe — is this display's H264 decode
+        // HARDWARE or SOFTWARE? Diagnostic only; read live to find where SD1's
+        // decode+present residual actually lives before any playback change.
+        "decoderImplementation": inbound.decoder_implementation,
+        "powerEfficientDecoder": inbound.power_efficient_decoder,
         "userAgent": user_agent,
         // #514 observability: the smoothed TRUE server→display latency this
         // display currently SHOWS (#512; null = n/a) plus the /ndi/time clock

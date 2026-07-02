@@ -39,6 +39,16 @@ pub struct StageContext {
     /// `ndi_clock_offset`). A later ticket (#512, T4) reads this to convert a
     /// `report.timestamp` reading into the server pipeline-clock domain.
     pub clock_offset: RwSignal<Option<(f64, f64)>>,
+    /// Per-display dropped-frame + freeze counts (#523): `Some((frames_dropped,
+    /// freeze_count))` from the SAME getStats inbound-rtp sample the health
+    /// beacon already reads (`ndi_beacon::extract_inbound_video`), pushed to
+    /// this signal each time a beacon is posted (~every
+    /// `Watchdog::RVFC_BEACON_FRAME_PERIOD` frames or every 15th health tick —
+    /// getStats is async, so this updates on the BEACON cadence, not the 1s
+    /// video-latency cadence). Shown beside `video_latency_ms` in the stage's
+    /// "server→displej · N ms · ⬇N" readout. `None` when no beacon has landed
+    /// yet, or the browser's getStats reports neither field.
+    pub dropped_frames: RwSignal<Option<(u32, u32)>>,
 }
 
 impl StageContext {
@@ -55,6 +65,7 @@ impl StageContext {
             video_latency_ms: RwSignal::new(None),
             ndi_frames_live: RwSignal::new(false),
             clock_offset: RwSignal::new(None),
+            dropped_frames: RwSignal::new(None),
         }
     }
 }

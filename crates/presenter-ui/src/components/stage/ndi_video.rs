@@ -17,7 +17,7 @@ use leptos::web_sys::{
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_clock_offset::ClockOffsetSetter;
-use super::ndi_frame_stats::{FramesLiveSetter, VideoLatencySetter};
+use super::ndi_frame_stats::{DroppedFramesSetter, FramesLiveSetter, VideoLatencySetter};
 use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
 use crate::state::stage::StageContext;
 
@@ -84,6 +84,17 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let clock_offset_setter: Option<ClockOffsetSetter> = clock_offset_sig
         .map(|sig| std::rc::Rc::new(move |v: Option<(f64, f64)>| sig.set(v)) as ClockOffsetSetter);
 
+    // #523: same shared-signal pattern for the per-display dropped-frame +
+    // freeze counts shown beside the latency figure. Written from the getStats
+    // beacon path (both the rVFC frame-count-driven beacon and the 1s ticker's
+    // beacon share this setter — see `Watchdog::install`). Owned by the parent
+    // StagePage, so it survives this mount/unmount. No StageContext → no
+    // setter (None).
+    let dropped_frames_sig = use_context::<StageContext>().map(|ctx| ctx.dropped_frames);
+    let dropped_frames_setter: Option<DroppedFramesSetter> = dropped_frames_sig.map(|sig| {
+        std::rc::Rc::new(move |v: Option<(u32, u32)>| sig.set(v)) as DroppedFramesSetter
+    });
+
     // Holds the active connection: the WHEP session + the watchdog observing
     // its health. Cleanup must close both — see on_cleanup below.
     struct ActiveConnection {
@@ -116,6 +127,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let video_latency_setter_for_effect = video_latency_setter;
     let frames_live_setter_for_effect = frames_live_setter;
     let clock_offset_setter_for_effect = clock_offset_setter;
+    let dropped_frames_setter_for_effect = dropped_frames_setter;
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
         let source_id = source_id_for_effect.clone();
@@ -123,6 +135,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         let video_latency_setter = video_latency_setter_for_effect.clone();
         let frames_live_setter = frames_live_setter_for_effect.clone();
         let clock_offset_setter = clock_offset_setter_for_effect.clone();
+        let dropped_frames_setter = dropped_frames_setter_for_effect.clone();
         spawn_local(async move {
             // The reconnect-trigger flag: when a watchdog fires, it sets this
             // flag; the loop drains it and reconnects.
@@ -197,6 +210,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             video_latency_setter.clone(),
                             frames_live_setter.clone(),
                             clock_offset_setter.clone(),
+                            dropped_frames_setter.clone(),
                             move || flag.set(true),
                         );
 

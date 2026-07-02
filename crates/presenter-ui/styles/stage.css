@@ -179,6 +179,13 @@ body.stage {
     50% { opacity: 0.7; }
 }
 
+/* #524: `.stage__connection` and `.stage__video-latency` are DIAGNOSTIC-ONLY
+   readouts — close-up info for the operator, not primary stage content. They
+   used to `autofit_effect_tabular` (scale font to FILL the box), which is
+   exactly why they looked too prominent. Fixed instead: a small fixed
+   font-size + low opacity, still legible up close. Rust no longer calls
+   autofit for these two elements (see `status_bar.rs`); the box's
+   width/height/position are otherwise unchanged. */
 .stage__connection {
     position: absolute;
     right: 2%;
@@ -186,6 +193,8 @@ body.stage {
     width: 24%;
     height: 2.5%;
     color: #38bdf8;
+    opacity: 0.45;
+    font-size: 1vw;
     font-family: "Courier New", Courier, monospace;
     font-weight: 600;
     letter-spacing: 0.05em;
@@ -199,9 +208,9 @@ body.stage {
 
 /* #479: stage-side VIDEO latency — a SEPARATE compact readout sitting just
    ABOVE the connection readout (same right corner). Distinguished from the
-   connection figure by a dimmer teal. tabular-nums is REQUIRED by the
-   autofit_effect_tabular coupling (equal char-length ⇒ equal width). Only
-   rendered when video frames are flowing. */
+   connection figure by a dimmer teal. Only rendered when video frames are
+   flowing. #524: small fixed font-size + low opacity — see the comment on
+   `.stage__connection` above. */
 .stage__video-latency {
     position: absolute;
     right: 2%;
@@ -209,7 +218,8 @@ body.stage {
     width: 24%;
     height: 2.5%;
     color: #7dd3fc;
-    opacity: 0.85;
+    opacity: 0.45;
+    font-size: 1vw;
     font-family: "Courier New", Courier, monospace;
     font-weight: 600;
     letter-spacing: 0.05em;

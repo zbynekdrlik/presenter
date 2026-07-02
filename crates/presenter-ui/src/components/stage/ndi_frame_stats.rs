@@ -36,6 +36,16 @@ pub(crate) type VideoLatencySetter = Rc<dyn Fn(Option<f64>)>;
 /// gate entirely (e.g. a video element with no StageContext).
 pub(crate) type FramesLiveSetter = Rc<dyn Fn(bool)>;
 
+/// Callback that publishes per-display dropped-frame + freeze counts (#523) to
+/// the shared `StageContext::dropped_frames` signal driving the stage's
+/// "⬇N" (and "❄N") health readout beside the latency figure. Fed
+/// `(frames_dropped, freeze_count)` from the SAME getStats inbound-rtp sample
+/// the health beacon already reads (`ndi_beacon::extract_inbound_video`) —
+/// this updates on the BEACON cadence (getStats is async and only sampled
+/// there), not the 1s video-latency cadence. `None` (no setter) disables the
+/// readout entirely (e.g. a video element with no StageContext).
+pub(crate) type DroppedFramesSetter = Rc<dyn Fn(Option<(u32, u32)>)>;
+
 /// How long after the last presented frame the video is considered no longer
 /// "live" (#500). Once `now - last_frame_at` exceeds this, the 1s health ticker
 /// flips `ndi_frames_live` back to `false` so a genuinely silent/stopped source
@@ -403,6 +413,7 @@ pub(crate) fn start_rvfc_frame_observer(
     clock_offset: &Rc<ClockOffsetEstimator>,
     video_latency_setter: Option<VideoLatencySetter>,
     frames_live_setter: Option<FramesLiveSetter>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) -> bool {
     if !video_supports_rvfc(video) {
         return false;
@@ -436,7 +447,13 @@ pub(crate) fn start_rvfc_frame_observer(
             update_video_latency(&meta, &stats, &video_latency_setter, network_one_way_ms);
             let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
-                post_stats_beacon(&pc, &source_id, &stats, clock_offset.current());
+                post_stats_beacon(
+                    &pc,
+                    &source_id,
+                    &stats,
+                    clock_offset.current(),
+                    dropped_frames_setter.clone(),
+                );
             }
             schedule_video_frame_callback(&video, &holder);
         })
