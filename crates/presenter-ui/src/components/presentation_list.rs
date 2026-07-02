@@ -22,24 +22,37 @@ pub fn PresentationList() -> impl IntoView {
         ctx.selected_entry_index.set(entry_index);
         crate::state::session::set("currentPresentationId", &id);
 
-        // Check slides cache first
-        let cached = ctx.slides_cache.get_untracked().get(&id).cloned();
-        if let Some(slides) = cached {
-            ctx.selected_presentation.update(|p| {
-                if let Some(pres) = p.as_mut() {
-                    if pres.id.to_string() == id {
-                        pres.slides = slides;
-                    }
-                }
-            });
-        }
+        // #515: NO synchronous "show cached slides first" step here anymore.
+        // As written (guarded by `pres.id.to_string() == id`, checked against
+        // the CURRENT pre-click selection), that branch could only ever fire
+        // when RE-selecting the presentation ALREADY on screen — it can't
+        // help a genuine switch to a different presentation, since `pres`
+        // still holds the OLD id at click time. For a re-select it was
+        // actively harmful: `ctx.slides_cache` is populated only from GET
+        // responses (never updated by a save), so re-clicking an
+        // already-open song right after editing it (e.g. typing a stage
+        // hand-off message) unconditionally reset the just-edited slide back
+        // to its pre-edit cached content, synchronously, with no guard at
+        // all. The `get_presentation` fetch below (seq-guarded) is the only
+        // source of truth needed here.
 
         // Capture signals OUTSIDE async block - context may not be available inside spawn_local
         let slides_cache_signal = ctx.slides_cache;
         let selected_presentation_signal = ctx.selected_presentation;
         let id_clone = id.clone();
+        // #515: capture the edit generation BEFORE issuing the fetch. If a
+        // slide-content save lands while this GET is still in flight (a
+        // very plausible race right after opening a song and immediately
+        // typing a stage/main/translation edit), the response below reflects
+        // pre-edit content — apply it ONLY if no save has landed since,
+        // otherwise it would clobber the newer edit with stale data.
+        let seq_at_fetch = op.slide_edit_seq.get_untracked();
+        let slide_edit_seq = op.slide_edit_seq;
         leptos::task::spawn_local(async move {
             if let Ok(detail) = crate::api::presentations::get_presentation(&id_clone).await {
+                if slide_edit_seq.get_untracked() != seq_at_fetch {
+                    return;
+                }
                 // Cache slides
                 slides_cache_signal.update(|cache| {
                     cache.insert(id_clone.clone(), detail.presentation.slides.clone());

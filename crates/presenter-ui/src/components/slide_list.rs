@@ -119,6 +119,15 @@ fn save_all_fields_from_dom(
         }
     }
 
+    // #515: bump the edit generation SYNCHRONOUSLY, the moment a genuine
+    // (non-no-op) edit is committed to saving — NOT when the save's network
+    // round-trip later completes. A `get_presentation` refetch (opening /
+    // re-opening the presentation) captures this counter before it fires;
+    // bumping here, before the async save even starts, guarantees that ANY
+    // such refetch still in flight at this point is provably stale no
+    // matter which of the two async calls happens to resolve first.
+    op.slide_edit_seq.update(|seq| *seq += 1);
+
     save_with_status(
         pres_id.to_string(),
         slide_id.to_string(),
@@ -127,6 +136,7 @@ fn save_all_fields_from_dom(
         stage,
         group,
         op.save_status,
+        selected_pres,
     );
 }
 
@@ -430,13 +440,21 @@ pub fn SlideList() -> impl IntoView {
                         let is_focused = focused_slide.as_deref() == Some(&slide_id);
                         let main_warning = field_has_warning(&main_text, line_limit);
                         let translation_warning = field_has_warning(&translation_text, line_limit);
-                        let stage_warning = field_has_warning(&stage_text, line_limit);
-                        let any_warning = slide_has_any_warning(&main_text, &translation_text, &stage_text, line_limit);
+                        // #515: the stage field is free-form speaker/reading
+                        // text (it feeds the fullscreen "stage" layout) and
+                        // is explicitly EXEMPT from the lyrics per-line
+                        // character-limit warning — it may run longer than
+                        // a projected lyric line.
+                        let stage_warning = false;
+                        let any_warning =
+                            slide_has_any_warning(&main_text, &translation_text, line_limit);
 
-                        // Format text with HTML for live mode display
+                        // Format text with HTML for live mode display. The
+                        // stage field never gets the overflow highlight
+                        // (limit 0 disables it) for the same reason.
                         let main_html = format_multiline(&main_text, line_limit);
                         let translation_html = format_multiline(&translation_text, line_limit);
-                        let stage_html = format_multiline(&stage_text, line_limit);
+                        let stage_html = format_multiline(&stage_text, 0);
 
                         let next_slide_id = presentation.slides.get(i + 1).map(|s| s.id.to_string());
 
@@ -856,12 +874,13 @@ pub fn SlideList() -> impl IntoView {
                                                         data-field="stage"
                                                         rows="2"
                                                         prop:value=stage_text.clone()
-                                                        on:input=move |ev| {
-                                                                let val = event_target_value(&ev);
-                                                                stage_warn_sig.set(field_has_warning(&val, line_limit));
+                                                        on:input=move |_ev| {
+                                                                // #515: stage text is free-form — it never
+                                                                // contributes a line-limit warning, so
+                                                                // stage_warn_sig stays at its initial `false`.
                                                                 let m = main_warn_sig.get_untracked();
                                                                 let t = trans_warn_sig.get_untracked();
-                                                                any_warn_sig.set(m || t || stage_warn_sig.get_untracked());
+                                                                any_warn_sig.set(m || t);
                                                             }
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();

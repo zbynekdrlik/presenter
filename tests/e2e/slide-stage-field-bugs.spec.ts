@@ -26,6 +26,24 @@ import {
 
 test.describe.configure({ timeout: 180_000 });
 
+const ALLOWED_CONSOLE_NOISE = [
+  /integrity.*ignored.*preload/i,
+  /ResizeObserver loop/i,
+];
+
+function collectConsoleErrors(page: Page): string[] {
+  const messages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      const text = msg.text();
+      if (!ALLOWED_CONSOLE_NOISE.some((pattern) => pattern.test(text))) {
+        messages.push(`[${msg.type()}] ${text}`);
+      }
+    }
+  });
+  return messages;
+}
+
 let server: ServerHandle | undefined;
 let baseURL = "";
 
@@ -104,6 +122,7 @@ async function openOperatorEditMode(page: Page) {
 test("editing the stage field survives a concurrent presentation refetch (#515)", async ({
   page,
 }) => {
+  const consoleErrors = collectConsoleErrors(page);
   await openOperatorEditMode(page);
   const slideId = slideIds[0];
 
@@ -171,11 +190,14 @@ test("editing the stage field survives a concurrent presentation refetch (#515)"
     (s: { id: string }) => s.id === slideId,
   );
   expect(slide.content.stage.value).toBe(NEW_TEXT);
+
+  expect(consoleErrors).toEqual([]);
 });
 
 test("stage field text over the line limit never warns; main/translation still do (#515)", async ({
   page,
 }) => {
+  const consoleErrors = collectConsoleErrors(page);
   await openOperatorEditMode(page);
   // Slide 1 (own slide, independent of the race test's slide 0) — seeded
   // with a short, non-empty stage value so its preview div is mounted from
@@ -221,4 +243,6 @@ test("stage field text over the line limit never warns; main/translation still d
   );
   await expect(mainPreview).toHaveAttribute("data-warning", "true");
   await expect(warningBanner).toHaveAttribute("data-visible", "true");
+
+  expect(consoleErrors).toEqual([]);
 });

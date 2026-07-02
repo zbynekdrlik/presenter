@@ -26,15 +26,13 @@ pub(super) fn field_has_warning(text: &str, limit: u32) -> bool {
     limit > 0 && text.lines().any(|line| line.chars().count() as u32 > limit)
 }
 
-pub(super) fn slide_has_any_warning(
-    main: &str,
-    translation: &str,
-    stage: &str,
-    limit: u32,
-) -> bool {
-    field_has_warning(main, limit)
-        || field_has_warning(translation, limit)
-        || field_has_warning(stage, limit)
+/// Whether ANY lyrics field on a slide exceeds the per-line character limit.
+///
+/// #515: the stage field is intentionally NOT a parameter here — it is
+/// free-form speaker/reading text and must never contribute to this
+/// warning, unlike the lyrics `main`/`translation` fields.
+pub(super) fn slide_has_any_warning(main: &str, translation: &str, limit: u32) -> bool {
+    field_has_warning(main, limit) || field_has_warning(translation, limit)
 }
 
 /// Apply is-focused class to a slide card via DOM manipulation.
@@ -147,21 +145,19 @@ mod tests {
     }
 
     #[test]
-    fn slide_has_any_warning_considers_all_fields() {
+    fn slide_has_any_warning_considers_lyrics_fields() {
         let ok = "short";
         let long = "abcdefghijklmnopqrstuvwxyz0123456";
-        assert!(!slide_has_any_warning(ok, ok, ok, 32));
-        assert!(slide_has_any_warning(long, ok, ok, 32));
-        assert!(slide_has_any_warning(ok, long, ok, 32));
-        assert!(slide_has_any_warning(ok, ok, long, 32));
+        assert!(!slide_has_any_warning(ok, ok, 32));
+        assert!(slide_has_any_warning(long, ok, 32));
+        assert!(slide_has_any_warning(ok, long, 32));
     }
 
     #[test]
     fn slide_has_any_warning_ignores_stage_field_length_entirely() {
-        // #515 (RED): the stage field is free-form speaker/reading text and
-        // must NEVER trip the lyrics per-line character-limit warning — only
-        // main/translation should. Currently `slide_has_any_warning` ORs the
-        // stage field in just like main/translation, so this fails today.
+        // #515: a long stage field must NOT be passed to (or trip)
+        // slide_has_any_warning — it is free-form speaker text, exempt from
+        // the lyrics per-line character limit.
         let ok = "short";
         let over_limit_stage = "abcdefghijklmnopqrstuvwxyz0123456";
         assert!(
@@ -169,7 +165,7 @@ mod tests {
             "sanity: this text IS over the limit"
         );
         assert!(
-            !slide_has_any_warning(ok, ok, over_limit_stage, 32),
+            !slide_has_any_warning(ok, ok, 32),
             "a slide with only ok main/translation must not warn regardless of any stage text"
         );
     }
