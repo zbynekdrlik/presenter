@@ -33,6 +33,7 @@ mod ndi_control;
 mod osc;
 mod presentations;
 mod seed;
+mod slide_stage_layout;
 pub(crate) mod slides;
 pub(crate) mod stage;
 mod stage_display;
@@ -112,6 +113,12 @@ pub struct AppState {
     /// In-memory caches: presentation / group-color / ableset (see [`CacheManager`]).
     caches: CacheManager,
     stage_layout: Arc<RwLock<String>>,
+    /// Serializes slide triggers (`update_stage_state`) so the stage-state
+    /// write, the per-slide layout-marker switch (#515) and the resolution
+    /// broadcast of one trigger can never interleave with another trigger's
+    /// (concurrent sources: operator HTTP, tablet, Companion, OSC, AI tools).
+    /// Only `update_stage_state` locks it — no nesting, no deadlock.
+    stage_trigger_lock: Arc<tokio::sync::Mutex<()>>,
     osc_bridge: OscBridge,
     ableset_bridge: AbleSetBridge,
     broadcast_live: Arc<AtomicBool>,
@@ -202,6 +209,7 @@ impl AppState {
             heartbeat_config,
             caches: CacheManager::new(),
             stage_layout: Arc::new(RwLock::new(default_layout)),
+            stage_trigger_lock: Arc::new(tokio::sync::Mutex::new(())),
             osc_bridge,
             ableset_bridge,
             broadcast_live: Arc::new(AtomicBool::new(false)),

@@ -57,9 +57,23 @@ impl AppState {
             playlist_id,
         )
         .with_active_entry_index(entry_index);
+
+        // #515: serialize triggers — without this, two near-simultaneous
+        // triggers from independent sources (operator + Companion pedal)
+        // could interleave state-write / marker-switch / broadcast so the
+        // stage ends on the LOSING trigger's layout or snapshot.
+        let _trigger_guard = self.stage_trigger_lock.lock().await;
+
         let db_start = Instant::now();
         self.repository.upsert_stage_state(&stage_state).await?;
         let t_db_write_ms = db_start.elapsed().as_secs_f64() * 1000.0;
+
+        // #515: a slide carrying a stage-layout marker switches the stage
+        // display BEFORE the resolution broadcast, so the snapshot below is
+        // already published for the new layout. Never fails the trigger.
+        let marker_start = Instant::now();
+        self.apply_slide_stage_layout_marker(current_slide_id).await;
+        let t_marker_ms = marker_start.elapsed().as_secs_f64() * 1000.0;
 
         let mut resolution = stage_resolution_from_presentation(
             &presentation,
@@ -96,6 +110,7 @@ impl AppState {
             correlation_id = %correlation_id,
             t_validate_ms,
             t_db_write_ms,
+            t_marker_ms,
             t_broadcast_ms,
             t_total_ms,
             "stage handler timing"

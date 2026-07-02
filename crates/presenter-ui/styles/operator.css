@@ -1322,6 +1322,33 @@ body.operator[data-mode="live"] .operator__slide-handle {
   opacity: 0.8;
 }
 
+/* ===== Per-slide stage-layout marker (#515) ===== */
+
+.operator__slide-stage-layout-select {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(248, 250, 252, 0.9);
+  color: #334155;
+  max-width: 9rem;
+}
+
+.operator__slide-stage-layout-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: rgba(14, 165, 233, 0.16);
+  color: #0369a1;
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  white-space: nowrap;
+}
+
 /* Worship slide card variant — make edit textareas grow like bible */
 .operator__slide-card--worship .operator__slide-editor textarea {
   field-sizing: content;

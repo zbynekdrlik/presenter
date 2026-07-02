@@ -26,6 +26,14 @@ ignore = [
     # no upgrade path until those frameworks migrate (dependency-refresh #343).
     # https://rustsec.org/advisories/RUSTSEC-2026-0173
     "RUSTSEC-2026-0173",
+    # quick-xml 0.39.4 DoS-class advisories, fixed only in >=0.41.0 — pinned
+    # transitively by gst-plugin-ndi (^0.39; 0.15.3 still pins ^0.40). NDI XML
+    # comes only from trusted-LAN sources. Tracked in #522 — remove both here
+    # AND in .cargo/audit.toml once gst-plugin-ndi allows quick-xml >=0.41.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0194
+    "RUSTSEC-2026-0194",
+    # https://rustsec.org/advisories/RUSTSEC-2026-0195
+    "RUSTSEC-2026-0195",
 ]
 
 [licenses]

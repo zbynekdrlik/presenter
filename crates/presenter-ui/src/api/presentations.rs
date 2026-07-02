@@ -194,3 +194,29 @@ pub async fn reorder_slides(pres_id: &str, slide_ids: Vec<String>) -> Result<Vec
 pub async fn fetch_group_colors() -> Result<HashMap<String, String>, ApiError> {
     get_json("/group-colors").await
 }
+
+// ── Per-slide stage-layout markers (#515) ────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SlideStageLayoutRequest {
+    layout_code: Option<String>,
+}
+
+/// Assign (`Some(code)`) or clear (`None`) a slide's stage-layout marker.
+pub async fn set_slide_stage_layout(
+    pres_id: &str,
+    slide_id: &str,
+    layout_code: Option<String>,
+) -> Result<(), ApiError> {
+    super::put_no_content(
+        &format!("/presentations/{pres_id}/slides/{slide_id}/stage-layout"),
+        &SlideStageLayoutRequest { layout_code },
+    )
+    .await
+}
+
+/// All markers of a presentation as `slide_id → layout_code`.
+pub async fn fetch_slide_stage_layouts(pres_id: &str) -> Result<HashMap<String, String>, ApiError> {
+    get_json(&format!("/presentations/{pres_id}/slide-stage-layouts")).await
+}

@@ -23,4 +23,12 @@ ignore = [
   # tracked separately as #367 (blocked: proc-macro-error2 still transitive).
   # (Moved here from the CI --ignore flags, #366.)
   "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained (transitive)
+  # quick-xml 0.39.4 DoS-class advisories (quadratic duplicate-attribute check
+  # + unbounded NsReader namespace allocation), fixed only in >=0.41.0. Pinned
+  # transitively by gst-plugin-ndi (^0.39; even 0.15.3 pins ^0.40) — no upgrade
+  # path until upstream bumps. NDI XML comes only from sources on the trusted
+  # LAN, so exposure is low. Tracked in #522 — remove BOTH ids (and the same
+  # pair in deny.toml) once gst-plugin-ndi allows quick-xml >=0.41.
+  "RUSTSEC-2026-0194", # quick-xml quadratic attr check (transitive, #522)
+  "RUSTSEC-2026-0195", # quick-xml NsReader allocation DoS (transitive, #522)
 ]

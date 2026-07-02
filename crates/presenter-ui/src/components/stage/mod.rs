@@ -2,6 +2,7 @@ pub mod api_stage;
 pub mod bible_layout;
 pub mod bible_overlay;
 pub mod camera_crew;
+pub mod fulltext_layout;
 mod ndi_beacon;
 mod ndi_clock_offset;
 mod ndi_frame_stats;

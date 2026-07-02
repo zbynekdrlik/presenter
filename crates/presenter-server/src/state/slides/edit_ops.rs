@@ -124,11 +124,30 @@ impl AppState {
             .position(|slide| slide.id == slide_id)
             .ok_or_else(|| anyhow::anyhow!("slide not found"))?;
         let source = slides[index].clone();
-        slides.insert(index + 1, Slide::new(0, source.content.clone()));
+        let duplicate = Slide::new(0, source.content.clone());
+        let duplicate_id = duplicate.id;
+        slides.insert(index + 1, duplicate);
         Self::reindex_slides(&mut slides);
         self.repository
             .replace_presentation_slides(presentation_id, &slides)
             .await?;
+        // #515: a duplicate copies ALL slide content — including the stage-
+        // layout marker. Non-fatal: the duplicate itself already succeeded.
+        match self.repository.get_slide_stage_layout(slide_id).await {
+            Ok(Some(code)) => {
+                if let Err(err) = self
+                    .repository
+                    .set_slide_stage_layout(presentation_id, duplicate_id, &code)
+                    .await
+                {
+                    tracing::warn!(?err, %slide_id, "failed to copy stage-layout marker to duplicated slide");
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(?err, %slide_id, "failed to read stage-layout marker while duplicating slide");
+            }
+        }
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
         let mut updated_presentation = presentation.clone();
@@ -161,6 +180,12 @@ impl AppState {
         self.repository
             .replace_presentation_slides(presentation_id, &slides)
             .await?;
+        // #515: a deleted slide's stage-layout marker goes with it. Non-fatal
+        // — the slide deletion already committed; a missed row is swept by
+        // prune_orphan_slide_stage_layouts on the next library change.
+        if let Err(err) = self.repository.clear_slide_stage_layout(slide_id).await {
+            tracing::warn!(?err, %slide_id, "failed to clear stage-layout marker of deleted slide");
+        }
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
         let mut updated_presentation = presentation.clone();

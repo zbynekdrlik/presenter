@@ -5,6 +5,7 @@ mod library;
 mod playlist;
 mod presentation;
 mod search;
+mod slide_stage_layout;
 mod stage_state;
 #[cfg(test)]
 mod tests;

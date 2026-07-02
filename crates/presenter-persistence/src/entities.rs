@@ -654,3 +654,23 @@ pub mod resolume_push_audit {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
+
+pub mod slide_stage_layout {
+    use sea_orm::entity::prelude::*;
+
+    /// #515: per-slide stage-layout marker. Triggering a slide that carries a
+    /// marker switches the stage display to `layout_code`.
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "slide_stage_layouts")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub slide_id: String,
+        pub presentation_id: String,
+        pub layout_code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}

@@ -11,8 +11,8 @@ use crate::utils::color::group_pill_style;
 
 use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
-    apply_focused_class, field_has_warning, format_multiline, reorder_slide_ids,
-    slide_has_any_warning,
+    apply_focused_class, field_has_warning, format_multiline, is_interactive_tag,
+    reorder_slide_ids, slide_has_any_warning,
 };
 use super::slide_save::{
     finish_save_status_err, finish_save_status_ok, save_with_status, start_save_status,
@@ -202,6 +202,12 @@ pub fn SlideList() -> impl IntoView {
             }
         });
     }
+
+    // #515: per-slide stage-layout markers of the open presentation
+    // (slide_id → layout_code), maintained by the picker module (clears on
+    // presentation switch + stale-response guard).
+    let slide_stage_markers =
+        crate::components::slide_stage_layout_picker::use_slide_stage_markers(&ctx);
 
     // Scroll active slide into view when stage's current slide changes.
     {
@@ -464,6 +470,10 @@ pub fn SlideList() -> impl IntoView {
                         // Clone for save-status badge in slide header
                         let slide_id_for_badge = slide_id.clone();
 
+                        // Clones for the per-slide stage-layout control (#515)
+                        let pres_id_for_marker = pres_id.clone();
+                        let slide_id_for_marker = slide_id.clone();
+
                         view! {
                             <article
                                 class=move || {
@@ -497,7 +507,7 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(target) = ev.target() {
                                             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                 let tag = el.tag_name().to_lowercase();
-                                                if tag == "button" || tag == "textarea" || tag == "input" {
+                                                if is_interactive_tag(&tag) {
                                                     return;
                                                 }
                                                 if el.get_attribute("data-action").is_some() {
@@ -534,7 +544,7 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(target) = ev.target() {
                                             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                 let tag = el.tag_name().to_lowercase();
-                                                if tag == "button" || tag == "textarea" || tag == "input" {
+                                                if is_interactive_tag(&tag) {
                                                     return;
                                                 }
                                             }
@@ -600,6 +610,14 @@ pub fn SlideList() -> impl IntoView {
                                             <span class=class style=color_style data-role="slide-group">{g}</span>
                                         }
                                     })}
+                                    // #515: per-slide stage-layout marker —
+                                    // selector in edit mode, badge in live mode.
+                                    <crate::components::slide_stage_layout_picker::SlideStageLayoutControl
+                                        pres_id=pres_id_for_marker
+                                        slide_id=slide_id_for_marker
+                                        is_edit=is_edit
+                                        markers=slide_stage_markers
+                                    />
                                     {
                                         // Memo: derives this slide's status from the shared map.
                                         // The body runs whenever any slide saves, but the Memo
