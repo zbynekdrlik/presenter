@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
+use presenter_core::{Presentation, SlideGroup, SlideText};
 
 use crate::api;
 use crate::state::operator::SaveStatus;
@@ -68,6 +69,15 @@ pub(super) fn finish_save_status_err(slide_id: String, save_status: SaveStatusMa
 
 /// Fire-and-forget save with indicator wiring. Used by the textarea blur
 /// handlers where no refetch is needed.
+///
+/// On success this ALSO patches `selected_pres`'s in-memory slide content to
+/// match what was just saved (#515), so the edit is visible everywhere
+/// `selected_pres` is read (e.g. the operator's own Live-mode preview), not
+/// only in the textarea's own DOM value. The `slide_edit_seq` bump that
+/// guards against a stale `get_presentation` refetch clobbering a newer
+/// edit happens SYNCHRONOUSLY at save-START, in the caller
+/// (`save_all_fields_from_dom`) — not here — so the guard holds no matter
+/// which of the two async calls (this save, or the refetch) resolves first.
 pub(super) fn save_with_status(
     pres_id: String,
     slide_id: String,
@@ -76,6 +86,7 @@ pub(super) fn save_with_status(
     stage: String,
     group: Option<String>,
     save_status: SaveStatusMap,
+    selected_pres: RwSignal<Option<Presentation>>,
 ) {
     let token = start_save_status(&slide_id, save_status);
     leptos::task::spawn_local(async move {
@@ -85,13 +96,77 @@ pub(super) fn save_with_status(
             &main,
             &translation,
             &stage,
-            group,
+            group.clone(),
         )
         .await;
 
         match result {
-            Ok(_) => finish_save_status_ok(slide_id, save_status, token).await,
+            Ok(_) => {
+                apply_saved_content_locally(
+                    selected_pres,
+                    &slide_id,
+                    &main,
+                    &translation,
+                    &stage,
+                    group.as_deref(),
+                );
+                finish_save_status_ok(slide_id, save_status, token).await
+            }
             Err(_) => finish_save_status_err(slide_id, save_status, token),
         }
+    });
+}
+
+/// Patch the in-memory presentation's slide content to match a just-saved
+/// edit (#515). Best-effort: if the values can no longer construct a valid
+/// `SlideText` (e.g. over the hard character cap), the local cache is left
+/// untouched — the save already round-tripped through server-side
+/// validation, so this only guards the local reconstruction.
+///
+/// Uses `update_untracked` DELIBERATELY (not `update`): a save fires on
+/// EVERY field's blur, so a tracked `.update()` here would force a full
+/// slide-list re-render — recreating every slide's local reactive signals
+/// (`main_warn_sig` & co. in `slide_list.rs`) — every time ANY field on ANY
+/// slide is saved. That re-render can stomp an in-progress edit to a
+/// DIFFERENT field of the same slide that hasn't been blurred/saved yet
+/// (its freshly-typed warning state gets reset from the stale pre-edit
+/// snapshot). `selected_pres` still ends up with the correct data for the
+/// next NATURAL re-render (mode toggle, re-opening the presentation, …) —
+/// it just doesn't force one of its own.
+fn apply_saved_content_locally(
+    selected_pres: RwSignal<Option<Presentation>>,
+    slide_id: &str,
+    main: &str,
+    translation: &str,
+    stage: &str,
+    group: Option<&str>,
+) {
+    let (Ok(main_text), Ok(translation_text), Ok(stage_text)) = (
+        SlideText::new(main),
+        SlideText::new(translation),
+        SlideText::new(stage),
+    ) else {
+        return;
+    };
+    let group = group
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(SlideGroup::new);
+
+    selected_pres.update_untracked(|maybe_pres| {
+        let Some(pres) = maybe_pres.as_mut() else {
+            return;
+        };
+        let Some(slide) = pres
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id.to_string() == slide_id)
+        else {
+            return;
+        };
+        slide.content.main = main_text;
+        slide.content.translation = translation_text;
+        slide.content.stage = stage_text;
+        slide.content.group = group;
     });
 }

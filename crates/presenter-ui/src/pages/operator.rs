@@ -92,7 +92,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
 
     // Load session state - runs after initial data starts loading
     // The session restoration handles its own data fetching
-    load_session_presentation(&ctx);
+    load_session_presentation(&ctx, &op);
 
     // Stage monitor polling
     setup_stage_monitor(ctx.clone());
@@ -464,12 +464,19 @@ fn load_initial_data(ctx: &AppContext) {
     });
 }
 
-fn load_session_presentation(ctx: &AppContext) {
+fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
     if let Some(pres_id) = ctx.selected_presentation_id.get_untracked() {
         let selected = ctx.selected_presentation;
+        // #515: same stale-refetch guard as `PresentationList::select_presentation`
+        // — this fetch fires once at page load; if a slide edit is saved
+        // before it resolves, drop the response instead of clobbering it.
+        let seq_at_fetch = op.slide_edit_seq.get_untracked();
+        let slide_edit_seq = op.slide_edit_seq;
         leptos::task::spawn_local(async move {
             if let Ok(detail) = crate::api::presentations::get_presentation(&pres_id).await {
-                selected.set(Some(detail.presentation));
+                if slide_edit_seq.get_untracked() == seq_at_fetch {
+                    selected.set(Some(detail.presentation));
+                }
             }
         });
     }

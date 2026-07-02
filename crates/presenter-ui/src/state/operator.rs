@@ -62,6 +62,15 @@ pub struct OperatorState {
     /// Per-slide save status keyed by slide_id, with a monotonic token to
     /// prevent stale fade timers from clearing a newer save's entry (#313).
     pub save_status: RwSignal<HashMap<String, (SaveStatus, u64)>>,
+    /// Monotonic counter bumped every time a slide-content save (main /
+    /// translation / stage / group) completes successfully (#515). A
+    /// `get_presentation` refetch captures this value before it is issued;
+    /// if the counter has moved by the time the fetch resolves, a save
+    /// landed while the fetch was in flight, so the response reflects
+    /// pre-edit content and must be dropped instead of clobbering the newer
+    /// edit — otherwise a slide's stage text could vanish from the editor
+    /// right after typing it (the presentation-open refetch resolving late).
+    pub slide_edit_seq: RwSignal<u64>,
 }
 
 impl OperatorState {
@@ -107,6 +116,7 @@ impl OperatorState {
             stage_layout_loading: RwSignal::new(false),
             triggering_slide_id: RwSignal::new(None),
             save_status: RwSignal::new(HashMap::new()),
+            slide_edit_seq: RwSignal::new(0),
         }
     }
 }
