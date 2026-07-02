@@ -83,9 +83,17 @@ impl wiremock::Respond for ArrivalRecorder {
 /// (parallel ≈ 0, serial ≈ `delay`), and it measures dispatch concurrency, not
 /// total wall time, so a loaded runner (which only slows the response, after
 /// arrival) does not false-fail. Replaces the flaky `total elapsed < delay+25ms`.
-fn assert_two_parallel_arrivals(arrivals: &Arc<std::sync::Mutex<Vec<std::time::Instant>>>, delay: std::time::Duration) {
+fn assert_two_parallel_arrivals(
+    arrivals: &Arc<std::sync::Mutex<Vec<std::time::Instant>>>,
+    delay: std::time::Duration,
+) {
     let a = arrivals.lock().expect("arrivals lock");
-    assert_eq!(a.len(), 2, "expected exactly two parallel PUTs, got {}", a.len());
+    assert_eq!(
+        a.len(),
+        2,
+        "expected exactly two parallel PUTs, got {}",
+        a.len()
+    );
     let spread = a[1].duration_since(a[0]);
     assert!(
         spread < delay / 2,
