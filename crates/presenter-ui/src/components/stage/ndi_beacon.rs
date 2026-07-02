@@ -15,7 +15,7 @@ use leptos::wasm_bindgen::{JsCast, JsValue};
 use leptos::web_sys::RtcPeerConnection;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_frame_stats::{snapshot_present_gaps, FrameStats};
+use super::ndi_frame_stats::{snapshot_present_gaps, DroppedFramesSetter, FrameStats};
 use super::ndi_profile::{local_storage, profile_mode_is_compat, profile_mode_name};
 
 /// localStorage key for the persistent per-display identity used in stats
@@ -55,6 +55,7 @@ pub(crate) fn post_stats_beacon(
     source_id: &str,
     stats: &FrameStats,
     clock_offset: Option<(f64, f64)>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     let (max_gap, over100, fps) = snapshot_present_gaps(stats);
     let video_latency_ms = stats.video_latency_ms.get();
@@ -70,6 +71,7 @@ pub(crate) fn post_stats_beacon(
                 fps,
                 video_latency_ms,
                 clock_offset,
+                dropped_frames_setter,
             )
             .await;
         }
@@ -85,12 +87,13 @@ pub(crate) fn maybe_post_beacon(
     source_id: &str,
     stats: &FrameStats,
     clock_offset: Option<(f64, f64)>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     tick_count.set(tick_count.get().wrapping_add(1));
     if tick_count.get() % 15 != 0 {
         return;
     }
-    post_stats_beacon(pc, source_id, stats, clock_offset);
+    post_stats_beacon(pc, source_id, stats, clock_offset, dropped_frames_setter);
 }
 
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
@@ -121,6 +124,12 @@ struct InboundVideoStats {
     // pre-first-SR gotcha), distinguished server-side.
     estimated_playout: Option<f64>,
     report_ts: Option<f64>,
+    // #525 (step 1) device-decode probe: is this display decoding H264 in
+    // HARDWARE or falling back to SOFTWARE? A software decode on a "smart TV"
+    // box is the prime suspect for a large decode+present residual (SD1 read
+    // ~90ms above sd2-4). Purely diagnostic — read-only, no playback change.
+    decoder_implementation: Option<String>,
+    power_efficient_decoder: Option<bool>,
 }
 
 /// One pass over the RtcStatsReport map: the inbound-rtp video entry's fields,
@@ -150,6 +159,8 @@ fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
                 codec_id = get("codecId").as_string();
                 out.estimated_playout = get("estimatedPlayoutTimestamp").as_f64();
                 out.report_ts = get("timestamp").as_f64();
+                out.decoder_implementation = get("decoderImplementation").as_string();
+                out.power_efficient_decoder = get("powerEfficientDecoder").as_bool();
             }
         }
     }
@@ -166,6 +177,33 @@ fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
     out
 }
 
+/// #523: push this beacon's dropped-frame + freeze counts to the on-screen
+/// readout. `None` only when the browser's getStats reports NEITHER field
+/// (honest "no data" rather than a misleading 0); a report with at least one
+/// of the two fields present treats the other as 0. This assumes the two
+/// fields are supported TOGETHER or not at all — true on every real target
+/// here (all stage displays are Chromium/WebView, and Chromium has always
+/// shipped `framesDropped` + `freezeCount` as part of the same inbound-rtp
+/// stats extension, never one without the other). If a future WebView ever
+/// violated that pairing, the worst case is a momentarily-optimistic "0" on
+/// this purely diagnostic overlay, not a functional regression. Split out of
+/// `post_client_stats` as its own concern (keeps the size-warning threshold
+/// creep down; the exact line count isn't pinned here since it will keep
+/// moving as fields are added — `scripts/dev/quality-check.sh` is the source
+/// of truth for whether it's still just a warning or has crossed the 120-line
+/// hard cap).
+fn notify_dropped_frames(inbound: &InboundVideoStats, setter: &Option<DroppedFramesSetter>) {
+    let Some(setter) = setter else { return };
+    let counts = match (inbound.frames_dropped, inbound.freeze_count) {
+        (None, None) => None,
+        (dropped, freeze) => Some((
+            dropped.unwrap_or(0.0).round() as u32,
+            freeze.unwrap_or(0.0).round() as u32,
+        )),
+    };
+    setter(counts);
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn post_client_stats(
     source_id: &str,
@@ -175,8 +213,10 @@ async fn post_client_stats(
     presented_fps: Option<f64>,
     video_latency_ms: Option<f64>,
     clock_offset: Option<(f64, f64)>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     let inbound = extract_inbound_video(report);
+    notify_dropped_frames(&inbound, &dropped_frames_setter);
 
     // #509 (T0): full userAgent — the exact WebView/Chrome version per real
     // stage TV, which decides whether the playout field is available there.
@@ -216,6 +256,11 @@ async fn post_client_stats(
         // #509 (T0) device-capability probe fields.
         "estimatedPlayoutTimestamp": inbound.estimated_playout,
         "reportTimestamp": inbound.report_ts,
+        // #525 (step 1) device-decode probe — is this display's H264 decode
+        // HARDWARE or SOFTWARE? Diagnostic only; read live to find where SD1's
+        // decode+present residual actually lives before any playback change.
+        "decoderImplementation": inbound.decoder_implementation,
+        "powerEfficientDecoder": inbound.power_efficient_decoder,
         "userAgent": user_agent,
         // #514 observability: the smoothed TRUE server→display latency this
         // display currently SHOWS (#512; null = n/a) plus the /ndi/time clock
@@ -241,5 +286,56 @@ async fn post_client_stats(
     };
     if let Some(window) = leptos::web_sys::window() {
         let _ = JsFuture::from(window.fetch_with_request(&request)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{notify_dropped_frames, DroppedFramesSetter, InboundVideoStats};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    type CapturedCounts = Rc<Cell<Option<(u32, u32)>>>;
+
+    fn capturing_setter() -> (DroppedFramesSetter, CapturedCounts) {
+        let captured = Rc::new(Cell::new(None));
+        let setter = {
+            let captured = Rc::clone(&captured);
+            Rc::new(move |v: Option<(u32, u32)>| captured.set(v)) as DroppedFramesSetter
+        };
+        (setter, captured)
+    }
+
+    #[test]
+    fn no_data_from_getstats_reports_none_not_a_fabricated_zero() {
+        let (setter, captured) = capturing_setter();
+        let inbound = InboundVideoStats::default();
+        notify_dropped_frames(&inbound, &Some(setter));
+        assert_eq!(captured.get(), None);
+    }
+
+    #[test]
+    fn dropped_present_freeze_absent_treats_freeze_as_zero() {
+        // Both counters are cumulative and start at 0 — a present dropped-count
+        // with no freeze field yet means "0 freezes so far", not "unknown".
+        let (setter, captured) = capturing_setter();
+        let inbound = InboundVideoStats {
+            frames_dropped: Some(128.0),
+            ..Default::default()
+        };
+        notify_dropped_frames(&inbound, &Some(setter));
+        assert_eq!(captured.get(), Some((128, 0)));
+    }
+
+    #[test]
+    fn both_present_round_to_nearest_integer() {
+        let (setter, captured) = capturing_setter();
+        let inbound = InboundVideoStats {
+            frames_dropped: Some(128.0),
+            freeze_count: Some(2.0),
+            ..Default::default()
+        };
+        notify_dropped_frames(&inbound, &Some(setter));
+        assert_eq!(captured.get(), Some((128, 2)));
     }
 }

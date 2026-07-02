@@ -22,7 +22,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::ndi_clock_offset::{self, ClockOffsetEstimator, ClockOffsetSetter};
 use super::ndi_frame_stats::{
-    start_rvfc_frame_observer, FrameStats, FramesLiveSetter, VideoLatencySetter,
+    start_rvfc_frame_observer, DroppedFramesSetter, FrameStats, FramesLiveSetter,
+    VideoLatencySetter,
 };
 use super::ndi_health_ticker::start_health_ticker;
 
@@ -328,6 +329,7 @@ impl Watchdog {
         video_latency_setter: Option<VideoLatencySetter>,
         frames_live_setter: Option<FramesLiveSetter>,
         clock_offset_setter: Option<ClockOffsetSetter>,
+        dropped_frames_setter: Option<DroppedFramesSetter>,
         on_failure: F,
     ) -> Self {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -345,6 +347,24 @@ impl Watchdog {
         // (no cover) so this never flashes the cover.
         if let Some(setter) = &frames_live_setter {
             setter(false);
+        }
+        // #523 (review follow-up): a freshly-installed session hasn't decoded a
+        // frame yet, so any server→display ms figure still on screen belongs to
+        // the prior (torn-down) session. Clear it for the SAME reason
+        // `frames_live_setter` is cleared above — the first presented frame's
+        // `update_video_latency` call repopulates it honestly within ~1s. (This
+        // reset was missing before #523 added the analogous one for
+        // `dropped_frames_setter` below; both readouts now clear consistently on
+        // every reconnect instead of only one of the two.)
+        if let Some(setter) = &video_latency_setter {
+            setter(None);
+        }
+        // #523: a freshly-installed session hasn't posted a beacon yet, so any
+        // dropped/freeze count still on screen is from the prior (torn-down)
+        // session. Clear it rather than show a stale figure — the next beacon
+        // (up to ~15s away) repopulates it honestly.
+        if let Some(setter) = &dropped_frames_setter {
+            setter(None);
         }
         // #510/#512: the browser<->server pipeline-clock offset estimator. Created
         // BEFORE the frame observer so the observer can read its current (offset,
@@ -364,6 +384,9 @@ impl Watchdog {
             // health ticker (below) flips them back to not-live on staleness, so
             // BOTH share the same per-session setter.
             frames_live_setter.clone(),
+            // #523: BOTH beacon paths (rVFC frame-count-driven and the 1s
+            // ticker) can post a stats beacon, so both share the same setter.
+            dropped_frames_setter.clone(),
         );
         if !rvfc_supported {
             leptos::logging::warn!(
@@ -387,6 +410,7 @@ impl Watchdog {
             escalation,
             &clock_offset_estimator,
             frames_live_setter,
+            dropped_frames_setter,
             on_failure,
         );
 

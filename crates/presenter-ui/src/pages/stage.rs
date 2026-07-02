@@ -58,6 +58,27 @@ pub fn StagePage() -> impl IntoView {
         setter.forget();
     }
 
+    // Test hook (#523): drive the per-display dropped-frame + freeze counters
+    // deterministically from the E2E without a live NDI/GPU pipeline (getStats
+    // beacons need a real WebRTC connection). Accepts two numbers (dropped,
+    // freeze) — the SAME pair the getStats beacon writes — or null/null to
+    // clear. In production this global is simply never called.
+    {
+        let dropped_frames = ctx.dropped_frames;
+        let setter = Closure::wrap(Box::new(move |dropped: JsValue, freeze: JsValue| {
+            match (dropped.as_f64(), freeze.as_f64()) {
+                (Some(d), Some(f)) => dropped_frames.set(Some((d as u32, f as u32))),
+                _ => dropped_frames.set(None),
+            }
+        }) as Box<dyn Fn(JsValue, JsValue)>);
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__presenterStageSetDroppedFrames"),
+            setter.as_ref(),
+        );
+        setter.forget();
+    }
+
     // Test hook (#500): drive the "frames are presenting" flag deterministically
     // from the E2E without a live NDI/GPU pipeline (the GitHub-hosted e2e lane
     // has neither). Accepts a boolean — the SAME signal the rVFC observer /

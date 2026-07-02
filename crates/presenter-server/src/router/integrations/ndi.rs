@@ -186,6 +186,19 @@ pub(crate) struct NdiClientStatsBeacon {
     /// (#514) The min round-trip time (ms) behind that offset — the network
     /// half of the displayed latency (one-way ≈ RTT/2) and its quality bound.
     pub clock_rtt_ms: Option<f64>,
+    /// (#525 step 1 probe) `decoderImplementation` from the SAME inbound-rtp
+    /// getStats snapshot — the exact decoder backend the browser picked
+    /// ("ffmpeg" software, or a hardware backend name like "MediaCodec" on
+    /// Android). `None` when the WebView doesn't expose the field at all.
+    /// This is the field that answers "is this display's ~90ms decode+present
+    /// residual a software-decode cost, or something else?" before any
+    /// playback change is made.
+    pub decoder_implementation: Option<String>,
+    /// (#525 step 1 probe) `powerEfficientDecoder` from the same snapshot —
+    /// true when the browser reports the decode path as power-efficient
+    /// (typically hardware-accelerated). `None` when unsupported by the
+    /// WebView.
+    pub power_efficient_decoder: Option<bool>,
 }
 
 /// Classification of a display's `estimatedPlayoutTimestamp` for the #509 (T0)
@@ -293,6 +306,8 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         video_latency_ms = beacon.video_latency_ms,
         clock_offset_ms = beacon.clock_offset_ms,
         clock_rtt_ms = beacon.clock_rtt_ms,
+        decoder_implementation = beacon.decoder_implementation.as_deref(),
+        power_efficient_decoder = beacon.power_efficient_decoder,
         user_agent = beacon.user_agent.as_deref(),
         "NDI stage-display client stats beacon"
     );
@@ -418,6 +433,42 @@ mod tests {
         assert_eq!(bare.video_latency_ms, None);
         assert_eq!(bare.clock_offset_ms, None);
         assert_eq!(bare.clock_rtt_ms, None);
+    }
+
+    #[test]
+    fn client_stats_beacon_parses_decoder_probe_fields() {
+        // #525 step 1: the decoder-implementation probe fields the stage now
+        // sends — locates whether a display's decode+present residual is a
+        // software-decode cost before any playback change is made.
+        let beacon: NdiClientStatsBeacon = serde_json::from_str(
+            r#"{
+                "sourceId":"src-1",
+                "decoderImplementation":"ffmpeg",
+                "powerEfficientDecoder":false
+            }"#,
+        )
+        .expect("beacon JSON with decoder-probe fields parses");
+        assert_eq!(beacon.decoder_implementation.as_deref(), Some("ffmpeg"));
+        assert_eq!(beacon.power_efficient_decoder, Some(false));
+
+        // A hardware-backed display reports a HW decoder name + true.
+        let hw: NdiClientStatsBeacon = serde_json::from_str(
+            r#"{
+                "sourceId":"src-1",
+                "decoderImplementation":"MediaCodec",
+                "powerEfficientDecoder":true
+            }"#,
+        )
+        .expect("beacon JSON with hardware decoder-probe fields parses");
+        assert_eq!(hw.decoder_implementation.as_deref(), Some("MediaCodec"));
+        assert_eq!(hw.power_efficient_decoder, Some(true));
+
+        // Older clients / unsupported WebViews omit them entirely → optional
+        // (back-compat) — this must never break beacon parsing.
+        let bare: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1"}"#).expect("bare beacon parses");
+        assert_eq!(bare.decoder_implementation, None);
+        assert_eq!(bare.power_efficient_decoder, None);
     }
 
     #[test]

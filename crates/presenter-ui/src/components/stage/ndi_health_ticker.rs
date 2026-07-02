@@ -17,8 +17,8 @@ use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 use super::ndi_beacon::maybe_post_beacon;
 use super::ndi_clock_offset::ClockOffsetEstimator;
 use super::ndi_frame_stats::{
-    mark_frames_live, record_presented_frame, refresh_frames_live_staleness, FrameStats,
-    FramesLiveSetter,
+    mark_frames_live, record_presented_frame, refresh_frames_live_staleness, DroppedFramesSetter,
+    FrameStats, FramesLiveSetter,
 };
 use super::ndi_profile::maybe_profile_fallback;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
@@ -45,6 +45,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
     escalation: &Rc<ReloadEscalation>,
     clock_offset: &Rc<ClockOffsetEstimator>,
     frames_live_setter: Option<FramesLiveSetter>,
+    dropped_frames_setter: Option<DroppedFramesSetter>,
     on_failure: Rc<F>,
 ) -> i32 {
     let active = Rc::clone(active);
@@ -71,7 +72,14 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
         }
         // Beacon first: the healthy-path early returns below must not
         // starve it during normal playback.
-        maybe_post_beacon(&tick_count, &pc, &source_id, &stats, clock_offset.current());
+        maybe_post_beacon(
+            &tick_count,
+            &pc,
+            &source_id,
+            &stats,
+            clock_offset.current(),
+            dropped_frames_setter.clone(),
+        );
         if !rvfc_supported
             && approximate_frame_from_current_time(&video, &stats, &last_current_time)
         {
