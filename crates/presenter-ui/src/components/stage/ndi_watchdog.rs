@@ -385,6 +385,7 @@ impl Watchdog {
             &stats,
             rvfc_supported,
             escalation,
+            &clock_offset_estimator,
             frames_live_setter,
             on_failure,
         );

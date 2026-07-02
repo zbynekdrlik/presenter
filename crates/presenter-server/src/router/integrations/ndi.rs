@@ -175,6 +175,17 @@ pub(crate) struct NdiClientStatsBeacon {
     /// WebView/Chrome version per real stage TV (SD1, Hyundai), which decides
     /// whether the playout field is available on the devices that matter.
     pub user_agent: Option<String>,
+    /// (#514) The smoothed TRUE server→display latency (ms) this display is
+    /// currently SHOWING (#512: render residual + network RTT/2). `null` = the
+    /// readout is `n/a` (no fresh /ndi/time offset) — honest, never a residual.
+    pub video_latency_ms: Option<f64>,
+    /// (#514) The display's current browser→server-pipeline-clock offset (ms)
+    /// from the /ndi/time handshake (#510) — lets the server correlate
+    /// timestamps across devices in ONE clock domain.
+    pub clock_offset_ms: Option<f64>,
+    /// (#514) The min round-trip time (ms) behind that offset — the network
+    /// half of the displayed latency (one-way ≈ RTT/2) and its quality bound.
+    pub clock_rtt_ms: Option<f64>,
 }
 
 /// Classification of a display's `estimatedPlayoutTimestamp` for the #509 (T0)
@@ -279,6 +290,9 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         estimated_playout_timestamp = beacon.estimated_playout_timestamp,
         report_timestamp = beacon.report_timestamp,
         playout_class,
+        video_latency_ms = beacon.video_latency_ms,
+        clock_offset_ms = beacon.clock_offset_ms,
+        clock_rtt_ms = beacon.clock_rtt_ms,
         user_agent = beacon.user_agent.as_deref(),
         "NDI stage-display client stats beacon"
     );
@@ -369,6 +383,41 @@ mod tests {
         assert_eq!(bare.estimated_playout_timestamp, None);
         assert_eq!(bare.report_timestamp, None);
         assert_eq!(bare.user_agent, None);
+    }
+
+    #[test]
+    fn client_stats_beacon_parses_true_latency_fields() {
+        // #514: the true-latency observability fields the stage now sends —
+        // the displayed server→display latency (#512) + the /ndi/time clock
+        // offset and RTT it was built from (#510).
+        let beacon: NdiClientStatsBeacon = serde_json::from_str(
+            r#"{
+                "sourceId":"src-1",
+                "videoLatencyMs":21.4,
+                "clockOffsetMs":996834481.7,
+                "clockRttMs":2.1
+            }"#,
+        )
+        .expect("beacon JSON with true-latency fields parses");
+        assert_eq!(beacon.video_latency_ms, Some(21.4));
+        assert_eq!(beacon.clock_offset_ms, Some(996_834_481.7));
+        assert_eq!(beacon.clock_rtt_ms, Some(2.1));
+
+        // n/a readout → explicit null on the wire → None (still parses).
+        let na: NdiClientStatsBeacon = serde_json::from_str(
+            r#"{"sourceId":"src-1","videoLatencyMs":null,"clockOffsetMs":null,"clockRttMs":null}"#,
+        )
+        .expect("beacon with null latency fields parses");
+        assert_eq!(na.video_latency_ms, None);
+        assert_eq!(na.clock_offset_ms, None);
+        assert_eq!(na.clock_rtt_ms, None);
+
+        // Older clients omit them entirely → optional (back-compat).
+        let bare: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1"}"#).expect("bare beacon parses");
+        assert_eq!(bare.video_latency_ms, None);
+        assert_eq!(bare.clock_offset_ms, None);
+        assert_eq!(bare.clock_rtt_ms, None);
     }
 
     #[test]
