@@ -18,10 +18,10 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_clock_offset::ClockOffsetSetter;
 use super::ndi_frame_stats::{
-    DroppedFramesSetter, FramesLiveSetter, StageSignalSetters, VideoLatencySetter,
+    DroppedFramesSetter, FramesLiveSetter, HealthSetter, StageSignalSetters, VideoLatencySetter,
 };
 use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
-use crate::state::stage::StageContext;
+use crate::state::stage::{StageContext, StageHealthReading};
 
 /// Holds an active WHEP session: the peer connection AND the WHEP resource URL
 /// returned in the `Location` header on POST. The resource URL is used to
@@ -112,15 +112,29 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         }) as DroppedFramesSetter
     });
 
-    // #527: bundle the four per-session setters into ONE struct threaded
-    // through the effect below and into `Watchdog::install` — a new stage
-    // diagnostic signal now costs one struct field instead of a new
-    // positional parameter in every function of the chain.
+    // #532: same shared-signal pattern for the recent-window health verdict
+    // (🟢/🟡/🔴) that now drives the readout's suffix (replacing the
+    // cumulative one `dropped_frames` above used to drive — that plumbing is
+    // untouched, just no longer read by the readout). UNLIKE `dropped_frames`,
+    // a health reading is NOT a cumulative counter — each beacon's
+    // classification simply REPLACES the prior one, so no out-of-order
+    // monotonic guard is needed here: whichever of the two concurrent beacon
+    // paths resolves last is, by definition, the most recent verdict.
+    let stage_health_sig = use_context::<StageContext>().map(|ctx| ctx.stage_health);
+    let stage_health_setter: Option<HealthSetter> = stage_health_sig.map(|sig| {
+        std::rc::Rc::new(move |v: Option<StageHealthReading>| sig.set(v)) as HealthSetter
+    });
+
+    // #527: bundle the per-session setters into ONE struct threaded through
+    // the effect below and into `Watchdog::install` — a new stage diagnostic
+    // signal now costs one struct field instead of a new positional
+    // parameter in every function of the chain.
     let stage_signal_setters = StageSignalSetters {
         video_latency: video_latency_setter,
         frames_live: frames_live_setter,
         clock_offset: clock_offset_setter,
         dropped_frames: dropped_frames_setter,
+        stage_health: stage_health_setter,
     };
 
     // Holds the active connection: the WHEP session + the watchdog observing

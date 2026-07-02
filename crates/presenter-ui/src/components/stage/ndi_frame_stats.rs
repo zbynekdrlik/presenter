@@ -18,6 +18,7 @@ use super::ndi_beacon::post_stats_beacon;
 use super::ndi_clock_offset::{ClockOffsetEstimator, ClockOffsetSetter};
 use super::ndi_profile::persist_proven_profile_mode;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
+use crate::state::stage::{StageHealth, StageHealthReading};
 
 /// Callback that publishes the smoothed stage-side video latency (ms) to the
 /// on-screen readout signal (`StageContext::video_latency_ms`). `Some(ms)`
@@ -46,6 +47,17 @@ pub(crate) type FramesLiveSetter = Rc<dyn Fn(bool)>;
 /// readout entirely (e.g. a video element with no StageContext).
 pub(crate) type DroppedFramesSetter = Rc<dyn Fn(Option<(u32, u32)>)>;
 
+/// Callback that publishes the recent-window stage-health verdict (#532) to
+/// the shared `StageContext::stage_health` signal driving the stage's
+/// "🟢/🟡/🔴" readout beside the latency figure — replacing the CUMULATIVE
+/// ⬇N/❄N suffix `DroppedFramesSetter` used to drive on-screen (that plumbing
+/// is kept for its own sake; only the readout moved to this signal). Fed from
+/// the SAME per-interval accumulators `snapshot_present_gaps` already resets
+/// each beacon, so the reading is inherently RECENT, never cumulative.
+/// `None` (no setter) disables the readout entirely (e.g. a video element
+/// with no StageContext).
+pub(crate) type HealthSetter = Rc<dyn Fn(Option<StageHealthReading>)>;
+
 /// Bundles the per-session stage-diagnostic signal setters that are threaded,
 /// as a SINGLE unit, through the `NdiVideo` → `Watchdog::install` →
 /// `start_rvfc_frame_observer` / `ndi_clock_offset::start` /
@@ -60,6 +72,7 @@ pub(crate) struct StageSignalSetters {
     pub(crate) frames_live: Option<FramesLiveSetter>,
     pub(crate) clock_offset: Option<ClockOffsetSetter>,
     pub(crate) dropped_frames: Option<DroppedFramesSetter>,
+    pub(crate) stage_health: Option<HealthSetter>,
 }
 
 /// How long after the last presented frame the video is considered no longer
@@ -393,6 +406,67 @@ pub(crate) fn snapshot_present_gaps(stats: &FrameStats) -> (f64, u32, Option<f64
     (max_gap, over100, fps)
 }
 
+/// fps at/above this (out of a 30fps NDI source), with a clean recent window,
+/// classifies as 🟢 (#532). A shade under the nominal 30fps so a single
+/// dropped frame in the window doesn't flip a genuinely smooth TV to yellow.
+const HEALTH_FPS_GOOD_MIN: f64 = 27.0;
+/// fps below this classifies as 🔴 regardless of gap count — the decode/
+/// render path is badly starved, not just occasionally hitching.
+const HEALTH_FPS_BAD_MAX: f64 = 15.0;
+/// An inter-present gap at/above this many ms is the "big freeze" bar for the
+/// health verdict — stricter than `PRESENT_GAP_HITCH_MS`'s 100ms perceptible-
+/// hitch threshold (a single ~100-149ms gap alone doesn't sink the verdict to
+/// 🟡, but it does count toward `present_gaps_over100`'s repeated-hitch total
+/// below, since that accumulator is keyed on the 100ms threshold).
+const HEALTH_GAP_HITCH_MS: f64 = 150.0;
+/// This many (or more) >100ms presentation gaps in one recent window is
+/// "repeated" stutter (as opposed to one isolated hitch) — escalates straight
+/// to 🔴 even when fps looks fine (an average can hide a hitch burst).
+const HEALTH_REPEATED_GAPS_MIN: u32 = 2;
+
+/// Pure classifier (#532): recent-window presented-fps + presentation-gap
+/// stats → a health verdict answering "is this stage TV usable right now?".
+/// Unlike getStats' cumulative freeze/drop counters, every input here resets
+/// each beacon interval (`snapshot_present_gaps`), so the verdict reflects
+/// only the LAST ~15-20s, never a stale blip from an hour ago. Thresholds are
+/// the named constants above — tune there, never inline.
+pub(crate) fn stage_health(
+    presented_fps: f64,
+    max_present_gap_ms: f64,
+    present_gaps_over100: u32,
+) -> StageHealth {
+    if presented_fps < HEALTH_FPS_BAD_MAX || present_gaps_over100 >= HEALTH_REPEATED_GAPS_MIN {
+        StageHealth::Bad
+    } else if presented_fps >= HEALTH_FPS_GOOD_MIN
+        && present_gaps_over100 == 0
+        && max_present_gap_ms < HEALTH_GAP_HITCH_MS
+    {
+        StageHealth::Good
+    } else {
+        StageHealth::Degraded
+    }
+}
+
+/// Classify this beacon's recent-window stats and push the reading to the
+/// on-screen signal (#532). `presented_fps = None` (the interval had no
+/// elapsed wall-clock time to compute a rate — see `snapshot_present_gaps`)
+/// leaves whatever verdict is already on screen alone rather than flipping it
+/// on a meaningless input; in practice this only happens on a same-instant
+/// double-call, never on real beacon cadence (~15s apart).
+pub(crate) fn notify_stage_health(
+    presented_fps: Option<f64>,
+    max_present_gap_ms: f64,
+    present_gaps_over100: u32,
+    setter: &Option<HealthSetter>,
+) {
+    let Some(setter) = setter else { return };
+    let Some(fps) = presented_fps else { return };
+    setter(Some(StageHealthReading {
+        state: stage_health(fps, max_present_gap_ms, present_gaps_over100),
+        fps,
+    }));
+}
+
 /// Shared holder for the self-rescheduling rVFC closure (the closure needs a
 /// handle to itself to re-register for the next presented frame). `pub(crate)`
 /// so `ndi_clock_offset`'s independent rVFC-driven handshake loop (#510) can
@@ -436,6 +510,7 @@ pub(crate) fn start_rvfc_frame_observer(
     let video_latency_setter = setters.video_latency.clone();
     let frames_live_setter = setters.frames_live.clone();
     let dropped_frames_setter = setters.dropped_frames.clone();
+    let stage_health_setter = setters.stage_health.clone();
 
     let holder: SharedRvfcClosure = Rc::new(RefCell::new(None));
     let cb = {
@@ -471,6 +546,7 @@ pub(crate) fn start_rvfc_frame_observer(
                     &stats,
                     clock_offset.current(),
                     dropped_frames_setter.clone(),
+                    stage_health_setter.clone(),
                 );
             }
             schedule_video_frame_callback(&video, &holder);
@@ -515,10 +591,13 @@ pub(crate) fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &S
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_video_latency_ms, frames_are_stale, mark_frames_live, smooth_latency, FrameStats,
-        FramesLiveSetter, StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS,
+        derive_video_latency_ms, frames_are_stale, mark_frames_live, notify_stage_health,
+        smooth_latency, stage_health, FrameStats, FramesLiveSetter, HealthSetter,
+        StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS, HEALTH_FPS_BAD_MAX,
+        HEALTH_FPS_GOOD_MIN, HEALTH_GAP_HITCH_MS, HEALTH_REPEATED_GAPS_MIN,
         VIDEO_LATENCY_SMOOTHING_ALPHA,
     };
+    use crate::state::stage::{StageHealth, StageHealthReading};
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -536,6 +615,7 @@ mod tests {
         assert!(setters.frames_live.is_none());
         assert!(setters.clock_offset.is_none());
         assert!(setters.dropped_frames.is_none());
+        assert!(setters.stage_health.is_none());
     }
 
     #[test]
@@ -555,10 +635,14 @@ mod tests {
             frames_live: Some(frames_live),
             clock_offset: None,
             dropped_frames: None,
+            stage_health: None,
         };
         // The bundled setters still reach their targets (no signal dropped by
         // the struct-bundling refactor).
-        (setters.video_latency.as_ref().expect("video_latency setter"))(Some(42.0));
+        (setters
+            .video_latency
+            .as_ref()
+            .expect("video_latency setter"))(Some(42.0));
         (setters.frames_live.as_ref().expect("frames_live setter"))(true);
         assert_eq!(latency_seen.get(), Some(42.0));
         assert!(live_seen.get());
@@ -744,5 +828,129 @@ mod tests {
             v = smooth_latency(Some(v), 50.0, VIDEO_LATENCY_SMOOTHING_ALPHA);
         }
         assert!((v - 50.0).abs() < 1e-6, "EMA converged = {v}");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #532 — `stage_health`: recent-window fps + presentation-gap stats → a
+    // 🟢/🟡/🔴 verdict. Boundary cases at every named threshold, so a future
+    // threshold tweak has to consciously touch these assertions.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn good_when_fps_high_and_no_gaps() {
+        assert_eq!(stage_health(30.0, 20.0, 0), StageHealth::Good);
+    }
+
+    #[test]
+    fn good_at_exact_fps_and_gap_boundary() {
+        // fps exactly at the GOOD floor, gap just under the hitch bar, zero
+        // hitch count → still 🟢 (boundaries are inclusive on the good side).
+        assert_eq!(
+            stage_health(HEALTH_FPS_GOOD_MIN, HEALTH_GAP_HITCH_MS - 0.1, 0),
+            StageHealth::Good
+        );
+    }
+
+    #[test]
+    fn degraded_when_fps_between_good_and_bad_thresholds() {
+        assert_eq!(stage_health(20.0, 50.0, 0), StageHealth::Degraded);
+    }
+
+    #[test]
+    fn one_isolated_gap_over_hitch_is_degraded_not_bad() {
+        // A single >100ms gap (not "repeated") with otherwise-fine fps must
+        // NOT sink straight to 🔴 — that's what "repeated" gates.
+        assert_eq!(
+            stage_health(29.0, HEALTH_GAP_HITCH_MS + 50.0, 1),
+            StageHealth::Degraded
+        );
+    }
+
+    #[test]
+    fn bad_when_fps_below_floor_even_with_clean_gaps() {
+        assert_eq!(
+            stage_health(HEALTH_FPS_BAD_MAX - 0.1, 20.0, 0),
+            StageHealth::Bad
+        );
+    }
+
+    #[test]
+    fn fps_exactly_at_bad_floor_is_not_bad_via_fps_alone() {
+        // Strictly-less-than on the bad side: fps == floor does not itself
+        // trigger 🔴 (falls through to the fps>=GOOD_MIN check, which also
+        // fails at this fps, landing on 🟡).
+        assert_eq!(
+            stage_health(HEALTH_FPS_BAD_MAX, 20.0, 0),
+            StageHealth::Degraded
+        );
+    }
+
+    #[test]
+    fn repeated_gaps_escalate_to_bad_even_with_healthy_fps() {
+        assert_eq!(
+            stage_health(29.0, HEALTH_GAP_HITCH_MS + 100.0, HEALTH_REPEATED_GAPS_MIN),
+            StageHealth::Bad
+        );
+    }
+
+    #[test]
+    fn repeated_gaps_boundary_one_below_min_is_not_bad() {
+        assert_eq!(
+            stage_health(
+                29.0,
+                HEALTH_GAP_HITCH_MS + 100.0,
+                HEALTH_REPEATED_GAPS_MIN - 1
+            ),
+            StageHealth::Degraded
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #532 — `notify_stage_health`: the beacon-facing glue that classifies +
+    // pushes to the on-screen signal, mirroring `notify_dropped_frames`'s
+    // early-return shape in `ndi_beacon.rs`.
+    // ─────────────────────────────────────────────────────────────────────
+
+    fn capturing_health_setter() -> (HealthSetter, Rc<Cell<Option<StageHealthReading>>>) {
+        let captured = Rc::new(Cell::new(None));
+        let setter = {
+            let captured = Rc::clone(&captured);
+            Rc::new(move |v: Option<StageHealthReading>| captured.set(v)) as HealthSetter
+        };
+        (setter, captured)
+    }
+
+    #[test]
+    fn notify_pushes_the_classified_reading() {
+        let (setter, captured) = capturing_health_setter();
+        notify_stage_health(Some(30.0), 10.0, 0, &Some(setter));
+        assert_eq!(
+            captured.get(),
+            Some(StageHealthReading {
+                state: StageHealth::Good,
+                fps: 30.0,
+            })
+        );
+    }
+
+    #[test]
+    fn notify_is_a_no_op_when_fps_is_none() {
+        // Interval had no elapsed time to compute a rate — leave whatever is
+        // already on screen alone rather than push a meaningless verdict.
+        // Seed a prior reading first so a wrongly-firing setter is caught
+        // (an unseeded `None` capture would pass either way).
+        let (setter, captured) = capturing_health_setter();
+        captured.set(Some(StageHealthReading {
+            state: StageHealth::Bad,
+            fps: 3.0,
+        }));
+        notify_stage_health(None, 10.0, 0, &Some(setter));
+        assert_eq!(
+            captured.get(),
+            Some(StageHealthReading {
+                state: StageHealth::Bad,
+                fps: 3.0,
+            })
+        );
     }
 }

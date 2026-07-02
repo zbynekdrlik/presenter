@@ -54,10 +54,11 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
     let source_id = source_id.to_string();
     let escalation = Rc::clone(escalation);
     let clock_offset = Rc::clone(clock_offset);
-    // #527: only the two fields this ticker needs, plucked once out of the
+    // #527: only the fields this ticker needs, plucked once out of the
     // shared bundle before they're moved into the `move` closure below.
     let frames_live_setter = setters.frames_live.clone();
     let dropped_frames_setter = setters.dropped_frames.clone();
+    let stage_health_setter = setters.stage_health.clone();
     let tick_count = Cell::new(0u32);
     let last_current_time = Cell::new(0.0f64);
     let cb = Closure::<dyn FnMut()>::new(move || {
@@ -82,6 +83,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
             &stats,
             clock_offset.current(),
             dropped_frames_setter.clone(),
+            stage_health_setter.clone(),
         );
         if !rvfc_supported
             && approximate_frame_from_current_time(&video, &stats, &last_current_time)

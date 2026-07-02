@@ -359,6 +359,13 @@ impl Watchdog {
         if let Some(setter) = &setters.dropped_frames {
             setter(None);
         }
+        // #532: a freshly-installed session hasn't classified a recent window
+        // yet, so any health verdict still on screen belongs to the prior
+        // (torn-down) session. Clear it — the next beacon (up to ~15s away)
+        // repopulates it honestly, same reasoning as `dropped_frames` above.
+        if let Some(setter) = &setters.stage_health {
+            setter(None);
+        }
         // #510/#512: the browser<->server pipeline-clock offset estimator. Created
         // BEFORE the frame observer so the observer can read its current (offset,
         // RTT) each presented frame — the RTT/2 network-transit term of the TRUE

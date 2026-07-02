@@ -6,6 +6,54 @@ use super::session;
 
 const CLIENT_ID_KEY: &str = "stageClientId";
 
+/// Recent-window stage-TV health verdict (#532): "is this TV usable for the
+/// band right now?" — computed CLIENT-SIDE from the render-side per-interval
+/// accumulators in `FrameStats` (presented fps + presentation-gap stats),
+/// which reset every beacon and are therefore inherently RECENT, unlike
+/// getStats' cumulative freeze/drop counters (`dropped_frames` below answers
+/// "how many since connect"; this answers "how is it doing RIGHT NOW", which
+/// is what an operator glancing at the stage actually needs). See
+/// `components::stage::ndi_frame_stats::stage_health` for the pure
+/// classifier and its named threshold constants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageHealth {
+    /// 🟢 plynulé — smooth, fully usable.
+    Good,
+    /// 🟡 mierne seká — minor stutter, still usable.
+    Degraded,
+    /// 🔴 výpadky — freezing / not usable, needs attention.
+    Bad,
+}
+
+impl StageHealth {
+    /// The colour glyph shown on the stage readout.
+    pub fn emoji(self) -> &'static str {
+        match self {
+            StageHealth::Good => "\u{1f7e2}",
+            StageHealth::Degraded => "\u{1f7e1}",
+            StageHealth::Bad => "\u{1f534}",
+        }
+    }
+
+    /// The short Slovak label shown next to the glyph.
+    pub fn label(self) -> &'static str {
+        match self {
+            StageHealth::Good => "plynul\u{e9}",
+            StageHealth::Degraded => "mierne sek\u{e1}",
+            StageHealth::Bad => "v\u{fd}padky",
+        }
+    }
+}
+
+/// One classified health reading (#532): the verdict plus the recent-window
+/// presented-fps figure it was derived from, shown together as the small
+/// secondary detail beside the colour (e.g. "🟢 plynulé · 28 fps").
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StageHealthReading {
+    pub state: StageHealth,
+    pub fps: f64,
+}
+
 #[derive(Clone)]
 pub struct StageContext {
     pub client_id: String,
@@ -45,10 +93,17 @@ pub struct StageContext {
     /// this signal each time a beacon is posted (~every
     /// `Watchdog::RVFC_BEACON_FRAME_PERIOD` frames or every 15th health tick —
     /// getStats is async, so this updates on the BEACON cadence, not the 1s
-    /// video-latency cadence). Shown beside `video_latency_ms` in the stage's
-    /// "server→displej · N ms · ⬇N" readout. `None` when no beacon has landed
-    /// yet, or the browser's getStats reports neither field.
+    /// video-latency cadence). **#532: this plumbing is kept (still populated,
+    /// still test-hookable) but is NO LONGER shown on the stage readout** —
+    /// the cumulative count never recovered from one old blip, which read as
+    /// meaningless. `stage_health` below is what the readout displays now.
     pub dropped_frames: RwSignal<Option<(u32, u32)>>,
+    /// Recent-window (~15-20s) stage-TV health verdict (#532): replaces the
+    /// cumulative ⬇N/❄N suffix `dropped_frames` used to drive on the
+    /// "server→displej · N ms" readout. `None` until the first beacon
+    /// classifies a window (or right after a reconnect resets it); `Some` is
+    /// refreshed on the SAME beacon cadence as `dropped_frames` above.
+    pub stage_health: RwSignal<Option<StageHealthReading>>,
 }
 
 impl StageContext {
@@ -66,6 +121,7 @@ impl StageContext {
             ndi_frames_live: RwSignal::new(false),
             clock_offset: RwSignal::new(None),
             dropped_frames: RwSignal::new(None),
+            stage_health: RwSignal::new(None),
         }
     }
 }
