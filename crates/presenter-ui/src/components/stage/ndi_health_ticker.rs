@@ -18,10 +18,32 @@ use super::ndi_beacon::maybe_post_beacon;
 use super::ndi_clock_offset::ClockOffsetEstimator;
 use super::ndi_frame_stats::{
     mark_frames_live, record_presented_frame, refresh_frames_live_staleness, FrameStats,
-    StageSignalSetters,
+    HealthSetter, StageSignalSetters,
 };
 use super::ndi_profile::maybe_profile_fallback;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
+
+/// Should this ticker's beacon push a health verdict (#532 review fix)? NO on
+/// rVFC-less browsers: `approximate_frame_from_current_time` below counts AT
+/// MOST ONE "frame" per 1s tick — a stall-detection proxy, never a real
+/// frame-rate measurement — so over this ticker's ~15s beacon window
+/// `presented_in_interval` caps at ~15, always computing ≈1 fps regardless of
+/// how smoothly the TV is actually playing. Feeding that to `stage_health()`
+/// would permanently show 🔴 "výpadky" on a perfectly healthy rVFC-less
+/// display — exactly the untrustworthy readout this feature exists to
+/// replace. `dropped_frames`/beacon telemetry are unaffected by this gate;
+/// only the on-screen verdict is withheld (the readout falls back to the
+/// latency figure alone, same as "no beacon yet"). Pure + host-unit-tested.
+pub(crate) fn health_setter_for_ticker_beacon(
+    rvfc_supported: bool,
+    setter: &Option<HealthSetter>,
+) -> Option<HealthSetter> {
+    if rvfc_supported {
+        setter.clone()
+    } else {
+        None
+    }
+}
 
 /// 1s interval driving (a) the beacon cadence and (b) evaluation of the
 /// FRAME-BASED health rules:
@@ -75,7 +97,9 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
             return;
         }
         // Beacon first: the healthy-path early returns below must not
-        // starve it during normal playback.
+        // starve it during normal playback. See
+        // `health_setter_for_ticker_beacon` for why the health verdict is
+        // withheld on rVFC-less browsers.
         maybe_post_beacon(
             &tick_count,
             &pc,
@@ -83,7 +107,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
             &stats,
             clock_offset.current(),
             dropped_frames_setter.clone(),
-            stage_health_setter.clone(),
+            health_setter_for_ticker_beacon(rvfc_supported, &stage_health_setter),
         );
         if !rvfc_supported
             && approximate_frame_from_current_time(&video, &stats, &last_current_time)
@@ -148,4 +172,38 @@ fn approximate_frame_from_current_time(
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::health_setter_for_ticker_beacon;
+    use crate::components::stage::ndi_frame_stats::HealthSetter;
+    use crate::state::stage::StageHealthReading;
+    use std::rc::Rc;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #532 review fix: on rVFC-less browsers the ticker's OWN frame count is
+    // a stall-detection proxy (≤1 "frame"/tick), never a real fps figure —
+    // feeding it to the health verdict would permanently show a false 🔴 on
+    // a perfectly smooth TV. The ticker beacon must withhold the health
+    // setter entirely on that path.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn passes_the_setter_through_when_rvfc_is_supported() {
+        let setter: HealthSetter = Rc::new(|_: Option<StageHealthReading>| {});
+        assert!(health_setter_for_ticker_beacon(true, &Some(setter)).is_some());
+    }
+
+    #[test]
+    fn withholds_the_setter_when_rvfc_is_unsupported() {
+        let setter: HealthSetter = Rc::new(|_: Option<StageHealthReading>| {});
+        assert!(health_setter_for_ticker_beacon(false, &Some(setter)).is_none());
+    }
+
+    #[test]
+    fn stays_none_when_there_was_no_setter_to_begin_with() {
+        assert!(health_setter_for_ticker_beacon(true, &None).is_none());
+        assert!(health_setter_for_ticker_beacon(false, &None).is_none());
+    }
 }
