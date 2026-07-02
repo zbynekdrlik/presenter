@@ -55,6 +55,45 @@ fn count_requests(requests: &[wiremock::Request], method_name: &str, path_name: 
         .count()
 }
 
+/// A wiremock responder that records the `Instant` each request ARRIVED (before
+/// the response delay is applied) so a test can prove two requests were
+/// DISPATCHED concurrently by their arrival SPREAD — robust to machine load,
+/// unlike a total-wall-clock bound (#529). `respond()` runs at request receipt,
+/// so the spread of recorded instants reflects dispatch concurrency: parallel
+/// dispatch → near-zero spread; serial dispatch → ~one response-delay apart.
+#[derive(Clone)]
+struct ArrivalRecorder {
+    arrivals: Arc<std::sync::Mutex<Vec<std::time::Instant>>>,
+    delay: std::time::Duration,
+}
+
+impl wiremock::Respond for ArrivalRecorder {
+    fn respond(&self, _req: &wiremock::Request) -> ResponseTemplate {
+        self.arrivals
+            .lock()
+            .expect("arrivals lock")
+            .push(std::time::Instant::now());
+        ResponseTemplate::new(200).set_delay(self.delay)
+    }
+}
+
+/// Assert two PUTs were dispatched IN PARALLEL by their arrival spread (#529).
+/// Parallel dispatch lands both arrivals within a few ms; serial dispatch spaces
+/// them ~one `delay` apart. The bound is `delay / 2` — a wide margin either way
+/// (parallel ≈ 0, serial ≈ `delay`), and it measures dispatch concurrency, not
+/// total wall time, so a loaded runner (which only slows the response, after
+/// arrival) does not false-fail. Replaces the flaky `total elapsed < delay+25ms`.
+fn assert_two_parallel_arrivals(arrivals: &Arc<std::sync::Mutex<Vec<std::time::Instant>>>, delay: std::time::Duration) {
+    let a = arrivals.lock().expect("arrivals lock");
+    assert_eq!(a.len(), 2, "expected exactly two parallel PUTs, got {}", a.len());
+    let spread = a[1].duration_since(a[0]);
+    assert!(
+        spread < delay / 2,
+        "expected PARALLEL dispatch (arrival spread {spread:?} < {:?}); serial would space them ~{delay:?} apart",
+        delay / 2
+    );
+}
+
 // ── Shared mock-mounting + driver-build helpers (#487) ──────────────
 // Extracted from the (formerly over-cap) stage/refresh tests so each test
 // stays under the 120-line fn cap and the composition/param/clip mounting is
@@ -1143,7 +1182,6 @@ async fn mapping_change_resets_dedup_when_timer_param_ids_change() {
 /// parallel takes ~50ms. We assert < 75ms.
 #[tokio::test]
 async fn multi_clip_timer_issued_in_parallel() {
-    use std::time::Instant;
     use wiremock::matchers::path_regex;
 
     let server = MockServer::start().await;
@@ -1174,16 +1212,20 @@ async fn multi_clip_timer_issued_in_parallel() {
         .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
         .mount(&server)
         .await;
+    let put_delay = std::time::Duration::from_millis(50);
+    let arrivals = Arc::new(std::sync::Mutex::new(Vec::new()));
     Mock::given(method("PUT"))
         .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
-        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(50)))
+        .respond_with(ArrivalRecorder {
+            arrivals: Arc::clone(&arrivals),
+            delay: put_delay,
+        })
         .mount(&server)
         .await;
 
     let (mut driver, status) = build_driver_against(&server).await;
     driver.ensure_mapping().await.expect("mapping");
 
-    let start = Instant::now();
     driver
         .handle_timer(
             crate::resolume::TimerFrame::new("05:00".to_string()),
@@ -1191,19 +1233,17 @@ async fn multi_clip_timer_issued_in_parallel() {
         )
         .await
         .expect("timer ok");
-    let elapsed = start.elapsed();
 
-    assert!(
-        elapsed < std::time::Duration::from_millis(75),
-        "expected parallel timer PUTs (<75ms), got {elapsed:?}"
-    );
+    // Both #timer PUTs must be dispatched in PARALLEL — proven by arrival spread,
+    // not total wall time (#529: the old `elapsed < 75ms` bound false-failed on a
+    // loaded runner even when the dispatch was genuinely parallel).
+    assert_two_parallel_arrivals(&arrivals, put_delay);
 }
 
 /// #267 fix (Task 6): two #main-a clips must be PUT in parallel.
 /// Same wall-time assertion shape as `multi_clip_timer_issued_in_parallel`.
 #[tokio::test]
 async fn multi_clip_lane_issued_in_parallel() {
-    use std::time::Instant;
     use wiremock::matchers::path_regex;
 
     let server = MockServer::start().await;
@@ -1234,9 +1274,14 @@ async fn multi_clip_lane_issued_in_parallel() {
         .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
         .mount(&server)
         .await;
+    let put_delay = std::time::Duration::from_millis(50);
+    let arrivals = Arc::new(std::sync::Mutex::new(Vec::new()));
     Mock::given(method("PUT"))
         .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
-        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(50)))
+        .respond_with(ArrivalRecorder {
+            arrivals: Arc::clone(&arrivals),
+            delay: put_delay,
+        })
         .mount(&server)
         .await;
 
@@ -1246,7 +1291,6 @@ async fn multi_clip_lane_issued_in_parallel() {
     let mapping = driver.mapping.clone().expect("mapping");
     let main_lane = driver.lane_state.current(super::types::SlotKind::Main);
 
-    let start = Instant::now();
     driver
         .update_lane_text(
             main_lane,
@@ -1257,10 +1301,7 @@ async fn multi_clip_lane_issued_in_parallel() {
         )
         .await
         .expect("lane ok");
-    let elapsed = start.elapsed();
 
-    assert!(
-        elapsed < std::time::Duration::from_millis(75),
-        "expected parallel lane PUTs (<75ms), got {elapsed:?}"
-    );
+    // Parallel-dispatch proven by arrival spread, not total wall time (#529).
+    assert_two_parallel_arrivals(&arrivals, put_delay);
 }
