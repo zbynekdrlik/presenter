@@ -157,6 +157,24 @@ mod tests {
     }
 
     #[test]
+    fn slide_has_any_warning_ignores_stage_field_length_entirely() {
+        // #515 (RED): the stage field is free-form speaker/reading text and
+        // must NEVER trip the lyrics per-line character-limit warning — only
+        // main/translation should. Currently `slide_has_any_warning` ORs the
+        // stage field in just like main/translation, so this fails today.
+        let ok = "short";
+        let over_limit_stage = "abcdefghijklmnopqrstuvwxyz0123456";
+        assert!(
+            field_has_warning(over_limit_stage, 32),
+            "sanity: this text IS over the limit"
+        );
+        assert!(
+            !slide_has_any_warning(ok, ok, over_limit_stage, 32),
+            "a slide with only ok main/translation must not warn regardless of any stage text"
+        );
+    }
+
+    #[test]
     fn zero_limit_disables_warnings() {
         let long = "abcdefghijklmnopqrstuvwxyz0123456";
         assert!(!field_has_warning(long, 0));
