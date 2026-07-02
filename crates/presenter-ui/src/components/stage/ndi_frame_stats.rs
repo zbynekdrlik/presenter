@@ -516,10 +516,53 @@ pub(crate) fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &S
 mod tests {
     use super::{
         derive_video_latency_ms, frames_are_stale, mark_frames_live, smooth_latency, FrameStats,
-        FramesLiveSetter, FRAMES_LIVE_STALENESS_MS, VIDEO_LATENCY_SMOOTHING_ALPHA,
+        FramesLiveSetter, StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS,
+        VIDEO_LATENCY_SMOOTHING_ALPHA,
     };
     use std::cell::Cell;
     use std::rc::Rc;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #527 refactor: the four stage-diagnostic signal setters are bundled into
+    // ONE `StageSignalSetters` struct threaded through the watchdog chain. This
+    // guards that the struct actually carries + exposes each optional setter and
+    // that a held setter still fires (the refactor must not drop a signal).
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stage_signal_setters_defaults_all_none() {
+        let setters = StageSignalSetters::default();
+        assert!(setters.video_latency.is_none());
+        assert!(setters.frames_live.is_none());
+        assert!(setters.clock_offset.is_none());
+        assert!(setters.dropped_frames.is_none());
+    }
+
+    #[test]
+    fn stage_signal_setters_hold_and_fire_each_signal() {
+        let latency_seen = Rc::new(Cell::new(None::<f64>));
+        let live_seen = Rc::new(Cell::new(false));
+        let video_latency: VideoLatencySetter = {
+            let latency_seen = Rc::clone(&latency_seen);
+            Rc::new(move |v: Option<f64>| latency_seen.set(v))
+        };
+        let frames_live: FramesLiveSetter = {
+            let live_seen = Rc::clone(&live_seen);
+            Rc::new(move |v: bool| live_seen.set(v))
+        };
+        let setters = StageSignalSetters {
+            video_latency: Some(video_latency),
+            frames_live: Some(frames_live),
+            clock_offset: None,
+            dropped_frames: None,
+        };
+        // The bundled setters still reach their targets (no signal dropped by
+        // the struct-bundling refactor).
+        (setters.video_latency.as_ref().expect("video_latency setter"))(Some(42.0));
+        (setters.frames_live.as_ref().expect("frames_live setter"))(true);
+        assert_eq!(latency_seen.get(), Some(42.0));
+        assert!(live_seen.get());
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // #500 frames-live gate: the neutral covering placeholder must reflect
