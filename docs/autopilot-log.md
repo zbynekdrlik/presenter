@@ -316,3 +316,26 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
 - **#512:** the stage latency number is now TRUTHFUL: `latency = render residual (rVFC buffer+decode+present) + network one-way (RTT/2 from /ndi/time, #510)`; labelled `server→displej`; honest `n/a` when no fresh offset. The #509 probe had proven the designed `estimatedPlayoutTimestamp` formula dead on ALL real TVs AND desktop Chrome (`playout_class="absent"` — monotonic-clock RTCP SRs), so the metric was redefined on fields every device reports. Unit invariants: Tailscale ≥ LAN, non-negative, n/a-without-network. ADR 0008 + architecture.md. PR #518, merged 34dcf5dd, v0.4.181.
 - **Visibility fix:** readout gated on stable `ndi_active` (per-frame `frames_live` throttles on idle/headless and hid the correct number). Verified live on prod: `SERVER→DISPLEJ · 21 ms` appears unforced, offset RTT 2.1ms, 0 console errors. PR #519, merged 48083c74, v0.4.182.
 - **CI fix (rode PR #519):** dev2 toolchain bump (rustc 1.96.1) forced a 19-min cold gstreamer rebuild in the e2e-ndi lane → 20-min cap → 2× cancelled. `ndi_test_sender` is now prebuilt in the GH-hosted Build job and shipped as an artifact — the self-hosted runner never compiles Rust again (matches the documented runner architecture).
+
+## 2026-07-02 — #515 (fulltext stage layout + per-slide stage-layout markers)
+- **Part 1:** new `fulltext` built-in layout — the current slide's STAGE text (fallback: main)
+  auto-scaled across the whole screen via the shared `autofit_effect` (max 800px, `pre-wrap` so
+  long hand-off paragraphs wrap instead of shrinking a single line). Minimal per the timer-layout
+  pattern: text area + StatusBar, nothing else. `components/stage/fulltext_layout.rs`.
+- **Part 2:** per-slide stage-layout markers in a NEW `slide_stage_layouts` table
+  (slide_id PK, presentation_id, layout_code; idempotent `m20260702_000001` migration).
+  Trigger flow is fully SERVER-side (tablet rule preserved): `update_stage_state` looks up the
+  marker of the now-current slide BEFORE the resolution broadcast and, if present+different,
+  switches via the same `set_stage_layout_code` path as `POST /stage/layout`. Unmarked slides
+  never revert; a stale marker (layout removed later) logs a warning and never fails the trigger.
+  Endpoints: `PUT /presentations/{pid}/slides/{sid}/stage-layout` (`{"layoutCode": code|null}`),
+  `GET /presentations/{pid}/slide-stage-layouts`. Markers are cleaned up on slide delete +
+  presentation delete. Operator UI: compact select in the slide-card header (edit mode), badge
+  "⤢ <NAME>" (live mode) — new module `components/slide_stage_layout_picker.rs` to keep
+  `slide_list.rs` under the 1000-line cap (now 989 prod lines).
+- **Tests:** repo CRUD (6, `repository/slide_stage_layout.rs`), state assign/validate/trigger-switch
+  (8, `state/slide_stage_layout.rs` — incl. marked-slide-switches, unmarked-keeps, stale-marker-safe),
+  router handler tests, core built_in updates, UI `fulltext_display_text` + `marker_label` units,
+  E2E `tests/e2e/stage-fulltext-layout.spec.ts` (3: fullscreen render + autoscale short-vs-long font
+  assertion, API marker → trigger switches live stage DOM, operator select→badge flow; 0 console errors).
+- Solo PR (dev→main, Closes #515), version 0.4.184.

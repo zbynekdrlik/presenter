@@ -161,6 +161,8 @@ impl AppState {
         self.repository
             .replace_presentation_slides(presentation_id, &slides)
             .await?;
+        // #515: a deleted slide's stage-layout marker goes with it.
+        self.repository.clear_slide_stage_layout(slide_id).await?;
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
         let mut updated_presentation = presentation.clone();

@@ -61,6 +61,11 @@ impl AppState {
         self.repository.upsert_stage_state(&stage_state).await?;
         let t_db_write_ms = db_start.elapsed().as_secs_f64() * 1000.0;
 
+        // #515: a slide carrying a stage-layout marker switches the stage
+        // display BEFORE the resolution broadcast, so the snapshot below is
+        // already published for the new layout. Never fails the trigger.
+        self.apply_slide_stage_layout_marker(current_slide_id).await;
+
         let mut resolution = stage_resolution_from_presentation(
             &presentation,
             Some(library_name),

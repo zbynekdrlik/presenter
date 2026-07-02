@@ -8,6 +8,7 @@ pub mod network_mode;
 mod playlists;
 mod presentations;
 mod search;
+mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
 mod tablet_pwa;
@@ -279,6 +280,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/presentations/{presentation_id}/slides",
             post(presentations::insert_slide),
+        )
+        .route(
+            "/presentations/{presentation_id}/slides/{slide_id}/stage-layout",
+            put(slide_stage_layout::set_slide_stage_layout),
+        )
+        .route(
+            "/presentations/{presentation_id}/slide-stage-layouts",
+            get(slide_stage_layout::list_slide_stage_layouts),
         )
         .route(
             "/presentations/{presentation_id}/slides/{slide_id}/duplicate",

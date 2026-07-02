@@ -96,6 +96,10 @@ impl Repository {
         if result.rows_affected == 0 {
             return Err(anyhow!("presentation not found"));
         }
+        // #515: drop any per-slide stage-layout markers of the deleted
+        // presentation so they don't accumulate as orphan rows.
+        self.clear_slide_stage_layouts_for_presentation(presentation_id)
+            .await?;
         Ok(())
     }
 

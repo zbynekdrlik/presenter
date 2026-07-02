@@ -203,6 +203,25 @@ pub fn SlideList() -> impl IntoView {
         });
     }
 
+    // #515: per-slide stage-layout markers of the open presentation
+    // (slide_id → layout_code), refetched whenever the presentation changes.
+    let slide_stage_markers = RwSignal::new(HashMap::<String, String>::new());
+    {
+        let selected_presentation_id = ctx.selected_presentation_id;
+        Effect::new(move |_| {
+            let Some(pres_id) = selected_presentation_id.get() else {
+                slide_stage_markers.set(HashMap::new());
+                return;
+            };
+            leptos::task::spawn_local(async move {
+                match api::presentations::fetch_slide_stage_layouts(&pres_id).await {
+                    Ok(map) => slide_stage_markers.set(map),
+                    Err(_) => slide_stage_markers.set(HashMap::new()),
+                }
+            });
+        });
+    }
+
     // Scroll active slide into view when stage's current slide changes.
     {
         let stage_snapshot = ctx.stage_snapshot;
@@ -464,6 +483,10 @@ pub fn SlideList() -> impl IntoView {
                         // Clone for save-status badge in slide header
                         let slide_id_for_badge = slide_id.clone();
 
+                        // Clones for the per-slide stage-layout control (#515)
+                        let pres_id_for_marker = pres_id.clone();
+                        let slide_id_for_marker = slide_id.clone();
+
                         view! {
                             <article
                                 class=move || {
@@ -497,7 +520,7 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(target) = ev.target() {
                                             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                 let tag = el.tag_name().to_lowercase();
-                                                if tag == "button" || tag == "textarea" || tag == "input" {
+                                                if tag == "button" || tag == "textarea" || tag == "input" || tag == "select" || tag == "option" {
                                                     return;
                                                 }
                                                 if el.get_attribute("data-action").is_some() {
@@ -534,7 +557,7 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(target) = ev.target() {
                                             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                 let tag = el.tag_name().to_lowercase();
-                                                if tag == "button" || tag == "textarea" || tag == "input" {
+                                                if tag == "button" || tag == "textarea" || tag == "input" || tag == "select" || tag == "option" {
                                                     return;
                                                 }
                                             }
@@ -600,6 +623,14 @@ pub fn SlideList() -> impl IntoView {
                                             <span class=class style=color_style data-role="slide-group">{g}</span>
                                         }
                                     })}
+                                    // #515: per-slide stage-layout marker —
+                                    // selector in edit mode, badge in live mode.
+                                    <crate::components::slide_stage_layout_picker::SlideStageLayoutControl
+                                        pres_id=pres_id_for_marker
+                                        slide_id=slide_id_for_marker
+                                        is_edit=is_edit
+                                        markers=slide_stage_markers
+                                    />
                                     {
                                         // Memo: derives this slide's status from the shared map.
                                         // The body runs whenever any slide saves, but the Memo
