@@ -47,14 +47,31 @@ fn display_id() -> Option<String> {
 /// The present-gap accumulators are snapshotted-and-reset SYNCHRONOUSLY here
 /// (before the async getStats), so each beacon reports exactly the interval
 /// since the previous beacon — even though the actual POST happens later on
-/// the spawned task.
-pub(crate) fn post_stats_beacon(pc: &RtcPeerConnection, source_id: &str, stats: &FrameStats) {
+/// the spawned task. The smoothed true latency and the clock offset/RTT
+/// (#514) are likewise sampled synchronously so they describe THIS beacon's
+/// moment, not the post-await one.
+pub(crate) fn post_stats_beacon(
+    pc: &RtcPeerConnection,
+    source_id: &str,
+    stats: &FrameStats,
+    clock_offset: Option<(f64, f64)>,
+) {
     let (max_gap, over100, fps) = snapshot_present_gaps(stats);
+    let video_latency_ms = stats.video_latency_ms.get();
     let pc = pc.clone();
     let source_id = source_id.to_string();
     spawn_local(async move {
         if let Ok(report) = JsFuture::from(pc.get_stats()).await {
-            post_client_stats(&source_id, &report, max_gap, over100, fps).await;
+            post_client_stats(
+                &source_id,
+                &report,
+                max_gap,
+                over100,
+                fps,
+                video_latency_ms,
+                clock_offset,
+            )
+            .await;
         }
     });
 }
@@ -67,12 +84,13 @@ pub(crate) fn maybe_post_beacon(
     pc: &RtcPeerConnection,
     source_id: &str,
     stats: &FrameStats,
+    clock_offset: Option<(f64, f64)>,
 ) {
     tick_count.set(tick_count.get().wrapping_add(1));
     if tick_count.get() % 15 != 0 {
         return;
     }
-    post_stats_beacon(pc, source_id, stats);
+    post_stats_beacon(pc, source_id, stats, clock_offset);
 }
 
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
@@ -84,12 +102,15 @@ pub(crate) fn maybe_post_beacon(
 /// beacon (already snapshotted-and-reset by the caller). They sit alongside
 /// the decode-side getStats fields so a reader can tell a frame that decoded
 /// on time but reached the screen late from a genuine decode stall.
+#[allow(clippy::too_many_arguments)]
 async fn post_client_stats(
     source_id: &str,
     report: &JsValue,
     max_present_gap_ms: f64,
     present_gaps_over100: u32,
     presented_fps: Option<f64>,
+    video_latency_ms: Option<f64>,
+    clock_offset: Option<(f64, f64)>,
 ) {
     let mut frames_decoded = JsValue::NULL;
     let mut fps = JsValue::NULL;
@@ -184,6 +205,13 @@ async fn post_client_stats(
         "estimatedPlayoutTimestamp": estimated_playout.as_f64(),
         "reportTimestamp": report_ts.as_f64(),
         "userAgent": user_agent,
+        // #514 observability: the smoothed TRUE server→display latency this
+        // display currently SHOWS (#512; null = n/a) plus the /ndi/time clock
+        // offset + RTT it was built from (#510) — for server-side cross-device
+        // correlation in one clock domain.
+        "videoLatencyMs": video_latency_ms,
+        "clockOffsetMs": clock_offset.map(|(o, _)| o),
+        "clockRttMs": clock_offset.map(|(_, r)| r),
     })
     .to_string();
 

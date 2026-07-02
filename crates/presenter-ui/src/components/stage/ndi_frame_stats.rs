@@ -436,7 +436,7 @@ pub(crate) fn start_rvfc_frame_observer(
             update_video_latency(&meta, &stats, &video_latency_setter, network_one_way_ms);
             let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
-                post_stats_beacon(&pc, &source_id, &stats);
+                post_stats_beacon(&pc, &source_id, &stats, clock_offset.current());
             }
             schedule_video_frame_callback(&video, &holder);
         })
