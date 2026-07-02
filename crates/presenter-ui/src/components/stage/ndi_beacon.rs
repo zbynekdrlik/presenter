@@ -177,6 +177,26 @@ fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
     out
 }
 
+/// #523: push this beacon's dropped-frame + freeze counts to the on-screen
+/// readout. `None` only when the browser's getStats reports NEITHER field
+/// (honest "no data" rather than a misleading 0); a report with at least one
+/// of the two fields present treats the other as 0 (freezeCount and
+/// framesDropped are both cumulative counters that start at 0, so an absent
+/// sibling field alongside a present one is "not yet incremented", not
+/// "unknown"). Split out of `post_client_stats` to keep that function under
+/// the 80-line size-warning threshold.
+fn notify_dropped_frames(inbound: &InboundVideoStats, setter: &Option<DroppedFramesSetter>) {
+    let Some(setter) = setter else { return };
+    let counts = match (inbound.frames_dropped, inbound.freeze_count) {
+        (None, None) => None,
+        (dropped, freeze) => Some((
+            dropped.unwrap_or(0.0).round() as u32,
+            freeze.unwrap_or(0.0).round() as u32,
+        )),
+    };
+    setter(counts);
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn post_client_stats(
     source_id: &str,
@@ -189,24 +209,7 @@ async fn post_client_stats(
     dropped_frames_setter: Option<DroppedFramesSetter>,
 ) {
     let inbound = extract_inbound_video(report);
-
-    // #523: push this beacon's dropped-frame + freeze counts to the on-screen
-    // readout. `None` only when the browser's getStats reports NEITHER field
-    // (honest "no data" rather than a misleading 0); a report with at least
-    // one of the two fields present treats the other as 0 (freezeCount and
-    // framesDropped are both cumulative counters that start at 0, so an
-    // absent sibling field alongside a present one is "not yet incremented",
-    // not "unknown").
-    if let Some(setter) = &dropped_frames_setter {
-        let counts = match (inbound.frames_dropped, inbound.freeze_count) {
-            (None, None) => None,
-            (dropped, freeze) => Some((
-                dropped.unwrap_or(0.0).round() as u32,
-                freeze.unwrap_or(0.0).round() as u32,
-            )),
-        };
-        setter(counts);
-    }
+    notify_dropped_frames(&inbound, &dropped_frames_setter);
 
     // #509 (T0): full userAgent — the exact WebView/Chrome version per real
     // stage TV, which decides whether the playout field is available there.
@@ -276,5 +279,56 @@ async fn post_client_stats(
     };
     if let Some(window) = leptos::web_sys::window() {
         let _ = JsFuture::from(window.fetch_with_request(&request)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{notify_dropped_frames, DroppedFramesSetter, InboundVideoStats};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    type CapturedCounts = Rc<Cell<Option<(u32, u32)>>>;
+
+    fn capturing_setter() -> (DroppedFramesSetter, CapturedCounts) {
+        let captured = Rc::new(Cell::new(None));
+        let setter = {
+            let captured = Rc::clone(&captured);
+            Rc::new(move |v: Option<(u32, u32)>| captured.set(v)) as DroppedFramesSetter
+        };
+        (setter, captured)
+    }
+
+    #[test]
+    fn no_data_from_getstats_reports_none_not_a_fabricated_zero() {
+        let (setter, captured) = capturing_setter();
+        let inbound = InboundVideoStats::default();
+        notify_dropped_frames(&inbound, &Some(setter));
+        assert_eq!(captured.get(), None);
+    }
+
+    #[test]
+    fn dropped_present_freeze_absent_treats_freeze_as_zero() {
+        // Both counters are cumulative and start at 0 — a present dropped-count
+        // with no freeze field yet means "0 freezes so far", not "unknown".
+        let (setter, captured) = capturing_setter();
+        let inbound = InboundVideoStats {
+            frames_dropped: Some(128.0),
+            ..Default::default()
+        };
+        notify_dropped_frames(&inbound, &Some(setter));
+        assert_eq!(captured.get(), Some((128, 0)));
+    }
+
+    #[test]
+    fn both_present_round_to_nearest_integer() {
+        let (setter, captured) = capturing_setter();
+        let inbound = InboundVideoStats {
+            frames_dropped: Some(128.0),
+            freeze_count: Some(2.0),
+            ..Default::default()
+        };
+        notify_dropped_frames(&inbound, &Some(setter));
+        assert_eq!(captured.get(), Some((128, 2)));
     }
 }

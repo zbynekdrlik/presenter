@@ -234,3 +234,48 @@ test("stage shows dropped-frame + freeze count beside the video latency", async 
 
   await stagePage.close();
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// #524 — the diagnostic readouts (`.stage__connection`, `.stage__video-latency`)
+// must render SMALL + FAINT (close-up info for the operator, not primary
+// content) rather than autofit-scaled to fill their box (which is why they
+// used to look too prominent). Verified by reading the COMPUTED style —
+// asserting a fixed small font-size + low opacity, not just visual guessing.
+// ─────────────────────────────────────────────────────────────────────────
+
+test("diagnostic readouts render small and faint (de-emphasized, not autofit)", async ({
+  context,
+}) => {
+  const stagePage = await openVideoStage(context);
+  await setNdiActive(stagePage, true);
+  await setVideoLatency(stagePage, 84);
+
+  const connectionEl = stagePage.locator(".stage__connection");
+  const videoEl = stagePage.locator(".stage__video-latency");
+  await expect(videoEl).toBeVisible();
+
+  const readComputed = async (locator: typeof connectionEl) =>
+    locator.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return { fontSize: parseFloat(style.fontSize), opacity: parseFloat(style.opacity) };
+    });
+
+  const connectionStyle = await readComputed(connectionEl);
+  const videoStyle = await readComputed(videoEl);
+
+  // Faint: low opacity (~0.4-0.5), never full-strength like primary content.
+  expect(connectionStyle.opacity).toBeGreaterThan(0);
+  expect(connectionStyle.opacity).toBeLessThanOrEqual(0.5);
+  expect(videoStyle.opacity).toBeGreaterThan(0);
+  expect(videoStyle.opacity).toBeLessThanOrEqual(0.5);
+
+  // Small: a fixed vw-scaled size, not autofit-to-fill-the-box (which would
+  // scale toward the STATUS_MAX_FONT ceiling). Comfortably below any autofit
+  // result, but still nonzero (readable up close, per the issue).
+  expect(connectionStyle.fontSize).toBeGreaterThan(0);
+  expect(connectionStyle.fontSize).toBeLessThan(40);
+  expect(videoStyle.fontSize).toBeGreaterThan(0);
+  expect(videoStyle.fontSize).toBeLessThan(40);
+
+  await stagePage.close();
+});
