@@ -98,8 +98,9 @@ pub(crate) fn refresh_frames_live_staleness(stats: &FrameStats, setter: &Option<
 
 /// Cadence (ms) at which the smoothed video latency is pushed to the on-screen
 /// signal. rVFC fires ~30×/s; writing the reactive signal that often would
-/// re-run the StatusBar autofit every frame. ~1 update/s keeps the readout
-/// live without churning the render.
+/// re-run the StatusBar's reactive text (and, before #524, the autofit reflow
+/// search it drove) every frame. ~1 update/s keeps the readout live without
+/// churning the render.
 const VIDEO_LATENCY_EMIT_INTERVAL_MS: f64 = 1000.0;
 
 /// EMA responsiveness for the on-screen video-latency figure. Lower = smoother
@@ -259,8 +260,9 @@ pub(crate) struct FrameStats {
     pub(crate) video_latency_ms: Cell<Option<f64>>,
     /// `now_ms()` of the last push of `video_latency_ms` to the on-screen
     /// signal. The rVFC callback fires ~30×/s; the readout is updated at most
-    /// once per `VIDEO_LATENCY_EMIT_INTERVAL_MS` so the StatusBar autofit does
-    /// not re-run every frame. Seeded to 0.0 so the first sample emits at once.
+    /// once per `VIDEO_LATENCY_EMIT_INTERVAL_MS` so the StatusBar's reactive
+    /// text does not re-run every frame. Seeded to 0.0 so the first sample
+    /// emits at once.
     pub(crate) last_latency_emit_at: Cell<f64>,
     /// Last-EMITTED frames-live state for THIS session (#500). Tracks what was
     /// last pushed to `StageContext::ndi_frames_live` via the `FramesLiveSetter`

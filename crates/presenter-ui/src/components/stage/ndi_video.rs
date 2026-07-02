@@ -90,9 +90,24 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     // beacon share this setter — see `Watchdog::install`). Owned by the parent
     // StagePage, so it survives this mount/unmount. No StageContext → no
     // setter (None).
+    //
+    // #523 (review follow-up): the two beacon-trigger paths can each call
+    // `pc.get_stats()` concurrently (~every 15s); their async resolutions are
+    // NOT guaranteed to land in the order they started. Without a guard, an
+    // older-but-later-resolving result could overwrite a fresher one and make
+    // the readout visibly jump BACKWARD for one beacon interval. Guarded via
+    // `should_apply_dropped_frames_update` (pure, unit-tested below): these
+    // are cumulative session counters that only ever increase, so a genuine
+    // update is never smaller than what's already shown — except the
+    // intentional reconnect reset to `None` (`Watchdog::install`), which this
+    // check always lets through.
     let dropped_frames_sig = use_context::<StageContext>().map(|ctx| ctx.dropped_frames);
     let dropped_frames_setter: Option<DroppedFramesSetter> = dropped_frames_sig.map(|sig| {
-        std::rc::Rc::new(move |v: Option<(u32, u32)>| sig.set(v)) as DroppedFramesSetter
+        std::rc::Rc::new(move |v: Option<(u32, u32)>| {
+            if should_apply_dropped_frames_update(v, sig.get_untracked()) {
+                sig.set(v);
+            }
+        }) as DroppedFramesSetter
     });
 
     // Holds the active connection: the WHEP session + the watchdog observing
@@ -379,6 +394,33 @@ pub(crate) const HEALTHY_SESSION_MS: f64 = 20_000.0;
 /// was healthy enough to reset the reconnect backoff (#369). Pure + unit-tested.
 pub(crate) fn should_reset_backoff(session_lifetime_ms: f64) -> bool {
     session_lifetime_ms >= HEALTHY_SESSION_MS
+}
+
+/// #523 (review follow-up): should an incoming dropped-frame+freeze reading
+/// actually be applied to the on-screen signal? The two beacon-trigger paths
+/// (rVFC frame-count-driven + the 1s health ticker) can each call
+/// `pc.get_stats()` concurrently roughly every 15s; their async resolutions
+/// are NOT guaranteed to land in start order, so without this guard an
+/// older-but-later-resolving reading could overwrite a fresher one and make
+/// the readout visibly jump BACKWARD for one interval.
+///
+/// `framesDropped`/`freezeCount` are cumulative WebRTC counters that only
+/// ever increase within one RTCPeerConnection session, so a genuine update
+/// is never smaller than what's already shown — reject one that is (it must
+/// be a stale, out-of-order resolution). The ONE deliberate exception: a
+/// `None` incoming value (or `None` currently shown) always applies — that
+/// is the reconnect reset (`Watchdog::install`) or the first reading of a
+/// fresh session, never a stale in-order regression. Pure + unit-tested.
+pub(crate) fn should_apply_dropped_frames_update(
+    incoming: Option<(u32, u32)>,
+    current: Option<(u32, u32)>,
+) -> bool {
+    match (incoming, current) {
+        (None, _) | (Some(_), None) => true,
+        (Some((dropped, freeze)), Some((prev_dropped, prev_freeze))) => {
+            dropped >= prev_dropped && freeze >= prev_freeze
+        }
+    }
 }
 
 /// Sleep for this instance's next capped-exponential backoff duration, then
@@ -796,5 +838,43 @@ mod tests {
         // A long-lived session that blipped — reset (prompt reconnect).
         assert!(should_reset_backoff(HEALTHY_SESSION_MS));
         assert!(should_reset_backoff(300_000.0));
+    }
+
+    /// #523 (review follow-up): two concurrent beacon-trigger paths' getStats()
+    /// resolutions can land out of order; the guard must reject a stale
+    /// (smaller) reading while still accepting the reconnect reset and the
+    /// first reading of a fresh session.
+    mod dropped_frames_monotonic_guard {
+        use super::super::should_apply_dropped_frames_update as should_apply;
+
+        #[test]
+        fn accepts_the_first_reading_of_a_fresh_session() {
+            assert!(should_apply(Some((0, 0)), None));
+            assert!(should_apply(Some((128, 2)), None));
+        }
+
+        #[test]
+        fn accepts_the_reconnect_reset_to_none() {
+            assert!(should_apply(None, Some((128, 2))));
+        }
+
+        #[test]
+        fn accepts_a_monotonically_increasing_update() {
+            assert!(should_apply(Some((129, 2)), Some((128, 2))));
+            assert!(should_apply(Some((128, 3)), Some((128, 2))));
+            assert!(
+                should_apply(Some((128, 2)), Some((128, 2))),
+                "equal counts still apply"
+            );
+        }
+
+        #[test]
+        fn rejects_an_out_of_order_stale_resolution() {
+            // The classic race: an older-but-later-resolving getStats() call
+            // would regress either counter visibly backward — reject it.
+            assert!(!should_apply(Some((100, 2)), Some((128, 2))));
+            assert!(!should_apply(Some((128, 1)), Some((128, 2))));
+            assert!(!should_apply(Some((100, 1)), Some((128, 2))));
+        }
     }
 }

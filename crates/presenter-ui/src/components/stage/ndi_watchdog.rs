@@ -348,6 +348,17 @@ impl Watchdog {
         if let Some(setter) = &frames_live_setter {
             setter(false);
         }
+        // #523 (review follow-up): a freshly-installed session hasn't decoded a
+        // frame yet, so any server→display ms figure still on screen belongs to
+        // the prior (torn-down) session. Clear it for the SAME reason
+        // `frames_live_setter` is cleared above — the first presented frame's
+        // `update_video_latency` call repopulates it honestly within ~1s. (This
+        // reset was missing before #523 added the analogous one for
+        // `dropped_frames_setter` below; both readouts now clear consistently on
+        // every reconnect instead of only one of the two.)
+        if let Some(setter) = &video_latency_setter {
+            setter(None);
+        }
         // #523: a freshly-installed session hasn't posted a beacon yet, so any
         // dropped/freeze count still on screen is from the prior (torn-down)
         // session. Clear it rather than show a stale figure — the next beacon

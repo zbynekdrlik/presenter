@@ -180,11 +180,15 @@ fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
 /// #523: push this beacon's dropped-frame + freeze counts to the on-screen
 /// readout. `None` only when the browser's getStats reports NEITHER field
 /// (honest "no data" rather than a misleading 0); a report with at least one
-/// of the two fields present treats the other as 0 (freezeCount and
-/// framesDropped are both cumulative counters that start at 0, so an absent
-/// sibling field alongside a present one is "not yet incremented", not
-/// "unknown"). Split out of `post_client_stats` to keep that function under
-/// the 80-line size-warning threshold.
+/// of the two fields present treats the other as 0. This assumes the two
+/// fields are supported TOGETHER or not at all — true on every real target
+/// here (all stage displays are Chromium/WebView, and Chromium has always
+/// shipped `framesDropped` + `freezeCount` as part of the same inbound-rtp
+/// stats extension, never one without the other). If a future WebView ever
+/// violated that pairing, the worst case is a momentarily-optimistic "0" on
+/// this purely diagnostic overlay, not a functional regression. Split out of
+/// `post_client_stats` to keep that function under the 80-line size-warning
+/// threshold.
 fn notify_dropped_frames(inbound: &InboundVideoStats, setter: &Option<DroppedFramesSetter>) {
     let Some(setter) = setter else { return };
     let counts = match (inbound.frames_dropped, inbound.freeze_count) {
