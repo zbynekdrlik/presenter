@@ -17,8 +17,8 @@ use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 use super::ndi_beacon::maybe_post_beacon;
 use super::ndi_clock_offset::ClockOffsetEstimator;
 use super::ndi_frame_stats::{
-    mark_frames_live, record_presented_frame, refresh_frames_live_staleness, DroppedFramesSetter,
-    FrameStats, FramesLiveSetter,
+    mark_frames_live, record_presented_frame, refresh_frames_live_staleness, FrameStats,
+    StageSignalSetters,
 };
 use super::ndi_profile::maybe_profile_fallback;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
@@ -44,8 +44,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
     rvfc_supported: bool,
     escalation: &Rc<ReloadEscalation>,
     clock_offset: &Rc<ClockOffsetEstimator>,
-    frames_live_setter: Option<FramesLiveSetter>,
-    dropped_frames_setter: Option<DroppedFramesSetter>,
+    setters: &StageSignalSetters,
     on_failure: Rc<F>,
 ) -> i32 {
     let active = Rc::clone(active);
@@ -55,6 +54,10 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
     let source_id = source_id.to_string();
     let escalation = Rc::clone(escalation);
     let clock_offset = Rc::clone(clock_offset);
+    // #527: only the two fields this ticker needs, plucked once out of the
+    // shared bundle before they're moved into the `move` closure below.
+    let frames_live_setter = setters.frames_live.clone();
+    let dropped_frames_setter = setters.dropped_frames.clone();
     let tick_count = Cell::new(0u32);
     let last_current_time = Cell::new(0.0f64);
     let cb = Closure::<dyn FnMut()>::new(move || {

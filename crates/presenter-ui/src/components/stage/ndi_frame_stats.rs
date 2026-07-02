@@ -15,7 +15,7 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 
 use super::ndi_beacon::post_stats_beacon;
-use super::ndi_clock_offset::ClockOffsetEstimator;
+use super::ndi_clock_offset::{ClockOffsetEstimator, ClockOffsetSetter};
 use super::ndi_profile::persist_proven_profile_mode;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
 
@@ -45,6 +45,22 @@ pub(crate) type FramesLiveSetter = Rc<dyn Fn(bool)>;
 /// there), not the 1s video-latency cadence. `None` (no setter) disables the
 /// readout entirely (e.g. a video element with no StageContext).
 pub(crate) type DroppedFramesSetter = Rc<dyn Fn(Option<(u32, u32)>)>;
+
+/// Bundles the per-session stage-diagnostic signal setters that are threaded,
+/// as a SINGLE unit, through the `NdiVideo` → `Watchdog::install` →
+/// `start_rvfc_frame_observer` / `ndi_clock_offset::start` /
+/// `start_health_ticker` call chain (#527). Each field is `None` under the
+/// same "no `StageContext` → no setter → readout disabled" contract each
+/// setter carried individually before this refactor. Adding a new stage
+/// diagnostic signal now costs ONE new field here instead of a new positional
+/// parameter threaded through every function in the chain.
+#[derive(Clone, Default)]
+pub(crate) struct StageSignalSetters {
+    pub(crate) video_latency: Option<VideoLatencySetter>,
+    pub(crate) frames_live: Option<FramesLiveSetter>,
+    pub(crate) clock_offset: Option<ClockOffsetSetter>,
+    pub(crate) dropped_frames: Option<DroppedFramesSetter>,
+}
 
 /// How long after the last presented frame the video is considered no longer
 /// "live" (#500). Once `now - last_frame_at` exceeds this, the 1s health ticker
@@ -404,7 +420,6 @@ pub(crate) type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue,
 /// The closure is gated by `active`: once cleared it returns WITHOUT
 /// rescheduling, ending the chain (the leaked holder cycle goes inert —
 /// same bounded-leak idiom as the rest of this file).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_rvfc_frame_observer(
     video: &HtmlVideoElement,
     pc: &RtcPeerConnection,
@@ -413,13 +428,14 @@ pub(crate) fn start_rvfc_frame_observer(
     stats: &Rc<FrameStats>,
     escalation: &Rc<ReloadEscalation>,
     clock_offset: &Rc<ClockOffsetEstimator>,
-    video_latency_setter: Option<VideoLatencySetter>,
-    frames_live_setter: Option<FramesLiveSetter>,
-    dropped_frames_setter: Option<DroppedFramesSetter>,
+    setters: &StageSignalSetters,
 ) -> bool {
     if !video_supports_rvfc(video) {
         return false;
     }
+    let video_latency_setter = setters.video_latency.clone();
+    let frames_live_setter = setters.frames_live.clone();
+    let dropped_frames_setter = setters.dropped_frames.clone();
 
     let holder: SharedRvfcClosure = Rc::new(RefCell::new(None));
     let cb = {
@@ -500,10 +516,53 @@ pub(crate) fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &S
 mod tests {
     use super::{
         derive_video_latency_ms, frames_are_stale, mark_frames_live, smooth_latency, FrameStats,
-        FramesLiveSetter, FRAMES_LIVE_STALENESS_MS, VIDEO_LATENCY_SMOOTHING_ALPHA,
+        FramesLiveSetter, StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS,
+        VIDEO_LATENCY_SMOOTHING_ALPHA,
     };
     use std::cell::Cell;
     use std::rc::Rc;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #527 refactor: the four stage-diagnostic signal setters are bundled into
+    // ONE `StageSignalSetters` struct threaded through the watchdog chain. This
+    // guards that the struct actually carries + exposes each optional setter and
+    // that a held setter still fires (the refactor must not drop a signal).
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stage_signal_setters_defaults_all_none() {
+        let setters = StageSignalSetters::default();
+        assert!(setters.video_latency.is_none());
+        assert!(setters.frames_live.is_none());
+        assert!(setters.clock_offset.is_none());
+        assert!(setters.dropped_frames.is_none());
+    }
+
+    #[test]
+    fn stage_signal_setters_hold_and_fire_each_signal() {
+        let latency_seen = Rc::new(Cell::new(None::<f64>));
+        let live_seen = Rc::new(Cell::new(false));
+        let video_latency: VideoLatencySetter = {
+            let latency_seen = Rc::clone(&latency_seen);
+            Rc::new(move |v: Option<f64>| latency_seen.set(v))
+        };
+        let frames_live: FramesLiveSetter = {
+            let live_seen = Rc::clone(&live_seen);
+            Rc::new(move |v: bool| live_seen.set(v))
+        };
+        let setters = StageSignalSetters {
+            video_latency: Some(video_latency),
+            frames_live: Some(frames_live),
+            clock_offset: None,
+            dropped_frames: None,
+        };
+        // The bundled setters still reach their targets (no signal dropped by
+        // the struct-bundling refactor).
+        (setters.video_latency.as_ref().expect("video_latency setter"))(Some(42.0));
+        (setters.frames_live.as_ref().expect("frames_live setter"))(true);
+        assert_eq!(latency_seen.get(), Some(42.0));
+        assert!(live_seen.get());
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // #500 frames-live gate: the neutral covering placeholder must reflect

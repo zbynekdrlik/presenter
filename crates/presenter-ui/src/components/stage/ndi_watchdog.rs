@@ -20,11 +20,8 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection};
 use wasm_bindgen_futures::spawn_local;
 
-use super::ndi_clock_offset::{self, ClockOffsetEstimator, ClockOffsetSetter};
-use super::ndi_frame_stats::{
-    start_rvfc_frame_observer, DroppedFramesSetter, FrameStats, FramesLiveSetter,
-    VideoLatencySetter,
-};
+use super::ndi_clock_offset::{self, ClockOffsetEstimator};
+use super::ndi_frame_stats::{start_rvfc_frame_observer, FrameStats, StageSignalSetters};
 use super::ndi_health_ticker::start_health_ticker;
 
 // Re-export the profile-mode query so `ndi_video.rs` keeps importing it from
@@ -320,16 +317,12 @@ impl Watchdog {
     /// when video has been dead long enough that reconnect has demonstrably
     /// failed. It is passed in (not created here) precisely so it survives the
     /// Watchdog being recreated on every reconnect.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn install<F: Fn() + 'static>(
         video: &HtmlVideoElement,
         pc: &RtcPeerConnection,
         source_id: &str,
         escalation: &Rc<ReloadEscalation>,
-        video_latency_setter: Option<VideoLatencySetter>,
-        frames_live_setter: Option<FramesLiveSetter>,
-        clock_offset_setter: Option<ClockOffsetSetter>,
-        dropped_frames_setter: Option<DroppedFramesSetter>,
+        setters: StageSignalSetters,
         on_failure: F,
     ) -> Self {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -345,25 +338,25 @@ impl Watchdog {
         // wrongly hide the neutral cover. The first presented frame re-marks it
         // true; on a healthy mid-stream reconnect the status is `connected`
         // (no cover) so this never flashes the cover.
-        if let Some(setter) = &frames_live_setter {
+        if let Some(setter) = &setters.frames_live {
             setter(false);
         }
         // #523 (review follow-up): a freshly-installed session hasn't decoded a
         // frame yet, so any server→display ms figure still on screen belongs to
         // the prior (torn-down) session. Clear it for the SAME reason
-        // `frames_live_setter` is cleared above — the first presented frame's
+        // `frames_live` is cleared above — the first presented frame's
         // `update_video_latency` call repopulates it honestly within ~1s. (This
         // reset was missing before #523 added the analogous one for
-        // `dropped_frames_setter` below; both readouts now clear consistently on
+        // `dropped_frames` below; both readouts now clear consistently on
         // every reconnect instead of only one of the two.)
-        if let Some(setter) = &video_latency_setter {
+        if let Some(setter) = &setters.video_latency {
             setter(None);
         }
         // #523: a freshly-installed session hasn't posted a beacon yet, so any
         // dropped/freeze count still on screen is from the prior (torn-down)
         // session. Clear it rather than show a stale figure — the next beacon
         // (up to ~15s away) repopulates it honestly.
-        if let Some(setter) = &dropped_frames_setter {
+        if let Some(setter) = &setters.dropped_frames {
             setter(None);
         }
         // #510/#512: the browser<->server pipeline-clock offset estimator. Created
@@ -379,14 +372,11 @@ impl Watchdog {
             &stats,
             escalation,
             &clock_offset_estimator,
-            video_latency_setter,
-            // #500: the rVFC path marks frames live on each presented frame; the
-            // health ticker (below) flips them back to not-live on staleness, so
-            // BOTH share the same per-session setter.
-            frames_live_setter.clone(),
-            // #523: BOTH beacon paths (rVFC frame-count-driven and the 1s
-            // ticker) can post a stats beacon, so both share the same setter.
-            dropped_frames_setter.clone(),
+            // #527: the rVFC path plucks the video-latency/frames-live/dropped-
+            // frames fields it needs out of the SAME bundle the health ticker
+            // (below) also receives — a new stage diagnostic signal is now one
+            // struct field, not a new positional parameter in both places.
+            &setters,
         );
         if !rvfc_supported {
             leptos::logging::warn!(
@@ -399,7 +389,7 @@ impl Watchdog {
         // it needs no decode-side counters, just a periodic tick that survives
         // TV WebView timer throttling the same way. Feeds the SAME estimator the
         // observer reads, so the RTT it measures becomes the latency's network term.
-        ndi_clock_offset::start(video, &active, &clock_offset_estimator, clock_offset_setter);
+        ndi_clock_offset::start(video, &active, &clock_offset_estimator, &setters);
         let health_ticker_handle = start_health_ticker(
             video,
             pc,
@@ -409,8 +399,7 @@ impl Watchdog {
             rvfc_supported,
             escalation,
             &clock_offset_estimator,
-            frames_live_setter,
-            dropped_frames_setter,
+            &setters,
             on_failure,
         );
 
