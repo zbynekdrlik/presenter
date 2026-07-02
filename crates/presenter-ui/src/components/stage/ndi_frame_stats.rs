@@ -15,7 +15,7 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 
 use super::ndi_beacon::post_stats_beacon;
-use super::ndi_clock_offset::ClockOffsetEstimator;
+use super::ndi_clock_offset::{ClockOffsetEstimator, ClockOffsetSetter};
 use super::ndi_profile::persist_proven_profile_mode;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
 
@@ -45,6 +45,22 @@ pub(crate) type FramesLiveSetter = Rc<dyn Fn(bool)>;
 /// there), not the 1s video-latency cadence. `None` (no setter) disables the
 /// readout entirely (e.g. a video element with no StageContext).
 pub(crate) type DroppedFramesSetter = Rc<dyn Fn(Option<(u32, u32)>)>;
+
+/// Bundles the per-session stage-diagnostic signal setters that are threaded,
+/// as a SINGLE unit, through the `NdiVideo` → `Watchdog::install` →
+/// `start_rvfc_frame_observer` / `ndi_clock_offset::start` /
+/// `start_health_ticker` call chain (#527). Each field is `None` under the
+/// same "no `StageContext` → no setter → readout disabled" contract each
+/// setter carried individually before this refactor. Adding a new stage
+/// diagnostic signal now costs ONE new field here instead of a new positional
+/// parameter threaded through every function in the chain.
+#[derive(Clone, Default)]
+pub(crate) struct StageSignalSetters {
+    pub(crate) video_latency: Option<VideoLatencySetter>,
+    pub(crate) frames_live: Option<FramesLiveSetter>,
+    pub(crate) clock_offset: Option<ClockOffsetSetter>,
+    pub(crate) dropped_frames: Option<DroppedFramesSetter>,
+}
 
 /// How long after the last presented frame the video is considered no longer
 /// "live" (#500). Once `now - last_frame_at` exceeds this, the 1s health ticker
@@ -404,7 +420,6 @@ pub(crate) type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue,
 /// The closure is gated by `active`: once cleared it returns WITHOUT
 /// rescheduling, ending the chain (the leaked holder cycle goes inert —
 /// same bounded-leak idiom as the rest of this file).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_rvfc_frame_observer(
     video: &HtmlVideoElement,
     pc: &RtcPeerConnection,
@@ -413,13 +428,14 @@ pub(crate) fn start_rvfc_frame_observer(
     stats: &Rc<FrameStats>,
     escalation: &Rc<ReloadEscalation>,
     clock_offset: &Rc<ClockOffsetEstimator>,
-    video_latency_setter: Option<VideoLatencySetter>,
-    frames_live_setter: Option<FramesLiveSetter>,
-    dropped_frames_setter: Option<DroppedFramesSetter>,
+    setters: &StageSignalSetters,
 ) -> bool {
     if !video_supports_rvfc(video) {
         return false;
     }
+    let video_latency_setter = setters.video_latency.clone();
+    let frames_live_setter = setters.frames_live.clone();
+    let dropped_frames_setter = setters.dropped_frames.clone();
 
     let holder: SharedRvfcClosure = Rc::new(RefCell::new(None));
     let cb = {

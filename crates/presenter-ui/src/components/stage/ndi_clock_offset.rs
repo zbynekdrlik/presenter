@@ -28,7 +28,7 @@ use leptos::web_sys::{HtmlVideoElement, Response};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_frame_stats::{
-    schedule_video_frame_callback, video_supports_rvfc, SharedRvfcClosure,
+    schedule_video_frame_callback, video_supports_rvfc, SharedRvfcClosure, StageSignalSetters,
 };
 use super::ndi_watchdog::now_ms;
 
@@ -240,15 +240,21 @@ fn maybe_fire_handshake(estimator: &Rc<ClockOffsetEstimator>, setter: Option<Clo
 /// Returns `false` when the browser lacks rVFC — same fallback boundary as
 /// `start_rvfc_frame_observer`; the estimator simply never runs there and
 /// `current()` stays `None` (`n/a`), which is honest per the trust predicate.
+///
+/// Takes the SAME `StageSignalSetters` bundle threaded through the rest of
+/// the `Watchdog::install` chain (#527) and plucks just its `clock_offset`
+/// field — the other fields are unused here (this loop owns only the
+/// browser<->server clock handshake).
 pub(crate) fn start(
     video: &HtmlVideoElement,
     active: &Rc<Cell<bool>>,
     estimator: &Rc<ClockOffsetEstimator>,
-    setter: Option<ClockOffsetSetter>,
+    setters: &StageSignalSetters,
 ) -> bool {
     if !video_supports_rvfc(video) {
         return false;
     }
+    let setter: Option<ClockOffsetSetter> = setters.clock_offset.clone();
 
     let holder: SharedRvfcClosure = Rc::new(RefCell::new(None));
     let cb = {

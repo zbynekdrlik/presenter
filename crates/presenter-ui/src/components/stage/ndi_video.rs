@@ -17,7 +17,9 @@ use leptos::web_sys::{
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_clock_offset::ClockOffsetSetter;
-use super::ndi_frame_stats::{DroppedFramesSetter, FramesLiveSetter, VideoLatencySetter};
+use super::ndi_frame_stats::{
+    DroppedFramesSetter, FramesLiveSetter, StageSignalSetters, VideoLatencySetter,
+};
 use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
 use crate::state::stage::StageContext;
 
@@ -110,6 +112,17 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         }) as DroppedFramesSetter
     });
 
+    // #527: bundle the four per-session setters into ONE struct threaded
+    // through the effect below and into `Watchdog::install` — a new stage
+    // diagnostic signal now costs one struct field instead of a new
+    // positional parameter in every function of the chain.
+    let stage_signal_setters = StageSignalSetters {
+        video_latency: video_latency_setter,
+        frames_live: frames_live_setter,
+        clock_offset: clock_offset_setter,
+        dropped_frames: dropped_frames_setter,
+    };
+
     // Holds the active connection: the WHEP session + the watchdog observing
     // its health. Cleanup must close both — see on_cleanup below.
     struct ActiveConnection {
@@ -139,18 +152,12 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         StoredValue::new_local(Some(ReloadEscalation::new()));
 
     let cancelled_for_effect = Arc::clone(&cancelled);
-    let video_latency_setter_for_effect = video_latency_setter;
-    let frames_live_setter_for_effect = frames_live_setter;
-    let clock_offset_setter_for_effect = clock_offset_setter;
-    let dropped_frames_setter_for_effect = dropped_frames_setter;
+    let stage_signal_setters_for_effect = stage_signal_setters;
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
         let source_id = source_id_for_effect.clone();
         let cancelled = Arc::clone(&cancelled_for_effect);
-        let video_latency_setter = video_latency_setter_for_effect.clone();
-        let frames_live_setter = frames_live_setter_for_effect.clone();
-        let clock_offset_setter = clock_offset_setter_for_effect.clone();
-        let dropped_frames_setter = dropped_frames_setter_for_effect.clone();
+        let stage_signal_setters = stage_signal_setters_for_effect.clone();
         spawn_local(async move {
             // The reconnect-trigger flag: when a watchdog fires, it sets this
             // flag; the loop drains it and reconnects.
@@ -222,10 +229,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             &session.pc,
                             &source_id,
                             &escalation,
-                            video_latency_setter.clone(),
-                            frames_live_setter.clone(),
-                            clock_offset_setter.clone(),
-                            dropped_frames_setter.clone(),
+                            stage_signal_setters.clone(),
                             move || flag.set(true),
                         );
 
