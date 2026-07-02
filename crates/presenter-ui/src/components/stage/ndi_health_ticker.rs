@@ -71,13 +71,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
         }
         // Beacon first: the healthy-path early returns below must not
         // starve it during normal playback.
-        maybe_post_beacon(
-            &tick_count,
-            &pc,
-            &source_id,
-            &stats,
-            clock_offset.current(),
-        );
+        maybe_post_beacon(&tick_count, &pc, &source_id, &stats, clock_offset.current());
         if !rvfc_supported
             && approximate_frame_from_current_time(&video, &stats, &last_current_time)
         {

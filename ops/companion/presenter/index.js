@@ -76,6 +76,7 @@ const STAGE_LAYOUT_CHOICES = [
   { id: "preach", label: "PREACH" },
   { id: "ndi-fullscreen", label: "NDI FULLSCREEN" },
   { id: "bible", label: "BIBLE" },
+  { id: "fulltext", label: "FULL TEXT" },
 ];
 
 class PresenterInstance extends InstanceBase {

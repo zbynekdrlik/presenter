@@ -90,16 +90,24 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn delete_presentation(&self, presentation_id: PresentationId) -> anyhow::Result<()> {
         let id = presentation_id.to_string();
+        // #515: one transaction — the presentation delete and its stage-layout
+        // marker cleanup commit (or fail) together, so a cleanup error can
+        // never report a failed delete that actually happened.
+        let txn = self.db.begin().await?;
         let result = presentation_entity::Entity::delete_by_id(id)
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("presentation not found"));
         }
-        // #515: drop any per-slide stage-layout markers of the deleted
-        // presentation so they don't accumulate as orphan rows.
-        self.clear_slide_stage_layouts_for_presentation(presentation_id)
+        crate::entities::slide_stage_layout::Entity::delete_many()
+            .filter(
+                crate::entities::slide_stage_layout::Column::PresentationId
+                    .eq(presentation_id.to_string()),
+            )
+            .exec(&txn)
             .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -108,6 +116,10 @@ impl Repository {
         let txn = self.db.begin().await?;
 
         slide_entity::Entity::delete_many().exec(&txn).await?;
+        // #515: purging every slide purges every stage-layout marker with it.
+        crate::entities::slide_stage_layout::Entity::delete_many()
+            .exec(&txn)
+            .await?;
         presentation_entity::Entity::delete_many()
             .exec(&txn)
             .await?;

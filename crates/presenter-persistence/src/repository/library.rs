@@ -81,6 +81,11 @@ impl Repository {
         }
 
         txn.commit().await?;
+
+        // #515: a name-colliding re-import cascade-deleted the old library's
+        // slides and recreated them under fresh UUIDs — sweep the marker rows
+        // that now point at dead slide ids so they never accumulate.
+        self.prune_orphan_slide_stage_layouts().await?;
         Ok(())
     }
 
@@ -124,6 +129,9 @@ impl Repository {
         if result.rows_affected == 0 {
             return Err(anyhow!("library not found"));
         }
+        // #515: the FK cascade removed the library's slides — sweep their
+        // stage-layout marker rows (no FK on slide_stage_layouts).
+        self.prune_orphan_slide_stage_layouts().await?;
         Ok(())
     }
 

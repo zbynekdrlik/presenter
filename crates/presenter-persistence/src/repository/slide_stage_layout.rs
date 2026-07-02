@@ -6,7 +6,7 @@
 use crate::entities::slide_stage_layout;
 use anyhow::Context;
 use presenter_core::{PresentationId, SlideId};
-use sea_orm::{sea_query::OnConflict, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashMap;
 use tracing::instrument;
 
@@ -82,6 +82,25 @@ impl Repository {
             .collect())
     }
 
+    /// Sweep marker rows whose slide no longer exists — library deletes
+    /// cascade slides away without touching this table, and library
+    /// re-imports assign fresh slide UUIDs. Called after library delete /
+    /// re-import so orphan rows never accumulate (#515).
+    #[instrument(skip_all)]
+    pub async fn prune_orphan_slide_stage_layouts(&self) -> anyhow::Result<u64> {
+        let backend = self.db.get_database_backend();
+        let result = self
+            .db
+            .execute(sea_orm::Statement::from_string(
+                backend,
+                "DELETE FROM slide_stage_layouts \
+                 WHERE slide_id NOT IN (SELECT id FROM slides)",
+            ))
+            .await
+            .context("failed to prune orphan slide stage layouts")?;
+        Ok(result.rows_affected())
+    }
+
     /// Remove all markers of a presentation (called when it is deleted).
     #[instrument(skip_all)]
     pub async fn clear_slide_stage_layouts_for_presentation(
@@ -100,7 +119,20 @@ impl Repository {
 #[cfg(test)]
 mod tests {
     use crate::repository::Repository;
-    use presenter_core::{PresentationId, SlideId};
+    use presenter_core::{PresentationId, Slide, SlideContent, SlideGroup, SlideId, SlideText};
+
+    fn sample_slide(order: u32) -> Slide {
+        Slide::new(
+            order,
+            SlideContent::new(
+                SlideText::new("Main").unwrap(),
+                SlideText::new("Translation").unwrap(),
+                SlideText::new("Stage").unwrap(),
+                Some(SlideGroup::new("Intro")),
+            ),
+        )
+        .with_id(SlideId::new())
+    }
 
     fn ids() -> (PresentationId, SlideId) {
         (PresentationId::new(), SlideId::new())
@@ -173,6 +205,64 @@ mod tests {
             map.get(&slide_a.to_string()).map(String::as_str),
             Some("fulltext")
         );
+    }
+
+    /// #515 review finding: markers must not survive as orphans on the
+    /// library-delete path (FK cascade removes the slides; nothing else
+    /// touches slide_stage_layouts) …
+    #[tokio::test]
+    async fn delete_library_prunes_its_slide_markers() {
+        let repo = Repository::connect_in_memory().await.expect("db");
+        let library = repo.create_library("Marker Lib").await.unwrap();
+        let slides = [sample_slide(0)];
+        let (_, _, presentation) = repo
+            .create_presentation(library.id, "Marked", Some(&slides))
+            .await
+            .unwrap();
+        let slide_id = presentation.slides[0].id;
+        repo.set_slide_stage_layout(presentation.id, slide_id, "fulltext")
+            .await
+            .unwrap();
+
+        repo.delete_library(library.id).await.unwrap();
+
+        assert_eq!(repo.get_slide_stage_layout(slide_id).await.unwrap(), None);
+    }
+
+    /// … and the Import-Data --purge path clears the whole marker table
+    /// inside the same transaction that purges the slides.
+    #[tokio::test]
+    async fn purge_presentation_content_clears_all_markers() {
+        let repo = Repository::connect_in_memory().await.expect("db");
+        let library = repo.create_library("Purge Lib").await.unwrap();
+        let slides = [sample_slide(0)];
+        let (_, _, presentation) = repo
+            .create_presentation(library.id, "Marked", Some(&slides))
+            .await
+            .unwrap();
+        let slide_id = presentation.slides[0].id;
+        repo.set_slide_stage_layout(presentation.id, slide_id, "timer")
+            .await
+            .unwrap();
+
+        repo.purge_presentation_content().await.unwrap();
+
+        assert_eq!(repo.get_slide_stage_layout(slide_id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn prune_removes_rows_whose_slide_no_longer_exists() {
+        let repo = Repository::connect_in_memory().await.expect("db");
+        // A marker pointing at a slide id that exists in NO slides row (the
+        // in-memory DB seeds no slides) is an orphan by definition.
+        let (pres, slide) = ids();
+        repo.set_slide_stage_layout(pres, slide, "fulltext")
+            .await
+            .unwrap();
+
+        let pruned = repo.prune_orphan_slide_stage_layouts().await.unwrap();
+        assert_eq!(pruned, 1);
+        assert_eq!(repo.get_slide_stage_layout(slide).await.unwrap(), None);
     }
 
     #[tokio::test]

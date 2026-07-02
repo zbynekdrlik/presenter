@@ -1,6 +1,6 @@
 {
   "name": "@companion-module/presenter",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Control Presenter via /companion/ws",
   "main": "index.js",
   "type": "commonjs",

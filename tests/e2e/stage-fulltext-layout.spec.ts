@@ -299,6 +299,20 @@ test("operator assigns a marker from the slide card and sees the badge in live m
   await expect(badge).toBeVisible({ timeout: 15_000 });
   await expect(badge).toContainText("FULL TEXT");
 
+  // Back in edit mode the selector must PRE-SELECT the existing marker
+  // (regression guard: prop:value on <select> was applied before the options
+  // mounted, so an assigned marker displayed as "Stage: —" — fixed with
+  // per-<option> prop:selected, the header layout picker's pattern).
+  await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+  await page.waitForFunction(
+    () => document.body.getAttribute("data-mode") === "edit",
+  );
+  const selectAgain = page
+    .locator(`[data-slide-id="${slideIds[1]}"]`)
+    .locator('[data-role="slide-stage-layout-select"]');
+  await expect(selectAgain).toBeVisible({ timeout: 15_000 });
+  await expect(selectAgain).toHaveValue("fulltext", { timeout: 15_000 });
+
   expect(consoleErrors).toEqual([]);
   await page.close();
 });

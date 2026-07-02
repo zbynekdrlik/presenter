@@ -100,16 +100,36 @@ impl AppState {
         self.stage_layout.read().await.clone()
     }
 
-    pub async fn set_stage_layout_code(&self, code: &str) -> anyhow::Result<StageDisplayLayout> {
+    /// Validate a layout code against the operator-selectable set (#515:
+    /// shared by `POST /stage/layout` AND per-slide marker assignment, so the
+    /// two paths can never drift apart).
+    pub(super) fn validate_operator_selectable(code: &str) -> anyhow::Result<StageDisplayLayout> {
         if code == "camera-crew" {
             return Err(anyhow::anyhow!(
                 "'camera-crew' is not an operator-selectable layout; it is served only at /ui/camera"
             ));
         }
-        let layout = StageDisplayLayout::built_in()
-            .into_iter()
-            .find(|layout| layout.code == code)
-            .ok_or_else(|| anyhow::anyhow!("unknown stage layout: {code}"))?;
+        StageDisplayLayout::find_operator_selectable(code)
+            .ok_or_else(|| anyhow::anyhow!("unknown stage layout: {code}"))
+    }
+
+    pub async fn set_stage_layout_code(&self, code: &str) -> anyhow::Result<StageDisplayLayout> {
+        self.switch_stage_layout(code, true).await
+    }
+
+    /// Switch the stage layout. `publish_snapshots = false` skips the
+    /// full-context snapshot broadcast for callers that immediately broadcast
+    /// a fresh resolution themselves (the per-slide marker path inside
+    /// `update_stage_state`, #515) — otherwise every marker-driven switch
+    /// would fan the full snapshot to every /live/ws client twice. The
+    /// `LiveEvent::StageLayout` publish and the api-layout snapshot publish
+    /// always happen (the resolution broadcast skips the api layout).
+    pub(super) async fn switch_stage_layout(
+        &self,
+        code: &str,
+        publish_snapshots: bool,
+    ) -> anyhow::Result<StageDisplayLayout> {
+        let layout = Self::validate_operator_selectable(code)?;
         {
             let mut guard = self.stage_layout.write().await;
             if *guard == layout.code {
@@ -141,10 +161,12 @@ impl AppState {
             // most recent PUT instead of waiting for the next one.
             // `broadcast_stage_snapshots` short-circuits on api layout
             // anyway (see broadcasting.rs::publish_stage_context), so we
-            // replace it with the api snapshot publish here.
+            // replace it with the api snapshot publish here. This publish is
+            // NOT skippable — the resolution broadcast that follows on the
+            // marker path also short-circuits on the api layout.
             let snapshot = self.api_stage_snapshot().await;
             self.live_hub.publish(LiveEvent::Stage { snapshot });
-        } else {
+        } else if publish_snapshots {
             self.broadcast_stage_snapshots().await?;
         }
         Ok(layout)
@@ -152,12 +174,9 @@ impl AppState {
 
     pub async fn stage_displays(&self) -> anyhow::Result<Vec<StageDisplayLayout>> {
         // camera-crew is published always but is not user-selectable from the
-        // operator UI — it's accessed via /ui/camera only. Hide it from the
-        // layout picker.
-        Ok(StageDisplayLayout::built_in()
-            .into_iter()
-            .filter(|l| l.code != "camera-crew")
-            .collect())
+        // operator UI — it's accessed via /ui/camera only. Hidden from the
+        // layout picker via the shared operator-selectable set.
+        Ok(StageDisplayLayout::operator_selectable())
     }
 }
 

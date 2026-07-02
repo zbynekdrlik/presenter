@@ -6,7 +6,7 @@
 //! over /live/ws). Slides without a marker leave the layout untouched.
 
 use super::AppState;
-use presenter_core::{PresentationId, SlideId, StageDisplayLayout};
+use presenter_core::{PresentationId, SlideId};
 use std::collections::HashMap;
 
 impl AppState {
@@ -28,17 +28,9 @@ impl AppState {
 
         match layout_code {
             Some(code) => {
-                if code == "camera-crew" {
-                    anyhow::bail!(
-                        "'camera-crew' is not an operator-selectable layout; it cannot be assigned to a slide"
-                    );
-                }
-                if !StageDisplayLayout::built_in()
-                    .into_iter()
-                    .any(|layout| layout.code == code)
-                {
-                    anyhow::bail!("unknown stage layout: {code}");
-                }
+                // Same validation as POST /stage/layout — the two paths share
+                // one operator-selectable source of truth and cannot drift.
+                Self::validate_operator_selectable(code)?;
                 self.repository
                     .set_slide_stage_layout(presentation_id, slide_id, code)
                     .await?;
@@ -96,7 +88,10 @@ impl AppState {
         if self.stage_layout_code().await == code {
             return;
         }
-        match self.set_stage_layout_code(&code).await {
+        // publish_snapshots = false: update_stage_state broadcasts the fresh
+        // resolution right after this call, so the full-context snapshot fan-
+        // out inside the switch would reach every /live/ws client twice.
+        match self.switch_stage_layout(&code, false).await {
             Ok(layout) => {
                 tracing::info!(
                     target: "presenter::stage::slide_layout",
@@ -106,12 +101,16 @@ impl AppState {
                 );
             }
             Err(err) => {
+                // Two failure modes share this arm: an unusable marker code
+                // (validation failed — layout genuinely unchanged) and a
+                // broadcast error AFTER the switch was committed (clients
+                // already received StageLayout). Do not claim "unchanged".
                 tracing::warn!(
                     target: "presenter::stage::slide_layout",
                     ?err,
                     slide_id = %slide_id,
                     layout_code = %code,
-                    "slide stage-layout marker points at an unusable layout — leaving layout unchanged"
+                    "slide stage-layout marker switch failed — invalid marker, or the switch committed but its broadcast errored"
                 );
             }
         }
@@ -259,6 +258,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state.stage_layout_code().await, "fulltext");
+    }
+
+    /// Duplicating a marked slide copies the marker to the duplicate (#515
+    /// review finding) — the copy behaves identically when triggered.
+    #[tokio::test]
+    async fn duplicating_marked_slide_copies_marker() {
+        let (state, presentation) = seeded_state().await;
+        let source = presentation.slides[0].id;
+        state
+            .assign_slide_stage_layout(presentation.id, source, Some("fulltext"))
+            .await
+            .unwrap();
+
+        let slides = state
+            .duplicate_slide(presentation.id, source)
+            .await
+            .unwrap();
+        let duplicate = slides[1].id; // inserted right after the source
+        assert_ne!(duplicate, source);
+
+        let map = state.slide_stage_layouts(presentation.id).await.unwrap();
+        assert_eq!(
+            map.get(&duplicate.to_string()).map(String::as_str),
+            Some("fulltext"),
+            "duplicate must carry the source slide's marker"
+        );
+        // The source keeps its own marker too.
+        assert_eq!(
+            map.get(&source.to_string()).map(String::as_str),
+            Some("fulltext")
+        );
     }
 
     /// A stale marker (its layout no longer usable) must never fail the slide

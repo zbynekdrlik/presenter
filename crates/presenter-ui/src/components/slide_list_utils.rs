@@ -215,3 +215,26 @@ mod tests {
         assert_eq!(result.len(), 5);
     }
 }
+
+/// Tags whose clicks/pointerdowns must NOT trigger/focus the slide card —
+/// the card's own interactive controls (#515: one predicate shared by the
+/// click AND pointerdown guards so a new control can't be wired into only
+/// one of them).
+pub fn is_interactive_tag(tag: &str) -> bool {
+    matches!(tag, "button" | "textarea" | "input" | "select" | "option")
+}
+
+#[cfg(test)]
+mod interactive_tag_tests {
+    use super::is_interactive_tag;
+
+    #[test]
+    fn interactive_tags_are_skipped_and_plain_tags_are_not() {
+        for tag in ["button", "textarea", "input", "select", "option"] {
+            assert!(is_interactive_tag(tag), "{tag} must be interactive");
+        }
+        for tag in ["div", "span", "article", "header"] {
+            assert!(!is_interactive_tag(tag), "{tag} must not be interactive");
+        }
+    }
+}

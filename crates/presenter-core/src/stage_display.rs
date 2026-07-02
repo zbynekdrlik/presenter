@@ -72,6 +72,25 @@ impl StageDisplayLayout {
         Self::new("api", "API", "External API-driven stage display")
     }
 
+    /// The single source of truth for which layouts the OPERATOR may select —
+    /// the layout picker, `POST /stage/layout` validation, and per-slide
+    /// stage-layout markers (#515) all share this set. `camera-crew` is
+    /// internal-only (served at /ui/camera) and excluded.
+    pub fn operator_selectable() -> Vec<Self> {
+        Self::built_in()
+            .into_iter()
+            .filter(|layout| layout.code != "camera-crew")
+            .collect()
+    }
+
+    /// Look up an operator-selectable layout by code (`None` for unknown
+    /// codes AND for internal-only layouts like `camera-crew`).
+    pub fn find_operator_selectable(code: &str) -> Option<Self> {
+        Self::operator_selectable()
+            .into_iter()
+            .find(|layout| layout.code == code)
+    }
+
     fn new(code: &str, name: &str, description: &str) -> Self {
         Self {
             code: code.to_string(),
@@ -279,6 +298,21 @@ impl StageDisplaySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_selectable_excludes_only_camera_crew() {
+        let selectable = StageDisplayLayout::operator_selectable();
+        assert_eq!(selectable.len(), StageDisplayLayout::built_in().len() - 1);
+        assert!(!selectable.iter().any(|layout| layout.code == "camera-crew"));
+        assert!(selectable.iter().any(|layout| layout.code == "fulltext"));
+    }
+
+    #[test]
+    fn find_operator_selectable_rejects_camera_crew_and_unknown() {
+        assert!(StageDisplayLayout::find_operator_selectable("fulltext").is_some());
+        assert!(StageDisplayLayout::find_operator_selectable("camera-crew").is_none());
+        assert!(StageDisplayLayout::find_operator_selectable("nope").is_none());
+    }
 
     #[test]
     fn built_in_layouts_cover_expected_variants() {

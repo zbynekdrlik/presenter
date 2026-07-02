@@ -11,8 +11,8 @@ use crate::utils::color::group_pill_style;
 
 use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
-    apply_focused_class, field_has_warning, format_multiline, reorder_slide_ids,
-    slide_has_any_warning,
+    apply_focused_class, field_has_warning, format_multiline, is_interactive_tag,
+    reorder_slide_ids, slide_has_any_warning,
 };
 use super::slide_save::{
     finish_save_status_err, finish_save_status_ok, save_with_status, start_save_status,
@@ -204,23 +204,10 @@ pub fn SlideList() -> impl IntoView {
     }
 
     // #515: per-slide stage-layout markers of the open presentation
-    // (slide_id → layout_code), refetched whenever the presentation changes.
-    let slide_stage_markers = RwSignal::new(HashMap::<String, String>::new());
-    {
-        let selected_presentation_id = ctx.selected_presentation_id;
-        Effect::new(move |_| {
-            let Some(pres_id) = selected_presentation_id.get() else {
-                slide_stage_markers.set(HashMap::new());
-                return;
-            };
-            leptos::task::spawn_local(async move {
-                match api::presentations::fetch_slide_stage_layouts(&pres_id).await {
-                    Ok(map) => slide_stage_markers.set(map),
-                    Err(_) => slide_stage_markers.set(HashMap::new()),
-                }
-            });
-        });
-    }
+    // (slide_id → layout_code), maintained by the picker module (clears on
+    // presentation switch + stale-response guard).
+    let slide_stage_markers =
+        crate::components::slide_stage_layout_picker::use_slide_stage_markers(&ctx);
 
     // Scroll active slide into view when stage's current slide changes.
     {
@@ -520,7 +507,7 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(target) = ev.target() {
                                             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                 let tag = el.tag_name().to_lowercase();
-                                                if tag == "button" || tag == "textarea" || tag == "input" || tag == "select" || tag == "option" {
+                                                if is_interactive_tag(&tag) {
                                                     return;
                                                 }
                                                 if el.get_attribute("data-action").is_some() {
@@ -557,7 +544,7 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(target) = ev.target() {
                                             if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                 let tag = el.tag_name().to_lowercase();
-                                                if tag == "button" || tag == "textarea" || tag == "input" || tag == "select" || tag == "option" {
+                                                if is_interactive_tag(&tag) {
                                                     return;
                                                 }
                                             }
