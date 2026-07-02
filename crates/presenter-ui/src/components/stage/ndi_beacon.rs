@@ -102,30 +102,35 @@ pub(crate) fn maybe_post_beacon(
 /// beacon (already snapshotted-and-reset by the caller). They sit alongside
 /// the decode-side getStats fields so a reader can tell a frame that decoded
 /// on time but reached the screen late from a genuine decode stall.
-#[allow(clippy::too_many_arguments)]
-async fn post_client_stats(
-    source_id: &str,
-    report: &JsValue,
-    max_present_gap_ms: f64,
-    present_gaps_over100: u32,
-    presented_fps: Option<f64>,
-    video_latency_ms: Option<f64>,
-    clock_offset: Option<(f64, f64)>,
-) {
-    let mut frames_decoded = JsValue::NULL;
-    let mut fps = JsValue::NULL;
-    let mut jb_delay = JsValue::NULL;
-    let mut jb_emitted = JsValue::NULL;
-    let mut freeze_count = JsValue::NULL;
-    let mut frames_dropped = JsValue::NULL;
-    let mut codec_id = JsValue::NULL;
+/// The inbound-video getStats fields a beacon reports, pulled out of the
+/// RtcStatsReport map in one pass (`extract_inbound_video`). Split from
+/// `post_client_stats` to keep that function under the 120-line fn cap.
+#[derive(Default)]
+struct InboundVideoStats {
+    frames_decoded: Option<f64>,
+    fps: Option<f64>,
+    jitter_buffer_ms: Option<f64>,
+    freeze_count: Option<f64>,
+    frames_dropped: Option<f64>,
+    codec: Option<String>,
     // #509 (T0) device-capability probe: the field T4's true server→display
     // metric would read, plus the inbound-rtp report's OWN Unix-epoch timestamp
     // from the SAME snapshot (the epoch reference the playout value is checked
-    // against server-side via `classify_playout`).
-    let mut estimated_playout = JsValue::NULL;
-    let mut report_ts = JsValue::NULL;
+    // against server-side via `classify_playout`). Absent → undefined →
+    // `as_f64()` None → null on the wire; a literal 0 → Some(0.0) (the
+    // pre-first-SR gotcha), distinguished server-side.
+    estimated_playout: Option<f64>,
+    report_ts: Option<f64>,
+}
 
+/// One pass over the RtcStatsReport map: the inbound-rtp video entry's fields,
+/// the negotiated codec (via the codecId → "codec"-entry mimeType lookup), and
+/// the average jitter-buffer depth in ms (cumulative delay / emitted count).
+fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
+    let mut out = InboundVideoStats::default();
+    let mut jb_delay = None;
+    let mut jb_emitted = None;
+    let mut codec_id = None;
     let map: &js_sys::Map = report.unchecked_ref();
     let entries = js_sys::try_iter(&map.values()).ok().flatten();
     if let Some(entries) = entries {
@@ -136,29 +141,42 @@ async fn post_client_stats(
             if get("type").as_string().as_deref() == Some("inbound-rtp")
                 && get("kind").as_string().as_deref() == Some("video")
             {
-                frames_decoded = get("framesDecoded");
-                fps = get("framesPerSecond");
-                jb_delay = get("jitterBufferDelay");
-                jb_emitted = get("jitterBufferEmittedCount");
-                freeze_count = get("freezeCount");
-                frames_dropped = get("framesDropped");
-                codec_id = get("codecId");
-                // Read from the same inbound-rtp snapshot: absent → undefined →
-                // `as_f64()` None → null on the wire; a literal 0 → Some(0.0)
-                // (the pre-first-SR gotcha), distinguished server-side.
-                estimated_playout = get("estimatedPlayoutTimestamp");
-                report_ts = get("timestamp");
+                out.frames_decoded = get("framesDecoded").as_f64();
+                out.fps = get("framesPerSecond").as_f64();
+                jb_delay = get("jitterBufferDelay").as_f64();
+                jb_emitted = get("jitterBufferEmittedCount").as_f64();
+                out.freeze_count = get("freezeCount").as_f64();
+                out.frames_dropped = get("framesDropped").as_f64();
+                codec_id = get("codecId").as_string();
+                out.estimated_playout = get("estimatedPlayoutTimestamp").as_f64();
+                out.report_ts = get("timestamp").as_f64();
             }
         }
     }
-
-    // The negotiated codec: inbound-rtp's codecId is the report-map KEY of
-    // the matching "codec" entry — look it up directly and read mimeType.
-    let codec = codec_id
-        .as_string()
+    // jitterBufferDelay is a cumulative sum of seconds each emitted frame
+    // spent in the buffer; divide by the emitted count for the average, in ms.
+    out.jitter_buffer_ms = match (jb_delay, jb_emitted) {
+        (Some(d), Some(n)) if n > 0.0 => Some(d / n * 1000.0),
+        _ => None,
+    };
+    out.codec = codec_id
         .map(|id| map.get(&JsValue::from_str(&id)))
         .and_then(|entry| js_sys::Reflect::get(&entry, &JsValue::from_str("mimeType")).ok())
         .and_then(|v| v.as_string());
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn post_client_stats(
+    source_id: &str,
+    report: &JsValue,
+    max_present_gap_ms: f64,
+    present_gaps_over100: u32,
+    presented_fps: Option<f64>,
+    video_latency_ms: Option<f64>,
+    clock_offset: Option<(f64, f64)>,
+) {
+    let inbound = extract_inbound_video(report);
 
     // #509 (T0): full userAgent — the exact WebView/Chrome version per real
     // stage TV, which decides whether the playout field is available there.
@@ -174,16 +192,10 @@ async fn post_client_stats(
             _ => None,
         });
 
-    // jitterBufferDelay is a cumulative sum of seconds each emitted frame
-    // spent in the buffer; divide by the emitted count for the average, in ms.
-    let jitter_buffer_ms = match (jb_delay.as_f64(), jb_emitted.as_f64()) {
-        (Some(d), Some(n)) if n > 0.0 => Some(d / n * 1000.0),
-        _ => None,
-    };
     let body = serde_json::json!({
         "sourceId": source_id,
         "displayId": display_id(),
-        "codec": codec,
+        "codec": inbound.codec,
         // Which stream profile this display requested ("default"/"compat").
         // The server serves ONE 720p H264 stream regardless of this value
         // (see `StreamProfile::from_query`); it is reported only to record
@@ -191,19 +203,19 @@ async fn post_client_stats(
         // there is no 640×480 / VP8 branch.
         "profile": profile_mode_name(profile_mode_is_compat()),
         "screen": screen,
-        "framesDecoded": frames_decoded.as_f64(),
-        "fps": fps.as_f64(),
-        "jitterBufferMs": jitter_buffer_ms,
-        "freezeCount": freeze_count.as_f64(),
-        "framesDropped": frames_dropped.as_f64(),
+        "framesDecoded": inbound.frames_decoded,
+        "fps": inbound.fps,
+        "jitterBufferMs": inbound.jitter_buffer_ms,
+        "freezeCount": inbound.freeze_count,
+        "framesDropped": inbound.frames_dropped,
         // Render-side presentation-cadence metrics for this beacon interval
         // (the decode-side fields above can't see a frame presented late).
         "maxPresentGapMs": max_present_gap_ms,
         "presentGapsOver100": present_gaps_over100,
         "presentedFps": presented_fps,
         // #509 (T0) device-capability probe fields.
-        "estimatedPlayoutTimestamp": estimated_playout.as_f64(),
-        "reportTimestamp": report_ts.as_f64(),
+        "estimatedPlayoutTimestamp": inbound.estimated_playout,
+        "reportTimestamp": inbound.report_ts,
         "userAgent": user_agent,
         // #514 observability: the smoothed TRUE server→display latency this
         // display currently SHOWS (#512; null = n/a) plus the /ndi/time clock
