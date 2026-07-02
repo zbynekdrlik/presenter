@@ -429,6 +429,39 @@ body.stage {
         0 2px 4px rgba(0, 0, 0, 0.7);
 }
 
+/* ===== fulltext layout (#515) ===== */
+
+/* Whole-screen stage text: the display area spans nearly the full viewport
+   (only the status bar strip at the bottom is kept, like every layout), and
+   the text auto-fits inside it via the shared autofit binary search. */
+.stage-fulltext__display {
+    position: absolute;
+    left: 2%;
+    top: 2%;
+    width: 96%;
+    height: 88%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    z-index: 2;
+}
+
+.stage-fulltext__text {
+    color: #f8fafc;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.12;
+    /* Long hand-off texts are paragraphs: preserve the author's line breaks
+       AND wrap long lines so autofit scales to the screen instead of shrinking
+       a single unwrappable line into unreadability. */
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
 /* ===== NDI background for timer layout (#306) ===== */
 .stage-timer__ndi {
     position: absolute;
