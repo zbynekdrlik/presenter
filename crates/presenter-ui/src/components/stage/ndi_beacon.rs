@@ -187,8 +187,11 @@ fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
 /// stats extension, never one without the other). If a future WebView ever
 /// violated that pairing, the worst case is a momentarily-optimistic "0" on
 /// this purely diagnostic overlay, not a functional regression. Split out of
-/// `post_client_stats` to keep that function under the 80-line size-warning
-/// threshold.
+/// `post_client_stats` as its own concern (keeps the size-warning threshold
+/// creep down; the exact line count isn't pinned here since it will keep
+/// moving as fields are added — `scripts/dev/quality-check.sh` is the source
+/// of truth for whether it's still just a warning or has crossed the 120-line
+/// hard cap).
 fn notify_dropped_frames(inbound: &InboundVideoStats, setter: &Option<DroppedFramesSetter>) {
     let Some(setter) = setter else { return };
     let counts = match (inbound.frames_dropped, inbound.freeze_count) {

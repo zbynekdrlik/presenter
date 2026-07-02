@@ -224,6 +224,13 @@ mod tests {
             format_video_latency_line(Some(84.0), Some((128, 2))),
             "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{2b07}128 \u{2744}2"
         );
+        // Freezes with zero dropped frames is a real combination too (a
+        // display can freeze without the decoder ever reporting a drop) —
+        // both figures show together, symmetric with the dropped-only case.
+        assert_eq!(
+            format_video_latency_line(Some(84.0), Some((0, 3))),
+            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{2b07}0 \u{2744}3"
+        );
     }
 
     #[test]
