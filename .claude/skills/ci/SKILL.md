@@ -15,6 +15,28 @@ triggers:
 
 # Presenter CI Skill
 
+## e2e-ndi lane NEVER compiles Rust — prebuild artifacts in the GH Build job (#519 lesson)
+
+The self-hosted `e2e-ndi` lane (`timeout-minutes: 20`) must only RUN pre-built artifacts,
+never `cargo build` on the runner (matches the runner architecture: the local runner doesn't
+compile Rust). A **toolchain bump on dev2** (e.g. `rustc` stable auto-updated) invalidates the
+runner-workspace Rust cache → a `cargo build … ndi_test_sender` step then cold-rebuilds the whole
+gstreamer tree (~19 min) → blows the 20-min cap → GitHub cancels the job → deploys skipped → ALL
+PRs blocked. This looks like a mystery cancellation with green logs. Fix (already in `pipeline.yml`):
+the `Build` job (GH-hosted, deps hot) builds `cargo build --release -p presenter-ndi --features
+test-helpers --bin ndi_test_sender` and ships it in `build-artifacts`; `e2e-ndi` just `cp`s
+`_artifacts/ndi_test_sender target/release/` and runs it. If e2e-ndi ever cold-builds again, check
+whether a new Rust-compiling step crept into that lane — don't raise the timeout.
+
+## `quality-check.sh --strict` IS the CI "Quality Checks" gate — run it locally before push
+
+CI runs `./scripts/dev/quality-check.sh --strict --against origin/main` (not just `fn_length_check.py`).
+Run that EXACT command locally before pushing. Hard-fails: file >1000 prod lines, **fn >120 lines
+(tests NOT exempt; >80 is only a warn)**, `continue-on-error` in workflows, and cargo-deny/cargo-audit
+policy. Note: cargo-deny/cargo-audit can transiently FAIL then PASS on an immediate re-run (advisory
+DB / lock timing) — re-run once before treating a deny/audit failure as real. A >120 fn added by a
+feature → split a helper out (e.g. #514 split `extract_inbound_video` out of `post_client_stats`).
+
 ## Runner Management
 
 Local runner host: `10.77.8.134` (same machine as dev server), label `self-hosted`/`local`.
