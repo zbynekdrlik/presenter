@@ -380,25 +380,45 @@ fn record_present_gap(stats: &FrameStats, gap_ms: f64) {
     }
 }
 
+/// Minimum interval span for a presented-fps figure to be trustworthy. Below
+/// this the frame count is too small to give a stable rate — the dominant
+/// cause is beacon INTERLEAVE: the rVFC observer (every `RVFC_BEACON_FRAME_
+/// PERIOD` frames) and the 1s health ticker (every 15th tick) BOTH call
+/// `snapshot_present_gaps` on the SAME `FrameStats`, each resetting the
+/// interval; they run on independent clocks and drift into near-coincidence,
+/// so whichever fires second can see a sub-frame window with 0-1 frames →
+/// `fps ≈ 0`. Feeding that to the #532 health verdict would flash a spurious
+/// 🔴/🟡 on a perfectly smooth TV. A 1s floor is far above frame-period noise
+/// yet far below the ~15s legitimate beacon cadence, and (because consecutive
+/// beacons partition each ~15s rVFC cycle) at least one path per cycle always
+/// spans well over 1s — so the verdict still refreshes at least every ~15s.
+/// A genuine freeze is unaffected: its full ~15s window with 0 frames still
+/// yields `Some(0.0)` → `Bad`, correctly.
+const MIN_FPS_INTERVAL_MS: f64 = 1000.0;
+
+/// Presented frames per second over an interval, or `None` when the interval
+/// is shorter than `MIN_FPS_INTERVAL_MS` (too short for a stable rate — see
+/// that constant). Pure so the window floor is host-testable without a clock.
+pub(crate) fn presented_fps_for_window(presented: u32, elapsed_ms: f64) -> Option<f64> {
+    (elapsed_ms >= MIN_FPS_INTERVAL_MS).then(|| f64::from(presented) / (elapsed_ms / 1000.0))
+}
+
 /// Snapshot the present-gap accumulators for a beacon and RESET them so the
 /// NEXT beacon reports only the next interval (last-interval semantics, not
 /// cumulative). Returns `(maxPresentGapMs, presentGapsOver100, presentedFps)`:
 /// - `max_present_gap_ms` — largest inter-present gap this interval (ms).
 /// - `present_gaps_over100` — count of >100ms gaps this interval.
 /// - `presented_fps` — frames presented / interval-seconds (render-side fps,
-///   distinct from getStats' decode-side fps). `None` when the interval is too
-///   short to be meaningful (no elapsed time yet).
+///   distinct from getStats' decode-side fps). `None` when the interval is
+///   shorter than `MIN_FPS_INTERVAL_MS` (interleaved beacons leaving a
+///   sub-frame window — see `presented_fps_for_window`).
 pub(crate) fn snapshot_present_gaps(stats: &FrameStats) -> (f64, u32, Option<f64>) {
     let now = now_ms();
     let max_gap = stats.max_present_gap_ms.get();
     let over100 = stats.present_gaps_over100.get();
     let presented = stats.presented_in_interval.get();
     let elapsed_ms = now - stats.interval_started_at.get();
-    let fps = if elapsed_ms > 0.0 {
-        Some(f64::from(presented) / (elapsed_ms / 1000.0))
-    } else {
-        None
-    };
+    let fps = presented_fps_for_window(presented, elapsed_ms);
     stats.max_present_gap_ms.set(0.0);
     stats.present_gaps_over100.set(0);
     stats.presented_in_interval.set(0);
@@ -592,10 +612,10 @@ pub(crate) fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &S
 mod tests {
     use super::{
         derive_video_latency_ms, frames_are_stale, mark_frames_live, notify_stage_health,
-        smooth_latency, stage_health, FrameStats, FramesLiveSetter, HealthSetter,
-        StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS, HEALTH_FPS_BAD_MAX,
-        HEALTH_FPS_GOOD_MIN, HEALTH_GAP_HITCH_MS, HEALTH_REPEATED_GAPS_MIN,
-        VIDEO_LATENCY_SMOOTHING_ALPHA,
+        presented_fps_for_window, smooth_latency, stage_health, FrameStats, FramesLiveSetter,
+        HealthSetter, StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS,
+        HEALTH_FPS_BAD_MAX, HEALTH_FPS_GOOD_MIN, HEALTH_GAP_HITCH_MS, HEALTH_REPEATED_GAPS_MIN,
+        MIN_FPS_INTERVAL_MS, VIDEO_LATENCY_SMOOTHING_ALPHA,
     };
     use crate::state::stage::{StageHealth, StageHealthReading};
     use std::cell::Cell;
@@ -952,5 +972,44 @@ mod tests {
                 fps: 3.0,
             })
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #532 review fix — `presented_fps_for_window`: a beacon window shorter
+    // than MIN_FPS_INTERVAL_MS yields None so an interleaved rVFC/ticker pair
+    // (which leaves one path a sub-frame window) can't flash a false 🔴/🟡.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fps_over_a_full_window_is_the_rate() {
+        // 450 frames over a 15s window → 30 fps.
+        assert_eq!(presented_fps_for_window(450, 15_000.0), Some(30.0));
+    }
+
+    #[test]
+    fn fps_at_exact_window_floor_is_computed() {
+        // Exactly MIN_FPS_INTERVAL_MS is inclusive: 30 frames in 1s → 30 fps.
+        assert_eq!(
+            presented_fps_for_window(30, MIN_FPS_INTERVAL_MS),
+            Some(30.0)
+        );
+    }
+
+    #[test]
+    fn fps_is_none_for_sub_floor_interleave_window() {
+        // The failure the review caught: two beacons fire ~one frame apart, so
+        // the second sees ~16ms with 0 frames. Without the floor this is
+        // Some(0.0) → Bad → spurious 🔴. With it, None → verdict unchanged.
+        assert_eq!(presented_fps_for_window(0, 16.0), None);
+        // Even a couple of frames in a ~150ms sub-window (which would compute a
+        // misleading ~13-20 fps → false 🟡) is suppressed.
+        assert_eq!(presented_fps_for_window(2, 150.0), None);
+    }
+
+    #[test]
+    fn fps_is_none_for_zero_window() {
+        // Same-instant double call (elapsed 0) — the original guard's case,
+        // still None under the tightened floor.
+        assert_eq!(presented_fps_for_window(0, 0.0), None);
     }
 }
