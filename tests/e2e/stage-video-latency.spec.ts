@@ -85,16 +85,16 @@ async function setVideoLatency(page: Page, ms: number | null): Promise<void> {
   }, ms);
 }
 
-/** Drive the "NDI frames are presenting" flag (gates the readout's visibility,
- * the same signal the rVFC observer / proxy write per frame). */
-async function setFramesLive(page: Page, live: boolean): Promise<void> {
+/** Drive the "NDI source active" flag (gates the readout's visibility — the
+ * stable per-layout signal, set from the live snapshot in production). */
+async function setNdiActive(page: Page, active: boolean): Promise<void> {
   await page.evaluate((value) => {
     (
       window as unknown as {
-        __presenterStageSetNdiFramesLive?: (v: boolean) => void;
+        __presenterStageSetNdiActive?: (v: boolean) => void;
       }
-    ).__presenterStageSetNdiFramesLive?.(value);
-  }, live);
+    ).__presenterStageSetNdiActive?.(value);
+  }, active);
 }
 
 test("stage shows true server→display latency as a separate readout, with honest n/a", async ({
@@ -115,12 +115,12 @@ test("stage shows true server→display latency as a separate readout, with hone
   await expect(connectionEl).toBeVisible();
   await expect(connectionEl).toContainText("CONNECTED");
 
-  // No NDI video flowing yet → the video readout is absent (not just empty).
+  // No NDI source active yet → the video readout is absent (not just empty).
   await expect(videoEl).toHaveCount(0);
 
-  // Video goes live but no trustworthy measurement yet → the readout appears
-  // showing "n/a" (honest), NOT a misleading number.
-  await setFramesLive(stagePage, true);
+  // NDI source goes active but no trustworthy measurement yet → the readout
+  // appears showing "n/a" (honest), NOT a misleading number.
+  await setNdiActive(stagePage, true);
   await expect(videoEl).toBeVisible();
   await expect(videoEl).toContainText(/server→displej\s*·\s*n\/a/);
 
@@ -143,9 +143,9 @@ test("stage shows true server→display latency as a separate readout, with hone
   await setVideoLatency(stagePage, null);
   await expect(videoEl).toContainText(/server→displej\s*·\s*n\/a/);
 
-  // Video stops (source deactivated) → the readout disappears; the connection
-  // readout remains.
-  await setFramesLive(stagePage, false);
+  // NDI source deactivated → the readout disappears; the connection readout
+  // remains.
+  await setNdiActive(stagePage, false);
   await expect(videoEl).toHaveCount(0);
   await expect(connectionEl).toBeVisible();
 

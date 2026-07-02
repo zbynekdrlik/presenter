@@ -77,6 +77,24 @@ pub fn StagePage() -> impl IntoView {
         setter.forget();
     }
 
+    // Test hook (#512): drive the "NDI source active" flag deterministically from
+    // the E2E without a real NDI source. `ndi_active` gates the server→display
+    // latency readout's visibility (shown whenever NDI is the active source; the
+    // value is a number or honest "n/a"). Accepts a boolean. Production never calls
+    // this — `ndi_active` is set from the live stage snapshot.
+    {
+        let ndi_active = ctx.ndi_active;
+        let setter = Closure::wrap(Box::new(move |v: JsValue| {
+            ndi_active.set(v.as_bool().unwrap_or(false));
+        }) as Box<dyn Fn(JsValue)>);
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__presenterStageSetNdiActive"),
+            setter.as_ref(),
+        );
+        setter.forget();
+    }
+
     // Test/diagnostic hook (#510 T3): read-only getter for the browser<->server
     // pipeline-clock offset estimate. Returns `{offsetMs, rttMs}` once a
     // fresh, low-RTT NTP-style round trip against `/ndi/time` has landed, or
