@@ -97,25 +97,25 @@ async function setNdiActive(page: Page, active: boolean): Promise<void> {
   }, active);
 }
 
-/** Drive the per-display dropped-frame + freeze counters (#523) — the SAME
- * pair the getStats beacon writes. `null` clears them. */
-async function setDroppedFrames(
+/** Drive the recent-window stage-health verdict (#532) — the SAME reading
+ * the beacon-driven classifier writes. `null` clears it. */
+async function setStageHealth(
   page: Page,
-  counts: { dropped: number; freeze: number } | null,
+  reading: { state: "good" | "degraded" | "bad"; fps: number } | null,
 ): Promise<void> {
   await page.evaluate((value) => {
     (
       window as unknown as {
-        __presenterStageSetDroppedFrames?: (
-          dropped: number | null,
-          freeze: number | null,
+        __presenterStageSetHealth?: (
+          state: string | null,
+          fps: number | null,
         ) => void;
       }
-    ).__presenterStageSetDroppedFrames?.(
-      value ? value.dropped : null,
-      value ? value.freeze : null,
+    ).__presenterStageSetHealth?.(
+      value ? value.state : null,
+      value ? value.fps : null,
     );
-  }, counts);
+  }, reading);
 }
 
 test("stage shows true server→display latency as a separate readout, with honest n/a", async ({
@@ -177,17 +177,19 @@ test("stage shows true server→display latency as a separate readout, with hone
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// #523 — the stage shows per-display dropped-frame (+freeze) counts beside
-// the latency figure, so "how is this TV doing" is visible at a glance (a
-// low latency reading can otherwise hide a TV that is dropping frames to
-// achieve it). Sourced from the SAME getStats inbound-rtp sample the health
-// beacon already reads; this test drives it via the deterministic test hook
-// (`__presenterStageSetDroppedFrames`), the same signal the beacon path
-// writes. The append-format math (⬇N, +❄N only when nonzero) is unit-tested
-// in `status_bar.rs`.
+// #532 — the stage shows a RECENT-WINDOW health verdict (🟢/🟡/🔴) beside the
+// latency figure, so "is this TV usable for the band right now" is visible at
+// a glance. Replaces #523's CUMULATIVE ⬇N/❄N suffix (which never recovered
+// from one old network blip — meaningless to an operator glancing at the
+// stage). Sourced from the render-side per-interval accumulators (presented
+// fps + presentation-gap stats), classified client-side; this test drives it
+// via the deterministic test hook (`__presenterStageSetHealth`), the same
+// signal the beacon-driven classifier writes. The fps/gap → verdict
+// threshold math is unit-tested in `ndi_frame_stats.rs`; the text formatting
+// is unit-tested in `status_bar.rs`.
 // ─────────────────────────────────────────────────────────────────────────
 
-test("stage shows dropped-frame + freeze count beside the video latency", async ({
+test("stage shows a recent-window health verdict beside the video latency", async ({
   context,
 }) => {
   const consoleMessages: string[] = [];
@@ -204,29 +206,34 @@ test("stage shows dropped-frame + freeze count beside the video latency", async 
   await setVideoLatency(stagePage, 84);
   await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms/);
 
-  // No beacon has landed yet → the readout shows the latency ALONE, no
-  // fabricated drop count.
-  await expect(videoEl).not.toContainText("⬇");
+  // No beacon has classified a window yet → the readout shows the latency
+  // ALONE, no fabricated verdict.
+  await expect(videoEl).not.toContainText("plynul");
+  await expect(videoEl).not.toContainText("sek");
+  await expect(videoEl).not.toContainText("výpadky");
 
-  // A beacon lands with zero drops/freezes → shown as "⬇0" (honest zero, not
-  // hidden — the whole point is a per-TV health signal at a glance).
-  await setDroppedFrames(stagePage, { dropped: 0, freeze: 0 });
-  await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms\s*·\s*⬇0/);
-  await expect(videoEl).not.toContainText("❄");
+  // A beacon classifies a smooth window → 🟢 plynulé + the recent fps.
+  await setStageHealth(stagePage, { state: "good", fps: 28 });
+  await expect(videoEl).toContainText("🟢");
+  await expect(videoEl).toContainText("plynulé");
+  await expect(videoEl).toContainText("28 fps");
 
-  // Drops accumulate → the count updates live.
-  await setDroppedFrames(stagePage, { dropped: 128, freeze: 0 });
-  await expect(videoEl).toContainText(/⬇128/);
-  await expect(videoEl).not.toContainText("❄");
+  // A beacon classifies minor stutter → 🟡 mierne seká.
+  await setStageHealth(stagePage, { state: "degraded", fps: 20 });
+  await expect(videoEl).toContainText("🟡");
+  await expect(videoEl).toContainText("mierne seká");
+  await expect(videoEl).toContainText("20 fps");
 
-  // A freeze count is present too → shown alongside the drop count.
-  await setDroppedFrames(stagePage, { dropped: 128, freeze: 2 });
-  await expect(videoEl).toContainText(/⬇128\s*❄2/);
+  // A beacon classifies real freezing → 🔴 výpadky.
+  await setStageHealth(stagePage, { state: "bad", fps: 6 });
+  await expect(videoEl).toContainText("🔴");
+  await expect(videoEl).toContainText("výpadky");
+  await expect(videoEl).toContainText("6 fps");
 
-  // Reconnect (or no getStats data) clears it → readout falls back to the
-  // latency alone, never a stale count.
-  await setDroppedFrames(stagePage, null);
-  await expect(videoEl).not.toContainText("⬇");
+  // Reconnect (or no classified window yet) clears it → readout falls back
+  // to the latency alone, never a stale verdict.
+  await setStageHealth(stagePage, null);
+  await expect(videoEl).not.toContainText("výpadky");
   await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms/);
 
   // browser-console-zero-errors: no errors/warnings the whole time.

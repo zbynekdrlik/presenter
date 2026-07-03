@@ -15,7 +15,9 @@ use leptos::wasm_bindgen::{JsCast, JsValue};
 use leptos::web_sys::RtcPeerConnection;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_frame_stats::{snapshot_present_gaps, DroppedFramesSetter, FrameStats};
+use super::ndi_frame_stats::{
+    notify_stage_health, snapshot_present_gaps, DroppedFramesSetter, FrameStats, HealthSetter,
+};
 use super::ndi_profile::{local_storage, profile_mode_is_compat, profile_mode_name};
 
 /// localStorage key for the persistent per-display identity used in stats
@@ -50,14 +52,21 @@ fn display_id() -> Option<String> {
 /// the spawned task. The smoothed true latency and the clock offset/RTT
 /// (#514) are likewise sampled synchronously so they describe THIS beacon's
 /// moment, not the post-await one.
+///
+/// #532: the stage-health verdict is classified from this SAME synchronous
+/// snapshot (`max_gap`/`over100`/`fps` need no getStats data at all), so it
+/// is pushed to the readout right here — independent of whether the async
+/// getStats round-trip below succeeds.
 pub(crate) fn post_stats_beacon(
     pc: &RtcPeerConnection,
     source_id: &str,
     stats: &FrameStats,
     clock_offset: Option<(f64, f64)>,
     dropped_frames_setter: Option<DroppedFramesSetter>,
+    health_setter: Option<HealthSetter>,
 ) {
     let (max_gap, over100, fps) = snapshot_present_gaps(stats);
+    notify_stage_health(fps, max_gap, over100, &health_setter);
     let video_latency_ms = stats.video_latency_ms.get();
     let pc = pc.clone();
     let source_id = source_id.to_string();
@@ -88,12 +97,20 @@ pub(crate) fn maybe_post_beacon(
     stats: &FrameStats,
     clock_offset: Option<(f64, f64)>,
     dropped_frames_setter: Option<DroppedFramesSetter>,
+    health_setter: Option<HealthSetter>,
 ) {
     tick_count.set(tick_count.get().wrapping_add(1));
     if tick_count.get() % 15 != 0 {
         return;
     }
-    post_stats_beacon(pc, source_id, stats, clock_offset, dropped_frames_setter);
+    post_stats_beacon(
+        pc,
+        source_id,
+        stats,
+        clock_offset,
+        dropped_frames_setter,
+        health_setter,
+    );
 }
 
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a

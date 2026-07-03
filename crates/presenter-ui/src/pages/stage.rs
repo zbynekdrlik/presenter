@@ -8,7 +8,7 @@ use crate::components::stage::{
     ndi_fullscreen::NdiFullscreen, preach_layout::PreachLayout, timer_layout::TimerLayout,
     worship_pp::WorshipPp, worship_snv::WorshipSnv,
 };
-use crate::state::stage::StageContext;
+use crate::state::stage::{StageContext, StageHealth, StageHealthReading};
 use crate::ws::stage::{self, StageWsState};
 
 #[component]
@@ -74,6 +74,41 @@ pub fn StagePage() -> impl IntoView {
         let _ = js_sys::Reflect::set(
             &js_sys::global(),
             &JsValue::from_str("__presenterStageSetDroppedFrames"),
+            setter.as_ref(),
+        );
+        setter.forget();
+    }
+
+    // Test hook (#532): drive the recent-window stage-health verdict
+    // deterministically from the E2E without a live NDI/GPU pipeline (the
+    // classifier normally runs off real beacon-interval accumulators).
+    // Accepts a state string ("good"|"degraded"|"bad") + the recent-fps
+    // number it was derived from — the SAME reading the beacon-driven
+    // classifier writes — or null/null to clear. In production this global
+    // is simply never called.
+    {
+        let stage_health = ctx.stage_health;
+        let setter = Closure::wrap(Box::new(move |state: JsValue, fps: JsValue| {
+            let reading = match (state.as_string().as_deref(), fps.as_f64()) {
+                (Some("good"), Some(fps)) => Some(StageHealthReading {
+                    state: StageHealth::Good,
+                    fps,
+                }),
+                (Some("degraded"), Some(fps)) => Some(StageHealthReading {
+                    state: StageHealth::Degraded,
+                    fps,
+                }),
+                (Some("bad"), Some(fps)) => Some(StageHealthReading {
+                    state: StageHealth::Bad,
+                    fps,
+                }),
+                _ => None,
+            };
+            stage_health.set(reading);
+        }) as Box<dyn Fn(JsValue, JsValue)>);
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__presenterStageSetHealth"),
             setter.as_ref(),
         );
         setter.forget();

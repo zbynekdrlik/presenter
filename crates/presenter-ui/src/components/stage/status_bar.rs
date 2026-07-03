@@ -2,7 +2,7 @@ use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 
 use crate::components::version_label::VersionLabel;
-use crate::state::stage::StageContext;
+use crate::state::stage::{StageContext, StageHealthReading};
 use crate::utils::autofit::autofit_effect_tabular;
 use crate::ws::stage::StageWsState;
 
@@ -98,11 +98,13 @@ pub fn StatusBar(
     let video_latency = ctx.video_latency_ms;
     let ndi_active = ctx.ndi_active;
     let has_video_latency = move || ndi_active.get();
-    // #523: per-display dropped-frame + freeze count from the getStats beacon,
-    // shown appended to the latency figure — see `format_video_latency_line`.
-    let dropped_frames = ctx.dropped_frames;
+    // #532: recent-window health verdict (🟢/🟡/🔴), shown appended to the
+    // latency figure — see `format_video_latency_line`. Replaces the
+    // cumulative ⬇N/❄N suffix #523 drove from `ctx.dropped_frames` (that
+    // signal is still populated by the beacon, just no longer read here).
+    let stage_health = ctx.stage_health;
     let video_latency_text =
-        move || format_video_latency_line(video_latency.get(), dropped_frames.get());
+        move || format_video_latency_line(video_latency.get(), stage_health.get());
 
     autofit_effect_tabular(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
     if !hide_live {
@@ -162,40 +164,47 @@ fn current_time_string() -> String {
     )
 }
 
-/// Pure format helper for the `.stage__video-latency` readout text (#523):
-/// appends the per-display dropped-frame (+ freeze, when nonzero) count from
-/// the getStats beacon to the existing "server→displej · N ms" figure.
-/// Extracted so the formatting is host-unit-testable without a live
+/// Pure format helper for the `.stage__video-latency` readout text (#532):
+/// appends the recent-window health verdict (🟢/🟡/🔴 + Slovak label + the
+/// recent fps figure it was derived from) to the existing "server→displej ·
+/// N ms" figure. Replaces the CUMULATIVE ⬇N/❄N suffix #523 put here — that
+/// count never recovered from one old network blip, which the user found
+/// meaningless; the underlying `dropped_frames` plumbing that fed it is left
+/// running (per the issue), only this on-screen text moved to the new
+/// signal. Extracted so the formatting is host-unit-testable without a live
 /// Leptos/WASM render — the reactive closure in `StatusBar` is a thin wrapper
 /// over this.
 fn format_video_latency_line(
     latency_ms: Option<f64>,
-    dropped_frames: Option<(u32, u32)>,
+    health: Option<StageHealthReading>,
 ) -> String {
     let base = match latency_ms {
         Some(ms) => format!("server\u{2192}displej \u{00b7} {} ms", ms as u32),
         None => "server\u{2192}displej \u{00b7} n/a".to_string(),
     };
-    match dropped_frames {
-        // Freeze count is shown too, but only when it's actually nonzero —
-        // keeps the common case (dropped frames with no freeze) to ONE short
-        // extra token, per the issue's "ONE short line" format.
-        Some((dropped, freeze)) if freeze > 0 => {
-            format!("{base} \u{00b7} \u{2b07}{dropped} \u{2744}{freeze}")
-        }
-        Some((dropped, _)) => format!("{base} \u{00b7} \u{2b07}{dropped}"),
+    match health {
+        // No beacon has classified a recent window yet (fresh session /
+        // reconnect) — show the latency alone rather than a stale/fabricated
+        // verdict.
         None => base,
+        Some(reading) => format!(
+            "{base} \u{00b7} {} {} \u{00b7} {} fps",
+            reading.state.emoji(),
+            reading.state.label(),
+            reading.fps.round() as u32,
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::format_video_latency_line;
+    use crate::state::stage::{StageHealth, StageHealthReading};
 
     #[test]
-    fn shows_latency_alone_when_no_drop_data_yet() {
-        // No beacon has landed yet (fresh session / reconnect) — the readout
-        // must not show a stale/fabricated drop count.
+    fn shows_latency_alone_when_no_health_data_yet() {
+        // No beacon has classified a recent window yet (fresh session /
+        // reconnect) — the readout must not show a stale/fabricated verdict.
         assert_eq!(
             format_video_latency_line(Some(112.0), None),
             "server\u{2192}displej \u{00b7} 112 ms"
@@ -207,39 +216,60 @@ mod tests {
     }
 
     #[test]
-    fn appends_dropped_count_with_no_freeze() {
+    fn appends_good_health_verdict_with_fps() {
         assert_eq!(
-            format_video_latency_line(Some(112.0), Some((0, 0))),
-            "server\u{2192}displej \u{00b7} 112 ms \u{00b7} \u{2b07}0"
-        );
-        assert_eq!(
-            format_video_latency_line(Some(84.0), Some((128, 0))),
-            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{2b07}128"
-        );
-    }
-
-    #[test]
-    fn appends_freeze_count_only_when_nonzero() {
-        assert_eq!(
-            format_video_latency_line(Some(84.0), Some((128, 2))),
-            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{2b07}128 \u{2744}2"
-        );
-        // Freezes with zero dropped frames is a real combination too (a
-        // display can freeze without the decoder ever reporting a drop) —
-        // both figures show together, symmetric with the dropped-only case.
-        assert_eq!(
-            format_video_latency_line(Some(84.0), Some((0, 3))),
-            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{2b07}0 \u{2744}3"
+            format_video_latency_line(
+                Some(84.0),
+                Some(StageHealthReading {
+                    state: StageHealth::Good,
+                    fps: 28.4,
+                })
+            ),
+            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{1f7e2} plynul\u{e9} \u{00b7} 28 fps"
         );
     }
 
     #[test]
-    fn n_a_latency_still_shows_drop_count() {
-        // A dropped-frame count is meaningful even without a trustworthy
-        // latency reading — never suppress it just because latency is n/a.
+    fn appends_degraded_health_verdict() {
         assert_eq!(
-            format_video_latency_line(None, Some((5, 0))),
-            "server\u{2192}displej \u{00b7} n/a \u{00b7} \u{2b07}5"
+            format_video_latency_line(
+                Some(84.0),
+                Some(StageHealthReading {
+                    state: StageHealth::Degraded,
+                    fps: 22.0,
+                })
+            ),
+            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{1f7e1} mierne sek\u{e1} \u{00b7} 22 fps"
+        );
+    }
+
+    #[test]
+    fn appends_bad_health_verdict() {
+        assert_eq!(
+            format_video_latency_line(
+                Some(84.0),
+                Some(StageHealthReading {
+                    state: StageHealth::Bad,
+                    fps: 8.0,
+                })
+            ),
+            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{1f534} v\u{fd}padky \u{00b7} 8 fps"
+        );
+    }
+
+    #[test]
+    fn n_a_latency_still_shows_health_verdict() {
+        // A health verdict is meaningful even without a trustworthy latency
+        // reading — never suppress it just because latency is n/a.
+        assert_eq!(
+            format_video_latency_line(
+                None,
+                Some(StageHealthReading {
+                    state: StageHealth::Bad,
+                    fps: 5.0,
+                })
+            ),
+            "server\u{2192}displej \u{00b7} n/a \u{00b7} \u{1f534} v\u{fd}padky \u{00b7} 5 fps"
         );
     }
 }
