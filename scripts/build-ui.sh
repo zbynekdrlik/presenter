@@ -48,4 +48,12 @@ sed -i 's| crossorigin="anonymous"||g' dist/index.html
 sed -i '/<link rel="modulepreload"/d' dist/index.html
 sed -i '/<link rel="preload"/d' dist/index.html
 
+# Regression guard (#533), positive form: the wasm loader MUST still resolve
+# its URL via import.meta.url in the shipped dist. Catches a future esbuild/
+# trunk change that empties it even without printing the warning above.
+if ! grep -q 'import\.meta\.url' dist/presenter-ui-*.js; then
+  echo "ERROR: dist wasm loader lost import.meta.url (#533 regression) — wasm URL base broken." >&2
+  exit 1
+fi
+
 echo "==> UI build complete."
