@@ -246,3 +246,38 @@ expose a `__presenterStageSet*` global in `pages/stage.rs` (mirror `__presenterS
 / `__presenterStageSetNdiFramesLive`) and call it from the spec — these globals are always compiled
 (not feature-gated) and never called in production. Allow-list the expected 503/204 WHEP-backoff
 console lines (TIGHT regexes) so console-zero still catches real errors.
+
+### Swapping what a readout DISPLAYS while keeping the underlying signal alive (#532)
+
+When a ticket says "replace the on-screen X with Y, but keep X's plumbing" (X = a signal other code
+might still rely on, e.g. `dropped_frames` feeding server-side per-TV telemetry): DO exactly that —
+keep the OLD `RwSignal`/setter/beacon-population code fully intact and just stop READING it in the
+render closure (`status_bar.rs`'s `video_latency_text` switched from `ctx.dropped_frames` to the new
+`ctx.stage_health`). Don't delete the old signal "because nothing renders it now" — a review pass
+will flag it as write-only, but that's the CORRECT shape when the issue explicitly asks for it; note
+the decision in the PR/commit rather than reverting under review pressure.
+
+**Beacon-classification pattern:** if the new signal can be computed from data the beacon ALREADY
+gathers synchronously (e.g. `snapshot_present_gaps`'s `(max_gap, over100, fps)`, no getStats/network
+round-trip needed), classify it in `post_stats_beacon` BEFORE the `spawn_local` async block — it's
+both simpler and lands independent of getStats succeeding.
+
+**Multi-source-fps gotcha:** `stage_health`-style classifiers keyed on presented-fps must account for
+BOTH beacon-trigger paths: (a) the two ~15s-cadenced rVFC-count and 1s-ticker paths share one
+`FrameStats` and drift into near-coincidence, leaving one a sub-second window (`presented_fps_for_
+window`'s `MIN_FPS_INTERVAL_MS` floor fixes this — always floor a computed rate below ~1s); (b)
+rVFC-LESS browsers' `approximate_frame_from_current_time` proxy counts ≤1 "frame"/tick — a
+stall-detection signal, NEVER a real rate — so it always computes ≈1fps regardless of real
+smoothness; gate the classified-signal setter itself on `rvfc_supported` (see
+`health_setter_for_ticker_beacon` in `ndi_health_ticker.rs`) rather than trying to special-case the
+classifier's thresholds for that path.
+
+**Verifying a new per-TV signal on PRODUCTION with a genuinely live stream:** the deterministic
+`__presenterStageSet*` test hooks are LOCAL signal overrides with no protection against being
+overwritten by the real beacon — on an ACTUALLY STREAMING production source, the live telemetry
+keeps firing every ~15s and will race with (and usually win against) a manual test-hook call within
+a couple of round-trips. Don't fight this or treat it as a bug. Instead, read the REAL computed value
+as the verification evidence (e.g. `server→displej · 22 ms · 🟢 plynulé · 30 fps` sourced from the
+actual live NDI stream) — that's actually STRONGER proof than a synthetic override, since it exercises
+the entire real pipeline end-to-end. Use `/stage?preview=1` (the operator-preview mirror mode) to open
+a read-only tab that never grabs a wake lock or changes the broadcast layout for real displays.
