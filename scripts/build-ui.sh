@@ -15,11 +15,26 @@ echo "==> Building WASM UI with Trunk (MVP WASM for Safari 12)..."
 RUSTUP_TOOLCHAIN=nightly trunk build --release
 
 # Step 2: Transpile JS glue code to ES2017 (Safari 12 compatible syntax).
+# `--supported:import-meta=true` overrides the es2017 default (#533): the
+# trunk-generated wasm loader resolves the .wasm URL via
+# `new URL('...wasm', import.meta.url)`, and the module IS loaded as an ES
+# module at runtime (Safari 12.1+/iOS 12.2+, our actual target, supports
+# import.meta), so esbuild must NOT down-level import.meta to `{}` — doing so
+# empties the URL base and can break wasm loading. We keep every other es2017
+# syntax down-level; only import.meta is declared runtime-supported.
 echo "==> Transpiling JS for Safari 12..."
-esbuild dist/presenter-ui-*.js \
+esbuild_out=$(esbuild dist/presenter-ui-*.js \
   --target=es2017 \
+  --supported:import-meta=true \
   --outdir=dist/ \
-  --allow-overwrite
+  --allow-overwrite 2>&1)
+echo "$esbuild_out"
+# Regression guard (#533): the empty-import-meta warning must not reappear — it
+# means the wasm URL base was silently emptied. Fail the build if it does.
+if echo "$esbuild_out" | grep -q 'empty-import-meta'; then
+  echo "ERROR: esbuild emptied import.meta (#533 regression) — wasm URL base broken." >&2
+  exit 1
+fi
 
 # Step 3: Patch index.html for Safari 12.
 # - Wrap top-level await (ES2022) in async IIFE, keeping static import at top
