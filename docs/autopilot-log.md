@@ -339,3 +339,49 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   E2E `tests/e2e/stage-fulltext-layout.spec.ts` (3: fullscreen render + autoscale short-vs-long font
   assertion, API marker → trigger switches live stage DOM, operator select→badge flow; 0 console errors).
 - Solo PR (dev→main, Closes #515), version 0.4.184.
+
+## 2026-07-03 — #532 Recent-window stage-TV health indicator (🟢/🟡/🔴) (PR #534, v0.4.189)
+
+- **Validated still real:** confirmed `format_video_latency_line` in `status_bar.rs` still showed the
+  cumulative `⬇N ❄N` suffix from #523 pre-fix — issue still applicable, not overcome.
+- **Version:** 0.4.188 → **0.4.189** (first commit `4e9a063f`), merged to main `a5aafc6f` before push.
+- **Feature commits:** `4e9a063f` (StageHealth enum + StageHealthReading in `state/stage.rs`; pure
+  `stage_health()` classifier + `notify_stage_health()` + `HealthSetter` in `ndi_frame_stats.rs`;
+  wired through `StageSignalSetters`/`post_stats_beacon`/`maybe_post_beacon`; `__presenterStageSetHealth`
+  test hook; `status_bar.rs` reads `stage_health` instead of `dropped_frames` for the readout text —
+  `dropped_frames` plumbing kept running per the issue's explicit "keep the plumbing" note).
+- **Code-review follow-up commits (adversarial multi-angle review before merge):**
+  `623451e2` fixed a beacon-interleave bug (two independent ~15s-cadenced beacon paths drifting into
+  near-coincidence → a sub-second window computing a spurious ~0fps) via `presented_fps_for_window`
+  with a `MIN_FPS_INTERVAL_MS` floor. `e2093b3f` (mine) fixed two more real bugs the review caught:
+  (1) `stage_health()`'s Bad branch only escalated on REPEATED (>=2) gaps, never on gap MAGNITUDE — a
+  single multi-second freeze registered as ONE `present_gaps_over100`, indistinguishable from a
+  trivial 101ms hitch, wrongly landing on 🟡 instead of 🔴; added `HEALTH_SEVERE_FREEZE_MS` (1000ms)
+  and removed dead code in the Good branch (`present_gaps_over100==0` already implies `max_gap<=100`,
+  making the old `HEALTH_GAP_HITCH_MS` check unreachable-false). (2) rVFC-less browsers' 1s-ticker
+  currentTime proxy caps at ~1fps (a stall-detection signal, never a real rate) — feeding that to the
+  verdict permanently showed 🔴 on a perfectly smooth rVFC-less TV; fixed via
+  `health_setter_for_ticker_beacon` withholding the health setter entirely on that path.
+- **Tests:** exhaustive `stage_health()` boundary tests at every threshold incl. severe-freeze
+  boundary, `notify_stage_health`/`presented_fps_for_window` glue tests, `health_setter_for_ticker_beacon`
+  unit tests (new, ndi_health_ticker.rs), `format_video_latency_line` formatting tests (status_bar.rs),
+  E2E `tests/e2e/stage-video-latency.spec.ts` (replaced the old #523 dropped-frame test with a
+  health-verdict test driving all 3 states + fallback via `__presenterStageSetHealth`; 0 console errors).
+- **Decision — left as-is (documented, not silently dropped):** review also flagged (a) `dropped_frames`
+  now write-only in production (explicitly by design per the issue's "keep the plumbing" instruction,
+  not a defect); (b) `post_stats_beacon`/`maybe_post_beacon` positional-param growth on adding
+  `health_setter` (mirrors the PRE-EXISTING `dropped_frames_setter` param shape from #523, not a new
+  inconsistency — restructuring the closure-capture code carried more risk than the cosmetic gain was
+  worth, especially mid-concurrent-edit); (c) `ndi_frame_stats.rs` at 956 lines crosses the 800-line
+  CI *warning* (not the 1000-line hard-fail) — deferred, non-blocking.
+- **Note on this cycle:** the feature commit + main-sync merge landed via an autonomous process running
+  concurrently with this worker session (same repo, same `dev` branch) before this worker's own
+  code-review pass ran — the worker picked up from that durable git state (`verify-issue-still-valid`
+  + `salvage-before-discarding-work` in spirit), ran its own adversarial review, found 2 more real bugs
+  beyond the concurrent process's own fix, and completed the cycle (review → fix → CI → merge → deploy).
+- **Post-deploy verification:** prod DOM read `v0.4.189` at http://10.77.9.205/stage; the LIVE NDI
+  stream's real beacon showed the feature working end-to-end with genuine data
+  (`server→displej · 22-31 ms · 🟢 plynulé · 28-31 fps`) — stronger evidence than the synthetic test
+  hook, which raced against and lost to the real telemetry (expected; the hook targets no-live-stream
+  E2E envs). 0 console errors/warnings.
+- Solo PR (dev→main #534, Closes #532), version 0.4.189.
