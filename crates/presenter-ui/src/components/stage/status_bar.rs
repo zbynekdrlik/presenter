@@ -2,7 +2,7 @@ use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 
 use crate::components::version_label::VersionLabel;
-use crate::state::stage::{StageContext, StageHealthReading};
+use crate::state::stage::{StageContext, StageHealth};
 use crate::utils::autofit::autofit_effect_tabular;
 use crate::ws::stage::StageWsState;
 
@@ -103,8 +103,7 @@ pub fn StatusBar(
     // cumulative ⬇N/❄N suffix #523 drove from `ctx.dropped_frames` (that
     // signal is still populated by the beacon, just no longer read here).
     let stage_health = ctx.stage_health;
-    let video_latency_text =
-        move || format_video_latency_line(video_latency.get(), stage_health.get());
+    let video_latency_text = move || format_video_latency_line(video_latency.get());
 
     autofit_effect_tabular(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
     if !hide_live {
@@ -145,6 +144,14 @@ pub fn StatusBar(
             <div node_ref=video_latency_ref class="stage__video-latency" data-role="video-latency">
                 <span class="stage__debug-label">"video-latency"</span>
                 {video_latency_text}
+                // #532/#536: recent-window health verdict as a SMALL colored
+                // dot (green/amber/red) + fps — replaces the wide emoji+word
+                // suffix that overflowed the narrow readout box off-screen.
+                {move || stage_health.get().map(|r| view! {
+                    " \u{00b7} "
+                    <span class=stage_health_dot_class(r.state) data-role="health-dot"></span>
+                    {format!(" {} fps", r.fps.round() as u32)}
+                })}
             </div>
         })}
         <div class="stage__version">
@@ -173,103 +180,68 @@ fn current_time_string() -> String {
 /// running (per the issue), only this on-screen text moved to the new
 /// signal. Extracted so the formatting is host-unit-testable without a live
 /// Leptos/WASM render — the reactive closure in `StatusBar` is a thin wrapper
-/// over this.
-fn format_video_latency_line(
-    latency_ms: Option<f64>,
-    health: Option<StageHealthReading>,
-) -> String {
-    let base = match latency_ms {
+/// over this. #536: this now returns ONLY the latency figure; the health
+/// verdict is rendered separately as a small colored DOT (+ fps) span in the
+/// view, because the old emoji+word suffix (`🟢 plynulé · 28 fps`) overflowed
+/// the narrow (24%-wide) readout box and was truncated / pushed off-screen on
+/// the real stage TVs, and the emoji glyph could not be sized down.
+fn format_video_latency_line(latency_ms: Option<f64>) -> String {
+    match latency_ms {
         Some(ms) => format!("server\u{2192}displej \u{00b7} {} ms", ms as u32),
         None => "server\u{2192}displej \u{00b7} n/a".to_string(),
-    };
-    match health {
-        // No beacon has classified a recent window yet (fresh session /
-        // reconnect) — show the latency alone rather than a stale/fabricated
-        // verdict.
-        None => base,
-        Some(reading) => format!(
-            "{base} \u{00b7} {} {} \u{00b7} {} fps",
-            reading.state.emoji(),
-            reading.state.label(),
-            reading.fps.round() as u32,
-        ),
+    }
+}
+
+/// CSS class for the recent-window health DOT (#536): a small colored circle
+/// (green/amber/red) whose SIZE is controlled by `stage.css` — unlike the old
+/// emoji glyph, which rendered oversized and could not be shrunk. The color
+/// alone conveys "usable right now?", so the Slovak word is dropped (it was
+/// what overflowed the box). Pure + host-unit-tested.
+fn stage_health_dot_class(state: StageHealth) -> &'static str {
+    match state {
+        StageHealth::Good => "stage__health-dot stage__health-dot--good",
+        StageHealth::Degraded => "stage__health-dot stage__health-dot--degraded",
+        StageHealth::Bad => "stage__health-dot stage__health-dot--bad",
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::format_video_latency_line;
-    use crate::state::stage::{StageHealth, StageHealthReading};
+    use super::{format_video_latency_line, stage_health_dot_class};
+    use crate::state::stage::StageHealth;
 
     #[test]
-    fn shows_latency_alone_when_no_health_data_yet() {
-        // No beacon has classified a recent window yet (fresh session /
-        // reconnect) — the readout must not show a stale/fabricated verdict.
+    fn shows_latency_number_when_measured() {
         assert_eq!(
-            format_video_latency_line(Some(112.0), None),
+            format_video_latency_line(Some(112.0)),
             "server\u{2192}displej \u{00b7} 112 ms"
         );
+    }
+
+    #[test]
+    fn shows_n_a_when_no_trustworthy_latency() {
         assert_eq!(
-            format_video_latency_line(None, None),
+            format_video_latency_line(None),
             "server\u{2192}displej \u{00b7} n/a"
         );
     }
 
     #[test]
-    fn appends_good_health_verdict_with_fps() {
-        assert_eq!(
-            format_video_latency_line(
-                Some(84.0),
-                Some(StageHealthReading {
-                    state: StageHealth::Good,
-                    fps: 28.4,
-                })
-            ),
-            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{1f7e2} plynul\u{e9} \u{00b7} 28 fps"
-        );
-    }
-
-    #[test]
-    fn appends_degraded_health_verdict() {
-        assert_eq!(
-            format_video_latency_line(
-                Some(84.0),
-                Some(StageHealthReading {
-                    state: StageHealth::Degraded,
-                    fps: 22.0,
-                })
-            ),
-            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{1f7e1} mierne sek\u{e1} \u{00b7} 22 fps"
-        );
-    }
-
-    #[test]
-    fn appends_bad_health_verdict() {
-        assert_eq!(
-            format_video_latency_line(
-                Some(84.0),
-                Some(StageHealthReading {
-                    state: StageHealth::Bad,
-                    fps: 8.0,
-                })
-            ),
-            "server\u{2192}displej \u{00b7} 84 ms \u{00b7} \u{1f534} v\u{fd}padky \u{00b7} 8 fps"
-        );
-    }
-
-    #[test]
-    fn n_a_latency_still_shows_health_verdict() {
-        // A health verdict is meaningful even without a trustworthy latency
-        // reading — never suppress it just because latency is n/a.
-        assert_eq!(
-            format_video_latency_line(
-                None,
-                Some(StageHealthReading {
-                    state: StageHealth::Bad,
-                    fps: 5.0,
-                })
-            ),
-            "server\u{2192}displej \u{00b7} n/a \u{00b7} \u{1f534} v\u{fd}padky \u{00b7} 5 fps"
-        );
+    fn health_dot_class_is_distinct_and_color_coded_per_state() {
+        // Each state maps to its own modifier so stage.css can colour + SIZE
+        // the dot (the whole point of #536 — a small, controllable dot instead
+        // of the oversized emoji). Base class shared; modifier distinct.
+        let good = stage_health_dot_class(StageHealth::Good);
+        let degraded = stage_health_dot_class(StageHealth::Degraded);
+        let bad = stage_health_dot_class(StageHealth::Bad);
+        assert_eq!(good, "stage__health-dot stage__health-dot--good");
+        assert_eq!(degraded, "stage__health-dot stage__health-dot--degraded");
+        assert_eq!(bad, "stage__health-dot stage__health-dot--bad");
+        assert_ne!(good, degraded);
+        assert_ne!(degraded, bad);
+        assert_ne!(good, bad);
+        for c in [good, degraded, bad] {
+            assert!(c.starts_with("stage__health-dot "));
+        }
     }
 }

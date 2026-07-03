@@ -241,6 +241,31 @@ body.stage {
     text-align: right;
 }
 
+/* #536: recent-window health verdict as a SMALL colored dot inside the
+   `.stage__video-latency` readout — replaces the emoji+word suffix that
+   overflowed the 24%-wide box off-screen and rendered an oversized glyph.
+   Sized in `em` so it tracks the readout's small 1vw font (a compact dot,
+   never a big ball); color alone conveys usability, inheriting the readout's
+   low opacity so it stays de-emphasized. */
+.stage__health-dot {
+    display: inline-block;
+    width: 0.62em;
+    height: 0.62em;
+    border-radius: 50%;
+    vertical-align: baseline;
+    /* fallback if a modifier is somehow missing — neutral, not alarming */
+    background-color: #64748b;
+}
+.stage__health-dot--good {
+    background-color: #22c55e;
+}
+.stage__health-dot--degraded {
+    background-color: #eab308;
+}
+.stage__health-dot--bad {
+    background-color: #ef4444;
+}
+
 /* ===== Group pills ===== */
 
 .stage__group-pill {

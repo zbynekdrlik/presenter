@@ -15,39 +15,24 @@ const CLIENT_ID_KEY: &str = "stageClientId";
 /// is what an operator glancing at the stage actually needs). See
 /// `components::stage::ndi_frame_stats::stage_health` for the pure
 /// classifier and its named threshold constants.
+/// The verdict drives a small colored dot on the stage readout (green/amber/
+/// red — see `status_bar::stage_health_dot_class` + `.stage__health-dot` in
+/// stage.css). #536: the dot replaced an emoji+word suffix that overflowed the
+/// narrow readout box; the color alone conveys usability, so no glyph/label
+/// method lives here anymore.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageHealth {
-    /// 🟢 plynulé — smooth, fully usable.
+    /// Green dot — smooth, fully usable.
     Good,
-    /// 🟡 mierne seká — minor stutter, still usable.
+    /// Amber dot — minor stutter, still usable.
     Degraded,
-    /// 🔴 výpadky — freezing / not usable, needs attention.
+    /// Red dot — freezing / not usable, needs attention.
     Bad,
-}
-
-impl StageHealth {
-    /// The colour glyph shown on the stage readout.
-    pub fn emoji(self) -> &'static str {
-        match self {
-            StageHealth::Good => "\u{1f7e2}",
-            StageHealth::Degraded => "\u{1f7e1}",
-            StageHealth::Bad => "\u{1f534}",
-        }
-    }
-
-    /// The short Slovak label shown next to the glyph.
-    pub fn label(self) -> &'static str {
-        match self {
-            StageHealth::Good => "plynul\u{e9}",
-            StageHealth::Degraded => "mierne sek\u{e1}",
-            StageHealth::Bad => "v\u{fd}padky",
-        }
-    }
 }
 
 /// One classified health reading (#532): the verdict plus the recent-window
 /// presented-fps figure it was derived from, shown together as the small
-/// secondary detail beside the colour (e.g. "🟢 plynulé · 28 fps").
+/// secondary detail beside the colored dot (e.g. "● 28 fps").
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StageHealthReading {
     pub state: StageHealth,

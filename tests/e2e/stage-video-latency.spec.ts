@@ -201,39 +201,47 @@ test("stage shows a recent-window health verdict beside the video latency", asyn
   });
 
   const videoEl = stagePage.locator(".stage__video-latency");
+  const dot = stagePage.locator(
+    ".stage__video-latency [data-role='health-dot']",
+  );
 
   await setNdiActive(stagePage, true);
   await setVideoLatency(stagePage, 84);
   await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms/);
 
-  // No beacon has classified a window yet → the readout shows the latency
-  // ALONE, no fabricated verdict.
-  await expect(videoEl).not.toContainText("plynul");
-  await expect(videoEl).not.toContainText("sek");
-  await expect(videoEl).not.toContainText("výpadky");
+  // No beacon has classified a window yet → latency ALONE, no verdict dot.
+  await expect(dot).toHaveCount(0);
 
-  // A beacon classifies a smooth window → 🟢 plynulé + the recent fps.
+  // #536: the verdict renders as a SMALL colored dot (green/amber/red) + fps —
+  // NOT the old emoji+word suffix that overflowed the box off-screen. The dot's
+  // modifier class carries the state; the word and emoji are gone entirely.
   await setStageHealth(stagePage, { state: "good", fps: 28 });
-  await expect(videoEl).toContainText("🟢");
-  await expect(videoEl).toContainText("plynulé");
+  await expect(dot).toHaveClass(/stage__health-dot--good/);
   await expect(videoEl).toContainText("28 fps");
+  await expect(videoEl).not.toContainText("plynul"); // word dropped
+  await expect(videoEl).not.toContainText("🟢"); // emoji dropped
 
-  // A beacon classifies minor stutter → 🟡 mierne seká.
   await setStageHealth(stagePage, { state: "degraded", fps: 20 });
-  await expect(videoEl).toContainText("🟡");
-  await expect(videoEl).toContainText("mierne seká");
+  await expect(dot).toHaveClass(/stage__health-dot--degraded/);
   await expect(videoEl).toContainText("20 fps");
 
-  // A beacon classifies real freezing → 🔴 výpadky.
   await setStageHealth(stagePage, { state: "bad", fps: 6 });
-  await expect(videoEl).toContainText("🔴");
-  await expect(videoEl).toContainText("výpadky");
+  await expect(dot).toHaveClass(/stage__health-dot--bad/);
   await expect(videoEl).toContainText("6 fps");
 
-  // Reconnect (or no classified window yet) clears it → readout falls back
-  // to the latency alone, never a stale verdict.
+  // #536 REGRESSION GUARD: with the verdict shown, the readout content must FIT
+  // its box — no horizontal overflow (scrollWidth > clientWidth) that ellipsis-
+  // truncates it and pushes it off the stage TV. Exactly what the old
+  // emoji+word suffix broke.
+  const fits = await videoEl.evaluate(
+    (el) => el.scrollWidth <= el.clientWidth + 1,
+  );
+  expect(fits).toBe(true);
+
+  // Reconnect (or no classified window yet) clears it → the dot disappears and
+  // the readout falls back to the latency alone, never a stale verdict.
   await setStageHealth(stagePage, null);
-  await expect(videoEl).not.toContainText("výpadky");
+  await expect(dot).toHaveCount(0);
   await expect(videoEl).toContainText(/server→displej\s*·\s*84\s*ms/);
 
   // browser-console-zero-errors: no errors/warnings the whole time.
