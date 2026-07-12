@@ -438,3 +438,130 @@ mod pick_h264_encoder_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod encoder_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn empty_cache() -> Mutex<HashMap<String, EncoderVerdict>> {
+        Mutex::new(HashMap::new())
+    }
+
+    /// #548, the regression. "Element not in the registry" is the TRANSIENT
+    /// boot-race state the encoder gate exists to ride out (#339: VA-API can take
+    /// 30-50s after udev to register `vah264enc`). Caching that verdict for the
+    /// process lifetime freezes it: the server that started a second too early
+    /// would never see the encoder appear, would fall through to software
+    /// `x264enc` — the CPU-melt shape of #335 — and the 30s NDI auto-reconnect
+    /// self-heal (#333 item 6) could never recover it without a restart.
+    #[test]
+    fn a_not_registered_verdict_is_never_cached_so_a_late_plugin_still_heals() {
+        let cache = empty_cache();
+        let calls = AtomicUsize::new(0);
+        // The #339 host: the element is missing on the first probe, registers
+        // before the second.
+        let probe = |_name: &str| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                EncoderVerdict::NotRegistered
+            } else {
+                EncoderVerdict::Usable
+            }
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::NotRegistered
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable,
+            "a missing element must be RE-PROBED — caching 'not registered' pins the \
+             host on software x264enc for the life of the process (#548)"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "both calls must reach the probe");
+    }
+
+    /// The #541 shape — the element IS registered, the driver refuses to encode
+    /// with it ("Selected preset not supported"). That cannot heal without a
+    /// driver change, which needs a restart anyway, so it stays cached: re-probing
+    /// it would open a fresh NVENC session on every 30s reconnect tick (consumer
+    /// GeForce cards cap concurrent sessions).
+    #[test]
+    fn a_driver_rejection_is_cached_and_not_re_probed() {
+        let cache = empty_cache();
+        let calls = AtomicUsize::new(0);
+        let probe = |_name: &str| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            EncoderVerdict::CannotEncode
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "nvh264enc", probe),
+            EncoderVerdict::CannotEncode
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "nvh264enc", probe),
+            EncoderVerdict::CannotEncode
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a driver-level rejection is stable — probe it once per process"
+        );
+    }
+
+    /// A working encoder does not stop working: cache the positive so the probe
+    /// stays off the 30s reconnect tick.
+    #[test]
+    fn a_usable_verdict_is_cached() {
+        let cache = empty_cache();
+        let calls = AtomicUsize::new(0);
+        let probe = |_name: &str| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            EncoderVerdict::Usable
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Verdicts are per element name — a cached `nvh264enc` rejection must not
+    /// answer for `vah264enc`.
+    #[test]
+    fn verdicts_are_keyed_by_encoder_name() {
+        let cache = empty_cache();
+        let probe = |name: &str| {
+            if name == "vah264enc" {
+                EncoderVerdict::Usable
+            } else {
+                EncoderVerdict::CannotEncode
+            }
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "nvh264enc", probe),
+            EncoderVerdict::CannotEncode
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable
+        );
+    }
+
+    /// Only `Usable` selects an encoder — both failure verdicts are a "no" to
+    /// `pick_h264_encoder`.
+    #[test]
+    fn only_a_usable_verdict_selects_the_encoder() {
+        assert!(EncoderVerdict::Usable.is_usable());
+        assert!(!EncoderVerdict::CannotEncode.is_usable());
+        assert!(!EncoderVerdict::NotRegistered.is_usable());
+    }
+}
