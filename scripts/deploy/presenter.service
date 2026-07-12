@@ -26,28 +26,15 @@ Group=newlevel
 # grant belongs HERE so GPU access never depends on who happens to be logged in.
 SupplementaryGroups=render video
 WorkingDirectory=/opt/presenter
-# #339: gate start on hardware H264 encoder being probeable. The race
-# that took prod down on 2026-05-24 (and reproduced on cold-reboot of
-# PR #334, 17:07 CEST) is: After=dev-dri-renderD128.device fires as
-# soon as udev creates the node, but the i915/VA-API features can
-# take 30-50s longer to register. Without this gate, item 1's
-# registry rescan runs against an empty va plugin and item 6's gate
-# skips auto-restore (correct safety behaviour, but operator still
-# has to manually restart 50s later). Polling gst-inspect-1.0 in a
-# 1s loop capped at 30s by `timeout` closes the race: systemd will
-# not exec the presenter binary until the encoder is visible to the
-# same probe presenter_ndi::hw_h264_encoder() uses at startup.
-#
-# Probe BOTH vah264enc (Intel/AMD VA-API — prod N100) AND nvh264enc
-# (Nvidia NVENC — dev2 RTX). The encoder probe inside presenter
-# returns the first one it finds; the gate matches that semantic.
-#
-# The leading `-` makes failures non-fatal: if the 30s timeout
-# expires (no GPU at all, BIOS disabled, kernel issue), systemd
-# still starts presenter so non-NDI features (lyrics, Bible,
-# timers, stage display) remain available. Item 6's encoder gate
-# then skips NDI auto-restore.
-ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 --exists vah264enc || gst-inspect-1.0 --exists nvh264enc; do sleep 1; done'
+# #339/#539: wait until the H264 encoder the server will use is registered, so we
+# never start into the udev-fires-before-VA-API-registers window that took prod down
+# on 2026-05-24. The gate lives in a script (deployed alongside the binary) because it
+# also has to SKIP the wait on a host that can never satisfy it — no GPU, or a render
+# node the service user cannot open — instead of burning the full 30s on every start
+# (#539), and because it must know the modern nvcodec encoders (#541). The script
+# always exits 0: a missing encoder costs NDI, not the whole service. Leading `-` keeps
+# an older host (script not yet deployed) starting too.
+ExecStartPre=-/opt/presenter/wait-for-h264-encoder.sh
 ExecStart=/opt/presenter/presenter-server
 Restart=always
 RestartSec=5
@@ -56,11 +43,13 @@ RestartSec=5
 Environment=PRESENTER_PORT=80
 Environment=PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
 Environment=PRESENTER_LIBRARY_ROOT=/opt/presenter/libraries
-# #404: stage URL the launcher opens on every Android stage display. The
-# launcher fires `am start -a VIEW -d <this URL> <package>` on each TV. Prod
-# points at its own /stage. If unset the launcher warns and skips (no broken
-# intent).
-Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.9.205/stage
+# #404/#538: PRESENTER_ANDROID_STAGE_URL — the URL the launcher opens on every
+# Android stage display (`am start -a VIEW -d <url> <package>`) — is PER SITE and is
+# therefore NOT set here. This unit is shared by every site (SNV prod, PP, any future
+# location); baking one site's URL into it meant a site deployed without an override
+# silently pointed its TVs at SNV's server. Each deploy writes its own
+# `presenter.service.d/stage-url.conf` drop-in instead (deploy.yml → SNV,
+# release.yml → PP). If it is unset the launcher warns and skips — no broken intent.
 # #472: the Presenter Stage APK the watchdog installs on any TV that needs our
 # own app (so the stage runs on every Android TV without a kiosk browser).
 Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter/presenter-stage.apk

@@ -355,12 +355,14 @@ jobs:
       - name: Deploy systemd service
         run: |
           scp -i ~/.ssh/id_deploy scripts/deploy/presenter.service deploy-target:/tmp/presenter.service
-          # The shared unit hardcodes SNV's PRESENTER_ANDROID_STAGE_URL. PP needs
-          # its OWN stage URL (its server IP) so the watchdog points PP's TV at PP,
-          # not SNV (#470). Ship a per-env drop-in that overrides it. Override the
-          # default with the PP_STAGE_URL repo variable if PP's IP changes.
+          # #539: the encoder-ready gate the unit calls from ExecStartPre.
+          scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
+          # #470/#538: the stage URL is PER SITE and is NOT in the shared unit — each
+          # deploy writes its own drop-in. PP points its TV at PP, not at SNV. Override
+          # the default with the PP_STAGE_URL repo variable if PP's IP changes.
           PP_STAGE_URL="${{ vars.PP_STAGE_URL || 'http://10.77.8.205/stage' }}"
           ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && \
+            sudo install -m 0755 /tmp/wait-for-h264-encoder.sh /opt/presenter/wait-for-h264-encoder.sh && \
             sudo mkdir -p /etc/systemd/system/presenter.service.d && \
             printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' '${PP_STAGE_URL}' | sudo tee /etc/systemd/system/presenter.service.d/stage-url.conf >/dev/null && \
             sudo systemctl daemon-reload"

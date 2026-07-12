@@ -365,6 +365,11 @@ jobs:
           # false-positive guard. Proves the detection logic with mock
           # wedged-vs-healthy facts (no real GPU needed on the hosted runner).
           bash tests/ci/gpu-preflight.test.sh
+          # Guards for what we SHIP to the hosts (#538, #539): the shared unit must
+          # not hardcode one site's stage URL, every deploy must write its own
+          # drop-in, and the encoder-ready gate must skip (not stall 30s) on a host
+          # with no usable GPU while still recognising the modern nvcodec encoders.
+          bash tests/deploy/deploy-config.test.sh
 
   # ============================================
   # Quality Checks
@@ -1149,7 +1154,11 @@ jobs:
       - name: Deploy systemd service
         run: |
           scp -i ~/.ssh/id_deploy scripts/deploy/presenter-dev.service deploy-target:/tmp/presenter-dev.service
-          ssh deploy-target "sudo cp /tmp/presenter-dev.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+          # #539: the encoder-ready gate the unit calls from ExecStartPre.
+          scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
+          ssh deploy-target "sudo cp /tmp/presenter-dev.service /etc/systemd/system/ && \
+            sudo install -m 0755 /tmp/wait-for-h264-encoder.sh /opt/presenter-dev/wait-for-h264-encoder.sh && \
+            sudo systemctl daemon-reload"
 
       # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only
       # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`).
