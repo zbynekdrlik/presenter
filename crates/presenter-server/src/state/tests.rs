@@ -90,30 +90,49 @@ fn presenter_service_blocks_start_until_h264_encoder_probeable() {
         assert!(
             exec_pre_trimmed.starts_with("ExecStartPre=-"),
             "{name}: ExecStartPre must use leading `-` (best-effort prefix). \
-             Without `-`, a 30s timeout (no GPU at all) makes systemd fail the \
-             whole unit — blocking non-NDI features (lyrics, Bible, timers) \
-             from starting. Item 6's encoder gate must be allowed to take \
-             over instead (#339). Line: {exec_pre}"
+             Without `-`, a host that cannot satisfy the gate (no GPU, or the script \
+             not yet deployed) would fail the whole unit — blocking non-NDI features \
+             (lyrics, Bible, timers) from starting. The encoder gate inside presenter \
+             takes over instead (#339). Line: {exec_pre}"
         );
+        // #539: the gate moved from an inline `timeout 30 sh -c 'until gst-inspect …'`
+        // into a script, because it must SKIP the wait on a host that can never satisfy
+        // it (no GPU / render node the service user cannot open) instead of burning the
+        // full timeout on every start, and it must know the modern nvcodec encoders
+        // (#541). The unit's job is to CALL that gate — the gate's own behaviour is
+        // pinned by tests/deploy/deploy-config.test.sh.
         assert!(
-            exec_pre.contains("gst-inspect-1.0"),
-            "{name}: ExecStartPre must use `gst-inspect-1.0` — canonical \
-             GStreamer feature query that matches what `presenter_ndi::\
-             hw_h264_encoder()` sees at startup (#339). Line: {exec_pre}"
+            exec_pre.contains("wait-for-h264-encoder.sh"),
+            "{name}: ExecStartPre must call the encoder-ready gate script \
+             (scripts/deploy/wait-for-h264-encoder.sh). Without it the binary can exec \
+             before /dev/dri/renderD128 is usable for VA-API and NDI stays down until a \
+             manual restart (#339, prod cold-reboot 2026-05-24 17:07 CEST). Line: {exec_pre}"
         );
+    }
+
+    // The gate script itself must still probe with gst-inspect-1.0 (the same view of the
+    // registry `presenter_ndi::hw_h264_encoder()` gets) and cover EVERY encoder we can
+    // actually use: VA-API (prod N100), the modern nvcodec elements a current NVIDIA
+    // driver provides (#541 — the legacy element is dead on 595+), and the legacy one for
+    // hosts still on an older driver. Waiting for a name we will never see would stall the
+    // start for the whole timeout on a perfectly healthy box.
+    let gate = include_str!("../../../../scripts/deploy/wait-for-h264-encoder.sh");
+    assert!(
+        gate.contains("gst-inspect-1.0"),
+        "the encoder gate must query the registry with gst-inspect-1.0 (#339)"
+    );
+    for encoder in [
+        "vah264enc",
+        "nvcudah264enc",
+        "nvautogpuh264enc",
+        "nvh264enc",
+    ] {
         assert!(
-            exec_pre.contains("vah264enc"),
-            "{name}: ExecStartPre must probe `vah264enc` (Intel/AMD VA-API — \
-             prod N100). The `va` plugin can register without features so a \
-             generic plugin check is insufficient (#339). Line: {exec_pre}"
-        );
-        assert!(
-            exec_pre.contains("nvh264enc"),
-            "{name}: ExecStartPre must ALSO probe `nvh264enc` (Nvidia NVENC — \
-             dev2 RTX). Without this branch the dev deploy unit-loops on a \
-             machine with Nvidia GPU because vah264enc never registers there \
-             (caught 2026-05-24 in CI run 26367361768 — #339 hotfix). \
-             Line: {exec_pre}"
+            gate.contains(encoder),
+            "the encoder gate must probe `{encoder}` — the server can select it \
+             (presenter_ndi::H264_ENCODER_CANDIDATES), so a gate that ignores it either \
+             stalls the start (waiting for an encoder that will never register) or lets \
+             the binary exec before the one it WILL use is ready (#339, #541)"
         );
     }
 }
