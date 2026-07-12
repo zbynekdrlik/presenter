@@ -1158,6 +1158,7 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
           ssh deploy-target "sudo cp /tmp/presenter-dev.service /etc/systemd/system/ && \
             sudo install -m 0755 /tmp/wait-for-h264-encoder.sh /opt/presenter-dev/wait-for-h264-encoder.sh && \
+            sudo rm -f /opt/presenter-dev/gstreamer-registry.bin && \
             sudo systemctl daemon-reload"
 
       # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only

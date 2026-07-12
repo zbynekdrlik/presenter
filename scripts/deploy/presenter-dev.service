@@ -32,6 +32,9 @@ Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.8.134:8080/stage
 # app. Dev deploys to /opt/presenter-dev (the default path is /opt/presenter).
 Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter-dev/presenter-stage.apk
 Environment=RUST_LOG=info,tower_http=debug
+# #544: service-owned GStreamer registry inside the writable deploy dir, deleted by
+# every deploy — a $HOME cache goes stale and can never recover (see presenter.service).
+Environment=GST_REGISTRY=/opt/presenter-dev/gstreamer-registry.bin
 # Offset integration ports to avoid conflicts with production
 Environment=PRESENTER_COMPANION_ENABLED=0
 Environment=PRESENTER_COMPANION_PORT=28175
