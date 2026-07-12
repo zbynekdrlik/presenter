@@ -285,4 +285,64 @@ mod pick_h264_encoder_tests {
         let picked = pick_h264_encoder(CANDIDATES, |name| name != "nvh264enc");
         assert_eq!(picked, Some("vah264enc"));
     }
+
+    /// #541: NVIDIA driver 595.71.05 (installed on dev2 2026-07-03) leaves the
+    /// LEGACY `nvh264enc` element registered and constructible, but it dies at
+    /// caps negotiation with "Selected preset not supported" — every NDI
+    /// pipeline build then failed on the CI runner. The modern nvcodec elements
+    /// (`nvcudah264enc` / `nvautogpuh264enc`) encode fine on the same driver.
+    /// So the real candidate list must offer them BEFORE the legacy element.
+    #[test]
+    fn broken_legacy_nvenc_falls_through_to_the_modern_cuda_encoder() {
+        // The driver-595 host: no Intel VA-API, legacy nvenc unusable, modern
+        // nvcodec + software usable.
+        let usable =
+            |name: &str| matches!(name, "nvcudah264enc" | "nvautogpuh264enc" | "x264enc");
+
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, usable),
+            Some("nvcudah264enc"),
+            "with the legacy nvh264enc unusable, the modern CUDA NVENC encoder must be \
+             chosen — falling back to software x264enc would throw away the GPU, and \
+             picking nvh264enc is what broke every NDI pipeline build (#541)"
+        );
+    }
+
+    /// The real candidate list's priority, asserted behaviourally: VA-API first
+    /// (production N100), then modern NVENC, then the legacy element, then
+    /// software. Each row removes the winner above it.
+    #[test]
+    fn real_candidate_order_is_vaapi_modern_nvenc_legacy_nvenc_software() {
+        let all = |_: &str| true;
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, all),
+            Some("vah264enc")
+        );
+
+        let no_va = |name: &str| name != "vah264enc";
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, no_va),
+            Some("nvcudah264enc")
+        );
+
+        let no_va_no_cuda = |name: &str| !matches!(name, "vah264enc" | "nvcudah264enc");
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, no_va_no_cuda),
+            Some("nvautogpuh264enc")
+        );
+
+        let only_legacy_and_software =
+            |name: &str| matches!(name, "nvh264enc" | "x264enc");
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, only_legacy_and_software),
+            Some("nvh264enc"),
+            "a host where the legacy element still works (older driver) keeps using it"
+        );
+
+        let software_only = |name: &str| name == "x264enc";
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, software_only),
+            Some("x264enc")
+        );
+    }
 }
