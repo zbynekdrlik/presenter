@@ -2,6 +2,7 @@
 
 pub mod clock;
 pub mod discovery;
+pub mod gpu;
 pub mod manager;
 pub mod ndi_sdk;
 pub mod pipeline;
