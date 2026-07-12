@@ -329,7 +329,23 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
                 .property("target-usage", 6u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
+        "nvcudah264enc" | "nvautogpuh264enc" => {
+            // #541: the MODERN nvcodec encoders. Current NVIDIA drivers (595.71.05+)
+            // reject the legacy element's preset API outright, so these are what
+            // NVENC means from now on. Their tuning knobs differ from nvh264enc:
+            // low latency is `tune=ultra-low-latency` + `zero-reorder-delay` (no
+            // B-frame reordering) + CBR, not the old `zerolatency` boolean.
+            encoder_builder = encoder_builder
+                .property("gop-size", 60i32)
+                .property("zero-reorder-delay", true)
+                .property_from_str("tune", "ultra-low-latency")
+                .property_from_str("rate-control", "cbr")
+                .property("bitrate", DEFAULT_BITRATE_KBPS);
+        }
         "nvh264enc" => {
+            // Legacy NVENC element — kept for hosts still on a driver that
+            // supports its preset API. On 595.71.05+ it fails at caps
+            // negotiation and `hw_h264_encoder()`'s probe skips it (#541).
             encoder_builder = encoder_builder
                 .property("gop-size", 60i32)
                 .property("zerolatency", true)
