@@ -375,7 +375,7 @@ impl HostDriver {
             let clip_id = target.clip_id;
             let url = format!(
                 "{}/composition/clips/by-id/{}/connect",
-                &endpoint.base_url, clip_id
+                endpoint.base_url, clip_id
             );
             let host_header = endpoint.host_header.clone();
             debug!(clip_id, "resolume.trigger_clip");
