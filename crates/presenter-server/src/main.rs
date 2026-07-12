@@ -113,11 +113,18 @@ async fn main() -> anyhow::Result<()> {
                 tracing::info!("NDI WebRTC encoder: {name}");
             }
             None => {
+                // #540: say WHY there is no encoder. The old message only ever
+                // advised installing driver packages — on PP every package was
+                // installed and the real cause was that the service could not open
+                // /dev/dri/renderD128 (no render-group grant), so the `va` plugin
+                // registered nothing. Report the host's actual render-node state.
+                let access = presenter_ndi::gpu::render_node_access();
                 tracing::warn!(
+                    render_node = presenter_ndi::gpu::RENDER_NODE,
+                    ?access,
                     "no hardware H264 encoder (vah264enc / nvh264enc) registered — \
-                     NDI WebRTC pipeline build will fail at activation. \
-                     Install Intel VA-API (gstreamer1.0-vaapi + intel-media-va-driver-non-free) \
-                     OR NVIDIA NVENC (gstreamer1.0-plugins-bad with nvcodec)."
+                     NDI WebRTC pipeline build will fail at activation. {}",
+                    presenter_ndi::gpu::missing_encoder_hint(access)
                 );
             }
         }
