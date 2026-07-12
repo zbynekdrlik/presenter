@@ -122,11 +122,7 @@ where
 {
     let mut hex = String::new();
     for _ in 0..2 {
-        if let Some(c) = chars.next() {
-            hex.push(c);
-        } else {
-            return None;
-        }
+        hex.push(chars.next()?);
     }
     let byte = u8::from_str_radix(&hex, 16).ok()?;
     let binding = [byte];

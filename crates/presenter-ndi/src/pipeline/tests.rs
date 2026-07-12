@@ -387,11 +387,27 @@ fn pipeline_tuning_properties_are_low_latency() {
     let encoder = p.pipeline.by_name("encoder").expect("encoder named");
     let factory = encoder.factory().expect("factory").name().to_string();
     let gop: i64 = match factory.as_str() {
-        "nvh264enc" => encoder.property::<i32>("gop-size") as i64,
+        // #541: the modern nvcodec encoders name the knob `gop-size` like the
+        // legacy element, and carry the low-latency tuning on `tune` +
+        // `zero-reorder-delay` instead of the old `zerolatency` boolean.
+        "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
+            encoder.property::<i32>("gop-size") as i64
+        }
         "vah264enc" | "x264enc" => encoder.property::<u32>("key-int-max") as i64,
         other => panic!("unexpected encoder factory {other}"),
     };
     assert_eq!(gop, 60, "GOP must be 60 frames");
+
+    // 4. #541: whichever encoder was selected, it must be configured for LOW
+    //    LATENCY — the modern nvcodec elements ignore the legacy `zerolatency`
+    //    property, so a copy-paste of the old tuning would silently ship a
+    //    reordering (B-frame) encoder to the stage TVs.
+    if matches!(factory.as_str(), "nvcudah264enc" | "nvautogpuh264enc") {
+        assert!(
+            encoder.property::<bool>("zero-reorder-delay"),
+            "modern NVENC must run with zero reorder delay (no B-frame latency)"
+        );
+    }
 }
 
 /// The video encoder factories `iterate_encoders` counts (the single shared

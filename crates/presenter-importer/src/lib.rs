@@ -145,17 +145,14 @@ impl<'a> ProPresenterImporter<'a> {
             .upsert_library(&library)
             .await
             .with_context(|| {
-                format!(
-                    "failed to upsert library {} into persistence",
-                    &library.name
-                )
+                format!("failed to upsert library {} into persistence", library.name)
             })?;
 
         if library.name.eq_ignore_ascii_case("NEW LEVEL") {
             self.repository
                 .set_library_favorite(library.id, true)
                 .await
-                .with_context(|| format!("failed to mark library {} as favorite", &library.name))?;
+                .with_context(|| format!("failed to mark library {} as favorite", library.name))?;
         }
         Ok(Some(summary))
     }

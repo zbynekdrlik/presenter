@@ -9,6 +9,9 @@ After=network.target dev-dri-renderD128.device
 Type=simple
 User=newlevel
 Group=newlevel
+# #540: render-group grant so the service can open /dev/dri/renderD128 without
+# relying on a console-login ACL (see presenter.service for the full incident).
+SupplementaryGroups=render video
 WorkingDirectory=/opt/presenter-dev
 # #339: gate start on hardware H264 encoder being probeable. Mirrors
 # prod presenter.service; see that file for the full incident

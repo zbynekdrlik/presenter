@@ -16,6 +16,15 @@ After=network.target dev-dri-renderD128.device
 Type=simple
 User=newlevel
 Group=newlevel
+# #540: the GPU render node is root:render 0660, so an ordinary service user can
+# only open it via the `render` group. Without this grant the GStreamer `va`
+# plugin registers ZERO elements, hw_h264_encoder() returns None and NDI never
+# starts — on a host where every driver package is installed (the PP outage,
+# 2026-07-12). Prod appeared healthy only because a console login left a
+# systemd-logind per-seat ACL (user:newlevel:rw-) on the node; the first reboot
+# without that login would have killed VA-API on the production wall too. The
+# grant belongs HERE so GPU access never depends on who happens to be logged in.
+SupplementaryGroups=render video
 WorkingDirectory=/opt/presenter
 # #339: gate start on hardware H264 encoder being probeable. The race
 # that took prod down on 2026-05-24 (and reproduced on cold-reboot of

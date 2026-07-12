@@ -2,6 +2,7 @@
 
 pub mod clock;
 pub mod discovery;
+pub mod gpu;
 pub mod manager;
 pub mod ndi_sdk;
 pub mod pipeline;
@@ -17,7 +18,8 @@ pub use manager::StatusCallback;
 pub use pipeline::{PipelineSnapshot, SessionSnapshot, StreamProfile};
 pub use whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 /// Holds the outcome of the one-shot `gstreamer::init()` + plugin registration.
 /// Subsequent `init()` calls return the SAME outcome — a previously failed
@@ -118,11 +120,28 @@ pub fn init() -> anyhow::Result<()> {
     }
 }
 
-/// Pick the first H264 encoder candidate (in priority order) that actually
-/// loads. The registry/loadability probe is injected via `can_load` so this
-/// is a PURE function — unit-testable without depending on the machine's live
-/// GStreamer registry state (#443). `hw_h264_encoder()` is the only caller and
-/// supplies the real probe.
+/// H264 encoders we will use, in priority order.
+///
+/// VA-API first: it is what the production N100 has, and it carries no
+/// concurrent-session cap. Then the MODERN nvcodec elements — `nvcudah264enc`
+/// and `nvautogpuh264enc` — ahead of the LEGACY `nvh264enc`: NVIDIA driver
+/// 595.71.05 rejects the legacy element's preset API outright ("Selected preset
+/// not supported"), so on a current driver the legacy element registers, builds,
+/// and then dies on the first frame (#541). Software `x264enc` is the last
+/// resort (no session cap, CPU cost only).
+pub(crate) const H264_ENCODER_CANDIDATES: &[&str] = &[
+    "vah264enc",
+    "nvcudah264enc",
+    "nvautogpuh264enc",
+    "nvh264enc",
+    "x264enc",
+];
+
+/// Pick the first H264 encoder candidate (in priority order) that is actually
+/// USABLE. The probe is injected via `is_usable` so this is a PURE function —
+/// unit-testable without depending on the machine's live GStreamer registry or
+/// GPU driver (#443, #541). `hw_h264_encoder()` is the only caller and supplies
+/// the real probe.
 fn pick_h264_encoder(
     candidates: &[&'static str],
     can_load: impl Fn(&str) -> bool,
@@ -169,10 +188,86 @@ fn pick_h264_encoder(
 /// self-heal: a host whose registry recovers resumes without a process restart
 /// (so it is intentionally NOT memoized).
 pub fn hw_h264_encoder() -> Option<&'static str> {
-    pick_h264_encoder(&["vah264enc", "nvh264enc", "x264enc"], |name| {
-        gstreamer::ElementFactory::make(name).build().is_ok()
-    })
+    pick_h264_encoder(H264_ENCODER_CANDIDATES, encoder_is_usable)
 }
+
+/// Can this encoder element actually ENCODE on this host — not merely be
+/// constructed (#541)?
+///
+/// #443 taught us that registry presence lies (an advertised element may fail to
+/// instantiate). Driver 595.71.05 taught us that instantiation lies too: the
+/// legacy `nvh264enc` builds happily and then fails at caps negotiation
+/// ("Selected preset not supported"), which surfaced only as an opaque
+/// `Could not configure supporting library` at pipeline start — after the
+/// encoder had already been selected. So the probe pushes ONE tiny frame through
+/// the element and only then calls it usable.
+///
+/// Cost: a 320x240 single-frame encode, on the FIRST query per element name only
+/// — the verdict is cached for the process (`ENCODER_USABILITY` below), because a
+/// driver-level rejection cannot heal without a driver change, which needs a
+/// restart anyway. Caching also keeps this off the 30 s NDI-reconnect tick and,
+/// crucially, stops the probe from opening a second NVENC session while a
+/// pipeline is streaming (consumer GeForce cards cap concurrent sessions).
+fn encoder_is_usable(name: &str) -> bool {
+    let cache = ENCODER_USABILITY.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(&verdict) = guard.get(name) {
+            return verdict;
+        }
+    }
+
+    let verdict = probe_encoder_can_encode(name);
+    if !verdict {
+        tracing::warn!(
+            encoder = name,
+            "encoder is registered but cannot encode on this host — skipping it"
+        );
+    }
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(name.to_string(), verdict);
+    }
+    verdict
+}
+
+/// Per-process cache of the functional encoder probe (see `encoder_is_usable`).
+static ENCODER_USABILITY: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+
+/// Push one frame through `videotestsrc ! videoconvert ! <encoder> ! fakesink`
+/// and report whether it encoded without an error message on the bus.
+fn probe_encoder_can_encode(name: &str) -> bool {
+    use gstreamer::prelude::*;
+
+    // Element-not-registered / not-instantiable is the #443 case and is still a
+    // "no" — parse::launch covers both without a separate build() probe.
+    let Ok(pipeline) = gstreamer::parse::launch(&format!(
+        "videotestsrc num-buffers=1 ! video/x-raw,width=320,height=240,framerate=30/1 \
+         ! videoconvert ! {name} ! fakesink sync=false"
+    )) else {
+        return false;
+    };
+
+    let usable = (|| {
+        let bus = pipeline.bus()?;
+        if pipeline.set_state(gstreamer::State::Playing).is_err() {
+            return Some(false);
+        }
+        // EOS = the frame made it through the encoder. Error = it did not
+        // (driver rejected the preset, no CUDA device, session cap, …).
+        let msg = bus.timed_pop_filtered(
+            gstreamer::ClockTime::from_seconds(ENCODER_PROBE_TIMEOUT_SECS),
+            &[gstreamer::MessageType::Eos, gstreamer::MessageType::Error],
+        )?;
+        Some(msg.type_() == gstreamer::MessageType::Eos)
+    })()
+    .unwrap_or(false);
+
+    let _ = pipeline.set_state(gstreamer::State::Null);
+    usable
+}
+
+/// Upper bound for the one-shot encoder probe. Generous enough for a cold CUDA /
+/// VA display init, short enough that a hung driver cannot stall startup.
+const ENCODER_PROBE_TIMEOUT_SECS: u64 = 10;
 
 #[cfg(test)]
 mod gst_init_tests {
@@ -283,5 +378,63 @@ mod pick_h264_encoder_tests {
     fn respects_priority_order_among_loadable() {
         let picked = pick_h264_encoder(CANDIDATES, |name| name != "nvh264enc");
         assert_eq!(picked, Some("vah264enc"));
+    }
+
+    /// #541: NVIDIA driver 595.71.05 (installed on dev2 2026-07-03) leaves the
+    /// LEGACY `nvh264enc` element registered and constructible, but it dies at
+    /// caps negotiation with "Selected preset not supported" — every NDI
+    /// pipeline build then failed on the CI runner. The modern nvcodec elements
+    /// (`nvcudah264enc` / `nvautogpuh264enc`) encode fine on the same driver.
+    /// So the real candidate list must offer them BEFORE the legacy element.
+    #[test]
+    fn broken_legacy_nvenc_falls_through_to_the_modern_cuda_encoder() {
+        // The driver-595 host: no Intel VA-API, legacy nvenc unusable, modern
+        // nvcodec + software usable.
+        let usable = |name: &str| matches!(name, "nvcudah264enc" | "nvautogpuh264enc" | "x264enc");
+
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, usable),
+            Some("nvcudah264enc"),
+            "with the legacy nvh264enc unusable, the modern CUDA NVENC encoder must be \
+             chosen — falling back to software x264enc would throw away the GPU, and \
+             picking nvh264enc is what broke every NDI pipeline build (#541)"
+        );
+    }
+
+    /// The real candidate list's priority, asserted behaviourally: VA-API first
+    /// (production N100), then modern NVENC, then the legacy element, then
+    /// software. Each row removes the winner above it.
+    #[test]
+    fn real_candidate_order_is_vaapi_modern_nvenc_legacy_nvenc_software() {
+        let all = |_: &str| true;
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, all),
+            Some("vah264enc")
+        );
+
+        let no_va = |name: &str| name != "vah264enc";
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, no_va),
+            Some("nvcudah264enc")
+        );
+
+        let no_va_no_cuda = |name: &str| !matches!(name, "vah264enc" | "nvcudah264enc");
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, no_va_no_cuda),
+            Some("nvautogpuh264enc")
+        );
+
+        let only_legacy_and_software = |name: &str| matches!(name, "nvh264enc" | "x264enc");
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, only_legacy_and_software),
+            Some("nvh264enc"),
+            "a host where the legacy element still works (older driver) keeps using it"
+        );
+
+        let software_only = |name: &str| name == "x264enc";
+        assert_eq!(
+            pick_h264_encoder(H264_ENCODER_CANDIDATES, software_only),
+            Some("x264enc")
+        );
     }
 }
