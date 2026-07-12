@@ -281,3 +281,46 @@ as the verification evidence (e.g. `server→displej · 22 ms · 🟢 plynulé �
 actual live NDI stream) — that's actually STRONGER proof than a synthetic override, since it exercises
 the entire real pipeline end-to-end. Use `/stage?preview=1` (the operator-preview mirror mode) to open
 a read-only tab that never grabs a wake lock or changes the broadcast layout for real displays.
+
+## Encoder selection — the two lies (#443, #541)
+
+`hw_h264_encoder()` picks the H264 encoder for the shared-encoder pipeline. Two hard-won rules:
+
+1. **Registry presence lies** (#443): an element can be advertised and fail to instantiate.
+2. **Instantiation lies too** (#541): NVIDIA driver 595.71.05 (dev2, 2026-07-03) dropped the LEGACY
+   nvenc preset API — `nvh264enc` still registers AND still constructs, then dies at caps negotiation
+   with *"Selected preset not supported"*, surfacing only as an opaque
+   `Could not configure supporting library` at pipeline start.
+
+So the probe pushes ONE real frame through `videotestsrc ! <encoder> ! fakesink` and requires EOS.
+Verdicts are cached per element per process (a driver rejection cannot heal without a driver change,
+and a live probe would open a second NVENC session mid-stream — consumer GeForce caps those).
+
+Candidate order: `vah264enc` (prod N100) → `nvcudah264enc` → `nvautogpuh264enc` → `nvh264enc` (legacy,
+older drivers only) → `x264enc`. The modern nvcodec elements ignore the legacy `zerolatency` boolean —
+they need `tune=ultra-low-latency` + `zero-reorder-delay=true` + `rate-control=cbr`, or you silently
+ship a B-frame (reordering) encoder to the stage TVs.
+
+**Triage recipe when e2e-ndi starts failing with an encoder error and the #445 GPU preflight PASSES:**
+
+```bash
+# 1. Is it the GPU, or the encoder element?
+nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader   # wedge = 100% + no process
+# 2. Can each encoder actually encode RIGHT NOW?
+for e in vah264enc nvh264enc nvcudah264enc nvautogpuh264enc x264enc; do
+  gst-inspect-1.0 --exists $e && gst-launch-1.0 -q videotestsrc num-buffers=5 \
+    ! video/x-raw,width=640,height=360 ! videoconvert ! $e ! h264parse ! fakesink 2>&1 | head -2
+done
+# 3. Did a driver land after the last green run?  (this is what #541 turned out to be)
+grep -h nvidia /var/log/dpkg.log* | grep -E ' install | upgrade ' | tail -5
+gh run list --branch dev --workflow=pipeline.yml --limit 12 --json createdAt,conclusion
+```
+
+## GPU access on a deployed host (#540)
+
+The service runs as an ordinary user; `/dev/dri/renderD128` is `root:render 0660`. Without
+`SupplementaryGroups=render` in the unit the process cannot open it, the GStreamer `va` plugin
+registers **zero** elements, and NDI dies silently with every driver package installed. Do NOT rely on
+the systemd-logind console ACL (`getfacl /dev/dri/renderD128` showing `user:<u>:rw-`) — it exists only
+while somebody is logged in at the physical console, and it is what made prod *look* healthy while PP
+was dead. Check with `gst-inspect-1.0 va | grep -c '^  va'` (0 = no access).
