@@ -66,9 +66,18 @@ pub fn missing_encoder_hint(access: RenderNodeAccess) -> &'static str {
              so NDI WebRTC cannot be hardware-encoded here."
         }
         RenderNodeAccess::Accessible => {
-            "the GPU render node is reachable, so the encoder plugins are missing: install \
-             Intel VA-API (gstreamer1.0-vaapi + intel-media-va-driver-non-free) OR NVIDIA \
-             NVENC (gstreamer1.0-plugins-bad with nvcodec)."
+            // #544: the FIRST candidate here is a stale registry, not a missing package.
+            // PP had every driver package installed and a reachable render node, and NDI
+            // was still dead: its GStreamer registry cached "va has 0 features" from back
+            // when the service could not open the GPU, and GST_REGISTRY_UPDATE=yes never
+            // re-scans a plugin whose FILE has not changed. Lead with that.
+            "the GPU render node is reachable, so either (a) the GStreamer plugin registry \
+             is STALE — it can cache 'no encoder' from a time when the GPU was unreachable, \
+             and it is NOT re-scanned just because permissions changed: delete the file in \
+             GST_REGISTRY (the service owns one in its deploy dir) and restart — or (b) the \
+             encoder plugins really are missing: install Intel VA-API (gstreamer1.0-vaapi + \
+             intel-media-va-driver-non-free) OR NVIDIA NVENC (gstreamer1.0-plugins-bad with \
+             nvcodec)."
         }
     }
 }
@@ -109,6 +118,28 @@ mod tests {
             classify_render_node(Path::new("/dev/null")),
             RenderNodeAccess::Accessible
         );
+    }
+
+    /// #544: when the render node IS reachable and there is still no encoder, the
+    /// most likely cause on our hosts is a STALE GStreamer registry cache — PP had
+    /// one that recorded "va has 0 features" from back when the service could not
+    /// open the GPU, and `GST_REGISTRY_UPDATE=yes` never re-scans a plugin whose
+    /// FILE has not changed. The old hint only advised installing packages, which on
+    /// PP were all present; that sent the investigation the wrong way for hours.
+    #[test]
+    fn hint_for_a_reachable_node_names_the_stale_registry_cache() {
+        let hint = missing_encoder_hint(RenderNodeAccess::Accessible);
+        assert!(
+            hint.contains("registry"),
+            "the hint must name a stale plugin registry as a candidate cause (#544): {hint}"
+        );
+        assert!(
+            hint.contains("GST_REGISTRY"),
+            "the hint must name the GST_REGISTRY the service owns, so the reader can \
+             clear it (#544): {hint}"
+        );
+        // …and still mention the packages, which remain the other candidate.
+        assert!(hint.contains("gstreamer1.0-vaapi"));
     }
 
     #[test]

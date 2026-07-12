@@ -357,6 +357,7 @@ jobs:
           PROD_STAGE_URL="${{ vars.PROD_STAGE_URL || 'http://10.77.9.205/stage' }}"
           ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && \
             sudo install -m 0755 /tmp/wait-for-h264-encoder.sh /opt/presenter/wait-for-h264-encoder.sh && \
+            sudo rm -f /opt/presenter/gstreamer-registry.bin && \
             sudo mkdir -p /etc/systemd/system/presenter.service.d && \
             printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' '${PROD_STAGE_URL}' | sudo tee /etc/systemd/system/presenter.service.d/stage-url.conf >/dev/null && \
             sudo systemctl daemon-reload"

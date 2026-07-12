@@ -54,6 +54,15 @@ Environment=PRESENTER_LIBRARY_ROOT=/opt/presenter/libraries
 # own app (so the stage runs on every Android TV without a kiosk browser).
 Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter/presenter-stage.apk
 Environment=RUST_LOG=info,tower_http=debug
+# #544: the service owns its GStreamer plugin registry, inside its (writable) deploy
+# dir. It used to land in $HOME/.cache, where it became a permanent lie: PP's cache
+# recorded "va has 0 features" back when the service could not open the GPU, and
+# GST_REGISTRY_UPDATE=yes only re-scans plugins whose FILE changed — the plugin never
+# changed, only our permissions did — so NDI stayed dead even after #540 granted
+# access. ProtectHome=read-only meant the service could not even rewrite it. Here the
+# file is under ReadWritePaths, and every deploy DELETES it, so the next start always
+# re-probes the plugins against the host's current permissions and driver.
+Environment=GST_REGISTRY=/opt/presenter/gstreamer-registry.bin
 # #502: Cloudflare Realtime TURN credentials. Kept OUT of this committed unit
 # (secret) — the deploy writes a 0600 root-only EnvironmentFile. Leading `-`
 # makes it optional: absent → TURN disabled (LAN-only), service still starts.
