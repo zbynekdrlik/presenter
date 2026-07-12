@@ -12,6 +12,13 @@
 #   #539  The encoder-ready gate must not burn its full timeout on a host that can
 #         never satisfy it (no GPU / no access), and it must recognise the MODERN
 #         nvcodec encoders (#541) — not just the legacy element.
+#
+#   #544  The GStreamer plugin registry must not outlive a permission/driver change.
+#         PP cached "va has 0 features" back when the service could not open the GPU;
+#         GST_REGISTRY_UPDATE=yes only rescans plugins whose FILE changed, so that
+#         verdict was trusted forever and NDI stayed dead even after #540 restored
+#         access. The service therefore owns a registry inside its (writable) deploy
+#         dir, and every deploy deletes it so the next start rescans against reality.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -137,6 +144,23 @@ both_units_use_the_gate_script() {
   grep -q 'wait-for-h264-encoder.sh' "$PROD_UNIT" && grep -q 'wait-for-h264-encoder.sh' "$DEV_UNIT"
 }
 
+# ── #544: the registry must be service-owned, writable and rebuilt on deploy ────
+units_own_a_writable_gst_registry() {
+  # The path must sit inside the unit's ReadWritePaths (its deploy dir), NOT in
+  # $HOME — ProtectHome=read-only makes a $HOME cache unfixable once it goes stale.
+  grep -qE '^Environment=GST_REGISTRY=/opt/presenter/' "$PROD_UNIT" &&
+    grep -qE '^Environment=GST_REGISTRY=/opt/presenter-dev/' "$DEV_UNIT"
+}
+
+every_deploy_rebuilds_the_registry() {
+  # Deleting the registry file is what guarantees the next start re-probes the
+  # plugins against the CURRENT permissions/driver. Without it, #544 comes back the
+  # first time a host's GPU access or driver changes.
+  grep -q 'gstreamer-registry.bin' "$REPO_ROOT/.github/workflows/deploy.yml" &&
+    grep -q 'gstreamer-registry.bin' "$REPO_ROOT/.github/workflows/release.yml" &&
+    grep -q 'gstreamer-registry.bin' "$REPO_ROOT/.github/workflows/pipeline.yml"
+}
+
 echo "Deploy-config guards (#538, #539):"
 check "#538 shared unit does not hardcode a site stage URL" not_hardcoding_stage_url
 check "#538 prod deploy writes its own stage-url drop-in" prod_deploy_writes_stage_url_dropin
@@ -146,6 +170,8 @@ check "#539 gate exits fast when the render node is inaccessible" exits_fast_whe
 check "#539 gate succeeds once an encoder is registered" waits_and_succeeds_when_an_encoder_is_present
 check "#539 gate accepts the modern nvcodec encoder (#541)" accepts_the_modern_nvcodec_encoder
 check "#539 both deployed units call the gate script" both_units_use_the_gate_script
+check "#544 units own a writable GST_REGISTRY in their deploy dir" units_own_a_writable_gst_registry
+check "#544 every deploy rebuilds the plugin registry" every_deploy_rebuilds_the_registry
 
 if [ "$failures" -ne 0 ]; then
   echo "Deploy-config guards: $failures FAILED"

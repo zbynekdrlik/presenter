@@ -111,6 +111,28 @@ mod tests {
         );
     }
 
+    /// #544: when the render node IS reachable and there is still no encoder, the
+    /// most likely cause on our hosts is a STALE GStreamer registry cache — PP had
+    /// one that recorded "va has 0 features" from back when the service could not
+    /// open the GPU, and `GST_REGISTRY_UPDATE=yes` never re-scans a plugin whose
+    /// FILE has not changed. The old hint only advised installing packages, which on
+    /// PP were all present; that sent the investigation the wrong way for hours.
+    #[test]
+    fn hint_for_a_reachable_node_names_the_stale_registry_cache() {
+        let hint = missing_encoder_hint(RenderNodeAccess::Accessible);
+        assert!(
+            hint.contains("registry"),
+            "the hint must name a stale plugin registry as a candidate cause (#544): {hint}"
+        );
+        assert!(
+            hint.contains("GST_REGISTRY"),
+            "the hint must name the GST_REGISTRY the service owns, so the reader can \
+             clear it (#544): {hint}"
+        );
+        // …and still mention the packages, which remain the other candidate.
+        assert!(hint.contains("gstreamer1.0-vaapi"));
+    }
+
     #[test]
     fn hint_for_an_unopenable_node_blames_access_not_packages() {
         // The #540 lesson: the old warning sent us hunting for packages that were
