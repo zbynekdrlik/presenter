@@ -185,10 +185,18 @@ fn pick_h264_encoder(
 /// alone then picked an unloadable encoder and the pipeline build failed.
 /// Probing loadability skips it and falls through to a real, loadable encoder.
 ///
-/// Verdicts are memoized SELECTIVELY (`cached_encoder_verdict`): a stable verdict
-/// is cached so the probe stays off the 30 s NDI-reconnect tick, but "the element
-/// is not registered" is re-probed every time — that is the transient boot-race
-/// state, and caching it would freeze the #333 item 6 self-heal (#548).
+/// Verdicts are memoized SELECTIVELY (`cached_encoder_verdict`): a STABLE verdict is
+/// cached so the probe stays off the 30 s NDI-reconnect tick; "the element is not
+/// registered" is not, because that is a fact about the plugin registry rather than
+/// about the encoder, and this process cannot prove it will stay true (#548).
+///
+/// What that does NOT buy: an in-process recovery from the boot race. The plugin
+/// registry is read once at `gst_init()`, and nothing re-scans it afterwards — an
+/// element missing at init stays missing for the life of the process, cached or not.
+/// The boot race is prevented by the ExecStartPre encoder gate
+/// (`scripts/deploy/wait-for-h264-encoder.sh`), which holds the service back until an
+/// encoder really encodes; recovering a host that already started wrong needs the
+/// registry deleted and the service restarted (see `gpu::missing_encoder_hint`).
 pub fn hw_h264_encoder() -> Option<&'static str> {
     pick_h264_encoder(H264_ENCODER_CANDIDATES, encoder_is_usable)
 }
@@ -235,12 +243,17 @@ impl EncoderVerdict {
 
     /// May this verdict be remembered for the life of the process?
     ///
-    /// #548: `NotRegistered` may NOT. It is exactly the state the encoder gate exists
-    /// to ride out (#339: VA-API can register `vah264enc` 30-50 s after udev), so
-    /// caching it freezes a server that started a second too early onto the next
-    /// candidate — in the worst case software `x264enc`, which always works and melts
-    /// the N100's CPU (#335) — and the 30 s NDI auto-reconnect self-heal (#333 item 6)
-    /// can then never recover it without a restart.
+    /// #548: `NotRegistered` may NOT. The other two are facts about the ENCODER — a
+    /// working element does not stop working, and a driver that refuses one cannot
+    /// change its mind without a driver change (which needs a restart anyway). But
+    /// "not in the registry" is a fact about the plugin REGISTRY, whose contents this
+    /// process does not own: remembering it would be recording someone else's state as
+    /// our own. Re-probing it is nearly free (an `ElementFactory::find` miss — never a
+    /// real encode, so no NVENC session is opened on the 30 s reconnect tick).
+    ///
+    /// It is NOT a self-heal: the registry is read once at `gst_init()` and never
+    /// re-scanned, so an element missing at init stays missing for this process either
+    /// way. The gate prevents the race; a restart is what recovers from it.
     fn is_stable(self) -> bool {
         !matches!(self, EncoderVerdict::NotRegistered)
     }
@@ -512,19 +525,18 @@ mod encoder_cache_tests {
         Mutex::new(HashMap::new())
     }
 
-    /// #548, the regression. "Element not in the registry" is the TRANSIENT
-    /// boot-race state the encoder gate exists to ride out (#339: VA-API can take
-    /// 30-50s after udev to register `vah264enc`). Caching that verdict for the
-    /// process lifetime freezes it: the server that started a second too early
-    /// would never see the encoder appear, would fall through to software
-    /// `x264enc` — the CPU-melt shape of #335 — and the 30s NDI auto-reconnect
-    /// self-heal (#333 item 6) could never recover it without a restart.
+    /// #548: "element not in the registry" is a fact about the plugin REGISTRY, not
+    /// about the encoder — this process does not own it and cannot prove it stays
+    /// true, so it is never remembered. (It is NOT an in-process self-heal: the
+    /// registry is read once at `gst_init()` and never re-scanned. The ExecStartPre
+    /// gate prevents the boot race; a restart recovers from it. Re-probing costs an
+    /// `ElementFactory::find` miss, never an encode — so no NVENC session is opened
+    /// on the 30s reconnect tick.)
     #[test]
-    fn a_not_registered_verdict_is_never_cached_so_a_late_plugin_still_heals() {
+    fn a_not_registered_verdict_is_never_cached() {
         let cache = empty_cache();
         let calls = AtomicUsize::new(0);
-        // The #339 host: the element is missing on the first probe, registers
-        // before the second.
+        // A registry that answers "missing" once and then knows the element.
         let probe = |_name: &str| {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 EncoderVerdict::NotRegistered
@@ -540,8 +552,8 @@ mod encoder_cache_tests {
         assert_eq!(
             cached_encoder_verdict(&cache, "vah264enc", probe),
             EncoderVerdict::Usable,
-            "a missing element must be RE-PROBED — caching 'not registered' pins the \
-             host on software x264enc for the life of the process (#548)"
+            "a missing element must be RE-PROBED, never remembered — the plugin \
+             registry is not ours to record a verdict about (#548)"
         );
         assert_eq!(
             calls.load(Ordering::SeqCst),

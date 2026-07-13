@@ -58,13 +58,36 @@ ENCODERS=(vah264enc nvcudah264enc nvautogpuh264enc nvh264enc)
 
 # The same one-frame encode the server runs before it trusts an encoder (#541). Bounded,
 # silent, and side-effect-free — no hardware is held after it returns.
+#
+# `timeout -k`: a plain SIGTERM does not reach a gst process stuck in an uninterruptible
+# driver ioctl (the #445 shape), so follow up with SIGKILL.
 probe_encoder() {
   local encoder="$1"
-  timeout "$PROBE_TIMEOUT_SECS" gst-launch-1.0 -q --gst-debug-level=0 \
+  timeout -k 2 "$PROBE_TIMEOUT_SECS" gst-launch-1.0 -q --gst-debug-level=0 \
     videotestsrc num-buffers=1 \
     ! video/x-raw,width=320,height=240,framerate=30/1 \
     ! videoconvert ! "$encoder" ! fakesink sync=false >/dev/null 2>&1
 }
+
+# Same probe, UNSUPPRESSED — run once on the give-up path so the journal carries WHY.
+# #541 was diagnosed entirely from the driver's own words ("Selected preset not
+# supported"); a bare "could not encode" would have told us nothing.
+explain_probe_failure() {
+  local encoder="$1"
+  echo "encoder-gate: last attempt at $encoder said:"
+  timeout -k 2 "$PROBE_TIMEOUT_SECS" gst-launch-1.0 \
+    videotestsrc num-buffers=1 \
+    ! video/x-raw,width=320,height=240,framerate=30/1 \
+    ! videoconvert ! "$encoder" ! fakesink sync=false 2>&1 |
+    grep -viE '^(setting pipeline|pipeline is|redistribute|execution ended|got eos)' |
+    tail -8 || true
+}
+
+if ! command -v gst-launch-1.0 >/dev/null 2>&1; then
+  echo "encoder-gate: gst-launch-1.0 is not installed (package gstreamer1.0-tools) —" \
+    "cannot probe, not waiting. NDI will be unavailable if the server finds no encoder."
+  exit 0
+fi
 
 if [ ! -e "$RENDER_NODE" ]; then
   echo "encoder-gate: no render node at $RENDER_NODE — no GPU on this host, not waiting"
@@ -83,8 +106,11 @@ while :; do
   # #547: force a REAL plugin scan. Every gst tool answers from this cache, so without
   # the delete the poll below just re-reads the previous verdict — including a stale one
   # inherited across a reboot.
+  # `|| true`: rm -f is quiet about a missing file but NOT about an unremovable one (a
+  # root-owned registry left behind by a manual `sudo gst-launch`), and `set -e` would
+  # then kill this script mid-loop — breaking the always-exit-0 contract above.
   if [ -n "$REGISTRY" ]; then
-    rm -f "$REGISTRY"
+    rm -f "$REGISTRY" || true
   fi
 
   for encoder in "${ENCODERS[@]}"; do
@@ -102,4 +128,5 @@ done
 
 echo "encoder-gate: no H264 encoder could encode within ${WAIT_SECS}s (tried: ${ENCODERS[*]})." \
   "Starting presenter anyway — NDI will be unavailable until an encoder appears."
+explain_probe_failure "${ENCODERS[0]}"
 exit 0

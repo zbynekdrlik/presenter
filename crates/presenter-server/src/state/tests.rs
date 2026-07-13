@@ -137,18 +137,32 @@ fn presenter_service_blocks_start_until_h264_encoder_probeable() {
     // …and it must cover EVERY encoder the server can select — derived from the server's
     // own list, so adding a 5th candidate cannot silently escape the gate. The software
     // fallback is excluded: it needs no GPU, so there is nothing to wait for.
-    for encoder in presenter_ndi::H264_ENCODER_CANDIDATES
+    //
+    // Read the gate's actual `ENCODERS=(…)` array, NOT the file text: half the candidate
+    // names also appear in the script's prose (it explains WHY nvh264enc is dead), so a
+    // whole-file `contains` was green even with the name deleted from the array.
+    let probed = gate
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("ENCODERS=("))
+        .and_then(|rest| rest.split(')').next())
+        .expect("the gate must declare its candidates as ENCODERS=(…)")
+        .split_whitespace()
+        .collect::<Vec<_>>();
+
+    let expected: Vec<_> = presenter_ndi::H264_ENCODER_CANDIDATES
         .iter()
-        .filter(|name| **name != "x264enc")
-    {
-        assert!(
-            gate.contains(encoder),
-            "the encoder gate must probe `{encoder}` — the server can select it \
-             (presenter_ndi::H264_ENCODER_CANDIDATES), so a gate that ignores it either \
-             stalls the start (waiting for an encoder that will never register) or lets \
-             the binary exec before the one it WILL use is ready (#339, #541)"
-        );
-    }
+        .copied()
+        .filter(|name| *name != "x264enc")
+        .collect();
+
+    assert_eq!(
+        probed, expected,
+        "the encoder gate must probe exactly the encoders the server can select, in the \
+         same priority order (presenter_ndi::H264_ENCODER_CANDIDATES minus the software \
+         fallback). A gate that misses one either stalls the start (waiting for an \
+         encoder that will never register) or lets the binary exec before the one it \
+         WILL use is ready (#339, #541)"
+    );
 }
 
 /// Regression for #335: cap presenter.service resource usage so a runaway

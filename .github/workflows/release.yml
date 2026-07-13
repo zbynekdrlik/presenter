@@ -371,6 +371,13 @@ jobs:
             sudo rm -f ${{ env.DEPLOY_DIR }}/gstreamer-registry.bin && \
             sudo mkdir -p /etc/systemd/system/presenter.service.d && \
             sudo systemctl daemon-reload"
+          # A newline in the variable would inject arbitrary [Service] directives into the
+          # drop-in — accept only a single-line http(s) URL.
+          case "$PP_STAGE_URL" in
+            *[$'\n\r']* | '') echo "::error::PP_STAGE_URL must be a single-line URL"; exit 1 ;;
+            http://* | https://*) ;;
+            *) echo "::error::PP_STAGE_URL must start with http:// or https://"; exit 1 ;;
+          esac
           printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$PP_STAGE_URL" |
             ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/stage-url.conf >/dev/null && sudo systemctl daemon-reload"
 

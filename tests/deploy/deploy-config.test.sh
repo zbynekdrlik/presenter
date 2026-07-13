@@ -111,12 +111,18 @@ run_gate() {
   # $5 = registry path ("" = unset)
   local bin="$1" node="$2" wait_secs="$3" probe_timeout="$4" registry="$5"
   local start=$SECONDS
+  # A caller expecting the gate to bound ITSELF sets GATE_HARNESS_TIMEOUT, so a gate
+  # that lost its bounds fails the test instead of stalling CI behind it.
+  local harness=("bash" "$WAIT_SCRIPT")
+  if [ -n "${GATE_HARNESS_TIMEOUT:-}" ]; then
+    harness=("timeout" "-k" "5" "$GATE_HARNESS_TIMEOUT" "bash" "$WAIT_SCRIPT")
+  fi
   set +e
   out="$(GST_REGISTRY="$registry" PATH="$bin:$PATH" \
     PRESENTER_RENDER_NODE="$node" \
     PRESENTER_ENCODER_WAIT_SECS="$wait_secs" \
     PRESENTER_ENCODER_PROBE_TIMEOUT_SECS="$probe_timeout" \
-    bash "$WAIT_SCRIPT" 2>&1)"
+    "${harness[@]}" 2>&1)"
   rc=$?
   set -e
   elapsed=$((SECONDS - start))
@@ -230,7 +236,10 @@ bounds_every_probe_so_a_wedged_driver_cannot_hang_the_unit() {
   tmp="$(mktemp -d)"
   stub_gst_launch "$tmp/bin" "vah264enc" 0 60 # every probe blocks for 60s
   install -m 666 /dev/null "$tmp/renderD128"
-  run_gate "$tmp/bin" "$tmp/renderD128" 3 2 "$tmp/registry.bin"
+  # The outer bound is part of the assertion: without `timeout` in the gate this would
+  # otherwise sit through 4 x 60s of blocked probes before failing — a 4-minute CI stall
+  # for a regression that should be caught in seconds.
+  GATE_HARNESS_TIMEOUT=40 run_gate "$tmp/bin" "$tmp/renderD128" 3 2 "$tmp/registry.bin"
   rm -rf "$tmp"
   # 4 candidates x 2s probe timeout + the 3s deadline, with generous slack.
   [ "$rc" -eq 0 ] && [ "$elapsed" -lt 25 ]
@@ -293,10 +302,14 @@ every_deploy_rebuilds_the_registry() {
 every_deploy_ships_the_gate_script() {
   # The unit calls the gate with a leading `-` (never fatal), so a deploy that stops
   # installing the script disables the gate SILENTLY — no failure, no log, NDI just
-  # races the driver again. Assert every deploy actually puts the script on the host.
-  grep -q 'wait-for-h264-encoder.sh' "$REPO_ROOT/.github/workflows/deploy.yml" &&
-    grep -q 'wait-for-h264-encoder.sh' "$REPO_ROOT/.github/workflows/release.yml" &&
-    grep -q 'wait-for-h264-encoder.sh' "$REPO_ROOT/.github/workflows/pipeline.yml"
+  # races the driver again. Both halves must be there: the scp that puts the file ON the
+  # host, and the install that puts it in the deploy dir. Grepping the bare filename
+  # would stay green with the scp deleted.
+  local wf
+  for wf in deploy.yml release.yml pipeline.yml; do
+    grep -qE 'scp .*wait-for-h264-encoder\.sh' "$REPO_ROOT/.github/workflows/$wf" || return 1
+    grep -qE 'install .*wait-for-h264-encoder\.sh' "$REPO_ROOT/.github/workflows/$wf" || return 1
+  done
 }
 
 echo "Deploy-config guards (#538, #539, #544, #547):"
