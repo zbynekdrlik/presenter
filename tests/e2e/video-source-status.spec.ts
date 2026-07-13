@@ -14,14 +14,26 @@ import {
 // not broadcasting that name. Hours went into the (genuinely broken) encoder chain
 // before the log revealed it. The server knew all along; nothing told the human.
 //
-// This spec runs on the DEFAULT lane, which has NO NDI SDK — so it can only prove the
-// blind-server path. That path matters on its own (the server must never claim "not
-// found on the network" when it cannot SEE the network), and it proves the endpoint,
-// the poll and the render are wired. The real PP reproduction — a mapped name that is
-// genuinely absent while a different name IS on the air — lives in
-// `ndi-source-status.spec.ts`, on the self-hosted lane that has libndi.
+// This spec runs on the DEFAULT lane, whose HOST may or may not have libndi: the
+// GitHub runners do not, dev2 — where the same suite is run before a merge — does. So
+// it asserts the contract that must hold EITHER WAY and takes its branch from what the
+// server reports about itself:
+//
+//   * blind server (no SDK) → `unknown` / "NDI unavailable". It must NEVER say "not
+//     found on the network" about a network it cannot see; that sends the operator off
+//     to check a sending machine that is perfectly fine.
+//   * seeing server        → a name nobody broadcasts reads `not-found`, with the hint
+//     and the list of what IS on the air. That is the PP reproduction.
+//
+// Hard-coding the SDK-less branch made this spec pass on CI and fail on dev2 — a guard
+// that is green on only one host is not a guard. The full synthetic reproduction (a
+// mapped ghost name while a REAL NDI sender is on the air) is in
+// `ndi-source-status.spec.ts`, on the self-hosted lane.
 
 test.describe.configure({ timeout: 180_000 });
+
+/** A name nothing on any of our networks broadcasts. */
+const GHOST = "GHOST-SOURCE (nope)";
 
 let server: ServerHandle | undefined;
 let baseURL = "";
@@ -51,27 +63,34 @@ async function createSource(request: any, label: string, ndiName: string) {
   return await res.json();
 }
 
-test("status endpoint joins the rows, the network and the pipelines", async ({
-  request,
-}) => {
-  const source = await createSource(request, "cgpp", "RESOLUME-PP (cg-obs)");
-
+async function readStatus(request: any) {
   const res = await request.get(
     new URL("/integrations/video-sources/status", baseURL).toString(),
   );
   expect(res.status()).toBe(200);
-  const body = await res.json();
+  return await res.json();
+}
 
-  // No SDK on this lane.
-  expect(body.ndiAvailable).toBe(false);
-  expect(body.discovered).toEqual([]);
+test("status endpoint joins the rows, the network and the pipelines", async ({
+  request,
+}) => {
+  const source = await createSource(request, "cgpp", GHOST);
+
+  const body = await readStatus(request);
 
   const entry = body.sources.find((s: any) => s.id === source.id);
   expect(entry, "the created source must appear in the status snapshot").toBeTruthy();
-  // The honest answer for a server that cannot see the network. NOT "not-found" —
-  // that would send the operator to check a sending machine that is perfectly fine.
-  expect(entry.state).toBe("unknown");
-  expect(entry.ndiName).toBe("RESOLUME-PP (cg-obs)");
+  expect(entry.ndiName).toBe(GHOST);
+
+  if (body.ndiAvailable) {
+    // The PP case: the mapped name is simply not being broadcast.
+    expect(body.discovered).not.toContain(GHOST);
+    expect(entry.state).toBe("not-found");
+  } else {
+    // A blind server says so — it never accuses a sender it cannot see.
+    expect(body.discovered).toEqual([]);
+    expect(entry.state).toBe("unknown");
+  }
 });
 
 test("the settings card shows the source's status badge", async ({
@@ -83,7 +102,8 @@ test("the settings card shows the source's status badge", async ({
     if (m.type() === "error") errors.push(m.text());
   });
 
-  const source = await createSource(request, "cam-status", "CAM-STATUS (usb)");
+  const source = await createSource(request, "cam-status", GHOST);
+  const ndiAvailable: boolean = (await readStatus(request)).ndiAvailable;
 
   await page.goto(new URL("/ui/settings", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 60_000 });
@@ -91,12 +111,24 @@ test("the settings card shows the source's status badge", async ({
   const badge = page.locator(
     `[data-role="video-source-status"][data-source-id="${source.id}"]`,
   );
-  await expect(badge).toHaveText("NDI unavailable", { timeout: 30_000 });
-  await expect(badge).toHaveAttribute("data-state", "unknown");
+  const hint = page.locator(
+    `[data-role="video-source-hint"][data-source-id="${source.id}"]`,
+  );
 
-  // Nothing can be discovered without the SDK, so the "on the network now" line must
-  // not be there claiming an empty network.
-  await expect(page.locator('[data-role="ndi-discovered"]')).toHaveCount(0);
+  if (ndiAvailable) {
+    await expect(badge).toHaveText("Not found on the network", { timeout: 30_000 });
+    await expect(badge).toHaveAttribute("data-state", "not-found");
+    // The sentence that would have ended the PP outage in a minute.
+    await expect(hint).toContainText("not on the network", { timeout: 30_000 });
+    // And what IS on the air, right there, to compare the mapped name against.
+    await expect(page.locator('[data-role="ndi-discovered"]')).toHaveCount(1);
+  } else {
+    await expect(badge).toHaveText("NDI unavailable", { timeout: 30_000 });
+    await expect(badge).toHaveAttribute("data-state", "unknown");
+    // Nothing can be discovered without the SDK, so the "on the network now" line must
+    // not be there claiming an empty network.
+    await expect(page.locator('[data-role="ndi-discovered"]')).toHaveCount(0);
+  }
 
   expect(errors, `console errors: ${errors.join(" | ")}`).toEqual([]);
 });

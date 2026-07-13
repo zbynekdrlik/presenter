@@ -2,11 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{delete, get_json, post_json, post_no_content, ApiError};
 
-#[derive(Debug, Deserialize)]
-pub struct NdiStatusResponse {
-    pub available: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSourceDto {
@@ -16,13 +11,8 @@ pub struct VideoSourceDto {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct NdiSourceDto {
-    pub name: String,
-}
-
 /// Live state of one mapped NDI source (#546) — is it actually working?
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct VideoSourceStatusDto {
     pub id: String,
@@ -51,16 +41,8 @@ pub struct CreateVideoSourceRequest {
     pub ndi_name: String,
 }
 
-pub async fn get_ndi_status() -> Result<NdiStatusResponse, ApiError> {
-    get_json("/ndi/status").await
-}
-
 pub async fn list_video_sources() -> Result<Vec<VideoSourceDto>, ApiError> {
     get_json("/integrations/video-sources").await
-}
-
-pub async fn discover_ndi_sources() -> Result<Vec<NdiSourceDto>, ApiError> {
-    get_json("/ndi/sources").await
 }
 
 /// One call for all three facts the settings card needs (#546): whether this server can

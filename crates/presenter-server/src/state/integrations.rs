@@ -11,6 +11,7 @@ use super::AppState;
 use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use crate::resolume::ResolumeConnectionSnapshot;
 use crate::state::video_source_status;
+use crate::state::video_source_status::{Discovery, PipelineFact};
 
 /// What the server can honestly say about every mapped NDI source right now (#546).
 ///
@@ -267,10 +268,14 @@ impl AppState {
     /// a broken server. This is the join; the decision itself is the pure
     /// [`video_source_status::classify`].
     ///
-    /// Fail-soft on purpose: a discovery error or a busy pipeline lock degrades to
-    /// "nothing discovered" / "no pipeline", never to an error page. The settings page
-    /// must keep rendering even when NDI is unhappy — that is exactly when the
-    /// operator needs to look at it.
+    /// Fail-soft on purpose — but never into a LIE. A discovery failure degrades to
+    /// [`Discovery::Blind`] ("we cannot see the network"), NOT to an empty network
+    /// (which would make a broken server accuse every sending machine at the site);
+    /// a busy pipeline lock degrades to [`PipelineFact::Unreadable`] ("the manager is
+    /// busy starting it"), NOT to "no pipeline" (which would paint every normal
+    /// activation as "sending nothing"). Both were deep-review findings on the first
+    /// cut of #546. Neither degrades to an error page: the settings page must keep
+    /// rendering when NDI is unhappy — that is exactly when the operator needs it.
     pub async fn video_source_status(&self) -> anyhow::Result<VideoSourceStatusSnapshot> {
         let rows = self.list_video_sources().await?;
 
@@ -287,45 +292,59 @@ impl AppState {
             });
         };
 
-        let discovered: Vec<String> = match manager.discover_sources(0) {
-            Ok(sources) => sources.into_iter().map(|s| s.name).collect(),
+        let discovered: Option<Vec<String>> = match manager.discover_sources(0) {
+            Ok(sources) => Some(sources.into_iter().map(|s| s.name).collect()),
             Err(e) => {
                 tracing::warn!(error = %e, "NDI discovery failed while reading source status");
-                Vec::new()
+                None
             }
         };
 
-        let pipelines: HashMap<String, (&'static str, Option<String>)> = manager
-            .pipeline_snapshots()
-            .await
-            .into_iter()
-            .map(|(id, state)| (id, video_source_status::pipeline_state_str(&state)))
-            .collect();
+        // `None` = the manager's lock was held past our budget (it is busy building a
+        // pipeline), which is NOT the same fact as "there are no pipelines".
+        let pipelines: Option<HashMap<String, (&'static str, Option<String>)>> =
+            manager.pipeline_snapshots_checked().await.map(|snapshots| {
+                snapshots
+                    .into_iter()
+                    .map(|(id, state)| (id, video_source_status::pipeline_state_str(&state)))
+                    .collect()
+            });
+
+        let discovery = match &discovered {
+            Some(names) => Discovery::Names(names),
+            None => Discovery::Blind,
+        };
 
         let sources = rows
             .into_iter()
             .map(|row| {
-                let pipeline = pipelines.get(&row.id.to_string());
+                let pipeline = pipelines
+                    .as_ref()
+                    .map(|map| map.get(&row.id.to_string()).cloned());
                 let state = video_source_status::classify(
                     row.is_active,
                     &row.ndi_name,
-                    true,
-                    &discovered,
-                    pipeline.map(|(s, _)| *s),
+                    discovery,
+                    match &pipeline {
+                        Some(entry) => PipelineFact::Known(entry.as_ref().map(|(s, _)| *s)),
+                        None => PipelineFact::Unreadable,
+                    },
                 );
                 VideoSourceStatusEntry {
                     id: row.id.to_string(),
                     ndi_name: row.ndi_name,
                     is_active: row.is_active,
                     state: state.as_str(),
-                    detail: pipeline.and_then(|(_, err)| err.clone()),
+                    detail: pipeline.flatten().and_then(|(_, err)| err),
                 }
             })
             .collect();
 
         Ok(VideoSourceStatusSnapshot {
-            ndi_available: true,
-            discovered,
+            // A discovery failure leaves us blind, exactly like a missing SDK — the UI
+            // must not print "On the network now: nothing" off the back of it.
+            ndi_available: discovered.is_some(),
+            discovered: discovered.unwrap_or_default(),
             sources,
         })
     }
@@ -717,6 +736,52 @@ mod tests {
         let entry = snapshot.sources.first().expect("one source");
         assert_eq!(entry.state, "live");
         assert_eq!(entry.detail, None);
+    }
+
+    /// THE ACTIVATION WINDOW (deep review 🟡 #1). `start_pipeline` holds the manager's
+    /// lock across its 8 s caps-wait, so a status poll landing in that window cannot read
+    /// the snapshot map at all. Reading "cannot look" as "no pipeline" painted the HAPPY
+    /// path amber and told the operator to go start an NDI output that was already on.
+    #[tokio::test]
+    async fn video_source_status_says_connecting_while_the_manager_is_busy_starting() {
+        let (state, source_id, _id, fake) = state_with_fake(StartOutcome::Ok).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activation succeeds");
+        // The manager is mid-start: its lock is held, so the snapshot times out.
+        fake.set_snapshots_unreadable();
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+        let entry = snapshot.sources.first().expect("one source");
+        assert_eq!(
+            entry.state, "connecting",
+            "a busy manager means the pipeline is coming up — NOT that the sending \
+             machine is silent",
+        );
+    }
+
+    /// Deep review 🟡 #2: a discovery FAILURE leaves us blind. Degrading it to an empty
+    /// network would make a broken server tell the operator that every sending machine
+    /// at the site is off — the exact false accusation this module exists to prevent.
+    #[tokio::test]
+    async fn video_source_status_says_unknown_when_discovery_itself_fails() {
+        let (state, _source_id, _id, fake) = state_with_fake(StartOutcome::Ok).await;
+        fake.fail_discovery();
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+
+        assert!(
+            !snapshot.ndi_available,
+            "a finder we cannot query is a network we cannot see",
+        );
+        assert!(snapshot.discovered.is_empty());
+        assert_eq!(
+            snapshot.sources.first().map(|s| s.state),
+            Some("unknown"),
+            "a discovery failure must never render as 'not found on the network'",
+        );
     }
 
     #[tokio::test]

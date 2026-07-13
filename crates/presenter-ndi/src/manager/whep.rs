@@ -26,20 +26,40 @@ impl NdiManager {
     /// item 7 was supposed to expose. On timeout we return an empty vec
     /// and log a warning; the caller (LB / dashboard) sees "no pipelines"
     /// for one poll cycle, which is preferable to a hung probe.
+    ///
+    /// Callers that must not read a timeout as "no pipelines" (the #546 source
+    /// status join — an empty map there means "sending nothing", which is a very
+    /// different sentence to put in front of an operator) use
+    /// [`Self::pipeline_snapshots_checked`] instead.
     pub async fn pipeline_snapshots(&self) -> Vec<(String, PipelineState)> {
+        self.pipeline_snapshots_checked().await.unwrap_or_default()
+    }
+
+    /// Like [`Self::pipeline_snapshots`], but `None` when the 200 ms lock wait
+    /// expired — i.e. "the manager is busy (almost always: building/starting a
+    /// pipeline), we could not look", as opposed to `Some(vec![])`, "we looked
+    /// and there are no pipelines".
+    ///
+    /// The distinction is load-bearing for #546: `start_pipeline` holds this same
+    /// mutex across its 8 s caps-wait, so during EVERY normal activation a caller
+    /// that cannot tell the two apart concludes "active, on the network, no
+    /// pipeline" and tells the operator to go fix a sending machine that is fine.
+    pub async fn pipeline_snapshots_checked(&self) -> Option<Vec<(String, PipelineState)>> {
         match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
         {
-            Ok(guard) => guard
-                .iter()
-                .map(|(id, src)| (id.clone(), src.pipeline.state()))
-                .collect(),
+            Ok(guard) => Some(
+                guard
+                    .iter()
+                    .map(|(id, src)| (id.clone(), src.pipeline.state()))
+                    .collect(),
+            ),
             Err(_) => {
                 tracing::warn!(
                     "pipeline_snapshots lock acquisition timed out after 200 ms — \
                      likely contended with a long-running pipeline start/rebuild; \
-                     returning empty snapshot so /healthz does not stall (#333 item 7)"
+                     reporting the snapshot as unavailable (#333 item 7, #546)"
                 );
-                Vec::new()
+                None
             }
         }
     }
