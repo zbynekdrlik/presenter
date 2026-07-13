@@ -324,3 +324,83 @@ registers **zero** elements, and NDI dies silently with every driver package ins
 the systemd-logind console ACL (`getfacl /dev/dri/renderD128` showing `user:<u>:rw-`) — it exists only
 while somebody is logged in at the physical console, and it is what made prod *look* healthy while PP
 was dead. Check with `gst-inspect-1.0 va | grep -c '^  va'` (0 = no access).
+
+## "No video on the stage" — triage in the order the layers actually fail (#544, #546)
+
+Four independent layers must ALL hold, and each fails silently. Walk them in THIS order — the PP
+outage cost hours because the investigation kept re-checking layer 3 while layer 1 was the cause,
+and then declared victory at layer 3 while layer 4 was the real remaining blocker.
+
+```bash
+H=companion-pp.lan   # or presenter.lan / 10.77.8.134:8080
+
+# 1. Can the service reach the GPU?  (#540 — zero features = no render-group access)
+ssh $H "sudo -u newlevel GST_REGISTRY=/opt/presenter/gstreamer-registry.bin gst-inspect-1.0 va | grep -c '^  va'"
+
+# 2. Did an encoder actually get SELECTED at startup?  (#541 / #544)
+ssh $H "sudo journalctl -u presenter -b --no-pager | grep -E 'encoder-gate|WebRTC encoder|no hardware'"
+#    "encoder-gate: vah264enc registered" + "NDI WebRTC encoder: vah264enc" = layers 1+2 green.
+
+# 3. Is the NDI source the operator mapped ACTUALLY BROADCASTING?  ← the one that is easy to miss
+curl -s http://$H/ndi/sources                      # what is on the network RIGHT NOW
+curl -s http://$H/integrations/video-sources       # what is mapped
+curl -s http://$H/healthz | jq .ndi_pipelines      # [] = nothing producing; [{state:"streaming"}] = live
+#    Mapped name absent from /ndi/sources → the SENDING machine is off/renamed. Not our bug, and no
+#    amount of server-side debugging will fix it. The log says so:
+#    "NDI source activated but not yet producing — broadcaster silent (#448)".
+#    The UI does not surface this yet — that gap is #546.
+
+# 4. Does the BROWSER decode it?  (Chromium ≠ Chrome — see below)
+```
+
+**A "pipeline built" log line does NOT mean video is flowing.** The pipeline is (re)built every ~30 s
+by the auto-reconnect loop even when the NDI source is silent. Proof of flow is
+`healthz.ndi_pipelines[].state == "streaming"`, nothing less.
+
+### `gst-inspect --exists` answers from the registry CACHE — it is not a plugin scan (#547)
+
+This burned a whole class of "fix" that could never have worked, so keep it in mind for anything
+that polls GStreamer:
+
+- `gst-inspect-1.0 --exists <element>` is a **lookup in the cached registry file** (`$GST_REGISTRY`),
+  not a plugin load. Measured on dev2: **14 ms warm vs 916 ms cold** (only the cold run emits
+  `vaInitialize`). So a poll loop built on it performs ONE real scan and then re-reads that same
+  verdict — it can **never observe a late-registering encoder**, which is the entire reason a
+  boot-time gate exists.
+- `GST_REGISTRY_UPDATE=yes` does **not** save you: it only rescans plugins whose **file** changed.
+  A permission change (#540) or a driver change leaves the plugin file untouched, so a cached
+  "va has 0 features" verdict survives it forever (that IS #544).
+- **The only way to force a real rescan is to DELETE the registry file** — which is what the
+  encoder gate now does before every poll, and what every deploy does before starting the service.
+- A name lookup also answers a different question than the server asks. Since #541 the server only
+  trusts an encoder after a **real one-frame encode** (`videotestsrc num-buffers=1 ! … ! <enc> !
+  fakesink`). Probe the same way, or the gate green-lights an encoder the server then rejects.
+- Bound every gst call with `timeout`. A wedged driver (#445) makes one hang forever; inside an
+  `ExecStartPre` that hangs the unit past `TimeoutStartSec` and **fails the whole service** — the
+  `-` prefix only ignores a non-zero exit, not a start timeout.
+
+### Probing WHEP yourself: use `channel: "chrome"`, never bundled Chromium
+
+Playwright's bundled Chromium has **no H264** — the server correctly rejects its offer with
+`WHEP offer carries no H264 rtpmap — rejecting consumer`, which reads like a server fault and is not.
+Launch real Chrome (same as `playwright.config.ts` does) and read the decoded-frame count:
+
+```js
+const browser = await chromium.launch({ channel: 'chrome', args: ['--autoplay-policy=no-user-gesture-required'] });
+// … page.goto('http://<host>/stage'); wait ~15 s
+const v = document.querySelector('video');          // in page.evaluate
+v.videoWidth /* 1280 */, v.getVideoPlaybackQuality().totalVideoFrames /* > 0 */
+```
+
+To verify the chain WITHOUT a live broadcaster (e.g. to prove a build before an event), publish the
+synthetic source and map it — this is exactly what the `e2e-ndi` lane does:
+
+```bash
+NDI_RUNTIME_DIR_V6=/usr/lib/ndi PRESENTER_NDI_TEST_NAME=PRESENTER-TEST \
+  cargo run -p presenter-ndi --features test-helpers --bin ndi_test_sender &
+# it appears as "DEV2 (PRESENTER-TEST)"; POST it to /integrations/video-sources, then
+# POST /integrations/video-sources/<id>/activate   ← activation is a POST to /activate, NOT a PATCH
+```
+
+Clean up afterwards (`/deactivate`, `DELETE` the source, pid-targeted `kill` of the sender — never
+`pkill -f`, it matches your own shell).

@@ -110,31 +110,59 @@ fn presenter_service_blocks_start_until_h264_encoder_probeable() {
         );
     }
 
-    // The gate script itself must still probe with gst-inspect-1.0 (the same view of the
-    // registry `presenter_ndi::hw_h264_encoder()` gets) and cover EVERY encoder we can
-    // actually use: VA-API (prod N100), the modern nvcodec elements a current NVIDIA
-    // driver provides (#541 — the legacy element is dead on 595+), and the legacy one for
-    // hosts still on an older driver. Waiting for a name we will never see would stall the
-    // start for the whole timeout on a perfectly healthy box.
+    // The gate must probe the way the SERVER decides — a real one-frame encode through
+    // `gst-launch-1.0` (#541/#547), not a `gst-inspect --exists` name lookup, which only
+    // re-reads the cached plugin registry and therefore can neither see a late-registering
+    // encoder nor notice a registered-but-broken one.
     let gate = include_str!("../../../../scripts/deploy/wait-for-h264-encoder.sh");
     assert!(
-        gate.contains("gst-inspect-1.0"),
-        "the encoder gate must query the registry with gst-inspect-1.0 (#339)"
+        gate.contains("gst-launch-1.0") && gate.contains("videotestsrc"),
+        "the encoder gate must probe FUNCTIONALLY (videotestsrc → encoder → fakesink via \
+         gst-launch-1.0), the same check presenter_ndi runs before it trusts an encoder. \
+         A name-only `gst-inspect --exists` answers from the registry cache: it green-lit \
+         encoders the server then rejected, and its poll loop never rescanned (#547)."
     );
-    for encoder in [
-        "vah264enc",
-        "nvcudah264enc",
-        "nvautogpuh264enc",
-        "nvh264enc",
-    ] {
-        assert!(
-            gate.contains(encoder),
-            "the encoder gate must probe `{encoder}` — the server can select it \
-             (presenter_ndi::H264_ENCODER_CANDIDATES), so a gate that ignores it either \
-             stalls the start (waiting for an encoder that will never register) or lets \
-             the binary exec before the one it WILL use is ready (#339, #541)"
-        );
-    }
+    // …and it must not fall back to one. (Comments may still NAME `gst-inspect-1.0` —
+    // they explain why it is wrong — so only executable lines are checked.)
+    let name_lookup_in_code = gate
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| !line.starts_with('#'))
+        .any(|line| line.contains("gst-inspect-1.0"));
+    assert!(
+        !name_lookup_in_code,
+        "the gate must not probe with a `gst-inspect` registry name lookup (#547)"
+    );
+
+    // …and it must cover EVERY encoder the server can select — derived from the server's
+    // own list, so adding a 5th candidate cannot silently escape the gate. The software
+    // fallback is excluded: it needs no GPU, so there is nothing to wait for.
+    //
+    // Read the gate's actual `ENCODERS=(…)` array, NOT the file text: half the candidate
+    // names also appear in the script's prose (it explains WHY nvh264enc is dead), so a
+    // whole-file `contains` was green even with the name deleted from the array.
+    let probed = gate
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("ENCODERS=("))
+        .and_then(|rest| rest.split(')').next())
+        .expect("the gate must declare its candidates as ENCODERS=(…)")
+        .split_whitespace()
+        .collect::<Vec<_>>();
+
+    let expected: Vec<_> = presenter_ndi::H264_ENCODER_CANDIDATES
+        .iter()
+        .copied()
+        .filter(|name| *name != "x264enc")
+        .collect();
+
+    assert_eq!(
+        probed, expected,
+        "the encoder gate must probe exactly the encoders the server can select, in the \
+         same priority order (presenter_ndi::H264_ENCODER_CANDIDATES minus the software \
+         fallback). A gate that misses one either stalls the start (waiting for an \
+         encoder that will never register) or lets the binary exec before the one it \
+         WILL use is ready (#339, #541)"
+    );
 }
 
 /// Regression for #335: cap presenter.service resource usage so a runaway

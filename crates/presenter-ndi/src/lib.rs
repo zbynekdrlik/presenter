@@ -129,7 +129,11 @@ pub fn init() -> anyhow::Result<()> {
 /// not supported"), so on a current driver the legacy element registers, builds,
 /// and then dies on the first frame (#541). Software `x264enc` is the last
 /// resort (no session cap, CPU cost only).
-pub(crate) const H264_ENCODER_CANDIDATES: &[&str] = &[
+///
+/// Public so the deploy guards can assert the encoder-ready gate covers exactly the
+/// encoders the server can select — a hand-copied list in the test silently stops
+/// covering a 5th candidate the moment one is added here.
+pub const H264_ENCODER_CANDIDATES: &[&str] = &[
     "vah264enc",
     "nvcudah264enc",
     "nvautogpuh264enc",
@@ -181,12 +185,18 @@ fn pick_h264_encoder(
 /// alone then picked an unloadable encoder and the pipeline build failed.
 /// Probing loadability skips it and falls through to a real, loadable encoder.
 ///
-/// Construction is cheap and side-effect-free: GStreamer element creation only
-/// allocates the GObject — hardware (CUDA/VA display) is opened later at the
-/// READY state transition, not at `build()`. So this stays safe to call on the
-/// 30 s NDI-reconnect tick, and re-probing every call preserves the #333 item 6
-/// self-heal: a host whose registry recovers resumes without a process restart
-/// (so it is intentionally NOT memoized).
+/// Verdicts are memoized SELECTIVELY (`cached_encoder_verdict`): a STABLE verdict is
+/// cached so the probe stays off the 30 s NDI-reconnect tick; "the element is not
+/// registered" is not, because that is a fact about the plugin registry rather than
+/// about the encoder, and this process cannot prove it will stay true (#548).
+///
+/// What that does NOT buy: an in-process recovery from the boot race. The plugin
+/// registry is read once at `gst_init()`, and nothing re-scans it afterwards — an
+/// element missing at init stays missing for the life of the process, cached or not.
+/// The boot race is prevented by the ExecStartPre encoder gate
+/// (`scripts/deploy/wait-for-h264-encoder.sh`), which holds the service back until an
+/// encoder really encodes; recovering a host that already started wrong needs the
+/// registry deleted and the service restarted (see `gpu::missing_encoder_hint`).
 pub fn hw_h264_encoder() -> Option<&'static str> {
     pick_h264_encoder(H264_ENCODER_CANDIDATES, encoder_is_usable)
 }
@@ -202,51 +212,111 @@ pub fn hw_h264_encoder() -> Option<&'static str> {
 /// encoder had already been selected. So the probe pushes ONE tiny frame through
 /// the element and only then calls it usable.
 ///
-/// Cost: a 320x240 single-frame encode, on the FIRST query per element name only
-/// — the verdict is cached for the process (`ENCODER_USABILITY` below), because a
-/// driver-level rejection cannot heal without a driver change, which needs a
-/// restart anyway. Caching also keeps this off the 30 s NDI-reconnect tick and,
-/// crucially, stops the probe from opening a second NVENC session while a
-/// pipeline is streaming (consumer GeForce cards cap concurrent sessions).
+/// Cost: a 320x240 single-frame encode, on the FIRST query per element name only —
+/// for a STABLE verdict. Caching keeps this off the 30 s NDI-reconnect tick and,
+/// crucially, stops the probe from opening a second NVENC session while a pipeline
+/// is streaming (consumer GeForce cards cap concurrent sessions).
 fn encoder_is_usable(name: &str) -> bool {
     let cache = ENCODER_USABILITY.get_or_init(|| Mutex::new(HashMap::new()));
+    cached_encoder_verdict(cache, name, probe_encoder_can_encode).is_usable()
+}
+
+/// What a functional probe found out about one encoder element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EncoderVerdict {
+    /// The element is not in the registry (or cannot be instantiated) — the #443 /
+    /// #339 boot-race shape. TRANSIENT: the plugin may register seconds from now.
+    NotRegistered,
+    /// The element is there, but the driver refused to encode with it — the #541
+    /// shape ("Selected preset not supported"). STABLE: it cannot heal without a
+    /// driver change, which needs a restart anyway.
+    CannotEncode,
+    /// It pushed a real frame through. STABLE.
+    Usable,
+}
+
+impl EncoderVerdict {
+    /// Only a real encode selects an encoder — both failure verdicts are a "no".
+    pub(crate) fn is_usable(self) -> bool {
+        matches!(self, EncoderVerdict::Usable)
+    }
+
+    /// May this verdict be remembered for the life of the process?
+    ///
+    /// #548: `NotRegistered` may NOT. The other two are facts about the ENCODER — a
+    /// working element does not stop working, and a driver that refuses one cannot
+    /// change its mind without a driver change (which needs a restart anyway). But
+    /// "not in the registry" is a fact about the plugin REGISTRY, whose contents this
+    /// process does not own: remembering it would be recording someone else's state as
+    /// our own. Re-probing it is nearly free (an `ElementFactory::find` miss — never a
+    /// real encode, so no NVENC session is opened on the 30 s reconnect tick).
+    ///
+    /// It is NOT a self-heal: the registry is read once at `gst_init()` and never
+    /// re-scanned, so an element missing at init stays missing for this process either
+    /// way. The gate prevents the race; a restart is what recovers from it.
+    fn is_stable(self) -> bool {
+        !matches!(self, EncoderVerdict::NotRegistered)
+    }
+}
+
+/// Probe `name`, reusing a previously-cached STABLE verdict. The probe is injected
+/// so the cache POLICY (what may be remembered) is unit-testable without a GPU.
+fn cached_encoder_verdict(
+    cache: &Mutex<HashMap<String, EncoderVerdict>>,
+    name: &str,
+    probe: impl Fn(&str) -> EncoderVerdict,
+) -> EncoderVerdict {
     if let Ok(guard) = cache.lock() {
         if let Some(&verdict) = guard.get(name) {
             return verdict;
         }
     }
 
-    let verdict = probe_encoder_can_encode(name);
-    if !verdict {
-        tracing::warn!(
+    let verdict = probe(name);
+    match verdict {
+        EncoderVerdict::CannotEncode => tracing::warn!(
             encoder = name,
             "encoder is registered but cannot encode on this host — skipping it"
-        );
+        ),
+        EncoderVerdict::NotRegistered => tracing::debug!(
+            encoder = name,
+            "encoder is not registered (yet) — will re-probe, it may still appear (#339)"
+        ),
+        EncoderVerdict::Usable => {}
     }
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(name.to_string(), verdict);
+
+    if verdict.is_stable() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(name.to_string(), verdict);
+        }
     }
     verdict
 }
 
-/// Per-process cache of the functional encoder probe (see `encoder_is_usable`).
-static ENCODER_USABILITY: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+/// Per-process cache of the functional encoder probe (see `cached_encoder_verdict`).
+static ENCODER_USABILITY: OnceLock<Mutex<HashMap<String, EncoderVerdict>>> = OnceLock::new();
 
 /// Push one frame through `videotestsrc ! videoconvert ! <encoder> ! fakesink`
 /// and report whether it encoded without an error message on the bus.
-fn probe_encoder_can_encode(name: &str) -> bool {
+fn probe_encoder_can_encode(name: &str) -> EncoderVerdict {
     use gstreamer::prelude::*;
 
-    // Element-not-registered / not-instantiable is the #443 case and is still a
-    // "no" — parse::launch covers both without a separate build() probe.
+    // Not advertised at all → nothing to encode with, and (unlike the two verdicts
+    // below) it may still show up: this is the transient case, kept uncached (#548).
+    if gstreamer::ElementFactory::find(name).is_none() {
+        return EncoderVerdict::NotRegistered;
+    }
+
+    // Advertised but not instantiable is the #443 registry-drift case — treated as
+    // transient too, for the same reason: a registry rescan can make it real.
     let Ok(pipeline) = gstreamer::parse::launch(&format!(
         "videotestsrc num-buffers=1 ! video/x-raw,width=320,height=240,framerate=30/1 \
          ! videoconvert ! {name} ! fakesink sync=false"
     )) else {
-        return false;
+        return EncoderVerdict::NotRegistered;
     };
 
-    let usable = (|| {
+    let encoded = (|| {
         let bus = pipeline.bus()?;
         if pipeline.set_state(gstreamer::State::Playing).is_err() {
             return Some(false);
@@ -262,7 +332,14 @@ fn probe_encoder_can_encode(name: &str) -> bool {
     .unwrap_or(false);
 
     let _ = pipeline.set_state(gstreamer::State::Null);
-    usable
+
+    // The element IS registered (checked above), so a failure here is the driver
+    // refusing it — stable, and safe to remember.
+    if encoded {
+        EncoderVerdict::Usable
+    } else {
+        EncoderVerdict::CannotEncode
+    }
 }
 
 /// Upper bound for the one-shot encoder probe. Generous enough for a cold CUDA /
@@ -436,5 +513,135 @@ mod pick_h264_encoder_tests {
             pick_h264_encoder(H264_ENCODER_CANDIDATES, software_only),
             Some("x264enc")
         );
+    }
+}
+
+#[cfg(test)]
+mod encoder_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn empty_cache() -> Mutex<HashMap<String, EncoderVerdict>> {
+        Mutex::new(HashMap::new())
+    }
+
+    /// #548: "element not in the registry" is a fact about the plugin REGISTRY, not
+    /// about the encoder — this process does not own it and cannot prove it stays
+    /// true, so it is never remembered. (It is NOT an in-process self-heal: the
+    /// registry is read once at `gst_init()` and never re-scanned. The ExecStartPre
+    /// gate prevents the boot race; a restart recovers from it. Re-probing costs an
+    /// `ElementFactory::find` miss, never an encode — so no NVENC session is opened
+    /// on the 30s reconnect tick.)
+    #[test]
+    fn a_not_registered_verdict_is_never_cached() {
+        let cache = empty_cache();
+        let calls = AtomicUsize::new(0);
+        // A registry that answers "missing" once and then knows the element.
+        let probe = |_name: &str| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                EncoderVerdict::NotRegistered
+            } else {
+                EncoderVerdict::Usable
+            }
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::NotRegistered
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable,
+            "a missing element must be RE-PROBED, never remembered — the plugin \
+             registry is not ours to record a verdict about (#548)"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "both calls must reach the probe"
+        );
+    }
+
+    /// The #541 shape — the element IS registered, the driver refuses to encode
+    /// with it ("Selected preset not supported"). That cannot heal without a
+    /// driver change, which needs a restart anyway, so it stays cached: re-probing
+    /// it would open a fresh NVENC session on every 30s reconnect tick (consumer
+    /// GeForce cards cap concurrent sessions).
+    #[test]
+    fn a_driver_rejection_is_cached_and_not_re_probed() {
+        let cache = empty_cache();
+        let calls = AtomicUsize::new(0);
+        let probe = |_name: &str| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            EncoderVerdict::CannotEncode
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "nvh264enc", probe),
+            EncoderVerdict::CannotEncode
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "nvh264enc", probe),
+            EncoderVerdict::CannotEncode
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a driver-level rejection is stable — probe it once per process"
+        );
+    }
+
+    /// A working encoder does not stop working: cache the positive so the probe
+    /// stays off the 30s reconnect tick.
+    #[test]
+    fn a_usable_verdict_is_cached() {
+        let cache = empty_cache();
+        let calls = AtomicUsize::new(0);
+        let probe = |_name: &str| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            EncoderVerdict::Usable
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Verdicts are per element name — a cached `nvh264enc` rejection must not
+    /// answer for `vah264enc`.
+    #[test]
+    fn verdicts_are_keyed_by_encoder_name() {
+        let cache = empty_cache();
+        let probe = |name: &str| {
+            if name == "vah264enc" {
+                EncoderVerdict::Usable
+            } else {
+                EncoderVerdict::CannotEncode
+            }
+        };
+
+        assert_eq!(
+            cached_encoder_verdict(&cache, "nvh264enc", probe),
+            EncoderVerdict::CannotEncode
+        );
+        assert_eq!(
+            cached_encoder_verdict(&cache, "vah264enc", probe),
+            EncoderVerdict::Usable
+        );
+    }
+
+    /// Only `Usable` selects an encoder — both failure verdicts are a "no" to
+    /// `pick_h264_encoder`.
+    #[test]
+    fn only_a_usable_verdict_selects_the_encoder() {
+        assert!(EncoderVerdict::Usable.is_usable());
+        assert!(!EncoderVerdict::CannotEncode.is_usable());
+        assert!(!EncoderVerdict::NotRegistered.is_usable());
     }
 }

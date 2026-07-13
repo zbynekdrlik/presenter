@@ -14,12 +14,14 @@ Group=newlevel
 SupplementaryGroups=render video
 WorkingDirectory=/opt/presenter-dev
 # #339/#539: encoder-ready gate — same script as prod (see presenter.service for the
-# full incident context). It skips the wait when the host has no usable GPU and knows
-# the modern nvcodec encoders (#541); it always exits 0.
-ExecStartPre=-/opt/presenter-dev/wait-for-h264-encoder.sh
+# full incident context). It skips the wait when the host has no usable GPU, knows the
+# modern nvcodec encoders (#541), and forces a real plugin rescan on every poll (#547);
+# it always exits 0. `timeout` hard-bounds it so a wedged driver cannot fail the unit.
+ExecStartPre=-/usr/bin/timeout 80 /opt/presenter-dev/wait-for-h264-encoder.sh
 ExecStart=/opt/presenter-dev/presenter-server
 Restart=always
 RestartSec=5
+TimeoutStartSec=120
 
 # Environment
 Environment=PRESENTER_PORT=8080
