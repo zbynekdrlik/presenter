@@ -377,6 +377,34 @@ mod tests {
         );
     }
 
+    /// The card HEADER badge told the same lie the row badges no longer tell: it is painted
+    /// from a plain `bool` initialised to `false`, so every load of a perfectly healthy
+    /// server flashed "NDI Unavailable" (and hid the "on the network now" list) until the
+    /// first poll landed — and stayed there forever if that poll errored.
+    #[test]
+    fn the_header_badge_says_checking_until_the_first_poll_answers() {
+        assert_eq!(header_badge_label(None), "Checking…");
+        assert_eq!(header_badge_label(Some(true)), "NDI Available");
+        assert_eq!(header_badge_label(Some(false)), "NDI Unavailable");
+    }
+
+    /// …and it must not wear the RED "off" class while it is merely waiting.
+    #[test]
+    fn the_header_badge_is_not_red_while_it_is_still_checking() {
+        assert_eq!(
+            header_badge_class(None),
+            "settings__badge settings__badge--checking"
+        );
+        assert_eq!(
+            header_badge_class(Some(true)),
+            "settings__badge settings__badge--ok"
+        );
+        assert_eq!(
+            header_badge_class(Some(false)),
+            "settings__badge settings__badge--off"
+        );
+    }
+
     #[test]
     fn class_is_built_from_the_state() {
         assert_eq!(

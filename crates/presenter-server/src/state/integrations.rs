@@ -762,13 +762,19 @@ mod tests {
         );
     }
 
-    /// Deep review 🟡 #2: a discovery FAILURE leaves us blind. Degrading it to an empty
-    /// network would make a broken server tell the operator that every sending machine
-    /// at the site is off — the exact false accusation this module exists to prevent.
+    /// Deep review 🟡 #2: a blind finder leaves us blind. Degrading it to an empty network
+    /// would make a broken server tell the operator that every sending machine at the site
+    /// is off — the exact false accusation this module exists to prevent.
+    ///
+    /// The FIRST cut of this fix keyed on `discover_sources()` returning `Err` — which the
+    /// real `NdiManager` never does (it is `Ok(self.source_list.read())`). So the blindness
+    /// production ACTUALLY has — the finder thread never started (`NDIlib_find_create_v2`
+    /// returned null), or has not completed its first scan yet (every restart) — still read
+    /// as an empty network. The seam now asks the finder whether it has ever scanned.
     #[tokio::test]
-    async fn video_source_status_says_unknown_when_discovery_itself_fails() {
+    async fn video_source_status_says_unknown_when_the_finder_has_never_scanned() {
         let (state, _source_id, _id, fake) = state_with_fake(StartOutcome::Ok).await;
-        fake.fail_discovery();
+        fake.finder_never_scanned();
 
         let snapshot = state.video_source_status().await.expect("status snapshot");
 
@@ -781,6 +787,28 @@ mod tests {
             snapshot.sources.first().map(|s| s.state),
             Some("unknown"),
             "a discovery failure must never render as 'not found on the network'",
+        );
+    }
+
+    /// The other half of the same rule: once the finder HAS scanned, an empty list is a
+    /// fact about the network — nothing is broadcasting — and the mapped source really is
+    /// not found. Blindness must not swallow the genuine PP answer.
+    #[tokio::test]
+    async fn video_source_status_still_says_not_found_when_a_scanned_network_is_empty() {
+        let (state, source_id, _id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+        fake.set_discovered(&[]); // the finder looked; nobody is on the air
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("a silent source still activates (#448)");
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+
+        assert!(snapshot.ndi_available, "we CAN see the network — it is just empty");
+        assert_eq!(
+            snapshot.sources.first().map(|s| s.state),
+            Some("not-found"),
+            "a scanned, empty network means the mapped name really is not there",
         );
     }
 

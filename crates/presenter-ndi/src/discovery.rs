@@ -124,18 +124,18 @@ fn run_finder_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, RwLock};
 
     #[test]
     fn source_list_read_returns_current_snapshot() {
-        let list = SourceList(Arc::new(RwLock::new(vec![
+        let list = SourceList::new();
+        list.publish(vec![
             NdiSourceInfo {
                 name: "SRC-A".into(),
             },
             NdiSourceInfo {
                 name: "SRC-B".into(),
             },
-        ])));
+        ]);
         let snapshot = list.read();
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot[0].name, "SRC-A");
@@ -143,24 +143,62 @@ mod tests {
 
     #[test]
     fn source_list_update_replaces_contents() {
-        let inner = Arc::new(RwLock::new(vec![NdiSourceInfo { name: "OLD".into() }]));
-        let list = SourceList(Arc::clone(&inner));
-        {
-            let mut w = inner.write().unwrap();
-            *w = vec![
-                NdiSourceInfo {
-                    name: "NEW-1".into(),
-                },
-                NdiSourceInfo {
-                    name: "NEW-2".into(),
-                },
-                NdiSourceInfo {
-                    name: "NEW-3".into(),
-                },
-            ];
-        }
+        let list = SourceList::new();
+        list.publish(vec![NdiSourceInfo { name: "OLD".into() }]);
+        list.publish(vec![
+            NdiSourceInfo {
+                name: "NEW-1".into(),
+            },
+            NdiSourceInfo {
+                name: "NEW-2".into(),
+            },
+            NdiSourceInfo {
+                name: "NEW-3".into(),
+            },
+        ]);
         let snapshot = list.read();
         assert_eq!(snapshot.len(), 3);
         assert_eq!(snapshot[0].name, "NEW-1");
+    }
+
+    /// THE REAL BLINDNESS (deep-review of the #546 fix). A finder that never came up —
+    /// `NDIlib_find_create_v2` returned null, so `run_finder_loop` returns immediately and
+    /// the list stays empty FOREVER — is not a network with nothing on it. Before this, the
+    /// server reported that empty list as fact and told the operator that every sending
+    /// machine at the site was switched off.
+    #[test]
+    fn a_finder_that_has_never_scanned_has_no_snapshot_at_all() {
+        let list = SourceList::new();
+        assert_eq!(
+            list.snapshot(),
+            None,
+            "no scan has completed — we are BLIND, not looking at an empty network",
+        );
+        // …and the best-effort read (used by /ndi/sources) still answers, as before.
+        assert!(list.read().is_empty());
+    }
+
+    /// Once the finder has completed one scan, an empty list IS a fact about the network:
+    /// nothing is broadcasting. That must stay distinguishable from blindness.
+    #[test]
+    fn an_empty_network_after_a_completed_scan_is_a_fact_not_blindness() {
+        let list = SourceList::new();
+        list.publish(Vec::new());
+        assert_eq!(
+            list.snapshot(),
+            Some(Vec::new()),
+            "the finder looked and found nothing — that is an empty network",
+        );
+    }
+
+    #[test]
+    fn a_snapshot_carries_what_the_finder_published() {
+        let list = SourceList::new();
+        list.publish(vec![NdiSourceInfo {
+            name: "STREAM-PP (stream)".into(),
+        }]);
+        let snapshot = list.snapshot().expect("the finder has scanned");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].name, "STREAM-PP (stream)");
     }
 }
