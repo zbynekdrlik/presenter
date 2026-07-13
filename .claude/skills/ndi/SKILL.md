@@ -357,6 +357,28 @@ curl -s http://$H/healthz | jq .ndi_pipelines      # [] = nothing producing; [{s
 by the auto-reconnect loop even when the NDI source is silent. Proof of flow is
 `healthz.ndi_pipelines[].state == "streaming"`, nothing less.
 
+### `gst-inspect --exists` answers from the registry CACHE — it is not a plugin scan (#547)
+
+This burned a whole class of "fix" that could never have worked, so keep it in mind for anything
+that polls GStreamer:
+
+- `gst-inspect-1.0 --exists <element>` is a **lookup in the cached registry file** (`$GST_REGISTRY`),
+  not a plugin load. Measured on dev2: **14 ms warm vs 916 ms cold** (only the cold run emits
+  `vaInitialize`). So a poll loop built on it performs ONE real scan and then re-reads that same
+  verdict — it can **never observe a late-registering encoder**, which is the entire reason a
+  boot-time gate exists.
+- `GST_REGISTRY_UPDATE=yes` does **not** save you: it only rescans plugins whose **file** changed.
+  A permission change (#540) or a driver change leaves the plugin file untouched, so a cached
+  "va has 0 features" verdict survives it forever (that IS #544).
+- **The only way to force a real rescan is to DELETE the registry file** — which is what the
+  encoder gate now does before every poll, and what every deploy does before starting the service.
+- A name lookup also answers a different question than the server asks. Since #541 the server only
+  trusts an encoder after a **real one-frame encode** (`videotestsrc num-buffers=1 ! … ! <enc> !
+  fakesink`). Probe the same way, or the gate green-lights an encoder the server then rejects.
+- Bound every gst call with `timeout`. A wedged driver (#445) makes one hang forever; inside an
+  `ExecStartPre` that hangs the unit past `TimeoutStartSec` and **fails the whole service** — the
+  `-` prefix only ignores a non-zero exit, not a start timeout.
+
 ### Probing WHEP yourself: use `channel: "chrome"`, never bundled Chromium
 
 Playwright's bundled Chromium has **no H264** — the server correctly rejects its offer with
