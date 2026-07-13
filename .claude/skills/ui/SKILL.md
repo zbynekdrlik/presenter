@@ -67,3 +67,32 @@ children=move |(idx, _entry)| {
   (`StageStateRequest.entry_index`). The sidebar resolves it via
   `worship_pp_helpers::active_sidebar_index(entries, snapshot_active_index)`
   (explicit index, fallback to first `is_active`). Don't re-derive by name/id.
+
+## Per-row live state in a `<For>`: key on identity, read the state through a `Memo`
+
+Keying a row on its live state (`format!("{id}-{state}")`) makes every state flap destroy and rebuild
+the whole row — buttons included. Key on identity (`id`, plus anything that changes the row's
+CONTROLS, e.g. `is_active`) and let the badge/hint read the state reactively.
+
+A plain closure capturing a `String` id is **not `Copy`**, so it cannot be moved into the four places
+that need it (class, `data-*`, text, hint). A `Memo` **is** `Copy`:
+
+```rust
+let row_id = source.id.clone();
+let status = Memo::new(move |_| statuses.with(|l| l.iter().find(|s| s.id == row_id).cloned()));
+let state_str = move || status.get().map(|s| s.state).unwrap_or_default();   // Copy closure ✓
+```
+The DTO must then derive `PartialEq` (Memo requires it). And `data-state=state_str` — NOT
+`data-state=move || state_str()`, which clippy rejects as a redundant closure.
+
+**A missing entry is not an error state.** `unwrap_or_default()` yields `""` on first paint and for a
+row added since the last poll — render that as a neutral "Checking…", never as the failure copy
+("NDI unavailable"), or a healthy server accuses itself for one frame (or forever, if the poll errors).
+
+**`on_cleanup` does not work for a `gloo_timers` Interval** in this crate: the Interval is not `Send`,
+and leptos' `on_cleanup` requires `Send` for the crate's **host** (non-wasm) test build, which is how
+`cargo test --lib` runs here. Use `interval.forget()`, like every other poller on the settings page —
+the timer dies with the page navigation (there is no client-side router).
+
+Reminder: this crate is **excluded from the workspace** — `cargo test -p presenter-ui` fails.
+Run `cd crates/presenter-ui && cargo test --lib`.
