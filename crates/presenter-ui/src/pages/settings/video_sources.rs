@@ -40,6 +40,45 @@ pub(crate) fn status_class(state: &str) -> String {
     format!("settings__status settings__status--{modifier}")
 }
 
+/// How many CONSECUTIVE status-poll failures mean the card is genuinely stale — as opposed
+/// to a single blip (the page being torn down mid-fetch, a redeploy restarting the server).
+///
+/// A poll error must never be swallowed: stale badges the operator trusts are worse than no
+/// badges. But it must not scream at the first hiccup either — an in-flight fetch aborted by
+/// a page navigation is not an outage, and treating it as one filled the console (and failed
+/// the zero-console-noise E2E guards) every time a page closed. So: one failure is tolerated
+/// silently, two in a row and the card admits it does not know — the badges fall back to
+/// "Checking…" and the failure is logged once.
+pub(crate) const STALE_AFTER_FAILURES: u32 = 2;
+
+/// Is the card's data stale after this many consecutive poll failures?
+pub(crate) fn is_stale(consecutive_failures: u32) -> bool {
+    consecutive_failures >= STALE_AFTER_FAILURES
+}
+
+/// The card-header badge: does this server see the NDI network at all?
+///
+/// `None` = the first status poll has not answered yet. It must NOT read as the failure
+/// copy — that painted a red "NDI Unavailable" across a perfectly healthy server on every
+/// page load, and left it there forever if the poll errored. Same lie the row badges tell
+/// no more; the header was simply missed the first time round.
+pub(crate) fn header_badge_label(available: Option<bool>) -> &'static str {
+    match available {
+        None => "Checking…",
+        Some(true) => "NDI Available",
+        Some(false) => "NDI Unavailable",
+    }
+}
+
+/// The header badge's class. Neutral while checking — never the red "off" modifier.
+pub(crate) fn header_badge_class(available: Option<bool>) -> &'static str {
+    match available {
+        None => "settings__badge settings__badge--checking",
+        Some(true) => "settings__badge settings__badge--ok",
+        Some(false) => "settings__badge settings__badge--off",
+    }
+}
+
 /// What the operator should DO about this state — shown under the row. `None` when the
 /// state needs no action (live / ready / connecting).
 ///
@@ -63,11 +102,14 @@ pub(crate) fn status_hint(state: &str) -> Option<&'static str> {
 #[component]
 pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
     let sources = RwSignal::new(Vec::<VideoSourceDto>::new());
-    let ndi_available = RwSignal::new(false);
+    // `None` until the first poll answers — see `header_badge_label`.
+    let ndi_available = RwSignal::new(None::<bool>);
     let discovered = RwSignal::new(Vec::<String>::new());
     let statuses = RwSignal::new(Vec::<VideoSourceStatusDto>::new());
     let new_label = RwSignal::new(String::new());
     let new_ndi_name = RwSignal::new(String::new());
+    // Consecutive status-poll failures — see `STALE_AFTER_FAILURES`.
+    let poll_failures = RwSignal::new(0u32);
 
     // #546: one call answers all three questions the operator has — can this server see
     // the NDI network, what is ON it, and is each mapped source actually working. Polled
@@ -77,13 +119,30 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match ndi::get_video_source_status().await {
                 Ok(status) => {
-                    ndi_available.set(status.ndi_available);
+                    poll_failures.set(0);
+                    ndi_available.set(Some(status.ndi_available));
                     discovered.set(status.discovered);
                     statuses.set(status.sources);
                 }
-                // Never swallow this: a failing poll means the badges are stale, and the
-                // whole point of the card is that the operator can trust what it says.
-                Err(err) => leptos::logging::warn!("video-source status poll failed: {err}"),
+                // Never swallow this: badges the operator trusts must not silently go stale.
+                // But one failure is a blip (a page being torn down mid-fetch is not an
+                // outage) — see `STALE_AFTER_FAILURES`. On the second in a row the card drops
+                // back to "Checking…" and says so, once.
+                Err(err) => {
+                    let failures = poll_failures.get_untracked() + 1;
+                    poll_failures.set(failures);
+                    if is_stale(failures) {
+                        if !is_stale(failures - 1) {
+                            leptos::logging::warn!(
+                                "video-source status poll failed {failures}x in a row — \
+                                 showing the card as unknown rather than stale: {err}"
+                            );
+                        }
+                        ndi_available.set(None);
+                        discovered.set(Vec::new());
+                        statuses.set(Vec::new());
+                    }
+                }
             }
         });
     };
@@ -122,7 +181,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             match ndi::get_video_source_status().await {
                 Ok(status) => {
                     let count = status.discovered.len();
-                    ndi_available.set(status.ndi_available);
+                    ndi_available.set(Some(status.ndi_available));
                     discovered.set(status.discovered);
                     statuses.set(status.sources);
                     toast.show(&format!("Found {count} NDI source(s)"), "info");
@@ -199,12 +258,9 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     <p>"Configure NDI sources for stage display"</p>
                 </div>
                 <div class="settings__badge-group">
-                    <span class=move || if ndi_available.get() {
-                        "settings__badge settings__badge--ok"
-                    } else {
-                        "settings__badge settings__badge--off"
-                    }>
-                        {move || if ndi_available.get() { "NDI Available" } else { "NDI Unavailable" }}
+                    <span class=move || header_badge_class(ndi_available.get())
+                        data-role="ndi-header-badge">
+                        {move || header_badge_label(ndi_available.get())}
                     </span>
                 </div>
             </header>
@@ -214,18 +270,13 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     // Keyed on identity, NOT on the live state: the badge, hint and detail
                     // below read `statuses` through reactive closures, so they update on
                     // every poll without destroying and rebuilding the row (and its buttons).
-                    key=|s: &VideoSourceDto| format!("{}-{}", s.id, s.is_active)
+                    key=|s: &VideoSourceDto| s.id.clone()
                     children=move |source: VideoSourceDto| {
-                        let dot_class = if source.is_active {
-                            "settings__source-dot settings__source-dot--active"
-                        } else {
-                            "settings__source-dot"
-                        };
                         let id_activate = source.id.clone();
                         let id_delete = source.id.clone();
                         let id_status = source.id.clone();
                         let id_hint = source.id.clone();
-                        let is_active = source.is_active;
+                        let listed_active = source.is_active;
 
                         // This row's live status, re-read on every poll. A `Memo` (not a plain
                         // closure) because it is `Copy`, so the badge, the class, the hint and
@@ -237,6 +288,20 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                         });
                         let state_str = move || status.get().map(|st| st.state).unwrap_or_default();
                         let detail = move || status.get().and_then(|st| st.detail);
+                        // The DOT and the BUTTON come from the POLLED status, not from the
+                        // `sources` list — that list is only refetched by this tab's own
+                        // actions, so activating from a second tab (or Companion) used to leave
+                        // this row's badge saying "Live" next to a grey dot and an "Activate"
+                        // button, forever, until a manual reload. Fall back to the listed value
+                        // only until the first poll lands.
+                        let is_active = move || {
+                            status.get().map(|st| st.is_active).unwrap_or(listed_active)
+                        };
+                        let dot_class = move || if is_active() {
+                            "settings__source-dot settings__source-dot--active"
+                        } else {
+                            "settings__source-dot"
+                        };
                         view! {
                             <div class="settings__source-item" data-role="video-source-row"
                                 data-source-id=source.id.clone()>
@@ -262,15 +327,16 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                     data-state=state_str>
                                     {move || status_label(&state_str())}
                                 </span>
-                                {if is_active {
+                                {move || if is_active() {
                                     view! {
                                         <button class="settings__btn settings__btn--active"
                                             on:click=move |_| deactivate(())>"ACTIVE"</button>
                                     }.into_any()
                                 } else {
+                                    let id = id_activate.clone();
                                     view! {
                                         <button class="settings__btn settings__btn--activate"
-                                            on:click=move |_| activate(id_activate.clone())>"Activate"</button>
+                                            on:click=move |_| activate(id.clone())>"Activate"</button>
                                     }.into_any()
                                 }}
                                 <button class="settings__btn settings__btn--delete"
@@ -283,7 +349,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             // What is ACTUALLY on the network, right next to what is mapped. This one line
             // is what turns "RESOLUME-PP (cg-obs) vs STREAM-PP (stream)" from a two-hour
             // investigation into something the operator spots at a glance (#546).
-            <Show when=move || ndi_available.get()>
+            <Show when=move || ndi_available.get() == Some(true)>
                 <div class="settings__discovered" data-role="ndi-discovered">
                     <span class="settings__discovered-title">"On the network now: "</span>
                     <Show
@@ -374,6 +440,44 @@ mod tests {
         assert_eq!(
             status_class(""),
             "settings__status settings__status--checking"
+        );
+    }
+
+    /// A single failed poll is a blip — a page torn down mid-fetch, a server restarting
+    /// during a deploy. Two in a row means the card genuinely does not know any more.
+    #[test]
+    fn one_failed_poll_is_a_blip_two_in_a_row_is_stale() {
+        assert!(!is_stale(0));
+        assert!(!is_stale(1), "a single failure must not blank the card or shout");
+        assert!(is_stale(2));
+        assert!(is_stale(7));
+    }
+
+    /// The card HEADER badge told the same lie the row badges no longer tell: it is painted
+    /// from a plain `bool` initialised to `false`, so every load of a perfectly healthy
+    /// server flashed "NDI Unavailable" (and hid the "on the network now" list) until the
+    /// first poll landed — and stayed there forever if that poll errored.
+    #[test]
+    fn the_header_badge_says_checking_until_the_first_poll_answers() {
+        assert_eq!(header_badge_label(None), "Checking…");
+        assert_eq!(header_badge_label(Some(true)), "NDI Available");
+        assert_eq!(header_badge_label(Some(false)), "NDI Unavailable");
+    }
+
+    /// …and it must not wear the RED "off" class while it is merely waiting.
+    #[test]
+    fn the_header_badge_is_not_red_while_it_is_still_checking() {
+        assert_eq!(
+            header_badge_class(None),
+            "settings__badge settings__badge--checking"
+        );
+        assert_eq!(
+            header_badge_class(Some(true)),
+            "settings__badge settings__badge--ok"
+        );
+        assert_eq!(
+            header_badge_class(Some(false)),
+            "settings__badge settings__badge--off"
         );
     }
 

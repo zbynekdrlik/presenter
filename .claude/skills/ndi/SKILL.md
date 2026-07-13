@@ -404,3 +404,32 @@ NDI_RUNTIME_DIR_V6=/usr/lib/ndi PRESENTER_NDI_TEST_NAME=PRESENTER-TEST \
 
 Clean up afterwards (`/deactivate`, `DELETE` the source, pid-targeted `kill` of the sender — never
 `pkill -f`, it matches your own shell).
+
+---
+
+## "No pipeline in the snapshot map" is NOT "the source is silent" (#546)
+
+`NdiManager::pipeline_snapshots()` gives up on the `active` mutex after **200 ms** and returns an
+**empty vec** — while `start_pipeline` HOLDS that same mutex across its **8 s caps-wait**. So during
+EVERY normal activation the map reads as empty. Any consumer that treats "no entry" as a fact about
+the SOURCE (rather than about our ability to LOOK) will report a perfectly healthy activation as
+"broadcaster silent" for those 8 seconds.
+
+Use **`pipeline_snapshots_checked() -> Option<Vec<..>>`** when the answer is shown to a human:
+`None` = the lock timed out (the manager is busy, almost always starting a pipeline) → say
+*Connecting*; `Some(vec![])` = we looked and there really is nothing → the silent-broadcaster case
+(#448). `pipeline_snapshots()` (the `unwrap_or_default()` wrapper) is fine for `/healthz`, which only
+wants a best-effort list and must never stall.
+
+Same shape one level up: a **discovery failure** (`discover_sources` errors, or the finder thread
+never came up because `NDIlib_find_create_v2` returned null) is NOT an empty network. Degrading it to
+"nothing is on the air" makes a broken server tell the operator that every sending machine at the
+site is off. Model the two apart (`Discovery::Blind` vs `Discovery::Names(..)`) and say *NDI
+unavailable*, never *not found on the network*, when blind. The classifier that encodes all of this
+is `presenter-server/src/state/video_source_status.rs` — pure, unit-tested, and the rule ORDER is the
+part that lies to the operator when it is wrong.
+
+**E2E consequence:** never hard-assert `ndiAvailable === false` in a default-lane spec. The GitHub
+runners have no libndi, **dev2 does** — and the same suite is run on dev2 before a merge. A spec that
+is green only on one host is not a guard. Branch on what the server reports about itself
+(`tests/e2e/video-source-status.spec.ts`), and assert something real in both branches.

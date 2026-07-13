@@ -69,8 +69,21 @@ impl NdiManager {
         true
     }
 
+    /// Best-effort list of NDI sources — empty both when nothing is broadcasting AND when
+    /// the finder has not looked. `GET /ndi/sources` uses this.
     pub fn discover_sources(&self, _timeout_ms: u32) -> Result<Vec<discovery::NdiSourceInfo>> {
         Ok(self.source_list.read())
+    }
+
+    /// What the finder has actually SEEN — `None` when it has never completed a scan
+    /// (it failed to start, or has not finished its first ~5 s pass since startup).
+    ///
+    /// Anything that shows the answer to a human must use this, not
+    /// [`Self::discover_sources`]: an empty list from a finder that never looked is
+    /// blindness, and reporting it as an empty network makes the server accuse every
+    /// sending machine at the site of being switched off (#546).
+    pub fn discovery_snapshot(&self) -> Option<Vec<discovery::NdiSourceInfo>> {
+        self.source_list.snapshot()
     }
 
     /// Start a pipeline for the given source.

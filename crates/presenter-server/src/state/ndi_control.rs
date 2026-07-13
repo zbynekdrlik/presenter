@@ -89,7 +89,7 @@ impl NdiManagerHandle {
         }
     }
 
-    /// Forward to [`NdiManager::discover_sources`].
+    /// Forward to [`NdiManager::discover_sources`] — best-effort, empty when blind.
     pub(crate) fn discover_sources(
         &self,
         timeout_ms: u32,
@@ -97,7 +97,19 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.discover_sources(timeout_ms),
             #[cfg(test)]
-            Self::Fake(f) => f.discovered(),
+            Self::Fake(f) => Ok(f.discovery_snapshot().unwrap_or_default()),
+        }
+    }
+
+    /// Forward to [`NdiManager::discovery_snapshot`] — `None` when the finder has never
+    /// completed a scan, which the #546 status join must NOT read as an empty network.
+    pub(crate) fn discovery_snapshot(
+        &self,
+    ) -> Option<Vec<presenter_ndi::discovery::NdiSourceInfo>> {
+        match self {
+            Self::Real(m) => m.discovery_snapshot(),
+            #[cfg(test)]
+            Self::Fake(f) => f.discovery_snapshot(),
         }
     }
 
@@ -183,8 +195,9 @@ pub(crate) struct FakeNdiControl {
     /// `true` = the manager's lock is held (it is busy starting a pipeline), so the
     /// snapshot map cannot be read at all — the real 200 ms-timeout path.
     snapshots_unreadable: Mutex<bool>,
-    /// `true` = the NDI finder errors out, so this server cannot see the network.
-    discovery_fails: Mutex<bool>,
+    /// `true` = the finder has never completed a scan (it failed to start, or the server
+    /// has only just booted), so this server cannot see the network at all (#546).
+    finder_never_scanned: Mutex<bool>,
 }
 
 /// One recorded call against [`FakeNdiControl`].
@@ -242,22 +255,32 @@ impl FakeNdiControl {
             .push((source_id.to_string(), state));
     }
 
-    /// Make NDI discovery FAIL — the server is blind, not looking at an empty network (#546).
-    pub(crate) fn fail_discovery(&self) {
-        *self.discovery_fails.lock().expect("discovery_fails lock") = true;
+    /// The finder has never completed a scan — the server is BLIND, which is a different
+    /// fact from "the network is empty" (#546). This is the state a server is in when
+    /// `NDIlib_find_create_v2` returned null (forever) or has just booted (transiently).
+    pub(crate) fn finder_never_scanned(&self) {
+        *self
+            .finder_never_scanned
+            .lock()
+            .expect("finder_never_scanned lock") = true;
     }
 
-    fn discovered(&self) -> anyhow::Result<Vec<presenter_ndi::discovery::NdiSourceInfo>> {
-        if *self.discovery_fails.lock().expect("discovery_fails lock") {
-            return Err(anyhow::anyhow!("NDI finder unavailable"));
-        }
-        Ok(self
-            .discovered
+    fn discovery_snapshot(&self) -> Option<Vec<presenter_ndi::discovery::NdiSourceInfo>> {
+        if *self
+            .finder_never_scanned
             .lock()
-            .expect("discovered lock")
-            .iter()
-            .map(|name| presenter_ndi::discovery::NdiSourceInfo { name: name.clone() })
-            .collect())
+            .expect("finder_never_scanned lock")
+        {
+            return None;
+        }
+        Some(
+            self.discovered
+                .lock()
+                .expect("discovered lock")
+                .iter()
+                .map(|name| presenter_ndi::discovery::NdiSourceInfo { name: name.clone() })
+                .collect(),
+        )
     }
 
     /// Simulate the manager being BUSY (mid `start_pipeline`): its lock is held, so the
