@@ -405,6 +405,12 @@ body.settings {
   max-width: 46ch;
 }
 
+/* The header badge before the first status poll answers — neutral, never the red "off". */
+.settings__badge--checking {
+  background: #e2e8f0;
+  color: #475569;
+}
+
 /* The pipeline's own error text, when it has one — the most specific "why" available. */
 .settings__source-detail {
   margin-top: 2px;

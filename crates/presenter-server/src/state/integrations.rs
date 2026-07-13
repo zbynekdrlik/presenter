@@ -292,13 +292,19 @@ impl AppState {
             });
         };
 
-        let discovered: Option<Vec<String>> = match manager.discover_sources(0) {
-            Ok(sources) => Some(sources.into_iter().map(|s| s.name).collect()),
-            Err(e) => {
-                tracing::warn!(error = %e, "NDI discovery failed while reading source status");
-                None
-            }
-        };
+        // `None` = the finder has never completed a scan (it failed to start, or we have
+        // only just booted). That is BLINDNESS, not an empty network — and the difference
+        // is the whole ticket: an empty list reported as fact makes the page tell the
+        // operator that every sending machine at the site is switched off.
+        let discovered: Option<Vec<String>> = manager
+            .discovery_snapshot()
+            .map(|sources| sources.into_iter().map(|s| s.name).collect());
+        if discovered.is_none() {
+            tracing::warn!(
+                "NDI finder has not completed a scan — reporting the network as unseen \
+                 rather than empty (#546)"
+            );
+        }
 
         // `None` = the manager's lock was held past our budget (it is busy building a
         // pipeline), which is NOT the same fact as "there are no pipelines".
@@ -804,7 +810,10 @@ mod tests {
 
         let snapshot = state.video_source_status().await.expect("status snapshot");
 
-        assert!(snapshot.ndi_available, "we CAN see the network — it is just empty");
+        assert!(
+            snapshot.ndi_available,
+            "we CAN see the network — it is just empty"
+        );
         assert_eq!(
             snapshot.sources.first().map(|s| s.state),
             Some("not-found"),

@@ -79,7 +79,10 @@ test("status endpoint joins the rows, the network and the pipelines", async ({
   const body = await readStatus(request);
 
   const entry = body.sources.find((s: any) => s.id === source.id);
-  expect(entry, "the created source must appear in the status snapshot").toBeTruthy();
+  expect(
+    entry,
+    "the created source must appear in the status snapshot",
+  ).toBeTruthy();
   expect(entry.ndiName).toBe(GHOST);
 
   if (body.ndiAvailable) {
@@ -106,7 +109,9 @@ test("the settings card shows the source's status badge", async ({
   const ndiAvailable: boolean = (await readStatus(request)).ndiAvailable;
 
   await page.goto(new URL("/ui/settings", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 60_000 });
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 60_000,
+  });
 
   const badge = page.locator(
     `[data-role="video-source-status"][data-source-id="${source.id}"]`,
@@ -116,7 +121,9 @@ test("the settings card shows the source's status badge", async ({
   );
 
   if (ndiAvailable) {
-    await expect(badge).toHaveText("Not found on the network", { timeout: 30_000 });
+    await expect(badge).toHaveText("Not found on the network", {
+      timeout: 30_000,
+    });
     await expect(badge).toHaveAttribute("data-state", "not-found");
     // The sentence that would have ended the PP outage in a minute.
     await expect(hint).toContainText("not on the network", { timeout: 30_000 });
@@ -130,5 +137,58 @@ test("the settings card shows the source's status badge", async ({
     await expect(page.locator('[data-role="ndi-discovered"]')).toHaveCount(0);
   }
 
+  // The card HEADER must agree with the server, and must never sit on the red failure
+  // copy — it used to be a bool initialised to false, so a healthy server painted "NDI
+  // Unavailable" on every load until the first poll landed.
+  const headerBadge = page.locator('[data-role="ndi-header-badge"]');
+  await expect(headerBadge).toHaveText(
+    ndiAvailable ? "NDI Available" : "NDI Unavailable",
+    { timeout: 30_000 },
+  );
+
   expect(errors, `console errors: ${errors.join(" | ")}`).toEqual([]);
+});
+
+// The row's dot and ACTIVE/Activate button used to come from a list only THIS tab
+// refetches — so an activation from anywhere else (a second tab, Companion) left the row
+// contradicting its own badge until a manual reload. They now come from the same polled
+// status the badge does.
+test("the row's active state follows the server, not this tab's own actions", async ({
+  page,
+  request,
+}) => {
+  const source = await createSource(request, "cam-elsewhere", GHOST);
+
+  await page.goto(new URL("/ui/settings", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 60_000,
+  });
+
+  const row = page.locator(
+    `[data-role="video-source-row"][data-source-id="${source.id}"]`,
+  );
+  await expect(row.locator(".settings__btn--activate")).toBeVisible({
+    timeout: 30_000,
+  });
+
+  // Activate OUT OF BAND — as another operator's tab or Companion would. A source whose
+  // broadcaster is silent still ACTIVATES (#448), with or without the NDI SDK, so this is
+  // deterministic on both lanes.
+  const res = await request.post(
+    new URL(
+      `/integrations/video-sources/${source.id}/activate`,
+      baseURL,
+    ).toString(),
+  );
+  expect(res.status()).toBe(200);
+  const entry = (await readStatus(request)).sources.find(
+    (s: any) => s.id === source.id,
+  );
+  expect(entry.isActive, "the server considers the source active").toBe(true);
+
+  // No reload, no click in this tab: the 5s poll alone must bring the row in line.
+  await expect(row.locator(".settings__btn--active")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(row.locator(".settings__source-dot--active")).toHaveCount(1);
 });

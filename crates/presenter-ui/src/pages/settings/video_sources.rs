@@ -40,6 +40,29 @@ pub(crate) fn status_class(state: &str) -> String {
     format!("settings__status settings__status--{modifier}")
 }
 
+/// The card-header badge: does this server see the NDI network at all?
+///
+/// `None` = the first status poll has not answered yet. It must NOT read as the failure
+/// copy — that painted a red "NDI Unavailable" across a perfectly healthy server on every
+/// page load, and left it there forever if the poll errored. Same lie the row badges tell
+/// no more; the header was simply missed the first time round.
+pub(crate) fn header_badge_label(available: Option<bool>) -> &'static str {
+    match available {
+        None => "Checking…",
+        Some(true) => "NDI Available",
+        Some(false) => "NDI Unavailable",
+    }
+}
+
+/// The header badge's class. Neutral while checking — never the red "off" modifier.
+pub(crate) fn header_badge_class(available: Option<bool>) -> &'static str {
+    match available {
+        None => "settings__badge settings__badge--checking",
+        Some(true) => "settings__badge settings__badge--ok",
+        Some(false) => "settings__badge settings__badge--off",
+    }
+}
+
 /// What the operator should DO about this state — shown under the row. `None` when the
 /// state needs no action (live / ready / connecting).
 ///
@@ -63,7 +86,8 @@ pub(crate) fn status_hint(state: &str) -> Option<&'static str> {
 #[component]
 pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
     let sources = RwSignal::new(Vec::<VideoSourceDto>::new());
-    let ndi_available = RwSignal::new(false);
+    // `None` until the first poll answers — see `header_badge_label`.
+    let ndi_available = RwSignal::new(None::<bool>);
     let discovered = RwSignal::new(Vec::<String>::new());
     let statuses = RwSignal::new(Vec::<VideoSourceStatusDto>::new());
     let new_label = RwSignal::new(String::new());
@@ -77,7 +101,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match ndi::get_video_source_status().await {
                 Ok(status) => {
-                    ndi_available.set(status.ndi_available);
+                    ndi_available.set(Some(status.ndi_available));
                     discovered.set(status.discovered);
                     statuses.set(status.sources);
                 }
@@ -122,7 +146,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             match ndi::get_video_source_status().await {
                 Ok(status) => {
                     let count = status.discovered.len();
-                    ndi_available.set(status.ndi_available);
+                    ndi_available.set(Some(status.ndi_available));
                     discovered.set(status.discovered);
                     statuses.set(status.sources);
                     toast.show(&format!("Found {count} NDI source(s)"), "info");
@@ -199,12 +223,9 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     <p>"Configure NDI sources for stage display"</p>
                 </div>
                 <div class="settings__badge-group">
-                    <span class=move || if ndi_available.get() {
-                        "settings__badge settings__badge--ok"
-                    } else {
-                        "settings__badge settings__badge--off"
-                    }>
-                        {move || if ndi_available.get() { "NDI Available" } else { "NDI Unavailable" }}
+                    <span class=move || header_badge_class(ndi_available.get())
+                        data-role="ndi-header-badge">
+                        {move || header_badge_label(ndi_available.get())}
                     </span>
                 </div>
             </header>
@@ -214,18 +235,13 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     // Keyed on identity, NOT on the live state: the badge, hint and detail
                     // below read `statuses` through reactive closures, so they update on
                     // every poll without destroying and rebuilding the row (and its buttons).
-                    key=|s: &VideoSourceDto| format!("{}-{}", s.id, s.is_active)
+                    key=|s: &VideoSourceDto| s.id.clone()
                     children=move |source: VideoSourceDto| {
-                        let dot_class = if source.is_active {
-                            "settings__source-dot settings__source-dot--active"
-                        } else {
-                            "settings__source-dot"
-                        };
                         let id_activate = source.id.clone();
                         let id_delete = source.id.clone();
                         let id_status = source.id.clone();
                         let id_hint = source.id.clone();
-                        let is_active = source.is_active;
+                        let listed_active = source.is_active;
 
                         // This row's live status, re-read on every poll. A `Memo` (not a plain
                         // closure) because it is `Copy`, so the badge, the class, the hint and
@@ -237,6 +253,20 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                         });
                         let state_str = move || status.get().map(|st| st.state).unwrap_or_default();
                         let detail = move || status.get().and_then(|st| st.detail);
+                        // The DOT and the BUTTON come from the POLLED status, not from the
+                        // `sources` list — that list is only refetched by this tab's own
+                        // actions, so activating from a second tab (or Companion) used to leave
+                        // this row's badge saying "Live" next to a grey dot and an "Activate"
+                        // button, forever, until a manual reload. Fall back to the listed value
+                        // only until the first poll lands.
+                        let is_active = move || {
+                            status.get().map(|st| st.is_active).unwrap_or(listed_active)
+                        };
+                        let dot_class = move || if is_active() {
+                            "settings__source-dot settings__source-dot--active"
+                        } else {
+                            "settings__source-dot"
+                        };
                         view! {
                             <div class="settings__source-item" data-role="video-source-row"
                                 data-source-id=source.id.clone()>
@@ -262,15 +292,16 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                     data-state=state_str>
                                     {move || status_label(&state_str())}
                                 </span>
-                                {if is_active {
+                                {move || if is_active() {
                                     view! {
                                         <button class="settings__btn settings__btn--active"
                                             on:click=move |_| deactivate(())>"ACTIVE"</button>
                                     }.into_any()
                                 } else {
+                                    let id = id_activate.clone();
                                     view! {
                                         <button class="settings__btn settings__btn--activate"
-                                            on:click=move |_| activate(id_activate.clone())>"Activate"</button>
+                                            on:click=move |_| activate(id.clone())>"Activate"</button>
                                     }.into_any()
                                 }}
                                 <button class="settings__btn settings__btn--delete"
@@ -283,7 +314,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             // What is ACTUALLY on the network, right next to what is mapped. This one line
             // is what turns "RESOLUME-PP (cg-obs) vs STREAM-PP (stream)" from a two-hour
             // investigation into something the operator spots at a glance (#546).
-            <Show when=move || ndi_available.get()>
+            <Show when=move || ndi_available.get() == Some(true)>
                 <div class="settings__discovered" data-role="ndi-discovered">
                     <span class="settings__discovered-title">"On the network now: "</span>
                     <Show

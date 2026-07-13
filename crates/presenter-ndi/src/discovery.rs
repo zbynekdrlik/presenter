@@ -5,21 +5,65 @@ use std::sync::{Arc, RwLock};
 use tracing::{debug, info, warn};
 
 /// A discovered NDI source on the network.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NdiSourceInfo {
     pub name: String,
 }
 
 /// Thread-safe handle to the accumulated NDI source list.
 ///
-/// Cheap to clone — internally an `Arc<RwLock<Vec>>`.
+/// Cheap to clone — internally two `Arc`s.
+///
+/// It carries TWO facts, and conflating them is the bug this type exists to prevent
+/// (#546): *what* the finder has seen, and *whether the finder has ever looked at all*.
+/// An empty list can mean "nobody is broadcasting" — or it can mean the finder never came
+/// up (`NDIlib_find_create_v2` returned null, so [`run_finder_loop`] returned immediately
+/// and the list stays empty forever) or simply has not completed its first ~5 s scan yet.
+/// Reporting the latter as "nothing is on the network" makes the server tell an operator
+/// that every sending machine at the site is switched off.
 #[derive(Clone)]
-pub struct SourceList(pub(crate) Arc<RwLock<Vec<NdiSourceInfo>>>);
+pub struct SourceList {
+    sources: Arc<RwLock<Vec<NdiSourceInfo>>>,
+    /// Set once the finder has completed a scan and published its result. Never set if the
+    /// finder failed to start.
+    scanned: Arc<AtomicBool>,
+}
 
 impl SourceList {
-    /// Read a snapshot of all currently known NDI sources.
+    pub(crate) fn new() -> Self {
+        Self {
+            sources: Arc::new(RwLock::new(Vec::new())),
+            scanned: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Best-effort read of all currently known NDI sources — empty both when the finder
+    /// found nothing AND when it has not looked. `GET /ndi/sources` uses this.
+    ///
+    /// Anything that SHOWS the answer to a human wants [`Self::snapshot`] instead.
     pub fn read(&self) -> Vec<NdiSourceInfo> {
-        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.sources
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// What the finder has seen — or `None` when it has never completed a scan, i.e. we
+    /// are BLIND and must say so rather than report an empty network (#546).
+    pub fn snapshot(&self) -> Option<Vec<NdiSourceInfo>> {
+        if !self.scanned.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some(self.read())
+    }
+
+    /// The finder publishes a completed scan. From here on the list is a FACT about the
+    /// network, empty or not.
+    pub(crate) fn publish(&self, list: Vec<NdiSourceInfo>) {
+        if let Ok(mut w) = self.sources.write() {
+            *w = list;
+        }
+        self.scanned.store(true, Ordering::SeqCst);
     }
 }
 
@@ -46,15 +90,15 @@ impl Drop for FinderShutdown {
 /// Returns a `SourceList` for reading discovered sources and a `FinderShutdown`
 /// handle that stops the thread when dropped.
 pub fn spawn_persistent_finder(sdk: Arc<NdiLib>) -> (SourceList, FinderShutdown) {
-    let sources = Arc::new(RwLock::new(Vec::new()));
-    let source_list = SourceList(Arc::clone(&sources));
+    let source_list = SourceList::new();
+    let thread_list = source_list.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = Arc::clone(&stop);
 
     let handle = std::thread::Builder::new()
         .name("ndi-finder".into())
         .spawn(move || {
-            run_finder_loop(sdk, sources, stop_clone);
+            run_finder_loop(sdk, thread_list, stop_clone);
         })
         .expect("failed to spawn NDI finder thread");
 
@@ -65,11 +109,7 @@ pub fn spawn_persistent_finder(sdk: Arc<NdiLib>) -> (SourceList, FinderShutdown)
     (source_list, shutdown)
 }
 
-fn run_finder_loop(
-    sdk: Arc<NdiLib>,
-    sources: Arc<RwLock<Vec<NdiSourceInfo>>>,
-    stop: Arc<AtomicBool>,
-) {
+fn run_finder_loop(sdk: Arc<NdiLib>, sources: SourceList, stop: Arc<AtomicBool>) {
     unsafe {
         let create_settings = NDIlib_find_create_t {
             show_local_sources: true,
@@ -110,10 +150,10 @@ fn run_finder_loop(
                 debug!("NDI sources updated: {} found", new_list.len());
             }
 
-            // Replace the source list atomically
-            if let Ok(mut w) = sources.write() {
-                *w = new_list;
-            }
+            // Publish the completed scan. This is also what marks the finder as having
+            // LOOKED at all — until the first publish, the server reports "we cannot see
+            // the network" rather than "the network is empty" (#546).
+            sources.publish(new_list);
         }
 
         (sdk.find_destroy)(finder);
