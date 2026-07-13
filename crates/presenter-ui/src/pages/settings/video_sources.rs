@@ -6,6 +6,33 @@ use super::ToastHandle;
 use crate::api::ndi::{self, VideoSourceDto};
 use crate::components::modal::confirm;
 
+/// The badge text for a source state (#546).
+///
+/// Plain operator language, not protocol language: the person reading this is standing
+/// in a church about to run a service, and the words have to tell them what to DO.
+/// An unrecognised state degrades to the honest "NDI unavailable" rather than panicking
+/// or rendering a raw wire token.
+pub(crate) fn status_label(state: &str) -> &'static str {
+    // [red] stub — the real copy lands in the GREEN commit.
+    let _ = state;
+    ""
+}
+
+/// The CSS class pair for a source state (#546).
+pub(crate) fn status_class(state: &str) -> String {
+    // [red] stub.
+    let _ = state;
+    String::new()
+}
+
+/// What the operator should DO about this state — shown under the row. `None` when the
+/// state needs no action (live / ready / connecting).
+pub(crate) fn status_hint(state: &str) -> Option<&'static str> {
+    // [red] stub.
+    let _ = state;
+    None
+}
+
 #[component]
 pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
     let sources = RwSignal::new(Vec::<VideoSourceDto>::new());
@@ -191,5 +218,69 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                 <button class="settings__btn settings__btn--add" on:click=add_source>"+ Add Source"</button>
             </div>
         </section>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The words the operator reads. The PP outage was not caused by a missing feature —
+    /// it was caused by the UI saying NOTHING while the server knew the answer. So the
+    /// copy is the deliverable, and it is pinned.
+    #[test]
+    fn every_state_has_plain_operator_copy() {
+        assert_eq!(status_label("live"), "Live");
+        assert_eq!(status_label("not-broadcasting"), "Not broadcasting");
+        assert_eq!(status_label("not-found"), "Not found on the network");
+        assert_eq!(status_label("ready"), "Ready");
+        assert_eq!(status_label("connecting"), "Connecting…");
+        assert_eq!(status_label("unknown"), "NDI unavailable");
+    }
+
+    /// A state we do not know must not render a raw wire token at the operator, and must
+    /// not panic the WASM app.
+    #[test]
+    fn an_unknown_state_degrades_instead_of_leaking_or_panicking() {
+        assert_eq!(status_label("wat"), "NDI unavailable");
+        assert_eq!(status_label(""), "NDI unavailable");
+    }
+
+    #[test]
+    fn class_is_built_from_the_state() {
+        assert_eq!(
+            status_class("not-found"),
+            "settings__status settings__status--not-found"
+        );
+        assert_eq!(
+            status_class("live"),
+            "settings__status settings__status--live"
+        );
+        assert_eq!(
+            status_class("nonsense"),
+            "settings__status settings__status--unknown",
+            "an unrecognised state must not inject an arbitrary class name"
+        );
+    }
+
+    /// Only the two BROKEN states get a hint — a hint under a working source is noise.
+    #[test]
+    fn only_the_broken_states_tell_the_operator_what_to_do() {
+        let not_found = status_hint("not-found").expect("not-found must explain itself");
+        assert!(
+            not_found.contains("not on the network"),
+            "the hint must name the actual problem: {not_found}"
+        );
+
+        let silent = status_hint("not-broadcasting").expect("not-broadcasting must explain itself");
+        assert!(
+            silent.contains("sending machine"),
+            "the hint must point at the sending machine: {silent}"
+        );
+
+        assert_eq!(status_hint("live"), None);
+        assert_eq!(status_hint("ready"), None);
+        assert_eq!(status_hint("connecting"), None);
+        assert_eq!(status_hint("unknown"), None);
     }
 }

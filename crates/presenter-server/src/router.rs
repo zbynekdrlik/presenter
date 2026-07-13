@@ -225,6 +225,13 @@ pub fn build_router(state: AppState) -> Router {
             "/integrations/video-sources/deactivate",
             post(integrations::video_source::deactivate_video_sources),
         )
+        // #546: static segment, so it must not be swallowed by `/{id}` below — axum's
+        // matchit gives static segments priority, and `video_source_status_route_is_not_shadowed`
+        // in state/tests.rs pins that.
+        .route(
+            "/integrations/video-sources/status",
+            get(integrations::video_source::video_source_status),
+        )
         .route(
             "/integrations/video-sources/{id}",
             put(integrations::video_source::update_video_source)

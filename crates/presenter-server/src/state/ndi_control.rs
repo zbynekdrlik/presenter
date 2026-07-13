@@ -97,7 +97,7 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.discover_sources(timeout_ms),
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::discover_sources is never exercised"),
+            Self::Fake(f) => Ok(f.discovered()),
         }
     }
 
@@ -108,7 +108,7 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.pipeline_snapshots().await,
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::pipeline_snapshots is never exercised"),
+            Self::Fake(f) => f.pipeline_snapshots(),
         }
     }
 
@@ -163,6 +163,10 @@ impl NdiManagerHandle {
 pub(crate) struct FakeNdiControl {
     calls: Mutex<Vec<NdiCall>>,
     start_outcome: Mutex<StartOutcome>,
+    /// What the NDI network "contains" — drives the #546 status join without libndi.
+    discovered: Mutex<Vec<String>>,
+    /// What the manager's pipeline map "holds", keyed by source id.
+    snapshots: Mutex<Vec<(String, presenter_ndi::pipeline::PipelineState)>>,
 }
 
 /// One recorded call against [`FakeNdiControl`].
@@ -200,6 +204,37 @@ impl FakeNdiControl {
     /// The ordered sequence of calls recorded so far.
     pub(crate) fn calls(&self) -> Vec<NdiCall> {
         self.calls.lock().expect("calls lock").clone()
+    }
+
+    /// Put these NDI names "on the network" (#546).
+    pub(crate) fn set_discovered(&self, names: &[&str]) {
+        *self.discovered.lock().expect("discovered lock") =
+            names.iter().map(|n| (*n).to_string()).collect();
+    }
+
+    /// Put this pipeline in the manager's map (#546).
+    pub(crate) fn set_pipeline(
+        &self,
+        source_id: &str,
+        state: presenter_ndi::pipeline::PipelineState,
+    ) {
+        self.snapshots
+            .lock()
+            .expect("snapshots lock")
+            .push((source_id.to_string(), state));
+    }
+
+    fn discovered(&self) -> Vec<presenter_ndi::discovery::NdiSourceInfo> {
+        self.discovered
+            .lock()
+            .expect("discovered lock")
+            .iter()
+            .map(|name| presenter_ndi::discovery::NdiSourceInfo { name: name.clone() })
+            .collect()
+    }
+
+    fn pipeline_snapshots(&self) -> Vec<(String, presenter_ndi::pipeline::PipelineState)> {
+        self.snapshots.lock().expect("snapshots lock").clone()
     }
 
     /// Whether `stop_other_pipelines(keep_id)` was recorded with this id.
