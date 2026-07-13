@@ -162,7 +162,7 @@ probes_functionally_rather_than_by_name() {
   stub_gst_launch "$tmp/bin" "vah264enc"
   install -m 666 /dev/null "$tmp/renderD128"
   run_gate "$tmp/bin" "$tmp/renderD128" 5 8 "$tmp/registry.bin"
-  local calls="$tmp/calls"
+  local calls="$tmp/bin/calls"
   local ok=1
   { [ "$rc" -eq 0 ] &&
     [ -f "$calls" ] &&
@@ -186,12 +186,18 @@ forces_a_registry_rescan_on_every_poll() {
   # Pre-existing (warm) registry — exactly what a reboot inherits.
   echo stale >"$tmp/registry.bin"
   run_gate "$tmp/bin" "$tmp/renderD128" 20 8 "$tmp/registry.bin"
-  local states="$tmp/registry-state"
+  local states="$tmp/bin/registry-state"
   local ok=1
+  # Each POLL must start cold. (Within one poll the first probe rebuilds the
+  # registry, so the remaining candidates of that same poll legitimately see it
+  # warm — that is one genuine scan per poll, which is the point.) So: the very
+  # first probe must be cold DESPITE the stale registry we planted, and a later
+  # poll must have gone cold again — proving the delete happens every round and
+  # not just once at startup.
   { [ "$rc" -eq 0 ] &&
     grep -q 'encodes on this host' <<<"$out" &&
     [ -f "$states" ] &&
-    [ "$(grep -c warm "$states" || true)" -eq 0 ] &&
+    [ "$(head -1 "$states")" = "cold" ] &&
     [ "$(grep -c cold "$states" || true)" -ge 2 ]; } || ok=0
   rm -rf "$tmp"
   [ "$ok" -eq 1 ]
@@ -265,15 +271,23 @@ units_own_a_writable_gst_registry() {
     grep -qE '^Environment=GST_REGISTRY=/opt/presenter-dev/' "$DEV_UNIT"
 }
 
+deploy_deletes_the_registry_under_its_deploy_dir() {
+  # $1 = workflow, $2 = the deploy dir that workflow targets (and that its unit points
+  # GST_REGISTRY into). Assert BOTH: the workflow really targets that dir, and it really
+  # deletes the registry there. A bare mention of the filename (a leftover comment) used
+  # to satisfy this guard with the `rm` gone.
+  local wf="$REPO_ROOT/.github/workflows/$1" dir="$2"
+  grep -qE "^ *DEPLOY_DIR: *$dir *\$" "$wf" &&
+    grep -qE 'rm -f +(\$\{\{ *env\.DEPLOY_DIR *\}\}|'"$dir"')/gstreamer-registry\.bin' "$wf"
+}
+
 every_deploy_rebuilds_the_registry() {
-  # Deleting the registry file is what guarantees the next start re-probes the
-  # plugins against the CURRENT permissions/driver. Without it, #544 comes back the
-  # first time a host's GPU access or driver changes. Match the actual `rm` of the
-  # actual path the unit points GST_REGISTRY at — a bare mention of the filename
-  # (a leftover comment) used to satisfy this guard.
-  grep -qE 'rm -f +/opt/presenter/gstreamer-registry\.bin' "$REPO_ROOT/.github/workflows/deploy.yml" &&
-    grep -qE 'rm -f +/opt/presenter/gstreamer-registry\.bin' "$REPO_ROOT/.github/workflows/release.yml" &&
-    grep -qE 'rm -f +/opt/presenter-dev/gstreamer-registry\.bin' "$REPO_ROOT/.github/workflows/pipeline.yml"
+  # Deleting the registry file is what guarantees the next start re-probes the plugins
+  # against the CURRENT permissions/driver. Without it, #544 comes back the first time a
+  # host's GPU access or driver changes.
+  deploy_deletes_the_registry_under_its_deploy_dir deploy.yml /opt/presenter &&
+    deploy_deletes_the_registry_under_its_deploy_dir release.yml /opt/presenter &&
+    deploy_deletes_the_registry_under_its_deploy_dir pipeline.yml /opt/presenter-dev
 }
 
 every_deploy_ships_the_gate_script() {

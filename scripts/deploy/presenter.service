@@ -26,18 +26,29 @@ Group=newlevel
 # grant belongs HERE so GPU access never depends on who happens to be logged in.
 SupplementaryGroups=render video
 WorkingDirectory=/opt/presenter
-# #339/#539: wait until the H264 encoder the server will use is registered, so we
+# #339/#539: wait until the H264 encoder the server will use can actually encode, so we
 # never start into the udev-fires-before-VA-API-registers window that took prod down
 # on 2026-05-24. The gate lives in a script (deployed alongside the binary) because it
 # also has to SKIP the wait on a host that can never satisfy it — no GPU, or a render
 # node the service user cannot open — instead of burning the full 30s on every start
-# (#539), and because it must know the modern nvcodec encoders (#541). The script
-# always exits 0: a missing encoder costs NDI, not the whole service. Leading `-` keeps
-# an older host (script not yet deployed) starting too.
-ExecStartPre=-/opt/presenter/wait-for-h264-encoder.sh
+# (#539), because it must know the modern nvcodec encoders (#541), and because it has to
+# force a real plugin rescan on every poll (#547 — a gst name lookup answers from the
+# cached registry, so a poll built on it never sees a late-registering encoder). The
+# script always exits 0: a missing encoder costs NDI, not the whole service. Leading `-`
+# keeps an older host (script not yet deployed) starting too.
+#
+# #547: `timeout` hard-bounds the WHOLE gate. Its own per-probe timeouts cap the normal
+# path, but a gst call wedged in a broken driver (#445) would otherwise hang ExecStartPre
+# until TimeoutStartSec and then FAIL the unit — which is exactly the "a missing encoder
+# must not cost the whole service" promise above. 80s > the gate's own worst case (30s
+# wait + one round of 4x8s probes) and < TimeoutStartSec below.
+ExecStartPre=-/usr/bin/timeout 80 /opt/presenter/wait-for-h264-encoder.sh
 ExecStart=/opt/presenter/presenter-server
 Restart=always
 RestartSec=5
+# Pinned rather than inherited (DefaultTimeoutStartSec=90s): the gate's budget must stay
+# comfortably under it, and that relationship should be visible in one file.
+TimeoutStartSec=120
 
 # Environment
 Environment=PRESENTER_PORT=80
