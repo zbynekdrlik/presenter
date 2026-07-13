@@ -41,6 +41,7 @@ mod stage_state;
 #[cfg(test)]
 mod tests;
 mod timers;
+pub(crate) mod video_source_status;
 
 #[cfg(test)]
 use crate::config::OscConfig;
@@ -629,6 +630,17 @@ impl AppState {
     #[cfg(test)]
     pub(crate) fn set_ndi_handle(&mut self, handle: ndi_control::NdiManagerHandle) {
         self.ndi_manager = Some(handle);
+    }
+
+    /// Test-only: make this state SDK-less on purpose.
+    ///
+    /// `AppState::new` calls `NdiManager::try_new()`, so whether an in-memory state has
+    /// an NDI handle depends on whether the HOST has libndi — dev2 does, the GitHub
+    /// runners do not. A test about the blind-server path must not be at the mercy of
+    /// that (#546).
+    #[cfg(test)]
+    pub(crate) fn clear_ndi_handle(&mut self) {
+        self.ndi_manager = None;
     }
 
     pub fn stage_connections_handle(&self) -> StageConnections {

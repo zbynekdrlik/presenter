@@ -56,6 +56,52 @@ pub(crate) async fn list_video_sources(
     Ok(Json(payload))
 }
 
+/// `GET /integrations/video-sources/status` (#546) — is each mapped NDI source
+/// actually working right now, and what IS on the network?
+///
+/// A separate read-only endpoint rather than a field on the CRUD list: the "what is
+/// on the network" answer is a page-level fact, not a per-row one, and the existing
+/// list contract (a bare array) stays byte-identical.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VideoSourceStatusResponse {
+    ndi_available: bool,
+    discovered: Vec<String>,
+    sources: Vec<VideoSourceStatusDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VideoSourceStatusDto {
+    id: String,
+    ndi_name: String,
+    is_active: bool,
+    state: String,
+    detail: Option<String>,
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn video_source_status(
+    State(state): State<AppState>,
+) -> Result<Json<VideoSourceStatusResponse>, AppError> {
+    let snapshot = state.video_source_status().await?;
+    Ok(Json(VideoSourceStatusResponse {
+        ndi_available: snapshot.ndi_available,
+        discovered: snapshot.discovered,
+        sources: snapshot
+            .sources
+            .into_iter()
+            .map(|s| VideoSourceStatusDto {
+                id: s.id,
+                ndi_name: s.ndi_name,
+                is_active: s.is_active,
+                state: s.state.to_string(),
+                detail: s.detail,
+            })
+            .collect(),
+    }))
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn create_video_source(
     State(state): State<AppState>,

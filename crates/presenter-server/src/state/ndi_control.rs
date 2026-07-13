@@ -97,7 +97,7 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.discover_sources(timeout_ms),
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::discover_sources is never exercised"),
+            Self::Fake(f) => f.discovered(),
         }
     }
 
@@ -108,7 +108,20 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.pipeline_snapshots().await,
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::pipeline_snapshots is never exercised"),
+            Self::Fake(f) => f.pipeline_snapshots().unwrap_or_default(),
+        }
+    }
+
+    /// Forward to [`NdiManager::pipeline_snapshots_checked`] — `None` when the
+    /// manager's lock could not be taken (it is busy starting a pipeline), which the
+    /// #546 status join must NOT read as "no pipelines".
+    pub(crate) async fn pipeline_snapshots_checked(
+        &self,
+    ) -> Option<Vec<(String, presenter_ndi::pipeline::PipelineState)>> {
+        match self {
+            Self::Real(m) => m.pipeline_snapshots_checked().await,
+            #[cfg(test)]
+            Self::Fake(f) => f.pipeline_snapshots(),
         }
     }
 
@@ -163,6 +176,15 @@ impl NdiManagerHandle {
 pub(crate) struct FakeNdiControl {
     calls: Mutex<Vec<NdiCall>>,
     start_outcome: Mutex<StartOutcome>,
+    /// What the NDI network "contains" — drives the #546 status join without libndi.
+    discovered: Mutex<Vec<String>>,
+    /// What the manager's pipeline map "holds", keyed by source id.
+    snapshots: Mutex<Vec<(String, presenter_ndi::pipeline::PipelineState)>>,
+    /// `true` = the manager's lock is held (it is busy starting a pipeline), so the
+    /// snapshot map cannot be read at all — the real 200 ms-timeout path.
+    snapshots_unreadable: Mutex<bool>,
+    /// `true` = the NDI finder errors out, so this server cannot see the network.
+    discovery_fails: Mutex<bool>,
 }
 
 /// One recorded call against [`FakeNdiControl`].
@@ -200,6 +222,62 @@ impl FakeNdiControl {
     /// The ordered sequence of calls recorded so far.
     pub(crate) fn calls(&self) -> Vec<NdiCall> {
         self.calls.lock().expect("calls lock").clone()
+    }
+
+    /// Put these NDI names "on the network" (#546).
+    pub(crate) fn set_discovered(&self, names: &[&str]) {
+        *self.discovered.lock().expect("discovered lock") =
+            names.iter().map(|n| (*n).to_string()).collect();
+    }
+
+    /// Put this pipeline in the manager's map (#546).
+    pub(crate) fn set_pipeline(
+        &self,
+        source_id: &str,
+        state: presenter_ndi::pipeline::PipelineState,
+    ) {
+        self.snapshots
+            .lock()
+            .expect("snapshots lock")
+            .push((source_id.to_string(), state));
+    }
+
+    /// Make NDI discovery FAIL — the server is blind, not looking at an empty network (#546).
+    pub(crate) fn fail_discovery(&self) {
+        *self.discovery_fails.lock().expect("discovery_fails lock") = true;
+    }
+
+    fn discovered(&self) -> anyhow::Result<Vec<presenter_ndi::discovery::NdiSourceInfo>> {
+        if *self.discovery_fails.lock().expect("discovery_fails lock") {
+            return Err(anyhow::anyhow!("NDI finder unavailable"));
+        }
+        Ok(self
+            .discovered
+            .lock()
+            .expect("discovered lock")
+            .iter()
+            .map(|name| presenter_ndi::discovery::NdiSourceInfo { name: name.clone() })
+            .collect())
+    }
+
+    /// Simulate the manager being BUSY (mid `start_pipeline`): its lock is held, so the
+    /// snapshot map cannot be read within the 200 ms budget (#546).
+    pub(crate) fn set_snapshots_unreadable(&self) {
+        *self
+            .snapshots_unreadable
+            .lock()
+            .expect("snapshots_unreadable lock") = true;
+    }
+
+    fn pipeline_snapshots(&self) -> Option<Vec<(String, presenter_ndi::pipeline::PipelineState)>> {
+        if *self
+            .snapshots_unreadable
+            .lock()
+            .expect("snapshots_unreadable lock")
+        {
+            return None;
+        }
+        Some(self.snapshots.lock().expect("snapshots lock").clone())
     }
 
     /// Whether `stop_other_pipelines(keep_id)` was recorded with this id.

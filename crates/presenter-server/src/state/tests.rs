@@ -1285,3 +1285,45 @@ async fn ableset_resolves_presentation_through_cache() {
     let missing = state.resolve_ableset_presentation("999").await.unwrap();
     assert_eq!(missing, None, "unknown prefix must resolve to None");
 }
+
+/// #546: `GET /integrations/video-sources/status` is a STATIC segment sitting next to
+/// `/integrations/video-sources/{id}`. axum's matchit gives static segments priority, so
+/// the status route wins — but nothing in the tree pinned that, and a future reorder or a
+/// switch to a wildcard would silently route `/status` into the `{id}` handler (which
+/// would then look up a video source whose id is the literal string "status" and 404).
+/// This asserts the status handler actually answers.
+#[tokio::test]
+async fn video_source_status_route_is_not_shadowed_by_the_id_route() {
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = crate::router::build_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/integrations/video-sources/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("oneshot");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the status route must answer — a 404/405 means `{{id}}` swallowed it"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body bytes");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("status json");
+    assert!(
+        json.get("sources").is_some() && json.get("ndiAvailable").is_some(),
+        "the status payload, not the by-id payload: {json}"
+    );
+}

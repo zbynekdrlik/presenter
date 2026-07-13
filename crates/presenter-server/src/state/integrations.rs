@@ -10,6 +10,46 @@ use presenter_ndi::PipelineStartError;
 use super::AppState;
 use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use crate::resolume::ResolumeConnectionSnapshot;
+use crate::state::video_source_status;
+use crate::state::video_source_status::{Discovery, PipelineFact};
+
+/// What the server can honestly say about every mapped NDI source right now (#546).
+///
+/// `discovered` rides along deliberately: seeing the mapped `RESOLUME-PP (cg-obs)`
+/// next to the network's actual `STREAM-PP (stream)` is what makes a renamed or
+/// switched-off sender obvious at a glance — the whole point of the ticket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoSourceStatusSnapshot {
+    /// False when this server has no NDI SDK and therefore cannot see the network.
+    pub ndi_available: bool,
+    /// The NDI names that ARE on the network right now.
+    pub discovered: Vec<String>,
+    pub sources: Vec<VideoSourceStatusEntry>,
+}
+
+/// One mapped source's live state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoSourceStatusEntry {
+    pub id: String,
+    pub ndi_name: String,
+    pub is_active: bool,
+    /// `unknown | not-found | ready | connecting | not-broadcasting | live`.
+    pub state: &'static str,
+    /// The pipeline's error text, when it has one.
+    pub detail: Option<String>,
+}
+
+impl VideoSourceStatusEntry {
+    fn unknown(row: &VideoSource) -> Self {
+        Self {
+            id: row.id.to_string(),
+            ndi_name: row.ndi_name.clone(),
+            is_active: row.is_active,
+            state: video_source_status::VideoSourceState::Unknown.as_str(),
+            detail: None,
+        }
+    }
+}
 
 /// How a failed `start_pipeline` should be surfaced when activating a source.
 ///
@@ -218,6 +258,95 @@ impl AppState {
     // Video source methods
     pub async fn list_video_sources(&self) -> anyhow::Result<Vec<VideoSource>> {
         self.repository.list_video_sources().await
+    }
+
+    /// Is each mapped NDI source actually working, right now? (#546)
+    ///
+    /// The three facts that answer that live in three different places — the DB rows,
+    /// the NDI discovery list, and the pipeline map — and until now nothing joined
+    /// them, so a mapped-but-absent source (the PP outage) was indistinguishable from
+    /// a broken server. This is the join; the decision itself is the pure
+    /// [`video_source_status::classify`].
+    ///
+    /// Fail-soft on purpose — but never into a LIE. A discovery failure degrades to
+    /// [`Discovery::Blind`] ("we cannot see the network"), NOT to an empty network
+    /// (which would make a broken server accuse every sending machine at the site);
+    /// a busy pipeline lock degrades to [`PipelineFact::Unreadable`] ("the manager is
+    /// busy starting it"), NOT to "no pipeline" (which would paint every normal
+    /// activation as "sending nothing"). Both were deep-review findings on the first
+    /// cut of #546. Neither degrades to an error page: the settings page must keep
+    /// rendering when NDI is unhappy — that is exactly when the operator needs it.
+    pub async fn video_source_status(&self) -> anyhow::Result<VideoSourceStatusSnapshot> {
+        let rows = self.list_video_sources().await?;
+
+        let Some(manager) = &self.ndi_manager else {
+            // No SDK: we cannot see the network, and we say so rather than accusing a
+            // sending machine that may be perfectly fine.
+            return Ok(VideoSourceStatusSnapshot {
+                ndi_available: false,
+                discovered: Vec::new(),
+                sources: rows
+                    .into_iter()
+                    .map(|r| VideoSourceStatusEntry::unknown(&r))
+                    .collect(),
+            });
+        };
+
+        let discovered: Option<Vec<String>> = match manager.discover_sources(0) {
+            Ok(sources) => Some(sources.into_iter().map(|s| s.name).collect()),
+            Err(e) => {
+                tracing::warn!(error = %e, "NDI discovery failed while reading source status");
+                None
+            }
+        };
+
+        // `None` = the manager's lock was held past our budget (it is busy building a
+        // pipeline), which is NOT the same fact as "there are no pipelines".
+        let pipelines: Option<HashMap<String, (&'static str, Option<String>)>> =
+            manager.pipeline_snapshots_checked().await.map(|snapshots| {
+                snapshots
+                    .into_iter()
+                    .map(|(id, state)| (id, video_source_status::pipeline_state_str(&state)))
+                    .collect()
+            });
+
+        let discovery = match &discovered {
+            Some(names) => Discovery::Names(names),
+            None => Discovery::Blind,
+        };
+
+        let sources = rows
+            .into_iter()
+            .map(|row| {
+                let pipeline = pipelines
+                    .as_ref()
+                    .map(|map| map.get(&row.id.to_string()).cloned());
+                let state = video_source_status::classify(
+                    row.is_active,
+                    &row.ndi_name,
+                    discovery,
+                    match &pipeline {
+                        Some(entry) => PipelineFact::Known(entry.as_ref().map(|(s, _)| *s)),
+                        None => PipelineFact::Unreadable,
+                    },
+                );
+                VideoSourceStatusEntry {
+                    id: row.id.to_string(),
+                    ndi_name: row.ndi_name,
+                    is_active: row.is_active,
+                    state: state.as_str(),
+                    detail: pipeline.flatten().and_then(|(_, err)| err),
+                }
+            })
+            .collect();
+
+        Ok(VideoSourceStatusSnapshot {
+            // A discovery failure leaves us blind, exactly like a missing SDK — the UI
+            // must not print "On the network now: nothing" off the back of it.
+            ndi_available: discovered.is_some(),
+            discovered: discovered.unwrap_or_default(),
+            sources,
+        })
     }
 
     pub async fn create_video_source(
@@ -556,6 +685,130 @@ mod tests {
         assert!(
             classified.is_hard_error,
             "a genuine pipeline failure must fail the activation",
+        );
+    }
+
+    // ── #546: does the server actually JOIN the three facts? ────────────────────
+    //
+    // The classifier's rules are unit-tested in `state::video_source_status`. What
+    // these two guard is the join itself: that the state method really reads the NDI
+    // discovery list and the pipeline map, and really reports what it finds. Without
+    // them the classifier could be perfect while the server fed it nothing.
+
+    #[tokio::test]
+    async fn video_source_status_reports_the_pp_incident_as_not_found() {
+        let (state, source_id, _id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+        // The network carries a DIFFERENT name than the one the operator mapped —
+        // the source is `STREAM-SNV (stream)` (see `state_with_fake`).
+        fake.set_discovered(&["SOMETHING-ELSE (stream)"]);
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("a silent source still activates (#448)");
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+
+        assert!(snapshot.ndi_available);
+        assert_eq!(snapshot.discovered, vec!["SOMETHING-ELSE (stream)"]);
+        let entry = snapshot
+            .sources
+            .first()
+            .expect("the created source is in the snapshot");
+        assert_eq!(
+            entry.state, "not-found",
+            "a mapped name that is not on the network must say so — the operator was \
+             left staring at a blank stage with no clue why (#546)",
+        );
+        assert!(entry.is_active, "the row IS activated — that is the trap");
+    }
+
+    #[tokio::test]
+    async fn video_source_status_reports_live_when_the_pipeline_is_streaming() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::Ok).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        fake.set_pipeline(&id, presenter_ndi::pipeline::PipelineState::Streaming);
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activation succeeds");
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+        let entry = snapshot.sources.first().expect("one source");
+        assert_eq!(entry.state, "live");
+        assert_eq!(entry.detail, None);
+    }
+
+    /// THE ACTIVATION WINDOW (deep review 🟡 #1). `start_pipeline` holds the manager's
+    /// lock across its 8 s caps-wait, so a status poll landing in that window cannot read
+    /// the snapshot map at all. Reading "cannot look" as "no pipeline" painted the HAPPY
+    /// path amber and told the operator to go start an NDI output that was already on.
+    #[tokio::test]
+    async fn video_source_status_says_connecting_while_the_manager_is_busy_starting() {
+        let (state, source_id, _id, fake) = state_with_fake(StartOutcome::Ok).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activation succeeds");
+        // The manager is mid-start: its lock is held, so the snapshot times out.
+        fake.set_snapshots_unreadable();
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+        let entry = snapshot.sources.first().expect("one source");
+        assert_eq!(
+            entry.state, "connecting",
+            "a busy manager means the pipeline is coming up — NOT that the sending \
+             machine is silent",
+        );
+    }
+
+    /// Deep review 🟡 #2: a discovery FAILURE leaves us blind. Degrading it to an empty
+    /// network would make a broken server tell the operator that every sending machine
+    /// at the site is off — the exact false accusation this module exists to prevent.
+    #[tokio::test]
+    async fn video_source_status_says_unknown_when_discovery_itself_fails() {
+        let (state, _source_id, _id, fake) = state_with_fake(StartOutcome::Ok).await;
+        fake.fail_discovery();
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+
+        assert!(
+            !snapshot.ndi_available,
+            "a finder we cannot query is a network we cannot see",
+        );
+        assert!(snapshot.discovered.is_empty());
+        assert_eq!(
+            snapshot.sources.first().map(|s| s.state),
+            Some("unknown"),
+            "a discovery failure must never render as 'not found on the network'",
+        );
+    }
+
+    #[tokio::test]
+    async fn video_source_status_says_unknown_when_there_is_no_ndi_sdk() {
+        // The libndi-free host (GH runners, and any server without the SDK): we cannot
+        // see the network, so we must not accuse the sending machine. Cleared
+        // explicitly — `AppState::new` picks the handle up from the HOST, and dev2 has
+        // libndi while the CI runners do not.
+        let mut state = AppState::in_memory().await.expect("in-memory AppState");
+        state.clear_ndi_handle();
+        state
+            .create_video_source(
+                VideoSourceDraft::new("Cam 1", "STREAM-SNV (stream)"),
+                SettingsAuditSource::HttpSetter,
+                "test",
+            )
+            .await
+            .expect("create video source");
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+
+        assert!(!snapshot.ndi_available);
+        assert!(snapshot.discovered.is_empty());
+        assert_eq!(
+            snapshot.sources.first().map(|s| s.state),
+            Some("unknown"),
+            "without the SDK the honest answer is 'we cannot see', never 'not found'",
         );
     }
 }
