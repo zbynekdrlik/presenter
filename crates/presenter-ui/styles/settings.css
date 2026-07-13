@@ -371,6 +371,66 @@ body.settings {
   color: #b91c1c;
 }
 
+/* #546 — video-source liveness. Green = video is flowing; amber = on the network but
+   sending nothing; red = the mapped name is not out there at all (the PP outage). */
+.settings__status--live {
+  background: #dcfcef;
+  color: #047857;
+}
+
+.settings__status--not-broadcasting {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.settings__status--not-found {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.settings__status--ready,
+.settings__status--unknown {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+/* The one-line instruction under a broken row: what the operator should actually go
+   and DO about it. */
+.settings__source-hint {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #b45309;
+  max-width: 46ch;
+}
+
+/* What is actually on the NDI network right now, listed next to what is mapped. */
+.settings__discovered {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.settings__discovered-title {
+  font-weight: 600;
+}
+
+.settings__discovered-name {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.settings__discovered-empty {
+  font-style: italic;
+}
+
 .settings__list-line {
   margin: 0;
   font-family: "JetBrains Mono", "Fira Mono", monospace;

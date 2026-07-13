@@ -69,14 +69,28 @@ impl VideoSourceState {
 /// 6. Otherwise → `NotBroadcasting`: it IS on the network, it IS switched on, and no
 ///    video is arriving.
 pub(crate) fn classify(
-    _is_active: bool,
-    _ndi_name: &str,
-    _ndi_available: bool,
-    _discovered: &[String],
-    _pipeline_state: Option<&str>,
+    is_active: bool,
+    ndi_name: &str,
+    ndi_available: bool,
+    discovered: &[String],
+    pipeline_state: Option<&str>,
 ) -> VideoSourceState {
-    // [red] stub — the real rules land in the GREEN commit.
-    VideoSourceState::Unknown
+    if !ndi_available {
+        return VideoSourceState::Unknown;
+    }
+    if pipeline_state == Some("streaming") {
+        return VideoSourceState::Live;
+    }
+    if !discovered.iter().any(|d| d == ndi_name) {
+        return VideoSourceState::NotFound;
+    }
+    if !is_active {
+        return VideoSourceState::Ready;
+    }
+    if pipeline_state == Some("starting") {
+        return VideoSourceState::Connecting;
+    }
+    VideoSourceState::NotBroadcasting
 }
 
 /// The wire name of a pipeline state, plus its error text when it has one.

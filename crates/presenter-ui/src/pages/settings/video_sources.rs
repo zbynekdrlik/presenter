@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 use super::ToastHandle;
-use crate::api::ndi::{self, VideoSourceDto};
+use crate::api::ndi::{self, VideoSourceDto, VideoSourceStatusDto};
 use crate::components::modal::confirm;
 
 /// The badge text for a source state (#546).
@@ -13,24 +13,45 @@ use crate::components::modal::confirm;
 /// An unrecognised state degrades to the honest "NDI unavailable" rather than panicking
 /// or rendering a raw wire token.
 pub(crate) fn status_label(state: &str) -> &'static str {
-    // [red] stub — the real copy lands in the GREEN commit.
-    let _ = state;
-    ""
+    match state {
+        "live" => "Live",
+        "not-broadcasting" => "Not broadcasting",
+        "not-found" => "Not found on the network",
+        "ready" => "Ready",
+        "connecting" => "Connecting…",
+        _ => "NDI unavailable",
+    }
 }
 
-/// The CSS class pair for a source state (#546).
+/// The CSS class pair for a source state (#546). An unrecognised state falls back to
+/// `--unknown` rather than injecting whatever the server said into a class name.
 pub(crate) fn status_class(state: &str) -> String {
-    // [red] stub.
-    let _ = state;
-    String::new()
+    let known = matches!(
+        state,
+        "live" | "not-broadcasting" | "not-found" | "ready" | "connecting" | "unknown"
+    );
+    let modifier = if known { state } else { "unknown" };
+    format!("settings__status settings__status--{modifier}")
 }
 
 /// What the operator should DO about this state — shown under the row. `None` when the
 /// state needs no action (live / ready / connecting).
+///
+/// These two sentences are the entire point of #546. At PP the operator had a blank
+/// stage and no idea whether to look at the server, the network, the TV, or the sending
+/// machine. The answer was the sending machine — and now the page says so.
 pub(crate) fn status_hint(state: &str) -> Option<&'static str> {
-    // [red] stub.
-    let _ = state;
-    None
+    match state {
+        "not-found" => Some(
+            "This NDI name is not on the network. Check the sending machine is on and its \
+             NDI output is switched on — or pick one of the names listed below.",
+        ),
+        "not-broadcasting" => Some(
+            "On the network, but sending no video. Start the NDI output on the sending \
+             machine.",
+        ),
+        _ => None,
+    }
 }
 
 #[component]
@@ -38,17 +59,35 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
     let sources = RwSignal::new(Vec::<VideoSourceDto>::new());
     let ndi_available = RwSignal::new(false);
     let discovered = RwSignal::new(Vec::<String>::new());
+    let statuses = RwSignal::new(Vec::<VideoSourceStatusDto>::new());
     let new_label = RwSignal::new(String::new());
     let new_ndi_name = RwSignal::new(String::new());
 
+    // #546: one call answers all three questions the operator has — can this server see
+    // the NDI network, what is ON it, and is each mapped source actually working. Polled
+    // on the same 5s cadence as every other live-status card on this page, because a
+    // source can go silent at any moment, including mid-service.
+    let poll_status = move || {
+        leptos::task::spawn_local(async move {
+            if let Ok(status) = ndi::get_video_source_status().await {
+                ndi_available.set(status.ndi_available);
+                discovered.set(status.discovered);
+                statuses.set(status.sources);
+            }
+        });
+    };
+
     leptos::task::spawn_local(async move {
-        if let Ok(status) = ndi::get_ndi_status().await {
-            ndi_available.set(status.available);
-        }
         if let Ok(list) = ndi::list_video_sources().await {
             sources.set(list);
         }
     });
+    poll_status();
+
+    let interval = gloo_timers::callback::Interval::new(super::STATUS_REFRESH_MS, move || {
+        poll_status();
+    });
+    interval.forget();
 
     let refresh = move || {
         leptos::task::spawn_local(async move {
@@ -56,6 +95,8 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                 sources.set(list);
             }
         });
+        // Don't make the operator wait up to 5s to see what their click did.
+        poll_status();
     };
 
     let scan = move |_| {
@@ -149,9 +190,22 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             </header>
             <div class="settings__source-list" data-role="video-source-list">
                 <For
-                    each=move || sources.get()
-                    key=|s: &VideoSourceDto| format!("{}-{}", s.id, s.is_active)
-                    children=move |source: VideoSourceDto| {
+                    each=move || {
+                        // Zip each row with its live state. The state MUST be part of the
+                        // key below — keying on id+is_active alone (as this card did) means
+                        // the 5s poll runs and the badge never re-renders.
+                        let by_id = statuses.get();
+                        sources.get().into_iter().map(move |s| {
+                            let state = by_id
+                                .iter()
+                                .find(|st| st.id == s.id)
+                                .map(|st| st.state.clone())
+                                .unwrap_or_default();
+                            (s, state)
+                        }).collect::<Vec<_>>()
+                    }
+                    key=|(s, state): &(VideoSourceDto, String)| format!("{}-{}-{}", s.id, s.is_active, state)
+                    children=move |(source, state): (VideoSourceDto, String)| {
                         let dot_class = if source.is_active {
                             "settings__source-dot settings__source-dot--active"
                         } else {
@@ -159,14 +213,32 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                         };
                         let id_activate = source.id.clone();
                         let id_delete = source.id.clone();
+                        let id_status = source.id.clone();
+                        let id_hint = source.id.clone();
                         let is_active = source.is_active;
+                        let hint = status_hint(&state);
                         view! {
-                            <div class="settings__source-item" data-source-id=source.id.clone()>
+                            <div class="settings__source-item" data-role="video-source-row"
+                                data-source-id=source.id.clone()>
                                 <div class=dot_class></div>
                                 <div class="settings__source-info">
                                     <div class="settings__source-label">{source.label.clone()}</div>
                                     <div class="settings__source-ndi">"NDI: " {source.ndi_name.clone()}</div>
+                                    {match hint {
+                                        Some(text) => view! {
+                                            <div class="settings__source-hint"
+                                                data-role="video-source-hint"
+                                                data-source-id=id_hint.clone()>{text}</div>
+                                        }.into_any(),
+                                        None => ().into_any(),
+                                    }}
                                 </div>
+                                <span class=status_class(&state)
+                                    data-role="video-source-status"
+                                    data-source-id=id_status.clone()
+                                    data-state=state.clone()>
+                                    {status_label(&state)}
+                                </span>
                                 {if is_active {
                                     view! {
                                         <button class="settings__btn settings__btn--active"
@@ -185,6 +257,31 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     }
                 />
             </div>
+            // What is ACTUALLY on the network, right next to what is mapped. This one line
+            // is what turns "RESOLUME-PP (cg-obs) vs STREAM-PP (stream)" from a two-hour
+            // investigation into something the operator spots at a glance (#546).
+            <Show when=move || ndi_available.get()>
+                <div class="settings__discovered" data-role="ndi-discovered">
+                    <span class="settings__discovered-title">"On the network now: "</span>
+                    <Show
+                        when=move || !discovered.get().is_empty()
+                        fallback=|| view! {
+                            <span class="settings__discovered-empty">
+                                "nothing — no NDI source is broadcasting."
+                            </span>
+                        }
+                    >
+                        <For
+                            each=move || discovered.get()
+                            key=|name: &String| name.clone()
+                            children=|name: String| view! {
+                                <span class="settings__discovered-name"
+                                    data-role="ndi-discovered-name">{name}</span>
+                            }
+                        />
+                    </Show>
+                </div>
+            </Show>
             <div class="settings__form" data-role="add-video-source-form">
                 <div class="settings__form-header">
                     <h3>"Add Video Source"</h3>
