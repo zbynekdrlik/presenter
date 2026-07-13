@@ -40,6 +40,22 @@ pub(crate) fn status_class(state: &str) -> String {
     format!("settings__status settings__status--{modifier}")
 }
 
+/// How many CONSECUTIVE status-poll failures mean the card is genuinely stale — as opposed
+/// to a single blip (the page being torn down mid-fetch, a redeploy restarting the server).
+///
+/// A poll error must never be swallowed: stale badges the operator trusts are worse than no
+/// badges. But it must not scream at the first hiccup either — an in-flight fetch aborted by
+/// a page navigation is not an outage, and treating it as one filled the console (and failed
+/// the zero-console-noise E2E guards) every time a page closed. So: one failure is tolerated
+/// silently, two in a row and the card admits it does not know — the badges fall back to
+/// "Checking…" and the failure is logged once.
+pub(crate) const STALE_AFTER_FAILURES: u32 = 2;
+
+/// Is the card's data stale after this many consecutive poll failures?
+pub(crate) fn is_stale(consecutive_failures: u32) -> bool {
+    consecutive_failures >= STALE_AFTER_FAILURES
+}
+
 /// The card-header badge: does this server see the NDI network at all?
 ///
 /// `None` = the first status poll has not answered yet. It must NOT read as the failure
@@ -92,6 +108,8 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
     let statuses = RwSignal::new(Vec::<VideoSourceStatusDto>::new());
     let new_label = RwSignal::new(String::new());
     let new_ndi_name = RwSignal::new(String::new());
+    // Consecutive status-poll failures — see `STALE_AFTER_FAILURES`.
+    let poll_failures = RwSignal::new(0u32);
 
     // #546: one call answers all three questions the operator has — can this server see
     // the NDI network, what is ON it, and is each mapped source actually working. Polled
@@ -101,13 +119,30 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match ndi::get_video_source_status().await {
                 Ok(status) => {
+                    poll_failures.set(0);
                     ndi_available.set(Some(status.ndi_available));
                     discovered.set(status.discovered);
                     statuses.set(status.sources);
                 }
-                // Never swallow this: a failing poll means the badges are stale, and the
-                // whole point of the card is that the operator can trust what it says.
-                Err(err) => leptos::logging::warn!("video-source status poll failed: {err}"),
+                // Never swallow this: badges the operator trusts must not silently go stale.
+                // But one failure is a blip (a page being torn down mid-fetch is not an
+                // outage) — see `STALE_AFTER_FAILURES`. On the second in a row the card drops
+                // back to "Checking…" and says so, once.
+                Err(err) => {
+                    let failures = poll_failures.get_untracked() + 1;
+                    poll_failures.set(failures);
+                    if is_stale(failures) {
+                        if !is_stale(failures - 1) {
+                            leptos::logging::warn!(
+                                "video-source status poll failed {failures}x in a row — \
+                                 showing the card as unknown rather than stale: {err}"
+                            );
+                        }
+                        ndi_available.set(None);
+                        discovered.set(Vec::new());
+                        statuses.set(Vec::new());
+                    }
+                }
             }
         });
     };
@@ -406,6 +441,16 @@ mod tests {
             status_class(""),
             "settings__status settings__status--checking"
         );
+    }
+
+    /// A single failed poll is a blip — a page torn down mid-fetch, a server restarting
+    /// during a deploy. Two in a row means the card genuinely does not know any more.
+    #[test]
+    fn one_failed_poll_is_a_blip_two_in_a_row_is_stale() {
+        assert!(!is_stale(0));
+        assert!(!is_stale(1), "a single failure must not blank the card or shout");
+        assert!(is_stale(2));
+        assert!(is_stale(7));
     }
 
     /// The card HEADER badge told the same lie the row badges no longer tell: it is painted
