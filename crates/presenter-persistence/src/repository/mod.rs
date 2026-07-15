@@ -8,6 +8,7 @@ mod search;
 mod slide_stage_layout;
 mod stage_state;
 mod sync;
+mod sync_apply;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
@@ -15,6 +16,7 @@ mod tests;
 mod util;
 
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
+pub use sync_apply::{sync_should_apply, SyncApplyOutcome};
 
 use util::{
     ableset_model_to_domain, android_stage_display_model_to_domain, osc_model_to_domain,

@@ -91,6 +91,108 @@ async fn replace_slides_bumps_updated_at() {
     assert!(after > before, "structural slide ops must bump updated_at");
 }
 
+fn peer_song(sync_id: &str, name: &str, main: &str, minutes_ago: i64) -> crate::SyncPresentation {
+    crate::SyncPresentation {
+        sync_id: sync_id.to_string(),
+        library_name: "Songs".to_string(),
+        name: name.to_string(),
+        updated_at: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+        deleted_at: None,
+        slides: vec![slide(0, main)],
+    }
+}
+
+#[tokio::test]
+async fn apply_creates_unknown_updates_newer_skips_older() {
+    let repo = repo().await;
+
+    // Unknown → created (library auto-created too).
+    let outcome = repo
+        .apply_sync_presentation(&peer_song("sid-1", "Peer Song", "v1", 10))
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Created);
+
+    // Newer peer edit → updated, and the PEER timestamp is stored verbatim.
+    let newer = peer_song("sid-1", "Peer Song", "v2", 5);
+    let outcome = repo.apply_sync_presentation(&newer).await.unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Updated);
+    let manifest = repo.list_sync_manifest().await.unwrap();
+    let row = manifest.iter().find(|r| r.sync_id == "sid-1").unwrap();
+    assert_eq!(
+        row.updated_at, newer.updated_at,
+        "apply stores the peer's clock, never now() (no echo)"
+    );
+
+    // Older peer state → skipped, content untouched.
+    let outcome = repo
+        .apply_sync_presentation(&peer_song("sid-1", "Peer Song", "stale", 60))
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::SkippedNotNewer);
+    let full = repo.fetch_sync_presentation("sid-1").await.unwrap().unwrap();
+    assert_eq!(full.slides[0].content.main.value(), "v2");
+}
+
+#[tokio::test]
+async fn apply_adopts_by_name_preserving_the_local_row_id() {
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(lib.id, "Shared Song", Some(&[slide(0, "local text")]))
+        .await
+        .unwrap();
+    let local_row_before = row(&repo, local.id).await;
+
+    // Peer holds the same-named song under a DIFFERENT sync_id, newer edit.
+    let peer = crate::SyncPresentation {
+        sync_id: "peer-identity".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Shared Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: vec![slide(0, "peer text")],
+    };
+    let outcome = repo.apply_sync_presentation(&peer).await.unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::AdoptedByName);
+
+    let local_row_after = row(&repo, local.id).await;
+    assert_eq!(
+        local_row_before.id, local_row_after.id,
+        "local presentation id survives (playlist refs intact)"
+    );
+    assert_eq!(
+        local_row_after.sync_id, "peer-identity",
+        "the peer's sync_id is adopted"
+    );
+    let full = repo
+        .fetch_sync_presentation("peer-identity")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(full.slides[0].content.main.value(), "peer text");
+}
+
+#[tokio::test]
+async fn apply_carries_a_peer_delete_and_restore() {
+    let repo = repo().await;
+    let created = peer_song("sid-del", "Doomed Peer", "x", 30);
+    repo.apply_sync_presentation(&created).await.unwrap();
+
+    // Peer deleted it later → local goes to trash.
+    let mut deleted = peer_song("sid-del", "Doomed Peer", "x", 20);
+    deleted.deleted_at = Some(deleted.updated_at);
+    repo.apply_sync_presentation(&deleted).await.unwrap();
+    let trash = repo.list_trashed_presentations().await.unwrap();
+    assert!(trash.iter().any(|t| t.sync_id == "sid-del"));
+
+    // Peer restored it even later → local leaves the trash.
+    let restored = peer_song("sid-del", "Doomed Peer", "x", 10);
+    repo.apply_sync_presentation(&restored).await.unwrap();
+    let trash = repo.list_trashed_presentations().await.unwrap();
+    assert!(!trash.iter().any(|t| t.sync_id == "sid-del"));
+}
+
 #[tokio::test]
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;

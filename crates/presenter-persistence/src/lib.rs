@@ -28,5 +28,6 @@ mod repository;
 
 pub use audit::{ResolumePushAuditEntry, SettingsAuditEntry, SettingsAuditSource};
 pub use repository::{
-    DatabaseSettings, Repository, SyncManifestRow, SyncPresentation, TrashedPresentation,
+    sync_should_apply, DatabaseSettings, Repository, SyncApplyOutcome, SyncManifestRow,
+    SyncPresentation, TrashedPresentation,
 };
