@@ -334,19 +334,23 @@ async fn upsert_library_deduplicates_repeated_pro_uuids_deterministically() {
     let second = presenter_core::Presentation::new("Copy Of Original", vec![slide(0, "b")])
         .unwrap()
         .with_sync_id("DUP-UUID");
-    let library = presenter_core::Library::new(
-        "Songs".to_string(),
-        vec![first.clone(), second.clone()],
-    )
-    .unwrap();
-    repo.upsert_library(&library).await.expect(
-        "duplicate .pro UUIDs within one import must not violate the unique index",
-    );
+    let library =
+        presenter_core::Library::new("Songs".to_string(), vec![first.clone(), second.clone()])
+            .unwrap();
+    repo.upsert_library(&library)
+        .await
+        .expect("duplicate .pro UUIDs within one import must not violate the unique index");
 
     let first_row = row(&repo, first.id).await;
     let second_row = row(&repo, second.id).await;
-    assert_eq!(first_row.sync_id, "DUP-UUID", "first occurrence keeps the raw UUID");
-    assert_ne!(second_row.sync_id, "DUP-UUID", "duplicate gets a distinct id");
+    assert_eq!(
+        first_row.sync_id, "DUP-UUID",
+        "first occurrence keeps the raw UUID"
+    );
+    assert_ne!(
+        second_row.sync_id, "DUP-UUID",
+        "duplicate gets a distinct id"
+    );
     assert_eq!(
         second_row.sync_id,
         uuid::Uuid::new_v5(

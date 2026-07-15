@@ -9,7 +9,7 @@ use presenter_core::{
 };
 use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use std::collections::HashMap;
 use tracing::instrument;
@@ -61,7 +61,42 @@ impl Repository {
         };
         library::Entity::insert(lib_model).exec(&txn).await?;
 
+        // #555: sync_id carries a UNIQUE index, but real ProPresenter libraries
+        // contain DUPLICATED .pro files sharing one embedded UUID. Seed the
+        // used-set with every sync_id already in the DB (this library's own rows
+        // were deleted above, so only OTHER libraries' identities remain), then
+        // resolve collisions DETERMINISTICALLY — first occurrence keeps the raw
+        // id, later duplicates derive UUIDv5(raw/library/name[/k]). Import order
+        // is filename-sorted on every instance, so both sites converge on
+        // identical identities with zero coordination.
+        let mut used_sync_ids: std::collections::HashSet<String> =
+            presentation_entity::Entity::find()
+                .select_only()
+                .column(presentation_entity::Column::SyncId)
+                .into_tuple::<String>()
+                .all(&txn)
+                .await?
+                .into_iter()
+                .collect();
+
         for presentation in &library.presentations {
+            // Prefer the domain identity (the .pro UUID from import); else derive
+            // the deterministic name-based id so a re-import without one still
+            // pairs across sites.
+            let desired = presentation
+                .sync_id
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| {
+                    presenter_core::sync_id_for_name(&library.name, &presentation.name)
+                });
+            let sync_id = dedupe_sync_id(
+                desired,
+                &library.name,
+                &presentation.name,
+                &mut used_sync_ids,
+            );
+
             let pres_model = presentation_entity::ActiveModel {
                 id: Set(presentation.id.to_string()),
                 library_id: Set(library.id.to_string()),
@@ -69,16 +104,7 @@ impl Repository {
                 search_name: Set(fold_query(&presentation.name)),
                 created_at: Set(Utc::now().into()),
                 updated_at: Set(Utc::now().into()),
-                // #555: prefer the domain identity (the .pro UUID from import);
-                // else derive the deterministic name-based id so a re-import
-                // without one still pairs across sites.
-                sync_id: Set(presentation
-                    .sync_id
-                    .clone()
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| {
-                        presenter_core::sync_id_for_name(&library.name, &presentation.name)
-                    })),
+                sync_id: Set(sync_id),
                 deleted_at: Set(None),
             };
             presentation_entity::Entity::insert(pres_model)
@@ -342,4 +368,31 @@ impl Repository {
 
         Ok(summaries)
     }
+}
+
+/// Resolve a `sync_id` collision deterministically (#555): the first occurrence
+/// keeps `desired`; a duplicate derives `UUIDv5(ns, desired/library/name)`, and a
+/// still-colliding derivation appends a counter (`.../2`, `.../3`, …). Purely a
+/// function of the import content — never random — so two instances importing the
+/// same filename-sorted library set converge on identical identities.
+fn dedupe_sync_id(
+    desired: String,
+    library_name: &str,
+    presentation_name: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    if used.insert(desired.clone()) {
+        return desired;
+    }
+    let base_key = format!("{desired}/{library_name}/{presentation_name}");
+    let mut candidate =
+        uuid::Uuid::new_v5(&presenter_core::SYNC_ID_NAMESPACE, base_key.as_bytes()).to_string();
+    let mut k = 2u32;
+    while !used.insert(candidate.clone()) {
+        let key = format!("{base_key}/{k}");
+        candidate =
+            uuid::Uuid::new_v5(&presenter_core::SYNC_ID_NAMESPACE, key.as_bytes()).to_string();
+        k += 1;
+    }
+    candidate
 }
