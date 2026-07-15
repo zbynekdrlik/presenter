@@ -66,6 +66,19 @@ pub struct OperatorState {
     /// edit — otherwise a slide's stage text could vanish from the editor
     /// right after typing it (the presentation-open refetch resolving late).
     pub slide_edit_seq: RwSignal<u64>,
+    /// Monotonic counter bumped after every slide-content save that can
+    /// affect the Group cascade (#556 F2). The Group field's blur save goes
+    /// through the same `update_untracked` path as every other field (see
+    /// `apply_saved_content_locally` in `slide_save.rs`) to avoid forcing a
+    /// full, unkeyed slide-list rebuild on every save — but that means the
+    /// header badge/placeholder markup, which is derived from the WHOLE
+    /// presentation's group cascade, can't just read `selected_pres.get()`
+    /// reactively either. Each slide's badge/placeholder instead renders as
+    /// its OWN small fine-grained closure that reads THIS counter (to know
+    /// something changed) plus `selected_pres.read_untracked()` (for the
+    /// actual data) — the same isolation trick already used for
+    /// `stage_snapshot` elsewhere in `slide_list.rs`.
+    pub groups_version: RwSignal<u64>,
 }
 
 impl OperatorState {
@@ -111,6 +124,7 @@ impl OperatorState {
             triggering_slide_id: RwSignal::new(None),
             save_status: RwSignal::new(HashMap::new()),
             slide_edit_seq: RwSignal::new(0),
+            groups_version: RwSignal::new(0),
         }
     }
 }

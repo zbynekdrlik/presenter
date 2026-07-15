@@ -78,6 +78,7 @@ pub(super) fn finish_save_status_err(slide_id: String, save_status: SaveStatusMa
 /// edit happens SYNCHRONOUSLY at save-START, in the caller
 /// (`save_all_fields_from_dom`) — not here — so the guard holds no matter
 /// which of the two async calls (this save, or the refetch) resolves first.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn save_with_status(
     pres_id: String,
     slide_id: String,
@@ -87,6 +88,7 @@ pub(super) fn save_with_status(
     group: Option<String>,
     save_status: SaveStatusMap,
     selected_pres: RwSignal<Option<Presentation>>,
+    groups_version: RwSignal<u64>,
 ) {
     let token = start_save_status(&slide_id, save_status);
     leptos::task::spawn_local(async move {
@@ -110,6 +112,16 @@ pub(super) fn save_with_status(
                     &stage,
                     group.as_deref(),
                 );
+                // #556 F2: bump the SEPARATE, cheap `groups_version` counter
+                // right after the group-cascade-affecting content lands in
+                // local state. `apply_saved_content_locally` above uses
+                // `update_untracked` deliberately (to avoid a full, unkeyed
+                // slide-list rebuild on every save — see its own doc
+                // comment), so nothing else would tell the header
+                // badge/placeholder fine-grained closures to recompute.
+                // This counter is what does — see `groups_version` on
+                // `OperatorState`.
+                groups_version.update(|v| *v += 1);
                 finish_save_status_ok(slide_id, save_status, token).await
             }
             Err(_) => finish_save_status_err(slide_id, save_status, token),

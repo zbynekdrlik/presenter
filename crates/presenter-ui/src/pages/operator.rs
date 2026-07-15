@@ -470,13 +470,30 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
         // #515: same stale-refetch guard as `PresentationList::select_presentation`
         // — this fetch fires once at page load; if a slide edit is saved
         // before it resolves, drop the response instead of clobbering it.
-        let seq_at_fetch = op.slide_edit_seq.get_untracked();
         let slide_edit_seq = op.slide_edit_seq;
         leptos::task::spawn_local(async move {
-            if let Ok(detail) = crate::api::presentations::get_presentation(&pres_id).await {
+            // #556 F6: reorder/insert/duplicate/delete now ALSO bump
+            // `slide_edit_seq` (#552/#553), widening the window in which
+            // some edit lands while THIS session-restore fetch is in
+            // flight — a bare drop on mismatch, with no retry, could leave
+            // the session-restored presentation never loading at all.
+            // Retry the fetch ONCE with a freshly captured seq before
+            // giving up (same policy as `PresentationList::select_presentation`).
+            let mut seq_at_fetch = slide_edit_seq.get_untracked();
+            let mut remaining_attempts = 2;
+            loop {
+                remaining_attempts -= 1;
+                let Ok(detail) = crate::api::presentations::get_presentation(&pres_id).await else {
+                    return;
+                };
                 if slide_edit_seq.get_untracked() == seq_at_fetch {
                     selected.set(Some(detail.presentation));
+                    return;
                 }
+                if remaining_attempts == 0 {
+                    return;
+                }
+                seq_at_fetch = slide_edit_seq.get_untracked();
             }
         });
     }

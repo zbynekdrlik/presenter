@@ -46,18 +46,35 @@ pub fn PresentationList() -> impl IntoView {
         // typing a stage/main/translation edit), the response below reflects
         // pre-edit content — apply it ONLY if no save has landed since,
         // otherwise it would clobber the newer edit with stale data.
-        let seq_at_fetch = op.slide_edit_seq.get_untracked();
         let slide_edit_seq = op.slide_edit_seq;
         leptos::task::spawn_local(async move {
-            if let Ok(detail) = crate::api::presentations::get_presentation(&id_clone).await {
-                if slide_edit_seq.get_untracked() != seq_at_fetch {
+            // #556 F6: reorder/insert/duplicate/delete now ALSO bump
+            // `slide_edit_seq` (#552/#553), widening the window in which
+            // some edit lands while THIS song-select fetch is in flight far
+            // beyond the original content-save-only race above. A bare
+            // drop on mismatch, with no retry, could leave the
+            // newly-selected song never actually loading. Retry the fetch
+            // ONCE with a freshly captured seq before giving up.
+            let mut seq_at_fetch = slide_edit_seq.get_untracked();
+            let mut remaining_attempts = 2;
+            loop {
+                remaining_attempts -= 1;
+                let Ok(detail) = crate::api::presentations::get_presentation(&id_clone).await
+                else {
+                    return;
+                };
+                if slide_edit_seq.get_untracked() == seq_at_fetch {
+                    // Cache slides
+                    slides_cache_signal.update(|cache| {
+                        cache.insert(id_clone.clone(), detail.presentation.slides.clone());
+                    });
+                    selected_presentation_signal.set(Some(detail.presentation));
                     return;
                 }
-                // Cache slides
-                slides_cache_signal.update(|cache| {
-                    cache.insert(id_clone.clone(), detail.presentation.slides.clone());
-                });
-                selected_presentation_signal.set(Some(detail.presentation));
+                if remaining_attempts == 0 {
+                    return;
+                }
+                seq_at_fetch = slide_edit_seq.get_untracked();
             }
         });
     };

@@ -758,7 +758,8 @@ body.operator {
   overflow: hidden;
 }
 
-/* #272: floating bubble + add button over the slides area */
+/* #272: floating add button over the slides area (the song bubble moved
+   IN-FLOW inside .operator__slides itself — see below, #556 F5). */
 .operator__slides-area {
   position: relative;
   display: flex;
@@ -767,10 +768,24 @@ body.operator {
   min-height: 0;
 }
 
+/* #556 F5: the song bubble used to be `position: absolute` here, pinned to
+   a FIXED screen position over `.operator__slides-area`. That only ever
+   protected whatever slide rendered at that exact spot at scrollTop=0
+   (the original #552 fix's `padding-top: 48px` reserved that gap) — once
+   the list scrolled, a DIFFERENT slide's row slid to that same physical
+   position and was silently covered, stealing its drag handle again. The
+   bubble is now rendered as the FIRST child inside `.operator__slides`
+   (a real grid item, `grid-column: 1 / -1` so it spans every column) with
+   `position: sticky; top: 0`, scoped to that same scrolling container. As
+   a genuine in-flow row it permanently reserves its own space — no slide
+   card is ever laid out underneath it, at ANY scroll position — while
+   `position: sticky` keeps it pinned to the top of the visible viewport
+   exactly like before.
+*/
 .operator__slides-bubble {
-  position: absolute;
-  top: 8px;
-  left: 8px;
+  position: sticky;
+  top: 0;
+  grid-column: 1 / -1;
   z-index: 10;
   display: inline-flex;
   align-items: center;
@@ -1030,11 +1045,10 @@ body.operator {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0.35rem;
-  /* #552: the floating song bubble + add button are absolutely positioned
-     (top: 8px) over this container, which otherwise overlaps the first
-     slide's own drag handle in its top-left corner — real drags starting
-     from the first slide can grab the bubble instead of the handle. */
-  padding-top: 48px;
+  /* #556 F5: no more manual `padding-top` reservation — the song bubble is
+     now an in-flow, sticky first grid row (see `.operator__slides-bubble`)
+     that reserves its own space at every scroll position, not just at
+     scrollTop=0. */
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.9rem;
@@ -1989,9 +2003,9 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   flex: 1;
   overflow-y: auto;
   padding: 0.35rem;
-  /* #552: see the other .operator__slides rule above — keeps the first
-     slide's drag handle clear of the floating song bubble/add button. */
-  padding-top: 48px;
+  /* #556 F5: see the other .operator__slides rule above — the song bubble
+     reserves its own space as an in-flow sticky grid row now, no manual
+     padding-top needed. */
   display: grid;
   grid-template-columns: repeat(
     var(--operator-slide-columns, 3),

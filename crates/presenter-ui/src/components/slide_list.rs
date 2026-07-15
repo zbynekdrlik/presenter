@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use leptos::prelude::*;
-use presenter_core::{resolve_sequence, ResolvedSlide};
+use presenter_core::{resolve_sequence, Presentation, ResolvedSlide, Slide};
 use wasm_bindgen::JsCast;
 
 use crate::api;
@@ -12,7 +12,7 @@ use crate::utils::color::group_pill_style;
 use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
     apply_focused_class, field_has_warning, format_multiline, is_interactive_tag,
-    reorder_slide_ids, slide_has_any_warning,
+    reorder_slide_ids, resolve_group_display, slide_has_any_warning,
 };
 use super::slide_save::{
     finish_save_status_err, finish_save_status_ok, save_with_status, start_save_status,
@@ -94,7 +94,100 @@ fn save_all_fields_from_dom(
         group,
         op.save_status,
         selected_pres,
+        op.groups_version,
     );
+}
+
+/// The slide id + field name currently holding focus, per an actual DOM
+/// check (`document.activeElement`) — not `OperatorState`'s
+/// `focused_slide_id`/`focused_field`, which only record the LAST field
+/// that was focused and are never cleared on blur. Used by the reorder
+/// drop handler (#556 F4) to know whether there is genuinely in-flight
+/// typing to protect before a tracked `selected_pres` update tears down
+/// and rebuilds the (unkeyed) slide list.
+fn focused_slide_field_in_dom() -> Option<(String, String)> {
+    let doc = crate::utils::window::document();
+    let active = doc.active_element()?;
+    let field = active.get_attribute("data-field")?;
+    let card = active.closest("[data-slide-id]").ok().flatten()?;
+    let slide_id = card.get_attribute("data-slide-id")?;
+    Some((slide_id, field))
+}
+
+/// Re-focus the given slide's field after a tracked slide-list rebuild
+/// (#556 F4). Best-effort: if the slide (or the field) no longer exists
+/// post-rebuild — e.g. it was concurrently deleted — this is a silent
+/// no-op, there is nothing left to focus.
+fn restore_pending_focus(slide_id: &str, field: &str) {
+    let doc = crate::utils::window::document();
+    let selector = format!("[data-slide-id=\"{slide_id}\"] [data-field=\"{field}\"]");
+    if let Ok(Some(el)) = doc.query_selector(&selector) {
+        if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    }
+}
+
+/// Reconcile an editing response (reorder / insert / duplicate / delete)
+/// against a possible `slide_edit_seq` mismatch (#556 F1/F3): some OTHER
+/// edit landed while this request was in flight. Never apply a response
+/// outright once it's known-stale, but never silently keep showing
+/// "Saved ✓" over a client that displays structure/content the server
+/// doesn't have either.
+///
+/// - If the response's slide-id SET still matches what's currently
+///   displayed, the concurrent edit only changed CONTENT (e.g. a
+///   content-field save bumped the seq) — apply the server's ORDER while
+///   keeping the (newer) local CONTENT for each slide.
+/// - If the id sets differ, a structural change (insert/duplicate/delete)
+///   raced this call and the merge above can't be done meaningfully — issue
+///   ONE guarded refetch and apply it only if nothing else has landed by
+///   the time it resolves.
+async fn reconcile_after_seq_mismatch(
+    pres_id: String,
+    server_slides: Vec<Slide>,
+    selected_pres: RwSignal<Option<Presentation>>,
+    slide_edit_seq: RwSignal<u64>,
+) {
+    let local_ids: Option<Vec<String>> = selected_pres
+        .get_untracked()
+        .map(|p| p.slides.iter().map(|s| s.id.to_string()).collect());
+    let server_ids: Vec<String> = server_slides.iter().map(|s| s.id.to_string()).collect();
+
+    let same_id_set = local_ids
+        .map(|mut local| {
+            let mut server_sorted = server_ids.clone();
+            local.sort();
+            server_sorted.sort();
+            local == server_sorted
+        })
+        .unwrap_or(false);
+
+    if same_id_set {
+        selected_pres.update(|p| {
+            if let Some(pres) = p.as_mut() {
+                let mut by_id: HashMap<String, Slide> = pres
+                    .slides
+                    .drain(..)
+                    .map(|s| (s.id.to_string(), s))
+                    .collect();
+                pres.slides = server_ids
+                    .iter()
+                    .filter_map(|id| by_id.remove(id))
+                    .collect();
+            }
+        });
+        return;
+    }
+
+    // A structural change raced this request: one guarded refetch, applied
+    // only if nothing newer has landed by the time it resolves.
+    let seq_at_refetch = slide_edit_seq.get_untracked();
+    if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
+        if slide_edit_seq.get_untracked() == seq_at_refetch {
+            selected_pres.set(Some(detail.presentation));
+        }
+    }
 }
 
 /// Capture current selection range from a textarea event.
@@ -234,14 +327,32 @@ pub fn SlideList() -> impl IntoView {
         let pres = ctx.selected_presentation.get_untracked();
         if let Some(p) = pres {
             let pres_id = p.id.to_string();
+            let pres_id_for_reconcile = pres_id.clone();
             let selected_presentation_signal = ctx.selected_presentation;
+            // #556 F3: bump slide_edit_seq the same way every other
+            // slide-structure mutation does, so a slower concurrent
+            // reorder/edit response can't silently resurrect stale
+            // structure once this insert lands.
+            op.slide_edit_seq.update(|seq| *seq += 1);
+            let my_seq = op.slide_edit_seq.get_untracked();
+            let slide_edit_seq = op.slide_edit_seq;
             leptos::task::spawn_local(async move {
                 if let Ok(slides) = api::presentations::insert_slide(&pres_id, None).await {
-                    selected_presentation_signal.update(|p| {
-                        if let Some(pres) = p.as_mut() {
-                            pres.slides = slides;
-                        }
-                    });
+                    if slide_edit_seq.get_untracked() == my_seq {
+                        selected_presentation_signal.update(|p| {
+                            if let Some(pres) = p.as_mut() {
+                                pres.slides = slides;
+                            }
+                        });
+                    } else {
+                        reconcile_after_seq_mismatch(
+                            pres_id_for_reconcile,
+                            slides,
+                            selected_presentation_signal,
+                            slide_edit_seq,
+                        )
+                        .await;
+                    }
                 }
             });
         }
@@ -250,7 +361,6 @@ pub fn SlideList() -> impl IntoView {
     view! {
         <section class="operator__slides-column">
             <div class="operator__slides-area">
-                {render_song_bubble(ctx.clone(), op.clone())}
                 <Show
                     when=move || ctx.selected_presentation.with(|p| p.is_some())
                     fallback=|| ()
@@ -269,6 +379,7 @@ pub fn SlideList() -> impl IntoView {
                     // Clone op for each handler that moves it into a closure
                     let op_dragover = op.clone();
                     let op_drop = op.clone();
+                    let op_bubble = op.clone();
                     view! {
                         <div
                             class="operator__slides"
@@ -303,20 +414,52 @@ pub fn SlideList() -> impl IntoView {
                                                     // (slide_edit_seq.update() above the async call, checked after
                                                     // it resolves) so a slower, overlapping EARLIER drag's response
                                                     // can't silently clobber a newer one that already landed.
+
+                                                    // #556 F4: a reorder's own tracked apply below MUST rebuild
+                                                    // the (unkeyed) slide list — the new ORDER changes which
+                                                    // cards render where, unlike a content save. Flush whatever
+                                                    // the user is mid-typing BEFORE that rebuild (both now, at
+                                                    // drop time, and again right before the response is applied
+                                                    // below) so nothing typed is silently lost, and restore
+                                                    // focus to the same field once the DOM exists again.
+                                                    if let Some((focus_sid, focus_field)) = focused_slide_field_in_dom() {
+                                                        save_all_fields_from_dom(&pres_id, &focus_sid, &focus_field, 0, 0, selected_pres, &op_drop);
+                                                    }
+
                                                     op_drop.slide_edit_seq.update(|seq| *seq += 1);
                                                     let my_seq = op_drop.slide_edit_seq.get_untracked();
                                                     let slide_edit_seq = op_drop.slide_edit_seq;
                                                     let save_status = op_drop.save_status;
+                                                    let op_for_apply = op_drop.clone();
                                                     let token = start_save_status(&dragged_id, save_status);
                                                     leptos::task::spawn_local(async move {
                                                         match api::presentations::reorder_slides(&pres_id, new_ids).await {
                                                             Ok(slides) => {
+                                                                // #556 F1: on a seq mismatch, never silently
+                                                                // discard the response while still showing
+                                                                // "Saved ✓" over a stale client order/content.
+                                                                //
+                                                                // #556 F4: flush + restore focus around whichever
+                                                                // apply path runs below (direct or reconciled) —
+                                                                // BOTH are tracked updates that rebuild the DOM.
+                                                                let focused = focused_slide_field_in_dom();
+                                                                if let Some((ref fid, ref ffield)) = focused {
+                                                                    save_all_fields_from_dom(&pres_id, fid, ffield, 0, 0, selected_pres, &op_for_apply);
+                                                                }
                                                                 if slide_edit_seq.get_untracked() == my_seq {
                                                                     selected_pres.update(|p| {
                                                                         if let Some(pres) = p.as_mut() {
                                                                             pres.slides = slides;
                                                                         }
                                                                     });
+                                                                } else {
+                                                                    reconcile_after_seq_mismatch(pres_id, slides, selected_pres, slide_edit_seq).await;
+                                                                }
+                                                                if let Some((fid, ffield)) = focused {
+                                                                    gloo_timers::callback::Timeout::new(0, move || {
+                                                                        restore_pending_focus(&fid, &ffield);
+                                                                    })
+                                                                    .forget();
                                                                 }
                                                                 finish_save_status_ok(dragged_id, save_status, token).await;
                                                             }
@@ -334,6 +477,19 @@ pub fn SlideList() -> impl IntoView {
                             op_drop.dragging_slide_id.set(None);
                         }
                     >
+                    // #556 F5: the song bubble is now an IN-FLOW, sticky first
+                    // child of this same scrolling grid (see the
+                    // `.operator__slides-bubble` / `.operator__slides` CSS)
+                    // instead of an absolutely-positioned overlay pinned to a
+                    // fixed screen position. A fixed overlay only ever
+                    // protected whatever slide happened to render at that
+                    // exact spot (row 1, at scrollTop=0) — every OTHER row
+                    // that later scrolled to that same physical position was
+                    // silently covered, stealing its drag handle. Being a
+                    // real grid item that reserves its own row means no
+                    // slide card is ever laid out underneath it, regardless
+                    // of scroll position.
+                    {render_song_bubble(ctx.clone(), op_bubble.clone())}
                     {
                     // Clone op inside the block so we can use it in nested closures
                     let op = op.clone();
@@ -394,28 +550,36 @@ pub fn SlideList() -> impl IntoView {
                         let group_inherited =
                             effective_group_name.is_some() && !group_is_new;
 
-                        // Header badge: render the effective group; dim if inherited.
-                        // Suppress entirely for "true blank" slides — empty main AND no
-                        // explicit group — so empty bookend slides created by the paste
-                        // pipeline (#275) render as truly empty rather than picking up
-                        // an inherited badge from the previous section.
-                        let group_badge_text =
-                            if main_text.is_empty() && explicit_group_name.is_none() {
-                                None
-                            } else {
-                                effective_group_name.clone()
-                            };
-                        let group_badge_inherited = group_inherited;
-
-                        // Edit-mode group input:
-                        // - value = explicit group (empty if this slide doesn't have one)
-                        // - placeholder = effective group (shows what would be inherited)
+                        // Edit-mode group input's OWN value (empty if this
+                        // slide doesn't have an explicit group) — the user's
+                        // own typed content, tied to the initial DOM render;
+                        // it never needs to react to a DIFFERENT slide's
+                        // group cascade.
                         let group_edit_value = explicit_group_name.clone().unwrap_or_default();
-                        let group_edit_placeholder = if explicit_group_name.is_none() {
-                            effective_group_name.clone().unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+
+                        // #556 F2: the header badge text/inherited-flag and
+                        // the Group input's placeholder (ghost text showing
+                        // what this slide would inherit) DO depend on the
+                        // whole presentation's group cascade, which can
+                        // change from ANOTHER slide's save without this
+                        // per-slide-list render pass re-running at all — the
+                        // Group save path is deliberately untracked (see
+                        // `slide_save.rs`). Recompute both from a fresh
+                        // `resolve_group_display` call inside a small
+                        // fine-grained Memo, gated on `groups_version`
+                        // (bumped after every save) — the same isolation
+                        // trick this file already uses for `stage_snapshot`.
+                        let sid_for_group_display = slide_id.clone();
+                        let selected_pres_for_group = ctx.selected_presentation;
+                        let groups_version = op.groups_version;
+                        let group_display = Memo::new(move |_| {
+                            let _ = groups_version.get();
+                            selected_pres_for_group
+                                .read_untracked()
+                                .as_ref()
+                                .map(|p| resolve_group_display(p, &sid_for_group_display))
+                                .unwrap_or_default()
+                        });
 
                         // is_active is now computed reactively in the class= closure
                         // using ctx.stage_snapshot.get() directly (see class closure below)
@@ -596,20 +760,33 @@ pub fn SlideList() -> impl IntoView {
                                             })}
                                         </span>
                                     </div>
-                                    {group_badge_text.clone().map(|g| {
-                                        let color_style = group_colors.get()
-                                            .get(&g)
-                                            .map(|c| group_pill_style(c))
-                                            .unwrap_or_default();
-                                        let class = if group_badge_inherited {
-                                            "operator__slide-group operator__slide-group--inherited"
-                                        } else {
-                                            "operator__slide-group"
-                                        };
+                                    {
+                                        // #556 F2: reactive — see `group_display` above.
+                                        // `<Show>`'s fallback renders nothing at all
+                                        // (same as the old `Option::map` returning
+                                        // `None`), preserving "no badge for a slide
+                                        // with no group" exactly.
                                         view! {
-                                            <span class=class style=color_style data-role="slide-group">{g}</span>
+                                            <Show when=move || group_display.get().badge_text.is_some() fallback=|| ()>
+                                                {move || {
+                                                    let display = group_display.get();
+                                                    let g = display.badge_text.unwrap_or_default();
+                                                    let color_style = group_colors.get()
+                                                        .get(&g)
+                                                        .map(|c| group_pill_style(c))
+                                                        .unwrap_or_default();
+                                                    let class = if display.badge_inherited {
+                                                        "operator__slide-group operator__slide-group--inherited"
+                                                    } else {
+                                                        "operator__slide-group"
+                                                    };
+                                                    view! {
+                                                        <span class=class style=color_style data-role="slide-group">{g}</span>
+                                                    }
+                                                }}
+                                            </Show>
                                         }
-                                    })}
+                                    }
                                     // #515: per-slide stage-layout marker —
                                     // selector in edit mode, badge in live mode.
                                     <crate::components::slide_stage_layout_picker::SlideStageLayoutControl
@@ -665,18 +842,32 @@ pub fn SlideList() -> impl IntoView {
                                     {is_edit.then(|| {
                                         let selected_pres_dup = ctx.selected_presentation;
                                         let selected_pres_del = ctx.selected_presentation;
+                                        let slide_edit_seq_dup = op.slide_edit_seq;
+                                        let slide_edit_seq_del = op.slide_edit_seq;
                                         view! {
                                             <div class="operator__slide-controls">
                                                 <button type="button" data-action="duplicate"
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_dup.clone();
+                                                        let pres_id_for_reconcile = pres_id.clone();
                                                         let sid = slide_id_dup.clone();
                                                         let selected_pres = selected_pres_dup;
+                                                        // #556 F3: bump slide_edit_seq + apply the same
+                                                        // guard+merge policy as the reorder response (F1),
+                                                        // so a slower concurrent reorder/edit response can't
+                                                        // silently resurrect stale structure once this
+                                                        // duplicate lands.
+                                                        slide_edit_seq_dup.update(|seq| *seq += 1);
+                                                        let my_seq = slide_edit_seq_dup.get_untracked();
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::duplicate_slide(&pres_id, &sid).await {
-                                                                selected_pres.update(|p| {
-                                                                    if let Some(pres) = p.as_mut() { pres.slides = slides; }
-                                                                });
+                                                                if slide_edit_seq_dup.get_untracked() == my_seq {
+                                                                    selected_pres.update(|p| {
+                                                                        if let Some(pres) = p.as_mut() { pres.slides = slides; }
+                                                                    });
+                                                                } else {
+                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup).await;
+                                                                }
                                                             }
                                                         });
                                                     }
@@ -689,13 +880,21 @@ pub fn SlideList() -> impl IntoView {
                                                         if !confirmed { return; }
 
                                                         let pres_id = pres_id_del.clone();
+                                                        let pres_id_for_reconcile = pres_id.clone();
                                                         let sid = slide_id_del.clone();
                                                         let selected_pres = selected_pres_del;
+                                                        // #556 F3: same seq bump + guard+merge as duplicate.
+                                                        slide_edit_seq_del.update(|seq| *seq += 1);
+                                                        let my_seq = slide_edit_seq_del.get_untracked();
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::delete_slide(&pres_id, &sid).await {
-                                                                selected_pres.update(|p| {
-                                                                    if let Some(pres) = p.as_mut() { pres.slides = slides; }
-                                                                });
+                                                                if slide_edit_seq_del.get_untracked() == my_seq {
+                                                                    selected_pres.update(|p| {
+                                                                        if let Some(pres) = p.as_mut() { pres.slides = slides; }
+                                                                    });
+                                                                } else {
+                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del).await;
+                                                                }
                                                             }
                                                         });
                                                     }
@@ -892,8 +1091,11 @@ pub fn SlideList() -> impl IntoView {
                                                         type="text"
                                                         data-field="group"
                                                         prop:value=group_edit_value.clone()
-                                                        // CRITICAL #8 fix: Show inherited group as placeholder
-                                                        placeholder=group_edit_placeholder
+                                                        // CRITICAL #8 fix: Show inherited group as placeholder.
+                                                        // #556 F2: reactive — see `group_display` above, so an
+                                                        // earlier slide's group save updates this placeholder
+                                                        // live instead of only after a reload.
+                                                        placeholder=move || group_display.get().edit_placeholder
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
