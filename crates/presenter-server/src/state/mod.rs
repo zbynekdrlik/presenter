@@ -40,6 +40,8 @@ mod stage_display;
 mod stage_state;
 pub(crate) mod sync;
 #[cfg(test)]
+mod sync_integration_tests;
+#[cfg(test)]
 mod tests;
 mod timers;
 pub(crate) mod video_source_status;
