@@ -241,7 +241,11 @@ async fn run_and_record(
 }
 
 async fn fetch_peer_version(client: &reqwest::Client, peer_url: &str) -> Option<String> {
-    let resp = client.get(format!("{peer_url}/healthz")).send().await.ok()?;
+    let resp = client
+        .get(format!("{peer_url}/healthz"))
+        .send()
+        .await
+        .ok()?;
     let json: serde_json::Value = resp.json().await.ok()?;
     json.get("version")
         .and_then(|v| v.as_str())

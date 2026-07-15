@@ -19,11 +19,7 @@ async fn serve(state: AppState) -> String {
     format!("http://{addr}")
 }
 
-async fn make_song(
-    state: &AppState,
-    lib: &str,
-    name: &str,
-) -> (LibraryId, PresentationId) {
+async fn make_song(state: &AppState, lib: &str, name: &str) -> (LibraryId, PresentationId) {
     let library = state.create_library(lib).await.unwrap();
     let (lib_id, _, pres, _) = state
         .create_presentation(library.id, name, None)
@@ -36,10 +32,7 @@ fn client() -> reqwest::Client {
     reqwest::Client::builder().build().unwrap()
 }
 
-fn find_song(
-    libs: &[presenter_core::Library],
-    name: &str,
-) -> Option<presenter_core::Presentation> {
+fn find_song(libs: &[presenter_core::Library], name: &str) -> Option<presenter_core::Presentation> {
     libs.iter()
         .flat_map(|l| l.presentations.iter())
         .find(|p| p.name == name)
@@ -113,9 +106,15 @@ async fn delete_to_trash_and_restore_propagate() {
     a.delete_presentation(id).await.unwrap();
     run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     let libs = b.libraries().await.unwrap();
-    assert!(find_song(&libs, "Temp").is_none(), "B hides the deleted song");
+    assert!(
+        find_song(&libs, "Temp").is_none(),
+        "B hides the deleted song"
+    );
     let trash = b.repository().list_trashed_presentations().await.unwrap();
-    assert!(trash.iter().any(|t| t.name == "Temp"), "B shows it in trash");
+    assert!(
+        trash.iter().any(|t| t.name == "Temp"),
+        "B shows it in trash"
+    );
 
     // Restore on A → propagates back to live.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;

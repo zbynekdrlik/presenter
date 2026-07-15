@@ -111,7 +111,10 @@ async fn sync_presentation_content_serves_full_slides_by_sync_id() {
     assert_eq!(json["name"], "Wire Song");
     assert_eq!(json["libraryName"], "Songs");
     assert!(json["slides"].is_array());
-    assert!(json["updatedAt"].is_string(), "camelCase timestamps: {json}");
+    assert!(
+        json["updatedAt"].is_string(),
+        "camelCase timestamps: {json}"
+    );
 
     let (status, _) = get_json(app, "/sync/presentations/does-not-exist").await;
     assert_eq!(status, StatusCode::NOT_FOUND);

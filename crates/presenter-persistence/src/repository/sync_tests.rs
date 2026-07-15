@@ -7,7 +7,9 @@ use presenter_core::{PresentationId, Slide, SlideContent, SlideText};
 use sea_orm::EntityTrait;
 
 async fn repo() -> Repository {
-    Repository::connect_in_memory().await.expect("in-memory repo")
+    Repository::connect_in_memory()
+        .await
+        .expect("in-memory repo")
 }
 
 fn slide(order: u32, main: &str) -> Slide {
@@ -130,7 +132,11 @@ async fn apply_creates_unknown_updates_newer_skips_older() {
         .await
         .unwrap();
     assert_eq!(outcome, crate::SyncApplyOutcome::SkippedNotNewer);
-    let full = repo.fetch_sync_presentation("sid-1").await.unwrap().unwrap();
+    let full = repo
+        .fetch_sync_presentation("sid-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(full.slides[0].content.main.value(), "v2");
 }
 
@@ -198,7 +204,11 @@ async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
     let (_, _, live) = repo
-        .create_presentation(lib.id, "Live Song", Some(&[slide(0, "alpha"), slide(1, "beta")]))
+        .create_presentation(
+            lib.id,
+            "Live Song",
+            Some(&[slide(0, "alpha"), slide(1, "beta")]),
+        )
         .await
         .unwrap();
     let (_, _, trashed) = repo
@@ -291,11 +301,12 @@ async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
     let with_uuid = presenter_core::Presentation::new("Imported", vec![slide(0, "a")])
         .unwrap()
         .with_sync_id("PRO-UUID-123");
-    let without_uuid =
-        presenter_core::Presentation::new("Handmade", vec![slide(0, "b")]).unwrap();
-    let library =
-        presenter_core::Library::new("Songs".to_string(), vec![with_uuid.clone(), without_uuid.clone()])
-            .unwrap();
+    let without_uuid = presenter_core::Presentation::new("Handmade", vec![slide(0, "b")]).unwrap();
+    let library = presenter_core::Library::new(
+        "Songs".to_string(),
+        vec![with_uuid.clone(), without_uuid.clone()],
+    )
+    .unwrap();
     repo.upsert_library(&library).await.unwrap();
 
     let imported = row(&repo, with_uuid.id).await;
@@ -344,7 +355,10 @@ async fn soft_delete_hides_the_song_but_keeps_the_row() {
         "soft-deleted song must not appear in libraries"
     );
     assert!(
-        repo.fetch_presentation_detail(pres.id).await.unwrap().is_none(),
+        repo.fetch_presentation_detail(pres.id)
+            .await
+            .unwrap()
+            .is_none(),
         "detail fetch must treat a trashed song as absent"
     );
 
