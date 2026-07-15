@@ -25,6 +25,7 @@ pub mod search;
 pub mod slide;
 pub mod stage_client;
 pub mod stage_display;
+pub mod sync;
 pub mod timer;
 pub mod video_source;
 
@@ -56,6 +57,7 @@ pub use presentation::Presentation;
 pub use resolume::{ResolumeHost, ResolumeHostDraft, ResolumeHostValidationError};
 pub use search::{SearchMatchField, SearchResult, SearchResultKind};
 pub use slide::{resolve_sequence, ResolvedSlide, Slide, SlideContent, SlideGroup, SlideText};
+pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};
 pub use stage_client::{StageClientSnapshot, StageClientStatus};
 pub use stage_display::{
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,

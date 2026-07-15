@@ -18,6 +18,7 @@ mod m20260625_000001_add_video_sources;
 mod m20260628_000001_create_resolume_push_audit;
 mod m20260629_000001_add_stage_active_entry_index;
 mod m20260702_000001_create_slide_stage_layouts;
+mod m20260715_000001_add_presentation_sync_columns;
 
 pub struct Migrator;
 
@@ -40,6 +41,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260628_000001_create_resolume_push_audit::Migration),
             Box::new(m20260629_000001_add_stage_active_entry_index::Migration),
             Box::new(m20260702_000001_create_slide_stage_layouts::Migration),
+            Box::new(m20260715_000001_add_presentation_sync_columns::Migration),
         ]
     }
 }

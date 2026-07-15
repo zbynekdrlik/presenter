@@ -3430,6 +3430,7 @@ version = "0.4.200"
 dependencies = [
  "async-trait",
  "chrono",
+ "presenter-core",
  "sea-orm",
  "sea-orm-migration",
  "serde_json",
