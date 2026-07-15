@@ -151,6 +151,16 @@ impl AppState {
         self.caches.presentation.write().await.clear();
     }
 
+    /// Spawn the sync loop iff a peer is configured (#555). The returned shutdown
+    /// sender is intentionally dropped — the loop runs for the process lifetime;
+    /// the oneshot closing on drop is a clean shutdown-on-exit.
+    pub(crate) fn maybe_spawn_sync(&self, peer_url: Option<String>) {
+        if let Some(peer_url) = peer_url {
+            tracing::info!(%peer_url, "song sync enabled");
+            let _ = self.spawn_sync_task(peer_url);
+        }
+    }
+
     /// Start the pull loop against `peer_url`. Called once from `from_config` when the
     /// env var is set. Returns the shutdown sender (dropped-on-exit is fine in prod).
     pub(crate) fn spawn_sync_task(&self, peer_url: String) -> oneshot::Sender<()> {

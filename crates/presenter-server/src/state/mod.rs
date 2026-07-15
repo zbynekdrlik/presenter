@@ -485,13 +485,7 @@ impl AppState {
             .configure_companion_service(companion_enabled, companion_port)
             .await?;
         state.spawn_background_tasks();
-        if let Some(peer_url) = config.sync.peer_url.clone() {
-            tracing::info!(%peer_url, "song sync enabled");
-            // The returned shutdown sender is intentionally dropped — the loop runs
-            // for the process lifetime; the oneshot closing on drop is a clean
-            // shutdown-on-exit.
-            let _ = state.spawn_sync_task(peer_url);
-        }
+        state.maybe_spawn_sync(config.sync.peer_url.clone());
         state.ai_proxy.auto_start().await;
         Ok(state)
     }
