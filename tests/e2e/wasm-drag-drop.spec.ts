@@ -234,118 +234,250 @@ test.describe("WASM Operator Drag-Drop", () => {
     expect(newCount).toBeGreaterThan(initialCount);
   });
 
-  test("slide reorder via test helper", async ({ page }) => {
-    await loadPresentation(page);
+  // #552 — a worship-team volunteer reported that dragging a slide to
+  // reorder it "sometimes works, sometimes does nothing" (raz sa to posuva
+  // raz nie). Root cause: the drop handler swallowed any network/server
+  // error silently (no `else` branch) and had no staleness guard against an
+  // overlapping second drag. The ONLY prior guard here bypassed real drag
+  // events entirely via a JS test helper, tested a single first-two swap,
+  // and self-`test.skip()`d on mismatch — exactly the untested-position gap
+  // this project's CLAUDE.md drag-drop rule exists to catch. These tests
+  // simulate REAL browser drag-and-drop (dragstart/dragover/drop), on a
+  // presentation created fresh via the API so the position coverage is
+  // deterministic, and never skip.
 
-    // Get presentation ID
-    const presId = await page
-      .locator('[data-role="presentation-item"][data-active="true"]')
-      .getAttribute("data-presentation-id");
+  async function createPresentationWithSlides(
+    request: any,
+    count: number,
+    libraryName: string,
+  ): Promise<{ presentationId: string; slideIds: string[] }> {
+    const libResp = await request.post(new URL("/libraries", baseURL).toString(), {
+      data: { name: libraryName },
+    });
+    expect(libResp.ok()).toBeTruthy();
+    const library: { id: string } = await libResp.json();
 
-    // Skip if no active presentation
-    if (!presId) {
-      test.skip(true, "No active presentation found for slide reorder test");
-      return;
+    const presResp = await request.post(
+      new URL(`/libraries/${library.id}/presentations`, baseURL).toString(),
+      { data: { name: "Drag reorder test song" } },
+    );
+    expect(presResp.ok()).toBeTruthy();
+    const presPayload: {
+      presentation: { id: string; slides: Array<{ id: string }> };
+    } = await presResp.json();
+    const presentationId = presPayload.presentation.id;
+
+    let slideIds = presPayload.presentation.slides.map((s) => s.id);
+    while (slideIds.length < count) {
+      const insertResp = await request.post(
+        new URL(`/presentations/${presentationId}/slides`, baseURL).toString(),
+        { data: { position: null } },
+      );
+      expect(insertResp.ok()).toBeTruthy();
+      const slides: Array<{ id: string }> = await insertResp.json();
+      slideIds = slides.map((s) => s.id);
     }
+    for (let i = 0; i < slideIds.length; i += 1) {
+      const updateResp = await request.patch(
+        new URL(
+          `/presentations/${presentationId}/slides/${slideIds[i]}`,
+          baseURL,
+        ).toString(),
+        { data: { main: `Slide ${i + 1}`, translation: "", stage: "" } },
+      );
+      expect(updateResp.ok()).toBeTruthy();
+    }
+    return { presentationId, slideIds };
+  }
 
-    // Wait for state to be fully loaded
+  async function openPresentationInEditMode(
+    page: import("@playwright/test").Page,
+    name: string,
+  ) {
+    await page.goto(`${baseURL}/ui/operator`);
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    const searchInput = page.locator('[data-role="global-search-query"]');
+    await searchInput.fill(name);
+    const result = page
+      .locator('[data-role="search-result-item"][data-kind="presentation"]')
+      .first();
+    await expect(result).toBeVisible({ timeout: 15_000 });
+    await result.click();
     await page.waitForFunction(
-      () => {
-        const helpers = (window as any).__presenterOperatorTestHelpers;
-        return helpers?.slideOrder !== undefined;
-      },
+      () =>
+        (document
+          .querySelector('[data-role="slides"]')
+          ?.querySelectorAll("[data-slide-id]").length ?? 0) > 0,
+      { timeout: 15_000 },
+    );
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-mode") === "edit",
       { timeout: 5_000 },
     );
+  }
 
-    const initialOrder = await page.evaluate((presId) => {
-      const helpers = (window as any).__presenterOperatorTestHelpers;
-      if (helpers?.slideOrder) {
-        return helpers.slideOrder(presId) ?? [];
-      }
-      return [];
-    }, presId);
-
-    // Skip if not enough slides
-    if (initialOrder.length < 2) {
-      test.skip(true, "Presentation needs at least 2 slides for reorder test");
-      return;
-    }
-
-    // Reorder: swap first two slides
-    const reorderedSlides = [
-      initialOrder[1],
-      initialOrder[0],
-      ...initialOrder.slice(2),
-    ];
-
-    await page.evaluate(
-      async ({ presId, slideIds }) => {
-        const helpers = (window as any).__presenterOperatorTestHelpers;
-        if (helpers?.reorderSlides) {
-          await helpers.reorderSlides(presId, slideIds);
-        }
-      },
-      { presId, slideIds: reorderedSlides },
+  async function domSlideOrder(page: import("@playwright/test").Page) {
+    return page.evaluate(() =>
+      Array.from(document.querySelectorAll("[data-slide-id]")).map((s) =>
+        s.getAttribute("data-slide-id"),
+      ),
     );
+  }
 
-    // Wait for state update
-    await page
-      .waitForFunction(
-        (expected) => {
-          const slides = document.querySelectorAll("[data-slide-id]");
-          return (
-            slides.length > 0 &&
-            slides[0]?.getAttribute("data-slide-id") === expected
-          );
-        },
-        reorderedSlides[0],
-        { timeout: 10_000 },
-      )
-      .catch(() => {});
+  // Dispatch real DragEvents (dragstart on the handle, dragover + drop on the
+  // target card, dragend on the handle) with a shared DataTransfer. This is
+  // Playwright's own documented approach for HTML5 drag-and-drop: the
+  // mouse-gesture `dragTo` synthesis of native DnD is intermittently a no-op
+  // (observed here on the drop-below-last case), while dispatched DragEvents
+  // deterministically exercise the exact same UI handlers — the handle's
+  // dragstart, the container's dragover/drop, reorder_slide_ids, and the
+  // reorder API call. Only the browser's gesture recognition is bypassed.
+  async function dragSlide(
+    page: import("@playwright/test").Page,
+    draggedSlideId: string,
+    targetSlideId: string,
+  ) {
+    await page.evaluate(
+      ({ draggedSlideId, targetSlideId }) => {
+        const handle = document.querySelector(
+          `[data-slide-id="${draggedSlideId}"] [data-role="slide-drag-handle"]`,
+        );
+        const target = document.querySelector(
+          `[data-slide-id="${targetSlideId}"]`,
+        );
+        if (!handle || !target) {
+          throw new Error("drag handle or target card not found");
+        }
+        const dataTransfer = new DataTransfer();
+        const opts = { bubbles: true, cancelable: true, dataTransfer };
+        handle.dispatchEvent(new DragEvent("dragstart", opts));
+        target.dispatchEvent(new DragEvent("dragover", opts));
+        target.dispatchEvent(new DragEvent("drop", opts));
+        handle.dispatchEvent(new DragEvent("dragend", opts));
+      },
+      { draggedSlideId, targetSlideId },
+    );
+  }
 
-    // Verify new order via DOM (may be flaky due to WASM state sync)
-    const domSlideIds = await page.evaluate(() => {
-      const slides = document.querySelectorAll("[data-slide-id]");
-      return Array.from(slides).map((s) => s.getAttribute("data-slide-id"));
+  test("dragging a slide onto a true middle position reorders it there", async ({
+    page,
+    request,
+  }) => {
+    const libraryName = `E2E Drag Middle ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 5, libraryName);
+    await openPresentationInEditMode(page, libraryName);
+
+    expect(await domSlideOrder(page)).toEqual(slideIds);
+
+    // Drag slide[0] onto slide[2] — a genuine middle position in a 5-slide
+    // list (neither the first nor the last entry), which the old
+    // first-two-swap helper test never exercised.
+    await dragSlide(page, slideIds[0], slideIds[2]);
+
+    await expect
+      .poll(() => domSlideOrder(page), { timeout: 10_000 })
+      .toEqual([slideIds[1], slideIds[2], slideIds[0], slideIds[3], slideIds[4]]);
+
+    // Persisted, not just visually reordered: reload and re-check.
+    await page.reload();
+    await openPresentationInEditMode(page, libraryName);
+    expect(await domSlideOrder(page)).toEqual([
+      slideIds[1],
+      slideIds[2],
+      slideIds[0],
+      slideIds[3],
+      slideIds[4],
+    ]);
+  });
+
+  test("dragging the last slide onto the first (drop above first entry) reorders it there", async ({
+    page,
+    request,
+  }) => {
+    const libraryName = `E2E Drag AboveFirst ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 4, libraryName);
+    await openPresentationInEditMode(page, libraryName);
+
+    await dragSlide(page, slideIds[3], slideIds[0]);
+
+    await expect
+      .poll(() => domSlideOrder(page), { timeout: 10_000 })
+      .toEqual([slideIds[3], slideIds[0], slideIds[1], slideIds[2]]);
+  });
+
+  test("dragging the first slide onto the last (drop below last entry) reorders it there", async ({
+    page,
+    request,
+  }) => {
+    const libraryName = `E2E Drag BelowLast ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 4, libraryName);
+    await openPresentationInEditMode(page, libraryName);
+
+    await dragSlide(page, slideIds[0], slideIds[3]);
+
+    await expect
+      .poll(() => domSlideOrder(page), { timeout: 10_000 })
+      .toEqual([slideIds[1], slideIds[2], slideIds[3], slideIds[0]]);
+  });
+
+  test("a single-slide (empty-reorder) presentation renders its drag handle without erroring", async ({
+    page,
+    request,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(`[pageerror] ${err.message}`));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(`[console] ${msg.text()}`);
     });
 
-    // Verify the swap occurred (first two should be swapped)
-    // This test is flaky due to WASM state synchronization timing
-    if (domSlideIds.length >= 2) {
-      if (
-        domSlideIds[0] !== initialOrder[1] ||
-        domSlideIds[1] !== initialOrder[0]
-      ) {
-        test.skip(
-          true,
-          "Slide order did not change in DOM (WASM state sync issue)",
-        );
-        // Restore original order anyway
-        await page.evaluate(
-          async ({ presId, slideIds }) => {
-            const helpers = (window as any).__presenterOperatorTestHelpers;
-            if (helpers?.reorderSlides) {
-              await helpers.reorderSlides(presId, slideIds);
-            }
-          },
-          { presId, slideIds: initialOrder },
-        );
-        return;
-      }
-      expect(domSlideIds[0]).toBe(initialOrder[1]);
-      expect(domSlideIds[1]).toBe(initialOrder[0]);
-    }
+    const libraryName = `E2E Drag Single ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 1, libraryName);
+    await openPresentationInEditMode(page, libraryName);
 
-    // Restore original order
-    await page.evaluate(
-      async ({ presId, slideIds }) => {
-        const helpers = (window as any).__presenterOperatorTestHelpers;
-        if (helpers?.reorderSlides) {
-          await helpers.reorderSlides(presId, slideIds);
-        }
-      },
-      { presId, slideIds: initialOrder },
+    // Dragging the only slide onto itself must be a graceful no-op — no
+    // second position exists to drop into.
+    await dragSlide(page, slideIds[0], slideIds[0]);
+    await page.waitForTimeout(300);
+    expect(await domSlideOrder(page)).toEqual(slideIds);
+
+    expect(errors, `page errors: ${errors.join(" | ")}`).toEqual([]);
+  });
+
+  test("a failed reorder request shows a visible failure instead of a silent no-op", async ({
+    page,
+    request,
+  }) => {
+    const libraryName = `E2E Drag Failure ${Date.now()}`;
+    const { presentationId, slideIds } = await createPresentationWithSlides(
+      request,
+      3,
+      libraryName,
     );
+
+    await page.route(
+      `**/presentations/${presentationId}/slides/reorder`,
+      (route) => route.fulfill({ status: 500, body: "injected failure" }),
+    );
+
+    await openPresentationInEditMode(page, libraryName);
+    await dragSlide(page, slideIds[0], slideIds[2]);
+
+    // Before the fix there was no error branch at all, so nothing ever
+    // indicated the drop failed. Now it reuses the same per-slide
+    // save-status badge every content edit already shows.
+    const badge = page.locator(
+      `[data-slide-id="${slideIds[0]}"] [data-role="slide-save-indicator"]`,
+    );
+    await expect(badge).toHaveAttribute("data-status", "failed", {
+      timeout: 10_000,
+    });
+
+    // And the order must NOT have silently changed client-side despite the
+    // server rejecting it.
+    expect(await domSlideOrder(page)).toEqual(slideIds);
   });
 
   // Regression guard for issue #274: dragging a search result over a

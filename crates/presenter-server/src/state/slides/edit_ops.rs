@@ -235,3 +235,114 @@ impl AppState {
         Ok(slides)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use presenter_core::{Presentation, SlideText};
+
+    fn blank_slide(order: u32, main: &str) -> Slide {
+        Slide::new(
+            order,
+            SlideContent::new(
+                SlideText::new(main).unwrap(),
+                SlideText::new("").unwrap(),
+                SlideText::new("").unwrap(),
+                None,
+            ),
+        )
+    }
+
+    async fn presentation_with_slides(state: &AppState, main_texts: &[&str]) -> Presentation {
+        let library = state.create_library("Test Library").await.unwrap();
+        let slides: Vec<Slide> = main_texts
+            .iter()
+            .enumerate()
+            .map(|(i, main)| blank_slide(i as u32, main))
+            .collect();
+        let (_, _, presentation, _) = state
+            .create_presentation(library.id, "Test Presentation", Some(&slides))
+            .await
+            .unwrap();
+        presentation
+    }
+
+    #[tokio::test]
+    async fn reorder_slides_persists_the_exact_requested_order() {
+        let state = AppState::in_memory().await.unwrap();
+        let presentation = presentation_with_slides(&state, &["A", "B", "C"]).await;
+        let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
+
+        // Move the first slide to the end: [A, B, C] -> [B, C, A].
+        let requested_order = vec![ids[1], ids[2], ids[0]];
+        let result = state
+            .reorder_slides(presentation.id, requested_order.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.iter().map(|s| s.id).collect::<Vec<_>>(),
+            requested_order,
+            "the returned slides must be in exactly the requested order"
+        );
+        assert_eq!(
+            result.iter().map(|s| s.order).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "reorder must reindex the `order` field to match the new positions"
+        );
+
+        // The reorder must actually PERSIST — re-reading the presentation from
+        // the repository (not the in-memory return value) must show the same
+        // order, not just the return value of this one call.
+        let reloaded = state.presentation_detail(presentation.id).await.unwrap();
+        let (_, _, reloaded_presentation) = reloaded.expect("presentation must still exist");
+        assert_eq!(
+            reloaded_presentation
+                .slides
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            requested_order,
+            "the new order must be persisted, not just returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn reorder_slides_rejects_a_length_mismatch_instead_of_silently_dropping_slides() {
+        let state = AppState::in_memory().await.unwrap();
+        let presentation = presentation_with_slides(&state, &["A", "B", "C"]).await;
+        let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
+
+        // Only two of the three slide ids: this must fail loudly, not silently
+        // drop the third slide from the presentation.
+        let short_order = vec![ids[0], ids[1]];
+        let result = state.reorder_slides(presentation.id, short_order).await;
+        assert!(
+            result.is_err(),
+            "a slide-count mismatch must be rejected, not silently applied"
+        );
+
+        let reloaded = state.presentation_detail(presentation.id).await.unwrap();
+        let (_, _, reloaded_presentation) = reloaded.expect("presentation must still exist");
+        assert_eq!(
+            reloaded_presentation.slides.len(),
+            3,
+            "a rejected reorder must not have mutated the persisted slide list"
+        );
+    }
+
+    #[tokio::test]
+    async fn reorder_slides_rejects_an_unknown_slide_id() {
+        let state = AppState::in_memory().await.unwrap();
+        let presentation = presentation_with_slides(&state, &["A", "B"]).await;
+        let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
+
+        let bogus_order = vec![ids[0], SlideId::new()];
+        let result = state.reorder_slides(presentation.id, bogus_order).await;
+        assert!(
+            result.is_err(),
+            "an order list naming a slide id that doesn't belong to this presentation must be rejected"
+        );
+    }
+}
