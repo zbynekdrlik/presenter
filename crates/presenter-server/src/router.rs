@@ -11,6 +11,7 @@ mod search;
 mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
+mod sync;
 mod tablet_pwa;
 mod timers;
 mod ui_routes;
@@ -279,6 +280,20 @@ pub fn build_router(state: AppState) -> Router {
     );
     router
         .route("/group-colors", get(presentations::get_group_colors))
+        // #555 sync + trash. The STATIC /presentations/trash route MUST be
+        // registered before the dynamic /presentations/{id} route so matchit
+        // does not swallow it (same lesson as /integrations/video-sources/status).
+        .route("/sync/manifest", get(sync::get_sync_manifest))
+        .route(
+            "/sync/presentations/{sync_id}",
+            get(sync::get_sync_presentation),
+        )
+        .route("/integrations/sync/status", get(sync::get_sync_status))
+        .route("/presentations/trash", get(sync::list_trash))
+        .route(
+            "/presentations/{id}/restore",
+            post(sync::restore_presentation),
+        )
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
@@ -559,5 +574,7 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
         .map_err(|_| AppError::bad_request_message(format!("{field} must be a valid UUID")))
 }
 
+#[cfg(test)]
+mod sync_tests;
 #[cfg(test)]
 mod tests;
