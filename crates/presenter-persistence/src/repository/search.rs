@@ -138,6 +138,7 @@ impl Repository {
         if !matched_library_vec.is_empty() {
             let matched_presentations = presentation_entity::Entity::find()
                 .filter(presentation_entity::Column::LibraryId.is_in(matched_library_vec))
+                .filter(presentation_entity::Column::DeletedAt.is_null())
                 .all(&self.db)
                 .await?;
             for model in matched_presentations {
@@ -176,6 +177,7 @@ impl Repository {
 
         let presentation_rows = presentation_entity::Entity::find()
             .filter(presentation_condition)
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(presentation_entity::Column::Name)
             .limit(remaining as u64)
             .find_also_related(library::Entity)

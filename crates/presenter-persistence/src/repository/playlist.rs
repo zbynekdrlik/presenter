@@ -251,6 +251,7 @@ impl Repository {
         }
         let models = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::Id.is_in(ids))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .all(&self.db)
             .await?;
         let mut map = HashMap::with_capacity(models.len());

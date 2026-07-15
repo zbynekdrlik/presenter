@@ -1,7 +1,7 @@
 //! #555 song-sync repository tests: identity, LWW apply, soft-delete, trash.
 //! Add further `use` imports (ColumnTrait/QueryFilter/etc.) in the task that first needs
 //! them — keep the file clippy-clean (`-D warnings` forbids unused imports) at every commit.
-use crate::entities::presentation as presentation_entity;
+use crate::entities::{playlist_entry, presentation as presentation_entity};
 use crate::Repository;
 use presenter_core::{PresentationId, Slide, SlideContent, SlideText};
 use sea_orm::EntityTrait;
@@ -89,6 +89,62 @@ async fn replace_slides_bumps_updated_at() {
         .unwrap();
     let after = updated_at_of(&repo, pres.id).await;
     assert!(after > before, "structural slide ops must bump updated_at");
+}
+
+#[tokio::test]
+async fn soft_delete_hides_the_song_but_keeps_the_row() {
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, pres) = repo
+        .create_presentation(lib.id, "Doomed", Some(&[slide(0, "x")]))
+        .await
+        .unwrap();
+
+    // Reference it from a playlist to prove the entry is removed on delete.
+    let playlist = repo.create_playlist("Sunday", false).await.unwrap();
+    playlist_entry::Entity::insert(playlist_entry::ActiveModel {
+        id: sea_orm::Set(uuid::Uuid::new_v4().to_string()),
+        playlist_id: sea_orm::Set(playlist.id.to_string()),
+        entry_type: sea_orm::Set("presentation".to_string()),
+        presentation_id: sea_orm::Set(Some(pres.id.to_string())),
+        position: sea_orm::Set(0),
+        midi_note: sea_orm::Set(None),
+        label: sea_orm::Set(None),
+    })
+    .exec(&repo.db)
+    .await
+    .unwrap();
+
+    repo.delete_presentation(pres.id).await.unwrap();
+
+    // Hidden from every listing…
+    let libs = repo.fetch_libraries().await.unwrap();
+    assert!(
+        !libs
+            .iter()
+            .any(|l| l.presentations.iter().any(|p| p.name == "Doomed")),
+        "soft-deleted song must not appear in libraries"
+    );
+    assert!(
+        repo.fetch_presentation_detail(pres.id).await.unwrap().is_none(),
+        "detail fetch must treat a trashed song as absent"
+    );
+
+    // …but the row survives, marked.
+    let model = row(&repo, pres.id).await;
+    assert!(model.deleted_at.is_some(), "row keeps a deleted_at marker");
+
+    // And its playlist entries are gone.
+    use sea_orm::{ColumnTrait, QueryFilter};
+    let remaining = playlist_entry::Entity::find()
+        .filter(playlist_entry::Column::PresentationId.eq(pres.id.to_string()))
+        .all(&repo.db)
+        .await
+        .unwrap();
+    assert!(
+        remaining.is_empty(),
+        "playlist entries referencing the song are removed"
+    );
 }
 
 #[tokio::test]

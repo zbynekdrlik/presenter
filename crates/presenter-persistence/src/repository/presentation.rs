@@ -110,24 +110,41 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn delete_presentation(&self, presentation_id: PresentationId) -> anyhow::Result<()> {
+        use crate::entities::playlist_entry;
         let id = presentation_id.to_string();
-        // #515: one transaction — the presentation delete and its stage-layout
-        // marker cleanup commit (or fail) together, so a cleanup error can
-        // never report a failed delete that actually happened.
+        // #555: delete is now a SOFT delete (the trash) so it syncs like any
+        // edit under LWW and stays restorable for 30 days. One transaction —
+        // the mark, the playlist-entry removal, and the stage-layout cleanup
+        // commit (or fail) together (#515).
         let txn = self.db.begin().await?;
-        let result = presentation_entity::Entity::delete_by_id(id)
+
+        let now = Utc::now().to_rfc3339();
+        let result = presentation_entity::Entity::update_many()
+            .col_expr(
+                presentation_entity::Column::DeletedAt,
+                Expr::value(now.clone()),
+            )
+            .col_expr(presentation_entity::Column::UpdatedAt, Expr::value(now))
+            .filter(presentation_entity::Column::Id.eq(id.clone()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("presentation not found"));
         }
-        crate::entities::slide_stage_layout::Entity::delete_many()
-            .filter(
-                crate::entities::slide_stage_layout::Column::PresentationId
-                    .eq(presentation_id.to_string()),
-            )
+
+        // Preserve today's behavior: a deleted song leaves every playlist.
+        playlist_entry::Entity::delete_many()
+            .filter(playlist_entry::Column::PresentationId.eq(id.clone()))
             .exec(&txn)
             .await?;
+
+        // #515 markers go with the (now-hidden) song.
+        crate::entities::slide_stage_layout::Entity::delete_many()
+            .filter(crate::entities::slide_stage_layout::Column::PresentationId.eq(id))
+            .exec(&txn)
+            .await?;
+
         txn.commit().await?;
         Ok(())
     }
@@ -162,7 +179,9 @@ impl Repository {
         &self,
         presentation_id: PresentationId,
     ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
-        let pres_model = presentation_entity::Entity::find_by_id(presentation_id.to_string())
+        let pres_model = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::Id.eq(presentation_id.to_string()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .one(&self.db)
             .await?;
         let Some(pres_model) = pres_model else {
@@ -199,6 +218,7 @@ impl Repository {
         &self,
     ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
         let presentation = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(presentation_entity::Column::CreatedAt)
             .one(&self.db)
             .await?;

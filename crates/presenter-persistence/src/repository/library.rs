@@ -157,6 +157,7 @@ impl Repository {
         // Query 2: Batch fetch all presentations for these libraries
         let all_presentations = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::LibraryId.is_in(library_ids))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(presentation_entity::Column::Name)
             .all(&self.db)
             .await?;
@@ -294,6 +295,7 @@ impl Repository {
         // Query 2: Batch fetch all presentations for these libraries
         let all_presentations = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::LibraryId.is_in(library_ids))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(presentation_entity::Column::Name)
             .all(&self.db)
             .await?;
