@@ -72,6 +72,10 @@ pub mod presentation {
         pub name: String,
         pub search_name: String,
         pub created_at: DateTimeWithTimeZone,
+        // #555 song sync:
+        pub updated_at: DateTimeWithTimeZone,
+        pub sync_id: String,
+        pub deleted_at: Option<DateTimeWithTimeZone>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

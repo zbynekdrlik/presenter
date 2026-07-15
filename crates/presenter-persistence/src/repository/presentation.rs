@@ -29,6 +29,9 @@ impl Repository {
             name: Set(name.to_string()),
             search_name: Set(fold_query(name)),
             created_at: Set(Utc::now().into()),
+            updated_at: Set(Utc::now().into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(None),
         })
         .exec(&txn)
         .await?;

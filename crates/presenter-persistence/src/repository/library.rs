@@ -68,6 +68,9 @@ impl Repository {
                 name: Set(presentation.name.clone()),
                 search_name: Set(fold_query(&presentation.name)),
                 created_at: Set(Utc::now().into()),
+                updated_at: Set(Utc::now().into()),
+                sync_id: Set(uuid::Uuid::new_v4().to_string()),
+                deleted_at: Set(None),
             };
             presentation_entity::Entity::insert(pres_model)
                 .exec(&txn)

@@ -8,6 +8,8 @@ mod search;
 mod slide_stage_layout;
 mod stage_state;
 #[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 mod tests;
 mod util;
 
