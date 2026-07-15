@@ -9,15 +9,10 @@ pub enum SaveStatus {
     Failed,
 }
 
-/// Focus restoration data: (slide_id, field_name, selection_start, selection_end)
-pub type PendingFocus = (String, String, u32, u32);
-
 #[derive(Clone)]
 pub struct OperatorState {
     pub focused_slide_id: RwSignal<Option<String>>,
     pub focused_field: RwSignal<Option<String>>,
-    /// Pending focus restoration after saves: (slide_id, field, sel_start, sel_end)
-    pub pending_focus: RwSignal<Option<PendingFocus>>,
     pub search_query: RwSignal<String>,
     pub search_open: RwSignal<bool>,
     pub open_modal: RwSignal<Option<String>>,
@@ -87,7 +82,6 @@ impl OperatorState {
         Self {
             focused_slide_id: RwSignal::new(crate::state::session::get("focusedSlideId")),
             focused_field: RwSignal::new(crate::state::session::get("focusedField")),
-            pending_focus: RwSignal::new(None),
             search_query: RwSignal::new(String::new()),
             search_open: RwSignal::new(false),
             open_modal: RwSignal::new(None),

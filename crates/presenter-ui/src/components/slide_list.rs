@@ -35,49 +35,6 @@ fn get_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -> Stri
     String::new()
 }
 
-/// Restore focus to a field after save/re-render.
-fn restore_pending_focus(op: &OperatorState) {
-    if let Some((slide_id, field, sel_start, sel_end)) = op.pending_focus.get_untracked() {
-        // Check mode before restoring - only restore in edit mode
-        if crate::state::session::get("mode").as_deref() != Some("edit") {
-            op.pending_focus.set(None);
-            return;
-        }
-        // Check modal not open
-        let doc = crate::utils::window::document();
-        if doc
-            .body()
-            .and_then(|b| b.get_attribute("data-modal-open"))
-            .is_some()
-        {
-            return;
-        }
-
-        let op = op.clone();
-        // Use requestAnimationFrame for proper timing after DOM updates
-        let closure = wasm_bindgen::closure::Closure::once(Box::new(move || {
-            let doc = crate::utils::window::document();
-            let selector = format!(
-                "[data-slide-id=\"{}\"] [data-field=\"{}\"]",
-                slide_id, field
-            );
-            if let Ok(Some(el)) = doc.query_selector(&selector) {
-                if let Ok(ta) = el.clone().dyn_into::<web_sys::HtmlTextAreaElement>() {
-                    let _ = ta.focus();
-                    let _ = ta.set_selection_range(sel_start, sel_end);
-                } else if let Ok(inp) = el.dyn_into::<web_sys::HtmlInputElement>() {
-                    let _ = inp.focus();
-                    let _ = inp.set_selection_range(sel_start, sel_end);
-                }
-            }
-            op.pending_focus.set(None);
-        }) as Box<dyn FnOnce()>);
-        let window = crate::utils::window::window();
-        let _ = window.request_animation_frame(closure.as_ref().unchecked_ref());
-        closure.forget();
-    }
-}
-
 /// Unified save function that saves ALL fields from DOM atomically.
 /// This prevents data loss when editing multiple fields before blur.
 /// Takes `RwSignal` (which is `Copy`) instead of `&AppContext` to allow
@@ -334,13 +291,38 @@ pub fn SlideList() -> impl IntoView {
                                                 let ids: Vec<String> = p.slides.iter().map(|s| s.id.to_string()).collect();
                                                 if let Some(new_ids) = reorder_slide_ids(ids, &dragged_id, &target_id) {
                                                     let selected_pres = ctx.selected_presentation;
+                                                    // #552: a reorder used to swallow any network/server error
+                                                    // silently (no `else` branch at all) — a WiFi blip on the
+                                                    // tablet made the drop look exactly like "nothing happened",
+                                                    // with no visible failure and no way to tell the drag from a
+                                                    // no-op. Reuse the same per-slide save-status badge the
+                                                    // content-edit fields already show, keyed on the dragged
+                                                    // slide, so a failed reorder is visible instead of silent.
+                                                    //
+                                                    // Also bump `slide_edit_seq` the same way a content edit does
+                                                    // (slide_edit_seq.update() above the async call, checked after
+                                                    // it resolves) so a slower, overlapping EARLIER drag's response
+                                                    // can't silently clobber a newer one that already landed.
+                                                    op_drop.slide_edit_seq.update(|seq| *seq += 1);
+                                                    let my_seq = op_drop.slide_edit_seq.get_untracked();
+                                                    let slide_edit_seq = op_drop.slide_edit_seq;
+                                                    let save_status = op_drop.save_status;
+                                                    let token = start_save_status(&dragged_id, save_status);
                                                     leptos::task::spawn_local(async move {
-                                                        if let Ok(slides) = api::presentations::reorder_slides(&pres_id, new_ids).await {
-                                                            selected_pres.update(|p| {
-                                                                if let Some(pres) = p.as_mut() {
-                                                                    pres.slides = slides;
+                                                        match api::presentations::reorder_slides(&pres_id, new_ids).await {
+                                                            Ok(slides) => {
+                                                                if slide_edit_seq.get_untracked() == my_seq {
+                                                                    selected_pres.update(|p| {
+                                                                        if let Some(pres) = p.as_mut() {
+                                                                            pres.slides = slides;
+                                                                        }
+                                                                    });
                                                                 }
-                                                            });
+                                                                finish_save_status_ok(dragged_id, save_status, token).await;
+                                                            }
+                                                            Err(_) => {
+                                                                finish_save_status_err(dragged_id, save_status, token);
+                                                            }
                                                         }
                                                     });
                                                 }
@@ -916,54 +898,20 @@ pub fn SlideList() -> impl IntoView {
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
                                                             let op = op.clone();
-                                                            let selected_pres = ctx.selected_presentation;
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
-                                                                op.pending_focus.set(Some((sid.clone(), "group".to_string(), sel_start, sel_end)));
-
-                                                                let doc = crate::utils::window::document();
-                                                                let main = get_field_value(&doc, &sid, "main");
-                                                                let translation = get_field_value(&doc, &sid, "translation");
-                                                                let stage = get_field_value(&doc, &sid, "stage");
-                                                                let group_val = get_field_value(&doc, &sid, "group");
-                                                                let group = if group_val.trim().is_empty() {
-                                                                    None
-                                                                } else {
-                                                                    Some(group_val.trim().to_string())
-                                                                };
-
-                                                                // PATCH first, refetch after save succeeds (avoids the
-                                                                // race where a refetch lands before the save), then mark
-                                                                // the indicator Saved. Indicator state is consistent with
-                                                                // what the operator actually sees on the next snapshot.
-                                                                let save_status = op.save_status;
-                                                                let token = start_save_status(&sid, save_status);
-                                                                let pres_id_for_save = pres_id.clone();
-                                                                let sid_for_save = sid.clone();
-                                                                let op_for_restore = op.clone();
-                                                                leptos::task::spawn_local(async move {
-                                                                    let result = api::presentations::update_slide_with_group(
-                                                                        &pres_id_for_save,
-                                                                        &sid_for_save,
-                                                                        &main,
-                                                                        &translation,
-                                                                        &stage,
-                                                                        group,
-                                                                    )
-                                                                    .await;
-                                                                    match result {
-                                                                        Ok(_) => {
-                                                                            if let Ok(detail) = api::presentations::get_presentation(&pres_id_for_save).await {
-                                                                                selected_pres.set(Some(detail.presentation));
-                                                                            }
-                                                                            restore_pending_focus(&op_for_restore);
-                                                                            finish_save_status_ok(sid_for_save, save_status, token).await;
-                                                                        }
-                                                                        Err(_) => {
-                                                                            finish_save_status_err(sid_for_save, save_status, token);
-                                                                        }
-                                                                    }
-                                                                });
+                                                                // #552/#553: this used to be a bespoke path that did a
+                                                                // full presentation refetch + tracked `.set()` on every
+                                                                // save (forcing a full slide-list rebuild) and a manual
+                                                                // async focus-restore to fight the resulting teardown —
+                                                                // which lost the race badly enough to freeze the page
+                                                                // (any click elsewhere re-blurred the just-refocused
+                                                                // input, retriggering the same cycle forever). Use the
+                                                                // same unified, untracked save path as every other
+                                                                // field: no full rebuild, so no focus to restore, and
+                                                                // its slide_edit_seq guard now also protects group edits
+                                                                // from a stale response overwriting a newer one.
+                                                                save_all_fields_from_dom(&pres_id, &sid, "group", sel_start, sel_end, ctx.selected_presentation, &op);
                                                             }
                                                         }
                                                         on:focus={
