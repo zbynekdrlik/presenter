@@ -79,6 +79,8 @@ impl AppState {
             presentation_id: presentation_id.to_string(),
         });
 
+        self.nudge_sync();
+
         Ok(updated_slide)
     }
 
@@ -108,6 +110,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
+        self.nudge_sync();
         Ok(slides)
     }
 
@@ -157,6 +160,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
+        self.nudge_sync();
         Ok(slides)
     }
 
@@ -195,6 +199,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
+        self.nudge_sync();
         Ok(slides)
     }
 
@@ -232,6 +237,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
+        self.nudge_sync();
         Ok(slides)
     }
 }

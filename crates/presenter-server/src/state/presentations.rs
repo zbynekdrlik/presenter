@@ -56,6 +56,7 @@ impl AppState {
         });
         let summaries = self.repository.list_library_summaries(None).await?;
         let summary = summaries.into_iter().find(|summary| summary.id == id);
+        self.nudge_sync();
         Ok((id, lib_name, presentation, summary))
     }
 
@@ -74,6 +75,7 @@ impl AppState {
                 pres.name = name.to_string();
             }
         }
+        self.nudge_sync();
         Ok(())
     }
 
@@ -83,6 +85,7 @@ impl AppState {
             let mut guard = self.caches.presentation.write().await;
             guard.remove(&presentation_id);
         }
+        self.nudge_sync();
         Ok(())
     }
 

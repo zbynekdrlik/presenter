@@ -38,6 +38,7 @@ pub(crate) mod slides;
 pub(crate) mod stage;
 mod stage_display;
 mod stage_state;
+pub(crate) mod sync;
 #[cfg(test)]
 mod tests;
 mod timers;
@@ -131,6 +132,9 @@ pub struct AppState {
     /// Cloudflare Realtime TURN minting (#502). Disabled (no-op) when the
     /// `PRESENTER_TURN_KEY_*` env vars are unset — on-LAN WebRTC is unaffected.
     turn: TurnService,
+    /// #555 song-sync coordinator (nudge channel + status). Loop spawned only when
+    /// PRESENTER_SYNC_PEER_URL is set.
+    sync: sync::SyncCoordinator,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -220,6 +224,7 @@ impl AppState {
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
             turn: TurnService::from_env(),
+            sync: sync::SyncCoordinator::new(),
         };
         state.spawn_heartbeat_tasks();
         state
@@ -278,6 +283,28 @@ impl AppState {
                 ticker.tick().await;
                 if let Err(err) = wal_state.repository.wal_checkpoint().await {
                     warn!(?err, "periodic WAL checkpoint failed");
+                }
+            }
+        });
+
+        // #555: songs trashed longer than 30 days are pruned for good. Low
+        // frequency — months of use must not grow the table unbounded.
+        let prune_state = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(TokioDuration::from_secs(6 * 3600));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                match prune_state
+                    .repository
+                    .prune_deleted_presentations(chrono::Duration::days(30))
+                    .await
+                {
+                    Ok(n) if n > 0 => {
+                        tracing::info!(pruned = n, "pruned trashed songs older than 30 days");
+                    }
+                    Ok(_) => {}
+                    Err(err) => warn!(?err, "trash prune failed"),
                 }
             }
         });
@@ -456,6 +483,13 @@ impl AppState {
             .configure_companion_service(companion_enabled, companion_port)
             .await?;
         state.spawn_background_tasks();
+        if let Some(peer_url) = config.sync.peer_url.clone() {
+            tracing::info!(%peer_url, "song sync enabled");
+            // The returned shutdown sender is intentionally dropped — the loop runs
+            // for the process lifetime; the oneshot closing on drop is a clean
+            // shutdown-on-exit.
+            let _ = state.spawn_sync_task(peer_url);
+        }
         state.ai_proxy.auto_start().await;
         Ok(state)
     }
