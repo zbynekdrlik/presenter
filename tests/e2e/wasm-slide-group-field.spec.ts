@@ -202,8 +202,20 @@ test.describe("WASM Operator Group field (#553)", () => {
 
     await openPresentation(page, libraryName);
 
+    const badge = (slideId: string) =>
+      page.locator(`[data-slide-id="${slideId}"] [data-role="slide-group"]`);
+
     const group0 = page.locator(
       `[data-slide-id="${slideIds[0]}"] input[data-field="group"]`,
+    );
+    // #556 F10: wait for the ACTUAL PATCH responses instead of a fixed
+    // sleep that merely outlasts the deliberately-delayed 800ms request on
+    // average — a banned arbitrary sleep, and a real flake risk on a
+    // shared/loaded CI runner.
+    const patch0Response = page.waitForResponse(
+      (resp) =>
+        resp.url().includes(`/presentations/${presentationId}/slides/${slideIds[0]}`) &&
+        resp.request().method() === "PATCH",
     );
     await group0.fill("A");
     await group0.blur();
@@ -212,20 +224,36 @@ test.describe("WASM Operator Group field (#553)", () => {
     const group3 = page.locator(
       `[data-slide-id="${slideIds[3]}"] input[data-field="group"]`,
     );
+    const patch3Response = page.waitForResponse(
+      (resp) =>
+        resp.url().includes(`/presentations/${presentationId}/slides/${slideIds[3]}`) &&
+        resp.request().method() === "PATCH",
+    );
     await group3.fill("B");
     await group3.blur();
 
-    // Give both in-flight requests (including the deliberately delayed one)
-    // time to resolve before reloading.
-    await page.waitForTimeout(1_500);
+    // Wait for BOTH PATCHes — including the deliberately delayed one — to
+    // actually resolve.
+    await Promise.all([patch0Response, patch3Response]);
+
+    // #556 F2/F7: the cascade must be visible LIVE, before any reload. The
+    // Group field's save uses `update_untracked` for `selected_pres` (to
+    // avoid a full, unkeyed slide-list rebuild / focus loss — see
+    // `slide_save.rs`), so an assertion that only ever checks AFTER a
+    // reload would pass on the OLD buggy code too (a reload always
+    // re-fetches fresh data) — it can't distinguish "cascades live" from
+    // "cascades only after a full reload", which was exactly the #553
+    // symptom this PR fixes.
+    await expect(badge(slideIds[0])).toHaveText("A");
+    await expect(badge(slideIds[1])).toHaveText("A");
+    await expect(badge(slideIds[2])).toHaveText("A");
+    await expect(badge(slideIds[3])).toHaveText("B");
+    await expect(badge(slideIds[4])).toHaveText("B");
 
     await page.reload();
     await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
     // Re-open the same presentation after reload.
     await openPresentation(page, libraryName);
-
-    const badge = (slideId: string) =>
-      page.locator(`[data-slide-id="${slideId}"] [data-role="slide-group"]`);
 
     await expect(badge(slideIds[0])).toHaveText("A");
     await expect(badge(slideIds[1])).toHaveText("A");

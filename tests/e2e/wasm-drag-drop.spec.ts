@@ -340,6 +340,13 @@ test.describe("WASM Operator Drag-Drop", () => {
     draggedSlideId: string,
     targetSlideId: string,
   ) {
+    // #556 F8: the previous version dispatched `drop` unconditionally,
+    // which means a regression that broke the `dragover` gating (the
+    // container only calls `preventDefault()` while a slide is actually
+    // being dragged — see the `on:dragover` handler in `slide_list.rs`)
+    // or that made the handle non-draggable would go completely unnoticed
+    // here. Assert BOTH before ever dispatching `drop`, so either
+    // regression fails the suite instead of being silently masked.
     await page.evaluate(
       ({ draggedSlideId, targetSlideId }) => {
         const handle = document.querySelector(
@@ -351,10 +358,24 @@ test.describe("WASM Operator Drag-Drop", () => {
         if (!handle || !target) {
           throw new Error("drag handle or target card not found");
         }
+        if (handle.getAttribute("draggable") !== "true") {
+          throw new Error(
+            'drag handle regression: expected draggable="true" on the source handle',
+          );
+        }
         const dataTransfer = new DataTransfer();
         const opts = { bubbles: true, cancelable: true, dataTransfer };
         handle.dispatchEvent(new DragEvent("dragstart", opts));
-        target.dispatchEvent(new DragEvent("dragover", opts));
+        // `dispatchEvent` returns `false` only when a listener called
+        // `preventDefault()` — i.e. the drop-zone gating actually fired.
+        const dragoverWasPrevented = !target.dispatchEvent(
+          new DragEvent("dragover", opts),
+        );
+        if (!dragoverWasPrevented) {
+          throw new Error(
+            "drop-zone gating regression: dragover was not preventDefault()'ed",
+          );
+        }
         target.dispatchEvent(new DragEvent("drop", opts));
         handle.dispatchEvent(new DragEvent("dragend", opts));
       },
@@ -977,5 +998,96 @@ test.describe("WASM Operator Drag-Drop", () => {
       .getAttribute("data-presentation-id");
     expect(firstEntryId).toBe(bubblePresId);
     expect(consoleMessages).toEqual([]);
+  });
+
+  // #556 F9: the #552 bubble-overlap fix had ZERO test coverage of the
+  // actual browser hit-testing it claims to fix — every drag test here
+  // uses synthetic DragEvents dispatched directly on the elements, which
+  // bypasses real pointer hit-testing entirely (a synthetic dispatch would
+  // "work" even if the bubble visually covered the handle). These
+  // assertions use `document.elementFromPoint()` — the same mechanism a
+  // real mouse click/drag uses to resolve which element is actually under
+  // the cursor — to prove the drag handle is genuinely reachable, both at
+  // the top of the list AND after scrolling (the #556 F5 fix: the bubble
+  // is a sticky, in-flow row that reserves its own space at every scroll
+  // position, not just at scrollTop=0).
+  test("the song bubble never covers a slide's drag handle, at scrollTop=0 or after scrolling (#556 F9)", async ({
+    page,
+    request,
+  }) => {
+    const libraryName = `E2E Drag Bubble Overlap ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(
+      request,
+      30,
+      libraryName,
+    );
+    await openPresentationInEditMode(page, libraryName);
+
+    // At scrollTop=0, the first slide's own drag handle must be the
+    // element actually hit-tested at its own screen position — not the
+    // floating song bubble that used to sit at that exact spot (#552's
+    // original overlap bug).
+    const firstHandleHitTestable = await page.evaluate((slideId) => {
+      const handle = document.querySelector(
+        `[data-slide-id="${slideId}"] [data-role="slide-drag-handle"]`,
+      );
+      if (!handle) return false;
+      const rect = handle.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      return hit === handle || (hit != null && handle.contains(hit));
+    }, slideIds[0]);
+    expect(
+      firstHandleHitTestable,
+      "the first slide's drag handle must be hit-testable at scrollTop=0",
+    ).toBe(true);
+
+    // Scroll a MIDDLE slide's card to the EXACT top edge of the scroll
+    // viewport via `scrollIntoView({block: "start"})` — the precise
+    // physical position the bubble used to permanently occupy on screen.
+    // The #552 fix's `padding-top: 48px` only ever reserved that spot for
+    // row 1 at scrollTop=0; any OTHER row that later scrolls to that exact
+    // position was silently covered (the #556 F5 bug this closes).
+    // Scrolling to an arbitrary/max position (e.g. `scrollHeight`) doesn't
+    // reliably land a row's top exactly there, so this uses the precise
+    // native alignment instead of a guessed scroll offset.
+    const targetSlideId = slideIds[15];
+    const scrolledTargetOffset = await page.evaluate((slideId) => {
+      const container = document.querySelector('[data-role="slides"]');
+      const card = document.querySelector(`[data-slide-id="${slideId}"]`);
+      if (!container || !card) return null;
+      card.scrollIntoView({ block: "start" });
+      return (
+        card.getBoundingClientRect().top -
+        container.getBoundingClientRect().top
+      );
+    }, targetSlideId);
+    expect(
+      scrolledTargetOffset,
+      "the slide list and target card must exist for this test to be meaningful",
+    ).not.toBeNull();
+    expect(
+      Math.abs(scrolledTargetOffset as number),
+      "scrollIntoView must align the target card's top with the container's own top edge",
+    ).toBeLessThan(5);
+
+    const scrolledHandleHitTestable = await page.evaluate((slideId) => {
+      const handle = document.querySelector(
+        `[data-slide-id="${slideId}"] [data-role="slide-drag-handle"]`,
+      );
+      if (!handle) return false;
+      const rect = handle.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      return hit === handle || (hit != null && handle.contains(hit));
+    }, targetSlideId);
+    expect(
+      scrolledHandleHitTestable,
+      "a slide scrolled to the exact top-of-viewport position must have its drag handle hit-testable, not covered by the song bubble",
+    ).toBe(true);
   });
 });
