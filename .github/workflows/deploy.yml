@@ -375,6 +375,10 @@ jobs:
           esac
           printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$PROD_STAGE_URL" |
             ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/stage-url.conf >/dev/null && sudo systemctl daemon-reload"
+          # #555: song-sync peer — SNV pulls from PP over tailscale (the two sites
+          # have overlapping 10.77.8.0/23 LANs; tailscale is the only inter-site path).
+          printf '[Service]\nEnvironment=PRESENTER_SYNC_PEER_URL=%s\n' "http://100.101.72.101" |
+            ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/sync-peer.conf >/dev/null && sudo systemctl daemon-reload"
 
       # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only
       # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`).
