@@ -281,7 +281,13 @@ fn presentation_from_proto(raw: &proto::Presentation) -> Result<Presentation> {
         ));
     }
 
-    Ok(Presentation::new(nfc::to_nfc(&raw.name), slides)?)
+    let presentation = Presentation::new(nfc::to_nfc(&raw.name), slides)?;
+    // #555: carry the .pro file's own UUID as the cross-instance sync identity, so
+    // two sites importing the same file converge on the same song.
+    Ok(match raw.uuid.as_ref() {
+        Some(u) if !u.string.trim().is_empty() => presentation.with_sync_id(u.string.trim()),
+        _ => presentation,
+    })
 }
 
 fn slide_content_from_proto(
@@ -920,6 +926,47 @@ mod tests {
 
         let presentation = presentation_from_proto(&raw).expect("import succeeds");
         assert_eq!(presentation.name, "Po Tebe Pane \u{17e}\u{ed}znim");
+        // No presentation-level uuid in this fixture → no sync identity.
+        assert_eq!(presentation.sync_id, None);
+    }
+
+    #[test]
+    fn presentation_from_proto_carries_the_pro_uuid_as_sync_id() {
+        let slide_type = proto::action::SlideType {
+            slide: Some(proto::action::slide_type::Slide::Presentation(
+                proto::PresentationSlide {
+                    base_slide: Some(proto::Slide::default()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let action = proto::Action {
+            r#type: proto::action::ActionType::PresentationSlide as i32,
+            action_type_data: Some(proto::action::ActionTypeData::Slide(slide_type)),
+            ..Default::default()
+        };
+        let cue = proto::Cue {
+            uuid: Some(proto::Uuid {
+                string: "cue-1".into(),
+            }),
+            actions: vec![action],
+            ..Default::default()
+        };
+        let raw = proto::Presentation {
+            name: String::from("Song"),
+            uuid: Some(proto::Uuid {
+                string: " PRO-UUID-123 ".into(),
+            }),
+            cues: vec![cue],
+            ..Default::default()
+        };
+
+        let presentation = presentation_from_proto(&raw).expect("import succeeds");
+        assert_eq!(
+            presentation.sync_id.as_deref(),
+            Some("PRO-UUID-123"),
+            "the .pro file's own UUID (trimmed) becomes the sync identity"
+        );
     }
 
     #[test]

@@ -92,6 +92,30 @@ async fn replace_slides_bumps_updated_at() {
 }
 
 #[tokio::test]
+async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
+    let repo = repo().await;
+    let with_uuid = presenter_core::Presentation::new("Imported", vec![slide(0, "a")])
+        .unwrap()
+        .with_sync_id("PRO-UUID-123");
+    let without_uuid =
+        presenter_core::Presentation::new("Handmade", vec![slide(0, "b")]).unwrap();
+    let library =
+        presenter_core::Library::new("Songs".to_string(), vec![with_uuid.clone(), without_uuid.clone()])
+            .unwrap();
+    repo.upsert_library(&library).await.unwrap();
+
+    let imported = row(&repo, with_uuid.id).await;
+    assert_eq!(imported.sync_id, "PRO-UUID-123", ".pro UUID wins");
+
+    let handmade = row(&repo, without_uuid.id).await;
+    assert_eq!(
+        handmade.sync_id,
+        presenter_core::sync_id_for_name("Songs", "Handmade"),
+        "no .pro UUID → deterministic name-based identity"
+    );
+}
+
+#[tokio::test]
 async fn soft_delete_hides_the_song_but_keeps_the_row() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();

@@ -69,7 +69,16 @@ impl Repository {
                 search_name: Set(fold_query(&presentation.name)),
                 created_at: Set(Utc::now().into()),
                 updated_at: Set(Utc::now().into()),
-                sync_id: Set(uuid::Uuid::new_v4().to_string()),
+                // #555: prefer the domain identity (the .pro UUID from import);
+                // else derive the deterministic name-based id so a re-import
+                // without one still pairs across sites.
+                sync_id: Set(presentation
+                    .sync_id
+                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        presenter_core::sync_id_for_name(&library.name, &presentation.name)
+                    })),
                 deleted_at: Set(None),
             };
             presentation_entity::Entity::insert(pres_model)
