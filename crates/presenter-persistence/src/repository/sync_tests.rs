@@ -92,6 +92,98 @@ async fn replace_slides_bumps_updated_at() {
 }
 
 #[tokio::test]
+async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, live) = repo
+        .create_presentation(lib.id, "Live Song", Some(&[slide(0, "alpha"), slide(1, "beta")]))
+        .await
+        .unwrap();
+    let (_, _, trashed) = repo
+        .create_presentation(lib.id, "Gone Song", Some(&[slide(0, "x")]))
+        .await
+        .unwrap();
+    repo.delete_presentation(trashed.id).await.unwrap();
+
+    let manifest = repo.list_sync_manifest().await.unwrap();
+    assert_eq!(manifest.len(), 2, "manifest carries live AND trashed songs");
+    let gone = manifest.iter().find(|r| r.name == "Gone Song").unwrap();
+    assert!(gone.deleted_at.is_some(), "trashed row keeps its marker");
+    let live_row = manifest.iter().find(|r| r.name == "Live Song").unwrap();
+    assert!(live_row.deleted_at.is_none());
+
+    let full = repo
+        .fetch_sync_presentation(&live_row.sync_id)
+        .await
+        .unwrap()
+        .expect("content fetch by sync_id");
+    assert_eq!(full.library_name, "Songs");
+    assert_eq!(full.slides.len(), 2);
+    assert_eq!(full.slides[0].content.main.value(), "alpha");
+
+    let _ = row(&repo, live.id).await; // row helper stays used across tasks
+}
+
+#[tokio::test]
+async fn trash_lists_restores_and_prunes() {
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, fresh) = repo
+        .create_presentation(lib.id, "Fresh Trash", Some(&[slide(0, "a")]))
+        .await
+        .unwrap();
+    let (_, _, old) = repo
+        .create_presentation(lib.id, "Old Trash", Some(&[slide(0, "b")]))
+        .await
+        .unwrap();
+    repo.delete_presentation(fresh.id).await.unwrap();
+    repo.delete_presentation(old.id).await.unwrap();
+
+    // Trash lists both.
+    let trash = repo.list_trashed_presentations().await.unwrap();
+    assert_eq!(trash.len(), 2);
+
+    // Restore brings one back into the libraries and bumps its clock.
+    let before = updated_at_of(&repo, fresh.id).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    repo.restore_presentation(fresh.id).await.unwrap();
+    let restored = row(&repo, fresh.id).await;
+    assert!(restored.deleted_at.is_none(), "restore clears the marker");
+    let after = updated_at_of(&repo, fresh.id).await;
+    assert!(after > before, "restore bumps updated_at (it must sync)");
+    let libs = repo.fetch_libraries().await.unwrap();
+    assert!(libs
+        .iter()
+        .any(|l| l.presentations.iter().any(|p| p.name == "Fresh Trash")));
+
+    // Age the other row 31 days back, then prune keeps only fresh trash.
+    use sea_orm::{ColumnTrait, QueryFilter};
+    let old_stamp = (chrono::Utc::now() - chrono::Duration::days(31)).to_rfc3339();
+    presentation_entity::Entity::update_many()
+        .col_expr(
+            presentation_entity::Column::DeletedAt,
+            sea_orm::sea_query::Expr::value(old_stamp),
+        )
+        .filter(presentation_entity::Column::Id.eq(old.id.to_string()))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+    let removed = repo
+        .prune_deleted_presentations(chrono::Duration::days(30))
+        .await
+        .unwrap();
+    assert_eq!(removed, 1, "only the 31-day-old row is pruned");
+    assert!(
+        presentation_entity::Entity::find_by_id(old.id.to_string())
+            .one(&repo.db)
+            .await
+            .unwrap()
+            .is_none(),
+        "pruned row is gone for good"
+    );
+}
+
+#[tokio::test]
 async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
     let repo = repo().await;
     let with_uuid = presenter_core::Presentation::new("Imported", vec![slide(0, "a")])
