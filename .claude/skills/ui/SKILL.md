@@ -96,3 +96,13 @@ the timer dies with the page navigation (there is no client-side router).
 
 Reminder: this crate is **excluded from the workspace** — `cargo test -p presenter-ui` fails.
 Run `cd crates/presenter-ui && cargo test --lib`.
+
+## A `console.warn` from a WASM poller can red-line an unrelated E2E
+
+`leptos::logging::warn!` reaches the browser console, and several specs (e.g.
+`operator-slide-scroll.spec.ts`) assert **zero console errors AND warnings**. The settings card is
+embedded in the operator page, so its 5 s poll runs there too — and the in-flight fetch a page
+teardown aborts fails with `TypeError: Failed to fetch`, warning once per closed page and failing
+those specs. Do not answer that by swallowing the error (stale data the operator trusts is worse
+than none): tolerate ONE failure silently, and on the second in a row fall back to a "Checking…"
+state and log once (`STALE_AFTER_FAILURES` in `video_sources.rs`).

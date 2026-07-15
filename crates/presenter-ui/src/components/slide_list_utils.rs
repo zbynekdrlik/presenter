@@ -1,3 +1,4 @@
+use presenter_core::{resolve_sequence, Presentation};
 use wasm_bindgen::JsCast;
 
 /// Format text with `<br>` for line breaks and highlight lines exceeding limit.
@@ -33,6 +34,159 @@ pub(super) fn field_has_warning(text: &str, limit: u32) -> bool {
 /// warning, unlike the lyrics `main`/`translation` fields.
 pub(super) fn slide_has_any_warning(main: &str, translation: &str, limit: u32) -> bool {
     field_has_warning(main, limit) || field_has_warning(translation, limit)
+}
+
+/// The group-cascade-derived pieces of a single slide's rendering that must
+/// recompute live after ANY slide's group is saved (#556 F2) — not just once
+/// per full slide-list render, since the Group save path deliberately uses
+/// `update_untracked` (see `slide_save.rs::apply_saved_content_locally`) to
+/// avoid a full, unkeyed list rebuild on every save.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct GroupDisplay {
+    /// The effective group badge text for the header pill; `None` suppresses
+    /// the badge entirely — no group at all, or a "true blank" slide (empty
+    /// main AND no explicit group, the #275 empty-bookend rule).
+    pub badge_text: Option<String>,
+    /// Whether the badge is the dimmed INHERITED variant vs. this slide's
+    /// own explicit group.
+    pub badge_inherited: bool,
+    /// The Group input's placeholder (ghost text showing what group this
+    /// slide would inherit) — empty when the slide has its own explicit
+    /// group.
+    pub edit_placeholder: String,
+}
+
+/// Resolve `slide_id`'s badge/placeholder by re-running the group cascade
+/// over the FULL, current `pres.slides` — a fresh, cheap O(n) computation
+/// rather than depending on a stale snapshot captured at a full-list render.
+pub(super) fn resolve_group_display(pres: &Presentation, slide_id: &str) -> GroupDisplay {
+    let resolved = resolve_sequence(&pres.slides);
+    let mut prev_effective: Option<String> = None;
+    for (raw, resolved_slide) in pres.slides.iter().zip(resolved.iter()) {
+        let effective_group_name = resolved_slide
+            .effective_group
+            .as_ref()
+            .map(|g| g.name().to_string());
+        let is_new = effective_group_name != prev_effective;
+        if raw.id.to_string() == slide_id {
+            let explicit_group_name = raw.content.group.as_ref().map(|g| g.name().to_string());
+            let main_is_empty = resolved_slide.main.value().is_empty();
+            let badge_text = if main_is_empty && explicit_group_name.is_none() {
+                None
+            } else {
+                effective_group_name.clone()
+            };
+            let badge_inherited = effective_group_name.is_some() && !is_new;
+            let edit_placeholder = if explicit_group_name.is_none() {
+                effective_group_name.unwrap_or_default()
+            } else {
+                String::new()
+            };
+            return GroupDisplay {
+                badge_text,
+                badge_inherited,
+                edit_placeholder,
+            };
+        }
+        prev_effective = effective_group_name;
+    }
+    GroupDisplay::default()
+}
+
+#[cfg(test)]
+mod group_display_tests {
+    use super::*;
+    use presenter_core::{Slide, SlideContent, SlideGroup, SlideText};
+
+    fn slide(main: &str, group: Option<&str>) -> Slide {
+        Slide::new(
+            0,
+            SlideContent::new(
+                SlideText::new(main).unwrap(),
+                SlideText::new("").unwrap(),
+                SlideText::new("").unwrap(),
+                group.map(|g| SlideGroup::new(g.to_string())),
+            ),
+        )
+    }
+
+    fn presentation(mut slides: Vec<Slide>) -> Presentation {
+        // `Presentation::new` requires unique `order` values; the `slide()`
+        // helper above always builds with `order: 0`, so reindex here.
+        for (i, s) in slides.iter_mut().enumerate() {
+            s.order = i as u32;
+        }
+        Presentation::new("Test", slides).unwrap()
+    }
+
+    #[test]
+    fn first_slide_with_explicit_group_is_not_inherited() {
+        let pres = presentation(vec![slide("A", Some("Verse 1"))]);
+        let display = resolve_group_display(&pres, &pres.slides[0].id.to_string());
+        assert_eq!(display.badge_text, Some("Verse 1".to_string()));
+        assert!(!display.badge_inherited);
+        assert_eq!(display.edit_placeholder, "");
+    }
+
+    #[test]
+    fn following_slide_without_its_own_group_inherits_and_is_marked_inherited() {
+        let pres = presentation(vec![slide("A", Some("Verse 1")), slide("B", None)]);
+        let second_id = pres.slides[1].id.to_string();
+        let display = resolve_group_display(&pres, &second_id);
+        assert_eq!(display.badge_text, Some("Verse 1".to_string()));
+        assert!(display.badge_inherited);
+        assert_eq!(
+            display.edit_placeholder, "Verse 1",
+            "an inheriting slide's placeholder shows what it would inherit"
+        );
+    }
+
+    #[test]
+    fn a_later_explicit_group_starts_a_new_non_inherited_section() {
+        let pres = presentation(vec![
+            slide("A", Some("Verse 1")),
+            slide("B", None),
+            slide("C", Some("Chorus")),
+        ]);
+        let third_id = pres.slides[2].id.to_string();
+        let display = resolve_group_display(&pres, &third_id);
+        assert_eq!(display.badge_text, Some("Chorus".to_string()));
+        assert!(!display.badge_inherited);
+    }
+
+    #[test]
+    fn true_blank_bookend_slide_suppresses_the_badge_entirely() {
+        // #275: an empty main AND no explicit group must render NO badge,
+        // even though it would otherwise inherit the previous group.
+        let pres = presentation(vec![slide("A", Some("Verse 1")), slide("", None)]);
+        let blank_id = pres.slides[1].id.to_string();
+        let display = resolve_group_display(&pres, &blank_id);
+        assert_eq!(display.badge_text, None);
+    }
+
+    #[test]
+    fn unknown_slide_id_returns_default() {
+        let pres = presentation(vec![slide("A", Some("Verse 1"))]);
+        let display = resolve_group_display(&pres, "does-not-exist");
+        assert_eq!(display, GroupDisplay::default());
+    }
+
+    #[test]
+    fn editing_an_earlier_slides_group_cascades_forward_when_recomputed() {
+        // #556 F2 regression shape: slide[0] gets a NEW explicit group after
+        // slides[1..] were already rendered inheriting the OLD state. A
+        // fresh `resolve_group_display` call (as the fine-grained closure
+        // does on every `groups_version` bump) must reflect the new value
+        // immediately, with no separate "re-render the whole list" step.
+        let mut pres = presentation(vec![slide("A", None), slide("B", None), slide("C", None)]);
+        // Simulate the save: slide[0] now carries an explicit group.
+        pres.slides[0].content.group = Some(SlideGroup::new("Verse 1".to_string()));
+
+        let second_id = pres.slides[1].id.to_string();
+        let display = resolve_group_display(&pres, &second_id);
+        assert_eq!(display.badge_text, Some("Verse 1".to_string()));
+        assert!(display.badge_inherited);
+    }
 }
 
 /// Apply is-focused class to a slide card via DOM manipulation.

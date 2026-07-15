@@ -433,3 +433,12 @@ part that lies to the operator when it is wrong.
 runners have no libndi, **dev2 does** — and the same suite is run on dev2 before a merge. A spec that
 is green only on one host is not a guard. Branch on what the server reports about itself
 (`tests/e2e/video-source-status.spec.ts`), and assert something real in both branches.
+
+**`discover_sources()` CANNOT fail — do not model blindness as an `Err`.** It is
+`Ok(self.source_list.read())` (lifecycle.rs). A "discovery failed" branch keyed on `Err` is
+therefore dead code in production and green in tests only because the fake fabricates an
+impossible error — that exact mistake shipped once. The blindness the server really has is
+**an empty list from a finder that never looked**: `NDIlib_find_create_v2` returned null (the
+finder thread exits and the list stays empty forever) or it simply has not completed its first
+~5 s scan yet (every restart). Ask `NdiManager::discovery_snapshot() -> Option<Vec<..>>`, which
+is `None` until the finder has published a scan.

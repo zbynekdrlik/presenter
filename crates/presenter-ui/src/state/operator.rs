@@ -9,15 +9,46 @@ pub enum SaveStatus {
     Failed,
 }
 
-/// Focus restoration data: (slide_id, field_name, selection_start, selection_end)
-pub type PendingFocus = (String, String, u32, u32);
+/// Wait (bounded) until NO slide save is in flight (#556 F6 + #515).
+///
+/// A `get_presentation` refetch dropped by the `slide_edit_seq` staleness
+/// guard may retry ONCE with a freshly captured seq — but the retry is only
+/// safe AFTER the save whose bump invalidated the first response has
+/// actually COMMITTED on the server. The seq bumps at save-START, so a
+/// retry issued immediately can still be served from pre-save state, and
+/// its tracked apply would blank the just-typed edit back out (the exact
+/// #515 symptom, reproduced by `slide-stage-field-bugs.spec.ts`). Polling
+/// the save-status map until no entry is `Saving` guarantees the retried
+/// GET's server-side read postdates every save that caused the mismatch.
+///
+/// Returns `true` once quiescent; `false` if still saving after
+/// `max_wait_ms` (callers then keep the old drop-the-response behavior,
+/// which is always safe).
+pub async fn await_saves_quiescent(
+    save_status: RwSignal<HashMap<String, (SaveStatus, u64)>>,
+    max_wait_ms: u32,
+) -> bool {
+    let mut waited: u32 = 0;
+    loop {
+        let any_saving = save_status
+            .get_untracked()
+            .values()
+            .any(|(status, _)| *status == SaveStatus::Saving);
+        if !any_saving {
+            return true;
+        }
+        if waited >= max_wait_ms {
+            return false;
+        }
+        gloo_timers::future::TimeoutFuture::new(50).await;
+        waited += 50;
+    }
+}
 
 #[derive(Clone)]
 pub struct OperatorState {
     pub focused_slide_id: RwSignal<Option<String>>,
     pub focused_field: RwSignal<Option<String>>,
-    /// Pending focus restoration after saves: (slide_id, field, sel_start, sel_end)
-    pub pending_focus: RwSignal<Option<PendingFocus>>,
     pub search_query: RwSignal<String>,
     pub search_open: RwSignal<bool>,
     pub open_modal: RwSignal<Option<String>>,
@@ -71,6 +102,19 @@ pub struct OperatorState {
     /// edit — otherwise a slide's stage text could vanish from the editor
     /// right after typing it (the presentation-open refetch resolving late).
     pub slide_edit_seq: RwSignal<u64>,
+    /// Monotonic counter bumped after every slide-content save that can
+    /// affect the Group cascade (#556 F2). The Group field's blur save goes
+    /// through the same `update_untracked` path as every other field (see
+    /// `apply_saved_content_locally` in `slide_save.rs`) to avoid forcing a
+    /// full, unkeyed slide-list rebuild on every save — but that means the
+    /// header badge/placeholder markup, which is derived from the WHOLE
+    /// presentation's group cascade, can't just read `selected_pres.get()`
+    /// reactively either. Each slide's badge/placeholder instead renders as
+    /// its OWN small fine-grained closure that reads THIS counter (to know
+    /// something changed) plus `selected_pres.read_untracked()` (for the
+    /// actual data) — the same isolation trick already used for
+    /// `stage_snapshot` elsewhere in `slide_list.rs`.
+    pub groups_version: RwSignal<u64>,
 }
 
 impl OperatorState {
@@ -87,7 +131,6 @@ impl OperatorState {
         Self {
             focused_slide_id: RwSignal::new(crate::state::session::get("focusedSlideId")),
             focused_field: RwSignal::new(crate::state::session::get("focusedField")),
-            pending_focus: RwSignal::new(None),
             search_query: RwSignal::new(String::new()),
             search_open: RwSignal::new(false),
             open_modal: RwSignal::new(None),
@@ -117,6 +160,7 @@ impl OperatorState {
             triggering_slide_id: RwSignal::new(None),
             save_status: RwSignal::new(HashMap::new()),
             slide_edit_seq: RwSignal::new(0),
+            groups_version: RwSignal::new(0),
         }
     }
 }
