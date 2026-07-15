@@ -9,6 +9,42 @@ pub enum SaveStatus {
     Failed,
 }
 
+/// Wait (bounded) until NO slide save is in flight (#556 F6 + #515).
+///
+/// A `get_presentation` refetch dropped by the `slide_edit_seq` staleness
+/// guard may retry ONCE with a freshly captured seq — but the retry is only
+/// safe AFTER the save whose bump invalidated the first response has
+/// actually COMMITTED on the server. The seq bumps at save-START, so a
+/// retry issued immediately can still be served from pre-save state, and
+/// its tracked apply would blank the just-typed edit back out (the exact
+/// #515 symptom, reproduced by `slide-stage-field-bugs.spec.ts`). Polling
+/// the save-status map until no entry is `Saving` guarantees the retried
+/// GET's server-side read postdates every save that caused the mismatch.
+///
+/// Returns `true` once quiescent; `false` if still saving after
+/// `max_wait_ms` (callers then keep the old drop-the-response behavior,
+/// which is always safe).
+pub async fn await_saves_quiescent(
+    save_status: RwSignal<HashMap<String, (SaveStatus, u64)>>,
+    max_wait_ms: u32,
+) -> bool {
+    let mut waited: u32 = 0;
+    loop {
+        let any_saving = save_status
+            .get_untracked()
+            .values()
+            .any(|(status, _)| *status == SaveStatus::Saving);
+        if !any_saving {
+            return true;
+        }
+        if waited >= max_wait_ms {
+            return false;
+        }
+        gloo_timers::future::TimeoutFuture::new(50).await;
+        waited += 50;
+    }
+}
+
 #[derive(Clone)]
 pub struct OperatorState {
     pub focused_slide_id: RwSignal<Option<String>>,

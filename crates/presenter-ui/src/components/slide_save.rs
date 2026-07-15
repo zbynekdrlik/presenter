@@ -324,13 +324,15 @@ pub(super) fn restore_pending_focus(slide_id: &str, field: &str) {
 ///   keeping the (newer) local CONTENT for each slide.
 /// - If the id sets differ, a structural change (insert/duplicate/delete)
 ///   raced this call and the merge above can't be done meaningfully — issue
-///   ONE guarded refetch and apply it only if nothing else has landed by
-///   the time it resolves.
+///   ONE guarded refetch (after in-flight saves have committed, so its
+///   server-side read can't predate them — the #515 race) and apply it
+///   only if nothing else has landed by the time it resolves.
 pub(super) async fn reconcile_after_seq_mismatch(
     pres_id: String,
     server_slides: Vec<Slide>,
     selected_pres: RwSignal<Option<Presentation>>,
     slide_edit_seq: RwSignal<u64>,
+    save_status: SaveStatusMap,
 ) {
     let local_ids: Option<Vec<String>> = selected_pres
         .get_untracked()
@@ -364,7 +366,15 @@ pub(super) async fn reconcile_after_seq_mismatch(
     }
 
     // A structural change raced this request: one guarded refetch, applied
-    // only if nothing newer has landed by the time it resolves.
+    // only if nothing newer has landed by the time it resolves. Wait for
+    // in-flight saves (e.g. the F4 pre-reorder flush) to commit first —
+    // a refetch issued immediately can be served from pre-save state and
+    // its tracked apply would blank the just-saved edit (the #515 race).
+    if !crate::state::operator::await_saves_quiescent(save_status, 3_000).await {
+        // Still saving after the bounded wait — keep the always-safe
+        // drop-the-response behavior.
+        return;
+    }
     let seq_at_refetch = slide_edit_seq.get_untracked();
     if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
         if slide_edit_seq.get_untracked() == seq_at_refetch {

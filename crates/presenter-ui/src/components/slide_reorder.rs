@@ -150,6 +150,7 @@ pub(super) fn handle_slide_drop(
                                                 slides,
                                                 selected_pres,
                                                 slide_edit_seq,
+                                                save_status,
                                             )
                                             .await;
                                         }

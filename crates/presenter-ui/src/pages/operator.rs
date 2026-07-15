@@ -471,6 +471,13 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
         // — this fetch fires once at page load; if a slide edit is saved
         // before it resolves, drop the response instead of clobbering it.
         let slide_edit_seq = op.slide_edit_seq;
+        let save_status = op.save_status;
+        // #515: the initial seq capture MUST stay SYNCHRONOUS (outside the
+        // spawn_local) — a `spawn_local` body runs as a microtask after the
+        // current handler, so a save fired in the same synchronous script
+        // would bump the counter first and make a stale pre-save response
+        // look "fresh" (see `PresentationList::select_presentation`).
+        let seq_at_load = op.slide_edit_seq.get_untracked();
         leptos::task::spawn_local(async move {
             // #556 F6: reorder/insert/duplicate/delete now ALSO bump
             // `slide_edit_seq` (#552/#553), widening the window in which
@@ -478,8 +485,11 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
             // flight — a bare drop on mismatch, with no retry, could leave
             // the session-restored presentation never loading at all.
             // Retry the fetch ONCE with a freshly captured seq before
-            // giving up (same policy as `PresentationList::select_presentation`).
-            let mut seq_at_fetch = slide_edit_seq.get_untracked();
+            // giving up (same policy as `PresentationList::select_presentation`),
+            // and only AFTER in-flight saves committed — a retry issued
+            // immediately can be served from pre-save state and its tracked
+            // apply would blank the just-typed edit (the #515 race).
+            let mut seq_at_fetch = seq_at_load;
             let mut remaining_attempts = 2;
             loop {
                 remaining_attempts -= 1;
@@ -491,6 +501,11 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
                     return;
                 }
                 if remaining_attempts == 0 {
+                    return;
+                }
+                if !crate::state::operator::await_saves_quiescent(save_status, 3_000).await {
+                    // Still saving after the bounded wait — keep the old,
+                    // always-safe drop-the-response behavior.
                     return;
                 }
                 seq_at_fetch = slide_edit_seq.get_untracked();

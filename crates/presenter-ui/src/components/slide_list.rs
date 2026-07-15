@@ -106,6 +106,7 @@ pub fn SlideList() -> impl IntoView {
             op.slide_edit_seq.update(|seq| *seq += 1);
             let my_seq = op.slide_edit_seq.get_untracked();
             let slide_edit_seq = op.slide_edit_seq;
+            let save_status = op.save_status;
             leptos::task::spawn_local(async move {
                 if let Ok(slides) = api::presentations::insert_slide(&pres_id, None).await {
                     if slide_edit_seq.get_untracked() == my_seq {
@@ -120,6 +121,7 @@ pub fn SlideList() -> impl IntoView {
                             slides,
                             selected_presentation_signal,
                             slide_edit_seq,
+                            save_status,
                         )
                         .await;
                     }
@@ -535,6 +537,8 @@ pub fn SlideList() -> impl IntoView {
                                         let selected_pres_del = ctx.selected_presentation;
                                         let slide_edit_seq_dup = op.slide_edit_seq;
                                         let slide_edit_seq_del = op.slide_edit_seq;
+                                        let save_status_dup = op.save_status;
+                                        let save_status_del = op.save_status;
                                         view! {
                                             <div class="operator__slide-controls">
                                                 <button type="button" data-action="duplicate"
@@ -557,7 +561,7 @@ pub fn SlideList() -> impl IntoView {
                                                                         if let Some(pres) = p.as_mut() { pres.slides = slides; }
                                                                     });
                                                                 } else {
-                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup).await;
+                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup, save_status_dup).await;
                                                                 }
                                                             }
                                                         });
@@ -584,7 +588,7 @@ pub fn SlideList() -> impl IntoView {
                                                                         if let Some(pres) = p.as_mut() { pres.slides = slides; }
                                                                     });
                                                                 } else {
-                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del).await;
+                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del, save_status_del).await;
                                                                 }
                                                             }
                                                         });

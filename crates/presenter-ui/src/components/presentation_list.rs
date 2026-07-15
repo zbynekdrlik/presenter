@@ -47,6 +47,14 @@ pub fn PresentationList() -> impl IntoView {
         // pre-edit content — apply it ONLY if no save has landed since,
         // otherwise it would clobber the newer edit with stale data.
         let slide_edit_seq = op.slide_edit_seq;
+        let save_status = op.save_status;
+        // #515: the initial seq capture MUST stay SYNCHRONOUS (outside the
+        // spawn_local) — a `spawn_local` body runs as a microtask AFTER the
+        // rest of the current event handler, so a blur-save fired in the
+        // same synchronous script (re-select a song, type, blur) would bump
+        // the counter BEFORE an inside-the-task capture ran, making the
+        // stale pre-save response look "fresh" and blanking the edit.
+        let seq_at_select = op.slide_edit_seq.get_untracked();
         leptos::task::spawn_local(async move {
             // #556 F6: reorder/insert/duplicate/delete now ALSO bump
             // `slide_edit_seq` (#552/#553), widening the window in which
@@ -54,8 +62,12 @@ pub fn PresentationList() -> impl IntoView {
             // beyond the original content-save-only race above. A bare
             // drop on mismatch, with no retry, could leave the
             // newly-selected song never actually loading. Retry the fetch
-            // ONCE with a freshly captured seq before giving up.
-            let mut seq_at_fetch = slide_edit_seq.get_untracked();
+            // ONCE with a freshly captured seq before giving up — but only
+            // AFTER the in-flight saves have committed (see
+            // `await_saves_quiescent`): a retry issued immediately can be
+            // served from pre-save state and its tracked apply would blank
+            // the just-typed edit (the #515 race this guard exists for).
+            let mut seq_at_fetch = seq_at_select;
             let mut remaining_attempts = 2;
             loop {
                 remaining_attempts -= 1;
@@ -72,6 +84,11 @@ pub fn PresentationList() -> impl IntoView {
                     return;
                 }
                 if remaining_attempts == 0 {
+                    return;
+                }
+                if !crate::state::operator::await_saves_quiescent(save_status, 3_000).await {
+                    // Still saving after the bounded wait — keep the old,
+                    // always-safe drop-the-response behavior.
                     return;
                 }
                 seq_at_fetch = slide_edit_seq.get_untracked();
