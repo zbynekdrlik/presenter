@@ -240,7 +240,7 @@ test.describe("WASM Operator Drag-Drop", () => {
   // error silently (no `else` branch) and had no staleness guard against an
   // overlapping second drag. The ONLY prior guard here bypassed real drag
   // events entirely via a JS test helper, tested a single first-two swap,
-  // and self-`test.skip()`d on mismatch — exactly the untested-position gap
+  // and silently self-skipped on mismatch — exactly the untested-position gap
   // this project's CLAUDE.md drag-drop rule exists to catch. These tests
   // simulate REAL browser drag-and-drop (dragstart/dragover/drop), on a
   // presentation created fresh via the API so the position coverage is
