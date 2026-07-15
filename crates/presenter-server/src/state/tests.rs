@@ -550,6 +550,7 @@ async fn from_config_against_empty_db_leaves_libraries_empty() {
         },
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
+        sync: crate::config::SyncConfig::default(),
     };
 
     let state = AppState::from_config(config).await.expect("from_config");
@@ -575,6 +576,7 @@ fn config_for_db(url: String) -> crate::config::ServerConfig {
         },
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
+        sync: crate::config::SyncConfig::default(),
     }
 }
 

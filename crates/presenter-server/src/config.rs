@@ -16,6 +16,7 @@ pub struct ServerConfig {
     pub android: AndroidConfig,
     #[allow(dead_code)] // Consumed in Task 2 (AppState) — not yet wired
     pub network: NetworkConfig,
+    pub sync: SyncConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,7 @@ impl ServerConfig {
             stage: StageConfig::load(),
             android: AndroidConfig::load(),
             network: NetworkConfig::load(),
+            sync: SyncConfig::load(),
         })
     }
 }
@@ -165,6 +167,22 @@ impl NetworkConfig {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SyncConfig {
+    /// Peer instance base URL for song sync (#555). Unset/empty → sync disabled.
+    pub peer_url: Option<String>,
+}
+
+impl SyncConfig {
+    fn load() -> Self {
+        let peer_url = env::var("PRESENTER_SYNC_PEER_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty());
+        Self { peer_url }
+    }
+}
+
 fn duration_override(var: &str) -> Option<Duration> {
     env::var(var)
         .ok()
@@ -244,6 +262,32 @@ mod tests {
         match original {
             Some(value) => env::set_var("PRESENTER_LOCAL_PUBLIC_IP", value),
             None => env::remove_var("PRESENTER_LOCAL_PUBLIC_IP"),
+        }
+    }
+
+    #[test]
+    fn sync_config_reads_peer_url_trimming_and_treating_empty_as_disabled() {
+        let original = env::var("PRESENTER_SYNC_PEER_URL").ok();
+
+        env::remove_var("PRESENTER_SYNC_PEER_URL");
+        assert_eq!(SyncConfig::load().peer_url, None);
+
+        env::set_var("PRESENTER_SYNC_PEER_URL", "");
+        assert_eq!(SyncConfig::load().peer_url, None);
+
+        env::set_var("PRESENTER_SYNC_PEER_URL", "   ");
+        assert_eq!(SyncConfig::load().peer_url, None);
+
+        env::set_var("PRESENTER_SYNC_PEER_URL", "  http://100.101.72.101/ ");
+        assert_eq!(
+            SyncConfig::load().peer_url,
+            Some("http://100.101.72.101".to_string()),
+            "trimmed, trailing slash stripped"
+        );
+
+        match original {
+            Some(value) => env::set_var("PRESENTER_SYNC_PEER_URL", value),
+            None => env::remove_var("PRESENTER_SYNC_PEER_URL"),
         }
     }
 
