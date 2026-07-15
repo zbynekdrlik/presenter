@@ -321,6 +321,63 @@ async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
 }
 
 #[tokio::test]
+async fn upsert_library_deduplicates_repeated_pro_uuids_deterministically() {
+    // Real ProPresenter libraries contain DUPLICATED .pro files, so two
+    // presentations can carry the SAME embedded protobuf UUID. The sync_id
+    // unique index must survive that: the first occurrence keeps the raw UUID,
+    // every later duplicate gets a DERIVED — deterministic, not random — id so
+    // both instances still converge on identical identities.
+    let repo = repo().await;
+    let first = presenter_core::Presentation::new("Original", vec![slide(0, "a")])
+        .unwrap()
+        .with_sync_id("DUP-UUID");
+    let second = presenter_core::Presentation::new("Copy Of Original", vec![slide(0, "b")])
+        .unwrap()
+        .with_sync_id("DUP-UUID");
+    let library = presenter_core::Library::new(
+        "Songs".to_string(),
+        vec![first.clone(), second.clone()],
+    )
+    .unwrap();
+    repo.upsert_library(&library).await.expect(
+        "duplicate .pro UUIDs within one import must not violate the unique index",
+    );
+
+    let first_row = row(&repo, first.id).await;
+    let second_row = row(&repo, second.id).await;
+    assert_eq!(first_row.sync_id, "DUP-UUID", "first occurrence keeps the raw UUID");
+    assert_ne!(second_row.sync_id, "DUP-UUID", "duplicate gets a distinct id");
+    assert_eq!(
+        second_row.sync_id,
+        uuid::Uuid::new_v5(
+            &presenter_core::SYNC_ID_NAMESPACE,
+            "DUP-UUID/Songs/Copy Of Original".as_bytes(),
+        )
+        .to_string(),
+        "the derived id is deterministic (both instances compute the same)"
+    );
+
+    // Cross-library duplicate: another library importing the same file also derives.
+    let elsewhere = presenter_core::Presentation::new("Original", vec![slide(0, "c")])
+        .unwrap()
+        .with_sync_id("DUP-UUID");
+    let other_lib =
+        presenter_core::Library::new("Other".to_string(), vec![elsewhere.clone()]).unwrap();
+    repo.upsert_library(&other_lib)
+        .await
+        .expect("cross-library duplicate must not violate the unique index");
+    let elsewhere_row = row(&repo, elsewhere.id).await;
+    assert_eq!(
+        elsewhere_row.sync_id,
+        uuid::Uuid::new_v5(
+            &presenter_core::SYNC_ID_NAMESPACE,
+            "DUP-UUID/Other/Original".as_bytes(),
+        )
+        .to_string(),
+    );
+}
+
+#[tokio::test]
 async fn soft_delete_hides_the_song_but_keeps_the_row() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
