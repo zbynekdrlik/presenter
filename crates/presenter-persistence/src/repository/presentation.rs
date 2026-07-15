@@ -11,6 +11,23 @@ use sea_orm::{
 };
 use tracing::instrument;
 
+/// Bump a presentation's `updated_at` to now, on any connection. Every local song
+/// mutation calls this so LWW sync has a monotone clock (#555).
+async fn touch_presentation<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    presentation_id: &str,
+) -> anyhow::Result<()> {
+    presentation_entity::Entity::update_many()
+        .col_expr(
+            presentation_entity::Column::UpdatedAt,
+            Expr::value(Utc::now().to_rfc3339()),
+        )
+        .filter(presentation_entity::Column::Id.eq(presentation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 impl Repository {
     #[instrument(skip_all)]
     pub async fn create_presentation(
@@ -87,6 +104,7 @@ impl Repository {
         if result.rows_affected == 0 {
             return Err(anyhow!("presentation not found"));
         }
+        touch_presentation(&self.db, &id).await?;
         Ok(())
     }
 
@@ -241,6 +259,7 @@ impl Repository {
             ));
         }
 
+        touch_presentation(&self.db, &presentation_id.to_string()).await?;
         Ok(())
     }
 
@@ -296,6 +315,7 @@ impl Repository {
             ));
         }
 
+        touch_presentation(&self.db, &presentation_id.to_string()).await?;
         Ok(())
     }
 
@@ -318,6 +338,7 @@ impl Repository {
             slide_entity::Entity::insert(active).exec(&txn).await?;
         }
 
+        touch_presentation(&txn, &presentation_id.to_string()).await?;
         txn.commit().await?;
         Ok(())
     }
