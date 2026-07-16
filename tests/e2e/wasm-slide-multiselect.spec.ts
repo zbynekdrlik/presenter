@@ -104,6 +104,28 @@ async function openPresentationInEditMode(
   );
 }
 
+/** Switch to a DIFFERENT presentation via search, staying on the same page
+ * (already in edit mode) — used to simulate the operator switching songs
+ * mid-request (#558 V4). */
+async function switchToPresentation(
+  page: import("@playwright/test").Page,
+  name: string,
+  firstExpectedSlideId: string,
+) {
+  const searchInput = page.locator('[data-role="global-search-query"]');
+  await searchInput.fill(name);
+  const result = page
+    .locator('[data-role="search-result-item"][data-kind="presentation"]')
+    .first();
+  await expect(result).toBeVisible({ timeout: 15_000 });
+  await result.click();
+  await page.waitForFunction(
+    (slideId) => document.querySelector(`[data-slide-id="${slideId}"]`) !== null,
+    firstExpectedSlideId,
+    { timeout: 15_000 },
+  );
+}
+
 /** The main texts of the slide cards in DOM order (edit-mode textareas). */
 async function mainTextsInOrder(page: import("@playwright/test").Page) {
   return page.evaluate(() =>
@@ -458,5 +480,134 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     await expect
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
       .toEqual(["Slide 1", "Slide 4", "Slide 2", "Slide 3", "Slide 4"]);
+  });
+
+  test("a stale paste response never clobbers a different presentation now open (#558 V4)", async ({
+    page,
+    request,
+  }) => {
+    const libA = `E2E MSel RaceA ${Date.now()}`;
+    const { slideIds: idsA } = await createPresentationWithSlides(request, 2, libA);
+    const libB = `E2E MSel RaceB ${Date.now()}`;
+    const { slideIds: idsB } = await createPresentationWithSlides(request, 2, libB);
+
+    await openPresentationInEditMode(page, libA);
+    await checkboxFor(page, idsA[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+
+    // Delay A's paste response so the test can switch to B before it lands.
+    // Perform the REAL request ourselves (server truth) but hold back
+    // DELIVERING it to the page until `released` resolves — decouples "wait
+    // for the network" from "hand the response to the page", so this
+    // doesn't race the underlying connection the way delaying
+    // `route.continue()` itself can. NOTE: deliberately no `page.unroute()`
+    // afterwards — calling it right after `releaseA()` races the handler's
+    // own still-in-flight `route.fulfill()` and throws "Route is already
+    // handled"; nothing else in this test hits `/slides/paste` again, so the
+    // route can simply stay registered.
+    let releaseA: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const pasteResponse = page.waitForResponse(
+      (r) => r.url().includes("/slides/paste") && r.request().method() === "POST",
+    );
+    await page.route("**/slides/paste", async (route) => {
+      const response = await request.fetch(route.request());
+      const body = await response.body();
+      await released;
+      await route.fulfill({
+        status: response.status(),
+        headers: response.headers(),
+        body,
+      });
+    });
+
+    await insertBar(page, 0).click(); // fires A's (now-delayed) paste
+
+    // Switch to presentation B WHILE A's paste is still in flight.
+    await switchToPresentation(page, libB, idsB[0]);
+
+    // Let A's delayed response land, and wait for the BROWSER to actually
+    // receive it before asserting. `expect.poll` alone is the WRONG tool
+    // here: it passes on the FIRST matching check, so if we polled starting
+    // immediately after `releaseA()`, the very first (near-instant) check
+    // could see B's still-uncorrupted state and pass BEFORE the response
+    // was even processed — a false pass that proves nothing. Anchor on the
+    // real network event instead, then assert once B is fully settled.
+    releaseA();
+    await pasteResponse;
+    // Bounded settle: the network response just arrived; give the WASM
+    // promise chain (`apply_slides_guarded`) a moment to run and Leptos to
+    // re-render before checking ONCE. This is NOT a poll-until-match (which
+    // would pass on a lucky first check before the corruption lands) — it's
+    // a fixed wait for a specific already-arrived event to finish
+    // processing, then a single assertion of the final state.
+    await page.waitForTimeout(500);
+
+    // B's slide list must be COMPLETELY untouched by A's late paste result —
+    // never A's returned slides painted onto B.
+    expect(await domSlideOrder(page)).toEqual(idsB);
+  });
+
+  test("clipboard shortcuts are inert on a non-worship view (#558 V5)", async ({
+    page,
+    request,
+  }) => {
+    const lib = `E2E MSel BibleView ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 2, lib);
+    await openPresentationInEditMode(page, lib);
+
+    await checkboxFor(page, slideIds[0]).click();
+
+    // Switch to the Bible view — the worship editor panel stays MOUNTED
+    // (CSS visibility toggle, not unmount/remount — see pages/operator.rs),
+    // so the window keydown listener installed for it is still live.
+    await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+    await expect(page.locator('body[data-view="bible"]')).toBeAttached();
+
+    await page.keyboard.press("Control+c");
+
+    // Switch back to worship: if Ctrl+C had set the clipboard while on the
+    // Bible view, insertion bars would now render (gated on a non-empty
+    // clipboard).
+    await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+    await expect(page.locator('[data-role="slide-insert-bar"]')).toHaveCount(0);
+  });
+
+  test("Ctrl+V inside the stage-layout dropdown does not mutate the presentation (#558 V10)", async ({
+    page,
+    request,
+  }) => {
+    const lib = `E2E MSel StageSelect ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 2, lib);
+    await openPresentationInEditMode(page, lib);
+
+    await checkboxFor(page, slideIds[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+    await expect(insertBar(page, 0)).toBeVisible();
+
+    // The paste fires an ASYNC POST that only mutates the DOM once its
+    // response lands — checking the DOM immediately after the keypress
+    // would pass even on buggy code (the request just hasn't resolved
+    // yet). Track whether the request fires at all instead.
+    let pasteFired = false;
+    page.on("request", (req) => {
+      if (req.url().includes("/slides/paste") && req.method() === "POST") {
+        pasteFired = true;
+      }
+    });
+
+    const select = page.locator(
+      `[data-slide-id="${slideIds[1]}"] [data-role="slide-stage-layout-select"]`,
+    );
+    await select.focus();
+    await page.keyboard.press("Control+v");
+
+    // Bounded settle: give a (buggy) paste request a chance to actually
+    // fire before asserting its absence.
+    await page.waitForTimeout(500);
+    expect(pasteFired).toBe(false);
+    expect(await domSlideOrder(page)).toEqual(slideIds);
   });
 });
