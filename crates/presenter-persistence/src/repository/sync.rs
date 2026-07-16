@@ -1,7 +1,7 @@
 //! #555 song-sync read layer: the manifest (identity + timestamps for every song,
 //! trashed included) and the full synced content for one song, plus the trash
 //! list/restore/prune operations.
-use super::util::{to_domain_slide, RepositoryError};
+use super::util::{to_domain_slide_wire, RepositoryError};
 use super::Repository;
 use crate::entities::{library, presentation as presentation_entity, slide as slide_entity};
 use chrono::{DateTime, Utc};
@@ -83,7 +83,7 @@ impl Repository {
             .all(&self.db)
             .await?
             .into_iter()
-            .map(to_domain_slide)
+            .map(to_domain_slide_wire)
             .collect::<Result<Vec<_>, RepositoryError>>()?;
         Ok(Some(SyncPresentation {
             sync_id: p.sync_id,

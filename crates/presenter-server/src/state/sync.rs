@@ -368,7 +368,7 @@ pub(crate) async fn run_sync_cycle(
     let mut pulled = 0usize;
     let mut applied = 0usize;
     let mut errors = 0usize;
-    for entry in peer_manifest {
+    for entry in &peer_manifest {
         let local_updated = local_map.get(&entry.sync_id).copied();
         if !presenter_persistence::sync_should_apply(
             entry.updated_at,
@@ -378,23 +378,25 @@ pub(crate) async fn run_sync_cycle(
             continue;
         }
         pulled += 1;
-        let dto: SyncPresentationDto = client
-            .get(format!("{peer_url}/sync/presentations/{}", entry.sync_id))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        match repo.apply_sync_presentation(&dto.into()).await {
-            Ok(outcome) => {
-                if outcome.wrote() {
+        // #558 round-4 U1(b): a single song's fetch/apply is ISOLATED — a
+        // failure here (e.g. an oversize legacy stored slide the peer
+        // still hasn't fixed, or any other per-song fault) must never
+        // abort the whole cycle via `?`; every other manifest entry
+        // deserves its own chance to sync in the same cycle.
+        match fetch_and_apply_one(repo, client, peer_url, entry).await {
+            Ok(wrote) => {
+                if wrote {
                     applied += 1;
                 }
-                info!(sync_id = %entry.sync_id, name = %entry.name, ?outcome, "sync applied");
             }
             Err(err) => {
                 errors += 1;
-                warn!(?err, sync_id = %entry.sync_id, "sync apply failed");
+                warn!(
+                    ?err,
+                    sync_id = %entry.sync_id,
+                    name = %entry.name,
+                    "sync: single-song fetch/apply failed — continuing with the next manifest entry"
+                );
             }
         }
     }
@@ -403,6 +405,28 @@ pub(crate) async fn run_sync_cycle(
         state.drop_presentation_caches().await;
     }
     Ok((pulled, applied, errors))
+}
+
+/// Fetch one song's full content from the peer and apply it locally.
+/// Isolated per-song (#558 round-4 U1(b)) — the caller catches any error
+/// this returns, logs + counts it, and moves on to the next manifest
+/// entry instead of aborting the whole cycle.
+async fn fetch_and_apply_one(
+    repo: &presenter_persistence::Repository,
+    client: &reqwest::Client,
+    peer_url: &str,
+    entry: &SyncManifestEntryDto,
+) -> anyhow::Result<bool> {
+    let dto: SyncPresentationDto = client
+        .get(format!("{peer_url}/sync/presentations/{}", entry.sync_id))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let outcome = repo.apply_sync_presentation(&dto.into()).await?;
+    info!(sync_id = %entry.sync_id, name = %entry.name, ?outcome, "sync applied");
+    Ok(outcome.wrote())
 }
 
 #[cfg(test)]

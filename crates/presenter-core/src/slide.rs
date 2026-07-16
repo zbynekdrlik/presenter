@@ -35,6 +35,21 @@ impl SlideText {
     pub fn is_empty(&self) -> bool {
         self.value.trim().is_empty()
     }
+
+    /// Construct a `SlideText` WITHOUT validating the 4000-char limit
+    /// (#558 round-4 U1). An escape hatch for read/wire paths that must
+    /// round-trip a value byte-for-byte regardless of length — a legacy or
+    /// wire-path row can already exceed the limit (deserializing a `Slide`
+    /// off the wire never validates either, since this struct's
+    /// `Deserialize` impl is a plain derive), so re-validating on every
+    /// future read would permanently fail that row. Never use this for
+    /// freshly authored/user-edited content — those paths must keep
+    /// calling `SlideText::new`.
+    pub fn from_stored_unchecked<T: Into<String>>(value: T) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

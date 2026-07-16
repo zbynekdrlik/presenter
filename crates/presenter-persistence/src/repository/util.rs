@@ -71,6 +71,25 @@ pub(super) fn to_domain_slide(model: slide_entity::Model) -> Result<Slide, Repos
         .with_id(SlideId::from_uuid(parse_uuid(&model.id)?));
     Ok(slide)
 }
+
+/// Build a domain `Slide` from a stored row WITHOUT re-validating the
+/// stored text through `SlideText::new` (#558 round-4 U1). Used ONLY by
+/// the sync SERVE path (`fetch_sync_presentation`): a legacy/wire-path row
+/// can already exceed the 4000-char limit — the APPLY side already
+/// accepts an oversize slide unchecked (a `Slide` deserialized off the
+/// wire never validates either), so re-validating on serve would 500 that
+/// song's fetch FOREVER, every future sync cycle.
+pub(super) fn to_domain_slide_wire(model: slide_entity::Model) -> Result<Slide, RepositoryError> {
+    let content = SlideContent::new(
+        SlideText::from_stored_unchecked(model.worship_main),
+        SlideText::from_stored_unchecked(model.worship_translate),
+        SlideText::from_stored_unchecked(model.worship_stage),
+        model.worship_group.map(SlideGroup::new),
+    );
+    let slide = Slide::new(model.position as u32, content)
+        .with_id(SlideId::from_uuid(parse_uuid(&model.id)?));
+    Ok(slide)
+}
 pub(super) fn to_domain_playlist_entry(
     model: playlist_entry::Model,
 ) -> Result<PlaylistEntry, RepositoryError> {
