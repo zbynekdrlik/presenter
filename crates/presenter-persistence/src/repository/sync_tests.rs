@@ -345,6 +345,122 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_position() {
 }
 
 #[tokio::test]
+async fn apply_sync_tombstone_clears_stage_layout_markers_instead_of_remapping_them() {
+    // R3 regression: applying a peer's TOMBSTONE went through the same
+    // remap-by-position path as a normal edit, so a trashed song's
+    // stage-layout markers survived (remapped) across the trash boundary —
+    // unlike a LOCAL delete, which clears them (`delete_presentation`).
+    // Restoring the song later then flips the stage to a stale layout the
+    // operator never re-applied. FIX: when the incoming row is a
+    // tombstone, clear markers in the same transaction, mirroring
+    // `delete_presentation`'s behavior, instead of remapping them.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(
+            lib.id,
+            "Marked Song",
+            Some(&[slide(0, "verse 1"), slide(1, "verse 2")]),
+        )
+        .await
+        .unwrap();
+    repo.set_slide_stage_layout(local.id, local.slides[1].id, "fulltext")
+        .await
+        .unwrap();
+    let markers_before = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert_eq!(markers_before.len(), 1, "sanity: the marker is set");
+
+    let local_sync_id = row(&repo, local.id).await.sync_id;
+    let tombstone_at = chrono::Utc::now() + chrono::Duration::seconds(5);
+    let tombstone = crate::SyncPresentation {
+        sync_id: local_sync_id,
+        library_name: "Songs".to_string(),
+        name: "Marked Song".to_string(),
+        updated_at: tombstone_at,
+        deleted_at: Some(tombstone_at),
+        slides: vec![slide(0, "verse 1"), slide(1, "verse 2")],
+    };
+    repo.apply_sync_presentation(&tombstone).await.unwrap();
+
+    let markers_after_tombstone = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert!(
+        markers_after_tombstone.is_empty(),
+        "a synced tombstone must CLEAR stage-layout markers, mirroring a local delete — \
+         never remap-and-preserve them across the trash boundary"
+    );
+
+    // A later restore must not resurrect a marker either (mirrors
+    // restore_presentation not reinstating anything it never held).
+    repo.restore_presentation(local.id).await.unwrap();
+    let markers_after_restore = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert!(
+        markers_after_restore.is_empty(),
+        "restore must not bring back a cleared marker"
+    );
+}
+
+#[tokio::test]
+async fn apply_sync_presentation_remaps_stage_layout_markers_by_content_on_a_pure_reorder() {
+    // R4 regression: the position-keyed remap reattaches a marker to the
+    // WRONG slide when the peer's version is a pure REORDER (no edits) —
+    // the marker followed the old INDEX, not the verse it was actually on.
+    // FIX: match old slide to new slide by CONTENT identity first (main /
+    // translation / stage / group all equal); only fall back to position
+    // when content doesn't settle it (e.g. the marked slide's text was
+    // itself edited — see the position-based test above, which must keep
+    // passing unchanged).
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(
+            lib.id,
+            "Reordered Song",
+            Some(&[
+                slide(0, "verse 1"),
+                slide(1, "verse 2"),
+                slide(2, "verse 3"),
+            ]),
+        )
+        .await
+        .unwrap();
+    // Mark "verse 2", currently at position 1.
+    repo.set_slide_stage_layout(local.id, local.slides[1].id, "fulltext")
+        .await
+        .unwrap();
+
+    let local_sync_id = row(&repo, local.id).await.sync_id;
+    // Peer reorders the SAME (unedited) slides: verse2 now leads.
+    let peer_slides = vec![
+        slide(0, "verse 2"),
+        slide(1, "verse 1"),
+        slide(2, "verse 3"),
+    ];
+    let incoming = crate::SyncPresentation {
+        sync_id: local_sync_id,
+        library_name: "Songs".to_string(),
+        name: "Reordered Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: peer_slides.clone(),
+    };
+    repo.apply_sync_presentation(&incoming).await.unwrap();
+
+    let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert_eq!(markers.len(), 1, "the marker survives a pure reorder");
+    let verse2_new_id = peer_slides[0].id.to_string();
+    let verse1_new_id = peer_slides[1].id.to_string();
+    assert_eq!(
+        markers.get(&verse2_new_id),
+        Some(&"fulltext".to_string()),
+        "the marker follows VERSE 2 by content, even though it moved to position 0"
+    );
+    assert!(
+        !markers.contains_key(&verse1_new_id),
+        "the marker must NOT stay pinned to position 1 (that's verse 1 now)"
+    );
+}
+
+#[tokio::test]
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
