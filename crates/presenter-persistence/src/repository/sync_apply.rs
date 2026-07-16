@@ -125,43 +125,61 @@ impl Repository {
             return Ok(SyncApplyOutcome::Updated);
         }
 
-        // 2. Adopt-by-name: same name in the same-named library, unknown sync_id,
-        // among LIVE (non-trashed) candidates only (#558 S4). A trashed local row
-        // must never be silently resurrected via adoption, and an AMBIGUOUS match
-        // (2+ live candidates sharing the same name) must never guess which one
-        // to adopt — it falls through to create instead. `.one()` with no
-        // ORDER BY picks an arbitrary row, so the candidate set is fetched in
-        // full, filtered to live rows, ordered deterministically, and adoption
-        // proceeds ONLY when exactly one live candidate remains.
-        let mut live_by_name_candidates = presentation_entity::Entity::find()
-            .filter(presentation_entity::Column::LibraryId.eq(library_id.clone()))
-            .filter(presentation_entity::Column::Name.eq(incoming.name.clone()))
-            .filter(presentation_entity::Column::DeletedAt.is_null())
-            .order_by_asc(presentation_entity::Column::CreatedAt)
-            .order_by_asc(presentation_entity::Column::Id)
-            .all(&txn)
-            .await?;
-        let by_name =
-            (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0));
-        if let Some(existing) = by_name {
-            let local_updated: DateTime<Utc> = existing.updated_at.into();
-            if !sync_should_apply(
-                incoming.updated_at,
-                incoming.deleted_at.is_some(),
-                Some(local_updated),
-            ) {
-                // Local wins; the peer will adopt OUR sync_id when it pulls us.
+        // 2. Adopt-by-name: same name in the same-named library, unknown
+        // sync_id — ONLY for a LIVE peer entry (#558 round-3 Decision B,
+        // fixes T1). A peer TOMBSTONE with an unknown sync_id must NEVER
+        // adopt a live local song by name: two different sites can
+        // independently hold DIFFERENT songs that happen to share a name
+        // (different sync_ids), so trashing one of them locally must never
+        // reach across and trash the OTHER site's unrelated same-named
+        // song. A tombstone therefore skips this step entirely and falls
+        // through to step 3, which creates its own separate trashed row
+        // instead — never touching any existing local row.
+        if incoming.deleted_at.is_none() {
+            // Among LIVE (non-trashed) candidates only (#558 S4). A trashed
+            // local row must never be silently resurrected via adoption,
+            // and an AMBIGUOUS match (2+ live candidates sharing the same
+            // name) must never guess which one to adopt — it falls through
+            // to create instead. `.one()` with no ORDER BY picks an
+            // arbitrary row, so the candidate set is fetched in full,
+            // filtered to live rows, ordered deterministically, and
+            // adoption proceeds ONLY when exactly one live candidate
+            // remains.
+            let mut live_by_name_candidates = presentation_entity::Entity::find()
+                .filter(presentation_entity::Column::LibraryId.eq(library_id.clone()))
+                .filter(presentation_entity::Column::Name.eq(incoming.name.clone()))
+                .filter(presentation_entity::Column::DeletedAt.is_null())
+                .order_by_asc(presentation_entity::Column::CreatedAt)
+                .order_by_asc(presentation_entity::Column::Id)
+                .all(&txn)
+                .await?;
+            let by_name =
+                (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0));
+            if let Some(existing) = by_name {
+                let local_updated: DateTime<Utc> = existing.updated_at.into();
+                if !sync_should_apply(incoming.updated_at, false, Some(local_updated)) {
+                    // Local wins; the peer will adopt OUR sync_id when it pulls us.
+                    txn.commit().await?;
+                    info!("sync skip (adopt-by-name, local newer)");
+                    return Ok(SyncApplyOutcome::SkippedNotNewer);
+                }
+                Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
                 txn.commit().await?;
-                info!("sync skip (adopt-by-name, local newer)");
-                return Ok(SyncApplyOutcome::SkippedNotNewer);
+                info!("sync adopted-by-name");
+                return Ok(SyncApplyOutcome::AdoptedByName);
             }
-            Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
-            txn.commit().await?;
-            info!("sync adopted-by-name");
-            return Ok(SyncApplyOutcome::AdoptedByName);
         }
 
-        // 3. Unknown → create with the peer's identity + timestamps.
+        // 3. Unknown sync_id (and, for a tombstone, still within
+        // PRUNE_HORIZON — #558 R2/S7 via `sync_should_apply`'s `None`
+        // branch; an already-pruned tombstone is skipped here too, never
+        // resurrected as a fresh trashed row) → create with the peer's
+        // identity + timestamps. Never touches any existing local row.
+        if !sync_should_apply(incoming.updated_at, incoming.deleted_at.is_some(), None) {
+            txn.commit().await?;
+            info!("sync skip (unknown tombstone past prune horizon)");
+            return Ok(SyncApplyOutcome::SkippedNotNewer);
+        }
         let new_id = uuid::Uuid::new_v4().to_string();
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(new_id.clone()),
