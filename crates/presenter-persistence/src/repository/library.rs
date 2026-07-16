@@ -8,16 +8,26 @@ use presenter_core::{
     PresentationSummary,
 };
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::instrument;
 
 use super::util::{
     build_slide_active_model, parse_uuid, sanitize_like_input, to_domain_slide, RepositoryError,
 };
 use super::Repository;
+
+/// A trashed-or-live row's timestamps, keyed by `sync_id` — captured from the
+/// OLD library being replaced BEFORE it is deleted (#558 S2).
+type OldTrashState = HashMap<
+    String,
+    (
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+        chrono::DateTime<chrono::FixedOffset>,
+    ),
+>;
 
 impl Repository {
     #[instrument(skip_all)]
@@ -46,6 +56,12 @@ impl Repository {
             .map(|model| model.id)
             .collect();
 
+        // #558 S2: capture the OLD library's trash/edit state BEFORE deleting
+        // it, keyed by sync_id — a re-import restores CONTENT but must never
+        // resurrect a tombstone or manufacture a newer edit-time for an
+        // already-trashed song.
+        let old_trash_state = fetch_old_trash_state(&txn, &stale_library_ids).await?;
+
         if !stale_library_ids.is_empty() {
             library::Entity::delete_many()
                 .filter(library::Column::Id.is_in(stale_library_ids))
@@ -61,61 +77,10 @@ impl Repository {
         };
         library::Entity::insert(lib_model).exec(&txn).await?;
 
-        // #555: sync_id carries a UNIQUE index, but real ProPresenter libraries
-        // contain DUPLICATED .pro files sharing one embedded UUID. Seed the
-        // used-set with every sync_id already in the DB (this library's own rows
-        // were deleted above, so only OTHER libraries' identities remain), then
-        // resolve collisions DETERMINISTICALLY — first occurrence keeps the raw
-        // id, later duplicates derive UUIDv5(raw/library/name[/k]). Import order
-        // is filename-sorted on every instance, so both sites converge on
-        // identical identities with zero coordination.
-        let mut used_sync_ids: std::collections::HashSet<String> =
-            presentation_entity::Entity::find()
-                .select_only()
-                .column(presentation_entity::Column::SyncId)
-                .into_tuple::<String>()
-                .all(&txn)
-                .await?
-                .into_iter()
-                .collect();
-
-        for presentation in &library.presentations {
-            // Prefer the domain identity (the .pro UUID from import); else derive
-            // the deterministic name-based id so a re-import without one still
-            // pairs across sites.
-            let desired = presentation
-                .sync_id
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| {
-                    presenter_core::sync_id_for_name(&library.name, &presentation.name)
-                });
-            let sync_id = dedupe_sync_id(
-                desired,
-                &library.name,
-                &presentation.name,
-                &mut used_sync_ids,
-            );
-
-            let pres_model = presentation_entity::ActiveModel {
-                id: Set(presentation.id.to_string()),
-                library_id: Set(library.id.to_string()),
-                name: Set(presentation.name.clone()),
-                search_name: Set(fold_query(&presentation.name)),
-                created_at: Set(Utc::now().into()),
-                updated_at: Set(Utc::now().into()),
-                sync_id: Set(sync_id),
-                deleted_at: Set(None),
-            };
-            presentation_entity::Entity::insert(pres_model)
-                .exec(&txn)
+        let sync_ids = resolve_content_pure_sync_ids(&txn, library).await?;
+        for (presentation, sync_id) in library.presentations.iter().zip(sync_ids) {
+            insert_presentation_with_slides(&txn, library, presentation, sync_id, &old_trash_state)
                 .await?;
-
-            for slide in &presentation.slides {
-                let pres_id_str = presentation.id.to_string();
-                let slide_model = build_slide_active_model(slide, &pres_id_str, slide.order as i32);
-                slide_entity::Entity::insert(slide_model).exec(&txn).await?;
-            }
         }
 
         txn.commit().await?;
@@ -370,29 +335,159 @@ impl Repository {
     }
 }
 
-/// Resolve a `sync_id` collision deterministically (#555): the first occurrence
-/// keeps `desired`; a duplicate derives `UUIDv5(ns, desired/library/name)`, and a
-/// still-colliding derivation appends a counter (`.../2`, `.../3`, …). Purely a
-/// function of the import content — never random — so two instances importing the
-/// same filename-sorted library set converge on identical identities.
-fn dedupe_sync_id(
-    desired: String,
+/// #558 S2: read the OLD library rows (about to be replaced) BEFORE they are
+/// deleted, keyed by `sync_id`, so the caller can carry over `deleted_at` /
+/// `updated_at` for any song that re-imports under the same identity. A
+/// re-import restores CONTENT but must never resurrect a tombstone nor
+/// manufacture a newer edit-time for an already-trashed song.
+async fn fetch_old_trash_state(
+    txn: &DatabaseTransaction,
+    stale_library_ids: &[String],
+) -> anyhow::Result<OldTrashState> {
+    if stale_library_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let old_rows = presentation_entity::Entity::find()
+        .filter(presentation_entity::Column::LibraryId.is_in(stale_library_ids.to_vec()))
+        .all(txn)
+        .await?;
+    Ok(old_rows
+        .into_iter()
+        .map(|model| (model.sync_id, (model.deleted_at, model.updated_at)))
+        .collect())
+}
+
+/// #558 S3: resolve a content-pure `sync_id` for every presentation in
+/// `library`, in order. A raw id (the `.pro` UUID, or the deterministic
+/// name-based fallback) is kept ONLY when it is unique across THIS library's
+/// own import scan AND does not already belong to a DIFFERENT, still-existing
+/// library in the DB. Every other occurrence — an in-scan duplicate, or a
+/// foreign-DB conflict — derives `UUIDv5(raw/library/name)`, with NO
+/// exception for "the first one" — the old dedupe's first-occurrence-wins
+/// rule was exactly the import-order/history dependence #558 flags. This is
+/// a pure function of content: neither the order presentations appear in the
+/// list, nor which library was imported into this DB first, changes the
+/// outcome for a raw id that only collides WITHIN this call.
+async fn resolve_content_pure_sync_ids(
+    txn: &DatabaseTransaction,
+    library: &Library,
+) -> anyhow::Result<Vec<String>> {
+    let desired_raw_ids: Vec<String> = library
+        .presentations
+        .iter()
+        .map(|presentation| {
+            presentation
+                .sync_id
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| {
+                    presenter_core::sync_id_for_name(&library.name, &presentation.name)
+                })
+        })
+        .collect();
+
+    let mut raw_occurrences: HashMap<&str, u32> = HashMap::new();
+    for raw in &desired_raw_ids {
+        *raw_occurrences.entry(raw.as_str()).or_insert(0) += 1;
+    }
+
+    // Read-only snapshot: sync_ids already used by any OTHER library still in
+    // the DB (this library's own stale rows were already deleted by the
+    // caller). Consulted only to AVOID a unique-index violation — never to
+    // implement "first come" claiming.
+    let foreign_sync_ids: HashSet<String> = presentation_entity::Entity::find()
+        .select_only()
+        .column(presentation_entity::Column::SyncId)
+        .into_tuple::<String>()
+        .all(txn)
+        .await?
+        .into_iter()
+        .collect();
+
+    let mut assigned_this_scan: HashSet<String> = HashSet::new();
+    let mut sync_ids = Vec::with_capacity(library.presentations.len());
+    for (presentation, raw) in library.presentations.iter().zip(desired_raw_ids.iter()) {
+        let unique_in_scan = raw_occurrences.get(raw.as_str()).copied() == Some(1);
+        let sync_id = if unique_in_scan && !foreign_sync_ids.contains(raw) {
+            raw.clone()
+        } else {
+            derive_sync_id(
+                raw,
+                &library.name,
+                &presentation.name,
+                &assigned_this_scan,
+                &foreign_sync_ids,
+            )
+        };
+        assigned_this_scan.insert(sync_id.clone());
+        sync_ids.push(sync_id);
+    }
+    Ok(sync_ids)
+}
+
+/// Deterministically derive a non-raw `sync_id` for a presentation whose raw
+/// id is not content-pure-unique (#558 S3): `UUIDv5(ns, raw/library/name)`,
+/// with a deterministic occurrence counter (`.../2`, `.../3`, …) appended only
+/// in the astronomically rare case that the derived id ITSELF collides.
+/// `assigned`/`foreign` are consulted purely to avoid that collision — never
+/// to grant "first come" priority.
+fn derive_sync_id(
+    raw: &str,
     library_name: &str,
     presentation_name: &str,
-    used: &mut std::collections::HashSet<String>,
+    assigned: &HashSet<String>,
+    foreign: &HashSet<String>,
 ) -> String {
-    if used.insert(desired.clone()) {
-        return desired;
-    }
-    let base_key = format!("{desired}/{library_name}/{presentation_name}");
-    let mut candidate =
-        uuid::Uuid::new_v5(&presenter_core::SYNC_ID_NAMESPACE, base_key.as_bytes()).to_string();
-    let mut k = 2u32;
-    while !used.insert(candidate.clone()) {
-        let key = format!("{base_key}/{k}");
-        candidate =
+    let mut k = 1u32;
+    loop {
+        let key = if k == 1 {
+            format!("{raw}/{library_name}/{presentation_name}")
+        } else {
+            format!("{raw}/{library_name}/{presentation_name}/{k}")
+        };
+        let candidate =
             uuid::Uuid::new_v5(&presenter_core::SYNC_ID_NAMESPACE, key.as_bytes()).to_string();
+        if !assigned.contains(&candidate) && !foreign.contains(&candidate) {
+            return candidate;
+        }
         k += 1;
     }
-    candidate
+}
+
+/// Insert one presentation row + its slides, carrying over the OLD
+/// trash/edit state for its (already resolved, content-pure) `sync_id` if a
+/// prior row under that identity existed (#558 S2) — otherwise it is a brand
+/// new song (`deleted_at: None`, `updated_at: now()`).
+async fn insert_presentation_with_slides(
+    txn: &DatabaseTransaction,
+    library: &Library,
+    presentation: &Presentation,
+    sync_id: String,
+    old_trash_state: &OldTrashState,
+) -> anyhow::Result<()> {
+    let (deleted_at, updated_at) = old_trash_state
+        .get(&sync_id)
+        .copied()
+        .unwrap_or((None, Utc::now().into()));
+
+    let pres_model = presentation_entity::ActiveModel {
+        id: Set(presentation.id.to_string()),
+        library_id: Set(library.id.to_string()),
+        name: Set(presentation.name.clone()),
+        search_name: Set(fold_query(&presentation.name)),
+        created_at: Set(Utc::now().into()),
+        updated_at: Set(updated_at),
+        sync_id: Set(sync_id),
+        deleted_at: Set(deleted_at),
+    };
+    presentation_entity::Entity::insert(pres_model)
+        .exec(txn)
+        .await?;
+
+    for slide in &presentation.slides {
+        let pres_id_str = presentation.id.to_string();
+        let slide_model = build_slide_active_model(slide, &pres_id_str, slide.order as i32);
+        slide_entity::Entity::insert(slide_model).exec(txn).await?;
+    }
+    Ok(())
 }
