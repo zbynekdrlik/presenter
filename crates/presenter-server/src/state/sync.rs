@@ -94,6 +94,15 @@ pub struct SyncCoordinator {
     nudge_tx: mpsc::Sender<()>,
     nudge_rx: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
     status: Arc<RwLock<SyncStatus>>,
+    /// S1: keeps the loop's shutdown oneshot Sender ALIVE for as long as the
+    /// coordinator (and thus AppState) lives. The Sender used to be handed
+    /// back to the caller and immediately dropped, which resolves
+    /// `tokio::select! { _ = &mut shutdown_rx => break, ... }`'s shutdown
+    /// branch on the very next pass — the loop died before ever completing a
+    /// real cycle in production. Every clone of AppState shares this same
+    /// `Arc`, so storing the sender here (rather than returning it) keeps
+    /// exactly one authoritative slot regardless of how many clones exist.
+    shutdown: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 impl Default for SyncCoordinator {
@@ -109,6 +118,7 @@ impl SyncCoordinator {
             nudge_tx: tx,
             nudge_rx: Arc::new(Mutex::new(Some(rx))),
             status: Arc::new(RwLock::new(SyncStatus::default())),
+            shutdown: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -151,24 +161,32 @@ impl AppState {
         self.caches.presentation.write().await.clear();
     }
 
-    /// Spawn the sync loop iff a peer is configured (#555). The returned shutdown
-    /// sender is intentionally dropped — the loop runs for the process lifetime;
-    /// the oneshot closing on drop is a clean shutdown-on-exit.
+    /// Spawn the sync loop iff a peer is configured (#555).
     pub(crate) fn maybe_spawn_sync(&self, peer_url: Option<String>) {
         if let Some(peer_url) = peer_url {
             tracing::info!(%peer_url, "song sync enabled");
-            let _ = self.spawn_sync_task(peer_url);
+            self.spawn_sync_task(peer_url);
         }
     }
 
     /// Start the pull loop against `peer_url`. Called once from `from_config` when the
-    /// env var is set. Returns the shutdown sender (dropped-on-exit is fine in prod).
-    pub(crate) fn spawn_sync_task(&self, peer_url: String) -> oneshot::Sender<()> {
+    /// env var is set. The shutdown sender is kept ALIVE on the coordinator (S1) —
+    /// it must NOT be dropped right after spawn, or the loop's
+    /// `tokio::select!` shutdown branch resolves immediately and kills the
+    /// loop before it does any real work. It is only dropped (cleanly
+    /// stopping the loop) when the coordinator's Arc itself is finally
+    /// dropped at process exit, or replaced by a later call here.
+    pub(crate) fn spawn_sync_task(&self, peer_url: String) {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         let state = self.clone();
         let coordinator = self.sync.clone();
         let rx_slot = coordinator.nudge_rx.clone();
         let status = coordinator.status.clone();
+
+        match coordinator.shutdown.lock() {
+            Ok(mut guard) => *guard = Some(shutdown_tx),
+            Err(poisoned) => *poisoned.into_inner() = Some(shutdown_tx),
+        }
 
         tokio::spawn(async move {
             let mut nudge_rx = match rx_slot.lock().await.take() {
@@ -216,7 +234,6 @@ impl AppState {
                 }
             }
         });
-        shutdown_tx
     }
 }
 
