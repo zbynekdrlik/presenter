@@ -25,56 +25,53 @@ type RowState = (
     chrono::DateTime<chrono::FixedOffset>,
 );
 
-/// One narrow `(library_id, name, updated_at, sync_id, deleted_at)`
-/// projection row from `presentations` — #558 R7 (never fetch the full row
-/// just for these five columns).
+/// One narrow `(sync_id, updated_at, deleted_at)` projection row from
+/// `presentations` — #558 R7 (never fetch the full row just for these three
+/// columns).
 type OldPresentationRow = (
     String,
-    String,
     chrono::DateTime<chrono::FixedOffset>,
-    String,
     Option<chrono::DateTime<chrono::FixedOffset>>,
 );
 
 /// Trash/edit state captured from the OLD library being replaced BEFORE it
-/// is deleted (#558 S2), keyed BOTH by `sync_id` AND by
-/// `(library_name, presentation_name)` (#558 R1). The sync_id alone is not
-/// enough: a re-import can shift a previously content-pure-unique song's
-/// sync_id the moment a same-name twin joins the scan (both occurrences
-/// then derive fresh ids per S3's cardinality-sensitive rule), so a
-/// sync_id-only lookup misses the old row entirely and a trashed song comes
-/// back live with a fresh `updated_at` — which then LWW-wins and propagates
-/// the resurrection to the peer.
+/// is deleted (#558 S2), keyed by `sync_id` ONLY.
+///
+/// #558 round-3 DESIGN SIMPLIFICATION (Decision A): an earlier revision
+/// (R1) also kept a `by_name` fallback map so a trashed song would still be
+/// found even when a re-import shifted its `sync_id` (a same-name twin
+/// joining the scan makes BOTH occurrences derive fresh ids under S3's
+/// cardinality-sensitive rule). Round-3 review found that fallback
+/// unfixable by patching — T2/T4/T5/T6 were four INDEPENDENT failures of
+/// the same mechanism (sibling-key leakage, name recycling, scan-order
+/// dependence, old-map name collisions) — so it was deleted wholesale
+/// instead of patched again.
+///
+/// The simplified rule: trash carryover on re-import is keyed by `sync_id`
+/// ONLY. If a trashed song's `sync_id` SHIFTS on re-import — a corner of a
+/// corner: it requires a same-name twin to join the import while the song
+/// sits in trash — the song comes back LIVE. That outcome is
+/// understandable ("re-import restored a song because the library file
+/// still contains it") and composes safely with sync: the peer still holds
+/// the OLD id as a fresh tombstone, which Decision B (`sync_apply.rs`)
+/// applies as its OWN new trashed row rather than reaching for any
+/// existing local row by name. Both sites converge to
+/// new-id-live + old-id-trashed, with no scan-order dependence and no
+/// wrongly-trashed live song, ever.
 struct OldTrashState {
     by_sync_id: HashMap<String, RowState>,
-    by_name: HashMap<(String, String), RowState>,
 }
 
 impl OldTrashState {
     fn empty() -> Self {
         Self {
             by_sync_id: HashMap::new(),
-            by_name: HashMap::new(),
         }
     }
 
-    /// Consume (remove) the matching OLD row's state, if any — by sync_id
-    /// first, else by `(library_name, presentation_name)`. Consuming
-    /// (rather than merely reading) the name-key match matters when a
-    /// re-import introduces a same-name twin: only the FIRST processed
-    /// occurrence in this scan inherits the ambiguous name-keyed tombstone,
-    /// so the brand-new twin does not also come back trashed.
-    fn take(
-        &mut self,
-        sync_id: &str,
-        library_name: &str,
-        presentation_name: &str,
-    ) -> Option<RowState> {
-        if let Some(state) = self.by_sync_id.remove(sync_id) {
-            return Some(state);
-        }
-        self.by_name
-            .remove(&(library_name.to_string(), presentation_name.to_string()))
+    /// Consume (remove) the matching OLD row's state by `sync_id`, if any.
+    fn take(&mut self, sync_id: &str) -> Option<RowState> {
+        self.by_sync_id.remove(sync_id)
     }
 }
 
@@ -390,13 +387,14 @@ impl Repository {
     }
 }
 
-/// #558 S2 + R1: read the OLD library rows (about to be replaced) BEFORE
-/// they are deleted, keyed by BOTH `sync_id` AND `(library_name,
-/// presentation_name)`, so the caller can carry over `deleted_at` /
-/// `updated_at` for any song that re-imports under the same identity — even
-/// when a same-name twin joining the scan shifts its sync_id (R1). A
-/// re-import restores CONTENT but must never resurrect a tombstone nor
-/// manufacture a newer edit-time for an already-trashed song.
+/// #558 S2 (round-3 Decision A): read the OLD library rows (about to be
+/// replaced) BEFORE they are deleted, keyed by `sync_id` ONLY, so the
+/// caller can carry over `deleted_at` / `updated_at` for any song that
+/// re-imports under the SAME identity. A re-import restores CONTENT but
+/// must never resurrect a tombstone nor manufacture a newer edit-time for
+/// an already-trashed song — unless the re-import itself shifted the
+/// song's `sync_id` (see `OldTrashState`'s doc), in which case the song is,
+/// by design, a fresh identity.
 async fn fetch_old_trash_state(
     txn: &DatabaseTransaction,
     stale_library_ids: &[String],
@@ -404,26 +402,12 @@ async fn fetch_old_trash_state(
     if stale_library_ids.is_empty() {
         return Ok(OldTrashState::empty());
     }
-    // #558 R7: project only the columns this function actually reads (never
-    // the full row) — id/name for the library lookup, and library_id/name/
-    // updated_at/sync_id/deleted_at for the trash-state maps.
-    let old_library_names: HashMap<String, String> = library::Entity::find()
-        .select_only()
-        .column(library::Column::Id)
-        .column(library::Column::Name)
-        .filter(library::Column::Id.is_in(stale_library_ids.to_vec()))
-        .into_tuple::<(String, String)>()
-        .all(txn)
-        .await?
-        .into_iter()
-        .collect();
-
+    // #558 R7 (round-3): project only sync_id/updated_at/deleted_at — the
+    // by-name map (and the library-name lookup it needed) is gone.
     let old_rows: Vec<OldPresentationRow> = presentation_entity::Entity::find()
         .select_only()
-        .column(presentation_entity::Column::LibraryId)
-        .column(presentation_entity::Column::Name)
-        .column(presentation_entity::Column::UpdatedAt)
         .column(presentation_entity::Column::SyncId)
+        .column(presentation_entity::Column::UpdatedAt)
         .column(presentation_entity::Column::DeletedAt)
         .filter(presentation_entity::Column::LibraryId.is_in(stale_library_ids.to_vec()))
         .into_tuple()
@@ -431,14 +415,8 @@ async fn fetch_old_trash_state(
         .await?;
 
     let mut state = OldTrashState::empty();
-    for (library_id, name, updated_at, sync_id, deleted_at) in old_rows {
-        let row_state: RowState = (deleted_at, updated_at);
-        if let Some(library_name) = old_library_names.get(&library_id) {
-            state
-                .by_name
-                .insert((library_name.clone(), name.clone()), row_state);
-        }
-        state.by_sync_id.insert(sync_id, row_state);
+    for (sync_id, updated_at, deleted_at) in old_rows {
+        state.by_sync_id.insert(sync_id, (deleted_at, updated_at));
     }
     Ok(state)
 }
@@ -552,7 +530,7 @@ async fn insert_presentation_with_slides(
     old_trash_state: &mut OldTrashState,
 ) -> anyhow::Result<()> {
     let (deleted_at, updated_at) = old_trash_state
-        .take(&sync_id, &library.name, &presentation.name)
+        .take(&sync_id)
         .unwrap_or((None, Utc::now().into()));
 
     let pres_model = presentation_entity::ActiveModel {

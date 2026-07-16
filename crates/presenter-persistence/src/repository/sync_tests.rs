@@ -597,17 +597,23 @@ async fn reimport_preserves_a_trashed_songs_tombstone() {
 }
 
 #[tokio::test]
-async fn reimport_preserves_trash_when_a_same_name_twin_shifts_the_song_to_a_derived_id() {
-    // R1 regression: a previously-UNIQUE trashed song ("Amazing Grace",
-    // name-derived sync_id) loses that very identity the moment a same-name
-    // twin joins a LATER import — the cardinality shift means BOTH
-    // occurrences now derive fresh sync_ids (#558 S3's content-pure rule),
-    // so `old_trash_state.get(&new_sync_id)` misses the OLD (name-derived)
-    // key entirely and the trashed song comes back LIVE with a fresh
-    // `updated_at` — which then LWW-wins and propagates the resurrection to
-    // the peer. FIX: key the old-state map by BOTH sync_id AND
-    // (library_name, presentation_name); fall back to the name key on a
-    // sync_id miss before defaulting to live/new.
+async fn reimport_resurrects_a_trashed_song_when_a_same_name_twin_shifts_its_sync_id() {
+    // #558 round-3 DESIGN SIMPLIFICATION (Decision A): the by-name
+    // trash-carryover fallback (R1) was DELETED — round-3 review found it
+    // unfixable by patching (T2/T4/T5/T6 were four independent failures of
+    // the same mechanism: sibling-key leakage, name recycling, scan-order
+    // dependence, old-map name collisions). The simplified, final rule:
+    // trash carryover on re-import keys on `sync_id` ONLY. If a trashed
+    // song's sync_id SHIFTS on re-import (this corner-of-a-corner case: a
+    // same-name twin joins the scan, so BOTH occurrences now derive fresh
+    // sync_ids under S3's cardinality-sensitive content-pure rule), the
+    // song comes back LIVE — that is now CORRECT behavior, not a
+    // regression. It composes safely with sync: the peer still holds the
+    // OLD sync_id as a fresh tombstone, which Decision B
+    // (`sync_apply.rs`) applies as its OWN new trashed row rather than
+    // reaching for any existing local row by name — both sites converge to
+    // new-id-live + old-id-trashed. A brand-new same-name twin must never
+    // inherit anyone's tombstone either.
     let repo = repo().await;
     let original =
         presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1")]).unwrap();
@@ -621,12 +627,12 @@ async fn reimport_preserves_trash_when_a_same_name_twin_shifts_the_song_to_a_der
         trashed_before.deleted_at.is_some(),
         "sanity: trashed before the re-import"
     );
-    let deleted_at_before = trashed_before.deleted_at;
     let updated_at_before = trashed_before.updated_at;
 
     // Re-import: the SAME "Amazing Grace" content, plus a brand-new
     // same-name twin. Both now collide on the raw name-derived id, so BOTH
-    // derive fresh sync_ids (S3) — the exact cardinality shift R1 flags.
+    // derive fresh sync_ids (S3) — the exact cardinality shift that used to
+    // be R1's regression and is now the documented, accepted outcome.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let reimported =
         presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1")]).unwrap();
@@ -641,20 +647,22 @@ async fn reimport_preserves_trash_when_a_same_name_twin_shifts_the_song_to_a_der
     let twin_row = row(&repo, twin.id).await;
 
     assert!(
-        reimported_row.deleted_at.is_some(),
-        "the original song's tombstone must survive even though its sync_id shifted"
+        reimported_row.deleted_at.is_none(),
+        "a sync_id SHIFT on re-import is treated as a fresh identity by design \
+         (Decision A) — the song comes back LIVE rather than resurrecting under a \
+         key it no longer holds"
     );
-    assert_eq!(
-        reimported_row.deleted_at, deleted_at_before,
-        "the tombstone's own timestamp survives unchanged"
-    );
-    assert_eq!(
-        reimported_row.updated_at, updated_at_before,
-        "re-import must not manufacture a newer edit-time for the trashed row"
+    assert!(
+        reimported_row.updated_at > updated_at_before,
+        "a fresh identity gets a fresh updated_at, exactly like any brand-new row"
     );
     assert!(
         twin_row.deleted_at.is_none(),
-        "the brand-new twin must NOT inherit the other row's tombstone"
+        "the brand-new twin must NOT inherit any tombstone"
+    );
+    assert_ne!(
+        reimported_row.sync_id, twin_row.sync_id,
+        "sanity: the cardinality shift produced two distinct derived identities"
     );
 }
 
