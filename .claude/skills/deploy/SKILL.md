@@ -98,6 +98,19 @@ To validate a stage/UI change with the real Playwright specs before pushing
    `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
    verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
 
+### GOTCHA — a stale/ambiguous `target/release/presenter-server` silently shadows your fresh fix (#558)
+
+`startTestServer` picks the NEWER of `target/debug/presenter-server` /
+`target/release/presenter-server` by mtime. If you only rebuilt `debug` (`cargo build -p
+presenter-server`, no `--release`) but a release binary already exists from an earlier point,
+E2E runs against WHICHEVER is newer — and if you can't account for why release's mtime moved
+(another process touched it, a leftover from a previous session), your test can silently
+exercise OLD code and produce a false result. When a result looks wrong/inconsistent with the
+diff you just made: check both mtimes (`ls -la --time-style=full-iso target/{debug,release}/presenter-server`);
+if in doubt, `rm target/release/presenter-server` to force the harness onto the `debug` binary
+you just built, and rebuild release properly (`cargo build --release -p presenter-server ...`,
+per step 2 above) before relying on it again.
+
 ### GOTCHA — Playwright `page.on("console")` ALSO captures IFRAME console (#460)
 
 The operator header now embeds `<iframe src="/stage?preview=1">` on EVERY operator

@@ -97,6 +97,19 @@ the timer dies with the page navigation (there is no client-side router).
 Reminder: this crate is **excluded from the workspace** — `cargo test -p presenter-ui` fails.
 Run `cd crates/presenter-ui && cargo test --lib`.
 
+## The toast `<div>` is ALWAYS mounted — assert visibility via `data-visible`, not DOM presence (#558 W1)
+
+`components/toast.rs` renders `<div data-role="toast" data-visible=… class:operator__toast--visible=…>`
+UNCONDITIONALLY — the element exists in the DOM at all times, with an EMPTY text node when no
+toast is active. `operator.css` fades it purely via `opacity` (no `display`/`visibility` change).
+Two E2E assertions that look correct both fail to detect "no toast shown":
+
+- `toHaveCount(0)` — the element always exists (count is always 1).
+- `.not.toBeVisible()` — Playwright's visibility check ignores `opacity`; an `opacity: 0` element
+  still has a non-empty bounding box and no `visibility: hidden`, so it reports VISIBLE regardless.
+
+Assert the component's own state instead: `expect(locator).toHaveAttribute("data-visible", "false")`.
+
 ## A `console.warn` from a WASM poller can red-line an unrelated E2E
 
 `leptos::logging::warn!` reaches the browser console, and several specs (e.g.
