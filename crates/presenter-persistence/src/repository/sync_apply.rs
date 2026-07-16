@@ -35,25 +35,38 @@ impl SyncApplyOutcome {
     }
 }
 
+/// Tombstones older than this are presumed already pruned on our own
+/// schedule (mirrors the retention `state/mod.rs`'s scheduled job passes to
+/// `prune_deleted_presentations`; #558 R2).
+fn unknown_tombstone_horizon() -> chrono::Duration {
+    chrono::Duration::days(30)
+}
+
 /// LWW: apply the peer row iff it is strictly newer than what we hold (or unknown).
 /// `local` is `None` when we have no matching song at all. `peer_deleted` is
 /// whether the PEER's row is currently a tombstone.
 ///
-/// #558 S7: when `local` is `None` AND the peer entry is a tombstone, this
-/// returns `false` — never re-create a trashed row we don't hold. Without
-/// this, a row we've already pruned (our own 30-day schedule fired) would be
-/// resurrected by a peer whose manifest still lists the tombstone (its own
-/// prune hasn't fired yet). Each side prunes on its own schedule and nothing
-/// resurrects. A peer delete of a row we DO still hold (`local: Some(_)`)
-/// is unaffected — that's normal trash propagation, gated on `peer > local`
-/// like any other edit.
+/// #558 S7 + R2: when `local` is `None` AND the peer entry is a tombstone,
+/// this distinguishes "we've never held this row at all" (a
+/// fresh/re-provisioned peer's first sync — the tombstone should be
+/// created locally so trash contents converge) from "we pruned it
+/// ourselves already" (S7's actual concern) by the tombstone's AGE against
+/// the 30-day prune horizon: a genuinely pruned row's tombstone predates
+/// it (real pruning never touches a fresher row), so only a tombstone
+/// OLDER than the horizon is skipped. The OLD rule (`!peer_deleted`,
+/// unconditional) treated every unknown tombstone the same, so a fresh
+/// peer's first sync permanently skipped anything already trashed on the
+/// other side and the two instances' trash contents diverged forever. A
+/// peer delete of a row we DO still hold (`local: Some(_)`) is unaffected
+/// — that's normal trash propagation, gated on `peer > local` like any
+/// other edit.
 pub fn sync_should_apply(
     peer: DateTime<Utc>,
     peer_deleted: bool,
     local: Option<DateTime<Utc>>,
 ) -> bool {
     match local {
-        None => !peer_deleted,
+        None => !peer_deleted || Utc::now() - peer < unknown_tombstone_horizon(),
         Some(local) => peer > local,
     }
 }
@@ -323,8 +336,14 @@ mod tests {
             "unknown locally, peer not deleted → apply"
         );
         assert!(
-            !sync_should_apply(now, true, None),
-            "unknown locally AND peer deleted → never resurrect a pruned row (S7)"
+            sync_should_apply(now, true, None),
+            "unknown locally AND peer deleted, but the tombstone is RECENT → apply \
+             (a fresh peer's first sync must not skip trash it never held; #558 R2)"
+        );
+        assert!(
+            !sync_should_apply(now - Duration::days(31), true, None),
+            "unknown locally AND peer deleted, tombstone OLDER than the prune horizon → \
+             never resurrect an already-pruned row (S7)"
         );
         assert!(
             sync_should_apply(now, false, Some(now - Duration::seconds(1))),
