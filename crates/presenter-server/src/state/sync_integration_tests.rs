@@ -128,6 +128,67 @@ async fn delete_to_trash_and_restore_propagate() {
 }
 
 #[tokio::test]
+async fn pruned_row_is_never_resurrected_by_a_stale_peer_tombstone() {
+    // S7 regression: once we've pruned a trashed row (our own 30-day
+    // schedule fired), the peer's manifest may still list the tombstone
+    // (its OWN prune hasn't fired yet) -- applying that stale tombstone
+    // against "we have no row at all" must be a NO-OP, not a re-create.
+    // Each side prunes on its own schedule and nothing resurrects.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    let (_lib, id) = make_song(&a, "Songs", "Old Temp").await;
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap(); // B learns of it
+
+    // Delete on A, sync the trash to B, then B prunes it immediately
+    // (simulating B's own 30-day schedule firing first) while A's manifest
+    // still lists the (unpruned) tombstone.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    a.delete_presentation(id).await.unwrap();
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert!(
+        !b.repository()
+            .list_trashed_presentations()
+            .await
+            .unwrap()
+            .is_empty(),
+        "sanity: B holds the trashed row before pruning"
+    );
+    b.repository()
+        .prune_deleted_presentations(chrono::Duration::seconds(-3600))
+        .await
+        .unwrap();
+    assert!(
+        b.repository()
+            .list_trashed_presentations()
+            .await
+            .unwrap()
+            .is_empty(),
+        "sanity: B's prune removed the row entirely"
+    );
+
+    // B pulls A again: A's manifest STILL lists the (unpruned) tombstone.
+    let (_pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert_eq!(
+        applied, 0,
+        "a pruned row must never be resurrected by the peer's stale tombstone"
+    );
+    assert!(
+        b.repository()
+            .list_trashed_presentations()
+            .await
+            .unwrap()
+            .is_empty(),
+        "no trash row must reappear"
+    );
+    let libs = b.libraries().await.unwrap();
+    assert!(
+        find_song(&libs, "Old Temp").is_none(),
+        "the song must not reappear live either"
+    );
+}
+
+#[tokio::test]
 async fn lww_newer_edit_wins_in_a_two_sided_conflict() {
     // Same song shared by both, then edited on both — the newer edit wins.
     let a = AppState::in_memory().await.unwrap();
