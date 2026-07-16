@@ -63,7 +63,7 @@ use chrono::Utc;
 use presenter_core::{
     StageClientSnapshot, StageDisplayLayout, TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
-use presenter_persistence::{DatabaseSettings, Repository};
+use presenter_persistence::{DatabaseSettings, Repository, PRUNE_HORIZON};
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use tokio::{
     sync::RwLock,
@@ -289,8 +289,12 @@ impl AppState {
             }
         });
 
-        // #555: songs trashed longer than 30 days are pruned for good. Low
-        // frequency — months of use must not grow the table unbounded.
+        // #555: songs trashed longer than PRUNE_HORIZON are pruned for good.
+        // Low frequency — months of use must not grow the table unbounded.
+        // #558 round-3 T8: PRUNE_HORIZON is the SAME constant `sync_apply.rs`
+        // uses to distinguish a fresh unknown tombstone from an
+        // already-pruned one — one shared source so the two can never
+        // drift apart.
         let prune_state = self.clone();
         tokio::spawn(async move {
             let mut ticker = interval(TokioDuration::from_secs(6 * 3600));
@@ -299,11 +303,11 @@ impl AppState {
                 ticker.tick().await;
                 match prune_state
                     .repository
-                    .prune_deleted_presentations(chrono::Duration::days(30))
+                    .prune_deleted_presentations(PRUNE_HORIZON)
                     .await
                 {
                     Ok(n) if n > 0 => {
-                        tracing::info!(pruned = n, "pruned trashed songs older than 30 days");
+                        tracing::info!(pruned = n, "pruned trashed songs older than PRUNE_HORIZON");
                     }
                     Ok(_) => {}
                     Err(err) => warn!(?err, "trash prune failed"),

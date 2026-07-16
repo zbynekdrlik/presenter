@@ -36,12 +36,13 @@ impl SyncApplyOutcome {
     }
 }
 
-/// Tombstones older than this are presumed already pruned on our own
-/// schedule (mirrors the retention `state/mod.rs`'s scheduled job passes to
-/// `prune_deleted_presentations`; #558 R2).
-fn unknown_tombstone_horizon() -> chrono::Duration {
-    chrono::Duration::days(30)
-}
+/// Trash is retained this long before the periodic background task
+/// (`state/mod.rs`) hard-deletes it, AND — the SAME constant, never a
+/// second copy (#558 round-3 T8) — this is the age past which an UNKNOWN
+/// tombstone (no matching local row at all) is presumed already-pruned
+/// rather than merely never-seen (#558 R2/S7). One shared `pub const` so
+/// the prune task and `sync_should_apply` can never drift apart.
+pub const PRUNE_HORIZON: chrono::Duration = chrono::Duration::days(30);
 
 /// LWW: apply the peer row iff it is strictly newer than what we hold (or unknown).
 /// `local` is `None` when we have no matching song at all. `peer_deleted` is
@@ -67,7 +68,7 @@ pub fn sync_should_apply(
     local: Option<DateTime<Utc>>,
 ) -> bool {
     match local {
-        None => !peer_deleted || Utc::now() - peer < unknown_tombstone_horizon(),
+        None => !peer_deleted || Utc::now() - peer < PRUNE_HORIZON,
         Some(local) => peer > local,
     }
 }
@@ -418,7 +419,7 @@ fn slide_content_from_fields(
 
 #[cfg(test)]
 mod tests {
-    use super::sync_should_apply;
+    use super::{sync_should_apply, PRUNE_HORIZON};
     use chrono::{Duration, Utc};
 
     #[test]
@@ -434,7 +435,7 @@ mod tests {
              (a fresh peer's first sync must not skip trash it never held; #558 R2)"
         );
         assert!(
-            !sync_should_apply(now - Duration::days(31), true, None),
+            !sync_should_apply(now - PRUNE_HORIZON - Duration::days(1), true, None),
             "unknown locally AND peer deleted, tombstone OLDER than the prune horizon → \
              never resurrect an already-pruned row (S7)"
         );
@@ -462,11 +463,11 @@ mod tests {
         // same when we hold no local row at all -- so a fresh/re-provisioned
         // peer's first sync PERMANENTLY skipped anything already trashed on
         // the other side, and the two instances' trash contents diverged
-        // forever. Fix: a tombstone YOUNGER than the 30-day prune horizon,
-        // for a row we've never held, must be applied (created locally as
-        // trashed, so trash contents converge); only a tombstone OLDER than
-        // the horizon is skipped (that's the genuinely-pruned case S7
-        // protects against).
+        // forever. Fix: a tombstone YOUNGER than PRUNE_HORIZON, for a row
+        // we've never held, must be applied (created locally as trashed, so
+        // trash contents converge); only a tombstone OLDER than the horizon
+        // is skipped (that's the genuinely-pruned case S7 protects
+        // against).
         let now = Utc::now();
         assert!(
             sync_should_apply(now - Duration::days(1), true, None),
@@ -477,8 +478,8 @@ mod tests {
             "a tombstone from right now, for a row we've never held, must be applied"
         );
         assert!(
-            !sync_should_apply(now - Duration::days(31), true, None),
-            "a tombstone OLDER than the 30-day prune horizon must be skipped, never resurrected"
+            !sync_should_apply(now - PRUNE_HORIZON - Duration::days(1), true, None),
+            "a tombstone OLDER than PRUNE_HORIZON must be skipped, never resurrected"
         );
     }
 }

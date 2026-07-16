@@ -529,9 +529,10 @@ async fn trash_lists_restores_and_prunes() {
         .iter()
         .any(|l| l.presentations.iter().any(|p| p.name == "Fresh Trash")));
 
-    // Age the other row 31 days back, then prune keeps only fresh trash.
+    // Age the other row past PRUNE_HORIZON, then prune keeps only fresh trash.
     use sea_orm::{ColumnTrait, QueryFilter};
-    let old_stamp = (chrono::Utc::now() - chrono::Duration::days(31)).to_rfc3339();
+    let old_stamp =
+        (chrono::Utc::now() - crate::PRUNE_HORIZON - chrono::Duration::days(1)).to_rfc3339();
     presentation_entity::Entity::update_many()
         .col_expr(
             presentation_entity::Column::DeletedAt,
@@ -542,10 +543,10 @@ async fn trash_lists_restores_and_prunes() {
         .await
         .unwrap();
     let removed = repo
-        .prune_deleted_presentations(chrono::Duration::days(30))
+        .prune_deleted_presentations(crate::PRUNE_HORIZON)
         .await
         .unwrap();
-    assert_eq!(removed, 1, "only the 31-day-old row is pruned");
+    assert_eq!(removed, 1, "only the row older than PRUNE_HORIZON is pruned");
     assert!(
         presentation_entity::Entity::find_by_id(old.id.to_string())
             .one(&repo.db)
