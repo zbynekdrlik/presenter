@@ -19,15 +19,53 @@ use super::util::{
 };
 use super::Repository;
 
-/// A trashed-or-live row's timestamps, keyed by `sync_id` — captured from the
-/// OLD library being replaced BEFORE it is deleted (#558 S2).
-type OldTrashState = HashMap<
-    String,
-    (
-        Option<chrono::DateTime<chrono::FixedOffset>>,
-        chrono::DateTime<chrono::FixedOffset>,
-    ),
->;
+/// A trashed-or-live row's `(deleted_at, updated_at)` timestamps.
+type RowState = (
+    Option<chrono::DateTime<chrono::FixedOffset>>,
+    chrono::DateTime<chrono::FixedOffset>,
+);
+
+/// Trash/edit state captured from the OLD library being replaced BEFORE it
+/// is deleted (#558 S2), keyed BOTH by `sync_id` AND by
+/// `(library_name, presentation_name)` (#558 R1). The sync_id alone is not
+/// enough: a re-import can shift a previously content-pure-unique song's
+/// sync_id the moment a same-name twin joins the scan (both occurrences
+/// then derive fresh ids per S3's cardinality-sensitive rule), so a
+/// sync_id-only lookup misses the old row entirely and a trashed song comes
+/// back live with a fresh `updated_at` — which then LWW-wins and propagates
+/// the resurrection to the peer.
+struct OldTrashState {
+    by_sync_id: HashMap<String, RowState>,
+    by_name: HashMap<(String, String), RowState>,
+}
+
+impl OldTrashState {
+    fn empty() -> Self {
+        Self {
+            by_sync_id: HashMap::new(),
+            by_name: HashMap::new(),
+        }
+    }
+
+    /// Consume (remove) the matching OLD row's state, if any — by sync_id
+    /// first, else by `(library_name, presentation_name)`. Consuming
+    /// (rather than merely reading) the name-key match matters when a
+    /// re-import introduces a same-name twin: only the FIRST processed
+    /// occurrence in this scan inherits the ambiguous name-keyed tombstone,
+    /// so the brand-new twin does not also come back trashed.
+    fn take(
+        &mut self,
+        sync_id: &str,
+        library_name: &str,
+        presentation_name: &str,
+    ) -> Option<RowState> {
+        if let Some(state) = self.by_sync_id.remove(sync_id) {
+            return Some(state);
+        }
+        self.by_name
+            .remove(&(library_name.to_string(), presentation_name.to_string()))
+    }
+}
 
 impl Repository {
     #[instrument(skip_all)]
@@ -60,7 +98,7 @@ impl Repository {
         // it, keyed by sync_id — a re-import restores CONTENT but must never
         // resurrect a tombstone or manufacture a newer edit-time for an
         // already-trashed song.
-        let old_trash_state = fetch_old_trash_state(&txn, &stale_library_ids).await?;
+        let mut old_trash_state = fetch_old_trash_state(&txn, &stale_library_ids).await?;
 
         if !stale_library_ids.is_empty() {
             library::Entity::delete_many()
@@ -79,8 +117,14 @@ impl Repository {
 
         let sync_ids = resolve_content_pure_sync_ids(&txn, library).await?;
         for (presentation, sync_id) in library.presentations.iter().zip(sync_ids) {
-            insert_presentation_with_slides(&txn, library, presentation, sync_id, &old_trash_state)
-                .await?;
+            insert_presentation_with_slides(
+                &txn,
+                library,
+                presentation,
+                sync_id,
+                &mut old_trash_state,
+            )
+            .await?;
         }
 
         txn.commit().await?;
@@ -335,9 +379,11 @@ impl Repository {
     }
 }
 
-/// #558 S2: read the OLD library rows (about to be replaced) BEFORE they are
-/// deleted, keyed by `sync_id`, so the caller can carry over `deleted_at` /
-/// `updated_at` for any song that re-imports under the same identity. A
+/// #558 S2 + R1: read the OLD library rows (about to be replaced) BEFORE
+/// they are deleted, keyed by BOTH `sync_id` AND `(library_name,
+/// presentation_name)`, so the caller can carry over `deleted_at` /
+/// `updated_at` for any song that re-imports under the same identity — even
+/// when a same-name twin joining the scan shifts its sync_id (R1). A
 /// re-import restores CONTENT but must never resurrect a tombstone nor
 /// manufacture a newer edit-time for an already-trashed song.
 async fn fetch_old_trash_state(
@@ -345,16 +391,32 @@ async fn fetch_old_trash_state(
     stale_library_ids: &[String],
 ) -> anyhow::Result<OldTrashState> {
     if stale_library_ids.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(OldTrashState::empty());
     }
+    let old_library_names: HashMap<String, String> = library::Entity::find()
+        .filter(library::Column::Id.is_in(stale_library_ids.to_vec()))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|model| (model.id, model.name))
+        .collect();
+
     let old_rows = presentation_entity::Entity::find()
         .filter(presentation_entity::Column::LibraryId.is_in(stale_library_ids.to_vec()))
         .all(txn)
         .await?;
-    Ok(old_rows
-        .into_iter()
-        .map(|model| (model.sync_id, (model.deleted_at, model.updated_at)))
-        .collect())
+
+    let mut state = OldTrashState::empty();
+    for model in old_rows {
+        let row_state: RowState = (model.deleted_at, model.updated_at);
+        if let Some(library_name) = old_library_names.get(&model.library_id) {
+            state
+                .by_name
+                .insert((library_name.clone(), model.name.clone()), row_state);
+        }
+        state.by_sync_id.insert(model.sync_id, row_state);
+    }
+    Ok(state)
 }
 
 /// #558 S3: resolve a content-pure `sync_id` for every presentation in
@@ -463,11 +525,10 @@ async fn insert_presentation_with_slides(
     library: &Library,
     presentation: &Presentation,
     sync_id: String,
-    old_trash_state: &OldTrashState,
+    old_trash_state: &mut OldTrashState,
 ) -> anyhow::Result<()> {
     let (deleted_at, updated_at) = old_trash_state
-        .get(&sync_id)
-        .copied()
+        .take(&sync_id, &library.name, &presentation.name)
         .unwrap_or((None, Utc::now().into()));
 
     let pres_model = presentation_entity::ActiveModel {
