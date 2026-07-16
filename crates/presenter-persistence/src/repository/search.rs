@@ -317,8 +317,13 @@ impl Repository {
 
         let slide_condition = Self::slide_search_condition(ctx);
 
+        // #558 S10: the two name-search phases (search_libraries' matched-
+        // presentations prefetch, search_presentations itself) both filter
+        // DeletedAt.is_null() — the slide-TEXT phase must too, or a trashed
+        // song's lyrics still surface it in results.
         let slide_rows = slide_entity::Entity::find()
             .filter(slide_condition)
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(slide_entity::Column::Position)
             .limit(remaining as u64)
             .find_also_related(presentation_entity::Entity)
