@@ -296,6 +296,47 @@ async fn trash_lists_restores_and_prunes() {
 }
 
 #[tokio::test]
+async fn reimport_preserves_a_trashed_songs_tombstone() {
+    // S2 regression: upsert_library inserted EVERY incoming row with
+    // deleted_at: None and updated_at: now() unconditionally — so
+    // re-importing a library (e.g. re-running the Import Data workflow)
+    // resurrected any song the user had TRASHED, and the fresh "now()"
+    // stamp then LWW-wins over the peer's real tombstone, propagating the
+    // resurrection to the other instance too. A re-import must restore
+    // CONTENT but never clear an existing tombstone nor manufacture a newer
+    // edit-time for an already-trashed song.
+    let repo = repo().await;
+    let presentation =
+        presenter_core::Presentation::new("Doomed", vec![slide(0, "v1")]).unwrap();
+    let library =
+        presenter_core::Library::new("Songs".to_string(), vec![presentation.clone()]).unwrap();
+    repo.upsert_library(&library).await.unwrap();
+
+    repo.delete_presentation(presentation.id).await.unwrap();
+    let trashed_before = row(&repo, presentation.id).await;
+    assert!(
+        trashed_before.deleted_at.is_some(),
+        "sanity: the song is trashed before the re-import"
+    );
+    let deleted_at_before = trashed_before.deleted_at;
+    let updated_at_before = trashed_before.updated_at;
+
+    // Re-import the SAME library content (same .pro files, unchanged).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    repo.upsert_library(&library).await.unwrap();
+
+    let after = row(&repo, presentation.id).await;
+    assert_eq!(
+        after.deleted_at, deleted_at_before,
+        "re-import must not resurrect a trashed song"
+    );
+    assert_eq!(
+        after.updated_at, updated_at_before,
+        "re-import must not manufacture a newer edit-time for a trashed song"
+    );
+}
+
+#[tokio::test]
 async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
     let repo = repo().await;
     let with_uuid = presenter_core::Presentation::new("Imported", vec![slide(0, "a")])
