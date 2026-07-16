@@ -17,6 +17,12 @@ pub enum PasteSlidesError {
     /// One or more requested slide ids are not in the presentation (stale
     /// clipboard) — the paste must fail loudly, never half-apply.
     UnknownSlides,
+    /// The request's `anchorSlideId` no longer names a slide in this
+    /// presentation — a concurrent structural edit (another tab's
+    /// delete/reorder/paste) removed it between when the client read the
+    /// list and when this request landed (#558 V8). The router maps this
+    /// to 409 so the client refreshes instead of guessing a position.
+    AnchorVanished,
     /// Any other failure (cache read, persistence, stage reconcile).
     Internal(anyhow::Error),
 }
@@ -31,25 +37,77 @@ impl std::fmt::Display for PasteSlidesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownSlides => write!(f, "one or more slides no longer exist"),
+            Self::AnchorVanished => write!(f, "the paste anchor slide no longer exists"),
             Self::Internal(err) => write!(f, "{err}"),
         }
     }
 }
 
 impl AppState {
+    /// #558 V3: `reconcile_stage_state_after_edit` runs AFTER the mutation
+    /// has already committed to the DB — a failure here must NEVER turn a
+    /// SUCCESSFUL edit into a client-visible 500 (the client would then
+    /// retry the whole request, duplicating an already-applied paste /
+    /// insert / duplicate / delete / reorder). Log WARN and swallow; the
+    /// next trigger/snapshot self-heals any stage drift.
+    async fn reconcile_stage_after_edit_best_effort(
+        &self,
+        presentation_id: PresentationId,
+        slides: &[Slide],
+    ) {
+        if let Err(err) = self
+            .reconcile_stage_state_after_edit(presentation_id, slides)
+            .await
+        {
+            tracing::warn!(
+                ?err,
+                %presentation_id,
+                "post-commit stage reconcile failed after a slide edit — the edit already \
+                 committed, continuing"
+            );
+        }
+    }
+
+    /// #558 V3: same rationale as `reconcile_stage_after_edit_best_effort`,
+    /// for `broadcast_stage_snapshots` — a failure here must never turn a
+    /// committed edit into a client-visible 500 either.
+    async fn broadcast_stage_best_effort(&self, presentation_id: PresentationId) {
+        if let Err(err) = self.broadcast_stage_snapshots().await {
+            tracing::warn!(
+                ?err,
+                %presentation_id,
+                "post-commit stage broadcast failed after a slide edit — the edit already \
+                 committed, continuing"
+            );
+        }
+    }
+
     /// Paste-of-COPY (#554): clone the named slides' full content and insert the
-    /// clones as a contiguous block at `position` (clamped `0..=len`). A
-    /// multi-slide generalization of `duplicate_slide`: same persist → reconcile
-    /// stage → cache → broadcast → publish → nudge_sync pipeline, so it bumps
-    /// `updated_at` (inside `replace_presentation_slides`) and propagates via
-    /// #555 sync exactly like every other slide mutation. Unknown ids →
-    /// `UnknownSlides` (router maps to 422).
+    /// clones as a contiguous block anchored at `anchor_slide_id` (the slide the
+    /// gap precedes; `None` = end — #558 V8). A multi-slide generalization of
+    /// `duplicate_slide`: same persist → reconcile stage → cache → broadcast →
+    /// publish → nudge_sync pipeline, so it bumps `updated_at` (inside
+    /// `replace_presentation_slides`) and propagates via #555 sync exactly like
+    /// every other slide mutation. Unknown source ids → `UnknownSlides`; an
+    /// anchor that no longer exists → `AnchorVanished` (router maps both to a
+    /// client-visible error, 422 / 409 respectively).
     pub async fn paste_slides(
         &self,
         presentation_id: PresentationId,
         source_ids: Vec<SlideId>,
-        position: u32,
+        anchor_slide_id: Option<SlideId>,
     ) -> Result<Vec<Slide>, PasteSlidesError> {
+        // #558 V2: hold the per-presentation lock across the ENTIRE
+        // read-snapshot + write + cache-refresh sequence — a concurrent sync
+        // apply of this SAME presentation takes the same lock (see
+        // `state/sync.rs`), so the two can never interleave.
+        let _guard = self.presentation_locks.lock(presentation_id).await;
+
+        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
+        // the DB under the lock — never a snapshot cached before a sync
+        // apply landed (sync applies write straight to the DB and are
+        // otherwise invisible to this in-memory cache).
+        self.drop_one_presentation_cache(presentation_id).await;
         let presentation_arc = self.presentation_from_cache(presentation_id).await?;
         let presentation = presentation_arc.as_ref();
 
@@ -62,6 +120,20 @@ impl AppState {
         if !requested.iter().all(|id| present.contains(id)) {
             return Err(PasteSlidesError::UnknownSlides);
         }
+
+        // #558 V8: resolve the insertion index from the ANCHOR SLIDE ID,
+        // inside the SAME lock as the read above — never a raw index a
+        // concurrent structural edit (another tab's delete/reorder) could
+        // have shifted underneath the client between when it read the list
+        // and when this request landed. `None` = insert at the end.
+        let insert_at = match anchor_slide_id {
+            None => presentation.slides.len(),
+            Some(anchor_id) => presentation
+                .slides
+                .iter()
+                .position(|slide| slide.id == anchor_id)
+                .ok_or(PasteSlidesError::AnchorVanished)?,
+        };
 
         // Clone the selected slides in the presentation's OWN list order so the
         // pasted block is contiguous and ordered like the source. Each clone
@@ -80,7 +152,6 @@ impl AppState {
         }
 
         let mut slides = presentation.slides.clone();
-        let insert_at = (position as usize).min(slides.len());
         let tail = slides.split_off(insert_at);
         slides.extend(block);
         slides.extend(tail);
@@ -110,12 +181,12 @@ impl AppState {
             }
         }
 
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
+        self.reconcile_stage_after_edit_best_effort(presentation_id, &slides)
+            .await;
         let mut updated_presentation = presentation.clone();
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
+        self.broadcast_stage_best_effort(presentation_id).await;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
@@ -186,7 +257,7 @@ impl AppState {
         }
         self.cache_presentation_value(updated_presentation).await;
 
-        self.broadcast_stage_snapshots().await?;
+        self.broadcast_stage_best_effort(presentation_id).await;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
@@ -201,6 +272,14 @@ impl AppState {
         presentation_id: PresentationId,
         position: Option<u32>,
     ) -> anyhow::Result<Vec<Slide>> {
+        // #558 V2: see `paste_slides` — same shared per-presentation lock.
+        let _guard = self.presentation_locks.lock(presentation_id).await;
+
+        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
+        // the DB under the lock — never a snapshot cached before a sync
+        // apply landed (sync applies write straight to the DB and are
+        // otherwise invisible to this in-memory cache).
+        self.drop_one_presentation_cache(presentation_id).await;
         let presentation_arc = self.presentation_from_cache(presentation_id).await?;
         let presentation = presentation_arc.as_ref();
         let mut slides = presentation.slides.clone();
@@ -213,12 +292,12 @@ impl AppState {
         self.repository
             .replace_presentation_slides(presentation_id, &slides)
             .await?;
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
+        self.reconcile_stage_after_edit_best_effort(presentation_id, &slides)
+            .await;
         let mut updated_presentation = presentation.clone();
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
+        self.broadcast_stage_best_effort(presentation_id).await;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
@@ -231,6 +310,14 @@ impl AppState {
         presentation_id: PresentationId,
         slide_id: SlideId,
     ) -> anyhow::Result<Vec<Slide>> {
+        // #558 V2: see `paste_slides` — same shared per-presentation lock.
+        let _guard = self.presentation_locks.lock(presentation_id).await;
+
+        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
+        // the DB under the lock — never a snapshot cached before a sync
+        // apply landed (sync applies write straight to the DB and are
+        // otherwise invisible to this in-memory cache).
+        self.drop_one_presentation_cache(presentation_id).await;
         let presentation_arc = self.presentation_from_cache(presentation_id).await?;
         let presentation = presentation_arc.as_ref();
         let mut slides = presentation.slides.clone();
@@ -263,12 +350,12 @@ impl AppState {
                 tracing::warn!(?err, %slide_id, "failed to read stage-layout marker while duplicating slide");
             }
         }
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
+        self.reconcile_stage_after_edit_best_effort(presentation_id, &slides)
+            .await;
         let mut updated_presentation = presentation.clone();
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
+        self.broadcast_stage_best_effort(presentation_id).await;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
@@ -281,6 +368,14 @@ impl AppState {
         presentation_id: PresentationId,
         slide_id: SlideId,
     ) -> anyhow::Result<Vec<Slide>> {
+        // #558 V2: see `paste_slides` — same shared per-presentation lock.
+        let _guard = self.presentation_locks.lock(presentation_id).await;
+
+        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
+        // the DB under the lock — never a snapshot cached before a sync
+        // apply landed (sync applies write straight to the DB and are
+        // otherwise invisible to this in-memory cache).
+        self.drop_one_presentation_cache(presentation_id).await;
         let presentation_arc = self.presentation_from_cache(presentation_id).await?;
         let presentation = presentation_arc.as_ref();
         let mut slides = presentation.slides.clone();
@@ -302,12 +397,12 @@ impl AppState {
         if let Err(err) = self.repository.clear_slide_stage_layout(slide_id).await {
             tracing::warn!(?err, %slide_id, "failed to clear stage-layout marker of deleted slide");
         }
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
+        self.reconcile_stage_after_edit_best_effort(presentation_id, &slides)
+            .await;
         let mut updated_presentation = presentation.clone();
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
+        self.broadcast_stage_best_effort(presentation_id).await;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
@@ -320,6 +415,14 @@ impl AppState {
         presentation_id: PresentationId,
         order: Vec<SlideId>,
     ) -> anyhow::Result<Vec<Slide>> {
+        // #558 V2: see `paste_slides` — same shared per-presentation lock.
+        let _guard = self.presentation_locks.lock(presentation_id).await;
+
+        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
+        // the DB under the lock — never a snapshot cached before a sync
+        // apply landed (sync applies write straight to the DB and are
+        // otherwise invisible to this in-memory cache).
+        self.drop_one_presentation_cache(presentation_id).await;
         let presentation_arc = self.presentation_from_cache(presentation_id).await?;
         let presentation = presentation_arc.as_ref();
         let mut map = HashMap::new();
@@ -340,12 +443,12 @@ impl AppState {
         self.repository
             .replace_presentation_slides(presentation_id, &slides)
             .await?;
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
+        self.reconcile_stage_after_edit_best_effort(presentation_id, &slides)
+            .await;
         let mut updated_presentation = presentation.clone();
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
+        self.broadcast_stage_best_effort(presentation_id).await;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
@@ -456,10 +559,11 @@ mod tests {
         let presentation = presentation_with_slides(&state, &["A", "B", "C"]).await;
         let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
 
-        // Copy A and C, paste at gap 1 (after A). New block = clones of A,C in
-        // list order → [A, A', C', B, C].
+        // Copy A and C, paste anchored on B (gap 1 = before B, i.e. after A —
+        // #558 V8: the anchor names the slide the gap PRECEDES). New block =
+        // clones of A,C in list order → [A, A', C', B, C].
         let result = state
-            .paste_slides(presentation.id, vec![ids[0], ids[2]], 1)
+            .paste_slides(presentation.id, vec![ids[0], ids[2]], Some(ids[1]))
             .await
             .unwrap();
 
@@ -498,8 +602,9 @@ mod tests {
             .unwrap();
         let src_id = presentation.slides[0].id;
 
+        // Single-slide presentation: gap 1 == len == the end → no anchor.
         let result = state
-            .paste_slides(presentation.id, vec![src_id], 1)
+            .paste_slides(presentation.id, vec![src_id], None)
             .await
             .unwrap();
         let clone = &result[1];
@@ -514,13 +619,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_clamps_position_past_the_end() {
+    async fn paste_with_no_anchor_appends_at_the_end() {
         let state = AppState::in_memory().await.unwrap();
         let presentation = presentation_with_slides(&state, &["A", "B"]).await;
         let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
-        // position 99 clamps to len (append).
+        // #558 V8: `None` = append at the end (replaces the old raw
+        // "position past the end clamps" behavior — there is no longer a
+        // raw index to clamp).
         let result = state
-            .paste_slides(presentation.id, vec![ids[0]], 99)
+            .paste_slides(presentation.id, vec![ids[0]], None)
             .await
             .unwrap();
         let mains: Vec<String> = result
@@ -536,7 +643,7 @@ mod tests {
         let presentation = presentation_with_slides(&state, &["A"]).await;
         let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
         let result = state
-            .paste_slides(presentation.id, vec![ids[0], SlideId::new()], 0)
+            .paste_slides(presentation.id, vec![ids[0], SlideId::new()], Some(ids[0]))
             .await;
         assert!(matches!(result, Err(PasteSlidesError::UnknownSlides)));
         // The presentation must be UNCHANGED (no half-paste).
@@ -551,7 +658,7 @@ mod tests {
         let presentation = presentation_with_slides(&state, &["A", "B"]).await;
         let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
         state
-            .paste_slides(presentation.id, vec![ids[0]], 0)
+            .paste_slides(presentation.id, vec![ids[0]], Some(ids[0]))
             .await
             .unwrap();
         let reloaded = state.presentation_detail(presentation.id).await.unwrap();
@@ -569,6 +676,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paste_anchored_resolution_still_lands_in_the_right_gap_after_a_concurrent_delete() {
+        // #558 V8: a raw clamped index would land in the WRONG gap once
+        // another tab's concurrent delete shifts the list underneath it.
+        // Anchoring on the SLIDE ID the gap precedes keeps the paste correct
+        // regardless of what else changed the list order/length meanwhile.
+        let state = AppState::in_memory().await.unwrap();
+        let presentation = presentation_with_slides(&state, &["A", "B", "C"]).await;
+        let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
+
+        // Intent: paste before C. Concurrently (simulated sequentially, as
+        // the lock would force it): B is deleted first, shifting C from
+        // index 2 to index 1.
+        state.delete_slide(presentation.id, ids[1]).await.unwrap();
+
+        let result = state
+            .paste_slides(presentation.id, vec![ids[0]], Some(ids[2]))
+            .await
+            .unwrap();
+        let mains: Vec<String> = result
+            .iter()
+            .map(|s| s.content.main.value().to_string())
+            .collect();
+        assert_eq!(
+            mains,
+            vec!["A", "A", "C"],
+            "the clone lands right before C — the anchor, not a stale raw index"
+        );
+    }
+
+    #[tokio::test]
+    async fn paste_fails_loudly_when_the_anchor_slide_itself_vanished() {
+        // #558 V8: when the anchor slide is the one that vanished (not just
+        // shifted), there is no honest gap to resolve — fail loudly so the
+        // client refreshes instead of silently guessing a position.
+        let state = AppState::in_memory().await.unwrap();
+        let presentation = presentation_with_slides(&state, &["A", "B", "C"]).await;
+        let ids: Vec<SlideId> = presentation.slides.iter().map(|s| s.id).collect();
+
+        state.delete_slide(presentation.id, ids[1]).await.unwrap();
+
+        let result = state
+            .paste_slides(presentation.id, vec![ids[0]], Some(ids[1]))
+            .await;
+        assert!(
+            matches!(result, Err(PasteSlidesError::AnchorVanished)),
+            "a paste anchored on a slide that no longer exists must fail loudly"
+        );
+        // No half-paste: the presentation is unchanged (still 2 slides: A, C).
+        let reloaded = state.presentation_detail(presentation.id).await.unwrap();
+        let (_, _, reloaded) = reloaded.expect("still exists");
+        assert_eq!(reloaded.slides.len(), 2);
+    }
+
+    #[tokio::test]
     async fn reorder_slides_rejects_an_unknown_slide_id() {
         let state = AppState::in_memory().await.unwrap();
         let presentation = presentation_with_slides(&state, &["A", "B"]).await;
@@ -579,6 +740,148 @@ mod tests {
         assert!(
             result.is_err(),
             "an order list naming a slide id that doesn't belong to this presentation must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_replace_edit_never_clobbers_a_sync_apply_that_landed_first() {
+        // #558 V2: every snapshot-replace edit op used to read the
+        // presentation from AppState's in-memory CACHE, never a fresh DB
+        // read. A sync apply writes DIRECTLY to the DB and is invisible to
+        // that cache — an edit op landing after such an apply, but still
+        // holding a snapshot cached from BEFORE it, silently overwrote the
+        // synced content with its own stale-based result (and its own
+        // `touch` would then LWW-propagate that loss back to the peer as
+        // the "newer" copy). This reproduces the exact stale-cache clobber
+        // deterministically: warm the cache, apply a sync update directly
+        // to the DB (bypassing AppState, exactly like the real sync engine
+        // does), then run an edit op and prove it builds on the FRESH
+        // (synced) content, never the stale cached snapshot.
+        let state = AppState::in_memory().await.unwrap();
+        let presentation = presentation_with_slides(&state, &["Original"]).await;
+
+        // Warm the cache with the pre-sync snapshot (mirrors a normal prior
+        // read, e.g. opening the song in the editor).
+        let _ = state
+            .presentation_from_cache(presentation.id)
+            .await
+            .unwrap();
+
+        // A peer sync apply lands directly in the DB, bypassing AppState
+        // entirely — the cache warmed above is now stale relative to the DB.
+        use presenter_persistence::entities::presentation as presentation_entity;
+        use sea_orm::EntityTrait;
+        let row = presentation_entity::Entity::find_by_id(presentation.id.to_string())
+            .one(state.repository().connection())
+            .await
+            .unwrap()
+            .expect("presentation row exists");
+        let incoming = presenter_persistence::SyncPresentation {
+            sync_id: row.sync_id,
+            library_name: "Test Library".to_string(),
+            name: "Test Presentation".to_string(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            slides: vec![blank_slide(0, "PeerA"), blank_slide(1, "PeerB")],
+        };
+        state
+            .repository()
+            .apply_sync_presentation(&incoming, &std::collections::HashSet::new())
+            .await
+            .unwrap();
+
+        // The edit op must build on the FRESH (synced) content, never the
+        // stale cached "Original" snapshot.
+        let result = state
+            .insert_blank_slide(presentation.id, None)
+            .await
+            .unwrap();
+        let mains: Vec<String> = result
+            .iter()
+            .map(|s| s.content.main.value().to_string())
+            .collect();
+        assert_eq!(
+            mains,
+            vec!["PeerA", "PeerB", ""],
+            "the insert must be built on top of the synced content, not overwrite it with a \
+             stale pre-sync snapshot"
+        );
+
+        // And persistence agrees — this isn't just the in-memory return value.
+        let reloaded = state.presentation_detail(presentation.id).await.unwrap();
+        let (_, _, reloaded) = reloaded.expect("still exists");
+        let reloaded_mains: Vec<String> = reloaded
+            .slides
+            .iter()
+            .map(|s| s.content.main.value().to_string())
+            .collect();
+        assert_eq!(reloaded_mains, vec!["PeerA", "PeerB", ""]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_slide_succeeds_even_when_post_commit_broadcast_fails() {
+        // #558 V3: `reconcile_stage_state_after_edit` / `broadcast_stage_snapshots`
+        // run AFTER `replace_presentation_slides` already committed — a
+        // failure there must never turn a SUCCESSFUL mutation into a
+        // client-visible error (the client would then retry the whole
+        // request, duplicating an already-applied edit). Forces a REAL
+        // post-commit broadcast failure: presentation `active` is the
+        // on-stage song and gets a slide corrupted directly in the DB
+        // (bypassing all validation) so re-reading it while building the
+        // broadcast snapshot errors — then an edit on a DIFFERENT,
+        // unrelated presentation must still succeed.
+        let state = AppState::in_memory().await.unwrap();
+        let library = state.create_library("V3 Library").await.unwrap();
+        let (_, _, active, _) = state
+            .create_presentation(
+                library.id,
+                "On Stage Song",
+                Some(&[blank_slide(0, "On stage")]),
+            )
+            .await
+            .unwrap();
+        state
+            .update_stage_state(active.id, active.slides[0].id, None, None, None)
+            .await
+            .unwrap();
+
+        use presenter_persistence::entities::slide as slide_entity;
+        use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter};
+        slide_entity::Entity::update_many()
+            .col_expr(
+                slide_entity::Column::WorshipMain,
+                Expr::value("x".repeat(5000)),
+            )
+            .filter(slide_entity::Column::Id.eq(active.slides[0].id.to_string()))
+            .exec(state.repository().connection())
+            .await
+            .unwrap();
+
+        // A completely different, unrelated presentation (SAME library) —
+        // its own edit must succeed even though building the
+        // (unconditional) stage broadcast now fails re-reading the
+        // corrupted `active` song.
+        let (_, _, other, _) = state
+            .create_presentation(
+                library.id,
+                "Other Song",
+                Some(&[blank_slide(0, "A"), blank_slide(1, "B")]),
+            )
+            .await
+            .unwrap();
+        let result = state.duplicate_slide(other.id, other.slides[0].id).await;
+        assert!(
+            result.is_ok(),
+            "a post-commit broadcast failure must never surface as an error from a \
+             successfully-committed edit: {result:?}"
+        );
+
+        let reloaded = state.presentation_detail(other.id).await.unwrap();
+        let (_, _, reloaded) = reloaded.expect("still exists");
+        assert_eq!(
+            reloaded.slides.len(),
+            3,
+            "the duplicate DID commit despite the swallowed broadcast failure"
         );
     }
 }
