@@ -180,6 +180,94 @@ async fn apply_adopts_by_name_preserving_the_local_row_id() {
 }
 
 #[tokio::test]
+async fn adopt_by_name_never_adopts_a_trashed_candidate() {
+    // S4 regression: the adopt-by-name match had no `deleted_at IS NULL`
+    // filter, so a peer row whose sync_id is unknown could silently adopt
+    // (and thereby un-delete) a LOCALLY TRASHED song sharing its name. A
+    // trashed candidate must never be eligible for adoption — the peer's
+    // song must be created as a brand new live row instead.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(lib.id, "Shared Song", Some(&[slide(0, "local text")]))
+        .await
+        .unwrap();
+    repo.delete_presentation(local.id).await.unwrap();
+    let local_sync_id_before = row(&repo, local.id).await.sync_id;
+
+    let peer = crate::SyncPresentation {
+        sync_id: "peer-identity-trashed-case".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Shared Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: vec![slide(0, "peer text")],
+    };
+    let outcome = repo.apply_sync_presentation(&peer).await.unwrap();
+    assert_eq!(
+        outcome,
+        crate::SyncApplyOutcome::Created,
+        "a trashed local row must never be adopted-by-name"
+    );
+
+    let local_row_after = row(&repo, local.id).await;
+    assert!(
+        local_row_after.deleted_at.is_some(),
+        "the trashed local row stays trashed"
+    );
+    assert_eq!(
+        local_row_after.sync_id, local_sync_id_before,
+        "the trashed local row's own identity is untouched"
+    );
+}
+
+#[tokio::test]
+async fn adopt_by_name_never_guesses_among_multiple_live_candidates() {
+    // S4 regression: `.one()` with no ORDER BY picks an ARBITRARY row when
+    // 2+ live candidates share the same name in the same library. Adoption
+    // must happen ONLY when exactly one live candidate exists — an
+    // ambiguous match must fall through to create, never guess.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, first) = repo
+        .create_presentation(lib.id, "Shared Song", Some(&[slide(0, "a")]))
+        .await
+        .unwrap();
+    let (_, _, second) = repo
+        .create_presentation(lib.id, "Shared Song", Some(&[slide(0, "b")]))
+        .await
+        .unwrap();
+    let first_sync_id_before = row(&repo, first.id).await.sync_id;
+    let second_sync_id_before = row(&repo, second.id).await.sync_id;
+
+    let peer = crate::SyncPresentation {
+        sync_id: "peer-identity-ambiguous-case".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Shared Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: vec![slide(0, "peer text")],
+    };
+    let outcome = repo.apply_sync_presentation(&peer).await.unwrap();
+    assert_eq!(
+        outcome,
+        crate::SyncApplyOutcome::Created,
+        "an ambiguous name match (2+ live candidates) must never guess"
+    );
+
+    assert_eq!(
+        row(&repo, first.id).await.sync_id,
+        first_sync_id_before,
+        "neither ambiguous candidate is touched"
+    );
+    assert_eq!(
+        row(&repo, second.id).await.sync_id,
+        second_sync_id_before,
+        "neither ambiguous candidate is touched"
+    );
+}
+
+#[tokio::test]
 async fn apply_carries_a_peer_delete_and_restore() {
     let repo = repo().await;
     let created = peer_song("sid-del", "Doomed Peer", "x", 30);
