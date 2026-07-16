@@ -571,8 +571,14 @@ mod tests {
         let _ = state.sync.nudge_rx.lock().await.take();
 
         state.spawn_sync_task("http://127.0.0.1:1".to_string());
-        // Let the spawned task run its early-return path.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Let the spawned task run its early-return path (#558 round-4 U5:
+        // poll the observable slot state instead of an arbitrary sleep).
+        poll_until(
+            || async { !state.sync.shutdown_slot_claimed() },
+            std::time::Duration::from_secs(2),
+            "shutdown slot released after the early-return path",
+        )
+        .await;
 
         // Put a fresh receiver back — in production this slot is only ever
         // taken once for real (a genuinely running loop keeps it), so a

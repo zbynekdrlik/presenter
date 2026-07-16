@@ -307,7 +307,14 @@ impl AppState {
                     .await
                 {
                     Ok(n) if n > 0 => {
-                        tracing::info!(pruned = n, "pruned trashed songs older than PRUNE_HORIZON");
+                        // #558 round-4 U7: log the horizon's actual VALUE
+                        // (days), not the Rust constant's name — a log
+                        // reader has no way to look up `PRUNE_HORIZON`.
+                        tracing::info!(
+                            pruned = n,
+                            horizon_days = PRUNE_HORIZON.num_days(),
+                            "pruned trashed songs older than the prune horizon"
+                        );
                     }
                     Ok(_) => {}
                     Err(err) => warn!(?err, "trash prune failed"),

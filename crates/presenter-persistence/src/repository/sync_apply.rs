@@ -481,6 +481,15 @@ impl Repository {
         let mut targets: Vec<Option<(usize, presenter_core::SlideId)>> =
             vec![None; old_markers.len()];
 
+        // #558 round-4 U6: precompute each NEW slide's raw content ONCE —
+        // pass 1 used to call `raw_content_of` inside the inner `.find()`
+        // closure, recomputing it for the same candidate slides on every
+        // marker's scan instead of once per slide up front.
+        let new_content: Vec<RawSlideContent> = new_slides
+            .iter()
+            .map(|slide| raw_content_of(&slide.content))
+            .collect();
+
         // Pass 1: CONTENT matches, order-independent. Compared as RAW
         // strings (#558 round-3 T7) — never re-validated.
         for (i, marker) in old_markers.iter().enumerate() {
@@ -489,27 +498,31 @@ impl Repository {
             if !content_unique_among_old {
                 continue;
             }
-            if let Some((idx, slide)) = new_slides.iter().enumerate().find(|(idx, slide)| {
-                !claimed[*idx] && raw_content_of(&slide.content) == marker.content
-            }) {
+            if let Some(idx) = new_content
+                .iter()
+                .enumerate()
+                .find(|(idx, content)| !claimed[*idx] && **content == marker.content)
+                .map(|(idx, _)| idx)
+            {
                 claimed[idx] = true;
-                targets[i] = Some((idx, slide.id));
+                targets[i] = Some((idx, new_slides[idx].id));
             }
         }
 
         // Pass 2: POSITION fallback for whatever pass 1 left unresolved —
         // only into a slot nothing has claimed yet, and only in range.
+        // #558 round-4 U9: `claimed.len() == new_slides.len()` always (set
+        // above), so a single bounds check against `claimed` is enough —
+        // the old code ALSO checked `new_slides.get(idx)`, a second check
+        // that could never itself be the deciding factor.
         for (i, marker) in old_markers.iter().enumerate() {
             if targets[i].is_some() {
                 continue;
             }
             let idx = marker.position as usize;
-            let available = !claimed.get(idx).copied().unwrap_or(true);
-            if available {
-                if let Some(slide) = new_slides.get(idx) {
-                    claimed[idx] = true;
-                    targets[i] = Some((idx, slide.id));
-                }
+            if idx < claimed.len() && !claimed[idx] {
+                claimed[idx] = true;
+                targets[i] = Some((idx, new_slides[idx].id));
             }
         }
 

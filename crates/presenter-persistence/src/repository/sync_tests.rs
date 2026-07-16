@@ -446,7 +446,7 @@ async fn apply_sync_presentation_remaps_a_marker_on_an_oversize_legacy_stored_sl
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
-    let (_, _, live) = repo
+    let (_, _, _live) = repo
         .create_presentation(
             lib.id,
             "Live Song",
@@ -475,8 +475,6 @@ async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     assert_eq!(full.library_name, "Songs");
     assert_eq!(full.slides.len(), 2);
     assert_eq!(full.slides[0].content.main.value(), "alpha");
-
-    let _ = row(&repo, live.id).await; // row helper stays used across tasks
 }
 
 #[tokio::test]

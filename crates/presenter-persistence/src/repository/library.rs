@@ -58,22 +58,11 @@ type OldPresentationRow = (
 /// existing local row by name. Both sites converge to
 /// new-id-live + old-id-trashed, with no scan-order dependence and no
 /// wrongly-trashed live song, ever.
-struct OldTrashState {
-    by_sync_id: HashMap<String, RowState>,
-}
-
-impl OldTrashState {
-    fn empty() -> Self {
-        Self {
-            by_sync_id: HashMap::new(),
-        }
-    }
-
-    /// Consume (remove) the matching OLD row's state by `sync_id`, if any.
-    fn take(&mut self, sync_id: &str) -> Option<RowState> {
-        self.by_sync_id.remove(sync_id)
-    }
-}
+///
+/// #558 round-4 U8: a plain alias — the old wrapper struct (with its own
+/// `empty()`/`take()`) was a pass-through with no behavior beyond what
+/// `HashMap` already provides; callers use `.remove(&sync_id)` directly.
+type OldTrashState = HashMap<String, RowState>;
 
 impl Repository {
     #[instrument(skip_all)]
@@ -400,7 +389,7 @@ async fn fetch_old_trash_state(
     stale_library_ids: &[String],
 ) -> anyhow::Result<OldTrashState> {
     if stale_library_ids.is_empty() {
-        return Ok(OldTrashState::empty());
+        return Ok(OldTrashState::new());
     }
     // #558 R7 (round-3): project only sync_id/updated_at/deleted_at — the
     // by-name map (and the library-name lookup it needed) is gone.
@@ -414,9 +403,9 @@ async fn fetch_old_trash_state(
         .all(txn)
         .await?;
 
-    let mut state = OldTrashState::empty();
+    let mut state = OldTrashState::new();
     for (sync_id, updated_at, deleted_at) in old_rows {
-        state.by_sync_id.insert(sync_id, (deleted_at, updated_at));
+        state.insert(sync_id, (deleted_at, updated_at));
     }
     Ok(state)
 }
@@ -530,7 +519,7 @@ async fn insert_presentation_with_slides(
     old_trash_state: &mut OldTrashState,
 ) -> anyhow::Result<()> {
     let (deleted_at, updated_at) = old_trash_state
-        .take(&sync_id)
+        .remove(&sync_id)
         .unwrap_or((None, Utc::now().into()));
 
     let pres_model = presentation_entity::ActiveModel {
