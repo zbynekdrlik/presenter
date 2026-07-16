@@ -50,7 +50,7 @@ pub fn LibraryList() -> impl IntoView {
         move |_| {
             op.modal_mode.set("create".to_string());
             op.modal_target_id.set(None);
-            modal::open_modal(&op, "library-edit");
+            modal::open_modal(&op, "library-create");
         }
     };
 
