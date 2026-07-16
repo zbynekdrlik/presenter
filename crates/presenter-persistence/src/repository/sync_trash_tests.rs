@@ -151,6 +151,40 @@ async fn apply_skips_an_unknown_tombstone_older_than_the_prune_horizon() {
 }
 
 #[tokio::test]
+async fn apply_skips_a_past_horizon_tombstone_for_an_unknown_library_without_creating_it() {
+    // #558 round-4 U4: `apply_unknown_sync_id`'s horizon-gate skip ran
+    // AFTER the library for the incoming peer `library_name` was already
+    // ensured/created (unconditionally, at the top of
+    // `apply_sync_presentation`) — so even a SKIPPED (never-write) apply
+    // committed a phantom, permanently-empty library row for a library
+    // this instance otherwise has no reason to know about. FIX: evaluate
+    // the tombstone/horizon decision BEFORE creating any library; only
+    // ensure-library once the apply is committed to actually writing a
+    // row.
+    let repo = repo().await;
+    let stale_at = chrono::Utc::now() - crate::PRUNE_HORIZON - chrono::Duration::days(1);
+    let stale_tombstone = crate::SyncPresentation {
+        sync_id: "ancient-unknown-library-tombstone".to_string(),
+        library_name: "Never Heard Of It".to_string(),
+        name: "Long Gone".to_string(),
+        updated_at: stale_at,
+        deleted_at: Some(stale_at),
+        slides: vec![slide(0, "x")],
+    };
+    let outcome = repo
+        .apply_sync_presentation(&stale_tombstone, &std::collections::HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::SkippedNotNewer);
+
+    let libraries = repo.fetch_libraries().await.unwrap();
+    assert!(
+        !libraries.iter().any(|l| l.name == "Never Heard Of It"),
+        "a skipped past-horizon tombstone must never create a phantom library"
+    );
+}
+
+#[tokio::test]
 async fn apply_carries_a_peer_delete_and_restore() {
     let repo = repo().await;
     let created = peer_song("sid-del", "Doomed Peer", "x", 30);
