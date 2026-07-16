@@ -4,7 +4,7 @@
 use presenter_core::sync_id_for_name;
 use sea_orm::{ConnectionTrait, Statement};
 use sea_orm_migration::prelude::*;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -32,20 +32,25 @@ impl MigrationTrait for Migration {
         // 1. updated_at — nullable at DB level (SQLite can't ADD NOT NULL without a
         //    default), backfilled from created_at, always set by every insert going
         //    forward, so no NULL row ever exists (entity type is NOT NULL).
+        //    #558 S8: the ADD COLUMN is gated on column_missing (idempotent —
+        //    SQLite errors re-adding an existing column), but the backfill UPDATE
+        //    is NOT — it always runs, keyed on DATA state (`updated_at IS NULL`),
+        //    so a crash between ADD COLUMN and the backfill can never strand NULL
+        //    rows forever once column_missing() starts returning false.
         if column_missing(db, "updated_at").await? {
             db.execute(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
                 "ALTER TABLE presentations ADD COLUMN updated_at TEXT",
             ))
             .await?;
-            db.execute(Statement::from_string(
-                sea_orm::DatabaseBackend::Sqlite,
-                "UPDATE presentations SET updated_at = created_at WHERE updated_at IS NULL",
-            ))
-            .await?;
         }
+        db.execute(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE presentations SET updated_at = created_at WHERE updated_at IS NULL",
+        ))
+        .await?;
 
-        // 2. deleted_at — genuinely nullable (the trash marker).
+        // 2. deleted_at — genuinely nullable (the trash marker), no backfill needed.
         if column_missing(db, "deleted_at").await? {
             db.execute(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
@@ -54,40 +59,54 @@ impl MigrationTrait for Migration {
             .await?;
         }
 
-        // 3. sync_id — cross-instance identity. Backfill deterministically; on the
-        //    rare same-library+same-name in-DB collision, fall back to a fresh v4 so
-        //    the unique index below always holds.
+        // 3. sync_id — cross-instance identity. Same S8 split as updated_at: the
+        //    ADD COLUMN is column-gated, the backfill below always runs (data-gated
+        //    via `sync_id IS NULL` in its UPDATE). Ranked deterministically by
+        //    (library name, presentation name, created_at, id) — #558 S5: NOT by
+        //    unordered scan order, which tracks physical/insertion order and gives
+        //    two independently built databases no reason to agree on which "twin"
+        //    ranks first. A same-library+same-name collision derives
+        //    UUIDv5(lib/name/k) — a deterministic occurrence counter, never
+        //    Uuid::new_v4() (which can never converge between two sites).
         if column_missing(db, "sync_id").await? {
             db.execute(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
                 "ALTER TABLE presentations ADD COLUMN sync_id TEXT",
             ))
             .await?;
-
-            let rows = db
-                .query_all(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "SELECT p.id AS id, COALESCE(l.name, '') AS lib_name, p.name AS name \
-                     FROM presentations p LEFT JOIN libraries l ON l.id = p.library_id",
-                ))
-                .await?;
-            let mut used: HashSet<String> = HashSet::new();
-            for row in rows {
-                let id: String = row.try_get("", "id")?;
-                let lib_name: String = row.try_get("", "lib_name")?;
-                let name: String = row.try_get("", "name")?;
-                let mut sid = sync_id_for_name(&lib_name, &name);
-                if !used.insert(sid.clone()) {
-                    sid = uuid::Uuid::new_v4().to_string();
-                    used.insert(sid.clone());
-                }
-                db.execute(Statement::from_sql_and_values(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "UPDATE presentations SET sync_id = ? WHERE id = ? AND sync_id IS NULL",
-                    [sid.into(), id.into()],
-                ))
-                .await?;
-            }
+        }
+        let rows = db
+            .query_all(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT p.id AS id, COALESCE(l.name, '') AS lib_name, p.name AS name \
+                 FROM presentations p LEFT JOIN libraries l ON l.id = p.library_id \
+                 ORDER BY lib_name, name, p.created_at, p.id",
+            ))
+            .await?;
+        let mut occurrence: HashMap<(String, String), u32> = HashMap::new();
+        for row in rows {
+            let id: String = row.try_get("", "id")?;
+            let lib_name: String = row.try_get("", "lib_name")?;
+            let name: String = row.try_get("", "name")?;
+            let k = occurrence
+                .entry((lib_name.clone(), name.clone()))
+                .or_insert(0);
+            *k += 1;
+            let sid = if *k == 1 {
+                sync_id_for_name(&lib_name, &name)
+            } else {
+                uuid::Uuid::new_v5(
+                    &presenter_core::SYNC_ID_NAMESPACE,
+                    format!("{lib_name}/{name}/{k}").as_bytes(),
+                )
+                .to_string()
+            };
+            db.execute(Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE presentations SET sync_id = ? WHERE id = ? AND sync_id IS NULL",
+                [sid.into(), id.into()],
+            ))
+            .await?;
         }
 
         // Unique index — enforces one row per identity. Idempotent (IF NOT EXISTS).
