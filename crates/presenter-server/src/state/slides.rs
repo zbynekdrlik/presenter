@@ -12,6 +12,7 @@ mod edit_ops;
 pub(crate) use compose::{
     compose_bible_items_into_slides, compose_bible_slides, BibleItem, ComposedBibleSlide,
 };
+pub(crate) use edit_ops::PasteSlidesError;
 
 #[cfg(test)]
 mod tests;
