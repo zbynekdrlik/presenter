@@ -15,7 +15,7 @@ use crate::state::AppContext;
 
 use super::slide_save::reconcile_after_seq_mismatch;
 use super::slide_selection_logic::{
-    cut_splice_order, range_select, shortcut_action, ShortcutAction,
+    cut_splice_order, range_select_by_anchor_id, shortcut_action, ShortcutAction,
 };
 
 /// Ordered slide ids of the currently open presentation (untracked snapshot).
@@ -33,26 +33,34 @@ fn current_pres_id(ctx: &AppContext) -> Option<String> {
         .map(|p| p.id.to_string())
 }
 
-/// True while a TEXT-ENTRY field (a textarea, or a non-checkbox input) holds
-/// focus — the guard that keeps Ctrl+C/X/V from firing while the user is typing
-/// slide content. A focused selection CHECKBOX must NOT suppress the shortcut
-/// (you select with the checkbox, then Ctrl+C), so it is excluded here. This is
-/// the "never fire from inside text fields" intent of the spec;
-/// `is_interactive_tag` stays the guard for the per-card CLICK, where its
-/// breadth (incl. checkbox) is correct.
+/// True while a TEXT-ENTRY field — a textarea, a `<select>`, a
+/// contenteditable element, or a non-checkbox input (#558 V10) — holds
+/// focus. The guard that keeps Ctrl+C/X/V from firing while the user is
+/// typing/selecting slide content, or interacting with an unrelated form
+/// control (e.g. the stage-layout `<select>` dropdown). A focused selection
+/// CHECKBOX must NOT suppress the shortcut (you select with the checkbox,
+/// then Ctrl+C), so it is the ONE input type excluded here. This is the
+/// "never fire outside the slide grid" intent of the spec; `is_interactive_tag`
+/// stays the guard for the per-card CLICK, where its breadth (incl. checkbox)
+/// is correct.
 fn text_entry_focused() -> bool {
     let doc = crate::utils::window::document();
     let Some(active) = doc.active_element() else {
         return false;
     };
     let tag = active.tag_name().to_lowercase();
-    if tag == "textarea" {
+    if tag == "textarea" || tag == "select" {
         return true;
     }
     if tag == "input" {
-        return active.get_attribute("type").as_deref() != Some("checkbox");
+        let is_slide_select_checkbox = active.get_attribute("type").as_deref() == Some("checkbox")
+            && active.get_attribute("data-role").as_deref() == Some("slide-select-checkbox");
+        return !is_slide_select_checkbox;
     }
-    false
+    active
+        .dyn_ref::<web_sys::HtmlElement>()
+        .map(|el| el.is_content_editable())
+        .unwrap_or(false)
 }
 
 /// Per-card `Memo`: is this slide currently selected? Copy + `PartialEq`, so
@@ -97,25 +105,30 @@ pub(super) fn render_select_checkbox(
                 ev.prevent_default();
                 let ids = current_slide_ids(&ctx);
                 if ev.shift_key() {
-                    if let Some(anchor) = op.selection_anchor_index.get_untracked() {
-                        let next = range_select(
+                    if let Some(anchor_id) = op.selection_anchor_id.get_untracked() {
+                        // #558 V9: resolve the anchor's CURRENT index by id —
+                        // a vanished anchor (e.g. deleted since) falls through
+                        // to a plain click below, never a guessed range.
+                        if let Some(next) = range_select_by_anchor_id(
                             &ids,
-                            anchor,
+                            &anchor_id,
                             index,
                             &op.selected_slide_ids.get_untracked(),
-                        );
-                        op.selected_slide_ids.set(next);
-                        return;
+                        ) {
+                            op.selected_slide_ids.set(next);
+                            return;
+                        }
                     }
                 }
-                // Plain click (or Shift with no anchor yet): toggle this id.
+                // Plain click (or Shift with no anchor yet, or a vanished
+                // anchor): toggle this id.
                 let sid = slide_id.clone();
                 op.selected_slide_ids.update(|set| {
                     if !set.remove(&sid) {
                         set.insert(sid);
                     }
                 });
-                op.selection_anchor_index.set(Some(index));
+                op.selection_anchor_id.set(Some(slide_id.clone()));
             }
         />
     }
@@ -197,12 +210,22 @@ fn set_clipboard(ctx: &AppContext, op: &OperatorState, mode: ClipboardMode) {
 pub(super) fn clear_selection_and_clipboard(op: &OperatorState) {
     op.clipboard.set(None);
     op.selected_slide_ids.set(std::collections::HashSet::new());
-    op.selection_anchor_index.set(None);
+    op.selection_anchor_id.set(None);
     op.paste_target_gap.set(None);
 }
 
-/// Paste the clipboard at `gap` (0..=len). Copy → the paste endpoint; Cut → the
-/// existing reorder endpoint via `cut_splice_order`.
+/// The slide id CURRENTLY at index `gap` — the anchor a paste inserted at
+/// `gap` must land BEFORE; `None` when `gap` is at (or past) the end
+/// (#558 V8). Resolved fresh from the live DOM-backed list, never a value
+/// captured earlier.
+fn anchor_slide_id_for_gap(ctx: &AppContext, gap: usize) -> Option<String> {
+    current_slide_ids(ctx).get(gap).cloned()
+}
+
+/// Paste the clipboard at `gap` (0..=len). Copy → the paste endpoint (by
+/// ANCHOR slide id, #558 V8); Cut → the existing reorder endpoint via
+/// `cut_splice_order` (already carries the full target order, so it has no
+/// raw-index race to fix).
 pub(super) fn paste_at_gap(ctx: &AppContext, op: &OperatorState, gap: usize) {
     let Some(clipboard) = op.clipboard.get_untracked() else {
         return;
@@ -217,7 +240,10 @@ pub(super) fn paste_at_gap(ctx: &AppContext, op: &OperatorState, gap: usize) {
         return;
     }
     match clipboard.mode {
-        ClipboardMode::Copy => paste_copy(ctx, op, pres_id, clipboard.slide_ids, gap),
+        ClipboardMode::Copy => {
+            let anchor_slide_id = anchor_slide_id_for_gap(ctx, gap);
+            paste_copy(ctx, op, pres_id, clipboard.slide_ids, anchor_slide_id)
+        }
         ClipboardMode::Cut => paste_cut(ctx, op, pres_id, clipboard.slide_ids, gap),
     }
 }
@@ -226,6 +252,14 @@ pub(super) fn paste_at_gap(ctx: &AppContext, op: &OperatorState, gap: usize) {
 /// `slide_edit_seq` staleness guard (#552/#556) — the same guard the
 /// reorder/insert/duplicate paths use. `my_seq` is captured by the caller
 /// BEFORE the async request.
+///
+/// #558 V4: the seq guard alone does not cover a PRESENTATION SWITCH — if
+/// the operator switches to a DIFFERENT presentation while this request is
+/// still in flight, `slide_edit_seq` may be unchanged (nothing else bumped
+/// it in the meantime), so the stale seq check alone would apply THIS
+/// response onto the NOW-selected (unrelated) presentation. `pres_id` is
+/// captured by the caller at request time; apply only if the currently
+/// selected presentation is still that same one.
 async fn apply_slides_guarded(
     ctx: &AppContext,
     op: &OperatorState,
@@ -233,6 +267,14 @@ async fn apply_slides_guarded(
     slides: Vec<presenter_core::Slide>,
     my_seq: u64,
 ) {
+    let same_presentation = ctx
+        .selected_presentation
+        .get_untracked()
+        .map(|pres| pres.id.to_string() == pres_id)
+        .unwrap_or(false);
+    if !same_presentation {
+        return;
+    }
     if op.slide_edit_seq.get_untracked() == my_seq {
         ctx.selected_presentation.update(|p| {
             if let Some(pres) = p.as_mut() {
@@ -251,13 +293,19 @@ async fn apply_slides_guarded(
     }
 }
 
-fn paste_copy(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<String>, gap: usize) {
+fn paste_copy(
+    ctx: &AppContext,
+    op: &OperatorState,
+    pres_id: String,
+    ids: Vec<String>,
+    anchor_slide_id: Option<String>,
+) {
     op.slide_edit_seq.update(|s| *s += 1);
     let my_seq = op.slide_edit_seq.get_untracked();
     let ctx = ctx.clone();
     let op = op.clone();
     leptos::task::spawn_local(async move {
-        match api::presentations::paste_slides(&pres_id, ids, gap as u32).await {
+        match api::presentations::paste_slides(&pres_id, ids, anchor_slide_id).await {
             Ok(slides) => {
                 apply_slides_guarded(&ctx, &op, pres_id, slides, my_seq).await;
                 // Copy clipboard is KEPT so the user can paste again.
@@ -265,6 +313,16 @@ fn paste_copy(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<St
             Err(ApiError::Status(422, _)) => {
                 op.clipboard.set(None);
                 ctx.show_toast("Those slides no longer exist", "error");
+            }
+            Err(ApiError::Status(409, _)) => {
+                // #558 V8: the anchor slide vanished (a concurrent structural
+                // edit removed it) — refresh from the server instead of
+                // guessing a new position. Clipboard is KEPT so the user can
+                // retry the paste against the fresh list.
+                if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
+                    ctx.selected_presentation.set(Some(detail.presentation));
+                }
+                ctx.show_toast("Paste position changed — refreshed, try again", "error");
             }
             Err(_) => {
                 // Clipboard KEPT so the user can retry.
@@ -324,8 +382,16 @@ pub(super) fn setup_selection_clear_on_switch(ctx: AppContext, op: OperatorState
 pub(super) fn setup_clipboard_keyboard(ctx: AppContext, op: OperatorState) {
     let handler =
         Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-            // Only in edit mode with a presentation open.
+            // Only in edit mode, with a presentation open, AND while the
+            // worship editor is the ACTIVE view (#558 V5). The operator
+            // page mounts every view's panel simultaneously (CSS toggles
+            // visibility — see `pages/operator.rs`), so this WINDOW
+            // listener stays live even while the Bible/timers/settings
+            // panel is showing; without the view check, Ctrl+C on one of
+            // those hidden panels hijacked native copy and silently
+            // mutated the (hidden) worship song's clipboard.
             if ctx.mode.get_untracked() == "live"
+                || ctx.view.get_untracked() != "worship"
                 || ctx.selected_presentation.get_untracked().is_none()
             {
                 return;
@@ -391,7 +457,8 @@ pub fn SlideSelectionPanel() -> impl IntoView {
     let selected_slide_ids = op.selected_slide_ids;
     let clipboard = op.clipboard;
     let visible = move || {
-        mode.get() != "live" && (!selected_slide_ids.with(|s| s.is_empty()) || clipboard.get().is_some())
+        mode.get() != "live"
+            && (!selected_slide_ids.with(|s| s.is_empty()) || clipboard.get().is_some())
     };
 
     view! {

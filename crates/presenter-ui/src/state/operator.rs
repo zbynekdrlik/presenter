@@ -138,9 +138,13 @@ pub struct OperatorState {
     pub selected_slide_ids: RwSignal<HashSet<String>>,
     /// The copy/cut clipboard; `None` when empty. Cleared on presentation switch.
     pub clipboard: RwSignal<Option<SlideClipboard>>,
-    /// Index of the last checkbox-clicked slide — the anchor for Shift+click
-    /// range selection (#554).
-    pub selection_anchor_index: RwSignal<Option<usize>>,
+    /// Id of the last checkbox-clicked slide — the anchor for Shift+click
+    /// range selection (#554). Stored as a SLIDE ID, not a positional index
+    /// (#558 V9): a raw index is never invalidated when the list shifts
+    /// (paste/delete/reorder), so a later Shift+click could range-select
+    /// the wrong slides. Resolved back to an index at Shift+click time via
+    /// `range_select_by_anchor_id`.
+    pub selection_anchor_id: RwSignal<Option<String>>,
     /// Gap index (0..=len) the user last hovered/selected as the Ctrl/Cmd+V
     /// paste target; `None` → paste at the end (#554).
     pub paste_target_gap: RwSignal<Option<usize>>,
@@ -193,7 +197,7 @@ impl OperatorState {
             groups_version: RwSignal::new(0),
             selected_slide_ids: RwSignal::new(HashSet::new()),
             clipboard: RwSignal::new(None),
-            selection_anchor_index: RwSignal::new(None),
+            selection_anchor_id: RwSignal::new(None),
             paste_target_gap: RwSignal::new(None),
             dragging_clipboard: RwSignal::new(false),
         }
