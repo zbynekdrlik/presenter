@@ -130,6 +130,24 @@ impl SyncCoordinator {
     pub async fn snapshot(&self) -> SyncStatus {
         self.status.read().await.clone()
     }
+
+    /// Check-and-claim the shutdown slot atomically (#558 R5): if a sender is
+    /// ALREADY installed (a loop is already running), leave it untouched and
+    /// return `false` — the caller must not spawn anything. Otherwise store
+    /// `sender` and return `true`. This must happen under ONE lock
+    /// acquisition so no window exists where an old sender is overwritten
+    /// before the "already running" check runs.
+    fn claim_shutdown_slot(&self, sender: oneshot::Sender<()>) -> bool {
+        let mut guard = match self.shutdown.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.is_some() {
+            return false;
+        }
+        *guard = Some(sender);
+        true
+    }
 }
 
 impl AppState {
@@ -175,7 +193,16 @@ impl AppState {
     /// `tokio::select!` shutdown branch resolves immediately and kills the
     /// loop before it does any real work. It is only dropped (cleanly
     /// stopping the loop) when the coordinator's Arc itself is finally
-    /// dropped at process exit, or replaced by a later call here.
+    /// dropped at process exit.
+    ///
+    /// #558 R5: a second call must NEVER overwrite an already-installed
+    /// shutdown sender — doing so drops the OLD sender, which resolves the
+    /// RUNNING loop's `shutdown_rx` and kills it, while the NEW task then
+    /// finds `nudge_rx` already taken (by the first, now-dying loop) and
+    /// refuses to start. Net effect: zero live loops. So the "is a loop
+    /// already running?" check-and-claim happens under ONE lock
+    /// acquisition, BEFORE anything else — a second spawn bails out
+    /// immediately, leaving the first loop completely untouched.
     pub(crate) fn spawn_sync_task(&self, peer_url: String) {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         let state = self.clone();
@@ -183,9 +210,9 @@ impl AppState {
         let rx_slot = coordinator.nudge_rx.clone();
         let status = coordinator.status.clone();
 
-        match coordinator.shutdown.lock() {
-            Ok(mut guard) => *guard = Some(shutdown_tx),
-            Err(poisoned) => *poisoned.into_inner() = Some(shutdown_tx),
+        if !coordinator.claim_shutdown_slot(shutdown_tx) {
+            warn!("sync task already started; not spawning a second loop");
+            return;
         }
 
         tokio::spawn(async move {
@@ -351,5 +378,36 @@ mod tests {
         let s = c.snapshot().await;
         assert!(!s.enabled);
         assert!(s.peer_url.is_none());
+    }
+
+    #[test]
+    fn claim_shutdown_slot_never_overwrites_an_already_installed_sender() {
+        // R5 regression: a second claim used to overwrite the slot
+        // unconditionally, dropping the FIRST sender (which kills a
+        // running loop's `shutdown_rx`). The fix is check-and-claim: the
+        // first claim succeeds and installs its sender; a second claim
+        // must fail WITHOUT touching the slot, so the first sender stays
+        // alive (provable here since dropping it would resolve `rx1`).
+        let c = SyncCoordinator::new();
+        let (tx1, mut rx1) = tokio::sync::oneshot::channel::<()>();
+        let (tx2, _rx2) = tokio::sync::oneshot::channel::<()>();
+
+        assert!(c.claim_shutdown_slot(tx1), "the first claim must succeed");
+        assert!(
+            !c.claim_shutdown_slot(tx2),
+            "a second claim while one is already installed must fail"
+        );
+        assert!(
+            rx1.try_recv().is_err(),
+            "tx1 must still be alive (not dropped by the failed second claim)"
+        );
+        // A closed/dropped channel would report Closed here; an empty-but-alive
+        // channel reports Empty -- either way `is_err()` above holds, so
+        // assert the SPECIFIC alive signal too.
+        assert_eq!(
+            rx1.try_recv().unwrap_err(),
+            tokio::sync::oneshot::error::TryRecvError::Empty,
+            "tx1 specifically must be EMPTY (alive), not Closed (dropped)"
+        );
     }
 }
