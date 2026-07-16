@@ -7,6 +7,8 @@ mod presentation;
 #[cfg(test)]
 mod presentation_atomicity_tests;
 mod search;
+#[cfg(test)]
+mod search_trash_tests;
 mod slide_stage_layout;
 mod stage_state;
 mod sync;
