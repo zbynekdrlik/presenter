@@ -268,6 +268,104 @@ async fn adopt_by_name_never_guesses_among_multiple_live_candidates() {
 }
 
 #[tokio::test]
+async fn apply_never_adopts_a_tombstone_by_name_onto_a_live_same_name_song() {
+    // #558 round-3 Decision B (fixes T1): two SITES can independently hold
+    // DIFFERENT songs that happen to share a NAME (different sync_ids) —
+    // e.g. each site imported its own "Shared Song". Trashing one site's
+    // copy must never reach across and trash the OTHER site's unrelated
+    // same-named song via adopt-by-name. A peer TOMBSTONE whose sync_id is
+    // unknown must therefore NEVER attempt adopt-by-name at all — it
+    // creates its OWN new trashed row instead, leaving any live
+    // same-named local song completely untouched.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(lib.id, "Shared Song", Some(&[slide(0, "local text")]))
+        .await
+        .unwrap();
+    let local_row_before = row(&repo, local.id).await;
+
+    // Peer's tombstone for a DIFFERENT song sharing the SAME name, unknown
+    // sync_id, clearly newer than the local row.
+    let tombstone_at = chrono::Utc::now() + chrono::Duration::seconds(5);
+    let peer_tombstone = crate::SyncPresentation {
+        sync_id: "peer-tombstone-unknown".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Shared Song".to_string(),
+        updated_at: tombstone_at,
+        deleted_at: Some(tombstone_at),
+        slides: vec![slide(0, "peer text")],
+    };
+    let outcome = repo
+        .apply_sync_presentation(&peer_tombstone)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        crate::SyncApplyOutcome::Created,
+        "a tombstone with an unknown sync_id must create its OWN row, never adopt-by-name"
+    );
+
+    let local_row_after = row(&repo, local.id).await;
+    assert_eq!(
+        local_row_before, local_row_after,
+        "the live local song must be completely untouched"
+    );
+
+    let new_trashed = repo
+        .fetch_sync_presentation("peer-tombstone-unknown")
+        .await
+        .unwrap()
+        .expect("the peer's tombstone landed as its own new row");
+    assert_eq!(new_trashed.deleted_at, Some(tombstone_at));
+    assert_eq!(new_trashed.slides[0].content.main.value(), "peer text");
+
+    let trash = repo.list_trashed_presentations().await.unwrap();
+    assert!(
+        trash.iter().any(|t| t.sync_id == "peer-tombstone-unknown"),
+        "the new row shows up in trash"
+    );
+    assert!(
+        !trash
+            .iter()
+            .any(|t| t.name == "Shared Song" && t.sync_id != "peer-tombstone-unknown"),
+        "the local live song must not have been trashed under this identity"
+    );
+}
+
+#[tokio::test]
+async fn apply_skips_an_unknown_tombstone_older_than_the_prune_horizon() {
+    // Decision B, second half: an unknown sync_id whose tombstone predates
+    // PRUNE_HORIZON is presumed already pruned elsewhere — apply must skip
+    // it, never manufacture a fresh trashed row for content nobody asked to
+    // resurrect (mirrors S7's guard, exercised here at the
+    // apply_sync_presentation level directly, not just via the manifest
+    // pre-filter).
+    let repo = repo().await;
+    let stale_at = chrono::Utc::now() - crate::PRUNE_HORIZON - chrono::Duration::days(1);
+    let stale_tombstone = crate::SyncPresentation {
+        sync_id: "ancient-tombstone".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Long Gone".to_string(),
+        updated_at: stale_at,
+        deleted_at: Some(stale_at),
+        slides: vec![slide(0, "x")],
+    };
+    let outcome = repo
+        .apply_sync_presentation(&stale_tombstone)
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::SkippedNotNewer);
+    assert!(
+        repo.fetch_sync_presentation("ancient-tombstone")
+            .await
+            .unwrap()
+            .is_none(),
+        "an already-pruned tombstone must never be resurrected as a new row"
+    );
+}
+
+#[tokio::test]
 async fn apply_carries_a_peer_delete_and_restore() {
     let repo = repo().await;
     let created = peer_song("sid-del", "Doomed Peer", "x", 30);
