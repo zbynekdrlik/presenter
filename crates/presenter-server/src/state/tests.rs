@@ -1058,31 +1058,6 @@ async fn group_color_cache_resolves_and_lists() {
 }
 
 #[tokio::test]
-async fn presentation_from_cache_serves_repeat_reads() {
-    // Kills presentation_from_cache's own cache write: a repeat read must return
-    // the very same Arc allocation (cache hit), only true if the value was
-    // actually inserted.
-    let state = AppState::in_memory().await.unwrap();
-    super::seed_sample_library(&state).await.unwrap();
-    let libraries = state.libraries().await.unwrap();
-    let presentation_id = libraries[0].presentations[0].id;
-
-    let first = state
-        .presentation_from_cache(presentation_id)
-        .await
-        .expect("first cache read");
-    let second = state
-        .presentation_from_cache(presentation_id)
-        .await
-        .expect("second cache read");
-    assert!(
-        std::sync::Arc::ptr_eq(&first, &second),
-        "presentation cache must return the same Arc on a repeat read (cache hit)"
-    );
-    assert_eq!(first.id, presentation_id);
-}
-
-#[tokio::test]
 async fn presentation_detail_populates_cache_via_cache_presentation_ref() {
     // Kills cache_presentation_ref -> (): presentation_detail caches the fetched
     // presentation as a side effect. A no-op write leaves the cache empty, so we

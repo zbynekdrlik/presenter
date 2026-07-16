@@ -319,10 +319,31 @@ fn paste_copy(
                 // edit removed it) — refresh from the server instead of
                 // guessing a new position. Clipboard is KEPT so the user can
                 // retry the paste against the fresh list.
-                if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
-                    ctx.selected_presentation.set(Some(detail.presentation));
+                //
+                // #558 W1: this used to apply the refetched detail
+                // UNCONDITIONALLY — bypassing the V4 presentation-switch
+                // guard `apply_slides_guarded` enforces on the success path.
+                // If the operator switched away from `pres_id` while this
+                // request was still in flight, painting a refetch of the
+                // OLD (now unrelated) presentation onto whatever is now
+                // selected would be exactly the V4 bug this guards against.
+                // Recover ONLY if `pres_id` is STILL the selected
+                // presentation; otherwise there is nothing to recover onto
+                // — just drop the stale clipboard silently (the operator
+                // already left the song).
+                let still_here = ctx
+                    .selected_presentation
+                    .get_untracked()
+                    .map(|pres| pres.id.to_string() == pres_id)
+                    .unwrap_or(false);
+                if still_here {
+                    if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
+                        ctx.selected_presentation.set(Some(detail.presentation));
+                    }
+                    ctx.show_toast("Paste position changed — refreshed, try again", "error");
+                } else {
+                    op.clipboard.set(None);
                 }
-                ctx.show_toast("Paste position changed — refreshed, try again", "error");
             }
             Err(_) => {
                 // Clipboard KEPT so the user can retry.

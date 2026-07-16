@@ -324,6 +324,92 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_content_on_a_pur
 }
 
 #[tokio::test]
+async fn apply_sync_presentation_remaps_an_oversize_marker_by_content_across_a_reorder() {
+    // #558 W6: `remap_markers` used to compare the OLD (clamped-at-write)
+    // stored content against the INCOMING slide's RAW, UNCLAMPED text —
+    // NOT the clamped text that is actually inserted. So an oversize marked
+    // slide that MOVES position on a reorder (no edit, still the same
+    // still-oversize content) could never content-match (clamped-old 4000
+    // chars vs raw-new 5000+ chars are never equal) and fell back to
+    // POSITION, reattaching the marker to whatever slide now sits at the
+    // OLD position — the WRONG slide. FIX: clamp the incoming slides FIRST,
+    // remap against those SAME clamped slides (the ones actually inserted),
+    // so content matching works identically for oversize and normal-size
+    // slides alike.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(
+            lib.id,
+            "Oversize Reorder Song",
+            Some(&[
+                slide(0, "oversize verse"),
+                slide(1, "verse 2"),
+                slide(2, "verse 3"),
+            ]),
+        )
+        .await
+        .unwrap();
+    repo.set_slide_stage_layout(local.id, local.slides[0].id, "fulltext")
+        .await
+        .unwrap();
+
+    // The marked slide is already stored at the CLAMPED length, as a prior
+    // apply's clamp would have written it.
+    let clamped_text = "x".repeat(4000);
+    use crate::entities::slide as slide_entity;
+    use sea_orm::{ColumnTrait, QueryFilter};
+    slide_entity::Entity::update_many()
+        .col_expr(
+            slide_entity::Column::WorshipMain,
+            sea_orm::sea_query::Expr::value(clamped_text.clone()),
+        )
+        .filter(slide_entity::Column::Id.eq(local.slides[0].id.to_string()))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+
+    let local_sync_id = row(&repo, local.id).await.sync_id;
+    let oversize_incoming = "x".repeat(5000);
+    // Peer reorders: the SAME (unedited, still-oversize) marked slide moves
+    // to the END; verse2/verse3 shift up to lead.
+    let peer_slides = vec![
+        slide(0, "verse 2"),
+        slide(1, "verse 3"),
+        presenter_core::Slide::new(
+            2,
+            SlideContent::new(
+                SlideText::from_stored_unchecked(oversize_incoming),
+                SlideText::new("").unwrap(),
+                SlideText::new("").unwrap(),
+                None,
+            ),
+        ),
+    ];
+    let incoming = crate::SyncPresentation {
+        sync_id: local_sync_id,
+        library_name: "Songs".to_string(),
+        name: "Oversize Reorder Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: peer_slides.clone(),
+    };
+    repo.apply_sync_presentation(&incoming, &std::collections::HashSet::new())
+        .await
+        .expect("sync apply must not fail on a still-oversize marked slide");
+
+    let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert_eq!(markers.len(), 1, "the marker must survive the reorder");
+    let oversize_new_id = peer_slides[2].id.to_string();
+    assert_eq!(
+        markers.get(&oversize_new_id),
+        Some(&"fulltext".to_string()),
+        "the marker must follow the OVERSIZE slide by content to its new position (2), \
+         never stay pinned to its OLD position (0, which is now \"verse 2\")"
+    );
+}
+
+#[tokio::test]
 async fn apply_sync_presentation_remaps_markers_without_a_position_fallback_collision() {
     // #558 round-3 T3: the POSITION fallback ignored `claimed`, so a marker
     // whose old content is AMBIGUOUS (shared by 2+ old slides, so it gets

@@ -82,42 +82,6 @@ impl Repository {
         .transpose()
     }
 
-    /// Resolve the SINGLE live (non-trashed) local presentation id matching
-    /// `library_name` + `name`, mirroring the adopt-by-name candidate rule in
-    /// `apply_sync_presentation`'s `try_adopt_by_name` (#558 V2) — used only
-    /// to pick a lock target BEFORE the apply transaction runs; the actual
-    /// adopt/create decision is unchanged and made later, inside the
-    /// transaction. Ambiguous (0 or 2+ candidates) → `None` (no single
-    /// target to lock on).
-    #[instrument(skip_all)]
-    pub async fn find_live_presentation_id_by_name(
-        &self,
-        library_name: &str,
-        name: &str,
-    ) -> anyhow::Result<Option<presenter_core::PresentationId>> {
-        let Some(library_id) = library::Entity::find()
-            .filter(library::Column::Name.eq(library_name.to_string()))
-            .one(&self.db)
-            .await?
-            .map(|l| l.id)
-        else {
-            return Ok(None);
-        };
-        let mut candidates = presentation_entity::Entity::find()
-            .filter(presentation_entity::Column::LibraryId.eq(library_id))
-            .filter(presentation_entity::Column::Name.eq(name.to_string()))
-            .filter(presentation_entity::Column::DeletedAt.is_null())
-            .all(&self.db)
-            .await?;
-        if candidates.len() != 1 {
-            return Ok(None);
-        }
-        let row = candidates.remove(0);
-        Ok(Some(presenter_core::PresentationId::from_uuid(
-            uuid::Uuid::parse_str(&row.id)?,
-        )))
-    }
-
     #[instrument(skip_all)]
     pub async fn fetch_sync_presentation(
         &self,

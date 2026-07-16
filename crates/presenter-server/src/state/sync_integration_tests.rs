@@ -674,13 +674,18 @@ async fn an_all_fail_cycle_reports_unhealthy_instead_of_success() {
 }
 
 #[tokio::test]
-async fn three_consecutive_failures_trip_the_breaker_and_abort_the_cycle() {
-    // #558 V7: per-song isolation deleted the systemic-failure circuit
-    // breaker — an unreachable peer mid-cycle burned a full 15s timeout ×
-    // every REMAINING manifest entry in one uninterruptible await. A fake
-    // peer (wiremock) answers `/sync/manifest` with 5 entries but 500s
-    // every per-song content fetch: the breaker must trip after exactly 3
-    // CONSECUTIVE failures and abort, never touching entries 4 and 5.
+async fn three_consecutive_transport_failures_trip_the_breaker_and_abort_the_cycle() {
+    // #558 V7, narrowed by W2: the systemic-failure circuit breaker must
+    // trip on a GENUINE peer-unreachable signal — connection refused/reset
+    // or a request timeout — never on a per-song APPLICATION-level failure
+    // (the peer answered, just badly, for one song). The original V7 test
+    // simulated "peer unreachable" with bare 500 responses, which W2
+    // identified as the WRONG signal (a 500 status is application-level,
+    // not evidence the peer itself is down) — see the companion test below,
+    // which proves 500s never trip the breaker. This test simulates a
+    // GENUINE transport failure instead: a short client timeout racing a
+    // delayed mock response, producing a real `reqwest::Error::is_timeout()`
+    // for every per-song content fetch.
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -707,16 +712,21 @@ async fn three_consecutive_failures_trip_the_breaker_and_abort_the_cycle() {
         .await;
     Mock::given(method("GET"))
         .and(path_regex(r"^/sync/presentations/.+$"))
-        .respond_with(ResponseTemplate::new(500))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(300)))
         .mount(&mock_server)
         .await;
 
-    let http_client = client();
+    // A short client timeout turns the delayed response into a genuine
+    // transport-shaped `reqwest::Error` — the ONLY signal the breaker
+    // counts (#558 W2).
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(30))
+        .build()
+        .unwrap();
     let result = run_sync_cycle(&b, &mock_server.uri(), &http_client).await;
     assert!(
         result.is_err(),
-        "3 consecutive per-song failures must abort the cycle with an error, not silently \
-         finish having only isolated each failure"
+        "3 consecutive TRANSPORT (timeout) failures must abort the cycle with an error"
     );
 
     let content_fetch_count = mock_server
@@ -729,5 +739,182 @@ async fn three_consecutive_failures_trip_the_breaker_and_abort_the_cycle() {
     assert_eq!(
         content_fetch_count, 3,
         "the breaker must stop at exactly 3 attempts, never burning a timeout on entries 4 and 5"
+    );
+}
+
+#[tokio::test]
+async fn adjacent_per_song_application_failures_never_trip_the_breaker() {
+    // #558 W2: a per-song APPLICATION-level failure (the peer is up and
+    // answers, just with an error status for THIS one song) must stay
+    // isolated forever (#558 round-4 U1(b)) and must never contribute to
+    // the systemic-failure breaker — otherwise 3 adjacent, individually
+    // harmless broken songs would abort the WHOLE cycle, starving every
+    // healthy song after them. Three adjacent 500s, then two healthy songs:
+    // all 5 must be attempted, and the two healthy ones must still apply.
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    let b = AppState::in_memory().await.unwrap();
+
+    let now = chrono::Utc::now();
+    let entries: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "syncId": format!("sid-{i}"),
+                "libraryName": "Songs",
+                "name": format!("Song {i}"),
+                "updatedAt": now,
+                "deletedAt": null,
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path("/sync/manifest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(entries))
+        .mount(&mock_server)
+        .await;
+    // Songs 0-2: application-level 500 (peer is up, just errors for them).
+    for i in 0..3 {
+        Mock::given(method("GET"))
+            .and(path(format!("/sync/presentations/sid-{i}")))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+    }
+    // Songs 3-4: healthy content.
+    for i in 3..5 {
+        Mock::given(method("GET"))
+            .and(path(format!("/sync/presentations/sid-{i}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "syncId": format!("sid-{i}"),
+                "libraryName": "Songs",
+                "name": format!("Song {i}"),
+                "updatedAt": now,
+                "deletedAt": null,
+                "slides": [],
+            })))
+            .mount(&mock_server)
+            .await;
+    }
+
+    let (pulled, applied, errors) = run_sync_cycle(&b, &mock_server.uri(), &client())
+        .await
+        .unwrap();
+    assert_eq!(pulled, 5, "every manifest entry must be attempted");
+    assert_eq!(errors, 3, "the three broken songs are counted as errors");
+    assert_eq!(
+        applied, 2,
+        "the two healthy songs after the broken run must still apply — the breaker \
+         must never trip on application-level (status-code) failures"
+    );
+}
+
+/// An ad-hoc peer serving one manifest entry (`sync_id`/`name` in library
+/// "Songs") whose CONTENT fetch blocks on a `Notify` gate until released
+/// (#558 W5). Returns `(peer_url, entered, gate)`: `entered` fires the
+/// MOMENT the content-fetch handler starts running (proving the request is
+/// genuinely in flight server-side, never a timing guess); `gate` holds the
+/// handler there until the caller calls `gate.notify_one()`.
+async fn spawn_gated_peer(
+    sync_id: String,
+    name: &str,
+) -> (
+    String,
+    std::sync::Arc<tokio::sync::Notify>,
+    std::sync::Arc<tokio::sync::Notify>,
+) {
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    let now = chrono::Utc::now();
+    let manifest_body = serde_json::json!([{
+        "syncId": sync_id, "libraryName": "Songs", "name": name,
+        "updatedAt": now, "deletedAt": null,
+    }]);
+    let content_body = serde_json::json!({
+        "syncId": sync_id, "libraryName": "Songs", "name": name,
+        "updatedAt": now, "deletedAt": null, "slides": [],
+    });
+
+    let entered = Arc::new(Notify::new());
+    let gate = Arc::new(Notify::new());
+    let entered_for_handler = entered.clone();
+    let gate_for_handler = gate.clone();
+    let app = axum::Router::new()
+        .route(
+            "/sync/manifest",
+            axum::routing::get(move || {
+                let body = manifest_body.clone();
+                async move { axum::Json(body) }
+            }),
+        )
+        .route(
+            "/sync/presentations/{sync_id}",
+            axum::routing::get(
+                move |axum::extract::Path(_id): axum::extract::Path<String>| {
+                    let entered = entered_for_handler.clone();
+                    let gate = gate_for_handler.clone();
+                    let body = content_body.clone();
+                    async move {
+                        entered.notify_one();
+                        gate.notified().await;
+                        axum::Json(body)
+                    }
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{addr}"), entered, gate)
+}
+
+#[tokio::test]
+async fn an_edit_op_lock_is_not_held_while_the_peer_content_fetch_is_in_flight() {
+    // #558 W5: `fetch_and_apply_one` used to acquire the shared
+    // per-presentation lock BEFORE the peer's (up to 15s) HTTP content
+    // fetch — a concurrent edit op on the SAME presentation blocked for the
+    // whole request. FIX: fetch first, lock only around the apply. The
+    // gated peer (`spawn_gated_peer`) holds the content request open until
+    // this test explicitly releases it (never an arbitrary sleep — fully
+    // sequenced), while a non-blocking `try_lock` probe proves the lock is
+    // free the ENTIRE time the fetch is in flight.
+    let state = AppState::in_memory().await.unwrap();
+    let (_, local_id) = make_song(&state, "Songs", "Slow Peer Song").await;
+
+    use presenter_persistence::entities::presentation as presentation_entity;
+    use sea_orm::EntityTrait;
+    let row = presentation_entity::Entity::find_by_id(local_id.to_string())
+        .one(state.repository().connection())
+        .await
+        .unwrap()
+        .expect("local row exists");
+
+    let (peer_url, entered, gate) = spawn_gated_peer(row.sync_id, "Slow Peer Song").await;
+
+    let state_for_cycle = state.clone();
+    let cycle =
+        tokio::spawn(async move { run_sync_cycle(&state_for_cycle, &peer_url, &client()).await });
+
+    // Wait until the content-fetch handler has genuinely been entered
+    // (in flight) BEFORE probing the lock — a sequenced hook, never a
+    // timing guess.
+    entered.notified().await;
+    assert!(
+        state.presentation_lock_try_acquire_for_test(local_id),
+        "the per-presentation lock must be FREE while the peer content fetch is in \
+         flight (#558 W5) — the old code acquired it BEFORE the fetch, so this would \
+         have failed on the pre-fix implementation"
+    );
+
+    gate.notify_one();
+    let (_pulled, applied, _errors) = cycle.await.unwrap().unwrap();
+    assert_eq!(
+        applied, 1,
+        "the sync cycle must still complete normally once the fetch is released"
     );
 }

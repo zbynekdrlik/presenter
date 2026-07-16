@@ -145,6 +145,32 @@ async fn paste_unknown_id_returns_422() {
 }
 
 #[tokio::test]
+async fn paste_with_a_legacy_position_field_returns_422() {
+    // #558 W4: a stale pre-deploy WASM tab may still send the OLD wire
+    // shape (`position`, a raw index — replaced by `anchorSlideId` in V8).
+    // Silently accepting it (default-deserializing the unknown field away)
+    // would append the paste at the end without telling the operator it
+    // landed in the WRONG place. `deny_unknown_fields` on the DTO makes an
+    // unrecognized field a loud, immediate 422 instead.
+    let state = AppState::in_memory().await.unwrap();
+    let (pres_id, slide_ids) = seed(&state).await;
+    let app = build_router(state);
+
+    let resp = post_json(
+        &app,
+        &format!("/presentations/{pres_id}/slides/paste"),
+        serde_json::json!({ "slideIds": [slide_ids[0]], "position": 0 }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a legacy `position` field (pre-#558-V8 wire shape) must be rejected loudly, \
+         never silently accepted with a guessed placement"
+    );
+}
+
+#[tokio::test]
 async fn paste_with_a_vanished_anchor_returns_409() {
     // #558 V8: the anchor slide itself was removed by a concurrent
     // structural edit before this paste landed — fail loudly (409) so the

@@ -237,6 +237,18 @@ impl AppState {
         self.presentation_locks.lock(presentation_id).await
     }
 
+    /// TEST-ONLY (#558 W5): non-blocking probe proving the shared
+    /// per-presentation lock is currently FREE — used to demonstrate that
+    /// `fetch_and_apply_one` no longer holds it across the peer content
+    /// fetch.
+    #[cfg(test)]
+    pub(crate) fn presentation_lock_try_acquire_for_test(
+        &self,
+        presentation_id: PresentationId,
+    ) -> bool {
+        self.presentation_locks.try_lock(presentation_id)
+    }
+
     /// Spawn the sync loop iff a peer is configured (#555).
     pub(crate) fn maybe_spawn_sync(&self, peer_url: Option<String>) {
         if let Some(peer_url) = peer_url {
@@ -410,6 +422,21 @@ fn cycle_all_failed(pulled: usize, applied: usize, errors: usize) -> bool {
     pulled > 0 && applied == 0 && errors == pulled
 }
 
+/// #558 W2: whether `err` is a TRANSPORT-shaped failure — the peer is
+/// genuinely unreachable (connection refused/reset) or the request timed
+/// out — as opposed to an APPLICATION-level failure (the peer answered with
+/// an error status for this one song, or the local apply itself failed).
+/// Only a transport-shaped failure may count toward the systemic-failure
+/// breaker; `error_for_status()` (a 4xx/5xx from the peer) constructs a
+/// `reqwest::Error` whose `is_status()` is true but whose `is_timeout()` /
+/// `is_connect()` are both false, so it correctly falls on the
+/// application-level side of this split.
+fn is_transport_failure(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<reqwest::Error>()
+        .map(|e| e.is_timeout() || e.is_connect())
+        .unwrap_or(false)
+}
+
 async fn fetch_peer_version(client: &reqwest::Client, peer_url: &str) -> Option<String> {
     let resp = client
         .get(format!("{peer_url}/healthz"))
@@ -460,6 +487,16 @@ pub(crate) async fn run_sync_cycle(
     // every remaining manifest entry in one uninterruptible await. Scattered,
     // non-consecutive failures (an occasional bad song among healthy ones)
     // never reach the threshold and stay fully isolated, as before.
+    //
+    // #558 W2: "consecutive" must count only TRANSPORT-shaped failures (the
+    // peer is genuinely unreachable: connection refused/reset, or the
+    // request timed out) — never a per-song APPLICATION-level failure (the
+    // peer answered, just badly, for this ONE song: a 4xx/5xx status body,
+    // or a local apply error). The breaker used to count EVERY per-song
+    // failure indiscriminately, so 3 adjacent but individually harmless
+    // broken songs (each isolated per round-4 U1(b)) tripped it and starved
+    // every healthy song after them — exactly the isolation guarantee
+    // U1(b) exists to provide.
     const CONSECUTIVE_FAILURE_BREAKER: u32 = 3;
 
     let mut pulled = 0usize;
@@ -490,22 +527,29 @@ pub(crate) async fn run_sync_cycle(
             }
             Err(err) => {
                 errors += 1;
-                consecutive_failures += 1;
                 warn!(
                     ?err,
                     sync_id = %entry.sync_id,
                     name = %entry.name,
                     "sync: single-song fetch/apply failed — continuing with the next manifest entry"
                 );
-                if consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER {
-                    if applied > 0 {
-                        state.drop_presentation_caches().await;
+                // #558 W2: only a transport-shaped failure counts toward the
+                // breaker. An application-level failure (a status-code
+                // error, or any non-transport error from the apply itself)
+                // is isolated per-song and never touches the streak at all
+                // — it neither trips nor resets it.
+                if is_transport_failure(&err) {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER {
+                        if applied > 0 {
+                            state.drop_presentation_caches().await;
+                        }
+                        anyhow::bail!(
+                            "sync cycle aborted: {consecutive_failures} consecutive TRANSPORT \
+                             failures (peer likely unreachable) — {applied} applied, {errors} \
+                             errored before the breaker tripped"
+                        );
                     }
-                    anyhow::bail!(
-                        "sync cycle aborted: {consecutive_failures} consecutive per-song fetch \
-                         failures (peer likely unreachable) — {applied} applied, {errors} errored \
-                         before the breaker tripped"
-                    );
                 }
             }
         }
@@ -522,14 +566,27 @@ pub(crate) async fn run_sync_cycle(
 /// this returns, logs + counts it, and moves on to the next manifest
 /// entry instead of aborting the whole cycle.
 ///
-/// #558 V2: resolves the LOCAL presentation id this apply will touch (by
-/// `sync_id`, or — for a live entry with no `sync_id` match — the single
-/// live adopt-by-name candidate) and holds the SAME per-presentation lock a
-/// snapshot-replace edit op takes (`slides/edit_ops.rs`) across the apply,
-/// so the two can never interleave. A genuinely new identity (no existing
-/// local row at all) has no lock target — nothing else could be concurrently
-/// editing a presentation id nobody has learned yet. On a successful WRITE
-/// to a resolved existing target, the AppState cache entry for that one
+/// #558 W5: the peer content fetch (up to the client's 15s timeout) runs
+/// FIRST, holding NO lock at all — holding the shared per-presentation lock
+/// across that network round-trip used to block any concurrent edit op on
+/// this presentation for the whole request.
+///
+/// #558 W8/W9: the lock target is then resolved from the JUST-FETCHED
+/// content via `resolve_sync_apply_target` — the SAME candidate rule
+/// `apply_sync_presentation` itself applies (by `sync_id`, or — for a live
+/// entry with no `sync_id` match — the single live adopt-by-name
+/// candidate). One shared implementation on both sides means this can never
+/// again resolve a DIFFERENT (and therefore wrong) target than what the
+/// real apply decides — which is exactly what the old, separately
+/// implemented `find_live_presentation_id_by_name` probe could do (it never
+/// gained the `peer_sync_ids` single-shot exclusion `try_adopt_by_name`
+/// picked up in round-4 U2). The lock is acquired immediately before the
+/// real apply transaction and holds the SAME per-presentation lock a
+/// snapshot-replace edit op takes (`slides/edit_ops.rs`), so the two can
+/// never interleave. A genuinely new identity (no existing local row at
+/// all) has no lock target — nothing else could be concurrently editing a
+/// presentation id nobody has learned yet. On a successful WRITE to a
+/// resolved existing target, the AppState cache entry for that one
 /// presentation is evicted (still under the lock) so the very next
 /// lock-holder's read is guaranteed fresh, never a stale pre-apply snapshot.
 async fn fetch_and_apply_one(
@@ -540,18 +597,6 @@ async fn fetch_and_apply_one(
     peer_sync_ids: &std::collections::HashSet<String>,
 ) -> anyhow::Result<bool> {
     let repo = state.repository();
-    let lock_target = match repo.find_presentation_id_by_sync_id(&entry.sync_id).await? {
-        Some(id) => Some(id),
-        None if entry.deleted_at.is_none() => {
-            repo.find_live_presentation_id_by_name(&entry.library_name, &entry.name)
-                .await?
-        }
-        None => None,
-    };
-    let _guard = match lock_target {
-        Some(id) => Some(state.presentation_lock_for_sync(id).await),
-        None => None,
-    };
 
     let dto: SyncPresentationDto = client
         .get(format!("{peer_url}/sync/presentations/{}", entry.sync_id))
@@ -560,8 +605,18 @@ async fn fetch_and_apply_one(
         .error_for_status()?
         .json()
         .await?;
+    let incoming: presenter_persistence::SyncPresentation = dto.into();
+
+    let lock_target = repo
+        .resolve_sync_apply_target(&incoming, peer_sync_ids)
+        .await?;
+    let _guard = match lock_target {
+        Some(id) => Some(state.presentation_lock_for_sync(id).await),
+        None => None,
+    };
+
     let outcome = repo
-        .apply_sync_presentation(&dto.into(), peer_sync_ids)
+        .apply_sync_presentation(&incoming, peer_sync_ids)
         .await?;
     if outcome.wrote() {
         if let Some(id) = lock_target {

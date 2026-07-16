@@ -56,6 +56,26 @@ impl PresentationLockRegistry {
         };
         mutex.lock_owned().await
     }
+
+    /// TEST-ONLY: attempt to acquire `id`'s lock WITHOUT waiting, then
+    /// immediately release it (#558 W5) — used to PROVE the lock is free
+    /// during some window (e.g. a slow peer HTTP fetch in flight), timing-
+    /// free. Returns `true` iff the lock was uncontended at the moment of
+    /// the call.
+    #[cfg(test)]
+    pub(crate) fn try_lock(&self, id: PresentationId) -> bool {
+        let mutex = {
+            let mut map = match self.locks.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            map.entry(id)
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+        let acquired = mutex.try_lock().is_ok();
+        acquired
+    }
 }
 
 #[cfg(test)]

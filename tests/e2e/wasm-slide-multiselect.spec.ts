@@ -537,16 +537,118 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     // real network event instead, then assert once B is fully settled.
     releaseA();
     await pasteResponse;
-    // Bounded settle: the network response just arrived; give the WASM
-    // promise chain (`apply_slides_guarded`) a moment to run and Leptos to
-    // re-render before checking ONCE. This is NOT a poll-until-match (which
-    // would pass on a lucky first check before the corruption lands) — it's
-    // a fixed wait for a specific already-arrived event to finish
-    // processing, then a single assertion of the final state.
-    await page.waitForTimeout(500);
+    // Positive sentinel, NOT an arbitrary sleep (#558 W10): perform a
+    // subsequent, unrelated, OBSERVABLE action on B and wait for ITS effect
+    // to land. The browser drains all queued microtasks (including A's
+    // already-resolved response continuation, whether or not it corrupts
+    // anything) before dispatching a new UI input event, so by the time
+    // this click's effect is visible, A's response has already finished
+    // processing. This is NOT a poll-until-match on the negative condition
+    // itself (which would pass on a lucky first check before any
+    // corruption lands) — it anchors on a REAL, different event instead of
+    // guessing a fixed duration.
+    await checkboxFor(page, idsB[0]).click();
+    await expect(
+      page.locator('[data-role="slide-selection-count"]'),
+    ).toHaveText("1 selected");
 
     // B's slide list must be COMPLETELY untouched by A's late paste result —
     // never A's returned slides painted onto B.
+    expect(await domSlideOrder(page)).toEqual(idsB);
+  });
+
+  test("a 409 (vanished anchor) refreshes the presentation when it is still open (#558 W1 guarded case)", async ({
+    page,
+    request,
+  }) => {
+    const lib = `E2E MSel Conflict409 ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 3, lib);
+    await openPresentationInEditMode(page, lib);
+
+    await page.route("**/slides/paste", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "the paste position no longer exists" }),
+      }),
+    );
+
+    await checkboxFor(page, slideIds[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+    const detailRefetch = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/presentations/`) &&
+        !r.url().includes("/slides/") &&
+        r.request().method() === "GET",
+    );
+    await insertBar(page, 0).click();
+
+    // Guarded recovery (#558 W1): still the SAME presentation → the 409
+    // handler refetches it fresh (a real GET round-trip) and applies it.
+    await detailRefetch;
+    await expect(page.locator('[data-role="toast"]')).toBeVisible({
+      timeout: 5_000,
+    });
+    expect(await domSlideOrder(page)).toEqual(slideIds);
+  });
+
+  test("a delayed 409 never clobbers a different presentation now open (#558 W1 unguarded case)", async ({
+    page,
+    request,
+  }) => {
+    const libA = `E2E MSel Conflict409A ${Date.now()}`;
+    const { slideIds: idsA } = await createPresentationWithSlides(request, 2, libA);
+    const libB = `E2E MSel Conflict409B ${Date.now()}`;
+    const { slideIds: idsB } = await createPresentationWithSlides(request, 2, libB);
+
+    await openPresentationInEditMode(page, libA);
+    await checkboxFor(page, idsA[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+
+    // Hold A's 409 response open until this test explicitly releases it —
+    // mirrors the V4 race test's technique above.
+    let releaseA: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const pasteResponse = page.waitForResponse(
+      (r) => r.url().includes("/slides/paste") && r.request().method() === "POST",
+    );
+    await page.route("**/slides/paste", async (route) => {
+      await released;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "the paste position no longer exists" }),
+      });
+    });
+
+    await insertBar(page, 0).click(); // fires A's (now-delayed) paste, which will 409
+
+    // Switch to presentation B WHILE A's 409 is still in flight.
+    await switchToPresentation(page, libB, idsB[0]);
+
+    releaseA();
+    await pasteResponse;
+    // Positive sentinel, not an arbitrary sleep (#558 W10) — see the V4
+    // race test above for the rationale.
+    await checkboxFor(page, idsB[0]).click();
+    await expect(
+      page.locator('[data-role="slide-selection-count"]'),
+    ).toHaveText("1 selected");
+
+    // B must be COMPLETELY untouched — never A's stale 409 refetch (or any
+    // recovery UI) painted onto B; and the clipboard recovery must have
+    // been silent (no toast fired for a presentation nobody is looking at).
+    // NOTE: the toast `<div data-role="toast">` is ALWAYS mounted, fading
+    // via `opacity` only (not `display`/`visibility`) — see
+    // `components/toast.rs` + `operator.css` — so neither `toHaveCount(0)`
+    // nor Playwright's `toBeVisible()` (which ignores `opacity`) can detect
+    // "no toast shown"; assert on the component's own `data-visible` flag.
+    await expect(page.locator('[data-role="toast"]')).toHaveAttribute(
+      "data-visible",
+      "false",
+    );
     expect(await domSlideOrder(page)).toEqual(idsB);
   });
 

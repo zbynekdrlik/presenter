@@ -37,13 +37,21 @@ pub(super) struct ReorderSlidesRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PasteSlidesRequest {
     pub(super) slide_ids: Vec<uuid::Uuid>,
     /// The slide the paste's gap PRECEDES; `None` = insert at the end
     /// (#558 V8). The server resolves the insertion position from this id
     /// at apply time — never a raw index, which a concurrent structural
     /// edit could shift out from under a stale client-computed position.
+    ///
+    /// #558 W4: `deny_unknown_fields` above rejects a stale pre-deploy WASM
+    /// tab that still sends the OLD wire shape (a raw `position` field,
+    /// replaced by `anchorSlideId` in V8) with a loud 422 — axum maps a
+    /// `serde_json::error::Category::Data` deserialize failure (which an
+    /// unrecognized field is) to `422 Unprocessable Entity` automatically —
+    /// instead of silently accepting the unknown field and appending at the
+    /// end, a silent wrong placement the operator would never notice.
     #[serde(default)]
     pub(super) anchor_slide_id: Option<uuid::Uuid>,
 }

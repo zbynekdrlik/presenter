@@ -151,16 +151,110 @@ impl Repository {
 
     /// Look up an existing library by name — NEVER creates one (#558
     /// round-4 U4). Used wherever "no library" can be treated as "nothing
-    /// to do" without paying for a write.
-    async fn find_library_id(
-        txn: &sea_orm::DatabaseTransaction,
+    /// to do" without paying for a write. Generic over the connection
+    /// (#558 W5/W8/W9) so the SAME implementation serves both the real
+    /// apply (inside its transaction) and `resolve_sync_apply_target` (a
+    /// plain pre-transaction probe, no transaction involved).
+    async fn find_library_id<C: sea_orm::ConnectionTrait>(
+        conn: &C,
         library_name: &str,
     ) -> anyhow::Result<Option<String>> {
         Ok(library::Entity::find()
             .filter(library::Column::Name.eq(library_name.to_string()))
-            .one(txn)
+            .one(conn)
             .await?
             .map(|l| l.id))
+    }
+
+    /// The single LIVE (non-trashed) local presentation row matching
+    /// `library_id` + `name`, if unambiguous — the adopt-by-name candidate
+    /// rule (#558 S4: `.one()` with no ORDER BY picks an arbitrary row among
+    /// duplicates, so the full candidate set is fetched, filtered to live
+    /// rows, and ordered deterministically; 0 or 2+ candidates means "no
+    /// unambiguous match", never a guess).
+    ///
+    /// Generic over the connection (#558 W5/W8/W9) so this ONE
+    /// implementation serves BOTH `try_adopt_by_name` (inside the real
+    /// apply transaction) and `resolve_sync_apply_target` (a plain
+    /// pre-transaction probe used only to pick a lock target) — the two can
+    /// no longer independently drift apart. That drift is exactly what let
+    /// the OLD, separately-implemented probe (`repository/sync.rs`'s
+    /// `find_live_presentation_id_by_name`, since deleted) lock the WRONG
+    /// target: it never gained the `peer_sync_ids` single-shot exclusion
+    /// `try_adopt_by_name` picked up in round-4 U2, so it could report a
+    /// candidate the real apply would actually skip (creating a new row
+    /// instead) — locking a row nothing was about to touch, while the row
+    /// ACTUALLY written held no lock at all.
+    async fn find_live_by_name_candidate<C: sea_orm::ConnectionTrait>(
+        conn: &C,
+        library_id: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<presentation_entity::Model>> {
+        let mut candidates = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::LibraryId.eq(library_id.to_string()))
+            .filter(presentation_entity::Column::Name.eq(name.to_string()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
+            .order_by_asc(presentation_entity::Column::CreatedAt)
+            .order_by_asc(presentation_entity::Column::Id)
+            .all(conn)
+            .await?;
+        if candidates.len() != 1 {
+            return Ok(None);
+        }
+        Ok(Some(candidates.remove(0)))
+    }
+
+    /// Resolve the LOCAL presentation id a sync apply of `incoming` will
+    /// touch, WITHOUT starting a transaction or writing anything (#558
+    /// W5/W8/W9) — matches `apply_sync_presentation`'s own step 1 (by
+    /// `sync_id`) then step 2 (adopt-by-name, respecting the SAME
+    /// `peer_sync_ids` single-shot exclusion) via the IDENTICAL query
+    /// helpers, so it can never drift from what the real apply decides.
+    ///
+    /// Used ONLY to pick a lock target BEFORE the real apply transaction
+    /// runs: the caller (`state/sync.rs`) fetches the peer's content FIRST,
+    /// holding NO lock — the ~15s network round-trip must never happen
+    /// while blocking a concurrent edit op on this presentation (#558 W5) —
+    /// then calls this on a plain (non-transactional) connection to learn
+    /// the target, acquires the per-presentation lock for it, and THEN
+    /// calls `apply_sync_presentation`, which re-resolves the identical
+    /// target under that lock. `None` means either a genuinely new identity
+    /// (nothing exists yet to lock) or an ambiguous/excluded adopt-by-name
+    /// candidate (the real apply will CREATE instead) — neither case has an
+    /// existing row a concurrent edit op could be touching.
+    #[instrument(skip_all, fields(sync_id = %incoming.sync_id, name = %incoming.name))]
+    pub async fn resolve_sync_apply_target(
+        &self,
+        incoming: &SyncPresentation,
+        peer_sync_ids: &HashSet<String>,
+    ) -> anyhow::Result<Option<presenter_core::PresentationId>> {
+        if let Some(existing) = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::SyncId.eq(incoming.sync_id.clone()))
+            .one(&self.db)
+            .await?
+        {
+            return Ok(Some(presenter_core::PresentationId::from_uuid(
+                uuid::Uuid::parse_str(&existing.id)?,
+            )));
+        }
+        if incoming.deleted_at.is_some() {
+            return Ok(None);
+        }
+        let Some(library_id) = Self::find_library_id(&self.db, &incoming.library_name).await?
+        else {
+            return Ok(None);
+        };
+        let Some(candidate) =
+            Self::find_live_by_name_candidate(&self.db, &library_id, &incoming.name).await?
+        else {
+            return Ok(None);
+        };
+        if peer_sync_ids.contains(&candidate.sync_id) {
+            return Ok(None);
+        }
+        Ok(Some(presenter_core::PresentationId::from_uuid(
+            uuid::Uuid::parse_str(&candidate.id)?,
+        )))
     }
 
     /// Look up an existing library by name, creating it if missing (#558
@@ -201,22 +295,19 @@ impl Repository {
     /// or skipped because local is newer); `None` when there is nothing to
     /// adopt onto, so the caller falls through to step 3. (Extracted per
     /// the #558 round-3/round-4 function-length gate.)
+    ///
+    /// #558 W8/W9: the candidate query itself now lives in
+    /// `find_live_by_name_candidate` — the SAME implementation
+    /// `resolve_sync_apply_target` uses for its pre-transaction lock-target
+    /// probe, so the two can never independently drift apart again.
     async fn try_adopt_by_name(
         txn: &sea_orm::DatabaseTransaction,
         library_id: &str,
         incoming: &SyncPresentation,
         peer_sync_ids: &HashSet<String>,
     ) -> anyhow::Result<Option<SyncApplyOutcome>> {
-        let mut live_by_name_candidates = presentation_entity::Entity::find()
-            .filter(presentation_entity::Column::LibraryId.eq(library_id.to_string()))
-            .filter(presentation_entity::Column::Name.eq(incoming.name.clone()))
-            .filter(presentation_entity::Column::DeletedAt.is_null())
-            .order_by_asc(presentation_entity::Column::CreatedAt)
-            .order_by_asc(presentation_entity::Column::Id)
-            .all(txn)
-            .await?;
         let Some(existing) =
-            (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0))
+            Self::find_live_by_name_candidate(txn, library_id, &incoming.name).await?
         else {
             return Ok(None);
         };
@@ -362,9 +453,22 @@ impl Repository {
             .exec(conn)
             .await?;
 
-        for (index, slide) in incoming.slides.iter().enumerate() {
-            let clamped = clamp_incoming_slide(slide, &incoming.sync_id);
-            let active = build_slide_active_model(&clamped, presentation_id, index as i32);
+        // #558 W6: clamp EVERY incoming slide ONCE, up front — the SAME
+        // clamped slides are both what gets INSERTED and what
+        // `remap_markers` compares against for content identity. The old
+        // code compared markers against the RAW, unclamped `incoming.slides`
+        // while inserting the CLAMPED version, so an oversize marked slide
+        // could never content-match what was actually stored (the clamped
+        // text is shorter than the raw incoming text whenever a legacy
+        // value gets truncated), silently losing precision to the position
+        // fallback — or, on a reorder, reattaching to the WRONG slide.
+        let clamped_slides: Vec<Slide> = incoming
+            .slides
+            .iter()
+            .map(|slide| clamp_incoming_slide(slide, &incoming.sync_id))
+            .collect();
+        for (index, clamped) in clamped_slides.iter().enumerate() {
+            let active = build_slide_active_model(clamped, presentation_id, index as i32);
             slide_entity::Entity::insert(active).exec(conn).await?;
         }
 
@@ -372,7 +476,7 @@ impl Repository {
             Self::remap_markers(
                 conn,
                 presentation_id,
-                &incoming.slides,
+                &clamped_slides,
                 old_markers,
                 &old_content,
             )

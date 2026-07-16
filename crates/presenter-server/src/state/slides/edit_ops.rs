@@ -3,7 +3,7 @@
 //! the presentation cache, and publishes a `BibleSlidesChanged` live event.
 
 use presenter_core::slide::SlideMetadata;
-use presenter_core::{PresentationId, Slide, SlideContent, SlideId, SlideText};
+use presenter_core::{Presentation, PresentationId, Slide, SlideContent, SlideId, SlideText};
 use std::collections::HashMap;
 
 use super::super::stage::blank_slide_content;
@@ -82,6 +82,38 @@ impl AppState {
         }
     }
 
+    /// #558 V2/W3/W7: acquire the shared per-presentation lock (the SAME
+    /// registry a concurrent sync apply takes — `state/sync.rs`) and read
+    /// the presentation straight from the DATABASE, never through the
+    /// in-memory cache. This is the shared opening for every
+    /// read-modify-write slide-edit op (snapshot-replace AND
+    /// content-update alike): hold the returned guard for the ENTIRE
+    /// read + write + cache-refresh sequence.
+    ///
+    /// #558 W7: reading through the cache here (even right after an
+    /// eviction) has a narrow but real race — an UNRELATED, unlocked reader
+    /// (anything that also calls the cache-populating read path without
+    /// holding this lock) can repopulate the cache in the gap between our
+    /// own eviction and our own read with a snapshot from whenever ITS OWN
+    /// read happened to start, which is not bounded by our critical
+    /// section. Reading the DB directly sidesteps the shared cache
+    /// entirely for this op's OWN view of the data, so no concurrent
+    /// reader's cache write can poison it. The cache is still refreshed
+    /// (by the caller) AFTER the mutation commits, for every OTHER reader's
+    /// benefit.
+    async fn lock_and_read_presentation_for_edit(
+        &self,
+        presentation_id: PresentationId,
+    ) -> anyhow::Result<(tokio::sync::OwnedMutexGuard<()>, Presentation)> {
+        let guard = self.presentation_locks.lock(presentation_id).await;
+        let (_, _, presentation) = self
+            .repository
+            .fetch_presentation_detail(presentation_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
+        Ok((guard, presentation))
+    }
+
     /// Paste-of-COPY (#554): clone the named slides' full content and insert the
     /// clones as a contiguous block anchored at `anchor_slide_id` (the slide the
     /// gap precedes; `None` = end — #558 V8). A multi-slide generalization of
@@ -97,19 +129,14 @@ impl AppState {
         source_ids: Vec<SlideId>,
         anchor_slide_id: Option<SlideId>,
     ) -> Result<Vec<Slide>, PasteSlidesError> {
-        // #558 V2: hold the per-presentation lock across the ENTIRE
-        // read-snapshot + write + cache-refresh sequence — a concurrent sync
-        // apply of this SAME presentation takes the same lock (see
-        // `state/sync.rs`), so the two can never interleave.
-        let _guard = self.presentation_locks.lock(presentation_id).await;
-
-        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
-        // the DB under the lock — never a snapshot cached before a sync
-        // apply landed (sync applies write straight to the DB and are
-        // otherwise invisible to this in-memory cache).
-        self.drop_one_presentation_cache(presentation_id).await;
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        // #558 V2/W7: hold the per-presentation lock across the ENTIRE
+        // read + write + cache-refresh sequence — a concurrent sync apply of
+        // this SAME presentation takes the same lock (see `state/sync.rs`),
+        // so the two can never interleave. The read is straight from the
+        // DB, never the cache (see `lock_and_read_presentation_for_edit`).
+        let (_guard, presentation) = self
+            .lock_and_read_presentation_for_edit(presentation_id)
+            .await?;
 
         if source_ids.is_empty() {
             return Err(PasteSlidesError::UnknownSlides);
@@ -204,8 +231,14 @@ impl AppState {
         group: Option<String>,
         metadata_override: Option<SlideMetadata>,
     ) -> anyhow::Result<Slide> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        // #558 W3/W7: a content update is a read-modify-write against the
+        // cache exactly like the snapshot-replace ops below — it takes the
+        // SAME shared per-presentation lock (so it can never interleave
+        // with a concurrent sync apply on this presentation either) and
+        // reads straight from the DB, never the cache.
+        let (_guard, presentation) = self
+            .lock_and_read_presentation_for_edit(presentation_id)
+            .await?;
 
         let existing_slide = presentation
             .slides
@@ -272,16 +305,11 @@ impl AppState {
         presentation_id: PresentationId,
         position: Option<u32>,
     ) -> anyhow::Result<Vec<Slide>> {
-        // #558 V2: see `paste_slides` — same shared per-presentation lock.
-        let _guard = self.presentation_locks.lock(presentation_id).await;
-
-        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
-        // the DB under the lock — never a snapshot cached before a sync
-        // apply landed (sync applies write straight to the DB and are
-        // otherwise invisible to this in-memory cache).
-        self.drop_one_presentation_cache(presentation_id).await;
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        // #558 V2/W7: see `paste_slides` — same shared per-presentation lock,
+        // read straight from the DB.
+        let (_guard, presentation) = self
+            .lock_and_read_presentation_for_edit(presentation_id)
+            .await?;
         let mut slides = presentation.slides.clone();
         let insert_at = position
             .map(|value| value as usize)
@@ -310,16 +338,11 @@ impl AppState {
         presentation_id: PresentationId,
         slide_id: SlideId,
     ) -> anyhow::Result<Vec<Slide>> {
-        // #558 V2: see `paste_slides` — same shared per-presentation lock.
-        let _guard = self.presentation_locks.lock(presentation_id).await;
-
-        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
-        // the DB under the lock — never a snapshot cached before a sync
-        // apply landed (sync applies write straight to the DB and are
-        // otherwise invisible to this in-memory cache).
-        self.drop_one_presentation_cache(presentation_id).await;
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        // #558 V2/W7: see `paste_slides` — same shared per-presentation lock,
+        // read straight from the DB.
+        let (_guard, presentation) = self
+            .lock_and_read_presentation_for_edit(presentation_id)
+            .await?;
         let mut slides = presentation.slides.clone();
         let index = slides
             .iter()
@@ -368,16 +391,11 @@ impl AppState {
         presentation_id: PresentationId,
         slide_id: SlideId,
     ) -> anyhow::Result<Vec<Slide>> {
-        // #558 V2: see `paste_slides` — same shared per-presentation lock.
-        let _guard = self.presentation_locks.lock(presentation_id).await;
-
-        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
-        // the DB under the lock — never a snapshot cached before a sync
-        // apply landed (sync applies write straight to the DB and are
-        // otherwise invisible to this in-memory cache).
-        self.drop_one_presentation_cache(presentation_id).await;
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        // #558 V2/W7: see `paste_slides` — same shared per-presentation lock,
+        // read straight from the DB.
+        let (_guard, presentation) = self
+            .lock_and_read_presentation_for_edit(presentation_id)
+            .await?;
         let mut slides = presentation.slides.clone();
         let index = slides
             .iter()
@@ -415,16 +433,11 @@ impl AppState {
         presentation_id: PresentationId,
         order: Vec<SlideId>,
     ) -> anyhow::Result<Vec<Slide>> {
-        // #558 V2: see `paste_slides` — same shared per-presentation lock.
-        let _guard = self.presentation_locks.lock(presentation_id).await;
-
-        // #558 V2: evict before reading, so this ALWAYS re-reads fresh from
-        // the DB under the lock — never a snapshot cached before a sync
-        // apply landed (sync applies write straight to the DB and are
-        // otherwise invisible to this in-memory cache).
-        self.drop_one_presentation_cache(presentation_id).await;
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        // #558 V2/W7: see `paste_slides` — same shared per-presentation lock,
+        // read straight from the DB.
+        let (_guard, presentation) = self
+            .lock_and_read_presentation_for_edit(presentation_id)
+            .await?;
         let mut map = HashMap::new();
         for slide in presentation.slides.clone() {
             map.insert(slide.id, slide);
@@ -745,27 +758,26 @@ mod tests {
 
     #[tokio::test]
     async fn a_snapshot_replace_edit_never_clobbers_a_sync_apply_that_landed_first() {
-        // #558 V2: every snapshot-replace edit op used to read the
+        // #558 V2/W7: every snapshot-replace edit op used to read the
         // presentation from AppState's in-memory CACHE, never a fresh DB
         // read. A sync apply writes DIRECTLY to the DB and is invisible to
         // that cache — an edit op landing after such an apply, but still
         // holding a snapshot cached from BEFORE it, silently overwrote the
         // synced content with its own stale-based result (and its own
         // `touch` would then LWW-propagate that loss back to the peer as
-        // the "newer" copy). This reproduces the exact stale-cache clobber
-        // deterministically: warm the cache, apply a sync update directly
-        // to the DB (bypassing AppState, exactly like the real sync engine
+        // the "newer" copy). W7 closed this by having edit ops read the DB
+        // DIRECTLY instead of through the cache at all — this reproduces
+        // the exact scenario that used to clobber: warm the cache with a
+        // stale (pre-sync) snapshot (mirrors a normal prior read, e.g.
+        // opening the song in the editor), apply a sync update directly to
+        // the DB (bypassing AppState, exactly like the real sync engine
         // does), then run an edit op and prove it builds on the FRESH
-        // (synced) content, never the stale cached snapshot.
+        // (synced) content from the DB, never the stale cached snapshot.
         let state = AppState::in_memory().await.unwrap();
         let presentation = presentation_with_slides(&state, &["Original"]).await;
 
-        // Warm the cache with the pre-sync snapshot (mirrors a normal prior
-        // read, e.g. opening the song in the editor).
-        let _ = state
-            .presentation_from_cache(presentation.id)
-            .await
-            .unwrap();
+        // Warm the cache with the pre-sync snapshot.
+        state.cache_presentation_ref(&presentation).await;
 
         // A peer sync apply lands directly in the DB, bypassing AppState
         // entirely — the cache warmed above is now stale relative to the DB.
