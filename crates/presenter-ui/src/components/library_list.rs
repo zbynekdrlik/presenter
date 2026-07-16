@@ -48,7 +48,6 @@ pub fn LibraryList() -> impl IntoView {
     let on_create = {
         let op = op.clone();
         move |_| {
-            op.modal_mode.set("create".to_string());
             op.modal_target_id.set(None);
             modal::open_modal(&op, "library-create");
         }
@@ -178,7 +177,6 @@ pub fn LibraryList() -> impl IntoView {
                                                 aria-label="Edit library"
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
-                                                    op_for_edit.modal_mode.set("edit".to_string());
                                                     op_for_edit.modal_target_id.set(Some(id_for_modal.clone()));
                                                     modal::open_modal(&op_for_edit, "library-edit");
                                                 }

@@ -46,7 +46,6 @@ pub fn PlaylistList() -> impl IntoView {
     let on_create = {
         let op = op.clone();
         move |_| {
-            op.modal_mode.set("create".to_string());
             op.modal_target_id.set(None);
             // Use "playlist-create" so edit_mode() returns "create" in playlist_modal.rs
             modal::open_modal(&op, "playlist-create");
@@ -263,7 +262,6 @@ pub fn PlaylistList() -> impl IntoView {
                                                 aria-label="Edit playlist"
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
-                                                    op_for_edit.modal_mode.set("edit".to_string());
                                                     op_for_edit.modal_target_id.set(Some(id_for_modal.clone()));
                                                     modal::open_modal(&op_for_edit, "playlist-edit");
                                                 }

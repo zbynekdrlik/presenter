@@ -157,7 +157,6 @@ pub fn PresentationList() -> impl IntoView {
                     }
                 });
             } else {
-                op.modal_mode.set("create".to_string());
                 modal::open_modal(&op, "presentation-create");
             }
         }
@@ -610,7 +609,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                 data-presentation-id=id_for_rename.clone()
                                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                                     ev.stop_propagation();
-                                                                    op_for_rename.modal_mode.set("edit".to_string());
                                                                     op_for_rename.modal_target_id.set(Some(id_for_rename.clone()));
                                                                     modal::open_modal(&op_for_rename, "presentation-edit");
                                                                 }
@@ -754,7 +752,6 @@ pub fn PresentationList() -> impl IntoView {
                                                 data-presentation-id=id_for_rename.clone()
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
-                                                    op_for_rename.modal_mode.set("edit".to_string());
                                                     op_for_rename.modal_target_id.set(Some(id_for_rename.clone()));
                                                     modal::open_modal(&op_for_rename, "presentation-edit");
                                                 }
