@@ -68,6 +68,23 @@ impl MigrationTrait for Migration {
         //    ranks first. A same-library+same-name collision derives
         //    UUIDv5(lib/name/k) — a deterministic occurrence counter, never
         //    Uuid::new_v4() (which can never converge between two sites).
+        //
+        //    #558 R6 (accepted residual risk, documented — no redesign): the
+        //    `created_at` tie-break ranks a collision group using EACH SITE'S
+        //    OWN import history, which has no cross-site correlation — two
+        //    independently built databases holding what SHOULD be "the same"
+        //    pair of same-library+same-name twins can rank them in a
+        //    DIFFERENT order (whichever twin has the earlier `created_at` on
+        //    THAT site keeps the plain name-derived id; the other derives
+        //    `.../k`), so the two twins can pair up CROSSWISE between sites
+        //    instead of matching content-to-content. This is a legacy-data
+        //    edge case only (a fresh import always assigns via #558 S3's
+        //    content-pure, occurrence-count rule instead): same-library +
+        //    same-name twins are rare, and when they occur their content is
+        //    usually identical anyway, so a crosswise pairing is low-impact.
+        //    Every row backfilled as a NON-FIRST occurrence of a collision
+        //    group (`k > 1`) is logged below so operators can spot-check
+        //    those specific songs after the first sync.
         if column_missing(db, "sync_id").await? {
             db.execute(Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
@@ -95,6 +112,18 @@ impl MigrationTrait for Migration {
             let sid = if *k == 1 {
                 sync_id_for_name(&lib_name, &name)
             } else {
+                // #558 R6: a same-library+same-name collision group — logged
+                // so operators can spot-check this song after the first
+                // sync (the created_at tie-break has no cross-site
+                // correlation; see the comment above).
+                tracing::warn!(
+                    presentation_id = %id,
+                    library_name = %lib_name,
+                    presentation_name = %name,
+                    occurrence = *k,
+                    "sync_id backfill: same-library+same-name collision group — \
+                     verify this song pairs correctly with its peer after first sync"
+                );
                 uuid::Uuid::new_v5(
                     &presenter_core::SYNC_ID_NAMESPACE,
                     format!("{lib_name}/{name}/{k}").as_bytes(),
