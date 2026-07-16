@@ -481,6 +481,70 @@ async fn reimport_preserves_a_trashed_songs_tombstone() {
 }
 
 #[tokio::test]
+async fn reimport_preserves_trash_when_a_same_name_twin_shifts_the_song_to_a_derived_id() {
+    // R1 regression: a previously-UNIQUE trashed song ("Amazing Grace",
+    // name-derived sync_id) loses that very identity the moment a same-name
+    // twin joins a LATER import — the cardinality shift means BOTH
+    // occurrences now derive fresh sync_ids (#558 S3's content-pure rule),
+    // so `old_trash_state.get(&new_sync_id)` misses the OLD (name-derived)
+    // key entirely and the trashed song comes back LIVE with a fresh
+    // `updated_at` — which then LWW-wins and propagates the resurrection to
+    // the peer. FIX: key the old-state map by BOTH sync_id AND
+    // (library_name, presentation_name); fall back to the name key on a
+    // sync_id miss before defaulting to live/new.
+    let repo = repo().await;
+    let original =
+        presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1")]).unwrap();
+    let library =
+        presenter_core::Library::new("Songs".to_string(), vec![original.clone()]).unwrap();
+    repo.upsert_library(&library).await.unwrap();
+    repo.delete_presentation(original.id).await.unwrap();
+
+    let trashed_before = row(&repo, original.id).await;
+    assert!(
+        trashed_before.deleted_at.is_some(),
+        "sanity: trashed before the re-import"
+    );
+    let deleted_at_before = trashed_before.deleted_at;
+    let updated_at_before = trashed_before.updated_at;
+
+    // Re-import: the SAME "Amazing Grace" content, plus a brand-new
+    // same-name twin. Both now collide on the raw name-derived id, so BOTH
+    // derive fresh sync_ids (S3) — the exact cardinality shift R1 flags.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let reimported =
+        presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1")]).unwrap();
+    let twin =
+        presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1 (twin)")]).unwrap();
+    let library2 = presenter_core::Library::new(
+        "Songs".to_string(),
+        vec![reimported.clone(), twin.clone()],
+    )
+    .unwrap();
+    repo.upsert_library(&library2).await.unwrap();
+
+    let reimported_row = row(&repo, reimported.id).await;
+    let twin_row = row(&repo, twin.id).await;
+
+    assert!(
+        reimported_row.deleted_at.is_some(),
+        "the original song's tombstone must survive even though its sync_id shifted"
+    );
+    assert_eq!(
+        reimported_row.deleted_at, deleted_at_before,
+        "the tombstone's own timestamp survives unchanged"
+    );
+    assert_eq!(
+        reimported_row.updated_at, updated_at_before,
+        "re-import must not manufacture a newer edit-time for the trashed row"
+    );
+    assert!(
+        twin_row.deleted_at.is_none(),
+        "the brand-new twin must NOT inherit the other row's tombstone"
+    );
+}
+
+#[tokio::test]
 async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
     let repo = repo().await;
     let with_uuid = presenter_core::Presentation::new("Imported", vec![slide(0, "a")])
