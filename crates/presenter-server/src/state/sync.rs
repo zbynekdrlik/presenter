@@ -245,6 +245,19 @@ impl AppState {
     /// flipped `enabled`), or the slot stays claimed forever and every
     /// subsequent spawn attempt silently refuses to start a loop that was
     /// never actually running.
+    ///
+    /// #558 round-4 U3: the HTTP client is built BEFORE `nudge_rx` is
+    /// taken — both preconditions are acquired ahead of any `status`
+    /// mutation. The client used to be built AFTER nudge_rx was taken, so
+    /// a client-build failure left nudge_rx PERMANENTLY gone (nothing ever
+    /// put it back): every later spawn attempt then found nudge_rx already
+    /// missing and hit the MISLEADING "already started" warning forever,
+    /// even though no loop had ever actually run. Building the client
+    /// first means a client-build failure never removes nudge_rx from its
+    /// slot at all. Every early-return path also resets `status` BEFORE
+    /// releasing the claimed slot — releasing first would let a concurrent
+    /// respawn claim the slot and flip status to enabled, which this
+    /// cleanup would then clobber back to disabled.
     pub(crate) fn spawn_sync_task(&self, peer_url: String) {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         let state = self.clone();
@@ -258,10 +271,32 @@ impl AppState {
         }
 
         tokio::spawn(async move {
+            let client = match reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    warn!(?err, "sync disabled: could not build HTTP client");
+                    {
+                        let mut s = status.write().await;
+                        s.enabled = false;
+                        s.peer_url = None;
+                    }
+                    coordinator.release_shutdown_slot();
+                    return;
+                }
+            };
+
             let mut nudge_rx = match rx_slot.lock().await.take() {
                 Some(rx) => rx,
                 None => {
                     warn!("sync task already started; not starting a second loop");
+                    {
+                        let mut s = status.write().await;
+                        s.enabled = false;
+                        s.peer_url = None;
+                    }
                     coordinator.release_shutdown_slot();
                     return;
                 }
@@ -271,20 +306,6 @@ impl AppState {
                 s.enabled = true;
                 s.peer_url = Some(peer_url.clone());
             }
-            let client = match reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
-                .build()
-            {
-                Ok(client) => client,
-                Err(err) => {
-                    warn!(?err, "sync disabled: could not build HTTP client");
-                    coordinator.release_shutdown_slot();
-                    let mut s = status.write().await;
-                    s.enabled = false;
-                    s.peer_url = None;
-                    return;
-                }
-            };
 
             let mut ticker = interval(SYNC_INTERVAL);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
