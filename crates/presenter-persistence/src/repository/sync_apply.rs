@@ -12,7 +12,9 @@ use crate::entities::{library, presentation as presentation_entity, slide as sli
 use crate::SyncPresentation;
 use chrono::{DateTime, Utc};
 use presenter_core::search::fold_query;
-use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{
+    sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+};
 use tracing::{info, instrument};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,12 +89,24 @@ impl Repository {
             return Ok(SyncApplyOutcome::Updated);
         }
 
-        // 2. Adopt-by-name: same name in the same-named library, unknown sync_id.
-        let by_name = presentation_entity::Entity::find()
+        // 2. Adopt-by-name: same name in the same-named library, unknown sync_id,
+        // among LIVE (non-trashed) candidates only (#558 S4). A trashed local row
+        // must never be silently resurrected via adoption, and an AMBIGUOUS match
+        // (2+ live candidates sharing the same name) must never guess which one
+        // to adopt — it falls through to create instead. `.one()` with no
+        // ORDER BY picks an arbitrary row, so the candidate set is fetched in
+        // full, filtered to live rows, ordered deterministically, and adoption
+        // proceeds ONLY when exactly one live candidate remains.
+        let mut live_by_name_candidates = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::LibraryId.eq(library_id.clone()))
             .filter(presentation_entity::Column::Name.eq(incoming.name.clone()))
-            .one(&txn)
+            .filter(presentation_entity::Column::DeletedAt.is_null())
+            .order_by_asc(presentation_entity::Column::CreatedAt)
+            .order_by_asc(presentation_entity::Column::Id)
+            .all(&txn)
             .await?;
+        let by_name =
+            (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0));
         if let Some(existing) = by_name {
             let local_updated: DateTime<Utc> = existing.updated_at.into();
             if !sync_should_apply(incoming.updated_at, Some(local_updated)) {
