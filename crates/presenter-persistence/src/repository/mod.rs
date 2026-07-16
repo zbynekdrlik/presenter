@@ -4,6 +4,8 @@ mod group_color;
 mod library;
 mod playlist;
 mod presentation;
+#[cfg(test)]
+mod presentation_atomicity_tests;
 mod search;
 mod slide_stage_layout;
 mod stage_state;
