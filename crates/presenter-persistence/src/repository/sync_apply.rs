@@ -14,6 +14,7 @@ use crate::entities::{
 use crate::SyncPresentation;
 use chrono::{DateTime, Utc};
 use presenter_core::search::fold_query;
+use presenter_core::{Slide, SlideContent, SlideText};
 use sea_orm::{
     sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
@@ -362,7 +363,8 @@ impl Repository {
             .await?;
 
         for (index, slide) in incoming.slides.iter().enumerate() {
-            let active = build_slide_active_model(slide, presentation_id, index as i32);
+            let clamped = clamp_incoming_slide(slide, &incoming.sync_id);
+            let active = build_slide_active_model(&clamped, presentation_id, index as i32);
             slide_entity::Entity::insert(active).exec(conn).await?;
         }
 
@@ -585,6 +587,46 @@ struct RawSlideContent {
     translation: String,
     stage: String,
     group: Option<String>,
+}
+
+/// #558 V1: the APPLY boundary is the last stop before storage — clamp any
+/// oversize incoming slide field to the 4000-char cap the LOCAL read path
+/// (`to_domain_slide`, via `fetch_presentation_detail`) enforces, instead of
+/// blindly replicating a pathological legacy/wire-path row from the peer.
+/// A `Slide` deserialized off the wire never validates (`SlideText`'s
+/// `Deserialize` is a plain derive), so an oversize field can arrive here
+/// completely unchecked. Truncating (never rejecting) keeps the sync
+/// converging — the alternative, rejecting the whole song, would leave it
+/// unsynced forever; the alternative of storing it raw is the U1 bug this
+/// closes (it broke the RECEIVING site's own normal read path for that
+/// song too, overwriting its good copy with the peer's bad one). Every
+/// truncated field is logged WARN naming the sync_id + field so the loss is
+/// visible, never silent.
+fn clamp_incoming_slide(slide: &Slide, sync_id: &str) -> Slide {
+    let (main, main_truncated) = SlideText::from_stored_or_truncate(slide.content.main.value());
+    let (translation, translation_truncated) =
+        SlideText::from_stored_or_truncate(slide.content.translation.value());
+    let (stage, stage_truncated) = SlideText::from_stored_or_truncate(slide.content.stage.value());
+
+    for (truncated, field) in [
+        (main_truncated, "main"),
+        (translation_truncated, "translation"),
+        (stage_truncated, "stage"),
+    ] {
+        if truncated {
+            warn!(
+                sync_id,
+                slide_id = %slide.id,
+                field,
+                "sync apply truncated an oversize incoming slide field to the 4000-char cap"
+            );
+        }
+    }
+
+    let content = SlideContent::new(main, translation, stage, slide.content.group.clone());
+    Slide::new(slide.order, content)
+        .with_id(slide.id)
+        .with_metadata(slide.metadata.clone())
 }
 
 /// Extract a NEW (already-validated) peer slide's content as raw strings,

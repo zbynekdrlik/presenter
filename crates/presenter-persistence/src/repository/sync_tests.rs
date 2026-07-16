@@ -443,6 +443,61 @@ async fn apply_sync_presentation_remaps_a_marker_on_an_oversize_legacy_stored_sl
 }
 
 #[tokio::test]
+async fn apply_sync_presentation_truncates_an_oversize_incoming_slide_instead_of_replicating_it() {
+    // #558 V1: U1 was one-sided — the APPLY side stored an oversize incoming
+    // peer slide VERBATIM (deserializing a `Slide` off the wire never
+    // validates), so a pathological legacy row on one site got REPLICATED
+    // onto the healthy peer too. The healthy site's own NORMAL read path
+    // (`fetch_presentation_detail`, via the validating `to_domain_slide`)
+    // then fails to open that song — unopenable on BOTH sites, and the
+    // healthy peer's own good copy is gone, overwritten by the bad one.
+    // FIX: clamp any oversize incoming slide field to the 4000-char cap AT
+    // THE APPLY BOUNDARY, with a WARN log naming the sync_id + field.
+    let repo = repo().await;
+
+    let oversize = "x".repeat(4500);
+    let incoming = crate::SyncPresentation {
+        sync_id: "sid-oversize".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Legacy Song".to_string(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        slides: vec![presenter_core::Slide::new(
+            0,
+            SlideContent::new(
+                SlideText::from_stored_unchecked(oversize),
+                SlideText::new("").unwrap(),
+                SlideText::new("").unwrap(),
+                None,
+            ),
+        )],
+    };
+
+    repo.apply_sync_presentation(&incoming, &std::collections::HashSet::new())
+        .await
+        .expect("an oversize incoming slide must be truncated, never rejected");
+
+    let local_id = repo
+        .find_presentation_id_by_sync_id("sid-oversize")
+        .await
+        .unwrap()
+        .expect("the song applied (created) locally");
+
+    // The LOCAL, VALIDATING read path must succeed — an untruncated apply is
+    // exactly what makes this song unopenable via the normal path.
+    let (_, _, presentation) = repo
+        .fetch_presentation_detail(local_id)
+        .await
+        .unwrap()
+        .expect("the applied song opens fine via the normal read path");
+    assert_eq!(
+        presentation.slides[0].content.main.value().chars().count(),
+        4000,
+        "the oversize field is truncated to the 4000-char cap, not rejected or stored raw"
+    );
+}
+
+#[tokio::test]
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
