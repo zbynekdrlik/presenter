@@ -296,10 +296,7 @@ async fn apply_never_adopts_a_tombstone_by_name_onto_a_live_same_name_song() {
         deleted_at: Some(tombstone_at),
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo
-        .apply_sync_presentation(&peer_tombstone)
-        .await
-        .unwrap();
+    let outcome = repo.apply_sync_presentation(&peer_tombstone).await.unwrap();
     assert_eq!(
         outcome,
         crate::SyncApplyOutcome::Created,
@@ -763,7 +760,10 @@ async fn trash_lists_restores_and_prunes() {
         .prune_deleted_presentations(crate::PRUNE_HORIZON)
         .await
         .unwrap();
-    assert_eq!(removed, 1, "only the row older than PRUNE_HORIZON is pruned");
+    assert_eq!(
+        removed, 1,
+        "only the row older than PRUNE_HORIZON is pruned"
+    );
     assert!(
         presentation_entity::Entity::find_by_id(old.id.to_string())
             .one(&repo.db)
