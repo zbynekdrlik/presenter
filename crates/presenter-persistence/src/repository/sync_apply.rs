@@ -15,7 +15,8 @@ use crate::SyncPresentation;
 use chrono::{DateTime, Utc};
 use presenter_core::search::fold_query;
 use sea_orm::{
-    sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
 };
 use std::collections::HashMap;
 use tracing::{info, instrument, warn};
@@ -280,18 +281,30 @@ impl Repository {
         if old_markers.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
-        let old_slides = slide_entity::Entity::find()
-            .filter(slide_entity::Column::PresentationId.eq(presentation_id))
-            .order_by_asc(slide_entity::Column::Position)
-            .all(conn)
-            .await?;
-        let mut by_slide_id: HashMap<&str, (i32, presenter_core::SlideContent)> =
+        // #558 R8: project only the columns needed to rebuild each old
+        // slide's position + content (never the full row — drops the
+        // `*_search` index columns and `created_at`).
+        let old_slides: Vec<(String, i32, String, String, String, Option<String>)> =
+            slide_entity::Entity::find()
+                .select_only()
+                .column(slide_entity::Column::Id)
+                .column(slide_entity::Column::Position)
+                .column(slide_entity::Column::WorshipMain)
+                .column(slide_entity::Column::WorshipTranslate)
+                .column(slide_entity::Column::WorshipStage)
+                .column(slide_entity::Column::WorshipGroup)
+                .filter(slide_entity::Column::PresentationId.eq(presentation_id))
+                .order_by_asc(slide_entity::Column::Position)
+                .into_tuple()
+                .all(conn)
+                .await?;
+        let mut by_slide_id: HashMap<String, (i32, presenter_core::SlideContent)> =
             HashMap::with_capacity(old_slides.len());
         let mut all_content = Vec::with_capacity(old_slides.len());
-        for model in &old_slides {
-            let content = slide_content_from_model(model)?;
+        for (id, position, main, translate, stage, group) in old_slides {
+            let content = slide_content_from_fields(main, translate, stage, group)?;
             all_content.push(content.clone());
-            by_slide_id.insert(model.id.as_str(), (model.position, content));
+            by_slide_id.insert(id, (position, content));
         }
         let markers = old_markers
             .into_iter()
@@ -389,17 +402,17 @@ struct OldMarker {
     layout_code: String,
 }
 
-fn slide_content_from_model(
-    model: &slide_entity::Model,
+fn slide_content_from_fields(
+    main: String,
+    translate: String,
+    stage: String,
+    group: Option<String>,
 ) -> anyhow::Result<presenter_core::SlideContent> {
     Ok(presenter_core::SlideContent::new(
-        presenter_core::SlideText::new(model.worship_main.clone())?,
-        presenter_core::SlideText::new(model.worship_translate.clone())?,
-        presenter_core::SlideText::new(model.worship_stage.clone())?,
-        model
-            .worship_group
-            .clone()
-            .map(presenter_core::SlideGroup::new),
+        presenter_core::SlideText::new(main)?,
+        presenter_core::SlideText::new(translate)?,
+        presenter_core::SlideText::new(stage)?,
+        group.map(presenter_core::SlideGroup::new),
     ))
 }
 

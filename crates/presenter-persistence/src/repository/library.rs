@@ -25,6 +25,17 @@ type RowState = (
     chrono::DateTime<chrono::FixedOffset>,
 );
 
+/// One narrow `(library_id, name, updated_at, sync_id, deleted_at)`
+/// projection row from `presentations` — #558 R7 (never fetch the full row
+/// just for these five columns).
+type OldPresentationRow = (
+    String,
+    String,
+    chrono::DateTime<chrono::FixedOffset>,
+    String,
+    Option<chrono::DateTime<chrono::FixedOffset>>,
+);
+
 /// Trash/edit state captured from the OLD library being replaced BEFORE it
 /// is deleted (#558 S2), keyed BOTH by `sync_id` AND by
 /// `(library_name, presentation_name)` (#558 R1). The sync_id alone is not
@@ -393,28 +404,41 @@ async fn fetch_old_trash_state(
     if stale_library_ids.is_empty() {
         return Ok(OldTrashState::empty());
     }
+    // #558 R7: project only the columns this function actually reads (never
+    // the full row) — id/name for the library lookup, and library_id/name/
+    // updated_at/sync_id/deleted_at for the trash-state maps.
     let old_library_names: HashMap<String, String> = library::Entity::find()
+        .select_only()
+        .column(library::Column::Id)
+        .column(library::Column::Name)
         .filter(library::Column::Id.is_in(stale_library_ids.to_vec()))
+        .into_tuple::<(String, String)>()
         .all(txn)
         .await?
         .into_iter()
-        .map(|model| (model.id, model.name))
         .collect();
 
-    let old_rows = presentation_entity::Entity::find()
+    let old_rows: Vec<OldPresentationRow> = presentation_entity::Entity::find()
+        .select_only()
+        .column(presentation_entity::Column::LibraryId)
+        .column(presentation_entity::Column::Name)
+        .column(presentation_entity::Column::UpdatedAt)
+        .column(presentation_entity::Column::SyncId)
+        .column(presentation_entity::Column::DeletedAt)
         .filter(presentation_entity::Column::LibraryId.is_in(stale_library_ids.to_vec()))
+        .into_tuple()
         .all(txn)
         .await?;
 
     let mut state = OldTrashState::empty();
-    for model in old_rows {
-        let row_state: RowState = (model.deleted_at, model.updated_at);
-        if let Some(library_name) = old_library_names.get(&model.library_id) {
+    for (library_id, name, updated_at, sync_id, deleted_at) in old_rows {
+        let row_state: RowState = (deleted_at, updated_at);
+        if let Some(library_name) = old_library_names.get(&library_id) {
             state
                 .by_name
-                .insert((library_name.clone(), model.name.clone()), row_state);
+                .insert((library_name.clone(), name.clone()), row_state);
         }
-        state.by_sync_id.insert(model.sync_id, row_state);
+        state.by_sync_id.insert(sync_id, row_state);
     }
     Ok(state)
 }
