@@ -517,11 +517,18 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
         let presentations = ctx.presentations;
         let context_title = ctx.context_title;
         let libraries = ctx.libraries;
+        let selected_library_id = ctx.selected_library_id;
         leptos::task::spawn_local(async move {
             if let Ok(libs) = crate::api::libraries::list_libraries().await {
                 if let Some(lib) = libs.iter().find(|l| l.id.to_string() == lib_id) {
                     context_title.set(lib.name.clone());
                     presentations.set(lib.presentations.clone());
+                } else {
+                    // #561: stale `activeLibraryId` — the library no longer
+                    // exists (deleted / DB swap). Clear it so it doesn't
+                    // keep pointing at a dead id on every future reload.
+                    crate::state::session::remove("activeLibraryId");
+                    selected_library_id.set(None);
                 }
                 libraries.set(libs);
             }
@@ -532,17 +539,35 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
         let playlists = ctx.playlists;
         let context_title = ctx.context_title;
         let selected_playlist = ctx.selected_playlist;
+        let selected_playlist_id = ctx.selected_playlist_id;
         leptos::task::spawn_local(async move {
-            // Fetch full playlist for entry rendering. The response now
-            // includes presentation_name on each entry, so the operator
-            // no longer needs to fake a presentations summary list.
-            if let Ok(pl) = crate::api::playlists::get_playlist(&pl_id).await {
-                context_title.set(pl.name.clone());
-                selected_playlist.set(Some(pl));
+            // #561: fetch the playlist LIST first so a stale sessionStorage
+            // id (the playlist was deleted, or the dev DB was swapped)
+            // never fires a per-id fetch. The browser's OWN network stack
+            // logs "Failed to load resource: ... 404" the instant a fetch()
+            // resolves with a non-2xx status — BEFORE our Rust `Err` handling
+            // even runs — so catching the error gracefully cannot keep the
+            // console clean. The only way is to never issue a request we
+            // already know will 404.
+            let Ok(pls) = crate::api::playlists::list_playlists().await else {
+                return;
+            };
+            if pls.iter().any(|p| p.id.to_string() == pl_id) {
+                // Fetch full playlist for entry rendering. The response now
+                // includes presentation_name on each entry, so the operator
+                // no longer needs to fake a presentations summary list.
+                if let Ok(pl) = crate::api::playlists::get_playlist(&pl_id).await {
+                    context_title.set(pl.name.clone());
+                    selected_playlist.set(Some(pl));
+                }
+            } else {
+                // Stale `activePlaylistId`: a normal condition (deleted
+                // playlist / DB swap), not an error. Clear it and start
+                // with no active playlist instead of firing a doomed fetch.
+                crate::state::session::remove("activePlaylistId");
+                selected_playlist_id.set(None);
             }
-            if let Ok(pls) = crate::api::playlists::list_playlists().await {
-                playlists.set(pls);
-            }
+            playlists.set(pls);
         });
     }
 }
