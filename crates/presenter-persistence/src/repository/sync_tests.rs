@@ -306,8 +306,7 @@ async fn reimport_preserves_a_trashed_songs_tombstone() {
     // CONTENT but never clear an existing tombstone nor manufacture a newer
     // edit-time for an already-trashed song.
     let repo = repo().await;
-    let presentation =
-        presenter_core::Presentation::new("Doomed", vec![slide(0, "v1")]).unwrap();
+    let presentation = presenter_core::Presentation::new("Doomed", vec![slide(0, "v1")]).unwrap();
     let library =
         presenter_core::Library::new("Songs".to_string(), vec![presentation.clone()]).unwrap();
     repo.upsert_library(&library).await.unwrap();
@@ -363,11 +362,16 @@ async fn upsert_library_prefers_domain_sync_id_and_derives_the_rest() {
 
 #[tokio::test]
 async fn upsert_library_deduplicates_repeated_pro_uuids_deterministically() {
-    // Real ProPresenter libraries contain DUPLICATED .pro files, so two
-    // presentations can carry the SAME embedded protobuf UUID. The sync_id
-    // unique index must survive that: the first occurrence keeps the raw UUID,
-    // every later duplicate gets a DERIVED — deterministic, not random — id so
-    // both instances still converge on identical identities.
+    // S3 FIX (this test's assertions changed on purpose — see #558 review):
+    // the OLD dedupe let the "first occurrence in this library's own scan"
+    // keep the raw UUID (a mutable `used` HashSet seeded from the DB, order
+    // + import-history dependent) while every LATER duplicate derived. That
+    // is exactly the history dependence #558 flags: WHICH song is "first"
+    // is an accident of processing order, not of content. The fixed rule is
+    // content-pure: a raw UUID is kept ONLY when it occurs exactly ONCE
+    // across the whole current import scan; EVERY occurrence of an in-scan
+    // duplicate derives UUIDv5(raw/library/name) — no exception for the
+    // first one.
     let repo = repo().await;
     let first = presenter_core::Presentation::new("Original", vec![slide(0, "a")])
         .unwrap()
@@ -385,12 +389,13 @@ async fn upsert_library_deduplicates_repeated_pro_uuids_deterministically() {
     let first_row = row(&repo, first.id).await;
     let second_row = row(&repo, second.id).await;
     assert_eq!(
-        first_row.sync_id, "DUP-UUID",
-        "first occurrence keeps the raw UUID"
-    );
-    assert_ne!(
-        second_row.sync_id, "DUP-UUID",
-        "duplicate gets a distinct id"
+        first_row.sync_id,
+        uuid::Uuid::new_v5(
+            &presenter_core::SYNC_ID_NAMESPACE,
+            "DUP-UUID/Songs/Original".as_bytes(),
+        )
+        .to_string(),
+        "an in-scan duplicate ALWAYS derives, even the first occurrence — no first-wins"
     );
     assert_eq!(
         second_row.sync_id,
@@ -399,10 +404,14 @@ async fn upsert_library_deduplicates_repeated_pro_uuids_deterministically() {
             "DUP-UUID/Songs/Copy Of Original".as_bytes(),
         )
         .to_string(),
-        "the derived id is deterministic (both instances compute the same)"
+        "the other duplicate derives too — deterministic, both instances compute the same"
     );
+    assert_ne!(first_row.sync_id, second_row.sync_id);
 
-    // Cross-library duplicate: another library importing the same file also derives.
+    // Cross-library: since NEITHER Songs row kept the raw "DUP-UUID" (both
+    // derived away above), a different library's presentation carrying the
+    // SAME raw uuid is now content-pure unique-in-scan AND does not conflict
+    // with any foreign DB row — so it keeps the raw value.
     let elsewhere = presenter_core::Presentation::new("Original", vec![slide(0, "c")])
         .unwrap()
         .with_sync_id("DUP-UUID");
@@ -413,12 +422,62 @@ async fn upsert_library_deduplicates_repeated_pro_uuids_deterministically() {
         .expect("cross-library duplicate must not violate the unique index");
     let elsewhere_row = row(&repo, elsewhere.id).await;
     assert_eq!(
-        elsewhere_row.sync_id,
-        uuid::Uuid::new_v5(
-            &presenter_core::SYNC_ID_NAMESPACE,
-            "DUP-UUID/Other/Original".as_bytes(),
-        )
-        .to_string(),
+        elsewhere_row.sync_id, "DUP-UUID",
+        "no foreign row holds the raw id anymore, so it is free to keep it"
+    );
+}
+
+#[tokio::test]
+async fn upsert_library_dedup_is_independent_of_presentation_list_order() {
+    // S3 regression: dedup must be a PURE function of import CONTENT — never
+    // of the ORDER presentations happen to appear in the list (which is
+    // filename-sort, an accident of the underlying directory listing, not a
+    // property either site can rely on matching). Import the SAME two
+    // duplicate-UUID presentations in FORWARD and REVERSED list order into
+    // two separate databases and require IDENTICAL final sync_id
+    // assignments either way.
+    async fn build(
+        order: [&str; 2],
+    ) -> (
+        Repository,
+        presenter_core::PresentationId,
+        presenter_core::PresentationId,
+    ) {
+        let repo = repo().await;
+        let original = presenter_core::Presentation::new("Original", vec![slide(0, "a")])
+            .unwrap()
+            .with_sync_id("ORDER-DUP");
+        let copy = presenter_core::Presentation::new("Copy Of Original", vec![slide(0, "b")])
+            .unwrap()
+            .with_sync_id("ORDER-DUP");
+        let by_name: std::collections::HashMap<&str, presenter_core::Presentation> = [
+            ("Original", original.clone()),
+            ("Copy Of Original", copy.clone()),
+        ]
+        .into();
+        let ordered: Vec<_> = order.iter().map(|name| by_name[name].clone()).collect();
+        let library = presenter_core::Library::new("Songs".to_string(), ordered).unwrap();
+        repo.upsert_library(&library).await.unwrap();
+        (repo, original.id, copy.id)
+    }
+
+    let (forward_repo, forward_original, forward_copy) =
+        build(["Original", "Copy Of Original"]).await;
+    let (reversed_repo, reversed_original, reversed_copy) =
+        build(["Copy Of Original", "Original"]).await;
+
+    let forward_original_sid = row(&forward_repo, forward_original).await.sync_id;
+    let forward_copy_sid = row(&forward_repo, forward_copy).await.sync_id;
+    let reversed_original_sid = row(&reversed_repo, reversed_original).await.sync_id;
+    let reversed_copy_sid = row(&reversed_repo, reversed_copy).await.sync_id;
+
+    assert_eq!(
+        forward_original_sid, reversed_original_sid,
+        "\"Original\"'s assigned identity must not depend on list order"
+    );
+    assert_eq!(
+        forward_copy_sid, reversed_copy_sid,
+        "\"Copy Of Original\"'s assigned identity must not depend on list order"
     );
 }
 
