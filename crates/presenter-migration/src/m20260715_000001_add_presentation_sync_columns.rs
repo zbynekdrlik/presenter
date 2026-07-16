@@ -301,4 +301,44 @@ mod tests {
             "the later twin derives via UUIDv5 with a deterministic occurrence counter, never random"
         );
     }
+
+    #[tokio::test]
+    async fn interrupted_backfill_is_completed_by_a_rerun_after_columns_already_exist() {
+        // S8 regression: the OLD code gated the WHOLE backfill (not just the
+        // ADD COLUMN) behind `column_missing()`. A crash between ADD COLUMN
+        // and the backfill UPDATE/loop leaves NULL rows -- and since the
+        // column now EXISTS, a restart's `column_missing()` check is false
+        // and the backfill is skipped FOREVER (every SELECT then fails to
+        // decode a NOT NULL `updated_at` / non-empty `sync_id` -> the whole
+        // app 500s). Simulate the crash: run the full migration once, then
+        // manually null out one row's updated_at/sync_id (as if its backfill
+        // never completed before the crash) and re-run the migration -- a
+        // rerun MUST finish the interrupted backfill, keyed on DATA state,
+        // not on whether the column already exists.
+        let db = setup_pre_migration_db().await;
+        let manager = SchemaManager::new(&db);
+        Migration.up(&manager).await.expect("first up");
+
+        db.execute(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE presentations SET updated_at = NULL, sync_id = NULL WHERE id = 'p3'",
+        ))
+        .await
+        .expect("simulate a crash that stranded p3 mid-backfill");
+
+        Migration.up(&manager).await.expect("second up (resumed)");
+
+        let rows = all_rows(&db).await;
+        let p3 = rows.iter().find(|r| r.0 == "p3").expect("p3");
+        assert!(
+            p3.2.is_some(),
+            "a rerun must finish the interrupted updated_at backfill, not skip it \
+             because the column already exists"
+        );
+        assert!(
+            !p3.3.is_empty(),
+            "a rerun must finish the interrupted sync_id backfill too"
+        );
+        assert_eq!(p3.3, sync_id_for_name("Songs", "Solo"));
+    }
 }
