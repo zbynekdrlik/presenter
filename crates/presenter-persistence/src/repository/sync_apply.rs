@@ -85,28 +85,10 @@ impl Repository {
     ) -> anyhow::Result<SyncApplyOutcome> {
         let txn = self.db.begin().await?;
 
-        // Ensure a library with the peer's library name exists; reuse or create.
-        let lib = library::Entity::find()
-            .filter(library::Column::Name.eq(incoming.library_name.clone()))
-            .one(&txn)
-            .await?;
-        let library_id = match lib {
-            Some(l) => l.id,
-            None => {
-                let id = uuid::Uuid::new_v4().to_string();
-                library::Entity::insert(library::ActiveModel {
-                    id: Set(id.clone()),
-                    name: Set(incoming.library_name.clone()),
-                    search_name: Set(fold_query(&incoming.library_name)),
-                    created_at: Set(Utc::now().into()),
-                })
-                .exec(&txn)
-                .await?;
-                id
-            }
-        };
-
-        // 1. Match by sync_id.
+        // 1. Match by sync_id — independent of the library (whether the
+        // peer's library exists locally yet, or has been renamed, is
+        // resolved by `ensure_library` ONLY once we know we're writing —
+        // #558 round-4 U4).
         let by_sync = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::SyncId.eq(incoming.sync_id.clone()))
             .one(&txn)
@@ -123,6 +105,7 @@ impl Repository {
                 info!("sync skip (not newer)");
                 return Ok(SyncApplyOutcome::SkippedNotNewer);
             }
+            let library_id = Self::ensure_library(&txn, &incoming.library_name).await?;
             Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
             txn.commit().await?;
             info!("sync updated");
@@ -139,19 +122,68 @@ impl Repository {
         // song. A tombstone therefore skips this step entirely and falls
         // through to step 3, which creates its own separate trashed row
         // instead — never touching any existing local row.
+        //
+        // #558 round-4 U4: this step only LOOKS UP the library (never
+        // creates it) — a library that doesn't exist locally yet cannot
+        // hold any adoption candidate, so a missing library is simply "no
+        // candidates", not a reason to create one speculatively.
         if incoming.deleted_at.is_none() {
-            if let Some(outcome) =
-                Self::try_adopt_by_name(&txn, &library_id, incoming, peer_sync_ids).await?
-            {
-                txn.commit().await?;
-                return Ok(outcome);
+            if let Some(library_id) = Self::find_library_id(&txn, &incoming.library_name).await? {
+                if let Some(outcome) =
+                    Self::try_adopt_by_name(&txn, &library_id, incoming, peer_sync_ids).await?
+                {
+                    txn.commit().await?;
+                    return Ok(outcome);
+                }
             }
         }
 
         // 3. Unknown sync_id → the tombstone-aware create-or-skip helper.
-        let outcome = Self::apply_unknown_sync_id(&txn, &library_id, incoming).await?;
+        // Ensures/creates the library only once the horizon gate inside it
+        // decides to WRITE (#558 round-4 U4) — a skipped (never-write)
+        // apply must never leave behind a phantom, permanently-empty
+        // library.
+        let outcome = Self::apply_unknown_sync_id(&txn, incoming).await?;
         txn.commit().await?;
         Ok(outcome)
+    }
+
+    /// Look up an existing library by name — NEVER creates one (#558
+    /// round-4 U4). Used wherever "no library" can be treated as "nothing
+    /// to do" without paying for a write.
+    async fn find_library_id(
+        txn: &sea_orm::DatabaseTransaction,
+        library_name: &str,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(library::Entity::find()
+            .filter(library::Column::Name.eq(library_name.to_string()))
+            .one(txn)
+            .await?
+            .map(|l| l.id))
+    }
+
+    /// Look up an existing library by name, creating it if missing (#558
+    /// round-4 U4). Call this ONLY once the caller is committed to
+    /// writing a presentation row into it — never speculatively, or a
+    /// skipped/never-write apply leaves behind a phantom, permanently-
+    /// empty library row.
+    async fn ensure_library(
+        txn: &sea_orm::DatabaseTransaction,
+        library_name: &str,
+    ) -> anyhow::Result<String> {
+        if let Some(id) = Self::find_library_id(txn, library_name).await? {
+            return Ok(id);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        library::Entity::insert(library::ActiveModel {
+            id: Set(id.clone()),
+            name: Set(library_name.to_string()),
+            search_name: Set(fold_query(library_name)),
+            created_at: Set(Utc::now().into()),
+        })
+        .exec(txn)
+        .await?;
+        Ok(id)
     }
 
     /// Step 2 of `apply_sync_presentation`: adopt-by-name among LIVE
@@ -230,19 +262,24 @@ impl Repository {
     /// already-pruned tombstone (older than the horizon) is skipped, never
     /// resurrected as a fresh trashed row. Never touches any existing
     /// local row. (Extracted per the #558 round-3 function-length gate.)
+    ///
+    /// #558 round-4 U4: the horizon gate runs BEFORE the library is
+    /// ensured/created — a skip must never leave behind a phantom,
+    /// permanently-empty library for a library this instance otherwise has
+    /// no reason to know about.
     async fn apply_unknown_sync_id(
         txn: &sea_orm::DatabaseTransaction,
-        library_id: &str,
         incoming: &SyncPresentation,
     ) -> anyhow::Result<SyncApplyOutcome> {
         if !sync_should_apply(incoming.updated_at, incoming.deleted_at.is_some(), None) {
             info!("sync skip (unknown tombstone past prune horizon)");
             return Ok(SyncApplyOutcome::SkippedNotNewer);
         }
+        let library_id = Self::ensure_library(txn, &incoming.library_name).await?;
         let new_id = uuid::Uuid::new_v4().to_string();
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(new_id.clone()),
-            library_id: Set(library_id.to_string()),
+            library_id: Set(library_id),
             name: Set(incoming.name.clone()),
             search_name: Set(fold_query(&incoming.name)),
             created_at: Set(Utc::now().into()),
