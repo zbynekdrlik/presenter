@@ -307,7 +307,11 @@ pub(crate) async fn run_sync_cycle(
     let mut applied = 0usize;
     for entry in peer_manifest {
         let local_updated = local_map.get(&entry.sync_id).copied();
-        if !presenter_persistence::sync_should_apply(entry.updated_at, local_updated) {
+        if !presenter_persistence::sync_should_apply(
+            entry.updated_at,
+            entry.deleted_at.is_some(),
+            local_updated,
+        ) {
             continue;
         }
         pulled += 1;

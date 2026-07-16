@@ -33,10 +33,24 @@ impl SyncApplyOutcome {
 }
 
 /// LWW: apply the peer row iff it is strictly newer than what we hold (or unknown).
-/// `local` is `None` when we have no matching song at all.
-pub fn sync_should_apply(peer: DateTime<Utc>, local: Option<DateTime<Utc>>) -> bool {
+/// `local` is `None` when we have no matching song at all. `peer_deleted` is
+/// whether the PEER's row is currently a tombstone.
+///
+/// #558 S7: when `local` is `None` AND the peer entry is a tombstone, this
+/// returns `false` — never re-create a trashed row we don't hold. Without
+/// this, a row we've already pruned (our own 30-day schedule fired) would be
+/// resurrected by a peer whose manifest still lists the tombstone (its own
+/// prune hasn't fired yet). Each side prunes on its own schedule and nothing
+/// resurrects. A peer delete of a row we DO still hold (`local: Some(_)`)
+/// is unaffected — that's normal trash propagation, gated on `peer > local`
+/// like any other edit.
+pub fn sync_should_apply(
+    peer: DateTime<Utc>,
+    peer_deleted: bool,
+    local: Option<DateTime<Utc>>,
+) -> bool {
     match local {
-        None => true,
+        None => !peer_deleted,
         Some(local) => peer > local,
     }
 }
@@ -78,7 +92,11 @@ impl Repository {
 
         if let Some(existing) = by_sync {
             let local_updated: DateTime<Utc> = existing.updated_at.into();
-            if !sync_should_apply(incoming.updated_at, Some(local_updated)) {
+            if !sync_should_apply(
+                incoming.updated_at,
+                incoming.deleted_at.is_some(),
+                Some(local_updated),
+            ) {
                 txn.commit().await?;
                 info!("sync skip (not newer)");
                 return Ok(SyncApplyOutcome::SkippedNotNewer);
@@ -109,7 +127,11 @@ impl Repository {
             (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0));
         if let Some(existing) = by_name {
             let local_updated: DateTime<Utc> = existing.updated_at.into();
-            if !sync_should_apply(incoming.updated_at, Some(local_updated)) {
+            if !sync_should_apply(
+                incoming.updated_at,
+                incoming.deleted_at.is_some(),
+                Some(local_updated),
+            ) {
                 // Local wins; the peer will adopt OUR sync_id when it pulls us.
                 txn.commit().await?;
                 info!("sync skip (adopt-by-name, local newer)");
@@ -198,15 +220,29 @@ mod tests {
     #[test]
     fn lww_matrix() {
         let now = Utc::now();
-        assert!(sync_should_apply(now, None), "unknown locally → apply");
         assert!(
-            sync_should_apply(now, Some(now - Duration::seconds(1))),
+            sync_should_apply(now, false, None),
+            "unknown locally, peer not deleted → apply"
+        );
+        assert!(
+            !sync_should_apply(now, true, None),
+            "unknown locally AND peer deleted → never resurrect a pruned row (S7)"
+        );
+        assert!(
+            sync_should_apply(now, false, Some(now - Duration::seconds(1))),
             "peer newer → apply"
         );
         assert!(
-            !sync_should_apply(now, Some(now + Duration::seconds(1))),
+            !sync_should_apply(now, false, Some(now + Duration::seconds(1))),
             "peer older → skip"
         );
-        assert!(!sync_should_apply(now, Some(now)), "equal → skip (no echo)");
+        assert!(
+            !sync_should_apply(now, false, Some(now)),
+            "equal → skip (no echo)"
+        );
+        assert!(
+            sync_should_apply(now, true, Some(now - Duration::seconds(1))),
+            "peer newer delete of a row we STILL HOLD applies normally (trash propagation)"
+        );
     }
 }
