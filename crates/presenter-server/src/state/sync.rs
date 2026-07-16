@@ -365,6 +365,13 @@ pub(crate) async fn run_sync_cycle(
         .json()
         .await?;
 
+    // #558 round-4 U2: the peer's FULL sync_id set, so the apply step can
+    // tell "a local adopt-by-name candidate whose sync_id the peer already
+    // tracks separately" from "a genuinely orphaned local song" — see
+    // `apply_sync_presentation`'s adopt-by-name single-shot gate.
+    let peer_sync_ids: std::collections::HashSet<String> =
+        peer_manifest.iter().map(|e| e.sync_id.clone()).collect();
+
     let mut pulled = 0usize;
     let mut applied = 0usize;
     let mut errors = 0usize;
@@ -383,7 +390,7 @@ pub(crate) async fn run_sync_cycle(
         // still hasn't fixed, or any other per-song fault) must never
         // abort the whole cycle via `?`; every other manifest entry
         // deserves its own chance to sync in the same cycle.
-        match fetch_and_apply_one(repo, client, peer_url, entry).await {
+        match fetch_and_apply_one(repo, client, peer_url, entry, &peer_sync_ids).await {
             Ok(wrote) => {
                 if wrote {
                     applied += 1;
@@ -416,6 +423,7 @@ async fn fetch_and_apply_one(
     client: &reqwest::Client,
     peer_url: &str,
     entry: &SyncManifestEntryDto,
+    peer_sync_ids: &std::collections::HashSet<String>,
 ) -> anyhow::Result<bool> {
     let dto: SyncPresentationDto = client
         .get(format!("{peer_url}/sync/presentations/{}", entry.sync_id))
@@ -424,7 +432,9 @@ async fn fetch_and_apply_one(
         .error_for_status()?
         .json()
         .await?;
-    let outcome = repo.apply_sync_presentation(&dto.into()).await?;
+    let outcome = repo
+        .apply_sync_presentation(&dto.into(), peer_sync_ids)
+        .await?;
     info!(sync_id = %entry.sync_id, name = %entry.name, ?outcome, "sync applied");
     Ok(outcome.wrote())
 }

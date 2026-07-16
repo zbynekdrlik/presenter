@@ -186,7 +186,7 @@ async fn a_tombstone_older_than_the_prune_horizon_is_never_resurrected_for_a_row
         slides: Vec::new(),
     };
     a.repository()
-        .apply_sync_presentation(&ancient_tombstone)
+        .apply_sync_presentation(&ancient_tombstone, &std::collections::HashSet::new())
         .await
         .unwrap();
 

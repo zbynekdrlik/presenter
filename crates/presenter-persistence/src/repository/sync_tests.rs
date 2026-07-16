@@ -71,14 +71,20 @@ async fn apply_creates_unknown_updates_newer_skips_older() {
 
     // Unknown → created (library auto-created too).
     let outcome = repo
-        .apply_sync_presentation(&peer_song("sid-1", "Peer Song", "v1", 10))
+        .apply_sync_presentation(
+            &peer_song("sid-1", "Peer Song", "v1", 10),
+            &std::collections::HashSet::new(),
+        )
         .await
         .unwrap();
     assert_eq!(outcome, crate::SyncApplyOutcome::Created);
 
     // Newer peer edit → updated, and the PEER timestamp is stored verbatim.
     let newer = peer_song("sid-1", "Peer Song", "v2", 5);
-    let outcome = repo.apply_sync_presentation(&newer).await.unwrap();
+    let outcome = repo
+        .apply_sync_presentation(&newer, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(outcome, crate::SyncApplyOutcome::Updated);
     let manifest = repo.list_sync_manifest().await.unwrap();
     let row = manifest.iter().find(|r| r.sync_id == "sid-1").unwrap();
@@ -89,7 +95,10 @@ async fn apply_creates_unknown_updates_newer_skips_older() {
 
     // Older peer state → skipped, content untouched.
     let outcome = repo
-        .apply_sync_presentation(&peer_song("sid-1", "Peer Song", "stale", 60))
+        .apply_sync_presentation(
+            &peer_song("sid-1", "Peer Song", "stale", 60),
+            &std::collections::HashSet::new(),
+        )
         .await
         .unwrap();
     assert_eq!(outcome, crate::SyncApplyOutcome::SkippedNotNewer);
@@ -120,7 +129,10 @@ async fn apply_adopts_by_name_preserving_the_local_row_id() {
         deleted_at: None,
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo.apply_sync_presentation(&peer).await.unwrap();
+    let outcome = repo
+        .apply_sync_presentation(&peer, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(outcome, crate::SyncApplyOutcome::AdoptedByName);
 
     let local_row_after = row(&repo, local.id).await;
@@ -167,7 +179,10 @@ async fn adopt_by_name_never_guesses_among_multiple_live_candidates() {
         deleted_at: None,
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo.apply_sync_presentation(&peer).await.unwrap();
+    let outcome = repo
+        .apply_sync_presentation(&peer, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(
         outcome,
         crate::SyncApplyOutcome::Created,
@@ -227,7 +242,9 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_position() {
         deleted_at: None,
         slides: peer_slides.clone(),
     };
-    repo.apply_sync_presentation(&incoming).await.unwrap();
+    repo.apply_sync_presentation(&incoming, &std::collections::HashSet::new())
+        .await
+        .unwrap();
 
     let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
     assert_eq!(
@@ -287,7 +304,9 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_content_on_a_pur
         deleted_at: None,
         slides: peer_slides.clone(),
     };
-    repo.apply_sync_presentation(&incoming).await.unwrap();
+    repo.apply_sync_presentation(&incoming, &std::collections::HashSet::new())
+        .await
+        .unwrap();
 
     let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
     assert_eq!(markers.len(), 1, "the marker survives a pure reorder");
@@ -346,7 +365,7 @@ async fn apply_sync_presentation_remaps_markers_without_a_position_fallback_coll
         slides: peer_slides.clone(),
     };
     // Must not error — a PK violation here IS the regression.
-    repo.apply_sync_presentation(&incoming)
+    repo.apply_sync_presentation(&incoming, &std::collections::HashSet::new())
         .await
         .expect("sync apply must not fail with a primary-key violation");
 
@@ -411,7 +430,7 @@ async fn apply_sync_presentation_remaps_a_marker_on_an_oversize_legacy_stored_sl
         slides: vec![slide(0, "short (edited by peer)")],
     };
     // Must not error — re-validating the oversize OLD stored text IS the regression.
-    repo.apply_sync_presentation(&incoming)
+    repo.apply_sync_presentation(&incoming, &std::collections::HashSet::new())
         .await
         .expect("sync apply must not choke on an oversize legacy stored slide");
 

@@ -91,8 +91,11 @@ async fn slide_edit_and_touch_are_atomic_against_a_concurrent_sync_apply() {
                 .await
         });
         let apply_repo = repo.clone();
-        let apply =
-            tokio::spawn(async move { apply_repo.apply_sync_presentation(&incoming).await });
+        let apply = tokio::spawn(async move {
+            apply_repo
+                .apply_sync_presentation(&incoming, &std::collections::HashSet::new())
+                .await
+        });
         let (edit_result, apply_result) = tokio::join!(edit, apply);
         apply_result
             .expect("apply task panicked")

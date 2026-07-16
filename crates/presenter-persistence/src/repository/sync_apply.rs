@@ -18,7 +18,7 @@ use sea_orm::{
     sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{info, instrument, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,10 +74,14 @@ pub fn sync_should_apply(
 }
 
 impl Repository {
+    /// `peer_sync_ids` is the FULL set of sync_ids the peer's manifest
+    /// currently reports (#558 round-4 U2) — pass an empty set when no
+    /// such context exists (a standalone apply outside a real sync cycle).
     #[instrument(skip_all, fields(sync_id = %incoming.sync_id, name = %incoming.name))]
     pub async fn apply_sync_presentation(
         &self,
         incoming: &SyncPresentation,
+        peer_sync_ids: &HashSet<String>,
     ) -> anyhow::Result<SyncApplyOutcome> {
         let txn = self.db.begin().await?;
 
@@ -136,37 +140,11 @@ impl Repository {
         // through to step 3, which creates its own separate trashed row
         // instead — never touching any existing local row.
         if incoming.deleted_at.is_none() {
-            // Among LIVE (non-trashed) candidates only (#558 S4). A trashed
-            // local row must never be silently resurrected via adoption,
-            // and an AMBIGUOUS match (2+ live candidates sharing the same
-            // name) must never guess which one to adopt — it falls through
-            // to create instead. `.one()` with no ORDER BY picks an
-            // arbitrary row, so the candidate set is fetched in full,
-            // filtered to live rows, ordered deterministically, and
-            // adoption proceeds ONLY when exactly one live candidate
-            // remains.
-            let mut live_by_name_candidates = presentation_entity::Entity::find()
-                .filter(presentation_entity::Column::LibraryId.eq(library_id.clone()))
-                .filter(presentation_entity::Column::Name.eq(incoming.name.clone()))
-                .filter(presentation_entity::Column::DeletedAt.is_null())
-                .order_by_asc(presentation_entity::Column::CreatedAt)
-                .order_by_asc(presentation_entity::Column::Id)
-                .all(&txn)
-                .await?;
-            let by_name =
-                (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0));
-            if let Some(existing) = by_name {
-                let local_updated: DateTime<Utc> = existing.updated_at.into();
-                if !sync_should_apply(incoming.updated_at, false, Some(local_updated)) {
-                    // Local wins; the peer will adopt OUR sync_id when it pulls us.
-                    txn.commit().await?;
-                    info!("sync skip (adopt-by-name, local newer)");
-                    return Ok(SyncApplyOutcome::SkippedNotNewer);
-                }
-                Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
+            if let Some(outcome) =
+                Self::try_adopt_by_name(&txn, &library_id, incoming, peer_sync_ids).await?
+            {
                 txn.commit().await?;
-                info!("sync adopted-by-name");
-                return Ok(SyncApplyOutcome::AdoptedByName);
+                return Ok(outcome);
             }
         }
 
@@ -174,6 +152,74 @@ impl Repository {
         let outcome = Self::apply_unknown_sync_id(&txn, &library_id, incoming).await?;
         txn.commit().await?;
         Ok(outcome)
+    }
+
+    /// Step 2 of `apply_sync_presentation`: adopt-by-name among LIVE
+    /// (non-trashed) candidates only (#558 S4). A trashed local row must
+    /// never be silently resurrected via adoption, and an AMBIGUOUS match
+    /// (2+ live candidates sharing the same name) must never guess which
+    /// one to adopt — both fall through to `None` (step 3 creates
+    /// instead). `.one()` with no ORDER BY picks an arbitrary row, so the
+    /// candidate set is fetched in full, filtered to live rows, ordered
+    /// deterministically, and adoption proceeds ONLY when exactly one live
+    /// candidate remains.
+    ///
+    /// Returns `Some(outcome)` when a final decision was reached (adopted,
+    /// or skipped because local is newer); `None` when there is nothing to
+    /// adopt onto, so the caller falls through to step 3. (Extracted per
+    /// the #558 round-3/round-4 function-length gate.)
+    async fn try_adopt_by_name(
+        txn: &sea_orm::DatabaseTransaction,
+        library_id: &str,
+        incoming: &SyncPresentation,
+        peer_sync_ids: &HashSet<String>,
+    ) -> anyhow::Result<Option<SyncApplyOutcome>> {
+        let mut live_by_name_candidates = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::LibraryId.eq(library_id.to_string()))
+            .filter(presentation_entity::Column::Name.eq(incoming.name.clone()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
+            .order_by_asc(presentation_entity::Column::CreatedAt)
+            .order_by_asc(presentation_entity::Column::Id)
+            .all(txn)
+            .await?;
+        let Some(existing) =
+            (live_by_name_candidates.len() == 1).then(|| live_by_name_candidates.remove(0))
+        else {
+            return Ok(None);
+        };
+
+        // #558 round-4 U2: adopt-by-name is single-shot per name. Two
+        // independently-created LIVE same-name songs on the PEER
+        // (different sync_ids, both listed in its manifest) used to
+        // serially adopt onto this ONE local candidate within a single
+        // cycle — the second peer entry processed found the first
+        // entry's just-written row as its sole live candidate and
+        // overwrote it, silently discarding the first twin. The orphaned
+        // identity then refetched + re-adopted every following cycle
+        // forever. If this candidate's OWN sync_id is itself known to the
+        // peer, the peer is ALREADY tracking it as a separate identity —
+        // adopting it here would orphan that peer entry instead. Fall
+        // through to step 3 (returns `None`), which creates a brand-new
+        // row for `incoming` instead; both twins then converge in the
+        // same cycle.
+        if peer_sync_ids.contains(&existing.sync_id) {
+            info!(
+                candidate_sync_id = %existing.sync_id,
+                "sync skip adopt-by-name (candidate's sync_id is itself peer-known); \
+                 creating a new row instead"
+            );
+            return Ok(None);
+        }
+
+        let local_updated: DateTime<Utc> = existing.updated_at.into();
+        if !sync_should_apply(incoming.updated_at, false, Some(local_updated)) {
+            // Local wins; the peer will adopt OUR sync_id when it pulls us.
+            info!("sync skip (adopt-by-name, local newer)");
+            return Ok(Some(SyncApplyOutcome::SkippedNotNewer));
+        }
+        Self::write_synced_row(txn, &existing.id, library_id, incoming).await?;
+        info!("sync adopted-by-name");
+        Ok(Some(SyncApplyOutcome::AdoptedByName))
     }
 
     /// Step 3 of `apply_sync_presentation`: the peer's `sync_id` matched no

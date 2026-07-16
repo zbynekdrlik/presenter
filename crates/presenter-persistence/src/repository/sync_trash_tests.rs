@@ -31,7 +31,10 @@ async fn adopt_by_name_never_adopts_a_trashed_candidate() {
         deleted_at: None,
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo.apply_sync_presentation(&peer).await.unwrap();
+    let outcome = repo
+        .apply_sync_presentation(&peer, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(
         outcome,
         crate::SyncApplyOutcome::Created,
@@ -78,7 +81,10 @@ async fn apply_never_adopts_a_tombstone_by_name_onto_a_live_same_name_song() {
         deleted_at: Some(tombstone_at),
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo.apply_sync_presentation(&peer_tombstone).await.unwrap();
+    let outcome = repo
+        .apply_sync_presentation(&peer_tombstone, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(
         outcome,
         crate::SyncApplyOutcome::Created,
@@ -131,7 +137,7 @@ async fn apply_skips_an_unknown_tombstone_older_than_the_prune_horizon() {
         slides: vec![slide(0, "x")],
     };
     let outcome = repo
-        .apply_sync_presentation(&stale_tombstone)
+        .apply_sync_presentation(&stale_tombstone, &std::collections::HashSet::new())
         .await
         .unwrap();
     assert_eq!(outcome, crate::SyncApplyOutcome::SkippedNotNewer);
@@ -148,18 +154,24 @@ async fn apply_skips_an_unknown_tombstone_older_than_the_prune_horizon() {
 async fn apply_carries_a_peer_delete_and_restore() {
     let repo = repo().await;
     let created = peer_song("sid-del", "Doomed Peer", "x", 30);
-    repo.apply_sync_presentation(&created).await.unwrap();
+    repo.apply_sync_presentation(&created, &std::collections::HashSet::new())
+        .await
+        .unwrap();
 
     // Peer deleted it later → local goes to trash.
     let mut deleted = peer_song("sid-del", "Doomed Peer", "x", 20);
     deleted.deleted_at = Some(deleted.updated_at);
-    repo.apply_sync_presentation(&deleted).await.unwrap();
+    repo.apply_sync_presentation(&deleted, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     let trash = repo.list_trashed_presentations().await.unwrap();
     assert!(trash.iter().any(|t| t.sync_id == "sid-del"));
 
     // Peer restored it even later → local leaves the trash.
     let restored = peer_song("sid-del", "Doomed Peer", "x", 10);
-    repo.apply_sync_presentation(&restored).await.unwrap();
+    repo.apply_sync_presentation(&restored, &std::collections::HashSet::new())
+        .await
+        .unwrap();
     let trash = repo.list_trashed_presentations().await.unwrap();
     assert!(!trash.iter().any(|t| t.sync_id == "sid-del"));
 }
@@ -200,7 +212,9 @@ async fn apply_sync_tombstone_clears_stage_layout_markers_instead_of_remapping_t
         deleted_at: Some(tombstone_at),
         slides: vec![slide(0, "verse 1"), slide(1, "verse 2")],
     };
-    repo.apply_sync_presentation(&tombstone).await.unwrap();
+    repo.apply_sync_presentation(&tombstone, &std::collections::HashSet::new())
+        .await
+        .unwrap();
 
     let markers_after_tombstone = repo.list_slide_stage_layouts(local.id).await.unwrap();
     assert!(
