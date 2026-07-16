@@ -50,6 +50,24 @@ pub(super) fn range_select(
     next
 }
 
+/// Resolve a Shift+click range selection from an ANCHOR SLIDE ID rather than
+/// a positional index (#558 V9): a raw index anchor is never invalidated
+/// when the list shifts (a paste/delete/reorder before the next
+/// Shift+click), so a later Shift+click could range-select the WRONG
+/// slides. Looks up the anchor's CURRENT index in `ids`; when the anchor
+/// slide no longer exists, returns `None` so the caller falls back to
+/// treating the click as a plain click (select just the clicked slide, and
+/// the clicked slide becomes the new anchor).
+pub(super) fn range_select_by_anchor_id(
+    ids: &[String],
+    anchor_id: &str,
+    clicked: usize,
+    current: &HashSet<String>,
+) -> Option<HashSet<String>> {
+    let anchor_index = ids.iter().position(|id| id == anchor_id)?;
+    Some(range_select(ids, anchor_index, clicked, current))
+}
+
 /// Final slide-id order for a cut+paste (#554): remove `cut_ids` from `current`
 /// (keeping their relative order as the moved block) and splice that block in at
 /// gap `position` (0..=current.len(), counted in the CURRENT list's gaps —
@@ -100,7 +118,10 @@ mod tests {
 
     #[test]
     fn shortcut_escape_maps_to_clear_without_modifier() {
-        assert_eq!(shortcut_action("Escape", false), Some(ShortcutAction::Clear));
+        assert_eq!(
+            shortcut_action("Escape", false),
+            Some(ShortcutAction::Clear)
+        );
     }
 
     #[test]
@@ -110,6 +131,52 @@ mod tests {
         assert_eq!(shortcut_action("v", true), Some(ShortcutAction::Paste));
         assert_eq!(shortcut_action("c", false), None);
         assert_eq!(shortcut_action("z", true), None);
+    }
+
+    #[test]
+    fn range_select_by_anchor_id_resolves_the_anchor_after_a_list_shift() {
+        // #558 V9: a POSITIONAL anchor (the old `selection_anchor_index`)
+        // is never invalidated when the list shifts — anchoring at index 1
+        // ("b") and then pasting a new slide above it moves "b" to index 2,
+        // but a stale positional anchor would still say "1", sweeping in
+        // the WRONG slide ("x", the pasted one) on the next Shift+click.
+        // Anchoring by SLIDE ID resolves "b"'s CURRENT index instead.
+        let before = ids(&["a", "b", "c"]);
+        let anchor_id = before[1].clone(); // "b", captured at anchor time.
+
+        // A paste inserts a new slide "x" above "b": list becomes [a, x, b, c].
+        let after = ids(&["a", "x", "b", "c"]);
+
+        // Shift+click "c" (now index 3): the correct range is b..=c.
+        let out = range_select_by_anchor_id(&after, &anchor_id, 3, &HashSet::new())
+            .expect("the anchor slide still exists in the shifted list");
+        assert_eq!(
+            out,
+            set(&["b", "c"]),
+            "must NOT include \"x\" — a stale positional anchor (1) would have"
+        );
+
+        // Proves the bug this replaces: the OLD positional anchor (index 1,
+        // captured before the shift) sweeps in "x" too — the wrong range.
+        let buggy_positional = range_select(&after, 1, 3, &HashSet::new());
+        assert_eq!(
+            buggy_positional,
+            set(&["x", "b", "c"]),
+            "a raw positional anchor demonstrably includes the wrong slide after a shift"
+        );
+    }
+
+    #[test]
+    fn range_select_by_anchor_id_signals_fallback_when_the_anchor_vanished() {
+        // #558 V9: the anchor slide was deleted since it was set — there is
+        // no honest range to resolve; the caller must fall back to a plain
+        // click instead of guessing.
+        let ids_now = ids(&["a", "c"]); // "b" (the anchor) was deleted.
+        let out = range_select_by_anchor_id(&ids_now, "b", 1, &HashSet::new());
+        assert!(
+            out.is_none(),
+            "a vanished anchor must signal fallback-to-plain-click, not a guessed range"
+        );
     }
 
     #[test]
