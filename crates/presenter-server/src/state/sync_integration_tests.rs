@@ -128,50 +128,73 @@ async fn delete_to_trash_and_restore_propagate() {
 }
 
 #[tokio::test]
-async fn pruned_row_is_never_resurrected_by_a_stale_peer_tombstone() {
-    // S7 regression: once we've pruned a trashed row (our own 30-day
-    // schedule fired), the peer's manifest may still list the tombstone
-    // (its OWN prune hasn't fired yet) -- applying that stale tombstone
-    // against "we have no row at all" must be a NO-OP, not a re-create.
-    // Each side prunes on its own schedule and nothing resurrects.
+async fn a_fresh_peer_creates_a_never_held_recent_tombstone_as_trashed() {
+    // R2 regression: `sync_should_apply`'s old `None => !peer_deleted` rule
+    // treated EVERY tombstone the same when we hold no local row at all --
+    // so a fresh/re-provisioned peer's FIRST sync permanently skipped
+    // anything already trashed on the peer, and the two instances' trash
+    // contents diverged forever. Fix: a RECENT tombstone (younger than the
+    // 30-day prune horizon) for a row we've never held must be applied --
+    // created locally IN TRASH, so trash contents converge. (The companion
+    // test below covers the other half: a tombstone OLDER than the
+    // horizon, which is what S7 actually protects against.)
     let a = AppState::in_memory().await.unwrap();
     let b = AppState::in_memory().await.unwrap();
     let a_url = serve(a.clone()).await;
-    let (_lib, id) = make_song(&a, "Songs", "Old Temp").await;
-    run_sync_cycle(&b, &a_url, &client()).await.unwrap(); // B learns of it
+    let (_lib, id) = make_song(&a, "Songs", "Already Gone").await;
+    a.delete_presentation(id).await.unwrap(); // trashed BEFORE B ever learns of it
 
-    // Delete on A, sync the trash to B, then B prunes it immediately
-    // (simulating B's own 30-day schedule firing first) while A's manifest
-    // still lists the (unpruned) tombstone.
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    a.delete_presentation(id).await.unwrap();
-    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
-    assert!(
-        !b.repository()
-            .list_trashed_presentations()
-            .await
-            .unwrap()
-            .is_empty(),
-        "sanity: B holds the trashed row before pruning"
+    let (_pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert_eq!(
+        applied, 1,
+        "a fresh peer must create a recently-trashed row it never held, in trash state"
     );
-    b.repository()
-        .prune_deleted_presentations(chrono::Duration::seconds(-3600))
+    let trash = b.repository().list_trashed_presentations().await.unwrap();
+    assert!(
+        trash.iter().any(|t| t.name == "Already Gone"),
+        "the row lands in B's trash, not silently dropped"
+    );
+    let libs = b.libraries().await.unwrap();
+    assert!(
+        find_song(&libs, "Already Gone").is_none(),
+        "it must never appear live"
+    );
+}
+
+#[tokio::test]
+async fn a_tombstone_older_than_the_prune_horizon_is_never_resurrected_for_a_row_never_held() {
+    // S7 regression, UPDATED for R2: `sync_should_apply`'s `local: None`
+    // branch can no longer unconditionally skip every tombstone (see the
+    // companion test above), so the "never resurrect an already-pruned
+    // row" guarantee now rests entirely on the tombstone's AGE against the
+    // 30-day prune horizon -- a genuinely pruned row's tombstone predates
+    // it (real pruning never touches a fresher row). Planted directly via
+    // `apply_sync_presentation`, which stores a peer's timestamp verbatim
+    // (never echo) -- exactly like a real peer's `/sync` response would,
+    // without needing to fast-forward 31 real days.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+
+    let ancient = chrono::Utc::now() - chrono::Duration::days(31);
+    let ancient_tombstone = presenter_persistence::SyncPresentation {
+        sync_id: "sid-ancient-tombstone".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Old Temp".to_string(),
+        updated_at: ancient,
+        deleted_at: Some(ancient),
+        slides: Vec::new(),
+    };
+    a.repository()
+        .apply_sync_presentation(&ancient_tombstone)
         .await
         .unwrap();
-    assert!(
-        b.repository()
-            .list_trashed_presentations()
-            .await
-            .unwrap()
-            .is_empty(),
-        "sanity: B's prune removed the row entirely"
-    );
 
-    // B pulls A again: A's manifest STILL lists the (unpruned) tombstone.
+    // B has NEVER held this row at all.
     let (_pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     assert_eq!(
         applied, 0,
-        "a pruned row must never be resurrected by the peer's stale tombstone"
+        "a tombstone older than the prune horizon must never be resurrected"
     );
     assert!(
         b.repository()
@@ -179,12 +202,12 @@ async fn pruned_row_is_never_resurrected_by_a_stale_peer_tombstone() {
             .await
             .unwrap()
             .is_empty(),
-        "no trash row must reappear"
+        "no trash row must appear"
     );
     let libs = b.libraries().await.unwrap();
     assert!(
         find_song(&libs, "Old Temp").is_none(),
-        "the song must not reappear live either"
+        "the song must not appear live either"
     );
 }
 

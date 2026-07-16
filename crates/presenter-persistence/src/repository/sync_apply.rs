@@ -343,4 +343,30 @@ mod tests {
             "peer newer delete of a row we STILL HOLD applies normally (trash propagation)"
         );
     }
+
+    #[test]
+    fn unknown_locally_distinguishes_a_fresh_tombstone_from_an_already_pruned_one() {
+        // R2 regression: `None => !peer_deleted` treated EVERY tombstone the
+        // same when we hold no local row at all -- so a fresh/re-provisioned
+        // peer's first sync PERMANENTLY skipped anything already trashed on
+        // the other side, and the two instances' trash contents diverged
+        // forever. Fix: a tombstone YOUNGER than the 30-day prune horizon,
+        // for a row we've never held, must be applied (created locally as
+        // trashed, so trash contents converge); only a tombstone OLDER than
+        // the horizon is skipped (that's the genuinely-pruned case S7
+        // protects against).
+        let now = Utc::now();
+        assert!(
+            sync_should_apply(now - Duration::days(1), true, None),
+            "a RECENT tombstone for a row we've never held must be applied (created as trashed)"
+        );
+        assert!(
+            sync_should_apply(now, true, None),
+            "a tombstone from right now, for a row we've never held, must be applied"
+        );
+        assert!(
+            !sync_should_apply(now - Duration::days(31), true, None),
+            "a tombstone OLDER than the 30-day prune horizon must be skipped, never resurrected"
+        );
+    }
 }
