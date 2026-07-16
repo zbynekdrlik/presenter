@@ -38,6 +38,13 @@ pub(super) struct ReorderSlidesRequest {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct PasteSlidesRequest {
+    pub(super) slide_ids: Vec<uuid::Uuid>,
+    pub(super) position: u32,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct SlideContentUpdateRequest {
     pub(super) main: String,
     pub(super) translation: String,
@@ -162,6 +169,34 @@ pub(super) async fn reorder_slides(
         .reorder_slides(PresentationId::from_uuid(presentation_uuid), order)
         .await?;
     Ok(Json(slides))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn paste_slides(
+    State(state): State<AppState>,
+    Path(presentation_id): Path<String>,
+    Json(payload): Json<PasteSlidesRequest>,
+) -> Result<Json<Vec<Slide>>, AppError> {
+    let presentation_uuid = super::parse_uuid("presentationId", &presentation_id)?;
+    let source_ids = payload
+        .slide_ids
+        .into_iter()
+        .map(SlideId::from_uuid)
+        .collect();
+    match state
+        .paste_slides(
+            PresentationId::from_uuid(presentation_uuid),
+            source_ids,
+            payload.position,
+        )
+        .await
+    {
+        Ok(slides) => Ok(Json(slides)),
+        Err(crate::state::slides::PasteSlidesError::UnknownSlides) => {
+            Err(AppError::unprocessable("one or more slides no longer exist"))
+        }
+        Err(crate::state::slides::PasteSlidesError::Internal(err)) => Err(err.into()),
+    }
 }
 
 #[instrument(skip_all)]

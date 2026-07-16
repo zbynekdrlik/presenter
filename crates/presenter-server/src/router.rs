@@ -324,6 +324,10 @@ pub fn build_router(state: AppState) -> Router {
             "/presentations/{presentation_id}/slides/reorder",
             post(presentations::reorder_slides),
         )
+        .route(
+            "/presentations/{presentation_id}/slides/paste",
+            post(presentations::paste_slides),
+        )
         .route("/timers/overview", get(timers::get_timers_overview))
         .route("/timers/command", post(timers::execute_timer_command))
         .route("/live/ws", get(live_websocket))
@@ -516,6 +520,13 @@ impl AppError {
         Self::new(StatusCode::NOT_FOUND, anyhow::anyhow!(message.into()))
     }
 
+    fn unprocessable(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            anyhow::anyhow!(message.into()),
+        )
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -574,6 +585,8 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
         .map_err(|_| AppError::bad_request_message(format!("{field} must be a valid UUID")))
 }
 
+#[cfg(test)]
+mod presentations_paste_tests;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
