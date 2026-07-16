@@ -18,6 +18,10 @@ use super::slide_reorder::{handle_slide_drop, render_song_bubble};
 use super::slide_save::{
     capture_selection, reconcile_after_seq_mismatch, save_all_fields_from_dom,
 };
+use super::slide_selection::{
+    cut_memo, render_insertion_bar, render_select_checkbox, selected_memo,
+    setup_clipboard_keyboard, setup_selection_clear_on_switch, SlideSelectionPanel,
+};
 
 #[component]
 pub fn SlideList() -> impl IntoView {
@@ -72,6 +76,11 @@ pub fn SlideList() -> impl IntoView {
             current_id
         });
     }
+
+    // #554: clear selection/clipboard on song switch + the window C/X/V/Escape
+    // shortcut listener. Both are one-time setups.
+    setup_selection_clear_on_switch(ctx.clone(), op.clone());
+    setup_clipboard_keyboard(ctx.clone(), op.clone());
 
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
@@ -147,14 +156,25 @@ pub fn SlideList() -> impl IntoView {
                         "+"
                     </button>
                 </Show>
+                <SlideSelectionPanel />
                 {
                     // Clone op for each handler that moves it into a closure
                     let op_dragover = op.clone();
                     let op_drop = op.clone();
                     let op_bubble = op.clone();
+                    let clipboard_for_class = op.clipboard;
                     view! {
                         <div
-                            class="operator__slides"
+                            // #554: single column while the clipboard is active so
+                            // every inter-slide gap is one unambiguous full-width
+                            // "paste here" bar.
+                            class=move || {
+                                if clipboard_for_class.get().is_some() {
+                                    "operator__slides operator__slides--clipboard"
+                                } else {
+                                    "operator__slides"
+                                }
+                            }
                             data-role="slides"
                             on:wheel=handle_wheel_event
                         on:dragover=move |ev: web_sys::DragEvent| {
@@ -184,8 +204,10 @@ pub fn SlideList() -> impl IntoView {
                     // of scroll position.
                     {render_song_bubble(ctx.clone(), op_bubble.clone())}
                     {
-                    // Clone op inside the block so we can use it in nested closures
+                    // Clone op + ctx inside the block so we can use them in
+                    // nested closures (#554 needs the whole ctx per card).
                     let op = op.clone();
+                    let ctx = ctx.clone();
                     move || {
                     let mode = ctx.mode.get();
                     let pres = ctx.selected_presentation.get();
@@ -210,10 +232,17 @@ pub fn SlideList() -> impl IntoView {
                     let resolved: Vec<ResolvedSlide> = resolve_sequence(&raw_slides);
                     let is_live = mode == "live";
                     let is_edit = !is_live;
+                    // #554: the ONE tracked clipboard read in this render
+                    // closure — a non-empty clipboard re-renders the list with
+                    // "paste here" bars in every gap (deliberate, infrequent,
+                    // never racing in-flight typing: shortcuts are guarded and
+                    // the panel buttons blur+save first).
+                    let clipboard_active = op.clipboard.get().is_some();
+                    let slide_count = raw_slides.len();
 
                     let mut prev_effective: Option<String> = None;
 
-                    raw_slides
+                    let cards = raw_slides
                         .iter()
                         .cloned()
                         .zip(resolved.into_iter())
@@ -324,6 +353,11 @@ pub fn SlideList() -> impl IntoView {
                         // Clone for class closure (is-loading check)
                         let slide_id_class = slide_id.clone();
 
+                        // #554: per-card selection/cut markers — fine-grained
+                        // Memos so checking a box never rebuilds the list.
+                        let selected_marker = selected_memo(&op, slide_id.clone());
+                        let cut_marker = cut_memo(&op, slide_id.clone());
+
                         // Clone for save-status badge in slide header
                         let slide_id_for_badge = slide_id.clone();
 
@@ -331,7 +365,13 @@ pub fn SlideList() -> impl IntoView {
                         let pres_id_for_marker = pres_id.clone();
                         let slide_id_for_marker = slide_id.clone();
 
+                        // #554: a "paste here" bar before this card while the
+                        // clipboard is active (gap i = before slide i).
+                        let insertion_bar =
+                            clipboard_active.then(|| render_insertion_bar(ctx.clone(), op.clone(), i));
+
                         view! {
+                            {insertion_bar}
                             <article
                                 class=move || {
                                     let mut c = "operator__slide-card operator__slide-card--worship".to_string();
@@ -347,6 +387,13 @@ pub fn SlideList() -> impl IntoView {
                                     // Add is-loading class during trigger operation
                                     if op.triggering_slide_id.get().as_deref() == Some(&slide_id_class) {
                                         c.push_str(" is-loading");
+                                    }
+                                    // #554: selection + cut marking.
+                                    if selected_marker.get() {
+                                        c.push_str(" operator__slide-card--selected");
+                                    }
+                                    if cut_marker.get() {
+                                        c.push_str(" operator__slide-card--cut");
                                     }
                                     c
                                 }
@@ -418,6 +465,13 @@ pub fn SlideList() -> impl IntoView {
                             >
                                 <header class="operator__slide-header">
                                     <div class="operator__slide-header-left">
+                                        // #554: multi-select checkbox (edit mode only)
+                                        {is_edit.then(|| render_select_checkbox(
+                                            ctx.clone(),
+                                            op.clone(),
+                                            slide_id.clone(),
+                                            i,
+                                        ))}
                                         // BLOCKER #5: Drag handle for reordering
                                         {is_edit.then(|| {
                                             let slide_id = slide_id_drag.clone();
@@ -829,7 +883,16 @@ pub fn SlideList() -> impl IntoView {
                                 </section>
                             </article>
                         }
-                    }).collect_view().into_any()
+                    }).collect_view();
+
+                    // #554: the trailing gap (after the last slide).
+                    let trailing_bar = clipboard_active
+                        .then(|| render_insertion_bar(ctx.clone(), op.clone(), slide_count));
+                    view! {
+                        {cards}
+                        {trailing_bar}
+                    }
+                    .into_any()
                     }}
                     </div>
                     }

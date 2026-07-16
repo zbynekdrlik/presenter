@@ -2914,3 +2914,77 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
         font-size: 0.75rem;
     }
 }
+
+/* #554 slide multi-select + clipboard */
+.operator__slide-select {
+  width: 1.05rem;
+  height: 1.05rem;
+  cursor: pointer;
+  accent-color: var(--operator-accent-dark);
+}
+.operator__slide-card--selected {
+  border-color: rgba(59, 124, 255, 0.55);
+  box-shadow: 0 0 0 2px rgba(59, 124, 255, 0.22);
+}
+.operator__slide-card--cut {
+  opacity: 0.55;
+}
+.operator__slide-card--cut .operator__slide-header-left::after {
+  content: "cut";
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  font-size: 0.65rem;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.25);
+  color: var(--operator-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.operator__slide-selection {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.4rem;
+  background: var(--operator-panel);
+  border: 1px solid var(--operator-border);
+  border-radius: 10px;
+}
+.operator__slide-selection-count {
+  font-size: 0.8rem;
+  color: var(--operator-muted);
+  margin-right: auto;
+}
+.operator__slide-selection-drag {
+  cursor: grab;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(59, 124, 255, 0.12);
+  color: var(--operator-accent-dark);
+}
+/* Clipboard active: single column so every gap is one full-width bar. */
+.operator__slides--clipboard {
+  grid-template-columns: 1fr;
+}
+.operator__slide-insert-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5rem;
+  border: 1px dashed rgba(59, 124, 255, 0.45);
+  border-radius: 8px;
+  background: rgba(59, 124, 255, 0.06);
+  color: var(--operator-accent-dark);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.operator__slide-insert-bar:hover {
+  background: rgba(59, 124, 255, 0.16);
+  border-color: rgba(59, 124, 255, 0.7);
+}

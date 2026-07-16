@@ -14,6 +14,7 @@ mod slide_list_scroll;
 mod slide_list_utils;
 mod slide_reorder;
 mod slide_save;
+mod slide_selection;
 mod slide_selection_logic;
 pub mod slide_stage_layout_picker;
 pub mod stage;
