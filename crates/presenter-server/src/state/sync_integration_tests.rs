@@ -295,6 +295,103 @@ async fn adopt_by_name_pairs_independently_created_copies() {
     let _ = (ia, ib);
 }
 
+#[tokio::test]
+async fn trashing_one_of_two_independently_created_same_name_songs_never_cross_contaminates() {
+    // #558 round-3 Decision B / T1, integration-matrix scenario. Unlike
+    // `adopt_by_name_pairs_independently_created_copies` above (where BOTH
+    // sides are still LIVE when they first sync, and adopt-by-name
+    // deliberately MERGES them into one song — that behavior is
+    // unchanged), this covers a peer TOMBSTONE with an unknown sync_id: A
+    // trashes its own "Shared Name" song BEFORE B ever learns it existed.
+    // Before Decision B, that tombstone could reach across and adopt (and
+    // thereby trash) B's completely unrelated, live, same-named song.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    let b_url = serve(b.clone()).await;
+
+    let (_la, ia) = make_song(&a, "Songs", "Shared Name").await;
+    edit_first_slide(&a, ia, "A's content").await;
+    let (_lb, ib) = make_song(&b, "Songs", "Shared Name").await;
+    edit_first_slide(&b, ib, "B's content").await;
+
+    // A trashes its OWN copy before any sync cycle ever runs — B never
+    // learns A's song existed live at all, only as a tombstone.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    a.delete_presentation(ia).await.unwrap();
+
+    // B pulls A: an unknown-sync_id TOMBSTONE arrives while B holds a LIVE
+    // same-named song. It must create its OWN new trashed row, never
+    // adopt B's live song by name.
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+
+    let b_libs = b.libraries().await.unwrap();
+    let b_own = find_song(&b_libs, "Shared Name").expect("B's own song stays live");
+    let b_own_detail = b.presentation_detail(b_own.id).await.unwrap().unwrap().2;
+    assert_eq!(
+        b_own_detail.slides[0].content.main.value(),
+        "B's content",
+        "B's own live song is completely untouched by A's tombstone"
+    );
+    let b_trash = b.repository().list_trashed_presentations().await.unwrap();
+    assert_eq!(
+        b_trash.len(),
+        1,
+        "A's tombstone landed as its OWN separate trashed row, not merged onto B's song"
+    );
+    assert_eq!(b_trash[0].name, "Shared Name");
+
+    // A pulls B: A's own local candidate is trashed (not live), so B's
+    // live song has no live candidate to adopt-by-name onto either — it
+    // is created as a brand-new live row.
+    run_sync_cycle(&a, &b_url, &client()).await.unwrap();
+    let a_libs = a.libraries().await.unwrap();
+    let a_songs: Vec<_> = a_libs
+        .iter()
+        .flat_map(|l| l.presentations.iter())
+        .filter(|p| p.name == "Shared Name")
+        .collect();
+    assert_eq!(
+        a_songs.len(),
+        1,
+        "A now holds exactly ONE live 'Shared Name' — B's copy (A's own is trashed)"
+    );
+    assert_eq!(a_songs[0].slides[0].content.main.value(), "B's content");
+    let a_trash = a.repository().list_trashed_presentations().await.unwrap();
+    assert_eq!(a_trash.len(), 1, "A's own copy is still trashed, untouched");
+
+    // Restoring A's copy on B brings back A's content under A's sync_id,
+    // WITHOUT touching B's own song.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let restore_id =
+        presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&b_trash[0].id).unwrap());
+    b.restore_presentation(restore_id).await.unwrap();
+
+    let b_libs_after_restore = b.libraries().await.unwrap();
+    let b_songs_after_restore: Vec<_> = b_libs_after_restore
+        .iter()
+        .flat_map(|l| l.presentations.iter())
+        .filter(|p| p.name == "Shared Name")
+        .collect();
+    assert_eq!(
+        b_songs_after_restore.len(),
+        2,
+        "B now holds BOTH songs live: its own, plus the restored A copy"
+    );
+    let restored_content: Vec<_> = b_songs_after_restore
+        .iter()
+        .map(|p| p.slides[0].content.main.value())
+        .collect();
+    assert!(
+        restored_content.contains(&"A's content"),
+        "the restored song carries A's original content"
+    );
+    assert!(
+        restored_content.contains(&"B's content"),
+        "B's own song is untouched by the restore"
+    );
+}
+
 /// Poll `sync_status_snapshot` until `last_run` differs from `after`, or panic
 /// once `timeout` elapses. A bounded retry loop, not an arbitrary sleep.
 async fn wait_for_next_cycle(
