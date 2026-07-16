@@ -341,13 +341,26 @@ impl Repository {
     }
 
     /// Re-attach each OLD marker to a NEW slide: match by CONTENT identity
-    /// first (first-unmatched-wins, so two identical-content slides don't
-    /// both claim the same new slide) when the old slide's content is
-    /// UNIQUE among the old slide set; fall back to POSITION when the old
-    /// content is ambiguous (shared by 2+ old slides) or has no content
-    /// match at all in the new list (e.g. the marked slide's own text was
-    /// edited by the peer). A marker that resolves to neither is dropped,
-    /// logged — never silently (#558 S9, hardened by R4).
+    /// first (when the old slide's content is UNIQUE among the old slide
+    /// set); fall back to POSITION when the old content is ambiguous
+    /// (shared by 2+ old slides) or has no content match at all in the new
+    /// list (e.g. the marked slide's own text was edited by the peer). A
+    /// marker that resolves to neither is dropped, logged — never silently
+    /// (#558 S9, hardened by R4).
+    ///
+    /// Two PASSES, deliberately, so the outcome never depends on the
+    /// arbitrary order `old_markers` came back from the DB in (#558
+    /// round-3 T3): pass 1 resolves every eligible marker's CONTENT match
+    /// first — a unique-content marker always gets its rightful slide
+    /// before ANY position fallback runs. Pass 2 then runs the POSITION
+    /// fallback for whatever is left, but ONLY into a slot pass 1 (or an
+    /// earlier pass-2 marker) hasn't already claimed — claimed-or-out-of-
+    /// range is dropped, never inserted. Interleaving the two (the old,
+    /// single-pass code) let iteration order decide which marker "won" a
+    /// contested slide, and a position fallback could target the exact
+    /// slide_id an earlier content match had just claimed — a genuine PK
+    /// violation on `slide_stage_layouts` (its primary key is `slide_id`
+    /// alone).
     async fn remap_markers<C: sea_orm::ConnectionTrait>(
         conn: &C,
         presentation_id: &str,
@@ -356,31 +369,47 @@ impl Repository {
         old_content: &[presenter_core::SlideContent],
     ) -> anyhow::Result<()> {
         let mut claimed = vec![false; new_slides.len()];
-        let mut remapped = 0usize;
-        let mut dropped = 0usize;
-        for marker in old_markers {
+        let mut targets: Vec<Option<(usize, presenter_core::SlideId)>> =
+            vec![None; old_markers.len()];
+
+        // Pass 1: CONTENT matches, order-independent.
+        for (i, marker) in old_markers.iter().enumerate() {
             let content_unique_among_old =
                 old_content.iter().filter(|c| **c == marker.content).count() == 1;
+            if !content_unique_among_old {
+                continue;
+            }
+            if let Some((idx, slide)) = new_slides
+                .iter()
+                .enumerate()
+                .find(|(idx, slide)| !claimed[*idx] && slide.content == marker.content)
+            {
+                claimed[idx] = true;
+                targets[i] = Some((idx, slide.id));
+            }
+        }
 
-            let content_match = content_unique_among_old
-                .then(|| {
-                    new_slides
-                        .iter()
-                        .enumerate()
-                        .find(|(idx, slide)| !claimed[*idx] && slide.content == marker.content)
-                        .map(|(idx, slide)| (idx, slide.id))
-                })
-                .flatten();
-
-            let target = content_match.or_else(|| {
-                new_slides
-                    .get(marker.position as usize)
-                    .map(|slide| (marker.position as usize, slide.id))
-            });
-
-            match target {
-                Some((idx, slide_id)) => {
+        // Pass 2: POSITION fallback for whatever pass 1 left unresolved —
+        // only into a slot nothing has claimed yet, and only in range.
+        for (i, marker) in old_markers.iter().enumerate() {
+            if targets[i].is_some() {
+                continue;
+            }
+            let idx = marker.position as usize;
+            let available = !claimed.get(idx).copied().unwrap_or(true);
+            if available {
+                if let Some(slide) = new_slides.get(idx) {
                     claimed[idx] = true;
+                    targets[i] = Some((idx, slide.id));
+                }
+            }
+        }
+
+        let mut remapped = 0usize;
+        let mut dropped = 0usize;
+        for (marker, target) in old_markers.into_iter().zip(targets) {
+            match target {
+                Some((_idx, slide_id)) => {
                     slide_stage_layout::Entity::insert(slide_stage_layout::ActiveModel {
                         slide_id: Set(slide_id.to_string()),
                         presentation_id: Set(presentation_id.to_string()),
