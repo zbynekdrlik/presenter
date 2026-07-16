@@ -1357,7 +1357,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # SNV is the production host and gets powered off when equipment travels to
+      # events — same reachability-skip treatment PP has always had below.
+      - name: Check companion-snv reachability
+        id: snv_check
+        run: |
+          if ssh-keyscan -T 5 10.77.9.205 2>/dev/null | grep -q '^10.77.9.205'; then
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
+            echo "companion-snv (10.77.9.205) is reachable"
+          else
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::companion-snv (10.77.9.205) unreachable (powered off?) — skipping SNV companion deploy; it re-arms once prod is back."
+          fi
+
       - name: Setup SSH for SNV (companion-snv.lan = production host)
+        if: steps.snv_check.outputs.reachable == 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_snv
@@ -1395,6 +1409,7 @@ jobs:
           EOF
 
       - name: Deploy to companion-snv.lan
+        if: steps.snv_check.outputs.reachable == 'true'
         run: |
           MODULE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
           STAGE_DIR=$(ssh companion-snv "mktemp -d /tmp/companion-module-XXXXXX")
@@ -1431,9 +1446,10 @@ jobs:
           VERSION=$(node -e "console.log(require('./ops/companion/presenter/package.json').version)")
           echo "=== Companion Plugin Deployment Complete ==="
           echo "Version: $VERSION"
-          if [ "${{ steps.pp_check.outputs.reachable }}" = "true" ]; then
-            echo "Deployed to: companion-snv.lan, companion-pp.lan"
-          else
-            echo "Deployed to: companion-snv.lan"
-            echo "Skipped: companion-pp.lan (unreachable at job start)"
-          fi
+          DEPLOYED=""
+          SKIPPED=""
+          if [ "${{ steps.snv_check.outputs.reachable }}" = "true" ]; then DEPLOYED="companion-snv.lan"; else SKIPPED="companion-snv.lan"; fi
+          if [ "${{ steps.pp_check.outputs.reachable }}" = "true" ]; then DEPLOYED="${DEPLOYED:+$DEPLOYED, }companion-pp.lan"; else SKIPPED="${SKIPPED:+$SKIPPED, }companion-pp.lan"; fi
+          echo "Deployed to: ${DEPLOYED:-none}"
+          [ -n "$SKIPPED" ] && echo "Skipped (unreachable at job start): $SKIPPED"
+          true
