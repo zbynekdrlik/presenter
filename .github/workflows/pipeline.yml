@@ -1076,6 +1076,14 @@ jobs:
       - name: Replace dev database with production snapshot
         run: |
           set -e
+          # Prod gets powered off when equipment travels to events. While it is
+          # deliberately unreachable, keep dev's CURRENT database instead of failing the
+          # whole dev deploy; the snapshot refresh re-arms on its own once prod is back.
+          # A reachable prod that fails the copy still hard-fails below.
+          if ! ssh -i ~/.ssh/id_prod -o ConnectTimeout=10 -o BatchMode=yes prod-server true 2>/dev/null; then
+            echo "::notice::Production host is unreachable (powered off?). Keeping dev's current database for this deploy — the prod snapshot refresh resumes automatically once prod is back online."
+            exit 0
+          fi
           echo "Fetching production database snapshot..."
           PROD_TMP="/tmp/prod-db-snapshot-$$.db"
           if ! scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_TMP" 2>/dev/null; then
