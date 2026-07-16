@@ -216,13 +216,26 @@ impl Repository {
         presentation_id: &str,
         incoming: &SyncPresentation,
     ) -> anyhow::Result<()> {
-        // #558 S9: capture the OLD slide-stage-layout markers BEFORE the
-        // wholesale slide replacement, keyed by POSITION (not slide_id — the
-        // new slides carry the PEER's ids, so the old slide_id is about to
-        // stop existing). Every marker is remapped to whichever new slide
-        // now sits at the same position; a marker whose position no longer
-        // exists in the shorter new slide list is dropped, logged.
-        let layout_by_position = Self::markers_by_position(conn, presentation_id).await?;
+        // #558 S9 + R4: capture the OLD stage-layout markers BEFORE the
+        // wholesale slide replacement, together with the OLD slide's own
+        // CONTENT and 0-based position — the new slides carry the PEER's
+        // ids, so the old slide_id is about to stop existing.
+        // `remap_markers` matches by CONTENT identity first (a pure
+        // reorder keeps the marker on the right verse even though its
+        // index moved) and falls back to position only when content
+        // doesn't settle it (e.g. the marked slide's own text was edited);
+        // a marker that resolves to neither is dropped, logged.
+        //
+        // R3: applying a peer's TOMBSTONE must mirror
+        // `delete_presentation`'s local-delete behavior and CLEAR the
+        // song's markers instead of carrying them across the trash
+        // boundary — else a later restore flips the stage to a stale
+        // layout the operator never re-applied.
+        let (old_markers, old_content) = if incoming.deleted_at.is_some() {
+            (Vec::new(), Vec::new())
+        } else {
+            Self::markers_with_content(conn, presentation_id).await?
+        };
 
         slide_entity::Entity::delete_many()
             .filter(slide_entity::Column::PresentationId.eq(presentation_id))
@@ -238,66 +251,108 @@ impl Repository {
             slide_entity::Entity::insert(active).exec(conn).await?;
         }
 
-        if !layout_by_position.is_empty() {
-            Self::remap_markers(conn, presentation_id, &incoming.slides, layout_by_position)
-                .await?;
+        if !old_markers.is_empty() {
+            Self::remap_markers(
+                conn,
+                presentation_id,
+                &incoming.slides,
+                old_markers,
+                &old_content,
+            )
+            .await?;
         }
         Ok(())
     }
 
-    /// The presentation's CURRENT stage-layout markers, keyed by the OLD
-    /// slide's position (0-based, matching `build_slide_active_model`'s
-    /// `position` column — see `insert_presentation_with_slides`/
-    /// `replace_presentation_slides`, which always write positions as the
-    /// slide's index in its list).
-    async fn markers_by_position<C: sea_orm::ConnectionTrait>(
+    /// The presentation's CURRENT stage-layout markers, each paired with its
+    /// OLD slide's 0-based position (matching `build_slide_active_model`'s
+    /// `position` column) and full content, PLUS every OLD slide's content
+    /// (marked or not) so `remap_markers` can tell whether a marked slide's
+    /// content is unique among the old set (#558 S9 + R4).
+    async fn markers_with_content<C: sea_orm::ConnectionTrait>(
         conn: &C,
         presentation_id: &str,
-    ) -> anyhow::Result<HashMap<i32, String>> {
+    ) -> anyhow::Result<(Vec<OldMarker>, Vec<presenter_core::SlideContent>)> {
         let old_markers = slide_stage_layout::Entity::find()
             .filter(slide_stage_layout::Column::PresentationId.eq(presentation_id))
             .all(conn)
             .await?;
         if old_markers.is_empty() {
-            return Ok(HashMap::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let old_slides = slide_entity::Entity::find()
             .filter(slide_entity::Column::PresentationId.eq(presentation_id))
             .order_by_asc(slide_entity::Column::Position)
             .all(conn)
             .await?;
-        let position_by_old_slide: HashMap<&str, i32> = old_slides
-            .iter()
-            .map(|s| (s.id.as_str(), s.position))
-            .collect();
-        Ok(old_markers
+        let mut by_slide_id: HashMap<&str, (i32, presenter_core::SlideContent)> =
+            HashMap::with_capacity(old_slides.len());
+        let mut all_content = Vec::with_capacity(old_slides.len());
+        for model in &old_slides {
+            let content = slide_content_from_model(model)?;
+            all_content.push(content.clone());
+            by_slide_id.insert(model.id.as_str(), (model.position, content));
+        }
+        let markers = old_markers
             .into_iter()
             .filter_map(|marker| {
-                position_by_old_slide
+                by_slide_id
                     .get(marker.slide_id.as_str())
-                    .map(|position| (*position, marker.layout_code))
+                    .map(|(position, content)| OldMarker {
+                        position: *position,
+                        content: content.clone(),
+                        layout_code: marker.layout_code,
+                    })
             })
-            .collect())
+            .collect();
+        Ok((markers, all_content))
     }
 
-    /// Re-insert a marker at each new slide occupying a position that used to
-    /// carry one; a position that no longer exists (the new list is shorter)
-    /// drops its marker, logged (never silently — #558 S9).
+    /// Re-attach each OLD marker to a NEW slide: match by CONTENT identity
+    /// first (first-unmatched-wins, so two identical-content slides don't
+    /// both claim the same new slide) when the old slide's content is
+    /// UNIQUE among the old slide set; fall back to POSITION when the old
+    /// content is ambiguous (shared by 2+ old slides) or has no content
+    /// match at all in the new list (e.g. the marked slide's own text was
+    /// edited by the peer). A marker that resolves to neither is dropped,
+    /// logged — never silently (#558 S9, hardened by R4).
     async fn remap_markers<C: sea_orm::ConnectionTrait>(
         conn: &C,
         presentation_id: &str,
         new_slides: &[presenter_core::Slide],
-        layout_by_position: HashMap<i32, String>,
+        old_markers: Vec<OldMarker>,
+        old_content: &[presenter_core::SlideContent],
     ) -> anyhow::Result<()> {
+        let mut claimed = vec![false; new_slides.len()];
         let mut remapped = 0usize;
         let mut dropped = 0usize;
-        for (position, layout_code) in layout_by_position {
-            match new_slides.get(position as usize) {
-                Some(new_slide) => {
+        for marker in old_markers {
+            let content_unique_among_old =
+                old_content.iter().filter(|c| **c == marker.content).count() == 1;
+
+            let content_match = content_unique_among_old
+                .then(|| {
+                    new_slides
+                        .iter()
+                        .enumerate()
+                        .find(|(idx, slide)| !claimed[*idx] && slide.content == marker.content)
+                        .map(|(idx, slide)| (idx, slide.id))
+                })
+                .flatten();
+
+            let target = content_match.or_else(|| {
+                new_slides
+                    .get(marker.position as usize)
+                    .map(|slide| (marker.position as usize, slide.id))
+            });
+
+            match target {
+                Some((idx, slide_id)) => {
+                    claimed[idx] = true;
                     slide_stage_layout::Entity::insert(slide_stage_layout::ActiveModel {
-                        slide_id: Set(new_slide.id.to_string()),
+                        slide_id: Set(slide_id.to_string()),
                         presentation_id: Set(presentation_id.to_string()),
-                        layout_code: Set(layout_code),
+                        layout_code: Set(marker.layout_code),
                     })
                     .exec(conn)
                     .await?;
@@ -311,16 +366,41 @@ impl Repository {
                 presentation_id,
                 remapped,
                 dropped,
-                "sync apply dropped stage-layout markers whose position no longer exists"
+                "sync apply dropped stage-layout markers with no content or position match"
             );
         } else {
             info!(
                 presentation_id,
-                remapped, "sync apply remapped stage-layout markers by slide position"
+                remapped,
+                "sync apply remapped stage-layout markers by content identity (position fallback)"
             );
         }
         Ok(())
     }
+}
+
+/// One OLD stage-layout marker with enough context to remap it by CONTENT
+/// identity first (#558 R4): the marker's own layout code, the OLD slide's
+/// 0-based position (a secondary/fallback signal — #558 S9), and the OLD
+/// slide's full content (main/translation/stage/group).
+struct OldMarker {
+    position: i32,
+    content: presenter_core::SlideContent,
+    layout_code: String,
+}
+
+fn slide_content_from_model(
+    model: &slide_entity::Model,
+) -> anyhow::Result<presenter_core::SlideContent> {
+    Ok(presenter_core::SlideContent::new(
+        presenter_core::SlideText::new(model.worship_main.clone())?,
+        presenter_core::SlideText::new(model.worship_translate.clone())?,
+        presenter_core::SlideText::new(model.worship_stage.clone())?,
+        model
+            .worship_group
+            .clone()
+            .map(presenter_core::SlideGroup::new),
+    ))
 }
 
 #[cfg(test)]

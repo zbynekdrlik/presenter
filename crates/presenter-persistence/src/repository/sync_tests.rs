@@ -632,11 +632,9 @@ async fn reimport_preserves_trash_when_a_same_name_twin_shifts_the_song_to_a_der
         presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1")]).unwrap();
     let twin =
         presenter_core::Presentation::new("Amazing Grace", vec![slide(0, "v1 (twin)")]).unwrap();
-    let library2 = presenter_core::Library::new(
-        "Songs".to_string(),
-        vec![reimported.clone(), twin.clone()],
-    )
-    .unwrap();
+    let library2 =
+        presenter_core::Library::new("Songs".to_string(), vec![reimported.clone(), twin.clone()])
+            .unwrap();
     repo.upsert_library(&library2).await.unwrap();
 
     let reimported_row = row(&repo, reimported.id).await;
