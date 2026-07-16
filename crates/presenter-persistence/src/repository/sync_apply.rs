@@ -289,10 +289,19 @@ impl Repository {
     /// `position` column) and full content, PLUS every OLD slide's content
     /// (marked or not) so `remap_markers` can tell whether a marked slide's
     /// content is unique among the old set (#558 S9 + R4).
+    ///
+    /// #558 round-3 T7: the OLD slide's content is read as RAW strings —
+    /// never rebuilt through `SlideText::new`, which VALIDATES a 4000-char
+    /// limit. A legacy row (or one that arrived over the wire before/
+    /// without that validation ever running) can already be stored
+    /// oversize; re-validating it here on every future sync apply would
+    /// make that marked song's sync fail FOREVER. This function only ever
+    /// COMPARES content for matching, never re-inserts it as a
+    /// `SlideText`, so raw strings are all it needs.
     async fn markers_with_content<C: sea_orm::ConnectionTrait>(
         conn: &C,
         presentation_id: &str,
-    ) -> anyhow::Result<(Vec<OldMarker>, Vec<presenter_core::SlideContent>)> {
+    ) -> anyhow::Result<(Vec<OldMarker>, Vec<RawSlideContent>)> {
         let old_markers = slide_stage_layout::Entity::find()
             .filter(slide_stage_layout::Column::PresentationId.eq(presentation_id))
             .all(conn)
@@ -317,11 +326,16 @@ impl Repository {
                 .into_tuple()
                 .all(conn)
                 .await?;
-        let mut by_slide_id: HashMap<String, (i32, presenter_core::SlideContent)> =
+        let mut by_slide_id: HashMap<String, (i32, RawSlideContent)> =
             HashMap::with_capacity(old_slides.len());
         let mut all_content = Vec::with_capacity(old_slides.len());
         for (id, position, main, translate, stage, group) in old_slides {
-            let content = slide_content_from_fields(main, translate, stage, group)?;
+            let content = RawSlideContent {
+                main,
+                translation: translate,
+                stage,
+                group,
+            };
             all_content.push(content.clone());
             by_slide_id.insert(id, (position, content));
         }
@@ -366,24 +380,23 @@ impl Repository {
         presentation_id: &str,
         new_slides: &[presenter_core::Slide],
         old_markers: Vec<OldMarker>,
-        old_content: &[presenter_core::SlideContent],
+        old_content: &[RawSlideContent],
     ) -> anyhow::Result<()> {
         let mut claimed = vec![false; new_slides.len()];
         let mut targets: Vec<Option<(usize, presenter_core::SlideId)>> =
             vec![None; old_markers.len()];
 
-        // Pass 1: CONTENT matches, order-independent.
+        // Pass 1: CONTENT matches, order-independent. Compared as RAW
+        // strings (#558 round-3 T7) — never re-validated.
         for (i, marker) in old_markers.iter().enumerate() {
             let content_unique_among_old =
                 old_content.iter().filter(|c| **c == marker.content).count() == 1;
             if !content_unique_among_old {
                 continue;
             }
-            if let Some((idx, slide)) = new_slides
-                .iter()
-                .enumerate()
-                .find(|(idx, slide)| !claimed[*idx] && slide.content == marker.content)
-            {
+            if let Some((idx, slide)) = new_slides.iter().enumerate().find(|(idx, slide)| {
+                !claimed[*idx] && raw_content_of(&slide.content) == marker.content
+            }) {
                 claimed[idx] = true;
                 targets[i] = Some((idx, slide.id));
             }
@@ -443,25 +456,39 @@ impl Repository {
 /// One OLD stage-layout marker with enough context to remap it by CONTENT
 /// identity first (#558 R4): the marker's own layout code, the OLD slide's
 /// 0-based position (a secondary/fallback signal — #558 S9), and the OLD
-/// slide's full content (main/translation/stage/group).
+/// slide's full content (main/translation/stage/group) as RAW strings
+/// (#558 round-3 T7).
 struct OldMarker {
     position: i32,
-    content: presenter_core::SlideContent,
+    content: RawSlideContent,
     layout_code: String,
 }
 
-fn slide_content_from_fields(
+/// A slide's content as RAW strings — deliberately never re-validated
+/// through `SlideText::new` (#558 round-3 T7). `markers_with_content` only
+/// ever COMPARES an OLD stored slide's content for matching purposes; it
+/// never re-inserts it as a `SlideText`. Re-validating a STORED value on
+/// every future sync apply would make a legacy/wire-path row that already
+/// exceeds the 4000-char `SlideText` limit fail sync forever, for a song
+/// that otherwise works fine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawSlideContent {
     main: String,
-    translate: String,
+    translation: String,
     stage: String,
     group: Option<String>,
-) -> anyhow::Result<presenter_core::SlideContent> {
-    Ok(presenter_core::SlideContent::new(
-        presenter_core::SlideText::new(main)?,
-        presenter_core::SlideText::new(translate)?,
-        presenter_core::SlideText::new(stage)?,
-        group.map(presenter_core::SlideGroup::new),
-    ))
+}
+
+/// Extract a NEW (already-validated) peer slide's content as raw strings,
+/// for comparison against an `OldMarker`'s `RawSlideContent` — never
+/// re-validates either side.
+fn raw_content_of(content: &presenter_core::SlideContent) -> RawSlideContent {
+    RawSlideContent {
+        main: content.main.value().to_string(),
+        translation: content.translation.value().to_string(),
+        stage: content.stage.value().to_string(),
+        group: content.group.as_ref().map(|g| g.name().to_string()),
+    }
 }
 
 #[cfg(test)]
