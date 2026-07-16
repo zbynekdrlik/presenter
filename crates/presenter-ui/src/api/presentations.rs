@@ -191,6 +191,28 @@ pub async fn reorder_slides(pres_id: &str, slide_ids: Vec<String>) -> Result<Vec
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasteSlidesRequest {
+    slide_ids: Vec<String>,
+    position: u32,
+}
+
+/// Paste-of-copy (#554): clone `slide_ids` as a contiguous block at `position`
+/// (0..=len). Returns the full new slide list (same contract as reorder).
+/// A `422` means a stale clipboard — the caller clears the clipboard and toasts.
+pub async fn paste_slides(
+    pres_id: &str,
+    slide_ids: Vec<String>,
+    position: u32,
+) -> Result<Vec<Slide>, ApiError> {
+    post_json(
+        &format!("/presentations/{pres_id}/slides/paste"),
+        &PasteSlidesRequest { slide_ids, position },
+    )
+    .await
+}
+
 pub async fn fetch_group_colors() -> Result<HashMap<String, String>, ApiError> {
     get_json("/group-colors").await
 }
