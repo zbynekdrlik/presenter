@@ -40,7 +40,12 @@ pub(super) struct ReorderSlidesRequest {
 #[serde(rename_all = "camelCase")]
 pub(super) struct PasteSlidesRequest {
     pub(super) slide_ids: Vec<uuid::Uuid>,
-    pub(super) position: u32,
+    /// The slide the paste's gap PRECEDES; `None` = insert at the end
+    /// (#558 V8). The server resolves the insertion position from this id
+    /// at apply time — never a raw index, which a concurrent structural
+    /// edit could shift out from under a stale client-computed position.
+    #[serde(default)]
+    pub(super) anchor_slide_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -183,17 +188,21 @@ pub(super) async fn paste_slides(
         .into_iter()
         .map(SlideId::from_uuid)
         .collect();
+    let anchor_slide_id = payload.anchor_slide_id.map(SlideId::from_uuid);
     match state
         .paste_slides(
             PresentationId::from_uuid(presentation_uuid),
             source_ids,
-            payload.position,
+            anchor_slide_id,
         )
         .await
     {
         Ok(slides) => Ok(Json(slides)),
         Err(crate::state::slides::PasteSlidesError::UnknownSlides) => Err(AppError::unprocessable(
             "one or more slides no longer exist",
+        )),
+        Err(crate::state::slides::PasteSlidesError::AnchorVanished) => Err(AppError::conflict(
+            "the paste position no longer exists — refresh and try again",
         )),
         Err(crate::state::slides::PasteSlidesError::Internal(err)) => Err(err.into()),
     }

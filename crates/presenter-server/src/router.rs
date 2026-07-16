@@ -527,6 +527,14 @@ impl AppError {
         )
     }
 
+    /// 409: the request targeted state that changed underneath it (#558 V8 —
+    /// a paste's `anchorSlideId` no longer exists because a concurrent
+    /// structural edit removed it). The client should refresh and retry,
+    /// never blindly resubmit the same stale anchor.
+    fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, anyhow::anyhow!(message.into()))
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
