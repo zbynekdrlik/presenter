@@ -356,6 +356,66 @@ async fn adopt_by_name_pairs_independently_created_copies() {
 }
 
 #[tokio::test]
+async fn two_live_same_name_twins_on_one_peer_both_converge_on_the_other() {
+    // #558 round-4 U2: two LIVE same-name songs on A used to serially
+    // adopt onto ONE row on B within a single cycle — whichever twin was
+    // processed first got CREATED, then the second twin's adopt-by-name
+    // step found that just-created row as its sole live candidate and
+    // overwrote its sync_id + content, silently discarding the first
+    // twin. The orphaned first identity then refetched and re-adopted
+    // every following cycle forever, ping-ponging content back and forth
+    // while B was only ever able to hold ONE of the two twins at a time.
+    // FIX: adopt-by-name is single-shot per name — a local candidate whose
+    // OWN sync_id is itself present in the peer's manifest is never
+    // adopted (the peer already tracks it under its own identity); the
+    // second twin creates its own new row instead, so both converge in
+    // one cycle.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+
+    let library = a.create_library("Songs").await.unwrap();
+    let (_, _, p1, _) = a
+        .create_presentation(library.id, "Twin Pair", None)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let (_, _, p2, _) = a
+        .create_presentation(library.id, "Twin Pair", None)
+        .await
+        .unwrap();
+    let (i1, i2) = (p1.id, p2.id);
+
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+
+    let libs = b.libraries().await.unwrap();
+    let twins: Vec<_> = libs
+        .iter()
+        .flat_map(|l| l.presentations.iter())
+        .filter(|p| p.name == "Twin Pair")
+        .collect();
+    assert_eq!(
+        twins.len(),
+        2,
+        "both same-name twins must exist on B after one cycle, not just one"
+    );
+
+    // Converged identities: a second cycle must be a total no-op — the old
+    // bug kept refetching and re-adopting both twins forever.
+    let (pulled, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert_eq!(
+        pulled, 0,
+        "converged twins must never be refetched every cycle"
+    );
+    assert_eq!(
+        applied, 0,
+        "converged twins must never be re-applied every cycle"
+    );
+
+    let _ = (i1, i2);
+}
+
+#[tokio::test]
 async fn trashing_one_of_two_independently_created_same_name_songs_never_cross_contaminates() {
     // #558 round-3 Decision B / T1, integration-matrix scenario. Unlike
     // `adopt_by_name_pairs_independently_created_copies` above (where BOTH
