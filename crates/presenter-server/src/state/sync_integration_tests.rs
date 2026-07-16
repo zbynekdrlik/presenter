@@ -360,3 +360,44 @@ async fn real_sync_loop_survives_past_startup_and_completes_multiple_cycles() {
         "the real (spawned) loop actually pulled and applied the peer's song"
     );
 }
+
+#[tokio::test]
+async fn two_spawns_on_one_app_state_leave_exactly_one_live_loop() {
+    // R5 regression: `spawn_sync_task` overwrote the coordinator's shutdown
+    // slot with the NEW sender BEFORE checking whether a loop was already
+    // running. Overwriting it drops the OLD sender, which resolves the
+    // running loop's `shutdown_rx` and kills it -- while the NEW task then
+    // finds `nudge_rx` already taken (by the first loop) and refuses to
+    // start. Net effect of a second spawn call: ZERO live loops. Fix: check
+    // whether a loop is already running BEFORE storing anything; a second
+    // spawn is then a no-op that leaves the FIRST loop untouched.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    make_song(&a, "Songs", "Loop Song").await;
+
+    b.maybe_spawn_sync(Some(a_url.clone()));
+    b.maybe_spawn_sync(Some(a_url)); // a second spawn call on the SAME AppState
+
+    b.nudge_sync();
+    let first = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
+    assert!(
+        first.last_success.is_some(),
+        "a live loop must survive two spawn calls: {first:?}"
+    );
+
+    // A second, independent nudge must ALSO complete a cycle - proving the
+    // surviving loop is still alive, not that it happened to run once.
+    b.nudge_sync();
+    let second = wait_for_next_cycle(&b, first.last_run, std::time::Duration::from_secs(10)).await;
+    assert!(
+        second.last_success.is_some(),
+        "the surviving loop must keep completing cycles: {second:?}"
+    );
+
+    let libs = b.libraries().await.unwrap();
+    assert!(
+        find_song(&libs, "Loop Song").is_some(),
+        "the surviving loop actually pulled and applied the peer's song"
+    );
+}
