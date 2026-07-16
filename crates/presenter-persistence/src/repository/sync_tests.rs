@@ -288,6 +288,63 @@ async fn apply_carries_a_peer_delete_and_restore() {
 }
 
 #[tokio::test]
+async fn apply_sync_presentation_remaps_stage_layout_markers_by_position() {
+    // S9 regression: apply replaces slides WHOLESALE, carrying the PEER's
+    // slide ids — every #515 stage-layout marker (keyed by slide_id) was
+    // orphaned by this, silently wiping the losing site's markers for
+    // ~every song on initial convergence. Fix: remap markers by slide
+    // POSITION (old index -> new slide id at that same index); only markers
+    // whose position no longer exists in the new slide list are dropped.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(
+            lib.id,
+            "Marked Song",
+            Some(&[
+                slide(0, "verse 1"),
+                slide(1, "verse 2"),
+                slide(2, "verse 3"),
+            ]),
+        )
+        .await
+        .unwrap();
+    // Mark slide at position 1 with a stage layout.
+    repo.set_slide_stage_layout(local.id, local.slides[1].id, "fulltext")
+        .await
+        .unwrap();
+
+    let local_sync_id = row(&repo, local.id).await.sync_id;
+    let peer_slides = vec![
+        slide(0, "verse 1"),
+        slide(1, "verse 2 (edited by peer)"),
+        slide(2, "verse 3"),
+    ];
+    let incoming = crate::SyncPresentation {
+        sync_id: local_sync_id,
+        library_name: "Songs".to_string(),
+        name: "Marked Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: peer_slides.clone(),
+    };
+    repo.apply_sync_presentation(&incoming).await.unwrap();
+
+    let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert_eq!(
+        markers.len(),
+        1,
+        "the marker survives the sync apply (not silently wiped)"
+    );
+    let new_slide_id_at_position_1 = peer_slides[1].id.to_string();
+    assert_eq!(
+        markers.get(&new_slide_id_at_position_1),
+        Some(&"fulltext".to_string()),
+        "the marker is remapped to the peer's slide id at the SAME position"
+    );
+}
+
+#[tokio::test]
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
