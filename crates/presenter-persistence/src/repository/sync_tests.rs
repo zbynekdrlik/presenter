@@ -620,6 +620,64 @@ async fn apply_sync_presentation_remaps_markers_without_a_position_fallback_coll
 }
 
 #[tokio::test]
+async fn apply_sync_presentation_remaps_a_marker_on_an_oversize_legacy_stored_slide() {
+    // #558 round-3 T7: `markers_with_content` re-validated the OLD slide's
+    // STORED text through `SlideText::new` — a legacy/wire-path row that
+    // predates (or bypassed, e.g. deserialized straight off the wire) the
+    // 4000-char limit then makes EVERY future sync apply of that marked
+    // song fail FOREVER (the same oversize stored text is read back and
+    // re-validated on every single apply attempt, never just once). FIX:
+    // match by RAW column strings, never re-validated through
+    // `SlideText::new`.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(lib.id, "Legacy Song", Some(&[slide(0, "short")]))
+        .await
+        .unwrap();
+    repo.set_slide_stage_layout(local.id, local.slides[0].id, "fulltext")
+        .await
+        .unwrap();
+
+    // Simulate a legacy/wire-path row: write an OVERSIZE worship_main
+    // directly, bypassing SlideText::new's validation entirely (a normal
+    // repository call would reject it before it ever reaches the DB).
+    let oversize = "x".repeat(5000);
+    use crate::entities::slide as slide_entity;
+    use sea_orm::{ColumnTrait, QueryFilter};
+    slide_entity::Entity::update_many()
+        .col_expr(
+            slide_entity::Column::WorshipMain,
+            sea_orm::sea_query::Expr::value(oversize),
+        )
+        .filter(slide_entity::Column::Id.eq(local.slides[0].id.to_string()))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+
+    let local_sync_id = row(&repo, local.id).await.sync_id;
+    let incoming = crate::SyncPresentation {
+        sync_id: local_sync_id,
+        library_name: "Songs".to_string(),
+        name: "Legacy Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: vec![slide(0, "short (edited by peer)")],
+    };
+    // Must not error — re-validating the oversize OLD stored text IS the regression.
+    repo.apply_sync_presentation(&incoming)
+        .await
+        .expect("sync apply must not choke on an oversize legacy stored slide");
+
+    let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    assert_eq!(
+        markers.len(),
+        1,
+        "the marker survives via position fallback (the slide's own content changed)"
+    );
+}
+
+#[tokio::test]
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
