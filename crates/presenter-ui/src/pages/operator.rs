@@ -523,10 +523,13 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
                 if let Some(lib) = libs.iter().find(|l| l.id.to_string() == lib_id) {
                     context_title.set(lib.name.clone());
                     presentations.set(lib.presentations.clone());
-                } else {
+                } else if selected_library_id.get_untracked().as_deref() == Some(lib_id.as_str()) {
                     // #561: stale `activeLibraryId` — the library no longer
                     // exists (deleted / DB swap). Clear it so it doesn't
                     // keep pointing at a dead id on every future reload.
+                    // Re-check the CURRENT signal value first: if the user
+                    // already selected something else while this fetch was
+                    // in flight, don't clobber that fresh selection.
                     crate::state::session::remove("activeLibraryId");
                     selected_library_id.set(None);
                 }
@@ -560,10 +563,13 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
                     context_title.set(pl.name.clone());
                     selected_playlist.set(Some(pl));
                 }
-            } else {
+            } else if selected_playlist_id.get_untracked().as_deref() == Some(pl_id.as_str()) {
                 // Stale `activePlaylistId`: a normal condition (deleted
                 // playlist / DB swap), not an error. Clear it and start
                 // with no active playlist instead of firing a doomed fetch.
+                // Re-check the CURRENT signal value first: if the user
+                // already selected a different playlist while this fetch
+                // was in flight, don't clobber that fresh selection.
                 crate::state::session::remove("activePlaylistId");
                 selected_playlist_id.set(None);
             }
