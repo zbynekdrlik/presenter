@@ -192,9 +192,9 @@ pub(super) async fn paste_slides(
         .await
     {
         Ok(slides) => Ok(Json(slides)),
-        Err(crate::state::slides::PasteSlidesError::UnknownSlides) => {
-            Err(AppError::unprocessable("one or more slides no longer exist"))
-        }
+        Err(crate::state::slides::PasteSlidesError::UnknownSlides) => Err(AppError::unprocessable(
+            "one or more slides no longer exist",
+        )),
         Err(crate::state::slides::PasteSlidesError::Internal(err)) => Err(err.into()),
     }
 }

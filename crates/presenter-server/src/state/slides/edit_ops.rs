@@ -475,7 +475,9 @@ mod tests {
             "paste must reindex order"
         );
         // Clones carry FRESH ids (not the sources').
-        assert!(!result[1..3].iter().any(|s| s.id == ids[0] || s.id == ids[2]));
+        assert!(!result[1..3]
+            .iter()
+            .any(|s| s.id == ids[0] || s.id == ids[2]));
     }
 
     #[tokio::test]
@@ -560,7 +562,11 @@ mod tests {
             .iter()
             .map(|s| s.content.main.value().to_string())
             .collect();
-        assert_eq!(mains, vec!["A", "A", "B"], "paste must persist, not just return");
+        assert_eq!(
+            mains,
+            vec!["A", "A", "B"],
+            "paste must persist, not just return"
+        );
     }
 
     #[tokio::test]
