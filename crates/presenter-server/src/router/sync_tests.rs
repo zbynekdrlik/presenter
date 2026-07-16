@@ -119,3 +119,64 @@ async fn sync_presentation_content_serves_full_slides_by_sync_id() {
     let (status, _) = get_json(app, "/sync/presentations/does-not-exist").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn sync_presentation_content_serves_an_oversize_legacy_stored_slide_without_500ing() {
+    // #558 round-4 U1(a): `fetch_sync_presentation` built its wire `Slide`
+    // through `to_domain_slide`, which re-validates the STORED text via
+    // `SlideText::new` (a 4000-char cap). A legacy/wire-path row that
+    // already exceeds that cap (or arrived over the wire before/without
+    // that validation ever running -- the APPLY side already accepts an
+    // oversize slide unchecked, since `Slide`'s plain `Deserialize` impl
+    // never validates either) then 500s this song's serve endpoint
+    // FOREVER, on every future sync cycle. FIX: the serve path builds the
+    // wire DTO from raw column strings, never re-validated.
+    let state = AppState::in_memory().await.unwrap();
+    let app = crate::router::build_router(state.clone());
+
+    let library = state.create_library("Songs").await.unwrap();
+    state
+        .create_presentation(library.id, "Oversize Song", None)
+        .await
+        .unwrap();
+
+    let (_, manifest) = get_json(app.clone(), "/sync/manifest").await;
+    let sync_id = manifest.as_array().expect("array")[0]["syncId"]
+        .as_str()
+        .expect("syncId")
+        .to_string();
+
+    // Corrupt the stored slide's worship_main directly, bypassing
+    // `SlideText::new`'s validation entirely -- simulating a legacy row
+    // (a normal repository call would reject it before it ever reaches
+    // the DB).
+    let oversize = "x".repeat(5000);
+    use presenter_persistence::entities::slide as slide_entity;
+    use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter};
+    let slide_row = slide_entity::Entity::find()
+        .one(state.repository().connection())
+        .await
+        .unwrap()
+        .expect("the newly created song has one slide");
+    slide_entity::Entity::update_many()
+        .col_expr(
+            slide_entity::Column::WorshipMain,
+            Expr::value(oversize.clone()),
+        )
+        .filter(slide_entity::Column::Id.eq(slide_row.id.clone()))
+        .exec(state.repository().connection())
+        .await
+        .unwrap();
+
+    let (status, json) = get_json(app, &format!("/sync/presentations/{sync_id}")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an oversize legacy stored slide must serve OK, never 500: {json}"
+    );
+    assert_eq!(
+        json["slides"][0]["content"]["main"]["value"],
+        Value::String(oversize),
+        "the oversize text is served verbatim, unchanged"
+    );
+}

@@ -64,7 +64,7 @@ async fn create_propagates_a_to_b() {
     make_song(&a, "Songs", "Amazing Grace").await;
 
     // B pulls from A.
-    let (_pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    let (_pulled, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     assert!(applied >= 1, "B must import the song created on A");
 
     let libs = b.libraries().await.unwrap();
@@ -144,7 +144,7 @@ async fn a_fresh_peer_creates_a_never_held_recent_tombstone_as_trashed() {
     let (_lib, id) = make_song(&a, "Songs", "Already Gone").await;
     a.delete_presentation(id).await.unwrap(); // trashed BEFORE B ever learns of it
 
-    let (_pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    let (_pulled, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     assert_eq!(
         applied, 1,
         "a fresh peer must create a recently-trashed row it never held, in trash state"
@@ -191,7 +191,7 @@ async fn a_tombstone_older_than_the_prune_horizon_is_never_resurrected_for_a_row
         .unwrap();
 
     // B has NEVER held this row at all.
-    let (_pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    let (_pulled, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     assert_eq!(
         applied, 0,
         "a tombstone older than the prune horizon must never be resurrected"
@@ -208,6 +208,66 @@ async fn a_tombstone_older_than_the_prune_horizon_is_never_resurrected_for_a_row
     assert!(
         find_song(&libs, "Old Temp").is_none(),
         "the song must not appear live either"
+    );
+}
+
+#[tokio::test]
+async fn a_single_broken_song_never_aborts_the_whole_sync_cycle() {
+    // #558 round-4 U1(b): `run_sync_cycle` used `?` on the per-song fetch
+    // (send/error_for_status/json), so ONE song's fetch failing (here: a
+    // corrupted stored slide id that can NEVER parse as a UUID -- a
+    // failure independent of U1(a)'s oversize-text fix, isolating THIS
+    // behavior specifically) aborted the WHOLE cycle via
+    // `anyhow::Result`'s early return. Every OTHER song in that cycle's
+    // manifest -- whatever order it happened to come in -- silently never
+    // synced, forever (retried every 30s, but the same song keeps failing
+    // first). FIX: isolate each song's fetch/apply -- log + count the
+    // failure and continue to the next manifest entry.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+
+    let library = a.create_library("Songs").await.unwrap();
+    let (_, _, broken_pres, _) = a
+        .create_presentation(library.id, "Broken Song", None)
+        .await
+        .unwrap();
+    let (_, _, _good_pres, _) = a
+        .create_presentation(library.id, "Good Song", None)
+        .await
+        .unwrap();
+    let broken_id = broken_pres.id;
+
+    let broken_detail = a.presentation_detail(broken_id).await.unwrap().unwrap().2;
+    let broken_slide_id = broken_detail.slides[0].id.to_string();
+    use presenter_persistence::entities::slide as slide_entity;
+    use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter};
+    slide_entity::Entity::update_many()
+        .col_expr(slide_entity::Column::Id, Expr::value("not-a-uuid"))
+        .filter(slide_entity::Column::Id.eq(broken_slide_id))
+        .exec(a.repository().connection())
+        .await
+        .unwrap();
+
+    let (pulled, applied, errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert_eq!(pulled, 2, "both manifest entries were attempted");
+    assert_eq!(
+        applied, 1,
+        "the good song still applies despite the broken one"
+    );
+    assert_eq!(
+        errors, 1,
+        "the broken song's failure is counted, not silently swallowed"
+    );
+
+    let libs = b.libraries().await.unwrap();
+    assert!(
+        find_song(&libs, "Good Song").is_some(),
+        "the good song must sync even though another manifest entry 500s"
+    );
+    assert!(
+        find_song(&libs, "Broken Song").is_none(),
+        "the broken song's row never applies (its fetch permanently fails)"
     );
 }
 
@@ -256,12 +316,12 @@ async fn fully_synced_pair_produces_zero_writes_on_next_cycle() {
 
     // A pulling B back must not see B's applied copy as "newer" (peer
     // timestamp was preserved verbatim on apply).
-    let (pulled_back, applied_back) = run_sync_cycle(&a, &b_url, &client()).await.unwrap();
+    let (pulled_back, applied_back, _errors) = run_sync_cycle(&a, &b_url, &client()).await.unwrap();
     assert_eq!(applied_back, 0, "A must not re-apply its own change (echo)");
     assert_eq!(pulled_back, 0, "A must not even re-pull it");
 
     // Next cycle B→A: nothing newer on A → zero pulled/applied.
-    let (pulled, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    let (pulled, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     assert_eq!(applied, 0, "a settled pair must not re-apply (no echo)");
     assert_eq!(pulled, 0, "a settled pair must not re-pull");
 }
@@ -289,7 +349,7 @@ async fn adopt_by_name_pairs_independently_created_copies() {
     assert_eq!(twins.len(), 1, "adopt-by-name must not duplicate the song");
 
     // And B pulling A now finds nothing newer (identities converged).
-    let (_p, applied) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    let (_p, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
     assert_eq!(applied, 0, "converged identities produce no further writes");
 
     let _ = (ia, ib);

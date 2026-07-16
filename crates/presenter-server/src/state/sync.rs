@@ -86,6 +86,11 @@ pub struct SyncStatus {
     pub last_error: Option<String>,
     pub pulled_last_cycle: usize,
     pub applied_last_cycle: usize,
+    /// Songs whose per-song fetch/apply failed during the last cycle
+    /// (#558 round-4 U1(b)) — a single song's failure (e.g. an oversize
+    /// legacy stored slide, or any other per-song error) is isolated and
+    /// counted here, never allowed to abort the whole cycle.
+    pub last_cycle_errors: usize,
 }
 
 /// Clonable handle stored on AppState. The receiver is taken once by the loop.
@@ -302,7 +307,7 @@ async fn run_and_record(
     let started = Utc::now();
     let peer_version = fetch_peer_version(client, peer_url).await;
     match run_sync_cycle(state, peer_url, client).await {
-        Ok((pulled, applied)) => {
+        Ok((pulled, applied, errors)) => {
             let mut s = status.write().await;
             s.last_run = Some(started);
             s.last_success = Some(Utc::now());
@@ -311,6 +316,7 @@ async fn run_and_record(
             s.peer_version = peer_version;
             s.pulled_last_cycle = pulled;
             s.applied_last_cycle = applied;
+            s.last_cycle_errors = errors;
         }
         Err(err) => {
             warn!(?err, "sync cycle failed");
@@ -335,13 +341,13 @@ async fn fetch_peer_version(client: &reqwest::Client, peer_url: &str) -> Option<
         .map(|s| s.to_string())
 }
 
-/// One reconciliation pass against the peer. Returns (pulled, applied). Directly
-/// callable from the integration test (bypasses the loop).
+/// One reconciliation pass against the peer. Returns (pulled, applied, errors).
+/// Directly callable from the integration test (bypasses the loop).
 pub(crate) async fn run_sync_cycle(
     state: &AppState,
     peer_url: &str,
     client: &reqwest::Client,
-) -> anyhow::Result<(usize, usize)> {
+) -> anyhow::Result<(usize, usize, usize)> {
     let repo = state.repository();
 
     // Index our local identities → updated_at for the LWW gate.
@@ -361,6 +367,7 @@ pub(crate) async fn run_sync_cycle(
 
     let mut pulled = 0usize;
     let mut applied = 0usize;
+    let mut errors = 0usize;
     for entry in peer_manifest {
         let local_updated = local_map.get(&entry.sync_id).copied();
         if !presenter_persistence::sync_should_apply(
@@ -385,14 +392,17 @@ pub(crate) async fn run_sync_cycle(
                 }
                 info!(sync_id = %entry.sync_id, name = %entry.name, ?outcome, "sync applied");
             }
-            Err(err) => warn!(?err, sync_id = %entry.sync_id, "sync apply failed"),
+            Err(err) => {
+                errors += 1;
+                warn!(?err, sync_id = %entry.sync_id, "sync apply failed");
+            }
         }
     }
     if applied > 0 {
         // Synced-in changes must be visible to this instance's own UI/caches.
         state.drop_presentation_caches().await;
     }
-    Ok((pulled, applied))
+    Ok((pulled, applied, errors))
 }
 
 #[cfg(test)]
