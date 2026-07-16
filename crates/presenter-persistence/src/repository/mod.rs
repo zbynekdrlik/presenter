@@ -14,7 +14,11 @@ mod stage_state;
 mod sync;
 mod sync_apply;
 #[cfg(test)]
+mod sync_test_support;
+#[cfg(test)]
 mod sync_tests;
+#[cfg(test)]
+mod sync_trash_tests;
 #[cfg(test)]
 mod tests;
 mod util;

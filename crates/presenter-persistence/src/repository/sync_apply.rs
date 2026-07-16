@@ -170,20 +170,33 @@ impl Repository {
             }
         }
 
-        // 3. Unknown sync_id (and, for a tombstone, still within
-        // PRUNE_HORIZON — #558 R2/S7 via `sync_should_apply`'s `None`
-        // branch; an already-pruned tombstone is skipped here too, never
-        // resurrected as a fresh trashed row) → create with the peer's
-        // identity + timestamps. Never touches any existing local row.
+        // 3. Unknown sync_id → the tombstone-aware create-or-skip helper.
+        let outcome = Self::apply_unknown_sync_id(&txn, &library_id, incoming).await?;
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    /// Step 3 of `apply_sync_presentation`: the peer's `sync_id` matched no
+    /// local row (and, for a live entry, no adopt-by-name candidate). For a
+    /// TOMBSTONE still within PRUNE_HORIZON — #558 R2/S7 via
+    /// `sync_should_apply`'s `None` branch — or any live entry, CREATE a
+    /// brand-new row with the peer's identity + timestamps; an
+    /// already-pruned tombstone (older than the horizon) is skipped, never
+    /// resurrected as a fresh trashed row. Never touches any existing
+    /// local row. (Extracted per the #558 round-3 function-length gate.)
+    async fn apply_unknown_sync_id(
+        txn: &sea_orm::DatabaseTransaction,
+        library_id: &str,
+        incoming: &SyncPresentation,
+    ) -> anyhow::Result<SyncApplyOutcome> {
         if !sync_should_apply(incoming.updated_at, incoming.deleted_at.is_some(), None) {
-            txn.commit().await?;
             info!("sync skip (unknown tombstone past prune horizon)");
             return Ok(SyncApplyOutcome::SkippedNotNewer);
         }
         let new_id = uuid::Uuid::new_v4().to_string();
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(new_id.clone()),
-            library_id: Set(library_id.clone()),
+            library_id: Set(library_id.to_string()),
             name: Set(incoming.name.clone()),
             search_name: Set(fold_query(&incoming.name)),
             created_at: Set(Utc::now().into()),
@@ -191,10 +204,9 @@ impl Repository {
             sync_id: Set(incoming.sync_id.clone()),
             deleted_at: Set(incoming.deleted_at.map(Into::into)),
         })
-        .exec(&txn)
+        .exec(txn)
         .await?;
-        Self::replace_slides(&txn, &new_id, incoming).await?;
-        txn.commit().await?;
+        Self::replace_slides(txn, &new_id, incoming).await?;
         info!("sync created");
         Ok(SyncApplyOutcome::Created)
     }
