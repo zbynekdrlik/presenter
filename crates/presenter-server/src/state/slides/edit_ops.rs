@@ -88,8 +88,7 @@ impl AppState {
 
         self.repository
             .replace_presentation_slides(presentation_id, &slides)
-            .await
-            .map_err(anyhow::Error::from)?;
+            .await?;
 
         // #515: copy each source's stage-layout marker to its clone. Non-fatal —
         // the paste already committed (mirrors `duplicate_slide`).
