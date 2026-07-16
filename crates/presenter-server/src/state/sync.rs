@@ -369,6 +369,39 @@ pub(crate) async fn run_sync_cycle(
 #[cfg(test)]
 mod tests {
     use super::SyncCoordinator;
+    use crate::state::AppState;
+
+    #[tokio::test]
+    async fn spawn_sync_task_releases_the_shutdown_slot_when_nudge_rx_is_already_gone() {
+        // #558 round-3 T9: spawn_sync_task claimed the shutdown slot
+        // SYNCHRONOUSLY (before tokio::spawn), then discovered — only
+        // INSIDE the spawned task — that nudge_rx was already gone, and
+        // returned early WITHOUT releasing the slot it had just claimed.
+        // The slot then stayed permanently claimed, so every SUBSEQUENT
+        // spawn_sync_task call silently refused to start a loop forever
+        // (claim_shutdown_slot sees it's occupied), even though no loop
+        // was ever actually running.
+        let state = AppState::in_memory().await.unwrap();
+        // Simulate nudge_rx already taken (e.g. a prior partial init).
+        let _ = state.sync.nudge_rx.lock().await.take();
+
+        state.spawn_sync_task("http://127.0.0.1:1".to_string());
+        // Let the spawned task run its early-return path.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Put a fresh receiver back — in production this slot is only ever
+        // taken once for real (a genuinely running loop keeps it), so a
+        // legitimate later attempt has one to take.
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        *state.sync.nudge_rx.lock().await = Some(rx);
+
+        // If the slot leaked, this claim fails and no loop can ever start.
+        let (probe_tx, _probe_rx) = tokio::sync::oneshot::channel::<()>();
+        assert!(
+            state.sync.claim_shutdown_slot(probe_tx),
+            "the shutdown slot must be free after the early-return path, not leaked"
+        );
+    }
 
     #[tokio::test]
     async fn coordinator_defaults_and_nudge_do_not_panic() {
