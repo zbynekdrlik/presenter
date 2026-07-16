@@ -148,6 +148,21 @@ impl SyncCoordinator {
         *guard = Some(sender);
         true
     }
+
+    /// Release a previously-claimed shutdown slot (#558 round-3 T9): used
+    /// ONLY when `spawn_sync_task`'s spawned task bails out EARLY, after it
+    /// already claimed the slot but before a loop is actually running (an
+    /// already-taken `nudge_rx`, or a failed HTTP client build). Without
+    /// this, the slot stays claimed FOREVER — `claim_shutdown_slot` would
+    /// keep reporting "already running" to every future spawn attempt even
+    /// though nothing is actually running.
+    fn release_shutdown_slot(&self) {
+        let mut guard = match self.shutdown.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = None;
+    }
 }
 
 impl AppState {
@@ -203,6 +218,15 @@ impl AppState {
     /// already running?" check-and-claim happens under ONE lock
     /// acquisition, BEFORE anything else — a second spawn bails out
     /// immediately, leaving the first loop completely untouched.
+    ///
+    /// #558 round-3 T9: the slot is claimed SYNCHRONOUSLY here, before the
+    /// task is even spawned — but the spawned task can still bail out
+    /// EARLY (an already-taken `nudge_rx`, or a failed HTTP client build)
+    /// BEFORE a loop is actually running. Each such early-return path MUST
+    /// release the slot it claimed (and reset `status` if it already
+    /// flipped `enabled`), or the slot stays claimed forever and every
+    /// subsequent spawn attempt silently refuses to start a loop that was
+    /// never actually running.
     pub(crate) fn spawn_sync_task(&self, peer_url: String) {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         let state = self.clone();
@@ -220,6 +244,7 @@ impl AppState {
                 Some(rx) => rx,
                 None => {
                     warn!("sync task already started; not starting a second loop");
+                    coordinator.release_shutdown_slot();
                     return;
                 }
             };
@@ -235,6 +260,10 @@ impl AppState {
                 Ok(client) => client,
                 Err(err) => {
                     warn!(?err, "sync disabled: could not build HTTP client");
+                    coordinator.release_shutdown_slot();
+                    let mut s = status.write().await;
+                    s.enabled = false;
+                    s.peer_url = None;
                     return;
                 }
             };
