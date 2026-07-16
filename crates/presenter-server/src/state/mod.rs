@@ -31,6 +31,7 @@ mod companion_manager;
 mod integrations;
 mod ndi_control;
 mod osc;
+mod presentation_lock;
 mod presentations;
 mod seed;
 mod slide_stage_layout;
@@ -78,6 +79,7 @@ use companion::{
     parse_bool_flag, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY, DEFAULT_COMPANION_PORT,
 };
 use companion_manager::CompanionManager;
+use presentation_lock::PresentationLockRegistry;
 #[cfg(test)]
 pub(crate) use seed::seed_sample_library;
 #[cfg(test)]
@@ -137,6 +139,11 @@ pub struct AppState {
     /// #555 song-sync coordinator (nudge channel + status). Loop spawned only when
     /// PRESENTER_SYNC_PEER_URL is set.
     sync: sync::SyncCoordinator,
+    /// #558 V2: per-presentation lock, held across the ENTIRE
+    /// read-snapshot + write + cache-refresh sequence by both every
+    /// snapshot-replace slide-edit op and the sync-apply call site — so
+    /// the two can never interleave on the same presentation.
+    presentation_locks: PresentationLockRegistry,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -227,6 +234,7 @@ impl AppState {
             local_public_ip,
             turn: TurnService::from_env(),
             sync: sync::SyncCoordinator::new(),
+            presentation_locks: PresentationLockRegistry::new(),
         };
         state.spawn_heartbeat_tasks();
         state
