@@ -50,6 +50,25 @@ impl SlideText {
             value: value.into(),
         }
     }
+
+    /// Construct a `SlideText`, clamping to the 4000-char cap instead of
+    /// rejecting when the value exceeds it (#558 V1). Returns whether
+    /// truncation happened, so a caller can log which field/identity was
+    /// clamped. Used at the sync APPLY boundary: an incoming peer slide can
+    /// already be oversize (a legacy row, or one that bypassed validation on
+    /// the wire), and replicating it verbatim would break the LOCAL read
+    /// path (`to_domain_slide`, which validates) for that song on the
+    /// receiving instance too — truncating repairs it instead of
+    /// propagating the breakage.
+    pub fn from_stored_or_truncate<T: Into<String>>(value: T) -> (Self, bool) {
+        let value: String = value.into();
+        if value.chars().count() > SLIDE_TEXT_LIMIT {
+            let clamped: String = value.chars().take(SLIDE_TEXT_LIMIT).collect();
+            (Self { value: clamped }, true)
+        } else {
+            (Self { value }, false)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +255,29 @@ mod tests {
                 limit: SLIDE_TEXT_LIMIT
             }
         );
+    }
+
+    #[test]
+    fn from_stored_or_truncate_clamps_oversize_input_and_reports_truncation() {
+        // #558 V1: the sync APPLY boundary must clamp an oversize incoming
+        // slide field to the SAME cap `SlideText::new` enforces, instead of
+        // rejecting (which would abandon the whole apply) or silently
+        // storing it raw (which breaks the local read path, `to_domain_slide`,
+        // forever for that song).
+        let oversize = "a".repeat(SLIDE_TEXT_LIMIT + 500);
+        let (clamped, truncated) = SlideText::from_stored_or_truncate(oversize);
+        assert!(truncated, "an oversize value must report truncated=true");
+        assert_eq!(clamped.value().chars().count(), SLIDE_TEXT_LIMIT);
+    }
+
+    #[test]
+    fn from_stored_or_truncate_passes_through_a_value_within_the_limit() {
+        let (value, truncated) = SlideText::from_stored_or_truncate("short");
+        assert!(
+            !truncated,
+            "a within-limit value must report truncated=false"
+        );
+        assert_eq!(value.value(), "short");
     }
 
     #[test]
