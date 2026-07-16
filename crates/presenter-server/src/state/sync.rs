@@ -154,6 +154,19 @@ impl SyncCoordinator {
         true
     }
 
+    /// TEST-ONLY: peek whether the shutdown slot is currently claimed,
+    /// without claiming or releasing it (#558 round-4 U3/U5) — lets a test
+    /// poll-with-timeout for "the slot became free" instead of an
+    /// arbitrary sleep.
+    #[cfg(test)]
+    fn shutdown_slot_claimed(&self) -> bool {
+        let guard = match self.shutdown.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.is_some()
+    }
+
     /// Release a previously-claimed shutdown slot (#558 round-3 T9): used
     /// ONLY when `spawn_sync_task`'s spawned task bails out EARLY, after it
     /// already claimed the slot but before a loop is actually running (an
@@ -443,6 +456,84 @@ async fn fetch_and_apply_one(
 mod tests {
     use super::SyncCoordinator;
     use crate::state::AppState;
+
+    /// Poll `cond` until it returns true, or panic once `timeout` elapses
+    /// (#558 round-4 U5) — a deterministic replacement for an arbitrary
+    /// `sleep` when waiting on a background task's side effect.
+    async fn poll_until<F, Fut>(mut cond: F, timeout: std::time::Duration, what: &str)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if cond().await {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("timed out waiting for: {what}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn early_return_paths_always_reset_status_even_when_it_was_left_enabled() {
+        // #558 round-4 U3: the nudge_rx-gone early-return branch used to
+        // skip resetting `status` entirely — harmless by accident on a
+        // fresh AppState (status starts disabled), but if `status.enabled`
+        // was ever left `true` from an inconsistent prior state (exactly
+        // the "status reset after slot-release can clobber a racing
+        // successful respawn" race this fix addresses), an early return
+        // must still leave status correctly DISABLED, never silently
+        // preserve a stale "enabled" that no running loop backs. Building
+        // the HTTP client BEFORE taking nudge_rx (and resetting status
+        // BEFORE releasing the claimed slot) makes every early-return path
+        // do this unconditionally.
+        let state = AppState::in_memory().await.unwrap();
+
+        // Simulate a stale "enabled" flag left over from an earlier
+        // inconsistent run.
+        {
+            let mut s = state.sync.status.write().await;
+            s.enabled = true;
+            s.peer_url = Some("http://stale-peer".to_string());
+        }
+        // Force the early-return path: nudge_rx already gone.
+        let _ = state.sync.nudge_rx.lock().await.take();
+
+        state.spawn_sync_task("http://127.0.0.1:1".to_string());
+        poll_until(
+            || async { !state.sync.shutdown_slot_claimed() },
+            std::time::Duration::from_secs(2),
+            "shutdown slot released after the early return",
+        )
+        .await;
+
+        let status = state.sync_status_snapshot().await;
+        assert!(
+            !status.enabled,
+            "an early return must reset status to disabled, never leave a stale enabled flag"
+        );
+        assert!(
+            status.peer_url.is_none(),
+            "an early return must clear peer_url, never leave a stale one"
+        );
+
+        // A subsequent, legitimate spawn (nudge_rx restored) must actually
+        // start a running loop — not find nudge_rx permanently gone, and
+        // not have its own successful status flip clobbered by the
+        // earlier cleanup.
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        *state.sync.nudge_rx.lock().await = Some(rx);
+        state.spawn_sync_task("http://127.0.0.1:1".to_string());
+        poll_until(
+            || async { state.sync_status_snapshot().await.enabled },
+            std::time::Duration::from_secs(2),
+            "a subsequent spawn actually starts a running loop",
+        )
+        .await;
+    }
 
     #[tokio::test]
     async fn spawn_sync_task_releases_the_shutdown_slot_when_nudge_rx_is_already_gone() {
