@@ -894,7 +894,10 @@ jobs:
         run: |
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_prod
           chmod 600 ~/.ssh/id_prod
-          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null
+          # keyscan fails while prod is deliberately powered off — that case is
+          # handled (and loudly ::notice::d) by the migration pre-check's own
+          # reachability probe in the NEXT step; setup must not die before it.
+          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null || true
           cat >> ~/.ssh/config <<EOF
           Host prod-server
               HostName 10.77.9.205
