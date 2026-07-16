@@ -210,3 +210,69 @@ async fn adopt_by_name_pairs_independently_created_copies() {
 
     let _ = (ia, ib);
 }
+
+/// Poll `sync_status_snapshot` until `last_run` differs from `after`, or panic
+/// once `timeout` elapses. A bounded retry loop, not an arbitrary sleep.
+async fn wait_for_next_cycle(
+    state: &AppState,
+    after: Option<chrono::DateTime<chrono::Utc>>,
+    timeout: std::time::Duration,
+) -> crate::state::sync::SyncStatus {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let status = state.sync_status_snapshot().await;
+        if status.last_run.is_some() && status.last_run != after {
+            return status;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "the real sync loop did not complete a cycle within {timeout:?} \
+                 (last_run={:?}) - it likely shut down immediately after spawn",
+                status.last_run
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+#[tokio::test]
+async fn real_sync_loop_survives_past_startup_and_completes_multiple_cycles() {
+    // S1 regression: `maybe_spawn_sync` used to drop the loop's shutdown
+    // oneshot Sender right after spawning it. Dropping the Sender makes
+    // `tokio::select! { _ = &mut shutdown_rx => break, ... }` resolve its
+    // shutdown branch essentially immediately - the loop died before ever
+    // running a real cycle in production. Every other sync test in this file
+    // calls `run_sync_cycle` directly, bypassing the loop/spawn path
+    // entirely, so CI never caught it. This test drives the REAL spawned
+    // loop via `maybe_spawn_sync` + the nudge channel and requires it to
+    // survive across TWO separate triggered cycles - a loop that dies right
+    // after (or even during) its first lucky cycle fails the second wait.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    make_song(&a, "Songs", "Loop Song").await;
+
+    b.maybe_spawn_sync(Some(a_url));
+
+    b.nudge_sync();
+    let first = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
+    assert!(
+        first.last_success.is_some(),
+        "the real loop's first cycle must succeed: {first:?}"
+    );
+
+    // A second, independent nudge must ALSO complete a cycle - proving the
+    // loop is still alive, not that it happened to survive one lucky race.
+    b.nudge_sync();
+    let second = wait_for_next_cycle(&b, first.last_run, std::time::Duration::from_secs(10)).await;
+    assert!(
+        second.last_success.is_some(),
+        "the real loop's second cycle must also succeed: {second:?}"
+    );
+
+    let libs = b.libraries().await.unwrap();
+    assert!(
+        find_song(&libs, "Loop Song").is_some(),
+        "the real (spawned) loop actually pulled and applied the peer's song"
+    );
+}
