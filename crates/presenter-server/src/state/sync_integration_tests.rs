@@ -618,3 +618,116 @@ async fn two_spawns_on_one_app_state_leave_exactly_one_live_loop() {
         "the surviving loop actually pulled and applied the peer's song"
     );
 }
+
+#[tokio::test]
+async fn an_all_fail_cycle_reports_unhealthy_instead_of_success() {
+    // #558 V6: per-song isolation (#558 round-4 U1(b)) means ONE bad song
+    // never aborts the cycle — but that isolation let a cycle where EVERY
+    // fetched entry failed fall through to the `Ok` branch and
+    // unconditionally refresh `last_success` / clear `last_error`, hiding a
+    // 100%-failed cycle behind a healthy-looking status. Corrupts BOTH
+    // songs' stored slide ids (same technique as
+    // `a_single_broken_song_never_aborts_the_whole_sync_cycle` — a
+    // corrupted id can never parse as a UUID, so every per-song content
+    // fetch 500s) so the cycle is genuinely all-fail, then drives the REAL
+    // spawned loop (not `run_sync_cycle` directly) so the status this
+    // asserts on is exactly what the operator-facing status endpoint would
+    // show.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+
+    let library = a.create_library("Songs").await.unwrap();
+    for name in ["Broken One", "Broken Two"] {
+        let (_, _, pres, _) = a.create_presentation(library.id, name, None).await.unwrap();
+        let detail = a.presentation_detail(pres.id).await.unwrap().unwrap().2;
+        let slide_id = detail.slides[0].id.to_string();
+        use presenter_persistence::entities::slide as slide_entity;
+        use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter};
+        slide_entity::Entity::update_many()
+            .col_expr(
+                slide_entity::Column::Id,
+                Expr::value(format!("not-a-uuid-{name}")),
+            )
+            .filter(slide_entity::Column::Id.eq(slide_id))
+            .exec(a.repository().connection())
+            .await
+            .unwrap();
+    }
+
+    b.maybe_spawn_sync(Some(a_url));
+    b.nudge_sync();
+    let status = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
+
+    assert!(
+        status.last_error.is_some(),
+        "an all-fail cycle must surface last_error, not report itself healthy: {status:?}"
+    );
+    assert!(
+        status.last_success.is_none(),
+        "an all-fail cycle must never refresh last_success: {status:?}"
+    );
+    assert_eq!(
+        status.last_cycle_errors, 2,
+        "both fetch failures must be counted: {status:?}"
+    );
+}
+
+#[tokio::test]
+async fn three_consecutive_failures_trip_the_breaker_and_abort_the_cycle() {
+    // #558 V7: per-song isolation deleted the systemic-failure circuit
+    // breaker — an unreachable peer mid-cycle burned a full 15s timeout ×
+    // every REMAINING manifest entry in one uninterruptible await. A fake
+    // peer (wiremock) answers `/sync/manifest` with 5 entries but 500s
+    // every per-song content fetch: the breaker must trip after exactly 3
+    // CONSECUTIVE failures and abort, never touching entries 4 and 5.
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    let b = AppState::in_memory().await.unwrap();
+
+    let now = chrono::Utc::now();
+    let entries: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            serde_json::json!({
+                "syncId": format!("sid-{i}"),
+                "libraryName": "Songs",
+                "name": format!("Song {i}"),
+                "updatedAt": now,
+                "deletedAt": null,
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path("/sync/manifest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(entries))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/sync/presentations/.+$"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let http_client = client();
+    let result = run_sync_cycle(&b, &mock_server.uri(), &http_client).await;
+    assert!(
+        result.is_err(),
+        "3 consecutive per-song failures must abort the cycle with an error, not silently \
+         finish having only isolated each failure"
+    );
+
+    let content_fetch_count = mock_server
+        .received_requests()
+        .await
+        .expect("wiremock request log")
+        .iter()
+        .filter(|req| req.url.path().starts_with("/sync/presentations/"))
+        .count();
+    assert_eq!(
+        content_fetch_count, 3,
+        "the breaker must stop at exactly 3 attempts, never burning a timeout on entries 4 and 5"
+    );
+}

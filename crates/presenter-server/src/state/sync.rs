@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use presenter_core::PresentationId;
 use presenter_persistence::{SyncPresentation, TrashedPresentation};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -212,6 +213,30 @@ impl AppState {
         self.caches.presentation.write().await.clear();
     }
 
+    /// #558 V2: evict ONE presentation's cache entry — used after a
+    /// successful sync apply that wrote to a KNOWN existing local id, so the
+    /// next caller to acquire that presentation's lock (any snapshot-replace
+    /// edit op) re-reads fresh from the DB instead of a stale pre-apply
+    /// snapshot. Cheaper than the wholesale `drop_presentation_caches` when
+    /// only one presentation actually changed.
+    pub(crate) async fn drop_one_presentation_cache(&self, presentation_id: PresentationId) {
+        self.caches
+            .presentation
+            .write()
+            .await
+            .remove(&presentation_id);
+    }
+
+    /// #558 V2: acquire the shared per-presentation lock for a sync apply —
+    /// the SAME registry `slides/edit_ops.rs`'s snapshot-replace ops use, so
+    /// the two families of writers can never interleave on one presentation.
+    pub(crate) async fn presentation_lock_for_sync(
+        &self,
+        presentation_id: PresentationId,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        self.presentation_locks.lock(presentation_id).await
+    }
+
     /// Spawn the sync loop iff a peer is configured (#555).
     pub(crate) fn maybe_spawn_sync(&self, peer_url: Option<String>) {
         if let Some(peer_url) = peer_url {
@@ -344,13 +369,27 @@ async fn run_and_record(
         Ok((pulled, applied, errors)) => {
             let mut s = status.write().await;
             s.last_run = Some(started);
-            s.last_success = Some(Utc::now());
-            s.last_error = None;
             s.peer_healthy = peer_version.is_some();
             s.peer_version = peer_version;
             s.pulled_last_cycle = pulled;
             s.applied_last_cycle = applied;
             s.last_cycle_errors = errors;
+
+            // #558 V6: a cycle where EVERY fetched entry failed (a systemic
+            // problem — e.g. the peer answers /sync/manifest fine but every
+            // per-song fetch errors) must not report itself healthy. Per-song
+            // failures are isolated from this cycle's own `Result` (#558
+            // round-4 U1(b)) precisely so ONE bad song never aborts the rest
+            // — but that isolation also means an all-fail cycle previously
+            // fell through to this `Ok` branch and unconditionally refreshed
+            // `last_success` / cleared `last_error`, hiding a 100%-failed
+            // cycle behind a healthy-looking status.
+            if cycle_all_failed(pulled, applied, errors) {
+                s.last_error = Some(format!("{errors}/{pulled} song fetches failed"));
+            } else {
+                s.last_success = Some(Utc::now());
+                s.last_error = None;
+            }
         }
         Err(err) => {
             warn!(?err, "sync cycle failed");
@@ -361,6 +400,14 @@ async fn run_and_record(
             s.peer_version = peer_version;
         }
     }
+}
+
+/// #558 V6: whether a completed cycle counts as a systemic failure (every
+/// FETCHED entry errored) that must not report itself healthy. `pulled == 0`
+/// (nothing needed fetching this cycle — the quiet, genuinely healthy case)
+/// is never "all failed".
+fn cycle_all_failed(pulled: usize, applied: usize, errors: usize) -> bool {
+    pulled > 0 && applied == 0 && errors == pulled
 }
 
 async fn fetch_peer_version(client: &reqwest::Client, peer_url: &str) -> Option<String> {
@@ -406,9 +453,19 @@ pub(crate) async fn run_sync_cycle(
     let peer_sync_ids: std::collections::HashSet<String> =
         peer_manifest.iter().map(|e| e.sync_id.clone()).collect();
 
+    // #558 V7: 3 consecutive per-song fetch failures signal a SYSTEMIC
+    // problem (the peer answered /sync/manifest fine but then died, or
+    // became unreachable, mid-cycle) rather than scattered per-song faults —
+    // trip the breaker and abort instead of burning a full 15s timeout on
+    // every remaining manifest entry in one uninterruptible await. Scattered,
+    // non-consecutive failures (an occasional bad song among healthy ones)
+    // never reach the threshold and stay fully isolated, as before.
+    const CONSECUTIVE_FAILURE_BREAKER: u32 = 3;
+
     let mut pulled = 0usize;
     let mut applied = 0usize;
     let mut errors = 0usize;
+    let mut consecutive_failures = 0u32;
     for entry in &peer_manifest {
         let local_updated = local_map.get(&entry.sync_id).copied();
         if !presenter_persistence::sync_should_apply(
@@ -424,20 +481,32 @@ pub(crate) async fn run_sync_cycle(
         // still hasn't fixed, or any other per-song fault) must never
         // abort the whole cycle via `?`; every other manifest entry
         // deserves its own chance to sync in the same cycle.
-        match fetch_and_apply_one(repo, client, peer_url, entry, &peer_sync_ids).await {
+        match fetch_and_apply_one(state, client, peer_url, entry, &peer_sync_ids).await {
             Ok(wrote) => {
+                consecutive_failures = 0;
                 if wrote {
                     applied += 1;
                 }
             }
             Err(err) => {
                 errors += 1;
+                consecutive_failures += 1;
                 warn!(
                     ?err,
                     sync_id = %entry.sync_id,
                     name = %entry.name,
                     "sync: single-song fetch/apply failed — continuing with the next manifest entry"
                 );
+                if consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER {
+                    if applied > 0 {
+                        state.drop_presentation_caches().await;
+                    }
+                    anyhow::bail!(
+                        "sync cycle aborted: {consecutive_failures} consecutive per-song fetch \
+                         failures (peer likely unreachable) — {applied} applied, {errors} errored \
+                         before the breaker tripped"
+                    );
+                }
             }
         }
     }
@@ -452,13 +521,38 @@ pub(crate) async fn run_sync_cycle(
 /// Isolated per-song (#558 round-4 U1(b)) — the caller catches any error
 /// this returns, logs + counts it, and moves on to the next manifest
 /// entry instead of aborting the whole cycle.
+///
+/// #558 V2: resolves the LOCAL presentation id this apply will touch (by
+/// `sync_id`, or — for a live entry with no `sync_id` match — the single
+/// live adopt-by-name candidate) and holds the SAME per-presentation lock a
+/// snapshot-replace edit op takes (`slides/edit_ops.rs`) across the apply,
+/// so the two can never interleave. A genuinely new identity (no existing
+/// local row at all) has no lock target — nothing else could be concurrently
+/// editing a presentation id nobody has learned yet. On a successful WRITE
+/// to a resolved existing target, the AppState cache entry for that one
+/// presentation is evicted (still under the lock) so the very next
+/// lock-holder's read is guaranteed fresh, never a stale pre-apply snapshot.
 async fn fetch_and_apply_one(
-    repo: &presenter_persistence::Repository,
+    state: &AppState,
     client: &reqwest::Client,
     peer_url: &str,
     entry: &SyncManifestEntryDto,
     peer_sync_ids: &std::collections::HashSet<String>,
 ) -> anyhow::Result<bool> {
+    let repo = state.repository();
+    let lock_target = match repo.find_presentation_id_by_sync_id(&entry.sync_id).await? {
+        Some(id) => Some(id),
+        None if entry.deleted_at.is_none() => {
+            repo.find_live_presentation_id_by_name(&entry.library_name, &entry.name)
+                .await?
+        }
+        None => None,
+    };
+    let _guard = match lock_target {
+        Some(id) => Some(state.presentation_lock_for_sync(id).await),
+        None => None,
+    };
+
     let dto: SyncPresentationDto = client
         .get(format!("{peer_url}/sync/presentations/{}", entry.sync_id))
         .send()
@@ -469,6 +563,11 @@ async fn fetch_and_apply_one(
     let outcome = repo
         .apply_sync_presentation(&dto.into(), peer_sync_ids)
         .await?;
+    if outcome.wrote() {
+        if let Some(id) = lock_target {
+            state.drop_one_presentation_cache(id).await;
+        }
+    }
     info!(sync_id = %entry.sync_id, name = %entry.name, ?outcome, "sync applied");
     Ok(outcome.wrote())
 }
