@@ -8,14 +8,17 @@
 //!   with it every playlist reference — survives; only the `sync_id` is adopted).
 use super::util::build_slide_active_model;
 use super::Repository;
-use crate::entities::{library, presentation as presentation_entity, slide as slide_entity};
+use crate::entities::{
+    library, presentation as presentation_entity, slide as slide_entity, slide_stage_layout,
+};
 use crate::SyncPresentation;
 use chrono::{DateTime, Utc};
 use presenter_core::search::fold_query;
 use sea_orm::{
     sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
-use tracing::{info, instrument};
+use std::collections::HashMap;
+use tracing::{info, instrument, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncApplyOutcome {
@@ -200,13 +203,108 @@ impl Repository {
         presentation_id: &str,
         incoming: &SyncPresentation,
     ) -> anyhow::Result<()> {
+        // #558 S9: capture the OLD slide-stage-layout markers BEFORE the
+        // wholesale slide replacement, keyed by POSITION (not slide_id — the
+        // new slides carry the PEER's ids, so the old slide_id is about to
+        // stop existing). Every marker is remapped to whichever new slide
+        // now sits at the same position; a marker whose position no longer
+        // exists in the shorter new slide list is dropped, logged.
+        let layout_by_position = Self::markers_by_position(conn, presentation_id).await?;
+
         slide_entity::Entity::delete_many()
             .filter(slide_entity::Column::PresentationId.eq(presentation_id))
             .exec(conn)
             .await?;
+        slide_stage_layout::Entity::delete_many()
+            .filter(slide_stage_layout::Column::PresentationId.eq(presentation_id))
+            .exec(conn)
+            .await?;
+
         for (index, slide) in incoming.slides.iter().enumerate() {
             let active = build_slide_active_model(slide, presentation_id, index as i32);
             slide_entity::Entity::insert(active).exec(conn).await?;
+        }
+
+        if !layout_by_position.is_empty() {
+            Self::remap_markers(conn, presentation_id, &incoming.slides, layout_by_position)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The presentation's CURRENT stage-layout markers, keyed by the OLD
+    /// slide's position (0-based, matching `build_slide_active_model`'s
+    /// `position` column — see `insert_presentation_with_slides`/
+    /// `replace_presentation_slides`, which always write positions as the
+    /// slide's index in its list).
+    async fn markers_by_position<C: sea_orm::ConnectionTrait>(
+        conn: &C,
+        presentation_id: &str,
+    ) -> anyhow::Result<HashMap<i32, String>> {
+        let old_markers = slide_stage_layout::Entity::find()
+            .filter(slide_stage_layout::Column::PresentationId.eq(presentation_id))
+            .all(conn)
+            .await?;
+        if old_markers.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let old_slides = slide_entity::Entity::find()
+            .filter(slide_entity::Column::PresentationId.eq(presentation_id))
+            .order_by_asc(slide_entity::Column::Position)
+            .all(conn)
+            .await?;
+        let position_by_old_slide: HashMap<&str, i32> = old_slides
+            .iter()
+            .map(|s| (s.id.as_str(), s.position))
+            .collect();
+        Ok(old_markers
+            .into_iter()
+            .filter_map(|marker| {
+                position_by_old_slide
+                    .get(marker.slide_id.as_str())
+                    .map(|position| (*position, marker.layout_code))
+            })
+            .collect())
+    }
+
+    /// Re-insert a marker at each new slide occupying a position that used to
+    /// carry one; a position that no longer exists (the new list is shorter)
+    /// drops its marker, logged (never silently — #558 S9).
+    async fn remap_markers<C: sea_orm::ConnectionTrait>(
+        conn: &C,
+        presentation_id: &str,
+        new_slides: &[presenter_core::Slide],
+        layout_by_position: HashMap<i32, String>,
+    ) -> anyhow::Result<()> {
+        let mut remapped = 0usize;
+        let mut dropped = 0usize;
+        for (position, layout_code) in layout_by_position {
+            match new_slides.get(position as usize) {
+                Some(new_slide) => {
+                    slide_stage_layout::Entity::insert(slide_stage_layout::ActiveModel {
+                        slide_id: Set(new_slide.id.to_string()),
+                        presentation_id: Set(presentation_id.to_string()),
+                        layout_code: Set(layout_code),
+                    })
+                    .exec(conn)
+                    .await?;
+                    remapped += 1;
+                }
+                None => dropped += 1,
+            }
+        }
+        if dropped > 0 {
+            warn!(
+                presentation_id,
+                remapped,
+                dropped,
+                "sync apply dropped stage-layout markers whose position no longer exists"
+            );
+        } else {
+            info!(
+                presentation_id,
+                remapped, "sync apply remapped stage-layout markers by slide position"
+            );
         }
         Ok(())
     }
