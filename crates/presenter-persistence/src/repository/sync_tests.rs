@@ -559,6 +559,67 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_content_on_a_pur
 }
 
 #[tokio::test]
+async fn apply_sync_presentation_remaps_markers_without_a_position_fallback_collision() {
+    // #558 round-3 T3: the POSITION fallback ignored `claimed`, so a marker
+    // whose old content is AMBIGUOUS (shared by 2+ old slides, so it gets
+    // no content match) could fall back to a position ANOTHER marker's
+    // content match already claimed — a PK violation on
+    // `slide_stage_layouts` (its primary key is `slide_id` alone; two
+    // markers can never point at the same slide). Reproduces the exact
+    // shape: OLD [verse(marked), chorus(marked), chorus] with the peer
+    // reordering to [chorus, verse, chorus] — verse's content is unique so
+    // it correctly claims its new slide; chorus's content is NOT unique
+    // (two old chorus slides), so it falls back to its OLD position (1),
+    // which the peer's reorder now gives to the very slide verse's content
+    // match just claimed.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, local) = repo
+        .create_presentation(
+            lib.id,
+            "Marked Song",
+            Some(&[slide(0, "verse"), slide(1, "chorus"), slide(2, "chorus")]),
+        )
+        .await
+        .unwrap();
+    repo.set_slide_stage_layout(local.id, local.slides[0].id, "verse-layout")
+        .await
+        .unwrap();
+    repo.set_slide_stage_layout(local.id, local.slides[1].id, "chorus-layout")
+        .await
+        .unwrap();
+
+    let local_sync_id = row(&repo, local.id).await.sync_id;
+    let peer_slides = vec![slide(0, "chorus"), slide(1, "verse"), slide(2, "chorus")];
+    let incoming = crate::SyncPresentation {
+        sync_id: local_sync_id,
+        library_name: "Songs".to_string(),
+        name: "Marked Song".to_string(),
+        updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: peer_slides.clone(),
+    };
+    // Must not error — a PK violation here IS the regression.
+    repo.apply_sync_presentation(&incoming)
+        .await
+        .expect("sync apply must not fail with a primary-key violation");
+
+    let markers = repo.list_slide_stage_layouts(local.id).await.unwrap();
+    let verse_new_id = peer_slides[1].id.to_string();
+    assert_eq!(
+        markers.get(&verse_new_id),
+        Some(&"verse-layout".to_string()),
+        "the verse marker follows its content to the new position, collision-free"
+    );
+    assert_eq!(
+        markers.len(),
+        1,
+        "the ambiguous chorus marker's position fallback is already claimed by the verse \
+         marker's content match — it is dropped, never double-inserted onto the same slide"
+    );
+}
+
+#[tokio::test]
 async fn manifest_lists_live_and_trashed_content_fetch_returns_slides() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();
