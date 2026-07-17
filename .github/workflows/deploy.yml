@@ -117,7 +117,7 @@ jobs:
     env:
       DEPLOY_DIR: /opt/presenter
       SERVICE_NAME: presenter
-      DEPLOY_HOST: 10.77.9.205
+      DEPLOY_HOST: 100.122.204.47
       DEPLOY_USER: newlevel
     steps:
       - uses: actions/checkout@v4
