@@ -140,6 +140,37 @@ pub async fn test_resolume_host(id: &str) -> Result<ResolumeTestResult, ApiError
     .await
 }
 
+/// #563/#564: the operator-header chip's poll target — every field is
+/// computed SERVER-SIDE (including the two "how long" fields) so this
+/// client never parses or diffs a timestamp itself, just renders numbers.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResolumeConnectionStatusDto {
+    pub host_id: String,
+    pub label: String,
+    pub is_enabled: bool,
+    pub configured_port: u16,
+    pub active_port: Option<u16>,
+    pub port_drifted: bool,
+    /// `connecting | connected | error | disabled`.
+    pub state: String,
+    pub last_success: Option<String>,
+    pub last_latency_ms: Option<f64>,
+    pub last_error: Option<String>,
+    /// `timeout | connect_refused | connect_other | reset | other`, present
+    /// only while `state == "error"`.
+    pub last_error_kind: Option<String>,
+    pub consecutive_failures: u32,
+    pub next_retry_in_secs: Option<i64>,
+    pub failing_for_secs: Option<i64>,
+    pub missing_clips: Vec<String>,
+}
+
+pub async fn get_resolume_connection_status() -> Result<Vec<ResolumeConnectionStatusDto>, ApiError>
+{
+    get_json("/integrations/resolume/status").await
+}
+
 // ── Android stage displays ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]

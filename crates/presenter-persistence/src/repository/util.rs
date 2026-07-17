@@ -278,6 +278,13 @@ pub(super) fn resolume_model_to_domain(
     if port == 0 {
         return Err(anyhow!("resolume host port cannot be zero"));
     }
+    // #564: active_port is a RUNTIME-discovered hint, not a validated user
+    // setting — an out-of-range stored value degrades to "no drift known"
+    // rather than failing the whole host load.
+    let active_port = model
+        .active_port
+        .and_then(|p| u16::try_from(p).ok())
+        .filter(|p| *p != 0);
     let created_at: DateTime<Utc> = model.created_at.into();
     let updated_at: DateTime<Utc> = model.updated_at.into();
     Ok(ResolumeHost::new(
@@ -288,7 +295,8 @@ pub(super) fn resolume_model_to_domain(
         model.is_enabled,
         created_at,
         updated_at,
-    ))
+    )
+    .with_active_port(active_port))
 }
 
 pub(super) fn timer_state_to_string(state: TimerState) -> String {

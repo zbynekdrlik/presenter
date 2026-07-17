@@ -183,6 +183,10 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::resolume::test_resolume_host),
         )
         .route(
+            "/integrations/resolume/status",
+            get(integrations::resolume::resolume_connection_status),
+        )
+        .route(
             "/integrations/android-stage/displays",
             get(integrations::android_stage::list_android_stage_displays)
                 .post(integrations::android_stage::create_android_stage_display),

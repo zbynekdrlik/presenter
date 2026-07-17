@@ -200,6 +200,51 @@ Activate ONLY when the user explicitly declares hotfix mode. This is the fast pa
    as normal — the hotfix commit goes through the ordinary gates retroactively; any CI
    failure found then is fixed forward. Never leave a hotfix deployed without its PR landing.
 
+## Event-network cloudflared tunnel — QUIC gets blocked, force HTTP/2 (#562)
+
+**Symptom:** `prsnv.newlevel.media` (the Cloudflare Tunnel in front of prod) went unreachable the
+moment the SNV rig traveled to an event venue — while `systemctl status cloudflared` and the
+Presenter service both looked completely healthy on the box itself. Cloudflare's edge showed the
+generic error 1033 (tunnel not connected) to the public.
+
+**Root cause:** `cloudflared`'s DEFAULT transport is QUIC (UDP). Many venue/event networks
+(temporary Wi-Fi, restrictive corporate/venue firewalls) block outbound UDP entirely — `cloudflared`
+then retries the QUIC handshake forever and never falls back on its own. The tunnel daemon, the
+Presenter binary, and the LAN are all fine; only the OUTBOUND leg to Cloudflare's edge is silently
+failing.
+
+**Fix — force the HTTP/2 transport (TCP 7844), which venue networks pass:**
+
+```bash
+sudo mkdir -p /etc/systemd/system/cloudflared.service.d
+sudo tee /etc/systemd/system/cloudflared.service.d/protocol-http2.conf >/dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/cloudflared tunnel --protocol http2 run
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart cloudflared
+# Verify: the tunnel reconnects and the public hostname resolves again.
+curl -sI https://prsnv.newlevel.media/healthz
+```
+
+(The blank `ExecStart=` line before the real one is required — systemd drop-ins APPEND to
+`ExecStart` by default; without clearing it first you get two conflicting `ExecStart` lines. Adjust
+the `ExecStart=` binary path/tunnel name to match the actual unit if it differs — check
+`systemctl cat cloudflared` first.)
+
+**HTTP/2 is a full-fidelity transport — this drop-in is safe to leave in place permanently**, not
+just as an event-mode toggle. It was applied LIVE on SNV prod on 2026-07-17 (hotfix mode, mid-event)
+and is standing since. **Apply the same drop-in to PP's (`companion-pp.lan`) cloudflared BEFORE PP
+ever travels to an event venue** — PP has not hit this yet only because it hasn't left the building.
+
+**Diagnosis checklist when a Cloudflare-Tunnel-fronted host goes unreachable "from outside" but is
+healthy locally:** `systemctl status cloudflared` (daemon up?) → `journalctl -u cloudflared -n 50`
+(look for repeated QUIC handshake/registration retries, `context deadline exceeded`, or "no
+`edge connections`") → if venue/event Wi-Fi is involved, suspect UDP-blocking FIRST, apply the
+HTTP/2 drop-in above, and re-verify — don't chase the app/service layer when the daemon logs show
+the tunnel itself never reconnecting.
+
 ## CLIProxyAPI Login Flow
 
 Use `cli-proxy-api -claude-login -no-browser` with callback URL paste.

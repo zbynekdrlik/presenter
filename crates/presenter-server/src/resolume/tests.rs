@@ -886,7 +886,7 @@ async fn handle_bible_routes_to_clear_when_no_passage() {
 // ── record_error tests ──────────────────────────────────────────────
 
 #[tokio::test]
-async fn record_error_transitions_to_error_state_and_clears_cache() {
+async fn record_error_transitions_to_error_state_and_clears_endpoint_but_not_the_mapping() {
     let (_server, mut driver, status) = setup_bible_driver().await;
 
     // First establish a mapping
@@ -906,10 +906,21 @@ async fn record_error_transitions_to_error_state_and_clears_cache() {
     assert!(snap.error_since.is_some());
     drop(snap);
 
-    // Verify caches are cleared
-    assert!(driver.mapping.is_none());
+    // #563b: a SINGLE failure must NOT invalidate the cached composition
+    // mapping — only CACHE_INVALIDATION_THRESHOLD (3) consecutive failures
+    // do (see `backoff_tests::record_error_keeps_the_cached_mapping_...`).
+    // The resolved endpoint is cheap to redo, though, and IS reset on every
+    // failure to encourage fast recovery (e.g. a flaky DNS name resolving
+    // again).
+    assert!(
+        driver.mapping.is_some(),
+        "a single failure must serve the stale-but-good mapping, not refetch"
+    );
     assert!(driver.endpoint.is_none());
-    assert!(driver.last_mapping_refresh.is_none());
+    assert!(
+        driver.last_mapping_refresh.is_some(),
+        "not invalidated below the threshold, so its age stays meaningful"
+    );
     assert!(driver.last_timer_payload.is_none());
 }
 

@@ -222,6 +222,9 @@ pub mod resolume_host {
         pub host: String,
         pub port: i32,
         pub is_enabled: bool,
+        /// #564: runtime-discovered port (auto-recovery from Arena port
+        /// drift). `NULL` means "dial `port`".
+        pub active_port: Option<i32>,
         pub created_at: DateTimeWithTimeZone,
         pub updated_at: DateTimeWithTimeZone,
     }

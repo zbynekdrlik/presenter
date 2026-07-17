@@ -209,6 +209,7 @@ impl Repository {
                     "companion_setter" => SettingsAuditSource::CompanionSetter,
                     "startup_default" => SettingsAuditSource::StartupDefault,
                     "schema_migration" => SettingsAuditSource::SchemaMigration,
+                    "port_drift_discovery" => SettingsAuditSource::PortDriftDiscovery,
                     other => anyhow::bail!("unknown source: {other}"),
                 };
                 Ok(crate::audit::SettingsAuditEntry {

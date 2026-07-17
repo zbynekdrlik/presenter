@@ -2,9 +2,13 @@
 mod backoff_tests;
 mod clip_map;
 mod driver;
+mod error_kind;
 mod handlers;
 #[cfg(test)]
 mod latency_tests;
+mod port_drift;
+#[cfg(test)]
+mod port_drift_integration_tests;
 mod types;
 
 use anyhow::anyhow;
@@ -23,6 +27,8 @@ use tokio::task::JoinHandle;
 use tracing::error;
 use uuid::Uuid;
 
+pub(crate) use error_kind::ResolumeErrorKind;
+
 use driver::{run_host_worker, HostCommand};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -30,6 +36,10 @@ const HOST_COMMAND_CAPACITY: usize = 16;
 /// Bounded buffer for per-push audit rows (#483). `try_send` drops rows when
 /// full so the push path never blocks on the DB writer.
 const AUDIT_CHANNEL_CAPACITY: usize = 512;
+/// #564: bounded buffer for port-drift discovery/heal-back events — tiny and
+/// infrequent (at most one per host per backoff attempt while a drift
+/// persists), so a small capacity is ample.
+const PORT_DRIFT_CHANNEL_CAPACITY: usize = 32;
 /// How long to collect per-host completions for one slide before emitting the
 /// cross-host perceived-latency line. Slides during singing are >1 s apart, so
 /// a 2 s window captures all hosts (incl. a slow ~655 ms one) without colliding
@@ -62,9 +72,29 @@ pub struct ResolumeConnectionSnapshot {
     pub last_latency_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// #563c: timeout / connect-refused / connect-other / reset / other —
+    /// distinguishes the FAILURE CLASS, not just its text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error_kind: Option<ResolumeErrorKind>,
     pub consecutive_failures: u32,
     pub last_attempt: Option<DateTime<Utc>>,
     pub error_since: Option<DateTime<Utc>>,
+    /// #563d: absolute time the next retry is allowed, while in a post-error
+    /// backoff window. Stored as an absolute instant (not a pre-computed
+    /// "seconds remaining") so [`Self::next_retry_in_secs`] is always fresh
+    /// at read time instead of going stale between the write and the poll.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_retry_at: Option<DateTime<Utc>>,
+    /// #564: the runtime-discovered port, when a port-drift probe found
+    /// Resolume actually listening somewhere other than the host's
+    /// configured `port`. `None` means "dialing the configured port".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_port: Option<u16>,
+    /// #563g/h: expected clip names missing from the last-fetched
+    /// composition (e.g. `"#timer"`, `"#song-name"`) — empty when nothing is
+    /// missing, or nothing has been fetched yet.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub missing_clips: Vec<String>,
 }
 
 impl ResolumeConnectionSnapshot {
@@ -74,10 +104,21 @@ impl ResolumeConnectionSnapshot {
             last_success: None,
             last_latency_ms: None,
             last_error: None,
+            last_error_kind: None,
             consecutive_failures: 0,
             last_attempt: None,
             error_since: None,
+            next_retry_at: None,
+            active_port: None,
+            missing_clips: Vec::new(),
         }
+    }
+
+    /// #563d: seconds until the next retry is allowed, or `None` when not in
+    /// a backoff window. Clamped at 0 rather than going negative when read
+    /// slightly after the retry became due.
+    pub fn next_retry_in_secs(&self, now: DateTime<Utc>) -> Option<i64> {
+        self.next_retry_at.map(|at| (at - now).num_seconds().max(0))
     }
 }
 
@@ -131,6 +172,17 @@ impl TimerFrame {
     }
 }
 
+/// #564: one discovered port-drift (or heal-back, when `new_port` is `None`)
+/// event, sent from a host worker to the DB-backed writer task so
+/// persistence never blocks the hot path.
+#[derive(Debug, Clone)]
+pub(crate) struct PortDriftEvent {
+    pub(crate) host_id: ResolumeHostId,
+    #[allow(dead_code)] // carried for future audit/log enrichment
+    pub(crate) old_port: Option<u16>,
+    pub(crate) new_port: Option<u16>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolumeRegistry {
     client: Client,
@@ -141,6 +193,10 @@ pub struct ResolumeRegistry {
     /// before the first host is spawned). Empty in unit tests built via `new()`.
     /// `Arc<OnceLock>` so all clones of the registry share the same sink.
     audit_tx: Arc<OnceLock<mpsc::Sender<ResolumePushAuditEntry>>>,
+    /// #564: non-blocking sink for port-drift persistence, wired alongside
+    /// `audit_tx` by the same [`ResolumeRegistry::attach_audit_writer`] call
+    /// (same Repository, same call site).
+    port_drift_tx: Arc<OnceLock<mpsc::Sender<PortDriftEvent>>>,
 }
 
 #[derive(Debug)]
@@ -161,23 +217,31 @@ impl ResolumeRegistry {
             client,
             hosts: Arc::new(RwLock::new(HashMap::new())),
             audit_tx: Arc::new(OnceLock::new()),
+            port_drift_tx: Arc::new(OnceLock::new()),
         })
     }
 
-    /// #483: wire the DB-backed per-push audit writer (idempotent). Spawns one
-    /// background task that owns the repository, persists each push-audit row,
-    /// and emits the cross-host perceived-latency line. The push path only
-    /// `try_send`s to it. MUST be called before hosts are spawned (i.e. before
-    /// `set_hosts`) so workers pick up the sink. Repeated calls are no-ops.
+    /// #483/#564: wire the DB-backed per-push audit writer AND the port-drift
+    /// persistence writer (idempotent, both share this one Repository). Spawns
+    /// background tasks that persist each push-audit row / port-drift event
+    /// without ever blocking the hot path (`try_send`). MUST be called before
+    /// hosts are spawned (i.e. before `set_hosts`) so workers pick up both
+    /// sinks. Repeated calls are no-ops.
     pub fn attach_audit_writer(&self, repo: Repository) {
-        if self.audit_tx.get().is_some() {
-            return;
+        if self.audit_tx.get().is_none() {
+            let (tx, rx) = mpsc::channel(AUDIT_CHANNEL_CAPACITY);
+            // If a concurrent caller won the race, drop our channel (its
+            // writer task exits when the sender drops) and keep the installed
+            // one.
+            if self.audit_tx.set(tx).is_ok() {
+                spawn_audit_writer(repo.clone(), rx);
+            }
         }
-        let (tx, rx) = mpsc::channel(AUDIT_CHANNEL_CAPACITY);
-        // If a concurrent caller won the race, drop our channel (its writer
-        // task exits when the sender drops) and keep the installed one.
-        if self.audit_tx.set(tx).is_ok() {
-            spawn_audit_writer(repo, rx);
+        if self.port_drift_tx.get().is_none() {
+            let (tx, rx) = mpsc::channel(PORT_DRIFT_CHANNEL_CAPACITY);
+            if self.port_drift_tx.set(tx).is_ok() {
+                spawn_port_drift_writer(repo, rx);
+            }
         }
     }
 
@@ -230,9 +294,13 @@ impl ResolumeRegistry {
                 last_success: None,
                 last_latency_ms: None,
                 last_error: None,
+                last_error_kind: None,
                 consecutive_failures: 0,
                 last_attempt: None,
                 error_since: None,
+                next_retry_at: None,
+                active_port: host.active_port,
+                missing_clips: Vec::new(),
             }
         } else {
             ResolumeConnectionSnapshot::disabled()
@@ -241,9 +309,17 @@ impl ResolumeRegistry {
         let status_clone = Arc::clone(&status);
         let config_clone = host.clone();
         let audit_tx = self.audit_tx.get().cloned();
+        let port_drift_tx = self.port_drift_tx.get().cloned();
         let handle = tokio::spawn(async move {
-            if let Err(err) =
-                run_host_worker(client, config_clone, status_clone, command_rx, audit_tx).await
+            if let Err(err) = run_host_worker(
+                client,
+                config_clone,
+                status_clone,
+                command_rx,
+                audit_tx,
+                port_drift_tx,
+            )
+            .await
             {
                 error!(host_id = %host.id, ?err, "resolume worker terminated with error");
             }
@@ -379,6 +455,28 @@ fn spawn_audit_writer(repo: Repository, mut rx: mpsc::Receiver<ResolumePushAudit
             }
         }
         flush_perceived(&mut pending, true);
+    });
+}
+
+/// #564: background task that owns the repository and persists each
+/// port-drift discovery/heal-back event. A failed persist is logged and
+/// dropped — the in-memory dial already switched (that's what matters for
+/// the live connection); losing a persist only means a restart re-learns the
+/// active port on the next refusal instead of resuming it immediately.
+fn spawn_port_drift_writer(repo: Repository, mut rx: mpsc::Receiver<PortDriftEvent>) {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let Err(err) = repo
+                .update_resolume_host_active_port(event.host_id, event.new_port)
+                .await
+            {
+                tracing::warn!(
+                    ?err,
+                    host_id = %event.host_id,
+                    "failed to persist resolume port-drift discovery"
+                );
+            }
+        }
     });
 }
 

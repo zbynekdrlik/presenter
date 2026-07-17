@@ -268,6 +268,51 @@ body.operator {
   color: var(--operator-muted);
 }
 
+/* #564: Resolume connection indicator — one chip per ENABLED host. Absent
+   entirely when no host is configured/enabled (no empty placeholder). */
+.operator__resolume-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.operator__resolume-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  background: var(--operator-panel);
+  border: 1px solid var(--operator-border);
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.operator__resolume-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #475569;
+}
+
+/* Green = last composition fetch OK. Yellow = retrying (not yet 2 min down).
+   Red = failing for more than 2 min. */
+.operator__resolume-dot--green {
+  background: #22c55e;
+}
+
+.operator__resolume-dot--yellow {
+  background: #f59e0b;
+}
+
+.operator__resolume-dot--red {
+  background: #ef4444;
+}
+
 .operator__stage-layout {
   display: flex;
   flex-direction: column;

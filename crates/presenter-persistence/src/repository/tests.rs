@@ -357,6 +357,134 @@ async fn resolume_host_crud_round_trip() {
     assert!(after_delete.is_empty());
 }
 
+/// #564: a fresh host has no discovered drift.
+#[tokio::test]
+async fn resolume_host_active_port_defaults_to_none() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
+    let created = repo
+        .create_resolume_host(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.active_port, None);
+    assert_eq!(created.dial_port(), 8090);
+}
+
+/// #564: persisting a discovered drift survives a reload, dials the ACTIVE
+/// port, and is audited under the autonomous `port_drift_discovery` source —
+/// never the human-facing source the caller might pass elsewhere.
+#[tokio::test]
+async fn update_resolume_host_active_port_persists_and_audits_as_port_drift_discovery() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
+    let created = repo
+        .create_resolume_host(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    let updated = repo
+        .update_resolume_host_active_port(created.id, Some(8091))
+        .await
+        .unwrap();
+    assert_eq!(updated.active_port, Some(8091));
+    assert_eq!(updated.dial_port(), 8091);
+
+    // Survives a reload from the DB, not just the in-memory return value.
+    let reloaded = repo
+        .list_resolume_hosts()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.id == created.id)
+        .unwrap();
+    assert_eq!(reloaded.active_port, Some(8091));
+
+    let audit = repo
+        .list_settings_audit(
+            Some("resolume_host"),
+            Some(&created.id.to_string()),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    let drift_entry = audit
+        .iter()
+        .find(|e| e.source == crate::audit::SettingsAuditSource::PortDriftDiscovery)
+        .expect("the active_port write must be audited as port_drift_discovery");
+    assert_eq!(drift_entry.actor, "resolume-driver");
+
+    // Healing back to the configured port clears active_port again.
+    let healed = repo
+        .update_resolume_host_active_port(created.id, None)
+        .await
+        .unwrap();
+    assert_eq!(healed.active_port, None);
+    assert_eq!(healed.dial_port(), 8090);
+}
+
+/// #564: an explicit host/port edit invalidates a previously-discovered
+/// drift — it was learned against the OLD host/port pair and would dial the
+/// wrong thing once the admin repoints the config.
+#[tokio::test]
+async fn editing_host_or_port_clears_a_previously_discovered_active_port() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
+    let created = repo
+        .create_resolume_host(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    repo.update_resolume_host_active_port(created.id, Some(8091))
+        .await
+        .unwrap();
+
+    // Editing only the label (host/port unchanged) preserves the drift.
+    let label_only = ResolumeHostDraft::new("Arena (renamed)", "resolume.lan", 8090);
+    let after_label_edit = repo
+        .update_resolume_host(
+            created.id,
+            &label_only,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        after_label_edit.active_port,
+        Some(8091),
+        "a label-only edit must not clear a legitimately-discovered drift"
+    );
+
+    // Editing the port clears the (now stale) discovered drift.
+    let new_port = ResolumeHostDraft::new("Arena (renamed)", "resolume.lan", 8095);
+    let after_port_edit = repo
+        .update_resolume_host(
+            created.id,
+            &new_port,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        after_port_edit.active_port, None,
+        "an explicit port edit must clear the stale discovered drift"
+    );
+    assert_eq!(after_port_edit.dial_port(), 8095);
+}
+
 #[tokio::test]
 async fn android_stage_display_crud_round_trip() {
     let repo = Repository::connect_in_memory().await.unwrap();
