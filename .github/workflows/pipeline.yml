@@ -1296,11 +1296,15 @@ jobs:
           fi
           DISK_COUNT=$(find /opt/presenter-dev/libraries -mindepth 1 -maxdepth 1 -type d ! -name 'LibraryData' | wc -l)
           DB_COUNT=$(printf '%s' "$LIBS" | python3 -c "import json,sys; data=json.load(sys.stdin); print(len([l for l in data if l.get('name','').strip().lower()!='bible']))")
-          if [ "$DISK_COUNT" -ne "$DB_COUNT" ]; then
+          # The DB may legitimately hold MORE libraries than the git-synced disk set:
+          # operators create libraries in the app (and #555 sync replicates them).
+          # This check exists to catch a FAILED IMPORT (#229) — i.e. fewer libraries
+          # in the DB than shipped on disk — not to forbid app-created ones.
+          if [ "$DB_COUNT" -lt "$DISK_COUNT" ]; then
             echo "::error::Library count mismatch: disk=$DISK_COUNT db=$DB_COUNT (DB may be seed-only or import failed) — see issue #229"
             exit 1
           fi
-          echo "Data check passed: $DB_COUNT libraries on disk match DB"
+          echo "Data check passed: $DB_COUNT libraries in DB cover the $DISK_COUNT on disk"
           REMOTE_SCRIPT
 
       - name: Post-deploy smoke test
