@@ -923,10 +923,22 @@ jobs:
           fi
           echo "Copying production database for migration testing..."
           PROD_DB="/tmp/prod-migration-test-$$.db"
-          if ! scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_DB"; then
-            echo "::error::Could not copy production database from prod-server. The migration test cannot run, which means we cannot verify the new binary won't break production. Fix prod SSH access (DEPLOY_SSH_KEY secret must be installed in prod's authorized_keys) before retrying."
+          # A raw scp of a LIVE SQLite file races concurrent writes — over a slow
+          # inter-site link the multi-minute copy window guarantees a torn,
+          # "malformed" image (hit 2026-07-17 at an event). Take a CONSISTENT
+          # snapshot with SQLite's online backup API on the prod box, gzip it
+          # (~8x smaller — the slow-bridge copy drops from hours to minutes),
+          # then pull the compressed snapshot.
+          if ! ssh -i ~/.ssh/id_prod prod-server "python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot.db'); s.backup(d); d.close(); s.close()\" && gzip -1f /tmp/prod-ci-snapshot.db"; then
+            echo "::error::Could not snapshot the production database on prod-server (python3 sqlite3 backup). The migration test cannot run. Fix prod SSH access / python3 before retrying."
             exit 1
           fi
+          if ! scp -i ~/.ssh/id_prod prod-server:/tmp/prod-ci-snapshot.db.gz "$PROD_DB.gz"; then
+            echo "::error::Could not copy production database snapshot from prod-server. The migration test cannot run, which means we cannot verify the new binary won't break production. Fix prod SSH access (DEPLOY_SSH_KEY secret must be installed in prod's authorized_keys) before retrying."
+            exit 1
+          fi
+          ssh -i ~/.ssh/id_prod prod-server "rm -f /tmp/prod-ci-snapshot.db.gz"
+          gunzip -f "$PROD_DB.gz"
           echo "Testing new binary against production database..."
           chmod +x target/release/presenter-server
           PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \
@@ -1086,10 +1098,18 @@ jobs:
           fi
           echo "Fetching production database snapshot..."
           PROD_TMP="/tmp/prod-db-snapshot-$$.db"
-          if ! scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_TMP" 2>/dev/null; then
-            echo "::error::Could not copy production database. Dev DB will retain its current state — this is a regression risk. Fix prod SSH access before proceeding."
+          # Consistent SQLite online-backup snapshot + gzip — a raw scp of the live
+          # file tears under concurrent writes (see the migration-test step above).
+          if ! ssh -i ~/.ssh/id_prod prod-server "python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot2.db'); s.backup(d); d.close(); s.close()\" && gzip -1f /tmp/prod-ci-snapshot2.db"; then
+            echo "::error::Could not snapshot the production database on prod-server. Dev DB will retain its current state — this is a regression risk. Fix prod SSH access / python3 before proceeding."
             exit 1
           fi
+          if ! scp -i ~/.ssh/id_prod prod-server:/tmp/prod-ci-snapshot2.db.gz "$PROD_TMP.gz" 2>/dev/null; then
+            echo "::error::Could not copy production database snapshot. Dev DB will retain its current state — this is a regression risk. Fix prod SSH access before proceeding."
+            exit 1
+          fi
+          ssh -i ~/.ssh/id_prod prod-server "rm -f /tmp/prod-ci-snapshot2.db.gz"
+          gunzip -f "$PROD_TMP.gz"
           PROD_SIZE=$(stat -c %s "$PROD_TMP")
           if [ "$PROD_SIZE" -lt 1024 ]; then
             echo "::error::Production DB snapshot suspiciously small (${PROD_SIZE} bytes). Aborting to avoid wiping dev with garbage."
