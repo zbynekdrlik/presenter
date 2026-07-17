@@ -897,10 +897,10 @@ jobs:
           # keyscan fails while prod is deliberately powered off — that case is
           # handled (and loudly ::notice::d) by the migration pre-check's own
           # reachability probe in the NEXT step; setup must not die before it.
-          ssh-keyscan 100.122.204.47 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null || true
           cat >> ~/.ssh/config <<EOF
           Host prod-server
-              HostName 100.122.204.47
+              HostName 10.77.9.205
               User newlevel
               IdentityFile ~/.ssh/id_prod
           EOF
@@ -1362,12 +1362,12 @@ jobs:
       - name: Check companion-snv reachability
         id: snv_check
         run: |
-          if ssh-keyscan -T 5 100.122.204.47 2>/dev/null | grep -q '^100.122.204.47'; then
+          if ssh-keyscan -T 5 10.77.9.205 2>/dev/null | grep -q '^10.77.9.205'; then
             echo "reachable=true" >> "$GITHUB_OUTPUT"
-            echo "companion-snv (100.122.204.47) is reachable"
+            echo "companion-snv (10.77.9.205) is reachable"
           else
             echo "reachable=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::companion-snv (100.122.204.47) unreachable (powered off?) — skipping SNV companion deploy; it re-arms once prod is back."
+            echo "::notice::companion-snv (10.77.9.205) unreachable (powered off?) — skipping SNV companion deploy; it re-arms once prod is back."
           fi
 
       - name: Setup SSH for SNV (companion-snv.lan = production host)
@@ -1376,10 +1376,10 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_snv
           chmod 600 ~/.ssh/id_snv
-          ssh-keyscan 100.122.204.47 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null
           cat >> ~/.ssh/config <<EOF
           Host companion-snv
-              HostName 100.122.204.47
+              HostName 10.77.9.205
               User newlevel
               IdentityFile ~/.ssh/id_snv
           EOF
