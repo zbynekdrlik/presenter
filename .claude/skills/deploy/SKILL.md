@@ -148,6 +148,58 @@ PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main
 
 Deploy is DB-safe — ProPresenter import is skipped on an existing DB ("preserving presentations"). DBs predating `video_sources` (PP) lack that table → `/integrations/video-sources` 500s; proper fix is an idempotent incremental migration (#468).
 
+## ROLLBACK RUNBOOK — regression on prod after a release (#558-era, standing)
+
+Escalating tiers; start at the lowest that covers the symptom. The v0.4.202+ schema
+migration is ADDITIVE (updated_at/sync_id/deleted_at columns) — an older binary
+ignores unknown columns, so a binary rollback WITHOUT a DB restore is always safe.
+Every deploy also backs up the DB first (5 retained in `backups/` on each host).
+
+**Tier 0 — sync kill switch (~1 min, keeps everything else live).** If the symptom
+is sync-shaped (songs changing/disappearing across sites, trash weirdness), disable
+the sync loop only:
+```bash
+# on the affected host(s) — SNV: sshpass -p '<pw in memory>' ssh newlevel@presenter.lan; PP: ...@companion-pp.lan
+sudo rm /etc/systemd/system/presenter.service.d/sync-peer.conf   # the PRESENTER_SYNC_PEER_URL drop-in
+sudo systemctl daemon-reload && sudo systemctl restart presenter
+curl -s localhost/healthz   # still ok; /integrations/sync/status now enabled:false
+```
+Re-enable = restore the drop-in + restart. All other features keep running.
+
+**Tier 1 — binary rollback to the previous release (~10 min, no data loss).**
+Download the previous release tarball (`gh release download v<PREV> -p '*'`), extract
+`presenter-server`, then on the host: stop service → replace `/opt/presenter/presenter-server`
+→ start → verify `/healthz` shows the OLD version and `/ui/operator` works. New-schema
+columns are ignored by the old binary; songs edited meanwhile keep working.
+
+**Tier 1.5 — git revert (clean, slower ~40 min).** `git revert -m 1 <merge-sha>` on a
+dev branch → PR → CI → merge → auto-deploy. Use when the regression is real but not
+urgent enough for Tier 1's manual surgery.
+
+**Tier 2 — DB restore (LOSES post-deploy edits — ASK THE USER FIRST, destructive).**
+Only for actual data corruption: stop service → copy the newest pre-deploy backup from
+`/opt/presenter/backups/` over `presenter.db` (rm -f the -wal/-shm) → start. If sync is
+enabled, FIRST kill sync on BOTH hosts (Tier 0), restore, verify, then re-enable —
+otherwise LWW can re-import the corruption from the peer.
+
+## HOTFIX MODE — user-declared emergencies only (skips the full CI wait, never main protection)
+
+Activate ONLY when the user explicitly declares hotfix mode. This is the fast path for
+"prod is broken NOW"; it does NOT admin-merge or weaken main — the process catches up after.
+
+1. Fix on `dev`, minimal targeted gate only: `cargo fmt --all --check`, `cargo clippy
+   --workspace --all-targets -- -D warnings`, plus ONLY the tests covering the touched
+   area (skip the full suite/E2E matrix).
+2. COMMIT on dev (the deploy-from-clean-tree hook requires a clean committed tree).
+3. Build locally on dev2 (this is the build box): `bash scripts/build-ui.sh && cargo build
+   --release -p presenter-server`.
+4. Manual deploy straight to the affected host(s) — standing-approved manual deploy of the
+   app being worked on: scp the binary → stop service → swap → start → verify `/healthz`
+   version + the FIXED behavior live in a real browser.
+5. IMMEDIATELY AFTER the fire is out: push dev, let full CI run, open/ride the dev→main PR
+   as normal — the hotfix commit goes through the ordinary gates retroactively; any CI
+   failure found then is fixed forward. Never leave a hotfix deployed without its PR landing.
+
 ## CLIProxyAPI Login Flow
 
 Use `cli-proxy-api -claude-login -no-browser` with callback URL paste.
