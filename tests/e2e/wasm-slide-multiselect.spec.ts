@@ -652,6 +652,109 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     expect(await domSlideOrder(page)).toEqual(idsB);
   });
 
+  test("a 409 recovery GET in flight during a presentation switch is dropped, never applied to the wrong presentation (#558 X1)", async ({
+    page,
+    request,
+  }) => {
+    // #558 X1: the W1 guard above only covers the window BEFORE the
+    // recovery GET fires. This test targets the SECOND window — the
+    // recovery GET's OWN `.await` — by delaying the GET itself (not the
+    // paste POST, which 409s immediately) and switching presentations
+    // while that GET is held open.
+    // NOTE: the differentiator letter is glued onto the preceding word
+    // (`RecoverA`/`RecoverB`), NEVER a standalone space-separated token —
+    // `query_tokens` splits on non-alphanumeric, and a lone single-char
+    // token like "A" broadly OR-matches the letter 'a' against real
+    // production library names (search.rs's `search_libraries` token match
+    // is `Condition::any()`), flooding `matched_library_ids` and starving
+    // the presentation query's result-page LIMIT before it ever reaches
+    // this test's own presentation. Every other 409/race test above
+    // follows this same glued-suffix convention for exactly this reason.
+    const libA = `E2E MSel Conflict409RecoverA ${Date.now()}`;
+    const { presentationId: presIdA, slideIds: idsA } =
+      await createPresentationWithSlides(request, 3, libA);
+    const libB = `E2E MSel Conflict409RecoverB ${Date.now()}`;
+    const { slideIds: idsB } = await createPresentationWithSlides(request, 2, libB);
+
+    await openPresentationInEditMode(page, libA);
+    await checkboxFor(page, idsA[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+
+    // The paste itself 409s immediately — the operator is still on A, so
+    // the handler's FIRST `still_here` check passes and it fires the
+    // recovery GET.
+    await page.route("**/slides/paste", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "the paste position no longer exists" }),
+      }),
+    );
+
+    // Hold the recovery GET's response open (a REAL server round-trip,
+    // delayed DELIVERY only — same technique as the V4 race test above).
+    // `recoveryStarted` fires the MOMENT the route handler begins running
+    // (proving the GET is genuinely in flight server-side) so the test
+    // never switches presentations before the recovery GET has actually
+    // been dispatched — unlike the paste POST above, this GET only fires
+    // AFTER an internal `.await` chain (the 409 response + the still_here
+    // check), so it is never guaranteed in flight the instant the click
+    // resolves.
+    let recoveryStarted: () => void = () => {};
+    const recoveryHasStarted = new Promise<void>((resolve) => {
+      recoveryStarted = resolve;
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryReleased = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const recoveryResponse = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/presentations/${presIdA}`) &&
+        r.request().method() === "GET",
+    );
+    await page.route(`**/presentations/${presIdA}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      recoveryStarted();
+      const response = await request.fetch(route.request());
+      const body = await response.body();
+      await recoveryReleased;
+      await route.fulfill({
+        status: response.status(),
+        headers: response.headers(),
+        body,
+      });
+    });
+
+    await insertBar(page, 0).click(); // fires the paste -> 409 -> recovery GET
+    await recoveryHasStarted;
+
+    // Switch to presentation B WHILE the recovery GET is still held open —
+    // the exact race #558 X1 fixes: `still_here` was true when the GET
+    // fired, but by the time it resolves the operator has moved on.
+    await switchToPresentation(page, libB, idsB[0]);
+
+    releaseRecovery();
+    await recoveryResponse;
+    // Positive sentinel, not an arbitrary sleep (#558 W10) — see the V4
+    // race test above for the rationale.
+    await checkboxFor(page, idsB[0]).click();
+    await expect(
+      page.locator('[data-role="slide-selection-count"]'),
+    ).toHaveText("1 selected");
+
+    // B must be COMPLETELY untouched by A's stale recovery refetch, and no
+    // misleading "refreshed" toast for a presentation nobody is looking at.
+    expect(await domSlideOrder(page)).toEqual(idsB);
+    await expect(page.locator('[data-role="toast"]')).toHaveAttribute(
+      "data-visible",
+      "false",
+    );
+  });
+
   test("clipboard shortcuts are inert on a non-worship view (#558 V5)", async ({
     page,
     request,

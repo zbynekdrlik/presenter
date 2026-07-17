@@ -328,22 +328,42 @@ fn paste_copy(
                 // OLD (now unrelated) presentation onto whatever is now
                 // selected would be exactly the V4 bug this guards against.
                 // Recover ONLY if `pres_id` is STILL the selected
-                // presentation; otherwise there is nothing to recover onto
-                // — just drop the stale clipboard silently (the operator
-                // already left the song).
+                // presentation; otherwise there is nothing to recover onto.
                 let still_here = ctx
                     .selected_presentation
                     .get_untracked()
                     .map(|pres| pres.id.to_string() == pres_id)
                     .unwrap_or(false);
                 if still_here {
+                    // #558 X1: the W1 guard above only covers the window
+                    // BEFORE this recovery GET — its OWN `.await` opens a
+                    // SECOND window the operator can switch presentations
+                    // (or make another edit) in. Re-check BOTH `still_here`
+                    // and the `slide_edit_seq` guard (the identical idiom
+                    // `apply_slides_guarded` uses on the success path) once
+                    // the GET resolves; apply only if both still hold, else
+                    // drop the response silently — nothing to recover onto.
                     if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
-                        ctx.selected_presentation.set(Some(detail.presentation));
+                        let still_here_after_fetch = ctx
+                            .selected_presentation
+                            .get_untracked()
+                            .map(|pres| pres.id.to_string() == pres_id)
+                            .unwrap_or(false);
+                        if still_here_after_fetch && op.slide_edit_seq.get_untracked() == my_seq {
+                            ctx.selected_presentation.set(Some(detail.presentation));
+                            ctx.show_toast(
+                                "Paste position changed — refreshed, try again",
+                                "error",
+                            );
+                        }
                     }
-                    ctx.show_toast("Paste position changed — refreshed, try again", "error");
-                } else {
-                    op.clipboard.set(None);
                 }
+                // #558 X3: NOT still-here means there is nothing to recover
+                // onto — the presentation-switch effect already cleared the
+                // (now stale) clipboard. Writing `clipboard.set(None)` here
+                // would instead wipe a FRESH clipboard the operator may have
+                // just set on whatever they switched to, so this branch does
+                // nothing at all.
             }
             Err(_) => {
                 // Clipboard KEPT so the user can retry.

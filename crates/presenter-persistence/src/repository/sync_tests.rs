@@ -70,7 +70,7 @@ async fn apply_creates_unknown_updates_newer_skips_older() {
     let repo = repo().await;
 
     // Unknown → created (library auto-created too).
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(
             &peer_song("sid-1", "Peer Song", "v1", 10),
             &std::collections::HashSet::new(),
@@ -81,7 +81,7 @@ async fn apply_creates_unknown_updates_newer_skips_older() {
 
     // Newer peer edit → updated, and the PEER timestamp is stored verbatim.
     let newer = peer_song("sid-1", "Peer Song", "v2", 5);
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&newer, &std::collections::HashSet::new())
         .await
         .unwrap();
@@ -94,7 +94,7 @@ async fn apply_creates_unknown_updates_newer_skips_older() {
     );
 
     // Older peer state → skipped, content untouched.
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(
             &peer_song("sid-1", "Peer Song", "stale", 60),
             &std::collections::HashSet::new(),
@@ -129,7 +129,7 @@ async fn apply_adopts_by_name_preserving_the_local_row_id() {
         deleted_at: None,
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&peer, &std::collections::HashSet::new())
         .await
         .unwrap();
@@ -179,7 +179,7 @@ async fn adopt_by_name_never_guesses_among_multiple_live_candidates() {
         deleted_at: None,
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&peer, &std::collections::HashSet::new())
         .await
         .unwrap();

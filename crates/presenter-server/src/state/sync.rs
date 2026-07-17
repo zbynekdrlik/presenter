@@ -422,19 +422,60 @@ fn cycle_all_failed(pulled: usize, applied: usize, errors: usize) -> bool {
     pulled > 0 && applied == 0 && errors == pulled
 }
 
-/// #558 W2: whether `err` is a TRANSPORT-shaped failure — the peer is
-/// genuinely unreachable (connection refused/reset) or the request timed
-/// out — as opposed to an APPLICATION-level failure (the peer answered with
-/// an error status for this one song, or the local apply itself failed).
-/// Only a transport-shaped failure may count toward the systemic-failure
-/// breaker; `error_for_status()` (a 4xx/5xx from the peer) constructs a
-/// `reqwest::Error` whose `is_status()` is true but whose `is_timeout()` /
-/// `is_connect()` are both false, so it correctly falls on the
-/// application-level side of this split.
+/// #558 W2, reclassified by X4: whether `err` is a TRANSPORT-shaped failure
+/// — the peer is genuinely unreachable (connection refused, a request
+/// timeout, or the connection was reset/dropped partway through the
+/// response body) — as opposed to an APPLICATION-level failure (the peer
+/// answered with an error status for this one song, a malformed body on an
+/// otherwise-successful response, or the local apply itself failed). A
+/// `reqwest::Error` carries a `status()` ONLY when it was built from
+/// `error_for_status()` (a real 4xx/5xx the peer sent); every other kind
+/// reports `status() == None`.
+///
+/// #558 X4: the OLD `is_timeout() || is_connect()` check missed a
+/// connection that accepts the request, starts streaming the response,
+/// then resets/closes mid-body — neither a timeout nor a connect-phase
+/// failure by reqwest's own classification, so it fell through to
+/// "application-level" even though the peer is genuinely gone from that
+/// point on. `reqwest::Error::is_decode()` CANNOT tell this apart from a
+/// genuine malformed-JSON parse failure on a fully-received 2xx body —
+/// `Response::bytes()`/`json()` route EVERY body-read failure through the
+/// same `Kind::Decode` (verified against reqwest 0.12: both a connection
+/// reset mid-transfer AND a JSON syntax error report `is_decode() == true`,
+/// `status() == None`). The two ARE distinguishable one level deeper: a
+/// dropped/reset connection carries a `std::io::Error` in its `source()`
+/// chain whose `ErrorKind` names the connection death (`UnexpectedEof` —
+/// the promised body never fully arrived — or `ConnectionReset` /
+/// `ConnectionAborted` / `BrokenPipe`); a JSON syntax error's source chain
+/// never contains an `io::Error` at all (its source is a `serde_json`
+/// parse error over bytes that were already fully, successfully read).
 fn is_transport_failure(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<reqwest::Error>()
-        .map(|e| e.is_timeout() || e.is_connect())
-        .unwrap_or(false)
+    let Some(e) = err.downcast_ref::<reqwest::Error>() else {
+        return false;
+    };
+    if e.status().is_some() {
+        return false;
+    }
+    if e.is_timeout() || e.is_connect() {
+        return true;
+    }
+    let mut source = std::error::Error::source(e);
+    while let Some(cause) = source {
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            use std::io::ErrorKind;
+            if matches!(
+                io_err.kind(),
+                ErrorKind::UnexpectedEof
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+            ) {
+                return true;
+            }
+        }
+        source = cause.source();
+    }
+    false
 }
 
 async fn fetch_peer_version(client: &reqwest::Client, peer_url: &str) -> Option<String> {
@@ -450,11 +491,30 @@ async fn fetch_peer_version(client: &reqwest::Client, peer_url: &str) -> Option<
 }
 
 /// One reconciliation pass against the peer. Returns (pulled, applied, errors).
-/// Directly callable from the integration test (bypasses the loop).
+/// Directly callable from the integration test (bypasses the loop). Thin
+/// wrapper over `run_sync_cycle_with_clients` using ONE client for both the
+/// manifest fetch and the per-song content fetches — the real production
+/// shape, where a single client with a generous timeout serves everything.
 pub(crate) async fn run_sync_cycle(
     state: &AppState,
     peer_url: &str,
     client: &reqwest::Client,
+) -> anyhow::Result<(usize, usize, usize)> {
+    run_sync_cycle_with_clients(state, peer_url, client, client).await
+}
+
+/// Same reconciliation pass as `run_sync_cycle`, but lets the manifest fetch
+/// and the per-song content fetches use DIFFERENT clients (#558 X7) — needed
+/// by the breaker unit tests, which pin a razor-thin timeout on the per-song
+/// fetches ONLY (to force a genuine transport failure deterministically).
+/// Routing the cheap, always-fast manifest fetch through a NORMAL-timeout
+/// client keeps it from itself flaking under a loaded CI runner, where even
+/// an un-delayed mock response can occasionally exceed a few milliseconds.
+pub(crate) async fn run_sync_cycle_with_clients(
+    state: &AppState,
+    peer_url: &str,
+    manifest_client: &reqwest::Client,
+    content_client: &reqwest::Client,
 ) -> anyhow::Result<(usize, usize, usize)> {
     let repo = state.repository();
 
@@ -465,7 +525,7 @@ pub(crate) async fn run_sync_cycle(
         local_map.insert(row.sync_id.clone(), row.updated_at);
     }
 
-    let peer_manifest: Vec<SyncManifestEntryDto> = client
+    let peer_manifest: Vec<SyncManifestEntryDto> = manifest_client
         .get(format!("{peer_url}/sync/manifest"))
         .send()
         .await?
@@ -480,85 +540,119 @@ pub(crate) async fn run_sync_cycle(
     let peer_sync_ids: std::collections::HashSet<String> =
         peer_manifest.iter().map(|e| e.sync_id.clone()).collect();
 
-    // #558 V7: 3 consecutive per-song fetch failures signal a SYSTEMIC
-    // problem (the peer answered /sync/manifest fine but then died, or
-    // became unreachable, mid-cycle) rather than scattered per-song faults —
-    // trip the breaker and abort instead of burning a full 15s timeout on
-    // every remaining manifest entry in one uninterruptible await. Scattered,
-    // non-consecutive failures (an occasional bad song among healthy ones)
-    // never reach the threshold and stay fully isolated, as before.
-    //
-    // #558 W2: "consecutive" must count only TRANSPORT-shaped failures (the
-    // peer is genuinely unreachable: connection refused/reset, or the
-    // request timed out) — never a per-song APPLICATION-level failure (the
-    // peer answered, just badly, for this ONE song: a 4xx/5xx status body,
-    // or a local apply error). The breaker used to count EVERY per-song
-    // failure indiscriminately, so 3 adjacent but individually harmless
-    // broken songs (each isolated per round-4 U1(b)) tripped it and starved
-    // every healthy song after them — exactly the isolation guarantee
-    // U1(b) exists to provide.
-    const CONSECUTIVE_FAILURE_BREAKER: u32 = 3;
-
     let mut pulled = 0usize;
     let mut applied = 0usize;
     let mut errors = 0usize;
     let mut consecutive_failures = 0u32;
     for entry in &peer_manifest {
         let local_updated = local_map.get(&entry.sync_id).copied();
-        if !presenter_persistence::sync_should_apply(
-            entry.updated_at,
-            entry.deleted_at.is_some(),
+        process_manifest_entry(
+            state,
+            content_client,
+            peer_url,
+            entry,
+            &peer_sync_ids,
             local_updated,
-        ) {
-            continue;
-        }
-        pulled += 1;
-        // #558 round-4 U1(b): a single song's fetch/apply is ISOLATED — a
-        // failure here (e.g. an oversize legacy stored slide the peer
-        // still hasn't fixed, or any other per-song fault) must never
-        // abort the whole cycle via `?`; every other manifest entry
-        // deserves its own chance to sync in the same cycle.
-        match fetch_and_apply_one(state, client, peer_url, entry, &peer_sync_ids).await {
-            Ok(wrote) => {
-                consecutive_failures = 0;
-                if wrote {
-                    applied += 1;
-                }
-            }
-            Err(err) => {
-                errors += 1;
-                warn!(
-                    ?err,
-                    sync_id = %entry.sync_id,
-                    name = %entry.name,
-                    "sync: single-song fetch/apply failed — continuing with the next manifest entry"
-                );
-                // #558 W2: only a transport-shaped failure counts toward the
-                // breaker. An application-level failure (a status-code
-                // error, or any non-transport error from the apply itself)
-                // is isolated per-song and never touches the streak at all
-                // — it neither trips nor resets it.
-                if is_transport_failure(&err) {
-                    consecutive_failures += 1;
-                    if consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER {
-                        if applied > 0 {
-                            state.drop_presentation_caches().await;
-                        }
-                        anyhow::bail!(
-                            "sync cycle aborted: {consecutive_failures} consecutive TRANSPORT \
-                             failures (peer likely unreachable) — {applied} applied, {errors} \
-                             errored before the breaker tripped"
-                        );
-                    }
-                }
-            }
-        }
+            &mut pulled,
+            &mut applied,
+            &mut errors,
+            &mut consecutive_failures,
+        )
+        .await?;
     }
     if applied > 0 {
         // Synced-in changes must be visible to this instance's own UI/caches.
         state.drop_presentation_caches().await;
     }
     Ok((pulled, applied, errors))
+}
+
+/// Process ONE manifest entry within `run_sync_cycle_with_clients`'s loop —
+/// the LWW pre-filter, the isolated per-song fetch+apply (#558 round-4
+/// U1(b): a failure here must never abort the whole cycle via `?`), and
+/// folding the result into the running counters. (Extracted per the #558
+/// function-length gate.)
+///
+/// #558 V7: 3 consecutive per-song fetch failures signal a SYSTEMIC problem
+/// (the peer answered `/sync/manifest` fine but then died, or became
+/// unreachable, mid-cycle) rather than scattered per-song faults — trip the
+/// breaker and abort (an `Err` return) instead of burning a full timeout on
+/// every remaining manifest entry. Scattered, non-consecutive failures (an
+/// occasional bad song among healthy ones) never reach the threshold and
+/// stay fully isolated, as before.
+///
+/// #558 W2: "consecutive" counts only TRANSPORT-shaped failures (the peer is
+/// genuinely unreachable — connection refused/reset, or the request timed
+/// out) — never a per-song APPLICATION-level failure (the peer answered,
+/// just badly, for this ONE song: a 4xx/5xx status body, or a local apply
+/// error). The breaker used to count EVERY per-song failure indiscriminately,
+/// so 3 adjacent but individually harmless broken songs (each isolated per
+/// round-4 U1(b)) tripped it and starved every healthy song after them —
+/// exactly the isolation guarantee U1(b) exists to provide.
+///
+/// #558 X2: an application-level failure also RESETS the streak — any
+/// response carrying an HTTP status (success OR a 4xx/5xx failure) proves
+/// the peer is reachable, exactly like a genuine success does. Leaving the
+/// streak untouched on an application-level failure let non-consecutive
+/// transport errors accumulate ACROSS one (transport, transport,
+/// (application 500 — reachable!), transport still summed to 3 and tripped
+/// the breaker even though the peer proved itself reachable in between).
+#[allow(clippy::too_many_arguments)]
+async fn process_manifest_entry(
+    state: &AppState,
+    content_client: &reqwest::Client,
+    peer_url: &str,
+    entry: &SyncManifestEntryDto,
+    peer_sync_ids: &std::collections::HashSet<String>,
+    local_updated: Option<DateTime<Utc>>,
+    pulled: &mut usize,
+    applied: &mut usize,
+    errors: &mut usize,
+    consecutive_failures: &mut u32,
+) -> anyhow::Result<()> {
+    const CONSECUTIVE_FAILURE_BREAKER: u32 = 3;
+
+    if !presenter_persistence::sync_should_apply(
+        entry.updated_at,
+        entry.deleted_at.is_some(),
+        local_updated,
+    ) {
+        return Ok(());
+    }
+    *pulled += 1;
+    match fetch_and_apply_one(state, content_client, peer_url, entry, peer_sync_ids).await {
+        Ok(wrote) => {
+            *consecutive_failures = 0;
+            if wrote {
+                *applied += 1;
+            }
+        }
+        Err(err) => {
+            *errors += 1;
+            warn!(
+                ?err,
+                sync_id = %entry.sync_id,
+                name = %entry.name,
+                "sync: single-song fetch/apply failed — continuing with the next manifest entry"
+            );
+            if is_transport_failure(&err) {
+                *consecutive_failures += 1;
+                if *consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER {
+                    if *applied > 0 {
+                        state.drop_presentation_caches().await;
+                    }
+                    anyhow::bail!(
+                        "sync cycle aborted: {consecutive_failures} consecutive TRANSPORT \
+                         failures (peer likely unreachable) — {applied} applied, {errors} \
+                         errored before the breaker tripped"
+                    );
+                }
+            } else {
+                *consecutive_failures = 0;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Fetch one song's full content from the peer and apply it locally.
@@ -615,12 +709,33 @@ async fn fetch_and_apply_one(
         None => None,
     };
 
-    let outcome = repo
+    let (outcome, written_id) = repo
         .apply_sync_presentation(&incoming, peer_sync_ids)
         .await?;
     if outcome.wrote() {
         if let Some(id) = lock_target {
             state.drop_one_presentation_cache(id).await;
+        }
+        // #558 X5: the probe (`resolve_sync_apply_target`, above) and this
+        // apply transaction can theoretically resolve to a DIFFERENT row
+        // across the probe→transaction gap (see the doc comment on this
+        // function). The DB write itself is already transaction-serialized
+        // and LWW-safe regardless — but evict the id the apply ACTUALLY
+        // wrote too, whenever it diverges from the pre-resolved lock
+        // target, so a divergence never leaves a stale cached snapshot of
+        // the real target un-evicted.
+        if let Some(written) = written_id {
+            if lock_target != Some(written) {
+                warn!(
+                    sync_id = %entry.sync_id,
+                    name = %entry.name,
+                    ?lock_target,
+                    written = %written,
+                    "sync: probe→transaction gap — locked target differs from the id \
+                     actually written; evicting both"
+                );
+                state.drop_one_presentation_cache(written).await;
+            }
         }
     }
     info!(sync_id = %entry.sync_id, name = %entry.name, ?outcome, "sync applied");
@@ -629,8 +744,99 @@ async fn fetch_and_apply_one(
 
 #[cfg(test)]
 mod tests {
-    use super::SyncCoordinator;
+    use super::{is_transport_failure, SyncCoordinator};
     use crate::state::AppState;
+
+    /// #558 X4: a peer that accepts the connection, sends headers, then
+    /// drops the socket PARTWAY through the promised body is a GENUINE
+    /// transport-shaped failure (the peer really did become unreachable
+    /// mid-response) — the OLD `is_timeout() || is_connect()` check missed
+    /// this exact case (neither a timeout nor a connect-phase failure by
+    /// reqwest's own classification), so it never counted toward the
+    /// systemic-failure breaker. Verified empirically (reqwest 0.12):
+    /// `Response::bytes()` routes this through `Kind::Decode` — the SAME
+    /// kind a malformed-JSON parse failure uses — so `is_decode()` alone
+    /// cannot tell the two apart; see the companion test below and the
+    /// `is_transport_failure` doc comment for the actual distinguishing
+    /// signal (an `io::Error` in the source chain).
+    #[tokio::test]
+    async fn a_connection_reset_mid_body_is_classified_as_a_transport_failure() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Promise 100 bytes, deliver 10, then drop the connection — the
+            // client's body read must observe a genuine transport error.
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789")
+                .await;
+            // Dropping `socket` here closes the connection before the
+            // promised body completes.
+        });
+
+        let err = reqwest::Client::new()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("headers arrive fine — only the body read fails")
+            .bytes()
+            .await
+            .expect_err("an incomplete body must error");
+
+        assert!(
+            err.status().is_none(),
+            "a body-stream error carries no HTTP status"
+        );
+        assert!(
+            is_transport_failure(&anyhow::Error::from(err)),
+            "a connection reset mid-body must count toward the systemic-failure breaker"
+        );
+    }
+
+    /// #558 X4: the fix above must NOT rely on `is_decode()` to exclude this
+    /// case — a JSON decode failure on an otherwise-200 response (the peer
+    /// answered IN FULL, proving it's reachable; the received bytes just
+    /// aren't valid JSON) reports `is_decode() == true` too (reqwest 0.12
+    /// routes every body-read failure through the same `Kind::Decode`), so
+    /// `is_decode()` cannot distinguish it from the companion test's
+    /// connection-reset case. `is_transport_failure` must still classify
+    /// THIS one as application-level — the real distinguishing signal is
+    /// the absence of an `io::Error` in the source chain (a JSON syntax
+    /// error's source is a `serde_json` parse error over bytes that were
+    /// already fully received, never an OS-level connection failure).
+    #[tokio::test]
+    async fn a_response_decode_failure_is_never_classified_as_transport() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nnot json!!!")
+                .await;
+        });
+
+        let err = reqwest::Client::new()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .expect_err("malformed JSON must fail to decode");
+
+        assert!(
+            err.status().is_none(),
+            "a decode error carries no HTTP status either"
+        );
+        assert!(
+            !is_transport_failure(&anyhow::Error::from(err)),
+            "a decode failure proves the peer answered — never transport"
+        );
+    }
 
     /// Poll `cond` until it returns true, or panic once `timeout` elapses
     /// (#558 round-4 U5) — a deterministic replacement for an arbitrary

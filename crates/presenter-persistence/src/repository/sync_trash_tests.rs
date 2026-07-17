@@ -31,7 +31,7 @@ async fn adopt_by_name_never_adopts_a_trashed_candidate() {
         deleted_at: None,
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&peer, &std::collections::HashSet::new())
         .await
         .unwrap();
@@ -81,7 +81,7 @@ async fn apply_never_adopts_a_tombstone_by_name_onto_a_live_same_name_song() {
         deleted_at: Some(tombstone_at),
         slides: vec![slide(0, "peer text")],
     };
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&peer_tombstone, &std::collections::HashSet::new())
         .await
         .unwrap();
@@ -136,7 +136,7 @@ async fn apply_skips_an_unknown_tombstone_older_than_the_prune_horizon() {
         deleted_at: Some(stale_at),
         slides: vec![slide(0, "x")],
     };
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&stale_tombstone, &std::collections::HashSet::new())
         .await
         .unwrap();
@@ -171,7 +171,7 @@ async fn apply_skips_a_past_horizon_tombstone_for_an_unknown_library_without_cre
         deleted_at: Some(stale_at),
         slides: vec![slide(0, "x")],
     };
-    let outcome = repo
+    let (outcome, _id) = repo
         .apply_sync_presentation(&stale_tombstone, &std::collections::HashSet::new())
         .await
         .unwrap();

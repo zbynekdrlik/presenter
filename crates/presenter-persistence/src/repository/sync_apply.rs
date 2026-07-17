@@ -78,12 +78,26 @@ impl Repository {
     /// `peer_sync_ids` is the FULL set of sync_ids the peer's manifest
     /// currently reports (#558 round-4 U2) — pass an empty set when no
     /// such context exists (a standalone apply outside a real sync cycle).
+    ///
+    /// #558 X5: returns the LOCAL presentation id this apply actually
+    /// WROTE — `Some(id)` whenever `outcome.wrote()` is true (updated,
+    /// adopted-by-name, or newly created), `None` for a skipped
+    /// (never-write) apply. The caller (`state/sync.rs`) uses this to evict
+    /// the RIGHT cache entry: `resolve_sync_apply_target` picks a lock
+    /// target BEFORE this transaction starts, and a narrow probe→
+    /// transaction gap can in theory let this apply resolve a DIFFERENT
+    /// row than the one that was locked (e.g. an adopt-by-name candidate
+    /// that only became eligible/ineligible in between). The DB write
+    /// itself is already transaction-serialized and LWW-safe regardless;
+    /// this return value just lets the caller ALSO evict the id it truly
+    /// wrote, in addition to the pre-resolved lock target, so a divergence
+    /// never leaves a stale cached snapshot un-evicted.
     #[instrument(skip_all, fields(sync_id = %incoming.sync_id, name = %incoming.name))]
     pub async fn apply_sync_presentation(
         &self,
         incoming: &SyncPresentation,
         peer_sync_ids: &HashSet<String>,
-    ) -> anyhow::Result<SyncApplyOutcome> {
+    ) -> anyhow::Result<(SyncApplyOutcome, Option<presenter_core::PresentationId>)> {
         let txn = self.db.begin().await?;
 
         // 1. Match by sync_id — independent of the library (whether the
@@ -104,13 +118,15 @@ impl Repository {
             ) {
                 txn.commit().await?;
                 info!("sync skip (not newer)");
-                return Ok(SyncApplyOutcome::SkippedNotNewer);
+                return Ok((SyncApplyOutcome::SkippedNotNewer, None));
             }
             let library_id = Self::ensure_library(&txn, &incoming.library_name).await?;
             Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
             txn.commit().await?;
             info!("sync updated");
-            return Ok(SyncApplyOutcome::Updated);
+            let id =
+                presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&existing.id)?);
+            return Ok((SyncApplyOutcome::Updated, Some(id)));
         }
 
         // 2. Adopt-by-name: same name in the same-named library, unknown
@@ -130,11 +146,11 @@ impl Repository {
         // candidates", not a reason to create one speculatively.
         if incoming.deleted_at.is_none() {
             if let Some(library_id) = Self::find_library_id(&txn, &incoming.library_name).await? {
-                if let Some(outcome) =
+                if let Some(result) =
                     Self::try_adopt_by_name(&txn, &library_id, incoming, peer_sync_ids).await?
                 {
                     txn.commit().await?;
-                    return Ok(outcome);
+                    return Ok(result);
                 }
             }
         }
@@ -144,9 +160,9 @@ impl Repository {
         // decides to WRITE (#558 round-4 U4) — a skipped (never-write)
         // apply must never leave behind a phantom, permanently-empty
         // library.
-        let outcome = Self::apply_unknown_sync_id(&txn, incoming).await?;
+        let result = Self::apply_unknown_sync_id(&txn, incoming).await?;
         txn.commit().await?;
-        Ok(outcome)
+        Ok(result)
     }
 
     /// Look up an existing library by name — NEVER creates one (#558
@@ -291,10 +307,11 @@ impl Repository {
     /// deterministically, and adoption proceeds ONLY when exactly one live
     /// candidate remains.
     ///
-    /// Returns `Some(outcome)` when a final decision was reached (adopted,
-    /// or skipped because local is newer); `None` when there is nothing to
-    /// adopt onto, so the caller falls through to step 3. (Extracted per
-    /// the #558 round-3/round-4 function-length gate.)
+    /// Returns `Some((outcome, id))` when a final decision was reached
+    /// (adopted, or skipped because local is newer — `id` is `Some` only
+    /// for the former, per #558 X5); `None` when there is nothing to adopt
+    /// onto, so the caller falls through to step 3. (Extracted per the #558
+    /// round-3/round-4 function-length gate.)
     ///
     /// #558 W8/W9: the candidate query itself now lives in
     /// `find_live_by_name_candidate` — the SAME implementation
@@ -305,7 +322,7 @@ impl Repository {
         library_id: &str,
         incoming: &SyncPresentation,
         peer_sync_ids: &HashSet<String>,
-    ) -> anyhow::Result<Option<SyncApplyOutcome>> {
+    ) -> anyhow::Result<Option<(SyncApplyOutcome, Option<presenter_core::PresentationId>)>> {
         let Some(existing) =
             Self::find_live_by_name_candidate(txn, library_id, &incoming.name).await?
         else {
@@ -339,11 +356,12 @@ impl Repository {
         if !sync_should_apply(incoming.updated_at, false, Some(local_updated)) {
             // Local wins; the peer will adopt OUR sync_id when it pulls us.
             info!("sync skip (adopt-by-name, local newer)");
-            return Ok(Some(SyncApplyOutcome::SkippedNotNewer));
+            return Ok(Some((SyncApplyOutcome::SkippedNotNewer, None)));
         }
         Self::write_synced_row(txn, &existing.id, library_id, incoming).await?;
         info!("sync adopted-by-name");
-        Ok(Some(SyncApplyOutcome::AdoptedByName))
+        let id = presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&existing.id)?);
+        Ok(Some((SyncApplyOutcome::AdoptedByName, Some(id))))
     }
 
     /// Step 3 of `apply_sync_presentation`: the peer's `sync_id` matched no
@@ -362,10 +380,10 @@ impl Repository {
     async fn apply_unknown_sync_id(
         txn: &sea_orm::DatabaseTransaction,
         incoming: &SyncPresentation,
-    ) -> anyhow::Result<SyncApplyOutcome> {
+    ) -> anyhow::Result<(SyncApplyOutcome, Option<presenter_core::PresentationId>)> {
         if !sync_should_apply(incoming.updated_at, incoming.deleted_at.is_some(), None) {
             info!("sync skip (unknown tombstone past prune horizon)");
-            return Ok(SyncApplyOutcome::SkippedNotNewer);
+            return Ok((SyncApplyOutcome::SkippedNotNewer, None));
         }
         let library_id = Self::ensure_library(txn, &incoming.library_name).await?;
         let new_id = uuid::Uuid::new_v4().to_string();
@@ -383,7 +401,8 @@ impl Repository {
         .await?;
         Self::replace_slides(txn, &new_id, incoming).await?;
         info!("sync created");
-        Ok(SyncApplyOutcome::Created)
+        let id = presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&new_id)?);
+        Ok((SyncApplyOutcome::Created, Some(id)))
     }
 
     /// Update an existing local row IN PLACE (preserving its id + playlist refs):

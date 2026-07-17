@@ -41,6 +41,8 @@ mod stage_display;
 mod stage_state;
 pub(crate) mod sync;
 #[cfg(test)]
+mod sync_integration_breaker_tests;
+#[cfg(test)]
 mod sync_integration_tests;
 #[cfg(test)]
 mod tests;
