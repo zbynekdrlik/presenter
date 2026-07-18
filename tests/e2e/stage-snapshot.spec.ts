@@ -122,12 +122,15 @@ test("stage snapshot reflects cleared state after stage clear", async ({
   );
   expect(clearResp.status()).toBe(204);
 
-  // Snapshot should have no current slide
+  // #566: the broom blanks the slide but KEEPS the song context — the
+  // snapshot has no current slide, yet the presentation survives.
   const snapshotResp = await request.get(
     new URL("/stage/snapshot", baseURL).toString(),
   );
   expect(snapshotResp.ok()).toBeTruthy();
   const snapshot = await snapshotResp.json();
   expect(snapshot.current).toBeNull();
-  expect(snapshot.presentationId).toBeUndefined();
+  expect(snapshot.next).toBeNull();
+  expect(snapshot.presentationId).toBe(presPayload.presentation.id);
+  expect(snapshot.presentationName).toBe("ClearSnap Song");
 });
