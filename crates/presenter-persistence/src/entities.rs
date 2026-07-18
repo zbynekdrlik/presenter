@@ -72,6 +72,10 @@ pub mod presentation {
         pub name: String,
         pub search_name: String,
         pub created_at: DateTimeWithTimeZone,
+        // #555 song sync:
+        pub updated_at: DateTimeWithTimeZone,
+        pub sync_id: String,
+        pub deleted_at: Option<DateTimeWithTimeZone>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -218,6 +222,9 @@ pub mod resolume_host {
         pub host: String,
         pub port: i32,
         pub is_enabled: bool,
+        /// #564: runtime-discovered port (auto-recovery from Arena port
+        /// drift). `NULL` means "dial `port`".
+        pub active_port: Option<i32>,
         pub created_at: DateTimeWithTimeZone,
         pub updated_at: DateTimeWithTimeZone,
     }

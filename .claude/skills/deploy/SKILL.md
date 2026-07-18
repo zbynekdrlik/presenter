@@ -98,6 +98,19 @@ To validate a stage/UI change with the real Playwright specs before pushing
    `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
    verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
 
+### GOTCHA — a stale/ambiguous `target/release/presenter-server` silently shadows your fresh fix (#558)
+
+`startTestServer` picks the NEWER of `target/debug/presenter-server` /
+`target/release/presenter-server` by mtime. If you only rebuilt `debug` (`cargo build -p
+presenter-server`, no `--release`) but a release binary already exists from an earlier point,
+E2E runs against WHICHEVER is newer — and if you can't account for why release's mtime moved
+(another process touched it, a leftover from a previous session), your test can silently
+exercise OLD code and produce a false result. When a result looks wrong/inconsistent with the
+diff you just made: check both mtimes (`ls -la --time-style=full-iso target/{debug,release}/presenter-server`);
+if in doubt, `rm target/release/presenter-server` to force the harness onto the `debug` binary
+you just built, and rebuild release properly (`cargo build --release -p presenter-server ...`,
+per step 2 above) before relying on it again.
+
 ### GOTCHA — Playwright `page.on("console")` ALSO captures IFRAME console (#460)
 
 The operator header now embeds `<iframe src="/stage?preview=1">` on EVERY operator
@@ -134,6 +147,103 @@ PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main
 3. `sudo systemctl start presenter`; verify `/healthz` version, `/libraries/summary` non-empty, `/stage` + `/ui/operator` = 200.
 
 Deploy is DB-safe — ProPresenter import is skipped on an existing DB ("preserving presentations"). DBs predating `video_sources` (PP) lack that table → `/integrations/video-sources` 500s; proper fix is an idempotent incremental migration (#468).
+
+## ROLLBACK RUNBOOK — regression on prod after a release (#558-era, standing)
+
+Escalating tiers; start at the lowest that covers the symptom. The v0.4.202+ schema
+migration is ADDITIVE (updated_at/sync_id/deleted_at columns) — an older binary
+ignores unknown columns, so a binary rollback WITHOUT a DB restore is always safe.
+Every deploy also backs up the DB first (5 retained in `backups/` on each host).
+
+**Tier 0 — sync kill switch (~1 min, keeps everything else live).** If the symptom
+is sync-shaped (songs changing/disappearing across sites, trash weirdness), disable
+the sync loop only:
+```bash
+# on the affected host(s) — SNV: sshpass -p '<pw in memory>' ssh newlevel@presenter.lan; PP: ...@companion-pp.lan
+sudo rm /etc/systemd/system/presenter.service.d/sync-peer.conf   # the PRESENTER_SYNC_PEER_URL drop-in
+sudo systemctl daemon-reload && sudo systemctl restart presenter
+curl -s localhost/healthz   # still ok; /integrations/sync/status now enabled:false
+```
+Re-enable = restore the drop-in + restart. All other features keep running.
+
+**Tier 1 — binary rollback to the previous release (~10 min, no data loss).**
+Download the previous release tarball (`gh release download v<PREV> -p '*'`), extract
+`presenter-server`, then on the host: stop service → replace `/opt/presenter/presenter-server`
+→ start → verify `/healthz` shows the OLD version and `/ui/operator` works. New-schema
+columns are ignored by the old binary; songs edited meanwhile keep working.
+
+**Tier 1.5 — git revert (clean, slower ~40 min).** `git revert -m 1 <merge-sha>` on a
+dev branch → PR → CI → merge → auto-deploy. Use when the regression is real but not
+urgent enough for Tier 1's manual surgery.
+
+**Tier 2 — DB restore (LOSES post-deploy edits — ASK THE USER FIRST, destructive).**
+Only for actual data corruption: stop service → copy the newest pre-deploy backup from
+`/opt/presenter/backups/` over `presenter.db` (rm -f the -wal/-shm) → start. If sync is
+enabled, FIRST kill sync on BOTH hosts (Tier 0), restore, verify, then re-enable —
+otherwise LWW can re-import the corruption from the peer.
+
+## HOTFIX MODE — user-declared emergencies only (skips the full CI wait, never main protection)
+
+Activate ONLY when the user explicitly declares hotfix mode. This is the fast path for
+"prod is broken NOW"; it does NOT admin-merge or weaken main — the process catches up after.
+
+1. Fix on `dev`, minimal targeted gate only: `cargo fmt --all --check`, `cargo clippy
+   --workspace --all-targets -- -D warnings`, plus ONLY the tests covering the touched
+   area (skip the full suite/E2E matrix).
+2. COMMIT on dev (the deploy-from-clean-tree hook requires a clean committed tree).
+3. Build locally on dev2 (this is the build box): `bash scripts/build-ui.sh && cargo build
+   --release -p presenter-server`.
+4. Manual deploy straight to the affected host(s) — standing-approved manual deploy of the
+   app being worked on: scp the binary → stop service → swap → start → verify `/healthz`
+   version + the FIXED behavior live in a real browser.
+5. IMMEDIATELY AFTER the fire is out: push dev, let full CI run, open/ride the dev→main PR
+   as normal — the hotfix commit goes through the ordinary gates retroactively; any CI
+   failure found then is fixed forward. Never leave a hotfix deployed without its PR landing.
+
+## Event-network cloudflared tunnel — QUIC gets blocked, force HTTP/2 (#562)
+
+**Symptom:** `prsnv.newlevel.media` (the Cloudflare Tunnel in front of prod) went unreachable the
+moment the SNV rig traveled to an event venue — while `systemctl status cloudflared` and the
+Presenter service both looked completely healthy on the box itself. Cloudflare's edge showed the
+generic error 1033 (tunnel not connected) to the public.
+
+**Root cause:** `cloudflared`'s DEFAULT transport is QUIC (UDP). Many venue/event networks
+(temporary Wi-Fi, restrictive corporate/venue firewalls) block outbound UDP entirely — `cloudflared`
+then retries the QUIC handshake forever and never falls back on its own. The tunnel daemon, the
+Presenter binary, and the LAN are all fine; only the OUTBOUND leg to Cloudflare's edge is silently
+failing.
+
+**Fix — force the HTTP/2 transport (TCP 7844), which venue networks pass:**
+
+```bash
+sudo mkdir -p /etc/systemd/system/cloudflared.service.d
+sudo tee /etc/systemd/system/cloudflared.service.d/protocol-http2.conf >/dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/cloudflared tunnel --protocol http2 run
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart cloudflared
+# Verify: the tunnel reconnects and the public hostname resolves again.
+curl -sI https://prsnv.newlevel.media/healthz
+```
+
+(The blank `ExecStart=` line before the real one is required — systemd drop-ins APPEND to
+`ExecStart` by default; without clearing it first you get two conflicting `ExecStart` lines. Adjust
+the `ExecStart=` binary path/tunnel name to match the actual unit if it differs — check
+`systemctl cat cloudflared` first.)
+
+**HTTP/2 is a full-fidelity transport — this drop-in is safe to leave in place permanently**, not
+just as an event-mode toggle. It was applied LIVE on SNV prod on 2026-07-17 (hotfix mode, mid-event)
+and is standing since. **Apply the same drop-in to PP's (`companion-pp.lan`) cloudflared BEFORE PP
+ever travels to an event venue** — PP has not hit this yet only because it hasn't left the building.
+
+**Diagnosis checklist when a Cloudflare-Tunnel-fronted host goes unreachable "from outside" but is
+healthy locally:** `systemctl status cloudflared` (daemon up?) → `journalctl -u cloudflared -n 50`
+(look for repeated QUIC handshake/registration retries, `context deadline exceeded`, or "no
+`edge connections`") → if venue/event Wi-Fi is involved, suspect UDP-blocking FIRST, apply the
+HTTP/2 drop-in above, and re-verify — don't chase the app/service layer when the daemon logs show
+the tunnel itself never reconnecting.
 
 ## CLIProxyAPI Login Flow
 

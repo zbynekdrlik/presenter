@@ -37,6 +37,26 @@ pub(super) struct ReorderSlidesRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PasteSlidesRequest {
+    pub(super) slide_ids: Vec<uuid::Uuid>,
+    /// The slide the paste's gap PRECEDES; `None` = insert at the end
+    /// (#558 V8). The server resolves the insertion position from this id
+    /// at apply time — never a raw index, which a concurrent structural
+    /// edit could shift out from under a stale client-computed position.
+    ///
+    /// #558 W4: `deny_unknown_fields` above rejects a stale pre-deploy WASM
+    /// tab that still sends the OLD wire shape (a raw `position` field,
+    /// replaced by `anchorSlideId` in V8) with a loud 422 — axum maps a
+    /// `serde_json::error::Category::Data` deserialize failure (which an
+    /// unrecognized field is) to `422 Unprocessable Entity` automatically —
+    /// instead of silently accepting the unknown field and appending at the
+    /// end, a silent wrong placement the operator would never notice.
+    #[serde(default)]
+    pub(super) anchor_slide_id: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SlideContentUpdateRequest {
     pub(super) main: String,
@@ -162,6 +182,38 @@ pub(super) async fn reorder_slides(
         .reorder_slides(PresentationId::from_uuid(presentation_uuid), order)
         .await?;
     Ok(Json(slides))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn paste_slides(
+    State(state): State<AppState>,
+    Path(presentation_id): Path<String>,
+    Json(payload): Json<PasteSlidesRequest>,
+) -> Result<Json<Vec<Slide>>, AppError> {
+    let presentation_uuid = super::parse_uuid("presentationId", &presentation_id)?;
+    let source_ids = payload
+        .slide_ids
+        .into_iter()
+        .map(SlideId::from_uuid)
+        .collect();
+    let anchor_slide_id = payload.anchor_slide_id.map(SlideId::from_uuid);
+    match state
+        .paste_slides(
+            PresentationId::from_uuid(presentation_uuid),
+            source_ids,
+            anchor_slide_id,
+        )
+        .await
+    {
+        Ok(slides) => Ok(Json(slides)),
+        Err(crate::state::slides::PasteSlidesError::UnknownSlides) => Err(AppError::unprocessable(
+            "one or more slides no longer exist",
+        )),
+        Err(crate::state::slides::PasteSlidesError::AnchorVanished) => Err(AppError::conflict(
+            "the paste position no longer exists — refresh and try again",
+        )),
+        Err(crate::state::slides::PasteSlidesError::Internal(err)) => Err(err.into()),
+    }
 }
 
 #[instrument(skip_all)]

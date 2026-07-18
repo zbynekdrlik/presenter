@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+presenter-core = { path = "../presenter-core" }
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 serde_json.workspace = true

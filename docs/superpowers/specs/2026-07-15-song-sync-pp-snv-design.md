@@ -68,6 +68,37 @@ Transitional mismatches are possible (one site re-imported with `.pro`-UUID sync
 other still holds UUIDv5 backfills). Apply rule: when a peer song arrives whose `sync_id`
 is unknown but a song with the SAME name exists in the same-named local library, treat
 them as the same song — resolve by LWW and adopt the winner's `sync_id` — never duplicate.
+**This applies ONLY to a LIVE peer entry** — see the round-3 amendment below for the
+tombstone case, which is deliberately excluded from adopt-by-name entirely.
+
+### Round-3 amendment (2026-07-16) — trash carryover is sync_id-only; tombstones never adopt-by-name
+
+An earlier revision also carried trashed songs across a re-import by falling back to a
+`(library_name, presentation_name)` key when `sync_id` didn't match. Adversarial review
+found that fallback unfixable by patching (four independent failures of the same
+mechanism: sibling-key leakage, name recycling, scan-order dependence, old-map name
+collisions) and it was deleted wholesale. The simplified, final rules:
+
+1. **Trash carryover on re-import keys on `sync_id` ONLY.** If a trashed song's `sync_id`
+   SHIFTS on re-import — a corner of a corner: it requires a same-name twin to join the
+   import scan while the song sits in trash, which shifts BOTH occurrences' sync_ids under
+   the content-pure dedupe rule — the song comes back LIVE. This is documented, accepted
+   behavior, not a regression: "re-import restored a song because the library file still
+   contains it" is an understandable outcome. It composes safely with sync (see rule 2):
+   the peer still holds the OLD sync_id as a fresh tombstone, which the peer's own site
+   applies as an entirely separate new trashed row rather than reaching for any existing
+   local row by name. Both sites converge to new-id-live + old-id-trashed.
+
+2. **A tombstone with an unknown `sync_id` NEVER adopts-by-name.** Adopt-by-name (above)
+   applies ONLY when the peer's incoming entry is LIVE. Two sites can independently hold
+   DIFFERENT songs that happen to share a name (different sync_ids) — trashing one site's
+   copy must never reach across and trash the other site's unrelated same-named song. So
+   for an unknown-sync_id tombstone:
+   - `deleted_at` within the prune horizon (30 days) → create a brand-new trashed row
+     carrying the peer's content, timestamps, and sync_id — never touching any existing
+     local row, live or trashed.
+   - `deleted_at` older than the prune horizon → skip (the row is presumed already pruned
+     elsewhere; never resurrect it).
 
 ### Sync engine (new `state/sync.rs`, ableset-tracker pattern)
 

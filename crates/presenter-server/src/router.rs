@@ -11,6 +11,7 @@ mod search;
 mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
+mod sync;
 mod tablet_pwa;
 mod timers;
 mod ui_routes;
@@ -182,6 +183,10 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::resolume::test_resolume_host),
         )
         .route(
+            "/integrations/resolume/status",
+            get(integrations::resolume::resolume_connection_status),
+        )
+        .route(
             "/integrations/android-stage/displays",
             get(integrations::android_stage::list_android_stage_displays)
                 .post(integrations::android_stage::create_android_stage_display),
@@ -279,6 +284,20 @@ pub fn build_router(state: AppState) -> Router {
     );
     router
         .route("/group-colors", get(presentations::get_group_colors))
+        // #555 sync + trash. The STATIC /presentations/trash route MUST be
+        // registered before the dynamic /presentations/{id} route so matchit
+        // does not swallow it (same lesson as /integrations/video-sources/status).
+        .route("/sync/manifest", get(sync::get_sync_manifest))
+        .route(
+            "/sync/presentations/{sync_id}",
+            get(sync::get_sync_presentation),
+        )
+        .route("/integrations/sync/status", get(sync::get_sync_status))
+        .route("/presentations/trash", get(sync::list_trash))
+        .route(
+            "/presentations/{id}/restore",
+            post(sync::restore_presentation),
+        )
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
@@ -308,6 +327,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/presentations/{presentation_id}/slides/reorder",
             post(presentations::reorder_slides),
+        )
+        .route(
+            "/presentations/{presentation_id}/slides/paste",
+            post(presentations::paste_slides),
         )
         .route("/timers/overview", get(timers::get_timers_overview))
         .route("/timers/command", post(timers::execute_timer_command))
@@ -501,6 +524,21 @@ impl AppError {
         Self::new(StatusCode::NOT_FOUND, anyhow::anyhow!(message.into()))
     }
 
+    fn unprocessable(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            anyhow::anyhow!(message.into()),
+        )
+    }
+
+    /// 409: the request targeted state that changed underneath it (#558 V8 —
+    /// a paste's `anchorSlideId` no longer exists because a concurrent
+    /// structural edit removed it). The client should refresh and retry,
+    /// never blindly resubmit the same stale anchor.
+    fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, anyhow::anyhow!(message.into()))
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -559,5 +597,9 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
         .map_err(|_| AppError::bad_request_message(format!("{field} must be a valid UUID")))
 }
 
+#[cfg(test)]
+mod presentations_paste_tests;
+#[cfg(test)]
+mod sync_tests;
 #[cfg(test)]
 mod tests;

@@ -7,6 +7,10 @@ pub enum SettingsAuditSource {
     CompanionSetter,
     StartupDefault,
     SchemaMigration,
+    /// #564: an autonomous Resolume port-drift discovery/heal-back — never a
+    /// human actor, so it gets its own source rather than borrowing one of
+    /// the human-facing values above.
+    PortDriftDiscovery,
 }
 
 impl SettingsAuditSource {
@@ -16,6 +20,7 @@ impl SettingsAuditSource {
             Self::CompanionSetter => "companion_setter",
             Self::StartupDefault => "startup_default",
             Self::SchemaMigration => "schema_migration",
+            Self::PortDriftDiscovery => "port_drift_discovery",
         }
     }
 }

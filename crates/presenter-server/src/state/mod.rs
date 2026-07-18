@@ -31,6 +31,7 @@ mod companion_manager;
 mod integrations;
 mod ndi_control;
 mod osc;
+mod presentation_lock;
 mod presentations;
 mod seed;
 mod slide_stage_layout;
@@ -38,6 +39,11 @@ pub(crate) mod slides;
 pub(crate) mod stage;
 mod stage_display;
 mod stage_state;
+pub(crate) mod sync;
+#[cfg(test)]
+mod sync_integration_breaker_tests;
+#[cfg(test)]
+mod sync_integration_tests;
 #[cfg(test)]
 mod tests;
 mod timers;
@@ -60,7 +66,7 @@ use chrono::Utc;
 use presenter_core::{
     StageClientSnapshot, StageDisplayLayout, TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
-use presenter_persistence::{DatabaseSettings, Repository};
+use presenter_persistence::{DatabaseSettings, Repository, PRUNE_HORIZON};
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use tokio::{
     sync::RwLock,
@@ -75,6 +81,7 @@ use companion::{
     parse_bool_flag, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY, DEFAULT_COMPANION_PORT,
 };
 use companion_manager::CompanionManager;
+use presentation_lock::PresentationLockRegistry;
 #[cfg(test)]
 pub(crate) use seed::seed_sample_library;
 #[cfg(test)]
@@ -131,6 +138,14 @@ pub struct AppState {
     /// Cloudflare Realtime TURN minting (#502). Disabled (no-op) when the
     /// `PRESENTER_TURN_KEY_*` env vars are unset — on-LAN WebRTC is unaffected.
     turn: TurnService,
+    /// #555 song-sync coordinator (nudge channel + status). Loop spawned only when
+    /// PRESENTER_SYNC_PEER_URL is set.
+    sync: sync::SyncCoordinator,
+    /// #558 V2: per-presentation lock, held across the ENTIRE
+    /// read-snapshot + write + cache-refresh sequence by both every
+    /// snapshot-replace slide-edit op and the sync-apply call site — so
+    /// the two can never interleave on the same presentation.
+    presentation_locks: PresentationLockRegistry,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -220,6 +235,8 @@ impl AppState {
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
             turn: TurnService::from_env(),
+            sync: sync::SyncCoordinator::new(),
+            presentation_locks: PresentationLockRegistry::new(),
         };
         state.spawn_heartbeat_tasks();
         state
@@ -278,6 +295,39 @@ impl AppState {
                 ticker.tick().await;
                 if let Err(err) = wal_state.repository.wal_checkpoint().await {
                     warn!(?err, "periodic WAL checkpoint failed");
+                }
+            }
+        });
+
+        // #555: songs trashed longer than PRUNE_HORIZON are pruned for good.
+        // Low frequency — months of use must not grow the table unbounded.
+        // #558 round-3 T8: PRUNE_HORIZON is the SAME constant `sync_apply.rs`
+        // uses to distinguish a fresh unknown tombstone from an
+        // already-pruned one — one shared source so the two can never
+        // drift apart.
+        let prune_state = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(TokioDuration::from_secs(6 * 3600));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                match prune_state
+                    .repository
+                    .prune_deleted_presentations(PRUNE_HORIZON)
+                    .await
+                {
+                    Ok(n) if n > 0 => {
+                        // #558 round-4 U7: log the horizon's actual VALUE
+                        // (days), not the Rust constant's name — a log
+                        // reader has no way to look up `PRUNE_HORIZON`.
+                        tracing::info!(
+                            pruned = n,
+                            horizon_days = PRUNE_HORIZON.num_days(),
+                            "pruned trashed songs older than the prune horizon"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(err) => warn!(?err, "trash prune failed"),
                 }
             }
         });
@@ -456,6 +506,7 @@ impl AppState {
             .configure_companion_service(companion_enabled, companion_port)
             .await?;
         state.spawn_background_tasks();
+        state.maybe_spawn_sync(config.sync.peer_url.clone());
         state.ai_proxy.auto_start().await;
         Ok(state)
     }

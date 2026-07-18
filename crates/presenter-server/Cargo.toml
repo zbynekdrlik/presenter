@@ -45,6 +45,10 @@ test-helpers = ["presenter-ndi/test-helpers"]
 [dev-dependencies]
 axum.workspace = true
 serde_json.workspace = true
+# Direct entity queries in sync integration tests (#558 round-4 U1) to
+# corrupt a stored slide's raw column value/id, simulating a legacy row —
+# test-only, never used by production code.
+sea-orm.workspace = true
 # test-util enables tokio's pausable clock (start_paused / advance) used by the
 # #484 backoff window test — no wall-clock sleeping. Additive over the workspace
 # tokio features; only affects the test build.

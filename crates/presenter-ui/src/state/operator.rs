@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Per-slide save status for the worship slide editor's "Saved" indicator (#313).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,25 @@ pub async fn await_saves_quiescent(
     }
 }
 
+/// Clipboard mode for slide copy/cut (#554): `Copy` pastes clones, `Cut` MOVES
+/// the originals (only when a paste actually succeeds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardMode {
+    Copy,
+    Cut,
+}
+
+/// A slide clipboard captured within ONE presentation (#554). `presentation_id`
+/// guards against a stale clipboard after switching songs and is the seam for a
+/// future cross-presentation clipboard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlideClipboard {
+    /// Ids of the captured slides, in list order at capture time.
+    pub slide_ids: Vec<String>,
+    pub mode: ClipboardMode,
+    pub presentation_id: String,
+}
+
 #[derive(Clone)]
 pub struct OperatorState {
     pub focused_slide_id: RwSignal<Option<String>>,
@@ -53,7 +72,6 @@ pub struct OperatorState {
     pub search_open: RwSignal<bool>,
     pub open_modal: RwSignal<Option<String>>,
     pub modal_target_id: RwSignal<Option<String>>,
-    pub modal_mode: RwSignal<String>,
     pub line_limit: RwSignal<u32>,
     pub catalog_top_height: RwSignal<f64>,
     pub mobile_nav_open: RwSignal<bool>,
@@ -115,6 +133,23 @@ pub struct OperatorState {
     /// actual data) — the same isolation trick already used for
     /// `stage_snapshot` elsewhere in `slide_list.rs`.
     pub groups_version: RwSignal<u64>,
+    /// Multi-selected slide ids in the operator editor (#554). Same shape as
+    /// the Bible page's `selected_slide_ids`.
+    pub selected_slide_ids: RwSignal<HashSet<String>>,
+    /// The copy/cut clipboard; `None` when empty. Cleared on presentation switch.
+    pub clipboard: RwSignal<Option<SlideClipboard>>,
+    /// Id of the last checkbox-clicked slide — the anchor for Shift+click
+    /// range selection (#554). Stored as a SLIDE ID, not a positional index
+    /// (#558 V9): a raw index is never invalidated when the list shifts
+    /// (paste/delete/reorder), so a later Shift+click could range-select
+    /// the wrong slides. Resolved back to an index at Shift+click time via
+    /// `range_select_by_anchor_id`.
+    pub selection_anchor_id: RwSignal<Option<String>>,
+    /// Gap index (0..=len) the user last hovered/selected as the Ctrl/Cmd+V
+    /// paste target; `None` → paste at the end (#554).
+    pub paste_target_gap: RwSignal<Option<usize>>,
+    /// True while the clipboard block is being dragged toward an insertion gap.
+    pub dragging_clipboard: RwSignal<bool>,
 }
 
 impl OperatorState {
@@ -135,7 +170,6 @@ impl OperatorState {
             search_open: RwSignal::new(false),
             open_modal: RwSignal::new(None),
             modal_target_id: RwSignal::new(None),
-            modal_mode: RwSignal::new("create".to_string()),
             line_limit: RwSignal::new(line_limit),
             catalog_top_height: RwSignal::new(catalog_top_height),
             mobile_nav_open: RwSignal::new(false),
@@ -161,6 +195,11 @@ impl OperatorState {
             save_status: RwSignal::new(HashMap::new()),
             slide_edit_seq: RwSignal::new(0),
             groups_version: RwSignal::new(0),
+            selected_slide_ids: RwSignal::new(HashSet::new()),
+            clipboard: RwSignal::new(None),
+            selection_anchor_id: RwSignal::new(None),
+            paste_target_gap: RwSignal::new(None),
+            dragging_clipboard: RwSignal::new(false),
         }
     }
 }

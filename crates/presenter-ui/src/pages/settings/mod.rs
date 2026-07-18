@@ -19,6 +19,7 @@ mod android;
 mod companion;
 mod preferences;
 mod resolume;
+mod trash;
 mod video_sources;
 
 use ableton::AbletonCard;
@@ -26,6 +27,7 @@ use android::AndroidCard;
 use companion::CompanionCard;
 use preferences::PreferencesCard;
 use resolume::ResolumeCard;
+use trash::TrashCard;
 use video_sources::VideoSourcesCard;
 
 /// How often live status (resolume/android/osc/ableset) is refreshed, matching
@@ -156,6 +158,7 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
                 <AndroidCard toast=toast />
                 <AbletonCard toast=toast />
                 <VideoSourcesCard toast=toast />
+                <TrashCard toast=toast />
             </main>
             <div
                 class="settings__toast"

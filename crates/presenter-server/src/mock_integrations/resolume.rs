@@ -32,6 +32,7 @@ pub async fn spawn(log: Arc<RequestLog>) -> anyhow::Result<()> {
             "/api/v1/composition/clips/by-id/{id}/connect",
             post(post_clip_connect),
         )
+        .route("/api/v1/product", get(get_product))
         .route("/__mock/log", get(log_handler))
         .with_state(log);
 
@@ -58,6 +59,22 @@ async fn get_composition(State(log): State<Arc<RequestLog>>) -> Json<Value> {
         "name": "Mock Composition",
         "layers": [],
         "columns": [],
+    }))
+}
+
+/// `GET /api/v1/product` — #564: identifies this mock as "Arena", the same
+/// shape the real REST API returns (confirmed against the bitfocus
+/// `companion-module-resolume-arena` client's `ArenaProductResponse`), so a
+/// port-drift probe pointed at this mock validates exactly like the real
+/// thing.
+async fn get_product(State(log): State<Arc<RequestLog>>) -> Json<Value> {
+    log.record(MOCK_NAME, "GET", "/api/v1/product", None);
+    Json(json!({
+        "name": "Arena",
+        "major": 7,
+        "minor": 13,
+        "micro": 2,
+        "revision": 0,
     }))
 }
 
@@ -120,8 +137,37 @@ mod tests {
                 "/api/v1/composition/clips/by-id/{id}/connect",
                 post(post_clip_connect),
             )
+            .route("/api/v1/product", get(get_product))
             .route("/__mock/log", get(log_handler))
             .with_state(log)
+    }
+
+    #[tokio::test]
+    async fn accepts_product_get_and_identifies_as_arena() {
+        let log = Arc::new(RequestLog::new());
+        let app = router(log.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/product")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body bytes");
+        let value: serde_json::Value = serde_json::from_slice(&body_bytes).expect("json");
+        assert_eq!(value["name"], "Arena");
+
+        let entries = log.snapshot();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "/api/v1/product");
     }
 
     #[tokio::test]

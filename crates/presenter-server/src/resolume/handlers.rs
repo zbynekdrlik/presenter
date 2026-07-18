@@ -242,11 +242,17 @@ impl HostDriver {
 
         if let Some(ref song_name) = update.song_name {
             if mapping.song_name.is_empty() {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    "Resolume mapping missing #song-name clip"
-                );
+                // #563h: rate-limited — un-throttled this fires on every
+                // stage push, not just every countdown tick, but the same
+                // missing-config warning still floods a persistently
+                // unmapped host.
+                if self.should_warn_missing_clip("song-name") {
+                    warn!(
+                        host = %self.config.host,
+                        port = self.config.port,
+                        "Resolume mapping missing #song-name clip"
+                    );
+                }
             } else {
                 let step_start = Instant::now();
                 self.update_metadata_targets(
@@ -264,11 +270,14 @@ impl HostDriver {
 
         if let Some(ref band_name) = update.band_name {
             if mapping.band_name.is_empty() {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    "Resolume mapping missing #band-name clip"
-                );
+                // #563h: rate-limited — see the song-name case above.
+                if self.should_warn_missing_clip("band-name") {
+                    warn!(
+                        host = %self.config.host,
+                        port = self.config.port,
+                        "Resolume mapping missing #band-name clip"
+                    );
+                }
             } else {
                 let step_start = Instant::now();
                 self.update_metadata_targets(
@@ -634,11 +643,16 @@ impl HostDriver {
         self.ensure_mapping().await?;
         if let Some(mapping) = self.mapping.clone() {
             if mapping.timer.is_empty() {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    "Resolume mapping missing #timer clip"
-                );
+                // #563h: this fires on EVERY timer tick (once a second while a
+                // countdown/preach timer is running) — the field incident saw
+                // 507 identical lines/hour from one unmapped host.
+                if self.should_warn_missing_clip("timer") {
+                    warn!(
+                        host = %self.config.host,
+                        port = self.config.port,
+                        "Resolume mapping missing #timer clip"
+                    );
+                }
                 return Ok(());
             }
 

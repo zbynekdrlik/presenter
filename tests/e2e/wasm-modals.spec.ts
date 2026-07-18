@@ -173,6 +173,75 @@ test.describe("WASM Operator Modals", () => {
     await page.keyboard.press("Escape");
   });
 
+  test("library create modal: create library end-to-end", async ({
+    page,
+  }) => {
+    await initPage(page);
+
+    const libraryName = `E2E Created Library ${Date.now()}`;
+
+    // Click the sidebar "+ Create library" button (regression guard for #560:
+    // this must open the CREATE modal, not the edit modal reused for renames)
+    await page.locator('[data-role="library-create"]').click();
+
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="library-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    // The modal must be in "create" mode: title says "Create Library" and
+    // there is no "Delete library" button (nothing exists yet to delete).
+    await expect(
+      page.locator('[data-role="library-edit-modal"]'),
+    ).toHaveAttribute("data-mode", "create");
+    await expect(page.locator('[data-role="library-edit-title"]')).toHaveText(
+      "Create Library",
+    );
+    await expect(
+      page.locator('[data-role="library-edit-delete"]'),
+    ).toBeHidden();
+
+    // Fill in a name and save.
+    await page.locator('[data-role="library-edit-name"]').fill(libraryName);
+    await page.locator('[data-role="library-edit-save"]').click();
+
+    // Modal should close on success (it never closes on the reported 404).
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="library-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    // Toast must show success, not "Error: HTTP 404: Not Found".
+    await expect(page.locator('[data-role="toast"]')).toContainText(
+      /saved|success/i,
+      { timeout: 5_000 },
+    );
+
+    // Verify the library actually persisted server-side (not just a UI toast).
+    const response = await fetch(`${baseURL}/libraries`);
+    expect(response.ok).toBe(true);
+    const libraries = (await response.json()) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const created = libraries.find((lib) => lib.name === libraryName);
+    expect(
+      created,
+      `Library "${libraryName}" not found via GET /libraries`,
+    ).toBeTruthy();
+
+    // Cleanup so later tests in this file see a stable library set.
+    if (created) {
+      await fetch(`${baseURL}/libraries/${created.id}`, { method: "DELETE" });
+    }
+  });
+
   test("playlist modal opens and closes", async ({ page }) => {
     await initPage(page);
 

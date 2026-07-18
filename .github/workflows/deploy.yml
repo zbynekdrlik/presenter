@@ -224,23 +224,41 @@ jobs:
           echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           REMOTE_SCRIPT
 
-      - name: Stop service (if running)
+      # STAGED deploy, PULL model: the runner→prod point-to-point path can be
+      # crippled (~21 KB/s over the inter-site bridge AND tailscale when the
+      # rig travels), while prod's own INTERNET stays fast (measured 4.2 MB/s
+      # from GitHub). So prod downloads the build artifact straight from
+      # GitHub via a short-lived signed URL instead of receiving an scp push.
+      # The service KEEPS RUNNING throughout; a later step stops → swaps →
+      # starts with seconds of downtime. sha256 sums computed on the runner
+      # guard the download's integrity.
+      - name: Stage binaries on prod (pull from GitHub, service keeps running)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ssh deploy-target "if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; else echo 'Service not running'; fi"
+          set -euo pipefail
+          ARTIFACT_ID=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name=="build-artifacts") | .id')
+          test -n "$ARTIFACT_ID" || { echo "::error::build-artifacts artifact not found for this run"; exit 1; }
+          SUMS=$(cd _artifacts && sha256sum presenter-server import_propresenter ingest_bibles presenter-stage.apk)
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/staging.new"
+          # The signed URL from the 302 redirect is valid ~1 minute — resolve it
+          # LAST and hand it straight to prod's curl (no token leaves the runner).
+          SIGNED_URL=$(curl -sI -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            | tr -d '\r' | awk 'tolower($1)=="location:" {print $2}')
+          test -n "$SIGNED_URL" || { echo "::error::could not resolve the signed artifact URL"; exit 1; }
+          ssh deploy-target "set -euo pipefail
+            cd ${{ env.DEPLOY_DIR }}/staging.new
+            curl -sL --max-time 300 -o build-artifacts.zip '$SIGNED_URL'
+            unzip -oq build-artifacts.zip && rm build-artifacts.zip
+            printf '%s\n' '$SUMS' | sha256sum -c --quiet
+            chmod +x presenter-server import_propresenter ingest_bibles
+            ls -la"
 
-      - name: Deploy binaries
-        run: |
-          scp -i ~/.ssh/id_deploy \
-            target/release/presenter-server \
-            target/release/import_propresenter \
-            target/release/ingest_bibles \
-            deploy-target:${{ env.DEPLOY_DIR }}/
-          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
-
-      - name: Deploy Android Stage APK
-        run: |
-          scp -i ~/.ssh/id_deploy target/release/presenter-stage.apk deploy-target:${{ env.DEPLOY_DIR }}/presenter-stage.apk
-          echo "Presenter Stage APK deployed to ${{ env.DEPLOY_DIR }}/presenter-stage.apk"
+      # The APK rides the same pulled artifact; it is swapped into place
+      # together with the binaries (the running service may be serving the
+      # old file until then).
 
       - name: Deploy CLIProxyAPI
         run: |
@@ -375,6 +393,10 @@ jobs:
           esac
           printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$PROD_STAGE_URL" |
             ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/stage-url.conf >/dev/null && sudo systemctl daemon-reload"
+          # #555: song-sync peer — SNV pulls from PP over tailscale (the two sites
+          # have overlapping 10.77.8.0/23 LANs; tailscale is the only inter-site path).
+          printf '[Service]\nEnvironment=PRESENTER_SYNC_PEER_URL=%s\n' "http://100.101.72.101" |
+            ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/sync-peer.conf >/dev/null && sudo systemctl daemon-reload"
 
       # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only
       # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`).
@@ -404,9 +426,20 @@ jobs:
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
-      - name: Start service
+      # The transfers above ran with the OLD service still serving. Downtime
+      # window = this single step: stop → swap the staged binaries into place
+      # → start. Seconds, not the length of a slow-bridge transfer.
+      - name: Swap staged binaries and restart service
         run: |
-          ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -euo pipefail
+          cd "${{ env.DEPLOY_DIR }}"
+          test -x staging.new/presenter-server || { echo "::error::staged presenter-server missing/not executable — aborting before touching the running service"; exit 1; }
+          if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; fi
+          mv -f staging.new/presenter-server staging.new/import_propresenter staging.new/ingest_bibles staging.new/presenter-stage.apk .
+          rmdir staging.new 2>/dev/null || true
+          sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}
+          REMOTE_SCRIPT
 
       - name: Verify deployment
         run: |

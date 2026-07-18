@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-bible"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "anyhow",
  "presenter-core",
@@ -3386,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-core"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-importer"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3426,10 +3426,11 @@ dependencies = [
 
 [[package]]
 name = "presenter-migration"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "async-trait",
  "chrono",
+ "presenter-core",
  "sea-orm",
  "sea-orm-migration",
  "serde_json",
@@ -3441,7 +3442,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-ndi"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "anyhow",
  "axum",
@@ -3465,7 +3466,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-persistence"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3486,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-server"
-version = "0.4.199"
+version = "0.4.201"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3506,6 +3507,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rosc",
+ "sea-orm",
  "serde",
  "serde_json",
  "serde_with",
@@ -4765,6 +4767,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5807,6 +5815,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

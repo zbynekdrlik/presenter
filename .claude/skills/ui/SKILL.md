@@ -97,6 +97,19 @@ the timer dies with the page navigation (there is no client-side router).
 Reminder: this crate is **excluded from the workspace** — `cargo test -p presenter-ui` fails.
 Run `cd crates/presenter-ui && cargo test --lib`.
 
+## The toast `<div>` is ALWAYS mounted — assert visibility via `data-visible`, not DOM presence (#558 W1)
+
+`components/toast.rs` renders `<div data-role="toast" data-visible=… class:operator__toast--visible=…>`
+UNCONDITIONALLY — the element exists in the DOM at all times, with an EMPTY text node when no
+toast is active. `operator.css` fades it purely via `opacity` (no `display`/`visibility` change).
+Two E2E assertions that look correct both fail to detect "no toast shown":
+
+- `toHaveCount(0)` — the element always exists (count is always 1).
+- `.not.toBeVisible()` — Playwright's visibility check ignores `opacity`; an `opacity: 0` element
+  still has a non-empty bounding box and no `visibility: hidden`, so it reports VISIBLE regardless.
+
+Assert the component's own state instead: `expect(locator).toHaveAttribute("data-visible", "false")`.
+
 ## A `console.warn` from a WASM poller can red-line an unrelated E2E
 
 `leptos::logging::warn!` reaches the browser console, and several specs (e.g.
@@ -106,3 +119,26 @@ teardown aborts fails with `TypeError: Failed to fetch`, warning once per closed
 those specs. Do not answer that by swallowing the error (stale data the operator trusts is worse
 than none): tolerate ONE failure silently, and on the second in a row fall back to a "Checking…"
 state and log once (`STALE_AFTER_FAILURES` in `video_sources.rs`).
+
+## E2E test library names: NEVER a standalone single-char differentiator token (#558 X1)
+
+Every 409/race E2E test creates two test libraries and opens one via
+`openPresentationInEditMode(page, libName)`, which searches by LIBRARY NAME to
+surface the presentation. `search_presenter` (`repository/search.rs`) splits the
+query into tokens (`query_tokens` — splits on non-alphanumeric) and
+`search_libraries`'s DB-level match is `Condition::any()` **OR-ed across every
+token**. A lone single-character differentiator like `` `${lib} A` `` /
+`` `${lib} B` `` makes `"a"`/`"b"` its OWN token — and `SearchName.contains("a")`
+then matches a huge slice of the REAL seeded dev libraries (e.g. `GRACE
+PEREMOT`, `OKSANA`, `TARZUS`, `ROMANI ARCHA` all contain a bare `a`). Those
+unrelated matches flood `matched_library_ids`, and `search_presentations`'
+result-page `LIMIT` gets exhausted by their (real, large) presentation counts
+before the test's own presentation is ever reached — the search dropdown then
+shows the test's LIBRARY as a match but never surfaces its PRESENTATION, and
+`openPresentationInEditMode` times out waiting for
+`[data-role="search-result-item"][data-kind="presentation"]`.
+
+**Fix: glue the differentiator directly onto the preceding word** — `RaceA`,
+`Conflict409A`, `Conflict409RecoverA` — never a space-separated lone letter.
+Every existing 409/race test in `wasm-slide-multiselect.spec.ts` already follows
+this; keep new ones consistent.

@@ -191,6 +191,38 @@ pub async fn reorder_slides(pres_id: &str, slide_ids: Vec<String>) -> Result<Vec
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasteSlidesRequest {
+    slide_ids: Vec<String>,
+    /// The slide the paste's gap PRECEDES; `None` = insert at the end
+    /// (#558 V8). The server resolves the position from this id at apply
+    /// time — never a raw index, which a concurrent structural edit could
+    /// shift out from under a stale client-computed position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor_slide_id: Option<String>,
+}
+
+/// Paste-of-copy (#554): clone `slide_ids` as a contiguous block anchored
+/// before `anchor_slide_id` (`None` = end — #558 V8). Returns the full new
+/// slide list (same contract as reorder). A `422` means a stale clipboard;
+/// a `409` means the anchor itself vanished (a concurrent structural edit) —
+/// the caller refreshes from the server instead of guessing a new position.
+pub async fn paste_slides(
+    pres_id: &str,
+    slide_ids: Vec<String>,
+    anchor_slide_id: Option<String>,
+) -> Result<Vec<Slide>, ApiError> {
+    post_json(
+        &format!("/presentations/{pres_id}/slides/paste"),
+        &PasteSlidesRequest {
+            slide_ids,
+            anchor_slide_id,
+        },
+    )
+    .await
+}
+
 pub async fn fetch_group_colors() -> Result<HashMap<String, String>, ApiError> {
     get_json("/group-colors").await
 }

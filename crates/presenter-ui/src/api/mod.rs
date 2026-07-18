@@ -7,6 +7,7 @@ pub mod playlists;
 pub mod presentations;
 pub mod settings;
 pub mod stage;
+pub mod sync;
 pub mod timers;
 
 use gloo_net::http::Request;

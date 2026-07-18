@@ -20,6 +20,10 @@ pub struct Presentation {
     pub id: PresentationId,
     pub name: String,
     pub slides: Vec<Slide>,
+    /// #555 cross-instance identity. `None` for app-created songs (a fresh v4 is
+    /// assigned at persist time); `Some` when imported from a `.pro` file (its UUID).
+    #[serde(default)]
+    pub sync_id: Option<String>,
 }
 
 impl Presentation {
@@ -28,6 +32,7 @@ impl Presentation {
             id: PresentationId::new(),
             name: name.into(),
             slides,
+            sync_id: None,
         };
         presentation.ensure_unique_orders()?;
         Ok(presentation)
@@ -35,6 +40,11 @@ impl Presentation {
 
     pub fn with_id(mut self, id: PresentationId) -> Self {
         self.id = id;
+        self
+    }
+
+    pub fn with_sync_id(mut self, sync_id: impl Into<String>) -> Self {
+        self.sync_id = Some(sync_id.into());
         self
     }
 

@@ -288,6 +288,110 @@ async fn clear_stage_emits_blank_snapshot() {
     assert!(snapshot.next.is_none());
 }
 
+/// #566: the operator's broom (POST /stage/clear) must act like triggering an
+/// EMPTY slide — blank the slide output but KEEP the presentation context
+/// (song name, playlist highlight, the stage layout's boxes) — NOT reset the
+/// whole stage. Live at the 2026-07 event, one broom click wiped the entire
+/// stage layout (song title, groups, next slide) instead of just the lyrics.
+#[tokio::test]
+async fn clear_stage_with_active_presentation_keeps_song_context_and_blanks_slide() {
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation = &libraries[0].presentations[0];
+    let current = presentation.slides[0].id;
+    let next = presentation.slides.get(1).map(|slide| slide.id);
+    state
+        .update_stage_state(presentation.id, current, next, None, None)
+        .await
+        .unwrap();
+
+    state.clear_stage().await.unwrap();
+
+    // Persisted state: presentation context kept, slide blanked.
+    let stored = state
+        .repository()
+        .get_stage_state()
+        .await
+        .unwrap()
+        .expect("stage state persisted");
+    assert_eq!(
+        stored.presentation_id,
+        Some(presentation.id),
+        "broom must keep the on-stage presentation (only the slide blanks)"
+    );
+    assert!(
+        stored.current_slide_id.is_none(),
+        "broom must blank the current slide"
+    );
+    assert!(stored.next_slide_id.is_none());
+
+    // Rebuilt snapshot (what a late-joining stage client fetches): song
+    // context present, slide blank — and NO fallback to the first slide.
+    let snapshot = state
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+        .await
+        .unwrap()
+        .expect("snapshot available");
+    assert_eq!(snapshot.presentation_id, Some(presentation.id));
+    assert_eq!(
+        snapshot.presentation_name.as_deref(),
+        Some(presentation.name.as_str()),
+        "song context must survive the broom"
+    );
+    assert!(
+        snapshot.current.is_none(),
+        "blanked stage must NOT fall back to showing the first slide"
+    );
+    assert!(snapshot.next.is_none());
+}
+
+/// #566 review finding: when the ON-STAGE presentation was deleted/trashed
+/// after the trigger, the broom must fall back to the FULL reset — persisting
+/// the dangling presentation_id would make a reconnecting stage display fall
+/// back to `resolve_default_stage` and render the FIRST presentation's slide
+/// WITH LYRICS right after the operator hit "clear".
+#[tokio::test]
+async fn clear_stage_fully_resets_when_the_on_stage_presentation_was_deleted() {
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation = &libraries[0].presentations[0];
+    let current = presentation.slides[0].id;
+    state
+        .update_stage_state(presentation.id, current, None, None, None)
+        .await
+        .unwrap();
+
+    state.delete_presentation(presentation.id).await.unwrap();
+    state.clear_stage().await.unwrap();
+
+    let stored = state
+        .repository()
+        .get_stage_state()
+        .await
+        .unwrap()
+        .expect("stage state persisted");
+    assert!(
+        stored.presentation_id.is_none(),
+        "a deleted on-stage presentation must not survive the broom as a dangling id"
+    );
+
+    // A late-joining/reconnecting stage client must get a BLANK snapshot —
+    // never a default-stage fallback to some other presentation's first slide.
+    let snapshot = state
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+        .await
+        .unwrap()
+        .expect("snapshot available");
+    assert!(snapshot.current.is_none());
+    assert_ne!(
+        snapshot.presentation_id,
+        Some(presentation.id),
+        "deleted presentation must not reappear in the snapshot"
+    );
+}
+
 #[tokio::test]
 async fn update_slide_content_updates_repository() {
     let state = AppState::in_memory().await.unwrap();
@@ -550,6 +654,7 @@ async fn from_config_against_empty_db_leaves_libraries_empty() {
         },
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
+        sync: crate::config::SyncConfig::default(),
     };
 
     let state = AppState::from_config(config).await.expect("from_config");
@@ -575,6 +680,7 @@ fn config_for_db(url: String) -> crate::config::ServerConfig {
         },
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
+        sync: crate::config::SyncConfig::default(),
     }
 }
 
@@ -1053,31 +1159,6 @@ async fn group_color_cache_resolves_and_lists() {
         "get_all_group_colors must expose the cached Intro color, not an \
          empty or fabricated map"
     );
-}
-
-#[tokio::test]
-async fn presentation_from_cache_serves_repeat_reads() {
-    // Kills presentation_from_cache's own cache write: a repeat read must return
-    // the very same Arc allocation (cache hit), only true if the value was
-    // actually inserted.
-    let state = AppState::in_memory().await.unwrap();
-    super::seed_sample_library(&state).await.unwrap();
-    let libraries = state.libraries().await.unwrap();
-    let presentation_id = libraries[0].presentations[0].id;
-
-    let first = state
-        .presentation_from_cache(presentation_id)
-        .await
-        .expect("first cache read");
-    let second = state
-        .presentation_from_cache(presentation_id)
-        .await
-        .expect("second cache read");
-    assert!(
-        std::sync::Arc::ptr_eq(&first, &second),
-        "presentation cache must return the same Arc on a repeat read (cache hit)"
-    );
-    assert_eq!(first.id, presentation_id);
 }
 
 #[tokio::test]

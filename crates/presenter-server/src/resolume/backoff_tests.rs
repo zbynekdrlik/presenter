@@ -10,7 +10,7 @@
 //! larger `tests.rs` fixtures and does not trip the fn-length cap there.
 
 use super::driver::{backoff_interval, should_log_error, HostDriver};
-use super::{ResolumeConnectionSnapshot, StageUpdate, CONNECT_TIMEOUT};
+use super::{ResolumeConnectionSnapshot, ResolumeErrorKind, StageUpdate, CONNECT_TIMEOUT};
 use chrono::Utc;
 use presenter_core::{ResolumeHost, ResolumeHostId};
 use reqwest::Client;
@@ -239,4 +239,158 @@ async fn backoff_window_opens_on_error_and_clears_after_the_interval() {
     assert!(driver.in_backoff());
     driver.mark_connected(&status).await;
     assert!(!driver.in_backoff(), "recovery clears the backoff window");
+}
+
+/// #563b: a single failure (or two) must NOT invalidate the cached
+/// composition mapping — only the 3rd CONSECUTIVE failure crosses
+/// `CACHE_INVALIDATION_THRESHOLD`. Pre-fix, `record_error` invalidated the
+/// cache unconditionally, forcing a full (potentially multi-MB) refetch on
+/// every transient blip — the #563 incident's self-aggravating flap loop.
+#[tokio::test]
+async fn record_error_keeps_the_cached_mapping_through_transient_failures_then_invalidates_at_the_threshold(
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/composition"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "name": "Composition", "layers": [], "columns": [],
+        })))
+        .mount(&server)
+        .await;
+    let addr = server.address();
+    let (mut driver, status) = driver_for(&addr.ip().to_string(), addr.port());
+
+    driver.refresh_mapping().await.expect("initial fetch");
+    assert!(driver.mapping.is_some(), "precondition: mapping cached");
+
+    driver
+        .record_error(anyhow::anyhow!("blip 1"), &status)
+        .await;
+    assert!(
+        driver.mapping.is_some(),
+        "1st failure must NOT invalidate the cached mapping"
+    );
+
+    driver
+        .record_error(anyhow::anyhow!("blip 2"), &status)
+        .await;
+    assert!(
+        driver.mapping.is_some(),
+        "2nd consecutive failure must still serve the stale-but-good mapping"
+    );
+
+    driver
+        .record_error(anyhow::anyhow!("blip 3"), &status)
+        .await;
+    assert!(
+        driver.mapping.is_none(),
+        "the 3rd consecutive failure crosses the threshold and invalidates the cache"
+    );
+}
+
+/// #563d: every host error surfaces `nextRetryInSecs` — both on the
+/// `HostDriver` itself (the backoff-skip debug log reads it) and in the
+/// shared status snapshot (the `/integrations/resolume/status` poll reads
+/// it) — so ops/UI can see the driver is still retrying, not stuck. Uses
+/// paused TOKIO time for the driver's own `Instant`-based clock; the
+/// snapshot's `next_retry_at` is a real (chrono) wall-clock timestamp, so it
+/// is only asserted immediately after the write, before any virtual-time
+/// advance.
+#[tokio::test(start_paused = true)]
+async fn record_error_surfaces_next_retry_in_secs_on_the_driver_and_in_the_snapshot() {
+    let (mut driver, status) = driver_for("127.0.0.1", 65502);
+
+    driver.record_error(anyhow::anyhow!("down"), &status).await;
+    assert_eq!(
+        driver.next_retry_in_secs(),
+        Some(1),
+        "1st failure → ~1s backoff (see backoff_interval)"
+    );
+
+    let snap = status.read().await.clone();
+    let secs = snap
+        .next_retry_in_secs(Utc::now())
+        .expect("a backoff window must be open in the snapshot too");
+    assert!(
+        (0..=1).contains(&secs),
+        "expected ~1s remaining, got {secs}"
+    );
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert_eq!(
+        driver.next_retry_in_secs(),
+        Some(0),
+        "past the retry time, seconds-remaining clamps at 0, never negative"
+    );
+
+    driver.mark_connected(&status).await;
+    assert_eq!(driver.next_retry_in_secs(), None, "recovery clears it");
+    let snap_after = status.read().await.clone();
+    assert_eq!(
+        snap_after.next_retry_at, None,
+        "recovery clears the snapshot too"
+    );
+}
+
+/// #563c: a REAL connect-refused error (nothing listens on the port) must
+/// classify as `ConnectRefused` and render as a single-line full chain in
+/// `last_error` — not the opaque top-level "failed to fetch composition"
+/// `.to_string()` gave, which dropped exactly the detail the incident
+/// diagnosis needed.
+#[tokio::test]
+async fn record_error_populates_last_error_kind_and_a_single_line_full_chain() {
+    let (mut driver, status) = driver_for("127.0.0.1", 65504);
+    let err = driver
+        .refresh_mapping()
+        .await
+        .expect_err("nothing listens on this port");
+    driver.record_error(err, &status).await;
+
+    let snap = status.read().await.clone();
+    assert_eq!(
+        snap.last_error_kind,
+        Some(ResolumeErrorKind::ConnectRefused)
+    );
+    let rendered = snap.last_error.expect("last_error must be set");
+    assert!(
+        !rendered.contains('\n'),
+        "the rendered chain must stay on one line: {rendered}"
+    );
+    assert!(
+        rendered.to_ascii_lowercase().contains("refus"),
+        "must include the underlying cause, not just the top-level context: {rendered}"
+    );
+}
+
+/// #563h: the per-push "mapping missing #x clip" WARN must be rate-limited
+/// per clip name — un-throttled it floods at one line per call (507/hour
+/// observed in the field for a single #timer clip re-checked every second).
+#[tokio::test(start_paused = true)]
+async fn should_warn_missing_clip_rate_limits_repeats_of_the_same_clip() {
+    let (mut driver, _status) = driver_for("127.0.0.1", 65503);
+
+    assert!(
+        driver.should_warn_missing_clip("timer"),
+        "the first warning for a clip always fires"
+    );
+    assert!(
+        !driver.should_warn_missing_clip("timer"),
+        "an immediate repeat for the SAME clip must be suppressed"
+    );
+    assert!(
+        driver.should_warn_missing_clip("song-name"),
+        "a DIFFERENT clip is tracked independently of #timer's rate limit"
+    );
+
+    tokio::time::advance(Duration::from_secs(299)).await;
+    assert!(
+        !driver.should_warn_missing_clip("timer"),
+        "still within MISSING_CLIP_WARN_INTERVAL"
+    );
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(
+        driver.should_warn_missing_clip("timer"),
+        "past the interval, the warning fires again"
+    );
 }

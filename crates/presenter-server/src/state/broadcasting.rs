@@ -262,7 +262,7 @@ impl AppState {
         })
     }
 
-    async fn resolve_stage_from_state(
+    pub(super) async fn resolve_stage_from_state(
         &self,
         stage_state: &StageState,
     ) -> anyhow::Result<Option<StageResolution>> {
@@ -276,12 +276,20 @@ impl AppState {
         let Some((_, library_name, presentation)) = detail else {
             return Ok(None);
         };
-        let mut resolution = stage_resolution_from_presentation(
-            &presentation,
-            Some(library_name),
-            stage_state.current_slide_id,
-            stage_state.next_slide_id,
-        );
+        let mut resolution = if stage_state.current_slide_id.is_none() {
+            // #566: a persisted state with a presentation but NO current slide
+            // is the operator's broom-blank — it must STAY blank (song context
+            // kept, both slide boxes empty), never fall back to the first
+            // slide the way `stage_resolution_from_presentation` does.
+            super::stage::blanked_stage_resolution(&presentation, Some(library_name))
+        } else {
+            stage_resolution_from_presentation(
+                &presentation,
+                Some(library_name),
+                stage_state.current_slide_id,
+                stage_state.next_slide_id,
+            )
+        };
         if let Some(playlist_id) = stage_state.playlist_id {
             if let Some(playlist) = self.repository.fetch_playlist_by_id(playlist_id).await? {
                 let name_lookup = self

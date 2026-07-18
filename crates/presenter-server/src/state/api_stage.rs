@@ -9,37 +9,13 @@ use super::{ApiStageState, AppState};
 use crate::live::LiveEvent;
 use chrono::Utc;
 use presenter_core::{
-    Presentation, PresentationId, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot,
-    TimersOverview, API_STAGE_LAYOUT_CODE,
+    Presentation, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, TimersOverview,
+    API_STAGE_LAYOUT_CODE,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 impl AppState {
-    // Presentation cache methods
-    pub(super) async fn presentation_from_cache(
-        &self,
-        presentation_id: PresentationId,
-    ) -> anyhow::Result<Arc<Presentation>> {
-        if let Some(cached) = {
-            let guard = self.caches.presentation.read().await;
-            guard.get(&presentation_id).cloned()
-        } {
-            return Ok(cached);
-        }
-        let detail = self
-            .repository
-            .fetch_presentation_detail(presentation_id)
-            .await?;
-        let Some((_, _, presentation)) = detail else {
-            return Err(anyhow::anyhow!("presentation not found"));
-        };
-        let arc = Arc::new(presentation);
-        let mut guard = self.caches.presentation.write().await;
-        guard.insert(presentation_id, arc.clone());
-        Ok(arc)
-    }
-
     pub(crate) async fn get_all_group_colors(&self) -> HashMap<String, String> {
         self.caches.group_color.read().await.clone()
     }

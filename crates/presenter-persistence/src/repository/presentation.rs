@@ -11,6 +11,77 @@ use sea_orm::{
 };
 use tracing::instrument;
 
+/// Bump a presentation's `updated_at` to now, on any connection. Every local song
+/// mutation calls this so LWW sync has a monotone clock (#555).
+async fn touch_presentation<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    presentation_id: &str,
+) -> anyhow::Result<()> {
+    presentation_entity::Entity::update_many()
+        .col_expr(
+            presentation_entity::Column::UpdatedAt,
+            Expr::value(Utc::now().to_rfc3339()),
+        )
+        .filter(presentation_entity::Column::Id.eq(presentation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Write a slide's worship-text columns on `conn` (any connection/transaction).
+/// Shared by `update_slide_content` and `update_slide_content_with_metadata` so
+/// the atomicity fix (#558 S6 — caller wraps this + `touch_presentation` in one
+/// transaction) lives in exactly one place.
+async fn update_slide_worship_columns<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    presentation_id: PresentationId,
+    slide_id: SlideId,
+    content: &SlideContent,
+) -> anyhow::Result<()> {
+    let result = slide_entity::Entity::update_many()
+        .col_expr(
+            slide_entity::Column::WorshipMain,
+            Expr::value(content.main.value().to_owned()),
+        )
+        .col_expr(
+            slide_entity::Column::WorshipMainSearch,
+            Expr::value(fold_query(content.main.value())),
+        )
+        .col_expr(
+            slide_entity::Column::WorshipTranslate,
+            Expr::value(content.translation.value().to_owned()),
+        )
+        .col_expr(
+            slide_entity::Column::WorshipTranslateSearch,
+            Expr::value(fold_query(content.translation.value())),
+        )
+        .col_expr(
+            slide_entity::Column::WorshipStage,
+            Expr::value(content.stage.value().to_owned()),
+        )
+        .col_expr(
+            slide_entity::Column::WorshipStageSearch,
+            Expr::value(fold_query(content.stage.value())),
+        )
+        .col_expr(
+            slide_entity::Column::WorshipGroup,
+            Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
+        )
+        .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
+        .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+        .exec(conn)
+        .await?;
+
+    if result.rows_affected == 0 {
+        return Err(anyhow!(
+            "slide {} not found in presentation {}",
+            slide_id,
+            presentation_id
+        ));
+    }
+    Ok(())
+}
+
 impl Repository {
     #[instrument(skip_all)]
     pub async fn create_presentation(
@@ -29,6 +100,9 @@ impl Repository {
             name: Set(name.to_string()),
             search_name: Set(fold_query(name)),
             created_at: Set(Utc::now().into()),
+            updated_at: Set(Utc::now().into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(None),
         })
         .exec(&txn)
         .await?;
@@ -72,6 +146,12 @@ impl Repository {
             return Err(anyhow!("presentation name cannot be empty"));
         }
         let id = presentation_id.to_string();
+        // #558 S6: the rename and its updated_at bump are ONE transaction — two
+        // separate autocommit statements let a concurrent sync apply read the
+        // OLD (not-yet-bumped) updated_at between them, "win" the LWW race, and
+        // overwrite this edit; the touch would then land AFTER and stamp a
+        // bogus "locally newer" timestamp over the peer's content.
+        let txn = self.db.begin().await?;
         let result = presentation_entity::Entity::update_many()
             .col_expr(presentation_entity::Column::Name, Expr::value(trimmed))
             .col_expr(
@@ -79,34 +159,53 @@ impl Repository {
                 Expr::value(fold_query(trimmed)),
             )
             .filter(presentation_entity::Column::Id.eq(id.clone()))
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("presentation not found"));
         }
+        touch_presentation(&txn, &id).await?;
+        txn.commit().await?;
         Ok(())
     }
 
     #[instrument(skip_all)]
     pub async fn delete_presentation(&self, presentation_id: PresentationId) -> anyhow::Result<()> {
+        use crate::entities::playlist_entry;
         let id = presentation_id.to_string();
-        // #515: one transaction — the presentation delete and its stage-layout
-        // marker cleanup commit (or fail) together, so a cleanup error can
-        // never report a failed delete that actually happened.
+        // #555: delete is now a SOFT delete (the trash) so it syncs like any
+        // edit under LWW and stays restorable for 30 days. One transaction —
+        // the mark, the playlist-entry removal, and the stage-layout cleanup
+        // commit (or fail) together (#515).
         let txn = self.db.begin().await?;
-        let result = presentation_entity::Entity::delete_by_id(id)
+
+        let now = Utc::now().to_rfc3339();
+        let result = presentation_entity::Entity::update_many()
+            .col_expr(
+                presentation_entity::Column::DeletedAt,
+                Expr::value(now.clone()),
+            )
+            .col_expr(presentation_entity::Column::UpdatedAt, Expr::value(now))
+            .filter(presentation_entity::Column::Id.eq(id.clone()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("presentation not found"));
         }
-        crate::entities::slide_stage_layout::Entity::delete_many()
-            .filter(
-                crate::entities::slide_stage_layout::Column::PresentationId
-                    .eq(presentation_id.to_string()),
-            )
+
+        // Preserve today's behavior: a deleted song leaves every playlist.
+        playlist_entry::Entity::delete_many()
+            .filter(playlist_entry::Column::PresentationId.eq(id.clone()))
             .exec(&txn)
             .await?;
+
+        // #515 markers go with the (now-hidden) song.
+        crate::entities::slide_stage_layout::Entity::delete_many()
+            .filter(crate::entities::slide_stage_layout::Column::PresentationId.eq(id))
+            .exec(&txn)
+            .await?;
+
         txn.commit().await?;
         Ok(())
     }
@@ -141,7 +240,9 @@ impl Repository {
         &self,
         presentation_id: PresentationId,
     ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
-        let pres_model = presentation_entity::Entity::find_by_id(presentation_id.to_string())
+        let pres_model = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::Id.eq(presentation_id.to_string()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .one(&self.db)
             .await?;
         let Some(pres_model) = pres_model else {
@@ -178,6 +279,7 @@ impl Repository {
         &self,
     ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
         let presentation = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(presentation_entity::Column::CreatedAt)
             .one(&self.db)
             .await?;
@@ -195,49 +297,16 @@ impl Repository {
         slide_id: SlideId,
         content: &SlideContent,
     ) -> anyhow::Result<()> {
-        // Worship slide update (no metadata change)
-        let result = slide_entity::Entity::update_many()
-            .col_expr(
-                slide_entity::Column::WorshipMain,
-                Expr::value(content.main.value().to_owned()),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipMainSearch,
-                Expr::value(fold_query(content.main.value())),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipTranslate,
-                Expr::value(content.translation.value().to_owned()),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipTranslateSearch,
-                Expr::value(fold_query(content.translation.value())),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipStage,
-                Expr::value(content.stage.value().to_owned()),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipStageSearch,
-                Expr::value(fold_query(content.stage.value())),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipGroup,
-                Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
-            )
-            .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
-            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
-            .exec(&self.db)
-            .await?;
-
-        if result.rows_affected == 0 {
-            return Err(anyhow!(
-                "slide {} not found in presentation {}",
-                slide_id,
-                presentation_id
-            ));
-        }
-
+        // #558 S6: the slide-content write and its updated_at bump are ONE
+        // transaction — two separate autocommit statements let a concurrent
+        // sync apply read the OLD (not-yet-bumped) updated_at between them,
+        // "win" the LWW race, and overwrite this edit; the touch would then
+        // land AFTER and stamp a bogus "locally newer" timestamp over the
+        // peer's content.
+        let txn = self.db.begin().await?;
+        update_slide_worship_columns(&txn, presentation_id, slide_id, content).await?;
+        touch_presentation(&txn, &presentation_id.to_string()).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -251,48 +320,11 @@ impl Repository {
     ) -> anyhow::Result<()> {
         // Worship slides no longer carry metadata — bible slides live in a separate table.
         // The metadata parameter is accepted for API compatibility but ignored.
-        let result = slide_entity::Entity::update_many()
-            .col_expr(
-                slide_entity::Column::WorshipMain,
-                Expr::value(content.main.value().to_owned()),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipMainSearch,
-                Expr::value(fold_query(content.main.value())),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipTranslate,
-                Expr::value(content.translation.value().to_owned()),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipTranslateSearch,
-                Expr::value(fold_query(content.translation.value())),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipStage,
-                Expr::value(content.stage.value().to_owned()),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipStageSearch,
-                Expr::value(fold_query(content.stage.value())),
-            )
-            .col_expr(
-                slide_entity::Column::WorshipGroup,
-                Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
-            )
-            .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
-            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
-            .exec(&self.db)
-            .await?;
-
-        if result.rows_affected == 0 {
-            return Err(anyhow!(
-                "slide {} not found in presentation {}",
-                slide_id,
-                presentation_id
-            ));
-        }
-
+        // #558 S6: same mutation+touch atomicity as update_slide_content.
+        let txn = self.db.begin().await?;
+        update_slide_worship_columns(&txn, presentation_id, slide_id, content).await?;
+        touch_presentation(&txn, &presentation_id.to_string()).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -315,6 +347,7 @@ impl Repository {
             slide_entity::Entity::insert(active).exec(&txn).await?;
         }
 
+        touch_presentation(&txn, &presentation_id.to_string()).await?;
         txn.commit().await?;
         Ok(())
     }

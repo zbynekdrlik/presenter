@@ -1,7 +1,9 @@
 use super::clip_map::ClipMapping;
+use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
-    BibleUpdate, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate, TimerFrame,
+    BibleUpdate, PortDriftEvent, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate,
+    TimerFrame,
 };
 use anyhow::{anyhow, Context};
 use chrono::Utc;
@@ -10,6 +12,7 @@ use presenter_core::ResolumeHost;
 use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::{header::HOST, Client, RequestBuilder};
 use std::{
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -27,13 +30,31 @@ pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(35);
 pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(0);
 const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
-const COMPOSITION_TIMEOUT: Duration = Duration::from_secs(5);
+/// #563a: 5 s was marginal for a large (12+ MB / 800+ clip) composition on a
+/// loaded event network — sporadic timeouts read as a full host error and,
+/// pre-#563b, tore down the composition cache on every one. 15 s gives real
+/// headroom without materially delaying error detection (a genuinely dead
+/// host still times out, just a bit later). `ACTION_TIMEOUT` (clip triggers /
+/// parameter pushes — tiny payloads) stays tight.
+const COMPOSITION_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Spacing before the FIRST retry after a host enters `Error` (#484).
 const BACKOFF_BASE: Duration = Duration::from_secs(1);
 /// Backoff ceiling — a persistently-down host retries at most ~once per minute
 /// instead of on every push + every 10 s mapping tick (#484).
 const BACKOFF_CAP: Duration = Duration::from_secs(60);
+/// #563b: the composition mapping cache is invalidated only after this many
+/// CONSECUTIVE failures — a single timeout/blip keeps serving the
+/// stale-but-good mapping instead of forcing a (potentially multi-MB) refetch
+/// storm that aggravates the very congestion causing the failures. Mirrors
+/// the push path's existing "never refetch on staleness alone" policy (#483)
+/// for the periodic background refresh too.
+const CACHE_INVALIDATION_THRESHOLD: u32 = 3;
+/// #563h: minimum spacing between repeated "mapping missing #x clip" WARNs
+/// for the SAME clip on the SAME host — unthrottled, a per-push warning
+/// (e.g. the #timer clip, re-checked every countdown tick) floods at one
+/// line per second (507/hour observed in the field for a single host).
+const MISSING_CLIP_WARN_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Minimum spacing before the next retry for a host with `consecutive_failures`
 /// recorded failures (1-based). Exponential (1 s, 2 s, 4 s, …) capped at
@@ -111,9 +132,11 @@ pub(super) async fn run_host_worker(
     status: Arc<RwLock<ResolumeConnectionSnapshot>>,
     mut commands: mpsc::Receiver<HostCommand>,
     audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
+    port_drift_tx: Option<mpsc::Sender<PortDriftEvent>>,
 ) -> anyhow::Result<()> {
     let mut driver = HostDriver::new(client, host.clone());
     driver.audit_tx = audit_tx;
+    driver.port_drift_tx = port_drift_tx;
     driver.refresh_status(&status).await;
 
     let mut mapping_timer = tokio::time::interval(MAPPING_REFRESH_INTERVAL);
@@ -149,9 +172,16 @@ pub(super) async fn run_host_worker(
             }
             _ = mapping_timer.tick() => {
                 if driver.in_backoff() {
-                    // #484: a down host is in its backoff window — skip this
-                    // 10 s refresh instead of re-attempting (and re-logging).
-                    debug!(host = %driver.config.host, "resolume host in backoff; skipping mapping refresh");
+                    // #484/#563d: a down host is in its backoff window — skip
+                    // this 10 s refresh instead of re-attempting (and
+                    // re-logging), but say for how much longer so ops reading
+                    // logs mid-incident can see the driver is still trying,
+                    // not stuck.
+                    debug!(
+                        host = %driver.config.host,
+                        next_retry_in_secs = driver.next_retry_in_secs(),
+                        "resolume host in backoff; skipping mapping refresh"
+                    );
                 } else if let Err(err) = driver.refresh_mapping().await {
                     driver.record_error(err, &status).await;
                 } else {
@@ -189,10 +219,27 @@ pub(super) struct HostDriver {
     /// and whenever no DB-backed writer is wired. Sent via `try_send` so a full
     /// channel drops the audit row rather than ever blocking the push.
     pub(super) audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
+    /// #564: the runtime-discovered port to dial instead of `config.port`,
+    /// when a port-drift probe found Resolume actually listening elsewhere.
+    /// Seeded from `config.active_port` (the persisted value) and updated
+    /// in-memory by [`Self::probe_port_drift`] — see `port_drift.rs`.
+    pub(super) active_port: Option<u16>,
+    /// #564: non-blocking sink for port-drift discovery/heal-back events.
+    /// `None` in unit tests and whenever no DB-backed writer is wired.
+    pub(super) port_drift_tx: Option<mpsc::Sender<PortDriftEvent>>,
+    /// #563g: expected clip names missing from the last-fetched composition,
+    /// cached so a status read reflects it without waiting for the caller to
+    /// pass `status` into the fetch itself.
+    pub(super) missing_clips: Vec<String>,
+    /// #563h: when each "mapping missing #x clip" WARN was last logged, keyed
+    /// by clip name — rate-limits the per-push warning to
+    /// `MISSING_CLIP_WARN_INTERVAL`.
+    pub(super) missing_clip_last_warn: HashMap<&'static str, Instant>,
 }
 
 impl HostDriver {
     pub(super) fn new(client: Client, config: ResolumeHost) -> Self {
+        let active_port = config.active_port;
         Self {
             client,
             config,
@@ -206,10 +253,15 @@ impl HostDriver {
             last_song_name_payload: None,
             last_band_name_payload: None,
             audit_tx: None,
+            active_port,
+            port_drift_tx: None,
+            missing_clips: Vec::new(),
+            missing_clip_last_warn: HashMap::new(),
         }
     }
 
     pub(super) fn update_config(&mut self, config: ResolumeHost) {
+        self.active_port = config.active_port;
         self.config = config;
         self.mapping = None;
         self.lane_state = SlotState::default();
@@ -220,6 +272,8 @@ impl HostDriver {
         self.last_timer_payload = None;
         self.last_song_name_payload = None;
         self.last_band_name_payload = None;
+        self.missing_clips = Vec::new();
+        self.missing_clip_last_warn.clear();
     }
 
     /// #484: true while the host is within its post-error backoff window — the
@@ -228,11 +282,44 @@ impl HostDriver {
         matches!(self.next_retry_at, Some(at) if Instant::now() < at)
     }
 
+    /// #563d: seconds until the next retry is allowed, for the "still trying"
+    /// backoff-skip log line. `None` when not in a backoff window.
+    pub(super) fn next_retry_in_secs(&self) -> Option<u64> {
+        self.next_retry_at.map(|at| {
+            let now = Instant::now();
+            if at > now {
+                (at - now).as_secs()
+            } else {
+                0
+            }
+        })
+    }
+
+    /// #563h: whether a "missing #`clip`" WARN should fire now, given when it
+    /// was last logged for this clip on this host. Rate-limits to once per
+    /// [`MISSING_CLIP_WARN_INTERVAL`] — records the attempt either way so the
+    /// interval is measured from the last CALL, not the last successful log.
+    pub(super) fn should_warn_missing_clip(&mut self, clip: &'static str) -> bool {
+        let now = Instant::now();
+        let should_log = match self.missing_clip_last_warn.get(clip) {
+            Some(&last) => now.duration_since(last) >= MISSING_CLIP_WARN_INTERVAL,
+            None => true,
+        };
+        if should_log {
+            self.missing_clip_last_warn.insert(clip, now);
+        }
+        should_log
+    }
+
     pub(super) async fn refresh_status(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
         let mut guard = status.write().await;
         if self.config.is_enabled {
             guard.state = ResolumeConnectionState::Connecting;
             guard.last_error = None;
+            // #564: reflect whatever active_port this driver was just
+            // (re)configured with — otherwise a settings edit that toggles
+            // `is_enabled` would leave a stale drift note in the snapshot.
+            guard.active_port = self.active_port;
         } else {
             *guard = ResolumeConnectionSnapshot::disabled();
         }
@@ -343,6 +430,10 @@ impl HostDriver {
                 "Resolume mapping missing expected clips"
             );
         }
+        // #563g/#564: cache so a status read (and the operator-page tooltip)
+        // reflects the current composition's gaps without needing `status`
+        // threaded into this fetch.
+        self.missing_clips = missing.iter().map(|token| token.to_string()).collect();
 
         // #267: only reset dedup state when the #timer param IDs actually
         // changed. A network blip that does not change the mapping must
@@ -424,7 +515,9 @@ impl HostDriver {
         if host.is_empty() {
             return Err(anyhow!("Resolume host cannot be empty"));
         }
-        let port = self.config.port;
+        // #564: dial the discovered active port when a port-drift probe found
+        // one, otherwise the user's configured port.
+        let port = self.active_port.unwrap_or(self.config.port);
 
         if host.parse::<IpAddr>().is_ok() {
             let base_url = format!("http://{}:{}/api/v1", host, port);
@@ -480,8 +573,15 @@ impl HostDriver {
             guard.last_success = Some(now);
             guard.last_attempt = Some(now);
             guard.last_error = None;
+            guard.last_error_kind = None;
             guard.consecutive_failures = 0;
             guard.error_since = None;
+            guard.next_retry_at = None;
+            // #564: keep the snapshot's dial info in sync with the driver's
+            // own state on every successful op (the probe already writes this
+            // immediately on discovery — this is a defensive re-assertion).
+            guard.active_port = self.active_port;
+            guard.missing_clips = self.missing_clips.clone();
             was_in_error.then_some(prior_failures)
         };
         // #484: clear the backoff window on recovery and log the state change
@@ -511,6 +611,18 @@ impl HostDriver {
         err: anyhow::Error,
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
     ) {
+        // #563c: classify BEFORE consuming `err` into the rendered chain —
+        // distinguishes timeout / connect-refused / connect-other / reset so
+        // ops (and #564's port-drift probe) know WHICH kind of failure this
+        // is, not just that the composition fetch "failed".
+        let kind = classify_error(&err);
+        // The alternate (`{:#}`) rendering is a single-line "top message:
+        // cause: cause: ..." — unlike `.to_string()` (Display), which only
+        // shows the outermost context ("failed to fetch composition from
+        // ...") and drops exactly the timeout/refused/reset detail the
+        // incident diagnosis needed.
+        let chain = format!("{err:#}");
+
         let failures = {
             let mut guard = status.write().await;
             let now = Utc::now();
@@ -518,7 +630,8 @@ impl HostDriver {
                 guard.error_since = Some(now);
             }
             guard.state = ResolumeConnectionState::Error;
-            guard.last_error = Some(err.to_string());
+            guard.last_error = Some(chain.clone());
+            guard.last_error_kind = Some(kind);
             guard.consecutive_failures = guard.consecutive_failures.saturating_add(1);
             guard.last_attempt = Some(now);
             guard.consecutive_failures
@@ -527,7 +640,15 @@ impl HostDriver {
         // #484: open/extend the backoff window so a persistently-down host stops
         // retrying on every push + every 10 s tick. Spacing grows with the
         // failure count and caps at ~1/min.
-        self.next_retry_at = Some(Instant::now() + backoff_interval(failures));
+        let retry_after = backoff_interval(failures);
+        self.next_retry_at = Some(Instant::now() + retry_after);
+        {
+            // #563d: surface the SAME backoff window in the status snapshot
+            // (as an absolute time, so `next_retry_in_secs` is computed fresh
+            // at read time rather than going stale between writes).
+            let mut guard = status.write().await;
+            guard.next_retry_at = Some(now_plus(retry_after));
+        }
 
         // #484: dedup the ERROR log — emit once on the transition into Error and
         // then only at widening milestones, so a down host produces O(log N)
@@ -537,15 +658,21 @@ impl HostDriver {
             error!(
                 host = %self.config.host,
                 consecutive_failures = failures,
-                error = ?err,
+                error_kind = ?kind,
+                error = %chain,
                 "resolume host error"
             );
         } else {
+            // #563d: every suppressed retry logs at DEBUG (never silent) with
+            // how long until the next attempt, so an incident read from logs
+            // sees the driver is still trying, not stuck.
             debug!(
                 target: "presenter::resolume",
                 host = %self.config.host,
                 consecutive_failures = failures,
-                error = ?err,
+                error_kind = ?kind,
+                error = %chain,
+                next_retry_in_secs = retry_after.as_secs(),
                 "resolume host error (suppressed; backing off)"
             );
         }
@@ -553,13 +680,36 @@ impl HostDriver {
         // #267: preserve last_timer_payload, last_song_name_payload,
         // last_band_name_payload across transient errors. They will only
         // be reset when refresh_mapping detects a real param-ID change.
-        // The mapping itself is invalidated so the next operation re-fetches.
-        self.mapping = None;
+        //
+        // #563b: the composition mapping cache is invalidated only once
+        // failures reach CACHE_INVALIDATION_THRESHOLD — a single blip keeps
+        // serving the stale-but-good mapping instead of forcing a refetch.
+        if failures >= CACHE_INVALIDATION_THRESHOLD {
+            self.mapping = None;
+            self.last_mapping_refresh = None;
+            // #483: the next inline fetch is error-driven, not a cold start.
+            self.mapping_cleared_by_error = true;
+        }
+        // The resolved endpoint (DNS/IP) is cheap to redo and IS reset on
+        // every failure — unlike the composition, re-resolving costs a DNS
+        // lookup, not a multi-MB refetch, and encourages fast recovery once
+        // e.g. a flaky `.lan` name starts resolving again.
         self.endpoint = None;
-        self.last_mapping_refresh = None;
-        // #483: the next inline fetch is error-driven, not a cold start.
-        self.mapping_cleared_by_error = true;
+
+        // #564: a refused connection on the currently-dialed port may mean
+        // Arena rebound to a different port (its own restart racing ours, or
+        // a wrong port configured). Scan a small window and adopt/heal the
+        // active port before the next backoff-window attempt.
+        if kind == ResolumeErrorKind::ConnectRefused {
+            self.probe_port_drift(status).await;
+        }
     }
+}
+
+/// `Instant::now() + d` expressed as an absolute `chrono::DateTime<Utc>` for
+/// the status snapshot (which is `Send`/serializable, unlike `tokio::time::Instant`).
+fn now_plus(d: Duration) -> chrono::DateTime<Utc> {
+    Utc::now() + chrono::Duration::milliseconds(d.as_millis().min(i64::MAX as u128) as i64)
 }
 
 /// Total number of clips across all layers in a Resolume `/composition` body —

@@ -138,6 +138,7 @@ impl Repository {
         if !matched_library_vec.is_empty() {
             let matched_presentations = presentation_entity::Entity::find()
                 .filter(presentation_entity::Column::LibraryId.is_in(matched_library_vec))
+                .filter(presentation_entity::Column::DeletedAt.is_null())
                 .all(&self.db)
                 .await?;
             for model in matched_presentations {
@@ -176,6 +177,7 @@ impl Repository {
 
         let presentation_rows = presentation_entity::Entity::find()
             .filter(presentation_condition)
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(presentation_entity::Column::Name)
             .limit(remaining as u64)
             .find_also_related(library::Entity)
@@ -226,12 +228,8 @@ impl Repository {
         Ok(())
     }
 
-    async fn search_slides(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
-        let remaining = ctx.remaining();
-        if remaining == 0 {
-            return Ok(());
-        }
-
+    /// Build the WHERE condition for the slide-text phase of a search.
+    fn slide_search_condition(ctx: &SearchContext) -> Condition {
         let matched_presentation_vec: Vec<String> =
             ctx.matched_presentation_ids.iter().cloned().collect();
 
@@ -257,9 +255,75 @@ impl Repository {
             slide_condition = slide_condition
                 .add(slide_entity::Column::PresentationId.is_in(matched_presentation_vec));
         }
+        slide_condition
+    }
 
+    /// Determine WHICH field caused a slide match (preserves diagnostic info).
+    /// Priority: Main, Translation, Stage. With tokens present the search-folded
+    /// fields decide; otherwise literal contains on the raw fields.
+    fn classify_slide_match(
+        ctx: &SearchContext,
+        eff_main: &str,
+        eff_main_search: &str,
+        eff_translation: &str,
+        eff_translation_search: &str,
+        eff_stage: &str,
+        eff_stage_search: &str,
+    ) -> SearchMatchField {
+        if ctx.has_tokens {
+            if ctx
+                .tokens
+                .iter()
+                .all(|token| eff_main_search.contains(token))
+            {
+                SearchMatchField::MainText
+            } else if ctx
+                .tokens
+                .iter()
+                .all(|token| eff_translation_search.contains(token))
+            {
+                SearchMatchField::TranslationText
+            } else if ctx
+                .tokens
+                .iter()
+                .all(|token| eff_stage_search.contains(token))
+            {
+                SearchMatchField::StageText
+            } else {
+                // Combined name+library token-match (no per-field win).
+                // Default to MainText for the diagnostic field.
+                SearchMatchField::MainText
+            }
+        } else if !ctx.trimmed.is_empty() {
+            if eff_main.contains(&ctx.trimmed) {
+                SearchMatchField::MainText
+            } else if eff_translation.contains(&ctx.trimmed) {
+                SearchMatchField::TranslationText
+            } else if eff_stage.contains(&ctx.trimmed) {
+                SearchMatchField::StageText
+            } else {
+                SearchMatchField::MainText
+            }
+        } else {
+            SearchMatchField::MainText
+        }
+    }
+
+    async fn search_slides(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
+        let remaining = ctx.remaining();
+        if remaining == 0 {
+            return Ok(());
+        }
+
+        let slide_condition = Self::slide_search_condition(ctx);
+
+        // #558 S10: the two name-search phases (search_libraries' matched-
+        // presentations prefetch, search_presentations itself) both filter
+        // DeletedAt.is_null() — the slide-TEXT phase must too, or a trashed
+        // song's lyrics still surface it in results.
         let slide_rows = slide_entity::Entity::find()
             .filter(slide_condition)
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .order_by_asc(slide_entity::Column::Position)
             .limit(remaining as u64)
             .find_also_related(presentation_entity::Entity)
@@ -338,47 +402,15 @@ impl Repository {
                 continue;
             }
 
-            // Determine WHICH field caused the match (preserves diagnostic
-            // info). Priority: Main, Translation, Stage. If tokens are present
-            // we use the search-folded fields; otherwise fall back to literal
-            // contains on the raw fields.
-            let match_field = if ctx.has_tokens {
-                if ctx
-                    .tokens
-                    .iter()
-                    .all(|token| eff_main_search.contains(token))
-                {
-                    SearchMatchField::MainText
-                } else if ctx
-                    .tokens
-                    .iter()
-                    .all(|token| eff_translation_search.contains(token))
-                {
-                    SearchMatchField::TranslationText
-                } else if ctx
-                    .tokens
-                    .iter()
-                    .all(|token| eff_stage_search.contains(token))
-                {
-                    SearchMatchField::StageText
-                } else {
-                    // Combined name+library token-match (no per-field win).
-                    // Default to MainText for the diagnostic field.
-                    SearchMatchField::MainText
-                }
-            } else if !ctx.trimmed.is_empty() {
-                if eff_main.contains(&ctx.trimmed) {
-                    SearchMatchField::MainText
-                } else if eff_translation.contains(&ctx.trimmed) {
-                    SearchMatchField::TranslationText
-                } else if eff_stage.contains(&ctx.trimmed) {
-                    SearchMatchField::StageText
-                } else {
-                    SearchMatchField::MainText
-                }
-            } else {
-                SearchMatchField::MainText
-            };
+            let match_field = Self::classify_slide_match(
+                ctx,
+                eff_main,
+                eff_main_search,
+                eff_translation,
+                eff_translation_search,
+                eff_stage,
+                eff_stage_search,
+            );
 
             ctx.results.push(SearchResult {
                 kind: SearchResultKind::Presentation,

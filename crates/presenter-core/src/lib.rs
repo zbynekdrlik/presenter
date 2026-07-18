@@ -25,6 +25,7 @@ pub mod search;
 pub mod slide;
 pub mod stage_client;
 pub mod stage_display;
+pub mod sync;
 pub mod timer;
 pub mod video_source;
 
@@ -61,6 +62,7 @@ pub use stage_display::{
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
     UpcomingGroup, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
+pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};
 pub use timer::{
     format_countdown, CountdownTimer, CountdownTimerSnapshot, PreachTimer, PreachTimerSnapshot,
     TimerCommand, TimerState, TimersOverview, TimersState,
