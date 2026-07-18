@@ -288,6 +288,64 @@ async fn clear_stage_emits_blank_snapshot() {
     assert!(snapshot.next.is_none());
 }
 
+/// #566: the operator's broom (POST /stage/clear) must act like triggering an
+/// EMPTY slide — blank the slide output but KEEP the presentation context
+/// (song name, playlist highlight, the stage layout's boxes) — NOT reset the
+/// whole stage. Live at the 2026-07 event, one broom click wiped the entire
+/// stage layout (song title, groups, next slide) instead of just the lyrics.
+#[tokio::test]
+async fn clear_stage_with_active_presentation_keeps_song_context_and_blanks_slide() {
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation = &libraries[0].presentations[0];
+    let current = presentation.slides[0].id;
+    let next = presentation.slides.get(1).map(|slide| slide.id);
+    state
+        .update_stage_state(presentation.id, current, next, None, None)
+        .await
+        .unwrap();
+
+    state.clear_stage().await.unwrap();
+
+    // Persisted state: presentation context kept, slide blanked.
+    let stored = state
+        .repository()
+        .get_stage_state()
+        .await
+        .unwrap()
+        .expect("stage state persisted");
+    assert_eq!(
+        stored.presentation_id,
+        Some(presentation.id),
+        "broom must keep the on-stage presentation (only the slide blanks)"
+    );
+    assert!(
+        stored.current_slide_id.is_none(),
+        "broom must blank the current slide"
+    );
+    assert!(stored.next_slide_id.is_none());
+
+    // Rebuilt snapshot (what a late-joining stage client fetches): song
+    // context present, slide blank — and NO fallback to the first slide.
+    let snapshot = state
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+        .await
+        .unwrap()
+        .expect("snapshot available");
+    assert_eq!(snapshot.presentation_id, Some(presentation.id));
+    assert_eq!(
+        snapshot.presentation_name.as_deref(),
+        Some(presentation.name.as_str()),
+        "song context must survive the broom"
+    );
+    assert!(
+        snapshot.current.is_none(),
+        "blanked stage must NOT fall back to showing the first slide"
+    );
+    assert!(snapshot.next.is_none());
+}
+
 #[tokio::test]
 async fn update_slide_content_updates_repository() {
     let state = AppState::in_memory().await.unwrap();
