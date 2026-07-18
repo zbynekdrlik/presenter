@@ -24,7 +24,7 @@ test.afterAll(async () => {
   server = undefined;
 });
 
-test("POST /stage/clear empties the stage display", async ({ request }) => {
+test("POST /stage/clear blanks the slide but keeps the song context (#566)", async ({ request }) => {
   // First, set up a presentation and trigger a slide
   const libResp = await request.post(
     new URL("/libraries", baseURL).toString(),
@@ -70,13 +70,19 @@ test("POST /stage/clear empties the stage display", async ({ request }) => {
   );
   expect(clearResp.status()).toBe(204);
 
-  // Verify stage is empty
+  // #566: the broom behaves like triggering an EMPTY slide — the slide boxes
+  // blank, but the song context (presentation, name) must SURVIVE. It must
+  // also NOT fall back to showing the first slide.
   const snapshotAfter = await request.get(
     new URL("/stage/snapshot", baseURL).toString(),
   );
   expect(snapshotAfter.ok()).toBeTruthy();
   const after = await snapshotAfter.json();
   expect(after.current).toBeNull();
+  expect(after.next).toBeNull();
+  expect(after.presentationId).toBe(presentationId);
+  expect(after.presentationName).toBe("Clear Song");
+  expect(after.songName).toBe("Clear Song");
 });
 
 test("stage clear broadcasts to WebSocket clients", async ({
@@ -143,4 +149,22 @@ test("stage clear broadcasts to WebSocket clients", async ({
   await expect(page.locator(".stage__current-slide .stage__slide-text")).toHaveText("", {
     timeout: 10_000,
   });
+
+  // #566: the song name must STAY on the stage — the broom blanks only the
+  // slide, it must not wipe the whole layout's content.
+  await expect(
+    page.locator(".stage__current-song .stage__song-name-text"),
+  ).toHaveText("WS Clear Song", { timeout: 10_000 });
+
+  // Re-triggering the slide after a broom-blank must bring the text back.
+  await request.post(new URL("/stage/state", baseURL).toString(), {
+    data: {
+      presentationId: presPayload.presentation.id,
+      currentSlideId: presPayload.presentation.slides[0].id,
+    },
+  });
+  await expect(page.locator(".stage__current-slide .stage__slide-text")).toContainText(
+    "Visible Text",
+    { timeout: 10_000 },
+  );
 });

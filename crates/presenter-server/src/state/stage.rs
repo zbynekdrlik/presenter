@@ -160,6 +160,44 @@ pub(crate) fn stage_resolution_from_presentation(
     }
 }
 
+/// #566: resolution for a presentation that is ON STAGE but has NO triggered
+/// slide — the operator's broom-blank. Keeps the song context (name, library,
+/// slide count, structural upcoming groups) while both slide boxes stay empty.
+/// Deliberately NOT `stage_resolution_from_presentation(.., None, None)` —
+/// that fallback resolves to the FIRST slide, which is exactly what a blank
+/// must never do.
+pub(crate) fn blanked_stage_resolution(
+    presentation: &Presentation,
+    library_name: Option<String>,
+) -> StageResolution {
+    let mut active_group: Option<&str> = None;
+    let mut group_names: Vec<Option<&str>> = Vec::with_capacity(presentation.slides.len());
+    for slide in &presentation.slides {
+        if let Some(group) = slide.content.group.as_ref() {
+            active_group = Some(group.name());
+        }
+        group_names.push(active_group);
+    }
+    StageResolution {
+        presentation_id: Some(presentation.id),
+        presentation_name: Some(presentation.name.clone()),
+        library_name,
+        current_slide_id: None,
+        current: None,
+        next_slide_id: None,
+        next: None,
+        override_song_name: None,
+        next_song_name: None,
+        current_index: None,
+        total_slides: Some(presentation.slides.len() as u32),
+        playlist_id: None,
+        playlist_name: None,
+        playlist_entries: None,
+        active_entry_index: None,
+        upcoming_groups: upcoming_distinct_groups(group_names, 4, None),
+    }
+}
+
 /// Returns up to `max` distinct upcoming group names from an ordered iterator
 /// of per-slide group names (`None` = ungrouped slide). Consecutive duplicates
 /// are collapsed; ungrouped slides are skipped (they do not break a run).

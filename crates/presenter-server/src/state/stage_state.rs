@@ -119,11 +119,24 @@ impl AppState {
         Ok(())
     }
 
+    /// #566: the operator's broom acts like triggering an EMPTY slide — it
+    /// blanks the slide output but KEEPS the presentation/playlist context
+    /// (song name, playlist highlight, the layout's boxes). Only when nothing
+    /// is on stage does it remain the full reset it used to be.
     pub async fn clear_stage(&self) -> anyhow::Result<()> {
-        let cleared = StageState::cleared();
-        self.repository.upsert_stage_state(&cleared).await?;
-        self.broadcast_stage_resolution(StageResolution::cleared(), None)
-            .await?;
+        let blanked = match self.repository.get_stage_state().await? {
+            Some(prior) if prior.presentation_id.is_some() => {
+                StageState::new(prior.presentation_id, None, None, prior.playlist_id)
+                    .with_active_entry_index(prior.active_entry_index)
+            }
+            _ => StageState::cleared(),
+        };
+        self.repository.upsert_stage_state(&blanked).await?;
+        let resolution = self
+            .resolve_stage_from_state(&blanked)
+            .await?
+            .unwrap_or_else(StageResolution::cleared);
+        self.broadcast_stage_resolution(resolution, None).await?;
         Ok(())
     }
 
