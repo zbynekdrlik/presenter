@@ -233,3 +233,11 @@ decision a PURE helper and unit-test it — don't bury it in the async path:
 - Keep new behavior tests in a SELF-CONTAINED file (`resolume/backoff_tests.rs`, registered
   `#[cfg(test)] mod backoff_tests;` in `resolume/mod.rs`) so the over-cap `tests.rs` debt never blocks
   you and the fn-length gate stays green.
+
+## gh CLI Quirk — `gh pr edit` Fails on This Repo
+
+`gh pr edit <N> --body-file ...` dies with `GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.projectCards)` — the repo has a legacy Projects-classic reference and gh's edit path always queries projectCards. Workaround (works every time):
+
+```bash
+gh api -X PATCH repos/zbynekdrlik/presenter/pulls/<N> -F "body=@body.md"
+```
