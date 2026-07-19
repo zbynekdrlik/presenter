@@ -905,40 +905,77 @@ jobs:
               IdentityFile ~/.ssh/id_prod
           EOF
 
-      - name: Test migration against production DB
+      - name: Fetch production DB snapshot (delta-synced cache)
+        id: prod_snapshot
         run: |
           set -e
-          # Prod is a physical machine that gets powered off when equipment travels to
-          # events. A DEV deploy must not be held hostage by a deliberately-offline prod:
-          # when prod is UNREACHABLE, warn loudly and skip this pre-check (it re-arms by
-          # itself the moment prod is back). A reachable prod that fails the copy or the
-          # migration still HARD-FAILS below — the gate itself is not weakened.
+          # #565: ONE snapshot fetch per run — the migration pre-check AND the
+          # dev-DB refresh below both read this cached copy (previously each
+          # pulled its own FULL snapshot: 2 × 75 MB gz over a ~21 KB/s
+          # inter-site bridge when the rig travels ≈ the whole deploy-dev job
+          # crawling for ~an hour). The cache is PERSISTENT on the runner and
+          # rsync delta-syncs it, so steady-state runs transfer only the
+          # SQLite pages that changed since the previous run.
+          #
+          # Prod is a physical machine that gets powered off when equipment
+          # travels to events. A DEV deploy must not be held hostage by a
+          # deliberately-offline prod: when prod is UNREACHABLE, notice-skip
+          # (available=false skips both consumer steps; they re-arm by
+          # themselves the moment prod is back). A reachable prod that fails
+          # the snapshot or the sync still HARD-FAILS.
           if ! ssh -i ~/.ssh/id_prod -o ConnectTimeout=10 -o BatchMode=yes prod-server true 2>/dev/null; then
-            # ::notice:: (not ::warning::) — this is a DELIBERATE, documented skip,
-            # not a swallowed failure; the strict quality gate forbids the
-            # warning-then-exit-0 soft-fail shape and a reachable-prod failure
-            # still hard-fails below.
-            echo "::notice::Production host is unreachable (powered off?). Skipping the prod-DB migration pre-check for this DEV deploy — it runs again automatically once prod is back online. The prod deploy workflow still gates on it."
+            echo "::notice::Production host is unreachable (powered off?). Skipping the prod-DB migration pre-check AND the dev-DB snapshot refresh for this DEV deploy — both run again automatically once prod is back online. The prod deploy workflow still gates on the migration check."
+            echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Copying production database for migration testing..."
+          CACHE_DIR="/var/tmp/presenter-ci"
+          CACHE_DB="$CACHE_DIR/prod-db-cache.db"
+          mkdir -p "$CACHE_DIR"
+          # Consistent online-backup snapshot on the prod box — a raw copy of
+          # the LIVE SQLite file races concurrent writes; over a slow link the
+          # multi-minute copy window guarantees a torn, "malformed" image (hit
+          # 2026-07-17 at an event). UNCOMPRESSED on purpose: rsync's delta
+          # algorithm needs the stable on-disk page layout to match blocks
+          # against the cache; compression happens in transit (-z).
+          if ! ssh -i ~/.ssh/id_prod prod-server "python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot.db'); s.backup(d); d.close(); s.close()\""; then
+            echo "::error::Could not snapshot the production database on prod-server (python3 sqlite3 backup). Fix prod SSH access / python3 before retrying."
+            exit 1
+          fi
+          sync_snapshot() {
+            # flock: the cache is shared machine state — never let two runs
+            # rsync --inplace into it concurrently.
+            flock "$CACHE_DIR/.fetch-lock" \
+              rsync -z --inplace --partial --timeout=600 \
+                -e "ssh -i ~/.ssh/id_prod" \
+                prod-server:/tmp/prod-ci-snapshot.db "$CACHE_DB"
+          }
+          check_snapshot() {
+            python3 -c "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); r=c.execute('PRAGMA quick_check(1)').fetchone(); sys.exit(0 if r and r[0]=='ok' else 1)" "$CACHE_DB"
+          }
+          if ! sync_snapshot || ! check_snapshot; then
+            echo "::warning::Delta sync failed or the cached snapshot failed its integrity check — discarding the cache and doing ONE full re-fetch."
+            rm -f "$CACHE_DB"
+            sync_snapshot
+            check_snapshot || { echo "::error::Prod DB snapshot is corrupt even after a full re-fetch. Cannot trust it for the migration test or the dev-DB refresh."; exit 1; }
+          fi
+          ssh -i ~/.ssh/id_prod prod-server "rm -f /tmp/prod-ci-snapshot.db"
+          SNAP_SIZE=$(stat -c %s "$CACHE_DB")
+          if [ "$SNAP_SIZE" -lt 1048576 ]; then
+            echo "::error::Production DB snapshot suspiciously small (${SNAP_SIZE} bytes). Aborting to avoid testing/deploying garbage."
+            exit 1
+          fi
+          echo "Snapshot cached at $CACHE_DB (${SNAP_SIZE} bytes)"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Test migration against production DB
+        if: steps.prod_snapshot.outputs.available == 'true'
+        run: |
+          set -e
           PROD_DB="/tmp/prod-migration-test-$$.db"
-          # A raw scp of a LIVE SQLite file races concurrent writes — over a slow
-          # inter-site link the multi-minute copy window guarantees a torn,
-          # "malformed" image (hit 2026-07-17 at an event). Take a CONSISTENT
-          # snapshot with SQLite's online backup API on the prod box, gzip it
-          # (~8x smaller — the slow-bridge copy drops from hours to minutes),
-          # then pull the compressed snapshot.
-          if ! ssh -i ~/.ssh/id_prod prod-server "python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot.db'); s.backup(d); d.close(); s.close()\" && gzip -1f /tmp/prod-ci-snapshot.db"; then
-            echo "::error::Could not snapshot the production database on prod-server (python3 sqlite3 backup). The migration test cannot run. Fix prod SSH access / python3 before retrying."
-            exit 1
-          fi
-          if ! scp -i ~/.ssh/id_prod prod-server:/tmp/prod-ci-snapshot.db.gz "$PROD_DB.gz"; then
-            echo "::error::Could not copy production database snapshot from prod-server. The migration test cannot run, which means we cannot verify the new binary won't break production. Fix prod SSH access (DEPLOY_SSH_KEY secret must be installed in prod's authorized_keys) before retrying."
-            exit 1
-          fi
-          ssh -i ~/.ssh/id_prod prod-server "rm -f /tmp/prod-ci-snapshot.db.gz"
-          gunzip -f "$PROD_DB.gz"
+          # Work on a COPY — the server run below migrates the DB in place,
+          # and the shared cache must stay byte-identical to prod so the next
+          # run's rsync delta stays minimal.
+          cp /var/tmp/presenter-ci/prod-db-cache.db "$PROD_DB"
           echo "Testing new binary against production database..."
           chmod +x target/release/presenter-server
           PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \
@@ -1086,37 +1123,19 @@ jobs:
           REMOTE_SCRIPT
 
       - name: Replace dev database with production snapshot
+        # #565: reads the snapshot cached by the "Fetch production DB
+        # snapshot" step — no second full pull over the slow inter-site link.
+        # Prod unreachable (available != 'true') → step skips and dev keeps
+        # its CURRENT database; the refresh re-arms once prod is back online.
+        if: steps.prod_snapshot.outputs.available == 'true'
         run: |
           set -e
-          # Prod gets powered off when equipment travels to events. While it is
-          # deliberately unreachable, keep dev's CURRENT database instead of failing the
-          # whole dev deploy; the snapshot refresh re-arms on its own once prod is back.
-          # A reachable prod that fails the copy still hard-fails below.
-          if ! ssh -i ~/.ssh/id_prod -o ConnectTimeout=10 -o BatchMode=yes prod-server true 2>/dev/null; then
-            echo "::notice::Production host is unreachable (powered off?). Keeping dev's current database for this deploy — the prod snapshot refresh resumes automatically once prod is back online."
-            exit 0
-          fi
-          echo "Fetching production database snapshot..."
           PROD_TMP="/tmp/prod-db-snapshot-$$.db"
-          # Consistent SQLite online-backup snapshot + gzip — a raw scp of the live
-          # file tears under concurrent writes (see the migration-test step above).
-          if ! ssh -i ~/.ssh/id_prod prod-server "python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot2.db'); s.backup(d); d.close(); s.close()\" && gzip -1f /tmp/prod-ci-snapshot2.db"; then
-            echo "::error::Could not snapshot the production database on prod-server. Dev DB will retain its current state — this is a regression risk. Fix prod SSH access / python3 before proceeding."
-            exit 1
-          fi
-          if ! scp -i ~/.ssh/id_prod prod-server:/tmp/prod-ci-snapshot2.db.gz "$PROD_TMP.gz" 2>/dev/null; then
-            echo "::error::Could not copy production database snapshot. Dev DB will retain its current state — this is a regression risk. Fix prod SSH access before proceeding."
-            exit 1
-          fi
-          ssh -i ~/.ssh/id_prod prod-server "rm -f /tmp/prod-ci-snapshot2.db.gz"
-          gunzip -f "$PROD_TMP.gz"
+          # Copy out of the shared cache — the deploy consumes the copy, the
+          # cache stays pristine for the next run's rsync delta.
+          cp /var/tmp/presenter-ci/prod-db-cache.db "$PROD_TMP"
           PROD_SIZE=$(stat -c %s "$PROD_TMP")
-          if [ "$PROD_SIZE" -lt 1024 ]; then
-            echo "::error::Production DB snapshot suspiciously small (${PROD_SIZE} bytes). Aborting to avoid wiping dev with garbage."
-            rm -f "$PROD_TMP"
-            exit 1
-          fi
-          echo "Production snapshot fetched (${PROD_SIZE} bytes). Uploading to dev server..."
+          echo "Production snapshot ready (${PROD_SIZE} bytes). Uploading to dev server..."
           scp -i ~/.ssh/id_deploy "$PROD_TMP" deploy-target:/opt/presenter-dev/presenter.db.new
           rm -f "$PROD_TMP"
           ssh deploy-target << 'REMOTE_SCRIPT'
