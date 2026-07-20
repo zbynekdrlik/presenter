@@ -1161,7 +1161,9 @@ jobs:
           # baked into the dev binary (--features mock-integrations). Since #565
           # the snapshot replace is SKIPPED when prod is offline, so this step can
           # re-run on an already-mocked DB — the label rewrite must be idempotent
-          # (REPLACE strips prior ' (mock)' suffixes before appending exactly one).
+          # (REPLACE strips prior ' (mock)' suffixes before appending exactly one;
+          # note REPLACE strips ALL occurrences, so a prod label with a literal
+          # mid-string ' (mock)' would collapse — implausible, dev-only cosmetic).
           sqlite3 /opt/presenter-dev/presenter.db "UPDATE resolume_hosts SET host='127.0.0.1', port=8091, label=REPLACE(label, ' (mock)', '') || ' (mock)'; UPDATE ableset_settings SET host='127.0.0.1', http_port=39042; DELETE FROM android_stage_displays; DELETE FROM video_sources;"
           echo "Integration tables redirected to localhost mock endpoints"
           REMOTE_SCRIPT

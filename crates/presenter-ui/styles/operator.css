@@ -291,6 +291,15 @@ body.operator {
   cursor: default;
 }
 
+/* The chip text is the host's arbitrary-length configured label — bound it
+   so several walls with long names can't overflow the sticky header (the
+   full name stays readable in the chip tooltip). */
+.operator__resolume-chip-label {
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .operator__resolume-dot {
   width: 8px;
   height: 8px;
