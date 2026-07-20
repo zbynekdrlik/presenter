@@ -55,6 +55,12 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # presenter-ui is a workspace `exclude` (WASM crate), so the root
+      # `cargo fmt --all` never sees it — check it explicitly.
+      - name: Check formatting (presenter-ui)
+        run: cargo fmt --check
+        working-directory: crates/presenter-ui
+
   # ============================================
   # Clippy Linting
   # ============================================

@@ -28,15 +28,6 @@ pub(crate) fn chip_dot_state(state: &str, failing_for_secs: Option<i64>) -> &'st
     }
 }
 
-/// The short label text next to the dot.
-pub(crate) fn chip_label(dot_state: &str) -> &'static str {
-    match dot_state {
-        "green" => "Connected",
-        "red" => "Down",
-        _ => "Retrying…",
-    }
-}
-
 /// Plain-language cause for the tooltip — never a raw wire token like
 /// `connect_refused`.
 pub(crate) fn error_kind_label(kind: Option<&str>) -> &'static str {
@@ -139,7 +130,6 @@ pub fn ResolumeStatusChips() -> impl IntoView {
                     let dot_class = move || {
                         format!("operator__resolume-dot operator__resolume-dot--{}", dot_state())
                     };
-                    let label_text = move || chip_label(dot_state());
                     let tooltip = move || status.get().map(|h| chip_tooltip(&h)).unwrap_or_default();
                     view! {
                         <span
@@ -150,7 +140,11 @@ pub fn ResolumeStatusChips() -> impl IntoView {
                             title=tooltip
                         >
                             <span class=dot_class aria-hidden="true"></span>
-                            <span class="operator__resolume-chip-label">{label_text}</span>
+                            // The visible text is the HOST'S NAME (its configured
+                            // label) — with several walls configured, "Connected"
+                            // alone never says WHICH Resolume the chip is. State
+                            // lives in the dot color + tooltip.
+                            <span class="operator__resolume-chip-label">{label.clone()}</span>
                         </span>
                     }
                 }
@@ -186,20 +180,17 @@ mod tests {
     #[test]
     fn connected_is_green() {
         assert_eq!(chip_dot_state("connected", None), "green");
-        assert_eq!(chip_label("green"), "Connected");
     }
 
     #[test]
     fn erroring_under_two_minutes_is_yellow_not_red() {
         assert_eq!(chip_dot_state("error", Some(119)), "yellow");
-        assert_eq!(chip_label("yellow"), "Retrying…");
     }
 
     #[test]
     fn erroring_past_two_minutes_is_red() {
         assert_eq!(chip_dot_state("error", Some(120)), "red");
         assert_eq!(chip_dot_state("error", Some(600)), "red");
-        assert_eq!(chip_label("red"), "Down");
     }
 
     #[test]
@@ -235,7 +226,10 @@ mod tests {
     #[test]
     fn error_kind_labels_are_plain_language_never_raw_wire_tokens() {
         assert_eq!(error_kind_label(Some("timeout")), "timed out");
-        assert_eq!(error_kind_label(Some("connect_refused")), "connection refused");
+        assert_eq!(
+            error_kind_label(Some("connect_refused")),
+            "connection refused"
+        );
         assert_eq!(error_kind_label(Some("connect_other")), "could not connect");
         assert_eq!(error_kind_label(Some("reset")), "connection reset");
         assert_eq!(error_kind_label(Some("other")), "request failed");
@@ -273,6 +267,9 @@ mod tests {
         let mut d = dto("connected", None);
         d.missing_clips = vec!["#timer".to_string(), "#song-name".to_string()];
         let text = chip_tooltip(&d);
-        assert!(text.contains("Composition missing: #timer, #song-name"), "{text}");
+        assert!(
+            text.contains("Composition missing: #timer, #song-name"),
+            "{text}"
+        );
     }
 }

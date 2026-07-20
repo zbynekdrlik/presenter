@@ -99,19 +99,18 @@ test("an enabled host tracks the mock's connection state: green while up, yellow
     `[data-role="resolume-status-chip"][data-host-label="${label}"]`,
   );
   await expect(chip).toHaveAttribute("data-state", "green", { timeout: 30_000 });
-  await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(
-    "Connected",
-  );
+  // The visible chip text is the HOST'S NAME — with several walls
+  // configured, a bare "Connected" never says WHICH Resolume it is.
+  // Connection state lives in the dot color + tooltip.
+  await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(label);
   await expect(chip).toHaveAttribute("title", /Connected/);
 
   // Simulate the mock going offline (Arena crashing / unreachable) — the
-  // chip must flip to yellow ("Retrying…") and its tooltip must name a
-  // concrete cause, not stay stuck showing "Connected".
+  // chip must flip to yellow while KEEPING the host's name as its text,
+  // and its tooltip must name a concrete cause.
   mockResolume.setOnline(false);
   await expect(chip).toHaveAttribute("data-state", "yellow", { timeout: 30_000 });
-  await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(
-    "Retrying…",
-  );
+  await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(label);
   await expect(chip).toHaveAttribute("title", /Not reachable/);
 
   // Recovery: back online, the chip must return to green on its own.

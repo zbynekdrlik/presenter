@@ -448,7 +448,10 @@ mod tests {
     #[test]
     fn one_failed_poll_is_a_blip_two_in_a_row_is_stale() {
         assert!(!is_stale(0));
-        assert!(!is_stale(1), "a single failure must not blank the card or shout");
+        assert!(
+            !is_stale(1),
+            "a single failure must not blank the card or shout"
+        );
         assert!(is_stale(2));
         assert!(is_stale(7));
     }
