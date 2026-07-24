@@ -4,6 +4,11 @@
 //! nothing when there are no enabled hosts — a deployment with no Resolume
 //! configured (e.g. the dev box) shows a clean absent state, never an empty
 //! placeholder or a console error.
+//!
+//! Placement (#573): mounted in the operator header's TOP brand row, inside
+//! `.operator__brand-nav`, immediately after `<SurfaceNav />` — connection
+//! status belongs next to the Stage/Camera/Tablet/Timer surface-nav pills,
+//! never next to the Stage Output select in `operator__header-right`.
 
 use leptos::prelude::*;
 
