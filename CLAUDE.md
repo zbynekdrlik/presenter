@@ -74,7 +74,7 @@ The project uses **Semantic Versioning** with a single `X.Y.Z` format on both br
 
 1. Dev work: version is `X.Y.Z`, push to dev, CI passes, dev deploy shows `vX.Y.Z (dev)`
 2. Release: create PR dev->main, no version change needed, all checks green
-3. Merge: human merges, main deploys, production shows `vX.Y.Z`
+3. Merge: Claude merges autonomously once every gate is green (user directive 2026-07-24), main deploys, production shows `vX.Y.Z`
 4. Post-release: bump to next version on dev, continue
 
 See `docs/architecture.md` for full versioning and release strategy.
