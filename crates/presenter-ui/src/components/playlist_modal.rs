@@ -61,6 +61,12 @@ pub fn PlaylistModals() -> impl IntoView {
         let op = op.clone();
         move |ev: web_sys::SubmitEvent| {
             ev.prevent_default();
+            // #571: re-entry guard — create is NOT idempotent, so a
+            // double-submit during the round-trip must not fire twice (the
+            // button is also disabled off this signal; belt and braces).
+            if op.submitting.get_untracked() {
+                return;
+            }
             let name = name_value.get_untracked().trim().to_string();
             if name.is_empty() {
                 return;
@@ -193,6 +199,10 @@ pub fn PlaylistModals() -> impl IntoView {
         move |_| crate::components::modal::close_modal(&op)
     };
 
+    // #571: disable the mutating buttons while a request is in flight.
+    let submitting_sig = op.submitting;
+    let is_submitting = move || submitting_sig.get();
+
     view! {
         // Playlist list modal
         <div class="operator__playlist-modal" data-role="playlist-modal"
@@ -310,13 +320,16 @@ pub fn PlaylistModals() -> impl IntoView {
                             class="operator__library-edit-delete"
                             data-role="playlist-edit-delete"
                             style:display=move || if edit_mode() == "edit" { "inline-block" } else { "none" }
+                            prop:disabled=is_submitting
                             on:click=on_delete
                         >"Delete playlist"</button>
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="playlist-edit-cancel"
                                 on:click=on_cancel
                             >"Cancel"</button>
-                            <button type="submit" data-role="playlist-edit-save">"Save changes"</button>
+                            <button type="submit" data-role="playlist-edit-save"
+                                prop:disabled=is_submitting
+                            >"Save changes"</button>
                         </div>
                     </footer>
                 </form>

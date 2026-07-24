@@ -261,6 +261,12 @@ pub fn PresentationModals() -> impl IntoView {
     let on_create_blank = {
         let op = op.clone();
         move |_| {
+            // #571: re-entry guard — create is NOT idempotent, so a
+            // double-click during the round-trip must not fire twice (the
+            // button is also disabled off this signal; belt and braces).
+            if op.submitting.get_untracked() {
+                return;
+            }
             let lib_id = match ctx.selected_library_id.get_untracked() {
                 Some(id) => id,
                 None => return,
@@ -321,6 +327,12 @@ pub fn PresentationModals() -> impl IntoView {
     let on_paste_confirm = {
         let op = op.clone();
         move |_| {
+            // #571: re-entry guard — create is NOT idempotent, so a
+            // double-click during the round-trip must not fire twice (the
+            // button is also disabled off this signal; belt and braces).
+            if op.submitting.get_untracked() {
+                return;
+            }
             let lib_id = match ctx.selected_library_id.get_untracked() {
                 Some(id) => id,
                 None => return,
@@ -394,6 +406,12 @@ pub fn PresentationModals() -> impl IntoView {
     let on_import_confirm = {
         let op = op.clone();
         move |_| {
+            // #571: re-entry guard — create is NOT idempotent, so a
+            // double-click during the round-trip must not fire twice (the
+            // button is also disabled off this signal; belt and braces).
+            if op.submitting.get_untracked() {
+                return;
+            }
             let lib_id = match ctx.selected_library_id.get_untracked() {
                 Some(id) => id,
                 None => return,
@@ -492,8 +510,10 @@ pub fn PresentationModals() -> impl IntoView {
         let libraries = ctx.libraries;
         move || libraries.get()
     };
-    // Disable the edit-modal's mutating buttons while a request is in
-    // flight — copy is not idempotent, so a double-click must not fire twice.
+    // Disable the edit-modal's AND create-modal's mutating buttons while a
+    // request is in flight — none of these actions are idempotent (copy,
+    // create blank/paste/import), so a double-click must not fire twice
+    // (#571 extends this from the edit modal, fixed in #570, to create).
     let submitting_sig = op.submitting;
     let is_submitting = move || submitting_sig.get();
 
@@ -602,6 +622,7 @@ pub fn PresentationModals() -> impl IntoView {
                             style:display=move || if create_step.get() == "options" { "flex" } else { "none" }
                         >
                             <button type="button" class="operator__create-option" data-role="presentation-create-blank"
+                                prop:disabled=is_submitting
                                 on:click=on_create_blank
                             >
                                 <span class="operator__create-option-label">"Blank"</span>
@@ -637,6 +658,7 @@ pub fn PresentationModals() -> impl IntoView {
                                     on:click=move |_| create_step.set("options".to_string())
                                 >"Back"</button>
                                 <button type="button" data-role="presentation-create-paste-confirm"
+                                    prop:disabled=is_submitting
                                     on:click=on_paste_confirm
                                 >"Create"</button>
                             </div>
@@ -652,6 +674,7 @@ pub fn PresentationModals() -> impl IntoView {
                                     on:click=move |_| create_step.set("options".to_string())
                                 >"Back"</button>
                                 <button type="button" data-role="presentation-create-import-confirm"
+                                    prop:disabled=is_submitting
                                     on:click=on_import_confirm
                                 >"Import"</button>
                             </div>
