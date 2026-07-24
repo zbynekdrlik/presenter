@@ -6,6 +6,8 @@ mod playlist;
 mod presentation;
 #[cfg(test)]
 mod presentation_atomicity_tests;
+#[cfg(test)]
+mod presentation_copy_tests;
 mod resolume;
 mod search;
 #[cfg(test)]

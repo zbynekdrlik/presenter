@@ -13,6 +13,7 @@ use presenter_core::{ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -70,6 +71,36 @@ fn host_config(port: u16) -> ResolumeHost {
     )
 }
 
+/// Drive the fail→classify→probe cycle until the driver's dial state reaches
+/// `expected_active`, bounded (retry-with-assert, per the project's E2E
+/// discipline). A ONE-SHOT assert on a single cycle is racy on a loaded
+/// runner: the dropped mock's shutdown is asynchronous, so the first dial
+/// can land accepted-then-reset (classified Reset, not ConnectRefused — no
+/// probe), and the 500ms probe budget can starve under llvm-cov
+/// instrumentation (both seen as a real coverage-job flake, 2026-07-20).
+/// Production recovers the same way this loop does — the driver probes again
+/// on the NEXT connect-refused failure — so retrying does not weaken the
+/// contract: the driver MUST reach `expected_active` within the bound.
+async fn drive_until_active_port(
+    driver: &mut HostDriver,
+    status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+    expected_active: Option<u16>,
+    context: &str,
+) {
+    for _ in 0..20 {
+        if driver.active_port == expected_active {
+            return;
+        }
+        // An Ok here means the OLD mock was still draining its shutdown and
+        // answered — not a failure of the drift logic; dial again.
+        if let Err(err) = driver.refresh_mapping().await {
+            driver.record_error(err, status).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(driver.active_port, expected_active, "{context}");
+}
+
 fn fresh_snapshot() -> Arc<RwLock<ResolumeConnectionSnapshot>> {
     Arc::new(RwLock::new(ResolumeConnectionSnapshot {
         state: ResolumeConnectionState::Connecting,
@@ -114,19 +145,15 @@ async fn driver_adopts_the_drifted_port_after_a_connection_refused_and_reconnect
     let server_b = MockServer::builder().listener(listener_b).start().await;
     mount_arena(&server_b).await;
 
-    // The next fetch against the (now-refused) configured port fails;
-    // record_error classifies it as ConnectRefused and probes the window.
-    let err = driver
-        .refresh_mapping()
-        .await
-        .expect_err("the configured port now refuses connections");
-    driver.record_error(err, &status).await;
-
-    assert_eq!(
-        driver.active_port,
+    // Fetches against the (now-refused) configured port fail; record_error
+    // classifies ConnectRefused and probes the window until adoption.
+    drive_until_active_port(
+        &mut driver,
+        &status,
         Some(drifted_port),
-        "the driver must adopt the drifted port after a connect-refused probe"
-    );
+        "the driver must adopt the drifted port after a connect-refused probe",
+    )
+    .await;
     let snap = status.read().await.clone();
     assert_eq!(
         snap.active_port,
@@ -170,19 +197,16 @@ async fn driver_heals_back_to_the_configured_port_once_it_answers_again() {
     let server_c = MockServer::builder().listener(listener_c).start().await;
     mount_arena(&server_c).await;
 
-    // The next fetch (still dialing the now-dead drifted port) fails, and the
-    // probe — which ALWAYS scans from the CONFIGURED port first — finds it
-    // healthy again and heals back.
-    let err = driver
-        .refresh_mapping()
-        .await
-        .expect_err("the drifted port now refuses connections");
-    driver.record_error(err, &status).await;
-
-    assert_eq!(
-        driver.active_port, None,
-        "healing back to the configured port must clear active_port"
-    );
+    // Fetches (still dialing the now-dead drifted port) fail, and the probe
+    // — which ALWAYS scans from the CONFIGURED port first — finds it healthy
+    // again and heals back.
+    drive_until_active_port(
+        &mut driver,
+        &status,
+        None,
+        "healing back to the configured port must clear active_port",
+    )
+    .await;
     let snap = status.read().await.clone();
     assert_eq!(
         snap.active_port, None,

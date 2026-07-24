@@ -291,6 +291,15 @@ body.operator {
   cursor: default;
 }
 
+/* The chip text is the host's arbitrary-length configured label — bound it
+   so several walls with long names can't overflow the sticky header (the
+   full name stays readable in the chip tooltip). */
+.operator__resolume-chip-label {
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .operator__resolume-dot {
   width: 8px;
   height: 8px;
@@ -1812,6 +1821,38 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   padding: 0.5rem 0.85rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+/* #570: "Copy to library" row in the presentation-edit modal. */
+.operator__presentation-copy-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.operator__presentation-copy-row label {
+  flex: 1;
+  min-width: 0;
+}
+
+.operator__presentation-copy-row select {
+  border-radius: 10px;
+  border: 1px solid var(--operator-border);
+  padding: 0.6rem 0.7rem;
+  font-size: 1rem;
+  color: var(--operator-text);
+  background: var(--operator-bg);
+  width: 100%;
+}
+
+.operator__presentation-copy-row button {
+  border: 1px solid var(--operator-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--operator-text);
+  background: var(--operator-bg);
 }
 
 .operator__library-edit-actions [data-role="library-edit-cancel"] {

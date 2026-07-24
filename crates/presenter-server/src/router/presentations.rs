@@ -24,6 +24,12 @@ pub(super) struct RenamePresentationRequest {
     pub(super) name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CopyPresentationRequest {
+    pub(super) target_library_id: String,
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CreateSlideRequest {
@@ -116,6 +122,44 @@ pub(super) async fn delete_presentation(
         .delete_presentation(PresentationId::from_uuid(presentation_uuid))
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// #570: deep-copy a presentation into another library. Returns the copy's
+/// detail (its NEW id) so the client can navigate straight to it.
+#[instrument(skip_all)]
+pub(super) async fn copy_presentation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<CopyPresentationRequest>,
+) -> Result<(StatusCode, Json<PresentationDetailDto>), AppError> {
+    let presentation_uuid = super::parse_uuid("presentationId", &id)?;
+    let library_uuid = super::parse_uuid("targetLibraryId", &payload.target_library_id)?;
+    let (library_id, library_name, presentation) = state
+        .copy_presentation(
+            PresentationId::from_uuid(presentation_uuid),
+            LibraryId::from_uuid(library_uuid),
+        )
+        .await
+        .map_err(|err| {
+            // EXACT match on the repository's two refusal messages — a
+            // substring test would mis-map any internal error that happens
+            // to contain "not found" to a client error.
+            match err.to_string().as_str() {
+                // The body-referenced target vanished — the REQUEST is
+                // unprocessable (422), not a missing URL resource.
+                "target library not found" => AppError::unprocessable("target library not found"),
+                "presentation not found" => AppError::not_found("presentation not found"),
+                _ => err.into(),
+            }
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(PresentationDetailDto {
+            library_id,
+            library_name,
+            presentation,
+        }),
+    ))
 }
 
 #[instrument(skip_all)]

@@ -28,15 +28,6 @@ pub(crate) fn chip_dot_state(state: &str, failing_for_secs: Option<i64>) -> &'st
     }
 }
 
-/// The short label text next to the dot.
-pub(crate) fn chip_label(dot_state: &str) -> &'static str {
-    match dot_state {
-        "green" => "Connected",
-        "red" => "Down",
-        _ => "Retrying…",
-    }
-}
-
 /// Plain-language cause for the tooltip — never a raw wire token like
 /// `connect_refused`.
 pub(crate) fn error_kind_label(kind: Option<&str>) -> &'static str {
@@ -58,11 +49,12 @@ pub(crate) fn port_drift_note(configured_port: u16, active_port: Option<u16>) ->
 }
 
 /// The full tooltip text (native `title` attribute — no custom popover
-/// needed for this MVP): connection cause + retry countdown while erroring,
-/// the configured-vs-active port drift note, and any missing composition
-/// clips (#563g).
+/// needed for this MVP): the host's FULL label first (the visible chip text
+/// ellipsizes past 12ch), then connection cause + retry countdown while
+/// erroring, the configured-vs-active port drift note, and any missing
+/// composition clips (#563g).
 pub(crate) fn chip_tooltip(dto: &ResolumeConnectionStatusDto) -> String {
-    let mut lines = Vec::new();
+    let mut lines = vec![dto.label.clone()];
     match dto.state.as_str() {
         "connected" => lines.push("Connected".to_string()),
         "error" => {
@@ -126,7 +118,6 @@ pub fn ResolumeStatusChips() -> impl IntoView {
                 key=|h: &ResolumeConnectionStatusDto| h.host_id.clone()
                 children=move |host: ResolumeConnectionStatusDto| {
                     let host_id = host.host_id.clone();
-                    let label = host.label.clone();
                     let status = Memo::new(move |_| {
                         hosts.with(|list| list.iter().find(|h| h.host_id == host_id).cloned())
                     });
@@ -139,18 +130,24 @@ pub fn ResolumeStatusChips() -> impl IntoView {
                     let dot_class = move || {
                         format!("operator__resolume-dot operator__resolume-dot--{}", dot_state())
                     };
-                    let label_text = move || chip_label(dot_state());
+                    // The visible text is the HOST'S NAME (its configured
+                    // label) — with several walls configured, "Connected"
+                    // alone never says WHICH Resolume the chip is. State
+                    // lives in the dot color + tooltip. Read through the
+                    // `status` Memo (not a one-shot capture) so a rename
+                    // refreshes on the next poll like the dot does.
+                    let label = move || status.get().map(|h| h.label).unwrap_or_default();
                     let tooltip = move || status.get().map(|h| chip_tooltip(&h)).unwrap_or_default();
                     view! {
                         <span
                             class="operator__resolume-chip"
                             data-role="resolume-status-chip"
-                            data-host-label=label.clone()
+                            data-host-label=label
                             data-state=dot_state
                             title=tooltip
                         >
                             <span class=dot_class aria-hidden="true"></span>
-                            <span class="operator__resolume-chip-label">{label_text}</span>
+                            <span class="operator__resolume-chip-label">{label}</span>
                         </span>
                     }
                 }
@@ -186,20 +183,17 @@ mod tests {
     #[test]
     fn connected_is_green() {
         assert_eq!(chip_dot_state("connected", None), "green");
-        assert_eq!(chip_label("green"), "Connected");
     }
 
     #[test]
     fn erroring_under_two_minutes_is_yellow_not_red() {
         assert_eq!(chip_dot_state("error", Some(119)), "yellow");
-        assert_eq!(chip_label("yellow"), "Retrying…");
     }
 
     #[test]
     fn erroring_past_two_minutes_is_red() {
         assert_eq!(chip_dot_state("error", Some(120)), "red");
         assert_eq!(chip_dot_state("error", Some(600)), "red");
-        assert_eq!(chip_label("red"), "Down");
     }
 
     #[test]
@@ -235,7 +229,10 @@ mod tests {
     #[test]
     fn error_kind_labels_are_plain_language_never_raw_wire_tokens() {
         assert_eq!(error_kind_label(Some("timeout")), "timed out");
-        assert_eq!(error_kind_label(Some("connect_refused")), "connection refused");
+        assert_eq!(
+            error_kind_label(Some("connect_refused")),
+            "connection refused"
+        );
         assert_eq!(error_kind_label(Some("connect_other")), "could not connect");
         assert_eq!(error_kind_label(Some("reset")), "connection reset");
         assert_eq!(error_kind_label(Some("other")), "request failed");
@@ -248,6 +245,14 @@ mod tests {
         assert!(text.contains("Connected"));
         assert!(!text.contains("Not reachable"));
         assert!(!text.contains("Port drifted"));
+    }
+
+    #[test]
+    fn tooltip_opens_with_the_full_host_label() {
+        // The visible chip text ellipsizes past 12ch — the tooltip is where
+        // a long name stays fully readable, so it must lead with the label.
+        let text = chip_tooltip(&dto("connected", None));
+        assert!(text.starts_with("resolume-pp\n"), "{text}");
     }
 
     #[test]
@@ -273,6 +278,9 @@ mod tests {
         let mut d = dto("connected", None);
         d.missing_clips = vec!["#timer".to_string(), "#song-name".to_string()];
         let text = chip_tooltip(&d);
-        assert!(text.contains("Composition missing: #timer, #song-name"), "{text}");
+        assert!(
+            text.contains("Composition missing: #timer, #song-name"),
+            "{text}"
+        );
     }
 }

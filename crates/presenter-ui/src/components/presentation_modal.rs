@@ -14,6 +14,8 @@ pub fn PresentationModals() -> impl IntoView {
 
     // Edit modal signals
     let edit_name = RwSignal::new(String::new());
+    // #570: target library for "Copy to library" (library id as String).
+    let copy_target = RwSignal::new(String::new());
 
     // Create modal signals
     let create_name = RwSignal::new(String::new());
@@ -36,6 +38,18 @@ pub fn PresentationModals() -> impl IntoView {
                         edit_name.set(pres.name.clone());
                     }
                 }
+                // #570: default the copy target to the first OTHER library —
+                // the common intent — falling back to the current one when it
+                // is the only library.
+                let current_lib = ctx.selected_library_id.get_untracked();
+                let libs = ctx.libraries.get_untracked();
+                let default_target = libs
+                    .iter()
+                    .find(|lib| Some(lib.id.to_string()) != current_lib)
+                    .or_else(|| libs.first())
+                    .map(|lib| lib.id.to_string())
+                    .unwrap_or_default();
+                copy_target.set(default_target);
             } else if modal.as_deref() == Some("presentation-create") {
                 create_name.set(String::new());
                 create_step.set("options".to_string());
@@ -154,6 +168,83 @@ pub fn PresentationModals() -> impl IntoView {
                 }
                 toast_variant.set("success".to_string());
                 toast_message.set(Some("Presentation deleted".to_string()));
+            });
+        }
+    };
+
+    // Edit: copy to library (#570)
+    let on_copy = {
+        let op = op.clone();
+        let ctx = ctx.clone();
+        move |_| {
+            // Re-entry guard: copy is NOT idempotent — a double-click during
+            // the round-trip would create two copies (the button is also
+            // disabled off this signal; belt and braces).
+            if op.submitting.get_untracked() {
+                return;
+            }
+            let target_id = op.modal_target_id.get_untracked().unwrap_or_default();
+            // The signal can be empty if the modal opened before libraries
+            // loaded — fall back to the first library, which is what the
+            // browser visually shows as the selected option.
+            let mut lib_id = copy_target.get_untracked();
+            if lib_id.is_empty() {
+                lib_id = ctx
+                    .libraries
+                    .get_untracked()
+                    .first()
+                    .map(|lib| lib.id.to_string())
+                    .unwrap_or_default();
+            }
+            if target_id.is_empty() || lib_id.is_empty() {
+                // Never silently no-op — say why nothing happened.
+                ctx.toast_variant.set("error".to_string());
+                ctx.toast_message
+                    .set(Some("No target library available".to_string()));
+                return;
+            }
+            op.submitting.set(true);
+
+            let presentations = ctx.presentations;
+            let libraries = ctx.libraries;
+            let selected_lib_id = ctx.selected_library_id;
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+            let submitting = op.submitting;
+            let open_modal = op.open_modal;
+            let modal_target = op.modal_target_id;
+
+            leptos::task::spawn_local(async move {
+                let result = crate::api::presentations::copy_to_library(&target_id, &lib_id).await;
+
+                // Refresh the current library's list (covers copy-into-the-
+                // same-library) and the library counts.
+                if let Some(current) = selected_lib_id.get_untracked() {
+                    if let Ok(pres) = crate::api::libraries::list_presentations(&current).await {
+                        presentations.set(pres);
+                    }
+                }
+                if let Ok(libs) = crate::api::libraries::list_libraries().await {
+                    libraries.set(libs);
+                }
+
+                submitting.set(false);
+                open_modal.set(None);
+                modal_target.set(None);
+                if let Some(body) = crate::utils::window::document_body() {
+                    body.dataset().delete("modalOpen");
+                }
+
+                match result {
+                    Ok(detail) => {
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some(format!("Copied to \"{}\"", detail.library_name)));
+                    }
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Copy error: {e}")));
+                    }
+                }
             });
         }
     };
@@ -395,6 +486,17 @@ pub fn PresentationModals() -> impl IntoView {
 
     let paste_text = op.paste_text;
 
+    // #570: `each` needs a NAMED closure (view! macro limitation — see the
+    // presenter-ui skill).
+    let library_options = {
+        let libraries = ctx.libraries;
+        move || libraries.get()
+    };
+    // Disable the edit-modal's mutating buttons while a request is in
+    // flight — copy is not idempotent, so a double-click must not fire twice.
+    let submitting_sig = op.submitting;
+    let is_submitting = move || submitting_sig.get();
+
     view! {
         // Presentation edit (rename) modal
         <div class="operator__library-edit operator__presentation-edit" data-role="presentation-edit-modal"
@@ -423,19 +525,48 @@ pub fn PresentationModals() -> impl IntoView {
                                 on:input=move |ev| edit_name.set(event_target_value(&ev))
                             />
                         </label>
+                        // #570: copy this presentation into another library.
+                        <div class="operator__presentation-copy-row" data-role="presentation-copy-row">
+                            <label>
+                                <span data-role="presentation-copy-label">"Copy to library"</span>
+                                <select
+                                    data-role="presentation-copy-target"
+                                    prop:value=move || copy_target.get()
+                                    on:change=move |ev| copy_target.set(event_target_value(&ev))
+                                >
+                                    <For
+                                        each=library_options
+                                        key=|lib: &presenter_core::LibrarySummary| lib.id.to_string()
+                                        children=move |lib: presenter_core::LibrarySummary| {
+                                            let id = lib.id.to_string();
+                                            view! { <option value=id>{lib.name}</option> }
+                                        }
+                                    />
+                                </select>
+                            </label>
+                            <button
+                                type="button"
+                                data-role="presentation-copy-confirm"
+                                prop:disabled=is_submitting
+                                on:click=on_copy
+                            >"Copy"</button>
+                        </div>
                     </div>
                     <footer class="operator__library-edit-footer">
                         <button
                             type="button"
                             class="operator__library-edit-delete"
                             data-role="presentation-edit-delete"
+                            prop:disabled=is_submitting
                             on:click=on_edit_delete
                         >"Delete presentation"</button>
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="presentation-edit-cancel"
                                 on:click=on_edit_cancel
                             >"Cancel"</button>
-                            <button type="submit" data-role="presentation-edit-save">"Save changes"</button>
+                            <button type="submit" data-role="presentation-edit-save"
+                                prop:disabled=is_submitting
+                            >"Save changes"</button>
                         </div>
                     </footer>
                 </form>

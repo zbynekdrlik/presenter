@@ -241,3 +241,12 @@ decision a PURE helper and unit-test it — don't bury it in the async path:
 ```bash
 gh api -X PATCH repos/zbynekdrlik/presenter/pulls/<N> -F "body=@body.md"
 ```
+
+## presenter-ui Is a Workspace `exclude` — Root fmt/clippy/test NEVER See It
+
+`crates/presenter-ui` (WASM) is in `[workspace] exclude`, so `cargo fmt --all`,
+`cargo clippy --workspace`, and `cargo test` from the root silently skip it. Run its
+checks FROM THE CRATE DIR: `cd crates/presenter-ui && cargo fmt --check && cargo clippy
+--all-targets -- -D warnings && cargo test --lib`. CI's Format job checks it explicitly
+(second step, `working-directory: crates/presenter-ui`) — an unformatted presenter-ui
+file now fails CI, so always `cargo fmt` inside the crate before pushing UI changes.
