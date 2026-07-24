@@ -555,7 +555,7 @@ async fn real_sync_loop_survives_past_startup_and_completes_multiple_cycles() {
 
     b.maybe_spawn_sync(Some(a_url));
 
-    b.nudge_sync();
+    b.nudge_sync().await;
     let first = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
     assert!(
         first.last_success.is_some(),
@@ -564,7 +564,7 @@ async fn real_sync_loop_survives_past_startup_and_completes_multiple_cycles() {
 
     // A second, independent nudge must ALSO complete a cycle - proving the
     // loop is still alive, not that it happened to survive one lucky race.
-    b.nudge_sync();
+    b.nudge_sync().await;
     let second = wait_for_next_cycle(&b, first.last_run, std::time::Duration::from_secs(10)).await;
     assert!(
         second.last_success.is_some(),
@@ -596,7 +596,7 @@ async fn two_spawns_on_one_app_state_leave_exactly_one_live_loop() {
     b.maybe_spawn_sync(Some(a_url.clone()));
     b.maybe_spawn_sync(Some(a_url)); // a second spawn call on the SAME AppState
 
-    b.nudge_sync();
+    b.nudge_sync().await;
     let first = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
     assert!(
         first.last_success.is_some(),
@@ -605,7 +605,7 @@ async fn two_spawns_on_one_app_state_leave_exactly_one_live_loop() {
 
     // A second, independent nudge must ALSO complete a cycle - proving the
     // surviving loop is still alive, not that it happened to run once.
-    b.nudge_sync();
+    b.nudge_sync().await;
     let second = wait_for_next_cycle(&b, first.last_run, std::time::Duration::from_secs(10)).await;
     assert!(
         second.last_success.is_some(),
@@ -656,7 +656,7 @@ async fn an_all_fail_cycle_reports_unhealthy_instead_of_success() {
     }
 
     b.maybe_spawn_sync(Some(a_url));
-    b.nudge_sync();
+    b.nudge_sync().await;
     let status = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
 
     assert!(

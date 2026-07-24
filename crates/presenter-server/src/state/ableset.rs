@@ -39,6 +39,18 @@ impl AppState {
         self.repository.get_ableset_settings().await
     }
 
+    /// Invalidate the resolved AbleSet song-name cache (#575). Cheap — clears
+    /// only the resolved `prefix -> id` map; `ensure_ableset_cache` lazily
+    /// rebuilds it from the DB on the next `resolve_ableset_presentation`
+    /// call. Call this after ANY mutation that changes which presentations
+    /// exist, their names, or which library they belong to. The AbleSet
+    /// settings themselves (which library / prefix length to track) are
+    /// untouched by these mutations, so a full struct reset is unnecessary —
+    /// only the resolved entries can go stale.
+    pub(crate) async fn invalidate_ableset_cache(&self) {
+        self.caches.ableset.write().await.entries.clear();
+    }
+
     pub async fn update_ableset_settings(
         &self,
         draft: AbleSetSettingsDraft,

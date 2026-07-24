@@ -217,7 +217,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(slides)
     }
 
@@ -295,7 +295,7 @@ impl AppState {
             presentation_id: presentation_id.to_string(),
         });
 
-        self.nudge_sync();
+        self.nudge_sync().await;
 
         Ok(updated_slide)
     }
@@ -329,7 +329,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(slides)
     }
 
@@ -382,7 +382,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(slides)
     }
 
@@ -424,7 +424,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(slides)
     }
 
@@ -465,7 +465,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation_id.to_string(),
         });
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(slides)
     }
 }

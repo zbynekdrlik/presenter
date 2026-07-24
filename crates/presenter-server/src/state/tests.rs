@@ -1479,10 +1479,7 @@ async fn ableset_cache_invalidates_after_library_rename() {
     );
 
     // Rename the tracked library WITHOUT touching AbleSet settings.
-    state
-        .rename_library(library.id, "New Name")
-        .await
-        .unwrap();
+    state.rename_library(library.id, "New Name").await.unwrap();
 
     // The cache's own `library_name` was "Old Name"; the actual DB library
     // is now "New Name", so a stale cache would keep resolving against a

@@ -33,11 +33,19 @@ impl AppState {
     }
 
     pub async fn rename_library(&self, library_id: LibraryId, name: &str) -> anyhow::Result<()> {
-        self.repository.rename_library(library_id, name).await
+        self.repository.rename_library(library_id, name).await?;
+        // #575: a rename can change whether this library matches the
+        // AbleSet-tracked library name.
+        self.invalidate_ableset_cache().await;
+        Ok(())
     }
 
     pub async fn delete_library(&self, library_id: LibraryId) -> anyhow::Result<()> {
-        self.repository.delete_library(library_id).await
+        self.repository.delete_library(library_id).await?;
+        // #575: deleting a library cascades its presentations away — any
+        // resolved AbleSet entries pointing at them must not survive.
+        self.invalidate_ableset_cache().await;
+        Ok(())
     }
 
     pub async fn create_presentation(
@@ -56,7 +64,7 @@ impl AppState {
         });
         let summaries = self.repository.list_library_summaries(None).await?;
         let summary = summaries.into_iter().find(|summary| summary.id == id);
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok((id, lib_name, presentation, summary))
     }
 
@@ -76,7 +84,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation.id.to_string(),
         });
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok((library_id, library_name, presentation))
     }
 
@@ -95,7 +103,7 @@ impl AppState {
                 pres.name = name.to_string();
             }
         }
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(())
     }
 
@@ -105,7 +113,7 @@ impl AppState {
             let mut guard = self.caches.presentation.write().await;
             guard.remove(&presentation_id);
         }
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(())
     }
 
