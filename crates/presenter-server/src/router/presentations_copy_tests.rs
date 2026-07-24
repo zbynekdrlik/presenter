@@ -1,6 +1,6 @@
 //! Router-level tests for `POST /presentations/{id}/copy` (#570): a valid
-//! copy returns 201 + the copy's detail; a vanished target library or a
-//! vanished presentation returns 404, not an opaque 500.
+//! copy returns 201 + the copy's detail; a vanished presentation is 404, a
+//! vanished body-referenced target library is 422 — never an opaque 500.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -80,7 +80,7 @@ async fn copy_returns_201_with_the_new_presentation_in_the_target_library() {
 }
 
 #[tokio::test]
-async fn copy_into_a_vanished_library_is_a_404() {
+async fn copy_into_a_vanished_library_is_a_422() {
     let state = AppState::in_memory().await.unwrap();
     let (pres_id, _) = seed(&state).await;
     let app = build_router(state);
@@ -91,7 +91,7 @@ async fn copy_into_a_vanished_library_is_a_404() {
         serde_json::json!({ "targetLibraryId": uuid::Uuid::new_v4().to_string() }),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

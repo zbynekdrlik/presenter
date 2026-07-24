@@ -141,13 +141,15 @@ pub(super) async fn copy_presentation(
         )
         .await
         .map_err(|err| {
-            let msg = err.to_string();
-            // The repository refuses these two with typed messages — surface
-            // them as client errors, not opaque 500s.
-            if msg.contains("not found") {
-                AppError::not_found(msg)
-            } else {
-                err.into()
+            // EXACT match on the repository's two refusal messages — a
+            // substring test would mis-map any internal error that happens
+            // to contain "not found" to a client error.
+            match err.to_string().as_str() {
+                // The body-referenced target vanished — the REQUEST is
+                // unprocessable (422), not a missing URL resource.
+                "target library not found" => AppError::unprocessable("target library not found"),
+                "presentation not found" => AppError::not_found("presentation not found"),
+                _ => err.into(),
             }
         })?;
     Ok((

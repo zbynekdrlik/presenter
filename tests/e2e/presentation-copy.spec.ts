@@ -109,12 +109,12 @@ test("API: copy is a deep, independent duplicate in the target library", async (
   );
   expect(detailResp.ok()).toBeTruthy();
 
-  // A vanished target library is a clean 404, not a 500.
+  // A vanished body-referenced target library is a clean 422, not a 500.
   const badResp = await request.post(
     new URL(`/presentations/${copy.presentation.id}/copy`, baseURL).toString(),
     { data: { targetLibraryId: "11111111-2222-3333-4444-555555555555" } },
   );
-  expect(badResp.status()).toBe(404);
+  expect(badResp.status()).toBe(422);
 });
 
 test("UI: edit-modal copy flow lands the song in the target library", async ({
@@ -167,11 +167,13 @@ test("UI: edit-modal copy flow lands the song in the target library", async ({
     { timeout: 5_000 },
   );
 
-  // Pick the target library and copy.
+  // Pick the target library and copy — via DOUBLE click: the second click
+  // must be swallowed by the re-entry guard (copy is not idempotent; a
+  // double-click must never create two copies).
   await page
     .locator('[data-role="presentation-copy-target"]')
     .selectOption(targetLib.id);
-  await page.locator('[data-role="presentation-copy-confirm"]').click();
+  await page.locator('[data-role="presentation-copy-confirm"]').dblclick();
 
   // Modal closes + success toast names the target library.
   await page.waitForFunction(

@@ -177,9 +177,30 @@ pub fn PresentationModals() -> impl IntoView {
         let op = op.clone();
         let ctx = ctx.clone();
         move |_| {
+            // Re-entry guard: copy is NOT idempotent — a double-click during
+            // the round-trip would create two copies (the button is also
+            // disabled off this signal; belt and braces).
+            if op.submitting.get_untracked() {
+                return;
+            }
             let target_id = op.modal_target_id.get_untracked().unwrap_or_default();
-            let lib_id = copy_target.get_untracked();
+            // The signal can be empty if the modal opened before libraries
+            // loaded — fall back to the first library, which is what the
+            // browser visually shows as the selected option.
+            let mut lib_id = copy_target.get_untracked();
+            if lib_id.is_empty() {
+                lib_id = ctx
+                    .libraries
+                    .get_untracked()
+                    .first()
+                    .map(|lib| lib.id.to_string())
+                    .unwrap_or_default();
+            }
             if target_id.is_empty() || lib_id.is_empty() {
+                // Never silently no-op — say why nothing happened.
+                ctx.toast_variant.set("error".to_string());
+                ctx.toast_message
+                    .set(Some("No target library available".to_string()));
                 return;
             }
             op.submitting.set(true);
@@ -471,6 +492,10 @@ pub fn PresentationModals() -> impl IntoView {
         let libraries = ctx.libraries;
         move || libraries.get()
     };
+    // Disable the edit-modal's mutating buttons while a request is in
+    // flight — copy is not idempotent, so a double-click must not fire twice.
+    let submitting_sig = op.submitting;
+    let is_submitting = move || submitting_sig.get();
 
     view! {
         // Presentation edit (rename) modal
@@ -522,6 +547,7 @@ pub fn PresentationModals() -> impl IntoView {
                             <button
                                 type="button"
                                 data-role="presentation-copy-confirm"
+                                prop:disabled=is_submitting
                                 on:click=on_copy
                             >"Copy"</button>
                         </div>
@@ -531,13 +557,16 @@ pub fn PresentationModals() -> impl IntoView {
                             type="button"
                             class="operator__library-edit-delete"
                             data-role="presentation-edit-delete"
+                            prop:disabled=is_submitting
                             on:click=on_edit_delete
                         >"Delete presentation"</button>
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="presentation-edit-cancel"
                                 on:click=on_edit_cancel
                             >"Cancel"</button>
-                            <button type="submit" data-role="presentation-edit-save">"Save changes"</button>
+                            <button type="submit" data-role="presentation-edit-save"
+                                prop:disabled=is_submitting
+                            >"Save changes"</button>
                         </div>
                     </footer>
                 </form>

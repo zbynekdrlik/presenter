@@ -1,4 +1,6 @@
-use super::util::{build_slide_active_model, parse_uuid, to_domain_slide, RepositoryError};
+use super::util::{
+    build_slide_active_model, parse_uuid, to_domain_slide, to_domain_slide_wire, RepositoryError,
+};
 use super::Repository;
 use crate::entities::{presentation as presentation_entity, slide as slide_entity};
 use anyhow::anyhow;
@@ -150,8 +152,13 @@ impl Repository {
         let source_id = presentation_id.to_string();
         let target_lib = target_library_id.to_string();
 
+        // All reads happen INSIDE the same transaction as the writes — a
+        // pool-read-then-txn-write split would leave a TOCTOU window where a
+        // concurrent edit/sync changes the source between snapshot and copy.
+        let txn = self.db.begin().await?;
+
         if crate::entities::library::Entity::find_by_id(target_lib.clone())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .is_none()
         {
@@ -161,26 +168,25 @@ impl Repository {
         let source = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::Id.eq(source_id.clone()))
             .filter(presentation_entity::Column::DeletedAt.is_null())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("presentation not found"))?;
 
         let source_slides = slide_entity::Entity::find()
             .filter(slide_entity::Column::PresentationId.eq(source_id.clone()))
             .order_by_asc(slide_entity::Column::Position)
-            .all(&self.db)
+            .all(&txn)
             .await?;
 
         let markers = crate::entities::slide_stage_layout::Entity::find()
             .filter(
                 crate::entities::slide_stage_layout::Column::PresentationId.eq(source_id.clone()),
             )
-            .all(&self.db)
+            .all(&txn)
             .await?;
 
         let new_uuid = uuid::Uuid::new_v4();
         let new_id_str = new_uuid.to_string();
-        let txn = self.db.begin().await?;
 
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(new_id_str.clone()),
@@ -197,7 +203,10 @@ impl Repository {
 
         for (index, model) in source_slides.into_iter().enumerate() {
             let old_slide_id = model.id.clone();
-            let fresh = Slide::new(index as u32, to_domain_slide(model)?.content);
+            // `_wire` (unchecked) — a legacy oversize row must copy verbatim,
+            // not fail the whole copy with a validation 500 (#558 U1 has the
+            // full rationale for reads of stored rows).
+            let fresh = Slide::new(index as u32, to_domain_slide_wire(model)?.content);
             let active = build_slide_active_model(&fresh, &new_id_str, index as i32);
             slide_entity::Entity::insert(active).exec(&txn).await?;
 
