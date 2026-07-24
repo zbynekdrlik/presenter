@@ -142,3 +142,21 @@ shows the test's LIBRARY as a match but never surfaces its PRESENTATION, and
 `Conflict409A`, `Conflict409RecoverA` — never a space-separated lone letter.
 Every existing 409/race test in `wasm-slide-multiselect.spec.ts` already follows
 this; keep new ones consistent.
+
+## E2E: the library SIDEBAR lists only FAVORITES — select fresh libraries via the modal (#570)
+
+`[data-role="library-item"]` in the operator sidebar renders only favorite
+libraries (plus the count button). A library an E2E test just created via the
+API is NOT in the sidebar — a `hasText` click on it times out with zero
+matches. Select it through the "Show all libraries" modal instead:
+
+```ts
+await page.locator('[data-role="library-more"]').click();
+await page
+  .locator(`[data-role="library-row"][data-library-id="${lib.id}"] .operator__list-button`)
+  .click();
+await page.waitForSelector('[data-role="presentation-list"]');
+```
+
+Related JSON-shape gotcha: `SlideText` serializes as an object — assert
+`slide.content.main.value`, never `slide.content.main` directly.
