@@ -1823,6 +1823,38 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   cursor: pointer;
 }
 
+/* #570: "Copy to library" row in the presentation-edit modal. */
+.operator__presentation-copy-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.operator__presentation-copy-row label {
+  flex: 1;
+  min-width: 0;
+}
+
+.operator__presentation-copy-row select {
+  border-radius: 10px;
+  border: 1px solid var(--operator-border);
+  padding: 0.6rem 0.7rem;
+  font-size: 1rem;
+  color: var(--operator-text);
+  background: var(--operator-bg);
+  width: 100%;
+}
+
+.operator__presentation-copy-row button {
+  border: 1px solid var(--operator-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--operator-text);
+  background: var(--operator-bg);
+}
+
 .operator__library-edit-actions [data-role="library-edit-cancel"] {
   background: rgba(148, 163, 184, 0.18);
   color: var(--operator-muted);

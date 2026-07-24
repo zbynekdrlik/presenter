@@ -135,6 +135,93 @@ impl Repository {
         detail.ok_or_else(|| anyhow!("failed to load newly created presentation"))
     }
 
+    /// #570: deep-copy a presentation into another (or the same) library.
+    /// The copy gets a NEW presentation id, a NEW sync_id (it syncs as its
+    /// own song under #555 LWW — never pairs with the original), and NEW
+    /// slide ids; per-slide stage-layout markers (#515) are remapped onto
+    /// the fresh slide ids. The original is not touched, so playlists
+    /// referencing it are unaffected.
+    #[instrument(skip_all)]
+    pub async fn copy_presentation_to_library(
+        &self,
+        presentation_id: PresentationId,
+        target_library_id: LibraryId,
+    ) -> anyhow::Result<(LibraryId, String, Presentation)> {
+        let source_id = presentation_id.to_string();
+        let target_lib = target_library_id.to_string();
+
+        if crate::entities::library::Entity::find_by_id(target_lib.clone())
+            .one(&self.db)
+            .await?
+            .is_none()
+        {
+            return Err(anyhow!("target library not found"));
+        }
+
+        let source = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::Id.eq(source_id.clone()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("presentation not found"))?;
+
+        let source_slides = slide_entity::Entity::find()
+            .filter(slide_entity::Column::PresentationId.eq(source_id.clone()))
+            .order_by_asc(slide_entity::Column::Position)
+            .all(&self.db)
+            .await?;
+
+        let markers = crate::entities::slide_stage_layout::Entity::find()
+            .filter(
+                crate::entities::slide_stage_layout::Column::PresentationId.eq(source_id.clone()),
+            )
+            .all(&self.db)
+            .await?;
+
+        let new_uuid = uuid::Uuid::new_v4();
+        let new_id_str = new_uuid.to_string();
+        let txn = self.db.begin().await?;
+
+        presentation_entity::Entity::insert(presentation_entity::ActiveModel {
+            id: Set(new_id_str.clone()),
+            library_id: Set(target_lib),
+            name: Set(source.name.clone()),
+            search_name: Set(fold_query(&source.name)),
+            created_at: Set(Utc::now().into()),
+            updated_at: Set(Utc::now().into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(None),
+        })
+        .exec(&txn)
+        .await?;
+
+        for (index, model) in source_slides.into_iter().enumerate() {
+            let old_slide_id = model.id.clone();
+            let fresh = Slide::new(index as u32, to_domain_slide(model)?.content);
+            let active = build_slide_active_model(&fresh, &new_id_str, index as i32);
+            slide_entity::Entity::insert(active).exec(&txn).await?;
+
+            if let Some(marker) = markers.iter().find(|m| m.slide_id == old_slide_id) {
+                crate::entities::slide_stage_layout::Entity::insert(
+                    crate::entities::slide_stage_layout::ActiveModel {
+                        slide_id: Set(fresh.id.to_string()),
+                        presentation_id: Set(new_id_str.clone()),
+                        layout_code: Set(marker.layout_code.clone()),
+                    },
+                )
+                .exec(&txn)
+                .await?;
+            }
+        }
+
+        txn.commit().await?;
+
+        let detail = self
+            .fetch_presentation_detail(PresentationId::from_uuid(new_uuid))
+            .await?;
+        detail.ok_or_else(|| anyhow!("failed to load copied presentation"))
+    }
+
     #[instrument(skip_all)]
     pub async fn rename_presentation(
         &self,

@@ -60,6 +60,26 @@ impl AppState {
         Ok((id, lib_name, presentation, summary))
     }
 
+    /// #570: deep-copy a presentation into another (or the same) library.
+    /// Same post-write bookkeeping as `create_presentation` — the copy IS a
+    /// newly created song (fresh ids, fresh sync_id).
+    pub async fn copy_presentation(
+        &self,
+        presentation_id: PresentationId,
+        target_library_id: LibraryId,
+    ) -> anyhow::Result<(LibraryId, String, Presentation)> {
+        let (library_id, library_name, presentation) = self
+            .repository
+            .copy_presentation_to_library(presentation_id, target_library_id)
+            .await?;
+        self.cache_presentation_ref(&presentation).await;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation.id.to_string(),
+        });
+        self.nudge_sync();
+        Ok((library_id, library_name, presentation))
+    }
+
     pub async fn rename_presentation(
         &self,
         presentation_id: PresentationId,

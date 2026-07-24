@@ -89,6 +89,27 @@ struct RenameRequest {
     name: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CopyPresentationRequest {
+    target_library_id: String,
+}
+
+/// #570: deep-copy the presentation into another library. Returns the COPY's
+/// detail (its new id + the target library's name).
+pub async fn copy_to_library(
+    id: &str,
+    target_library_id: &str,
+) -> Result<PresentationDetail, ApiError> {
+    post_json(
+        &format!("/presentations/{id}/copy"),
+        &CopyPresentationRequest {
+            target_library_id: target_library_id.to_string(),
+        },
+    )
+    .await
+}
+
 pub async fn rename(id: &str, name: &str) -> Result<(), ApiError> {
     patch_no_content(
         &format!("/presentations/{id}"),

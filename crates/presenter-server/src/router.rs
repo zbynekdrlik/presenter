@@ -299,6 +299,10 @@ pub fn build_router(state: AppState) -> Router {
             post(sync::restore_presentation),
         )
         .route(
+            "/presentations/{id}/copy",
+            post(presentations::copy_presentation),
+        )
+        .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
                 .patch(presentations::update_presentation)
@@ -597,6 +601,8 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
         .map_err(|_| AppError::bad_request_message(format!("{field} must be a valid UUID")))
 }
 
+#[cfg(test)]
+mod presentations_copy_tests;
 #[cfg(test)]
 mod presentations_paste_tests;
 #[cfg(test)]

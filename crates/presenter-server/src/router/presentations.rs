@@ -24,6 +24,12 @@ pub(super) struct RenamePresentationRequest {
     pub(super) name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CopyPresentationRequest {
+    pub(super) target_library_id: String,
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CreateSlideRequest {
@@ -116,6 +122,42 @@ pub(super) async fn delete_presentation(
         .delete_presentation(PresentationId::from_uuid(presentation_uuid))
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// #570: deep-copy a presentation into another library. Returns the copy's
+/// detail (its NEW id) so the client can navigate straight to it.
+#[instrument(skip_all)]
+pub(super) async fn copy_presentation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<CopyPresentationRequest>,
+) -> Result<(StatusCode, Json<PresentationDetailDto>), AppError> {
+    let presentation_uuid = super::parse_uuid("presentationId", &id)?;
+    let library_uuid = super::parse_uuid("targetLibraryId", &payload.target_library_id)?;
+    let (library_id, library_name, presentation) = state
+        .copy_presentation(
+            PresentationId::from_uuid(presentation_uuid),
+            LibraryId::from_uuid(library_uuid),
+        )
+        .await
+        .map_err(|err| {
+            let msg = err.to_string();
+            // The repository refuses these two with typed messages — surface
+            // them as client errors, not opaque 500s.
+            if msg.contains("not found") {
+                AppError::not_found(msg)
+            } else {
+                err.into()
+            }
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(PresentationDetailDto {
+            library_id,
+            library_name,
+            presentation,
+        }),
+    ))
 }
 
 #[instrument(skip_all)]
