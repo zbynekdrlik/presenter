@@ -152,7 +152,16 @@ pub fn Header() -> impl IntoView {
                 <div class="operator__header-brand">
                     <h1>"Presenter"</h1>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
-                    <SurfaceNav />
+                    // #573: surface-nav pills + Resolume connection chips are
+                    // one absolutely-positioned group (`.operator__brand-nav`)
+                    // in the top brand row — connection/status indicators
+                    // belong next to Stage/Camera/Tablet/Timer, never next to
+                    // the Stage Output select (see `operator__header-right`
+                    // below, which no longer mounts the chips).
+                    <div class="operator__brand-nav">
+                        <SurfaceNav />
+                        <ResolumeStatusChips />
+                    </div>
                 </div>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                     on:submit=on_search_submit
@@ -232,7 +241,6 @@ pub fn Header() -> impl IntoView {
                         }).collect_view()}
                     </select>
                 </div>
-                <ResolumeStatusChips />
                 <StagePreview />
                 <div class="operator__mode-toggle">
                     {["live", "edit"].into_iter().map(|m| {

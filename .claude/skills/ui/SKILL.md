@@ -160,3 +160,9 @@ await page.waitForSelector('[data-role="presentation-list"]');
 
 Related JSON-shape gotcha: `SlideText` serializes as an object — assert
 `slide.content.main.value`, never `slide.content.main` directly.
+
+## Operator header design rule (#573, user directive 2026-07-24)
+
+Connection/status indicators (Resolume chips etc.) live in the TOP brand/surface-nav row
+(`.operator__brand-nav`, next to the Stage/Camera/Tablet/Timer links), never next to the
+Stage Output controls in `operator__header-right`.

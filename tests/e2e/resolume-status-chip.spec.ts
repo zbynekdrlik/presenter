@@ -64,6 +64,15 @@ test("no resolume host configured — the chip area renders absent, console clea
   await expect(page.locator('[data-role="resolume-status-chips"]')).toBeAttached();
   await expect(page.locator('[data-role="resolume-status-chip"]')).toHaveCount(0);
 
+  // #573: the chips live in the TOP brand/surface-nav row — never next to
+  // the Stage Output select in `operator__header-right`.
+  await expect(
+    page.locator('.operator__header-brand [data-role="resolume-status-chips"]'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('.operator__header-right [data-role="resolume-status-chips"]'),
+  ).toHaveCount(0);
+
   expect(consoleMessages).toEqual([]);
 });
 

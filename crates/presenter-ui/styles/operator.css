@@ -268,24 +268,29 @@ body.operator {
   color: var(--operator-muted);
 }
 
-/* #564: Resolume connection indicator — one chip per ENABLED host. Absent
-   entirely when no host is configured/enabled (no empty placeholder). */
+/* #564/#573: Resolume connection indicator — one chip per ENABLED host,
+   mounted in the top `.operator__brand-nav` group right after the
+   surface-nav pills. Absent entirely when no host is configured/enabled (no
+   empty placeholder). Sized to sit inline with `.operator__surface-nav-link`
+   — compact height, no wrapping. */
 .operator__resolume-chips {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   flex-shrink: 0;
+  flex-wrap: nowrap;
 }
 
 .operator__resolume-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.3rem 0.55rem;
+  padding: 0.18rem 0.55rem;
   border-radius: 999px;
   background: var(--operator-panel);
   border: 1px solid var(--operator-border);
   font-size: 0.7rem;
+  line-height: 1.2;
   color: rgba(255, 255, 255, 0.75);
   white-space: nowrap;
   cursor: default;
@@ -2949,14 +2954,24 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
     font-weight: 600;
 }
 
-/* --- Surface-nav pills right of brand+version (#326) ------------------- */
-/* Absolute-positioned to avoid widening `.operator__header-left`'s         */
-/* intrinsic width — otherwise the view-nav tabs wrap to 2 rows.            */
+/* --- Brand-nav group: surface-nav pills + Resolume chips (#326, #573) -- */
+/* Absolute-positioned AS A GROUP to avoid widening                         */
+/* `.operator__header-left`'s intrinsic width — otherwise the view-nav      */
+/* tabs wrap to 2 rows. The surface-nav pills (Stage/Camera/Tablet/Timer)   */
+/* and the Resolume connection chips both live in this top brand row —     */
+/* connection/status indicators are never placed next to the Stage Output  */
+/* controls (#573 design rule).                                            */
 
-.operator__surface-nav {
+.operator__brand-nav {
     position: absolute;
     left: calc(100% + 0.75rem);
     top: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.operator__surface-nav {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
