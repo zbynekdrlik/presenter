@@ -3,3 +3,14 @@ build-std = ["std", "panic_abort"]
 
 [target.wasm32-unknown-unknown]
 rustflags = ["-Ctarget-cpu=mvp", "-Ctarget-feature=+mutable-globals"]
+
+# #585: incremental compilation disabled — this crate is OUTSIDE the
+# workspace (own Cargo.lock, own target/), so the repo-root .cargo/config.toml
+# never applies to it and it needs its own entry. Its incremental cache alone
+# accounted for ~9.3 GB (5.0 GB debug + 4.3 GB wasm32-unknown-unknown
+# debug+release) of the 55 GB that filled dev2's disk.
+[build]
+incremental = false
+
+[env]
+CARGO_INCREMENTAL = "0"

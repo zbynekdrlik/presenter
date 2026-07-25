@@ -42,6 +42,47 @@ Build order matters (WASM embedded into server at compile time via `include_dir!
 
 5. **Verify**: `curl http://10.77.8.134:8080/healthz`
 
+## Disk budget — incremental compilation disabled (#585)
+
+`target/` dirs grew to **55 GB** on dev2 (41 GB workspace `target/` + 14 GB
+`crates/presenter-ui/target/`, 84% disk usage), **29 GB of it pure
+`incremental/` scratch cache** (20 GB `target/debug/incremental` + 5.0 GB
+`crates/presenter-ui/target/debug/incremental` + 4.3 GB
+`crates/presenter-ui/target/wasm32-unknown-unknown/{debug,release}/incremental`).
+Incremental compilation only pays off on repeated small edits to the SAME
+crate — our local runs are dominated by full `cargo test` / `cargo clippy
+--all-targets` sweeps and `build-ui.sh`, where it added disk + I/O for
+little wall-clock benefit (and this disk is shared with bakerion-ai's own
+`target/`).
+
+**Fixed as of v0.4.209**: `incremental = false` in BOTH `[build]` and
+`[profile.dev]` of the repo-root `.cargo/config.toml` (a profile-level
+`incremental` setting overrides `[build]`'s, so both must agree — and
+`CARGO_INCREMENTAL` in `[env]` must match too, since an env var overrides
+config/profile settings), plus the identical `[build]`/`[env]` pair in
+`crates/presenter-ui/.cargo/config.toml` (that crate is OUTSIDE the
+workspace — own `Cargo.lock`, own `target/` — so the root config never
+reaches it). Verified locally: a full `cargo test --workspace` +
+`bash scripts/build-ui.sh` after purging leaves `incremental/` either
+absent or an EMPTY 4 KB placeholder dir (cargo/trunk still `mkdir`s the
+slot; it just never writes cache content into it) under every `target/`
+tree — no more multi-GB growth.
+
+**Purge one-liner** (safe any time — these are pure scratch caches, never
+committed source, and Cargo regenerates whatever it still needs):
+```bash
+rm -rf target/debug/incremental target/release/incremental \
+  crates/presenter-ui/target/debug/incremental \
+  crates/presenter-ui/target/release/incremental \
+  crates/presenter-ui/target/wasm32-unknown-unknown/debug/incremental \
+  crates/presenter-ui/target/wasm32-unknown-unknown/release/incremental
+```
+Check current disk budget: `df -h /` and `du -sh target crates/presenter-ui/target`.
+If `target/` disk usage is climbing again despite the fix, suspect a NEW
+per-profile `incremental = true` override slipping into either
+`.cargo/config.toml` before reaching for the purge — the setting, not the
+purge, is the actual fix; purging just reclaims space already spent.
+
 ### Local WASM build — use `scripts/build-ui.sh`, NOT plain `trunk build` (#465 resolved)
 
 The local WASM build **works** — via `scripts/build-ui.sh`. The #465 symptom

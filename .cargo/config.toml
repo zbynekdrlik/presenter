@@ -1,8 +1,13 @@
 # SOTA 2025 Cargo build configuration
 
 [build]
-# Enable incremental compilation
-incremental = true
+# #585: incremental compilation disabled — the `incremental/` scratch cache
+# grew to 29 GB on dev2 for a Tier-1 (local-build) machine dominated by full
+# `cargo test` / `cargo clippy --all-targets` sweeps and build-ui.sh, where
+# incremental buys little wall-clock but costs real disk (also shared with
+# bakerion-ai's own target/ on the same disk). See .claude/skills/deploy for
+# the purge one-liner + disk-size expectations.
+incremental = false
 
 # Use LLD linker for faster linking on Linux
 [target.x86_64-unknown-linux-gnu]
@@ -11,7 +16,10 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 # Environment variables for build
 [env]
-CARGO_INCREMENTAL = "1"
+# #585: an env var overrides [build]/[profile] settings, so this must stay
+# in lockstep with `incremental = false` above — never re-enable one without
+# the other.
+CARGO_INCREMENTAL = "0"
 
 # Alias definitions for common tasks
 [alias]
@@ -33,7 +41,10 @@ doc-open = "doc --open --no-deps"
 [profile.dev]
 opt-level = 0
 debug = true
-incremental = true
+# #585: an explicit per-profile `incremental` setting takes precedence over
+# [build] incremental above — both must say false, or dev/test/clippy builds
+# (all profile.dev-derived) would keep incremental ON regardless.
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2  # Optimize dependencies even in dev
