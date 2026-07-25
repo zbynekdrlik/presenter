@@ -245,6 +245,35 @@ healthy locally:** `systemctl status cloudflared` (daemon up?) → `journalctl -
 HTTP/2 drop-in above, and re-verify — don't chase the app/service layer when the daemon logs show
 the tunnel itself never reconnecting.
 
+## Post-deploy live verification on SNV/PP: NEVER delete a test library via `/libraries/{id}` (#578)
+
+When you create a throwaway test library+presentation on SNV or PP to verify a live fix,
+clean it up by deleting the **presentation** (`DELETE /presentations/{id}` — soft-delete,
+tombstoned, propagates the deletion through the #555 sync loop) and only THEN, if you
+want, the now-empty library. **Never delete the library first/only** — `delete_library`
+does a plain hard `Entity::delete_by_id` with NO sync tombstone (pre-existing bug, filed
+as #578), so if the peer (PP<->SNV) already pulled a copy of that presentation in the
+~30s since you created it, the very next sync cycle sees "we never held this" on the
+side that just hard-deleted it and RESURRECTS the whole library+presentation from the
+peer — repeatably, forever, no matter how many times you delete the library again. Live
+incident (2026-07-24/25, verifying #575/#571/#574): a canary library round-tripped
+resurrection twice before switching to presentation-level delete converged it for good.
+If you're left with an empty, obviously-test-named library shell on either side, that's
+the safe end state — leave it (deleting it again just risks re-triggering the loop if
+either side still holds a live copy of anything under that name).
+
+## `cargo test --workspace 2>&1 | tail -N` SWALLOWS a real test failure's exit code
+
+The exit code of a bash pipeline is the LAST command's (`tail`'s, which is almost always
+0) — not `cargo test`'s. Piping a live `cargo test` run through `tail` for a shorter
+paste ALSO throws away the real pass/fail signal; a failing suite silently reports
+`EXIT_CODE: 0`. Redirect to a file instead and check the exit code of the redirect
+itself, then `grep -n "^test result:\|FAILED"` the file afterward:
+```bash
+cargo test --workspace > /tmp/full_test.log 2>&1; echo "EXIT: $?"
+grep -n "^test result:\|FAILED" /tmp/full_test.log
+```
+
 ## CLIProxyAPI Login Flow
 
 Use `cli-proxy-api -claude-login -no-browser` with callback URL paste.

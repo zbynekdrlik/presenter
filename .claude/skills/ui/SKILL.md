@@ -166,3 +166,15 @@ Related JSON-shape gotcha: `SlideText` serializes as an object — assert
 Connection/status indicators (Resolume chips etc.) live in the TOP brand/surface-nav row
 (`.operator__brand-nav`, next to the Stage/Camera/Tablet/Timer links), never next to the
 Stage Output controls in `operator__header-right`.
+
+## `env!("CARGO_PKG_VERSION")` is USELESS here for server-version comparison (#574)
+
+`presenter-ui` has its OWN unrelated Cargo.toml `version` (e.g. `0.1.43` — bumped
+independently of the workspace's `0.4.x`, since the crate is workspace-`exclude`d, see
+the deploy skill). `env!("CARGO_PKG_VERSION")` inside `presenter-ui` compiles to THAT
+number, never the server's real version — `info_popover.rs` already does this (a
+pre-existing, out-of-scope display quirk, left alone in #574). Do NOT reach for
+`env!("CARGO_PKG_VERSION")` to detect "did the server get redeployed under this open
+tab" — it would mismatch on every single load. Instead capture the baseline from the
+tab's OWN first `/healthz` response (`header.rs`'s `known_version` signal) and compare
+LATER polls against that captured value, never against a build-time constant.
