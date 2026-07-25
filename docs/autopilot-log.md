@@ -385,3 +385,35 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   hook, which raced against and lost to the real telemetry (expected; the hook targets no-live-stream
   E2E envs). 0 console errors/warnings.
 - Solo PR (dev→main #534, Closes #532), version 0.4.189.
+
+## Batch: #575 + #571 + #574 (2026-07-25)
+
+- **#575** AbleSet song cache never invalidated on presentation/library mutations (2026-07-24 SNV
+  incident). RED `4dcc14b4` (`state::tests::ableset_cache_invalidates_after_presentation_create_delete_rename`,
+  `ableset_cache_invalidates_after_library_rename`, `state::sync_integration_tests::sync_apply_invalidates_the_ableset_cache_on_the_pulling_side`)
+  → GREEN `7c24a585`: `nudge_sync()` (now async) + `drop_presentation_caches()` both invalidate
+  `caches.ableset`; `rename_library`/`delete_library` invalidate it directly too.
+- **#571** dead `op.submitting` double-submit guard outside the #570 presentation-edit modal. RED
+  `355000b2` (E2E `wasm-presentation-crud.spec.ts` double-click-create-blank, reproduced 2 presentations
+  live) → GREEN `46ca3cad`: `prop:disabled` + re-entry guards wired into `library_modal.rs`,
+  `playlist_modal.rs`, presentation CREATE panel (mirrors #570's `on_copy` pattern).
+- **#574** operator tab open across a deploy breaks silently (2026-07-24 SNV incident: worship panel
+  rendered without library names after a deploy). RED `ca3edaff` (new E2E spec
+  `operator-version-recovery.spec.ts`, both tests reproduced live) → GREEN `d031078a`: `header.rs` polls
+  `/healthz` every 15s vs. a tab-captured baseline (NOT `env!("CARGO_PKG_VERSION")` — presenter-ui's own
+  Cargo.toml version is unrelated) and shows a reload banner; `operator.rs` refetches
+  libraries/playlists/presentations on a genuine WS reconnect.
+- **Review fixup** `27192bf4`: adversarial code review (dispatched subagent) caught the #574 banner's
+  `z-index:200` sitting below modal overlays (1200/1300) — bumped to 2000; also tightened two
+  slightly-imprecise comments.
+- **Discovered + filed, NOT fixed here (genuinely out of scope):** #578 — `delete_library` hard-cascades
+  presentations with no sync tombstone, causing a resurrection loop across the PP<->SNV sync peer.
+  Found live during post-deploy verification (a throwaway test library on SNV kept resurrecting after
+  delete); pre-existing on `main` before this batch, confirmed via `git log -p`. Cleaned up by
+  soft-deleting the presentation (not the library) on both SNV and PP instead.
+- One bundled PR (dev→main #577, Closes #575 #571 #574), merged `e3e1d3e5`. Main Deploy green → SNV
+  verified v0.4.205 (DOM + Playwright, 0 console errors; #571 dbl-click canary proved live). GitHub
+  Release v0.4.205 → `release.yml` deploy-pp succeeded (no #469 recurrence this time) → PP verified
+  v0.4.205. Post-release bump to 0.4.206 (`e9832cc3`) needed a `git merge origin/main` first (dev was
+  1 commit behind main's own merge commit — Branch Sync Check failure, fixed by syncing before the
+  second push, `2cb00531`). Playbook doc-only follow-up `d1898a3d` (deploy + ui skills).
