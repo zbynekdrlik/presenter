@@ -250,3 +250,28 @@ checks FROM THE CRATE DIR: `cd crates/presenter-ui && cargo fmt --check && cargo
 --all-targets -- -D warnings && cargo test --lib`. CI's Format job checks it explicitly
 (second step, `working-directory: crates/presenter-ui`) — an unformatted presenter-ui
 file now fails CI, so always `cargo fmt` inside the crate before pushing UI changes.
+
+## After a `--merge` (merge-commit) PR, ALWAYS merge main back into dev before continuing (#591)
+
+`gh pr merge <N> --merge` creates a NEW merge commit that lands ONLY on `main` — it is
+NOT automatically present on `dev`'s own history (dev's tip stays the pre-merge commit
+your PR was built on; only `main` gains the two-parent merge commit). Continuing
+straight to a post-release task on `dev` (e.g. the standard version-bump-after-release
+commit) WITHOUT first pulling that merge commit back in makes `dev` genuinely 1 commit
+behind `main` from the Branch Sync Check's point of view (`git rev-list --count
+HEAD..origin/main`) — even though every LINE of content already matches. The check
+fails with the exact fix in its own error message, but it costs a wasted CI cycle if
+you don't do it proactively:
+
+```bash
+git fetch origin
+git checkout dev
+git merge origin/main -m "Merge main (PR #N merge commit) back into dev"
+git push origin dev
+```
+
+This resolves as a clean, conflict-free merge (the content already matches — you're
+just re-uniting the two DAG branches at the merge commit), so it's always safe to run
+immediately after ANY `--merge`-style PR merge, before starting the next commit on dev
+(version bump or otherwise). `git rev-list --count origin/dev..origin/main` should read
+`0` before you push anything else.
