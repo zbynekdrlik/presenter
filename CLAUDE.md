@@ -32,6 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Runner management, GPU wedge, probe cleanup | `.claude/skills/ci/SKILL.md` |
 | Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
+| Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
 
 ## Always-Rules
 
@@ -99,23 +100,7 @@ The local runner does NOT compile Rust — it only runs pre-built artifacts down
 
 **Deploy workflows** use SSH from the local runner to application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
 
-#### Runner Management
-
-```bash
-# Check runner status (runs locally — same machine as dev)
-cd ~/actions-runner && sudo ./svc.sh status
-
-# View runner logs
-sudo journalctl -u actions.runner.zbynekdrlik-presenter.presenter-local -f
-
-# Restart runner
-cd ~/actions-runner && sudo ./svc.sh stop && sudo ./svc.sh start
-
-# Re-register (requires fresh token)
-gh api -X POST repos/zbynekdrlik/presenter/actions/runners/registration-token --jq '.token'
-cd ~/actions-runner && ./config.sh --url https://github.com/zbynekdrlik/presenter --token "$TOKEN" --name presenter-local --labels self-hosted,local
-sudo ./svc.sh install && sudo ./svc.sh start
-```
+Runner management commands (status, restart, re-register) live in the ci skill — see the Playbook Router.
 
 ### Workflows
 
@@ -282,93 +267,15 @@ crates/
 
 ---
 
-## Database Policy
-
-### Schema Changes (Pre-release)
-
-Schema is mutable during pre-release:
-
-1. **New columns:** Add an incremental migration (e.g., `m20260408_000001_add_column.rs`) that uses `ALTER TABLE ADD COLUMN` with an idempotent guard (check `pragma_table_info` first). Register it in `lib.rs`. This ensures existing databases are upgraded automatically on startup.
-2. **New tables:** May be added to the initial migration (uses `if_not_exists()`) or as an incremental migration.
-3. **Destructive schema changes** (column renames, type changes): Add an incremental migration. If data must be re-imported, manually trigger the Import Data workflow after deploy.
-4. The server auto-migrates on startup via `Repository::connect()`
-
-### Deploy Safety
-
-- Deploys NEVER delete the database — only binaries and service files are updated
-- Database is backed up automatically before each deploy (5 retained in `backups/`)
-- Imports happen only via the explicit Import Data workflow. Deploys never touch the database.
-- New server installations start with an empty libraries table. Run the Import Data workflow once after first deploy to populate it.
-
-### Settings Audit Log
-
-All settings writes (ableset, osc, resolume hosts, android stage displays, video sources) are recorded in `settings_audit` (append-only). Each entry captures:
-
-- `setting_table`, `setting_id` — which row changed
-- `source` — `http_setter` | `companion_setter` | `startup_default` | `schema_migration`
-- `actor` — caller IP (from `X-Forwarded-For` or `X-Real-IP`) or `"system"` / `"companion"`
-- `before_json`, `after_json` — full row state before and after
-
-Query: `GET /integrations/audit?table=<name>&settingId=<id>&since=<rfc3339>&limit=<n>`.
-
-Startup MUST be read-only against settings tables. The only allowed startup write is creating a singleton row if missing (with `source=startup_default`). A second startup on an unchanged DB produces zero new audit rows — enforced by the regression test in `crates/presenter-persistence/src/repository/tests.rs::second_startup_writes_no_audit_rows`.
-
-### Manual Import
-
-To re-import source data (ProPresenter libraries, Bibles):
-
-1. Go to Actions > "Import Data" > Run workflow
-2. Select environment (dev/production) and import type
-3. Default mode (`--keep`) preserves existing data
-4. `--purge` mode replaces all libraries (WARNING: destroys playlists via FK cascade)
-
-### Library Management
-
-ProPresenter libraries are stored in `data/libraries/` as the single source of truth.
-
-**To update songs:**
-
-1. Export from ProPresenter on Mac
-2. Copy `.pro` files to `data/libraries/<LIBRARY_NAME>/`
-3. Commit and push to dev
-4. Deploy syncs libraries to servers via `rsync`
-5. Run Import Data workflow if needed
-
-Deploy workflows automatically sync `data/libraries/` to `/opt/presenter*/libraries/` on target servers.
-
----
-
 ## Code Quality Standards
 
 ### Format & Lint (CI enforces)
 
-```bash
-cargo fmt --check                                              # Must pass
-cargo clippy --workspace --all-targets -- -D warnings -W clippy::all  # Must pass (zero warnings allowed)
-```
-
-### Naming Conventions
-
-- `snake_case` for module names
-- `PascalCase` for types
-- `mod.rs` for orchestration/re-exports only
-
----
-
-## Anti-Patterns (Never Do These)
-
-- **Don't delete production databases** - Use incremental migrations for schema changes
-- **Don't use arbitrary sleeps in tests** - Use retry-with-assert helpers
+Pre-push quality gate: `scripts/dev/quality-check.sh --strict --against origin/main` (what CI runs) — details in the ci skill.
 
 ---
 
 ## Documentation Standards
-
-### When to Update Docs
-
-- New features: Update relevant docs and CLAUDE.md
-- Architecture changes: Add/update ADR in `docs/adr/`
-- Configuration changes: Update `docs/configuration.md`
 
 ### ADR Process
 
@@ -392,16 +299,6 @@ cargo clippy --workspace --all-targets -- -D warnings -W clippy::all  # Must pas
 
 ### LAN IP (NOT localhost)
 
-The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.**
-
-**Production LAN IP:** `10.77.9.205`
-**Dev LAN IP:** `10.77.8.134`
-
-When providing URLs, use:
-
-- http://10.77.9.205/ui/operator (Production)
-- http://10.77.8.134:8080/ui/operator (Dev)
-- http://10.77.9.205/stage (Production stage)
-- http://10.77.8.134:8080/stage (Dev stage)
+The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.** (IPs are in the Deployed Instances table above.)
 
 **Never use localhost** — always use the LAN IP.
