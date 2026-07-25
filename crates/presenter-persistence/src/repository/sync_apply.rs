@@ -327,9 +327,18 @@ impl Repository {
         if let Some(id) = Self::find_library_id(txn, library_name).await? {
             return Ok(id);
         }
+        // Order by UpdatedAt DESC: repeated delete/recreate cycles of the
+        // same-named library leave MULTIPLE tombstoned rows behind (the
+        // partial unique index only guards LIVE rows — see
+        // idx_libraries_name_live_unique), and `.one()` with no explicit
+        // order picks an arbitrary one. Always deciding against the MOST
+        // RECENT tombstone is the one that's actually relevant to this
+        // race; an older, already-superseded tombstone would compare the
+        // presentation against the wrong timestamp entirely.
         if let Some(tombstoned) = library::Entity::find()
             .filter(library::Column::Name.eq(library_name.to_string()))
             .filter(library::Column::DeletedAt.is_not_null())
+            .order_by_desc(library::Column::UpdatedAt)
             .one(txn)
             .await?
         {
