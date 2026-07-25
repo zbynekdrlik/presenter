@@ -899,3 +899,76 @@ async fn deleting_a_library_does_not_resurrect_via_sync() {
         "the library deletion must propagate to B via the presentation tombstone"
     );
 }
+
+#[tokio::test]
+async fn library_rename_propagates_across_sync() {
+    // #578: a library rename bumps updated_at and propagates under LWW. Library
+    // identity converges on the FIRST sync (reconcile_libraries creates B's
+    // library carrying A's sync_id, before the presentation's ensure_library),
+    // so a later rename matches by sync_id and applies IN PLACE — no duplicate
+    // library, the song stays attached.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    let (lib_id, _id) = make_song(&a, "Songs", "S").await;
+
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert!(
+        b.libraries()
+            .await
+            .unwrap()
+            .iter()
+            .any(|l| l.name == "Songs"),
+        "B holds the library after the first sync"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    a.rename_library(lib_id, "Gospel").await.unwrap();
+
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    let libs = b.libraries().await.unwrap();
+    assert_eq!(
+        libs.iter().filter(|l| l.name == "Gospel").count(),
+        1,
+        "the rename applied in place — exactly one 'Gospel', no duplicate"
+    );
+    assert!(
+        !libs.iter().any(|l| l.name == "Songs"),
+        "the old library name is gone on B"
+    );
+    assert!(
+        find_song(&libs, "S").is_some(),
+        "the song stayed attached across the library rename"
+    );
+}
+
+#[tokio::test]
+async fn library_delete_propagates_the_library_tombstone_to_the_peer() {
+    // #578: deleting a library on A hides the library ROW on B too (the library
+    // tombstone converges via /sync/libraries/manifest), not just the song.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    let (lib_id, _id) = make_song(&a, "Songs", "S").await;
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert!(b
+        .libraries()
+        .await
+        .unwrap()
+        .iter()
+        .any(|l| l.name == "Songs"));
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    a.delete_library(lib_id).await.unwrap();
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+
+    let libs = b.libraries().await.unwrap();
+    assert!(
+        !libs.iter().any(|l| l.name == "Songs"),
+        "the deleted library's row is hidden on the peer (library tombstone propagated)"
+    );
+    assert!(
+        find_song(&libs, "S").is_none(),
+        "and its song is hidden on the peer too"
+    );
+}

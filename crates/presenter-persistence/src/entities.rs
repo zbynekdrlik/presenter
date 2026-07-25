@@ -10,6 +10,10 @@ pub mod library {
         pub name: String,
         pub search_name: String,
         pub created_at: DateTimeWithTimeZone,
+        // #578 library sync (mirrors the #555 presentation sync columns):
+        pub updated_at: DateTimeWithTimeZone,
+        pub sync_id: String,
+        pub deleted_at: Option<DateTimeWithTimeZone>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

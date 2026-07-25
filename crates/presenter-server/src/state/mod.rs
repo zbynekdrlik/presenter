@@ -329,6 +329,23 @@ impl AppState {
                     Ok(_) => {}
                     Err(err) => warn!(?err, "trash prune failed"),
                 }
+                // #578: soft-deleted LIBRARIES age out on the SAME horizon.
+                // Runs AFTER the presentation prune so a still-live song in a
+                // to-be-pruned library is already tombstoned; the library
+                // hard-delete's FK cascade then clears whatever remains.
+                match prune_state
+                    .repository
+                    .prune_deleted_libraries(PRUNE_HORIZON)
+                    .await
+                {
+                    Ok(n) if n > 0 => tracing::info!(
+                        pruned = n,
+                        horizon_days = PRUNE_HORIZON.num_days(),
+                        "pruned trashed libraries older than the prune horizon"
+                    ),
+                    Ok(_) => {}
+                    Err(err) => warn!(?err, "library trash prune failed"),
+                }
             }
         });
 

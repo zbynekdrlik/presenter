@@ -2,6 +2,9 @@ mod audit;
 mod bible;
 mod group_color;
 mod library;
+mod library_sync;
+#[cfg(test)]
+mod library_sync_tests;
 mod playlist;
 mod presentation;
 #[cfg(test)]
@@ -26,6 +29,7 @@ mod sync_trash_tests;
 mod tests;
 mod util;
 
+pub use library_sync::SyncLibraryManifestRow;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
 pub use sync_apply::{sync_should_apply, SyncApplyOutcome, PRUNE_HORIZON};
 

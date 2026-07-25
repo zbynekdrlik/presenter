@@ -288,6 +288,13 @@ pub fn build_router(state: AppState) -> Router {
         // registered before the dynamic /presentations/{id} route so matchit
         // does not swallow it (same lesson as /integrations/video-sources/status).
         .route("/sync/manifest", get(sync::get_sync_manifest))
+        // #578: library identities (rename + tombstone) — a separate manifest
+        // (a library has no content to fetch). An OLD peer without this route
+        // 404s; the pulling side degrades gracefully (skips library recon).
+        .route(
+            "/sync/libraries/manifest",
+            get(sync::get_sync_library_manifest),
+        )
         .route(
             "/sync/presentations/{sync_id}",
             get(sync::get_sync_presentation),
