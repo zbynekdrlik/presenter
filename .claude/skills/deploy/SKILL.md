@@ -57,12 +57,21 @@ little wall-clock benefit (and this disk is shared with bakerion-ai's own
 
 **Fixed as of v0.4.209**: `incremental = false` in BOTH `[build]` and
 `[profile.dev]` of the repo-root `.cargo/config.toml` (a profile-level
-`incremental` setting overrides `[build]`'s, so both must agree — and
-`CARGO_INCREMENTAL` in `[env]` must match too, since an env var overrides
-config/profile settings), plus the identical `[build]`/`[env]` pair in
-`crates/presenter-ui/.cargo/config.toml` (that crate is OUTSIDE the
-workspace — own `Cargo.lock`, own `target/` — so the root config never
-reaches it). Verified locally: a full `cargo test --workspace` +
+`incremental` setting overrides `[build]`'s, so both must agree — Cargo's
+own incremental decision comes ONLY from `[build]`/`[profile.*]`), plus the
+identical `[build]` entry in `crates/presenter-ui/.cargo/config.toml`
+(duplicated defensively — Cargo discovers config by DIRECTORY ANCESTRY, not
+workspace membership, so the root config actually DOES merge into that
+crate's build when `build-ui.sh` `cd`s there first; the duplicate just keeps
+the setting attached to the crate if it's ever built from elsewhere).
+**#594 correction:** the `CARGO_INCREMENTAL` `[env]` entries in both files
+do NOT protect Cargo's own build — Cargo's `[env]` table only sets variables
+for processes Cargo *spawns*, it does not read `[env]` back for its own
+config (verified empirically on cargo 1.97.0). They're harmless to keep
+(they do affect a nested cargo invocation spawned by a build script) but
+real protection against a shell-exported `CARGO_INCREMENTAL` would need a
+guard in `scripts/dev/quality-check.sh` / `scripts/build-ui.sh` instead.
+Verified locally: a full `cargo test --workspace` +
 `bash scripts/build-ui.sh` after purging leaves `incremental/` either
 absent or an EMPTY 4 KB placeholder dir (cargo/trunk still `mkdir`s the
 slot; it just never writes cache content into it) under every `target/`

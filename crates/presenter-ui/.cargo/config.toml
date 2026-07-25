@@ -4,16 +4,24 @@ build-std = ["std", "panic_abort"]
 [target.wasm32-unknown-unknown]
 rustflags = ["-Ctarget-cpu=mvp", "-Ctarget-feature=+mutable-globals"]
 
-# #585: incremental compilation disabled — this crate is OUTSIDE the
-# workspace (own Cargo.lock, own target/), so the repo-root .cargo/config.toml
-# never applies to it and it needs its own entry. Its incremental cache alone
-# accounted for ~9.3 GB (5.0 GB debug + 4.3 GB wasm32-unknown-unknown
-# debug+release) of the 55 GB that filled dev2's disk.
+# #585/#594: incremental compilation disabled here too. Duplicated
+# DEFENSIVELY, not because it's strictly required today: Cargo discovers
+# config by DIRECTORY ANCESTRY, not workspace membership, so the repo-root
+# .cargo/config.toml DOES merge into this crate's build whenever
+# scripts/build-ui.sh `cd`s here first (verified empirically) — this crate
+# being OUTSIDE the workspace (own Cargo.lock, own target/) is unrelated to
+# that. This entry just keeps the setting attached to the crate in case it's
+# ever built from a different cwd. Its incremental cache alone accounted for
+# ~9.3 GB (5.0 GB debug + 4.3 GB wasm32-unknown-unknown debug+release) of the
+# 55 GB that filled dev2's disk.
 [build]
 incremental = false
 
 [env]
-# force = true: a plain KEY = "value" only applies when the process env does
-# NOT already define it — without force, an inherited shell CARGO_INCREMENTAL
-# would silently win over this config (see the root .cargo/config.toml note).
+# #594: like the root .cargo/config.toml, this [env] entry is INERT for
+# Cargo's own incremental decision — Cargo's [env] table only sets variables
+# for processes Cargo *spawns*, it does not read [env] back for its own
+# config. The actual fix is `[build] incremental = false` above. Kept here
+# (with `force = true`) only because it DOES help a nested cargo invocation
+# spawned by a build script.
 CARGO_INCREMENTAL = { value = "0", force = true }
