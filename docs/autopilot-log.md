@@ -4,6 +4,47 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-07-25 — #580 library-delete-vs-presentation-create race + #585 disable incremental compilation (PR #591, v0.4.209)
+
+- **#580 (bug):** `ensure_library()` in `sync_apply.rs` only ever looked at LIVE libraries by
+  name; when only a TOMBSTONED same-named one existed, it unconditionally minted a fresh live
+  library instead of considering it — diverging two peers forever in a rare concurrent
+  library-delete-vs-presentation-create race. Precondition verified first: libraries DO carry a
+  comparable `updated_at` through the sync path (#578's `apply_sync_library`), so the design
+  decision on the issue (option b: LWW against the tombstone) was implemented without inventing
+  a new wire field (the rejected, larger option a).
+- **RED** `11d4b522` — two-peer regression tests
+  (`crates/presenter-server/src/state/sync_race_tests.rs:82`, `:161`), both fail on pre-fix code.
+- **GREEN** `eb61430b` — `ensure_library` revives-or-attaches via LWW against the tombstoned
+  library's own `updated_at`; both tests pass.
+- **Self-review hardening** `d5321c6c` (+ regression test
+  `sync_trash_tests.rs:503`) — the tombstone lookup needs a most-recent pick when MULTIPLE
+  tombstones share a name (repeated delete/recreate cycles; the partial unique index only
+  guards LIVE rows). Confirmed failing without `order_by_desc(UpdatedAt)`, passing with it.
+- **Dispatched deep-review fixup** `bd044c4e` — reviewer found the multi-tombstone tie-break
+  wasn't peer-stable on an EXACT `updated_at` collision; added `SyncId DESC` as a peer-stable
+  secondary sort (never a local-only key like row `Id`). Also hardened `.cargo/config.toml`'s
+  `[env] CARGO_INCREMENTAL` to the `{ value = "0", force = true }` table form (a plain
+  `KEY = "value"` only wins when the shell doesn't already export it).
+- **#585 (chore)** `58595f04` — `target/` had grown to 55 GB on dev2 (29 GB pure
+  `incremental/` scratch cache). `incremental = false` in `[build]` AND `[profile.dev]` of both
+  `.cargo/config.toml` files (root + `crates/presenter-ui`, which is workspace-excluded and needs
+  its own entry) — a profile-level setting overrides `[build]`'s, so both had to agree. CI was
+  already running `CARGO_INCREMENTAL: 0` at the workflow-env level (`pipeline.yml`), so this is a
+  LOCAL-machine-only fix with zero CI-behavior change — verified: full `cargo test --workspace` +
+  `build-ui.sh` after purging left `incremental/` absent or an empty 4 KB placeholder everywhere.
+- **Gotcha hit + documented** `46c92ce2` — after `gh pr merge --merge`, the new merge commit
+  lands only on `main`; continuing straight to the version bump on `dev` tripped the Branch Sync
+  Check even though content matched. Fixed by merging `origin/main` back into `dev`
+  (`168d2a8b`) before the version bump; documented in `.claude/skills/ci/SKILL.md` so the next
+  session doesn't lose a CI cycle to it.
+- **Bundled PR #591** (dev→main, `Closes #580 #585`), merged `9431be31`. Main CI green → SNV
+  deployed + verified v0.4.209 (Playwright: operator loads, WASM ready, 24 libraries, 0 console
+  errors; `/integrations/sync/status` healthy, 0 errors). GitHub Release v0.4.209 →
+  `release.yml` deploy-pp succeeded (no #469 recurrence this time) → PP verified v0.4.209
+  (Playwright + healthz), both peers report each other at 0.4.209 with healthy sync. Post-release
+  bump to 0.4.210 (`fbbcc53e`).
+
 ## 2026-06-22 — #346 Decompose state/mod.rs AppState facade → subsystem managers (PR #456, v0.4.153)
 
 - **Validated still real:** `crates/presenter-server/src/state/mod.rs` = 1115 lines, `AppState` = 24 fields. NOT a 1000-line-cap fix — the CI fn-size gate miscounts this file (stops at the first `#[cfg(test)]` ~line 33; that undercount is open #407). So done as voluntary readability decomposition, not gate compliance.
