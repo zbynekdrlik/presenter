@@ -2,10 +2,15 @@
 //!
 //! Android TV / weak-WebView browsers draw a big native "start playback"
 //! overlay over a `<video>` element the moment it sits in a PAUSED state —
-//! whether that's a rejected autoplay `.play()`, a WHEP stream that stalls
-//! mid-session (`pause`/`suspend`/`ended` fire on the element even though
-//! playback SHOULD continue), or the page/app returning from background
-//! (Android TV WebViews often suspend/resume without ever firing `pause`).
+//! a WHEP stream that stalls mid-session (`pause`/`suspend`/`ended` fire on
+//! the element even though playback SHOULD continue), or the page/app
+//! returning from background (Android TV WebViews often suspend/resume
+//! without ever firing `pause`). A rejected INITIAL autoplay `.play()` (the
+//! ticket's #1 named cause) is covered indirectly: `attach_ontrack`
+//! (`ndi_video.rs`) already asserts `muted` before that first `.play()`, and
+//! if a genuine rejection ever leaves the element paused, the browser itself
+//! typically follows with a `pause` event — this guard's `pause` listener
+//! then re-asserts `muted` and retries, same as any other stall.
 //! CSS suppression (`stage.css`) hides the affordance as defense-in-depth, but
 //! the root cause is that nothing re-initiates playback — so the element can
 //! sit paused indefinitely. This module detects the pause and re-calls
@@ -24,15 +29,23 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_watchdog::now_ms;
 
-/// At most this many `.play()` replay attempts within any rolling
-/// `RETRY_WINDOW_MS` window. Beyond that, this guard stops trying and lets the
-/// frame-based `Watchdog` escalate instead — a source that is truly dead needs
-/// a RECONNECT, not a tighter replay loop hammering `.play()`.
+/// At most this many `.play()` replay attempts within any `RETRY_WINDOW_MS`
+/// window. Beyond that, this guard stops trying and lets the frame-based
+/// `Watchdog` escalate instead — a source that is truly dead needs a
+/// RECONNECT, not a tighter replay loop hammering `.play()`.
+///
+/// Note: `RetryWindow` is a FIXED window that resets once fully elapsed, not
+/// a true sliding window — a burst straddling the boundary (attempts just
+/// before reset, more just after) can allow up to `2×MAX_RETRIES_PER_WINDOW`
+/// in a short span. Acceptable here: the frame-based `Watchdog` is the real
+/// backstop for a persistently-broken source, so this budget only needs to
+/// be "roughly bounded," not exact.
 pub(crate) const MAX_RETRIES_PER_WINDOW: usize = 5;
 pub(crate) const RETRY_WINDOW_MS: f64 = 30_000.0;
 
-/// Rolling-window bookkeeping for the bounded replay retries. Pure state, no
-/// DOM — kept separate from the DOM wiring so the decision logic is
+/// Fixed-window bookkeeping for the bounded replay retries (see the
+/// `MAX_RETRIES_PER_WINDOW` note on the fixed-vs-rolling distinction). Pure
+/// state, no DOM — kept separate from the DOM wiring so the decision logic is
 /// unit-testable without a browser.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RetryWindow {
@@ -51,10 +64,10 @@ impl RetryWindow {
 
 /// Decide whether a pause/ended/suspend/visibility-restore event observed at
 /// `now_ms` should trigger another `.play()` attempt, advancing `state`'s
-/// rolling-window bookkeeping. A window with no activity for
-/// `RETRY_WINDOW_MS` resets the attempt counter — a source that recovered and
-/// later blips again gets a fresh budget rather than staying permanently
-/// capped by an old failure streak. Pure + unit-tested.
+/// fixed-window bookkeeping. A window with no activity for `RETRY_WINDOW_MS`
+/// resets the attempt counter — a source that recovered and later blips
+/// again gets a fresh budget rather than staying permanently capped by an
+/// old failure streak. Pure + unit-tested.
 pub(crate) fn should_attempt_replay(state: &mut RetryWindow, now_ms: f64) -> bool {
     if now_ms - state.window_start_ms >= RETRY_WINDOW_MS {
         state.attempts = 0;
@@ -112,7 +125,7 @@ pub(crate) fn install(video: &HtmlVideoElement) {
     }
 }
 
-/// If `video` is actually paused and the rolling-window budget allows it,
+/// If `video` is actually paused and the fixed-window budget allows it,
 /// re-assert `muted` (matches `attach_ontrack`'s Chrome-autoplay-policy fix —
 /// a stream reassigned or renegotiated could reset the live `muted` property)
 /// and re-call `.play()`. Silently no-ops when the element isn't paused (nothing
@@ -135,18 +148,25 @@ fn replay_if_within_budget(
         return;
     }
     video.set_muted(true);
+    play_and_log(video, format!("ndi_playback_guard: replay after {source}"));
+}
+
+/// Call `.play()` on `video` and log (WARN, never propagated) if the returned
+/// promise rejects or the call itself throws. Shared by `ndi_video.rs`'s
+/// initial `attach_ontrack` play and this module's replay above — both need
+/// identical "fire, await, log on failure" handling, and duplicating it was
+/// flagged in review (PR #579).
+pub(crate) fn play_and_log(video: &HtmlVideoElement, context: String) {
     match video.play() {
         Ok(promise) => {
             spawn_local(async move {
                 if let Err(e) = JsFuture::from(promise).await {
-                    leptos::logging::warn!(
-                        "ndi_playback_guard: replay after {source} rejected: {e:?}"
-                    );
+                    leptos::logging::warn!("{context}: play() rejected: {e:?}");
                 }
             });
         }
         Err(e) => {
-            leptos::logging::warn!("ndi_playback_guard: replay after {source} threw: {e:?}");
+            leptos::logging::warn!("{context}: play() threw: {e:?}");
         }
     }
 }

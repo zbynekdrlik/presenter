@@ -292,3 +292,82 @@ test("NdiVideo replays a stalled stream after an external pause() within the bou
     await deactivateAndDelete(page, sourceId);
   }
 });
+
+// #568 review follow-up (PR #579): the sibling test above proves the
+// pause/ended/suspend replay guard recovers from an EXPLICIT pause() call,
+// but Playwright's default `chromium` project disables Chrome's autoplay
+// policy entirely (see playwright.config.ts), so it can't prove the replay
+// still succeeds under REAL enforcement — the ticket's #1 named root cause
+// ("video.play() rejects (autoplay policy)... and no retry brings it back").
+// This re-runs the same playing→paused→recovered cycle under real Chrome
+// with `--autoplay-policy=user-gesture-required` (the `chrome-video`
+// project, `@video-codec` tag — same mechanism as the pre-existing
+// "NdiVideo actually starts playing (autoplay policy regression)" test in
+// ndi-webrtc.spec.ts), proving the guard's `set_muted(true)` + `.play()`
+// re-assertion (ndi_playback_guard.rs) genuinely survives strict policy
+// enforcement — a script-initiated replay is ONLY permitted at all because
+// it re-asserts `muted` first.
+test("NdiVideo replays a stalled stream after pause() under real Chrome autoplay-policy enforcement (#568) @video-codec", async ({
+  page,
+}) => {
+  const consoleMessages = collectConsoleNoise(page);
+  const sourceId = await openStageWithNdiVideo(
+    page,
+    "ndi-fullscreen",
+    "PlaybackGuardReplayStrictPolicy",
+  );
+
+  try {
+    await page.evaluate((sel) => {
+      const video = document.querySelector(sel) as HTMLVideoElement;
+      const canvas = document.createElement("canvas");
+      canvas.width = 16;
+      canvas.height = 16;
+      const ctx = canvas.getContext("2d")!;
+      let toggle = false;
+      ctx.fillStyle = "red";
+      ctx.fillRect(0, 0, 16, 16);
+      const interval = setInterval(() => {
+        toggle = !toggle;
+        ctx.fillStyle = toggle ? "blue" : "red";
+        ctx.fillRect(0, 0, 16, 16);
+      }, 100);
+      (window as unknown as { __e2eGuardInterval?: number }).__e2eGuardInterval =
+        interval as unknown as number;
+      const stream = canvas.captureStream(10);
+      video.srcObject = stream;
+      video.muted = true;
+      return video.play();
+    }, '[data-role="ndi-video"]');
+
+    const isPaused = () =>
+      page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLVideoElement).paused,
+        '[data-role="ndi-video"]',
+      );
+
+    // Under REAL Chrome with --autoplay-policy=user-gesture-required, a
+    // programmatic play() on a NON-muted element would reject — this first
+    // poll proves the initial muted play() succeeds even under strict
+    // enforcement (mirrors attach_ontrack's production behavior).
+    await expect.poll(isPaused, { timeout: 10_000 }).toBe(false);
+
+    await page.evaluate(
+      (sel) => (document.querySelector(sel) as HTMLVideoElement).pause(),
+      '[data-role="ndi-video"]',
+    );
+
+    // The guard's replay must recover even here — proving the fix holds
+    // under real policy enforcement, not just Playwright's relaxed default.
+    await expect.poll(isPaused, { timeout: 5_000 }).toBe(false);
+
+    await page.evaluate(() => {
+      const w = window as unknown as { __e2eGuardInterval?: number };
+      if (w.__e2eGuardInterval) clearInterval(w.__e2eGuardInterval);
+    });
+
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await deactivateAndDelete(page, sourceId);
+  }
+});

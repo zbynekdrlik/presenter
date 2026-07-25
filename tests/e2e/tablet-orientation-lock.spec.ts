@@ -58,19 +58,69 @@ test("tablet manifest declares a fixed landscape orientation (#569)", async ({
   expect(manifest.orientation).toBe("landscape");
 });
 
-test("tablet UI counter-rotates to stay landscape when the window is portrait, and does not when it's landscape (#569)", async ({
+// A real phone/tablet has a COARSE (touch) primary pointer — Playwright only
+// makes `(pointer: coarse)` match when the browser context declares touch
+// support, so this test explicitly emulates one (review finding, PR #579:
+// the fallback is scoped to `(pointer: coarse)` so a desktop user with a
+// narrow/portrait-shaped browser window is never force-rotated — see the
+// sibling test below for that case).
+test.describe("touch device (pointer: coarse)", () => {
+  test.use({ hasTouch: true });
+
+  test("tablet UI counter-rotates to stay landscape when the window is portrait, and does not when it's landscape (#569)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    // Start landscape (a typical tablet shape) — the fallback rotation must
+    // NOT be active here; this is the everyday, already-correct case.
+    await page.setViewportSize({ width: 900, height: 500 });
+    await page.goto(new URL("/ui/tablet", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+
+    const body = page.locator("body.tablet");
+    await expect(body).toBeAttached();
+
+    const readTransform = () =>
+      body.evaluate((el) => window.getComputedStyle(el).transform);
+    const readPosition = () =>
+      body.evaluate((el) => window.getComputedStyle(el).position);
+
+    await expect.poll(readTransform).toBe("none");
+
+    // Rotate to a portrait phone shape (a physically-rotated phone with no
+    // orientation lock active — the exact bug condition: the UI must NOT
+    // follow this rotation). The media query re-evaluates automatically.
+    await page.setViewportSize({ width: 400, height: 800 });
+    await expect.poll(readTransform).not.toBe("none");
+    expect(await readPosition()).toBe("fixed");
+
+    // Rotate back to landscape (phone turned back) — the fallback must
+    // disengage cleanly, proving this is a live, bounded, reversible rule
+    // and not a one-shot state that gets stuck.
+    await page.setViewportSize({ width: 900, height: 500 });
+    await expect.poll(readTransform).toBe("none");
+
+    expect(consoleMessages).toEqual([]);
+  });
+});
+
+// Desktop browsers report a FINE (mouse/trackpad) primary pointer regardless
+// of window aspect ratio. A narrow/portrait-shaped desktop browser window
+// (e.g. a portrait external monitor, a docked side-panel browser) must NOT
+// get the tablet UI force-rotated — that would be a real, if unlikely,
+// regression of the "no regression on desktop" requirement.
+test("desktop (fine pointer) with a portrait-shaped window is NOT rotated (#569)", async ({
   page,
 }) => {
-  const consoleMessages: string[] = [];
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warning") {
-      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-    }
-  });
-
-  // Start landscape (a typical tablet/desktop shape) — the fallback rotation
-  // must NOT be active here; this is the everyday, already-correct case.
-  await page.setViewportSize({ width: 900, height: 500 });
+  await page.setViewportSize({ width: 400, height: 800 });
   await page.goto(new URL("/ui/tablet", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
@@ -78,26 +128,8 @@ test("tablet UI counter-rotates to stay landscape when the window is portrait, a
 
   const body = page.locator("body.tablet");
   await expect(body).toBeAttached();
-
-  const readTransform = () =>
-    body.evaluate((el) => window.getComputedStyle(el).transform);
-  const readPosition = () =>
-    body.evaluate((el) => window.getComputedStyle(el).position);
-
-  await expect.poll(readTransform).toBe("none");
-
-  // Rotate to a portrait phone shape (a physically-rotated phone with no
-  // orientation lock active — the exact bug condition: the UI must NOT
-  // follow this rotation). The media query re-evaluates automatically.
-  await page.setViewportSize({ width: 400, height: 800 });
-  await expect.poll(readTransform).not.toBe("none");
-  expect(await readPosition()).toBe("fixed");
-
-  // Rotate back to landscape (phone turned back) — the fallback must
-  // disengage cleanly, proving this is a live, bounded, reversible rule and
-  // not a one-shot state that gets stuck.
-  await page.setViewportSize({ width: 900, height: 500 });
-  await expect.poll(readTransform).toBe("none");
-
-  expect(consoleMessages).toEqual([]);
+  const transform = await body.evaluate(
+    (el) => window.getComputedStyle(el).transform,
+  );
+  expect(transform).toBe("none");
 });

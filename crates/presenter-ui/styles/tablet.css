@@ -58,8 +58,15 @@ body.tablet {
    clockwise. That composition maps the box's four corners exactly onto
    (0,0)-(100vw,100vh) — i.e. it fills the real portrait viewport edge to
    edge with content that is internally composed as landscape (100vh x
-   100vw), pivoted into a phone-shaped screen. */
-@media screen and (orientation: portrait) {
+   100vw), pivoted into a phone-shaped screen.
+
+   `(pointer: coarse)` scopes this to touch devices (review finding, PR #579):
+   without it, a desktop user with a narrow/portrait-shaped browser window (a
+   portrait external monitor, a docked side-panel browser) would get the
+   whole UI silently force-rotated too — a real device has ONLY a coarse
+   (touch) primary pointer, a desktop/laptop has a fine (mouse/trackpad) one,
+   regardless of window aspect ratio. */
+@media screen and (orientation: portrait) and (pointer: coarse) {
   body.tablet {
     position: fixed;
     top: 0;
