@@ -327,18 +327,29 @@ impl Repository {
         if let Some(id) = Self::find_library_id(txn, library_name).await? {
             return Ok(id);
         }
-        // Order by UpdatedAt DESC: repeated delete/recreate cycles of the
-        // same-named library leave MULTIPLE tombstoned rows behind (the
-        // partial unique index only guards LIVE rows — see
+        // Order by UpdatedAt DESC, SyncId DESC: repeated delete/recreate
+        // cycles of the same-named library leave MULTIPLE tombstoned rows
+        // behind (the partial unique index only guards LIVE rows — see
         // idx_libraries_name_live_unique), and `.one()` with no explicit
         // order picks an arbitrary one. Always deciding against the MOST
         // RECENT tombstone is the one that's actually relevant to this
         // race; an older, already-superseded tombstone would compare the
-        // presentation against the wrong timestamp entirely.
+        // presentation against the wrong timestamp entirely. `SyncId` is
+        // the tie-breaker for an EXACT `updated_at` collision (two rapid
+        // delete/recreate cycles can land on the same wall-clock
+        // millisecond) — it MUST be a peer-stable key, never a local-only
+        // one like the row `Id` (`find_live_by_name_candidate`'s own
+        // secondary sort), or two peers holding the same two tombstoned
+        // rows could break the tie in DIFFERENT directions and pick a
+        // DIFFERENT "most recent" tombstone each — reintroducing the exact
+        // divergence class this fix closes. `sync_id` converges identically
+        // on both sides once synced, so ordering by it is deterministic
+        // peer-to-peer.
         if let Some(tombstoned) = library::Entity::find()
             .filter(library::Column::Name.eq(library_name.to_string()))
             .filter(library::Column::DeletedAt.is_not_null())
             .order_by_desc(library::Column::UpdatedAt)
+            .order_by_desc(library::Column::SyncId)
             .one(txn)
             .await?
         {
@@ -354,6 +365,7 @@ impl Repository {
                         Expr::value(presentation_updated_at.to_rfc3339()),
                     )
                     .filter(library::Column::Id.eq(tombstoned.id.clone()))
+                    .filter(library::Column::DeletedAt.is_not_null())
                     .exec(txn)
                     .await?;
             }

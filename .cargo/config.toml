@@ -18,8 +18,12 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 [env]
 # #585: an env var overrides [build]/[profile] settings, so this must stay
 # in lockstep with `incremental = false` above — never re-enable one without
-# the other.
-CARGO_INCREMENTAL = "0"
+# the other. `force = true` is required: a plain `KEY = "value"` [env] entry
+# only applies when the process environment does NOT already define the
+# variable (Cargo config reference) — without force, a shell that happens to
+# export CARGO_INCREMENTAL would silently win over this config and defeat
+# the whole point of this fix.
+CARGO_INCREMENTAL = { value = "0", force = true }
 
 # Alias definitions for common tasks
 [alias]
