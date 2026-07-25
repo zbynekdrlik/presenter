@@ -587,38 +587,56 @@ async fn ensure_library_picks_the_most_recent_tombstone_when_several_share_a_nam
         2,
         "exactly v1 and v2 -- no third library was minted"
     );
+}
 
-    // #594 finding 4: the LWW boundary in `ensure_library` is a STRICT `>`
-    // (mirrors `sync_should_apply`'s own strict tie-break) — an incoming
-    // presentation whose `updated_at` is EXACTLY EQUAL to v2's must NOT
-    // revive it. Mutating the strict `>` to `>=` in production code would
-    // make this assertion fail.
+#[tokio::test]
+async fn ensure_library_boundary_is_strict_greater_than_not_greater_or_equal() {
+    // #594 finding 4: the LWW boundary in `ensure_library` (sync_apply.rs:357)
+    // is a STRICT `>` (mirrors `sync_should_apply`'s own strict tie-break),
+    // documented as deliberate at :311 but previously untested -- mutating it
+    // to `>=` would pass every existing test (exact equality is near
+    // unreachable in practice, but the boundary itself was unproven). An
+    // incoming presentation whose `updated_at` is EXACTLY EQUAL to the
+    // tombstoned library's own must NOT revive it.
+    let repo = repo().await;
+
+    let lib = repo.create_library("Songs").await.unwrap();
+    repo.delete_library(lib.id).await.unwrap();
+    let lib_row = library::Entity::find_by_id(lib.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .expect("library row still exists, tombstoned");
+    let tombstoned_at: chrono::DateTime<chrono::Utc> = lib_row.updated_at.into();
+
     let peer_tied = crate::SyncPresentation {
-        sync_id: "peer-p3-tied-with-v2".to_string(),
+        sync_id: "peer-p2-tied-with-tombstone".to_string(),
         library_name: "Songs".to_string(),
-        name: "P3".to_string(),
-        updated_at: t2,
+        name: "P2".to_string(),
+        updated_at: tombstoned_at,
         deleted_at: None,
         slides: vec![slide(0, "x")],
     };
-    let (outcome_tied, id_tied) = repo
+    let (outcome, id) = repo
         .apply_sync_presentation(&peer_tied, &std::collections::HashSet::new())
         .await
         .unwrap();
-    assert_eq!(outcome_tied, crate::SyncApplyOutcome::Created);
-    let pres_row_tied = row(&repo, id_tied.expect("created presentation has an id")).await;
+    assert_eq!(outcome, crate::SyncApplyOutcome::Created);
+    let pres_row = row(&repo, id.expect("created presentation has an id")).await;
     assert_eq!(
-        pres_row_tied.library_id,
-        v2.id.to_string(),
-        "P3 (tied exactly with v2's own updated_at) still attaches to v2"
+        pres_row.library_id,
+        lib.id.to_string(),
+        "P2 (tied exactly with the tombstone's own updated_at) still attaches \
+         to the existing tombstoned library"
     );
-    let v2_row_after_tie = library::Entity::find_by_id(v2.id.to_string())
+
+    let lib_row_after = library::Entity::find_by_id(lib.id.to_string())
         .one(&repo.db)
         .await
         .unwrap()
         .unwrap();
     assert!(
-        v2_row_after_tie.deleted_at.is_some(),
+        lib_row_after.deleted_at.is_some(),
         "an EXACTLY EQUAL updated_at must not revive the library -- the LWW \
          boundary is strict `>`, not `>=`"
     );
