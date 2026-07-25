@@ -1367,6 +1367,133 @@ async fn ableset_resolves_presentation_through_cache() {
     assert_eq!(missing, None, "unknown prefix must resolve to None");
 }
 
+#[tokio::test]
+async fn ableset_cache_invalidates_after_presentation_create_delete_rename() {
+    // #575 regression: `AbleSetLibraryCache` was invalidated ONLY by
+    // `update_ableset_settings` — create/delete/rename left it stale
+    // forever (the 2026-07-24 SNV incident: a deleted song kept resolving,
+    // new songs never did, until the settings were re-saved verbatim).
+    // Build the cache once, then create/delete/rename presentations WITHOUT
+    // touching AbleSet settings again, and prove every mutation is reflected
+    // on the very next resolve.
+    let state = AppState::in_memory().await.unwrap();
+
+    let library = state.create_library("Hymnal").await.unwrap();
+    let (_, _, original, _) = state
+        .create_presentation(library.id, "001 Original", None)
+        .await
+        .unwrap();
+    let (_, _, keep, _) = state
+        .create_presentation(library.id, "002 Keep", None)
+        .await
+        .unwrap();
+
+    let draft = AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: "Hymnal".to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(
+            draft,
+            presenter_persistence::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    // Build the cache: "001" resolves to the original presentation.
+    assert_eq!(
+        state.resolve_ableset_presentation("001").await.unwrap(),
+        Some(original.id),
+        "cache must resolve the seeded song before any mutation"
+    );
+
+    // Mutate the presentation set WITHOUT touching AbleSet settings again —
+    // this is the exact scenario that left the cache stale in production.
+    let (_, _, created, _) = state
+        .create_presentation(library.id, "003 Brand New", None)
+        .await
+        .unwrap();
+    state.delete_presentation(original.id).await.unwrap();
+    state
+        .rename_presentation(keep.id, "004 Renamed")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        state.resolve_ableset_presentation("003").await.unwrap(),
+        Some(created.id),
+        "a song created after the cache was built must be resolvable without a settings re-save"
+    );
+    assert_eq!(
+        state.resolve_ableset_presentation("001").await.unwrap(),
+        None,
+        "a deleted song must stop resolving without a settings re-save"
+    );
+    assert_eq!(
+        state.resolve_ableset_presentation("004").await.unwrap(),
+        Some(keep.id),
+        "a renamed song must resolve under its new prefix without a settings re-save"
+    );
+    assert_eq!(
+        state.resolve_ableset_presentation("002").await.unwrap(),
+        None,
+        "the old prefix of a renamed song must stop resolving after the rename"
+    );
+}
+
+#[tokio::test]
+async fn ableset_cache_invalidates_after_library_rename() {
+    // #575: renaming the AbleSet-tracked library must not leave the cache
+    // resolving against the OLD library-name match forever.
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Old Name").await.unwrap();
+    let (_, _, song, _) = state
+        .create_presentation(library.id, "001 Song", None)
+        .await
+        .unwrap();
+
+    let draft = AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: "Old Name".to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(
+            draft,
+            presenter_persistence::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state.resolve_ableset_presentation("001").await.unwrap(),
+        Some(song.id)
+    );
+
+    // Rename the tracked library WITHOUT touching AbleSet settings.
+    state.rename_library(library.id, "New Name").await.unwrap();
+
+    // The cache's own `library_name` was "Old Name"; the actual DB library
+    // is now "New Name", so a stale cache would keep resolving against a
+    // library that AbleSet settings claim to track but no longer exists
+    // under that name. After invalidation, resolve must rebuild against the
+    // CURRENT settings.library_name ("Old Name") — which no longer matches
+    // any library — and correctly return None.
+    assert_eq!(
+        state.resolve_ableset_presentation("001").await.unwrap(),
+        None,
+        "after the tracked library is renamed away, a stale cache entry must not survive"
+    );
+}
+
 /// #546: `GET /integrations/video-sources/status` is a STATIC segment sitting next to
 /// `/integrations/video-sources/{id}`. axum's matchit gives static segments priority, so
 /// the status route wins — but nothing in the tree pinned that, and a future reorder or a

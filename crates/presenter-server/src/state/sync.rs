@@ -185,8 +185,13 @@ impl SyncCoordinator {
 }
 
 impl AppState {
-    /// Fire-and-forget nudge after a local song mutation.
-    pub(crate) fn nudge_sync(&self) {
+    /// Fire-and-forget nudge after a local song mutation. Also invalidates
+    /// the resolved AbleSet cache (#575) — every caller of `nudge_sync` is a
+    /// mutation that can change which presentations exist or what they're
+    /// named, and the cache must never be left resolving stale/missing ids
+    /// until the next unrelated AbleSet-settings save.
+    pub(crate) async fn nudge_sync(&self) {
+        self.invalidate_ableset_cache().await;
         self.sync.nudge();
     }
 
@@ -195,6 +200,11 @@ impl AppState {
     }
 
     /// Restore a trashed song; a restore is a local edit that must propagate.
+    /// Deliberately calls BOTH `drop_presentation_caches()` (also clears the
+    /// AbleSet cache, #575) AND `nudge_sync()` (which does the same,
+    /// harmlessly redundant here) — the former handles the sync engine's own
+    /// bulk-apply path, the latter is the seam every OTHER local mutation
+    /// goes through; restore is the one call site that needs both.
     pub async fn restore_presentation(
         &self,
         presentation_id: presenter_core::PresentationId,
@@ -203,14 +213,18 @@ impl AppState {
             .restore_presentation(presentation_id)
             .await?;
         self.drop_presentation_caches().await;
-        self.nudge_sync();
+        self.nudge_sync().await;
         Ok(())
     }
 
     /// Synced-in / restored rows invalidate the per-id presentation cache wholesale —
-    /// entries are lazily reloaded from the DB on next access.
+    /// entries are lazily reloaded from the DB on next access. Also invalidates the
+    /// resolved AbleSet cache (#575) — this is the wholesale post-mutation
+    /// convergence point the sync engine itself calls (which never goes through
+    /// `nudge_sync`, to avoid re-nudging the very sync loop that just ran).
     pub(crate) async fn drop_presentation_caches(&self) {
         self.caches.presentation.write().await.clear();
+        self.invalidate_ableset_cache().await;
     }
 
     /// #558 V2: evict ONE presentation's cache entry — used after a

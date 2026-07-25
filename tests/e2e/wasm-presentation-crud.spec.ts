@@ -424,6 +424,47 @@ Multiple lines here`;
     await page.keyboard.press("Escape");
   });
 
+  // #571: op.submitting is set by the create handlers but was never READ by
+  // any button — nothing actually prevented a double-submit during the
+  // network round-trip. A double-click on the non-idempotent "create blank"
+  // action must yield exactly ONE presentation, never two.
+  test("double-click create blank yields exactly one presentation (#571)", async ({
+    page,
+  }) => {
+    await selectLibrary(page);
+
+    const uniqueName = `DblClickBlank${Date.now()}`;
+
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    await page.locator('[data-role="presentation-create-name"]').fill(uniqueName);
+
+    // The second click must be swallowed by the re-entry guard AND the
+    // disabled button — never create a second presentation.
+    await page.locator('[data-role="presentation-create-blank"]').dblclick();
+
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    await expect(
+      page.locator('[data-role="presentation-item"]', { hasText: uniqueName }),
+    ).toHaveCount(1, { timeout: 10_000 });
+  });
+
   // Regression guard for issue #275 follow-up: full pipeline on a
   // spevnik song export must produce the right name + correctly
   // chunked slides + empty bookends.

@@ -84,6 +84,43 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         });
     }
 
+    // #574: on a WS RECONNECT (not the very first connect — that's already
+    // covered by load_initial_data below), re-fetch libraries/playlists/
+    // presentations. A server restart (a deploy) always drops this socket;
+    // whatever changed on the other clients while it was down never
+    // reaches this tab as a broadcast, so a plain reconnect alone would
+    // leave stale/blank lists forever (the 2026-07-24 SNV incident).
+    {
+        let libraries = ctx.libraries;
+        let playlists = ctx.playlists;
+        let presentations = ctx.presentations;
+        let selected_library_id = ctx.selected_library_id;
+        let connected_before = std::cell::Cell::new(false);
+        Effect::new(move || {
+            let state = ws_state.get();
+            if state == ws::WsState::Connected {
+                if connected_before.get() {
+                    leptos::task::spawn_local(async move {
+                        if let Ok(libs) = crate::api::libraries::list_libraries().await {
+                            libraries.set(libs);
+                        }
+                        if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                            playlists.set(pls);
+                        }
+                        if let Some(lib_id) = selected_library_id.get_untracked() {
+                            if let Ok(pres) =
+                                crate::api::libraries::list_presentations(&lib_id).await
+                            {
+                                presentations.set(pres);
+                            }
+                        }
+                    });
+                }
+                connected_before.set(true);
+            }
+        });
+    }
+
     // Dispatch WS events
     setup_ws_dispatch(last_event, &ctx);
 

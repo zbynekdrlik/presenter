@@ -38,6 +38,40 @@ body.operator {
   --operator-line-line-height: 1.35;
 }
 
+/* #574: prominent banner shown when the server was redeployed under an
+   open operator tab — fixed above everything (including the sticky
+   header) so it is impossible to miss regardless of scroll position. */
+.operator__version-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Must outrank every modal overlay (library/playlist/presentation edit
+     modals sit at 1200/1300) — a deploy during an open modal must still
+     show the reload banner on top, not behind the modal backdrop. */
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: #b45309;
+  color: #fffbeb;
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: var(--shadow-soft);
+}
+
+.operator__version-banner button {
+  background: #fffbeb;
+  color: #78350f;
+  border: none;
+  border-radius: 6px;
+  padding: 0.25rem 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .operator__header {
   display: flex;
   align-items: flex-start;

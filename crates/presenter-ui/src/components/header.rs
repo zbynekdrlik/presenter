@@ -129,8 +129,21 @@ pub fn Header() -> impl IntoView {
         op.mobile_nav_open.update(|v| *v = !*v);
     };
 
-    // Fetch version from /healthz
+    // #574: version-drift detection. An operator tab left open across a
+    // deploy must recover on its own instead of silently misbehaving with
+    // stale WASM until someone manually reloads (2026-07-24 SNV incident).
+    //
+    // NOTE: `presenter-ui` is workspace-EXCLUDED with its OWN unrelated
+    // Cargo.toml version (0.1.x — see the deploy skill) — `env!("CARGO_PKG_VERSION")`
+    // would therefore NEVER match the real server version and would show
+    // this banner on every single page load. The only baseline that is
+    // actually comparable to a later poll is the version THIS tab's own
+    // first `/healthz` response reported.
+    const VERSION_POLL_INTERVAL_MS: u32 = 15_000;
+
     let version_text = RwSignal::new(String::new());
+    let known_version = RwSignal::new(String::new());
+    let new_version_available = RwSignal::new(false);
     {
         leptos::task::spawn_local(async move {
             if let Ok(health) =
@@ -142,11 +155,49 @@ pub fn Header() -> impl IntoView {
                     format!("v{} ({})", health.version, health.channel)
                 };
                 version_text.set(text);
+                known_version.set(health.version);
             }
         });
     }
 
+    // Poll periodically; a mismatch against the captured baseline means the
+    // server was redeployed underneath this open tab.
+    {
+        let interval = gloo_timers::callback::Interval::new(VERSION_POLL_INTERVAL_MS, move || {
+            leptos::task::spawn_local(async move {
+                if let Ok(health) =
+                    crate::api::get_json::<crate::api::HealthzResponse>("/healthz").await
+                {
+                    let baseline = known_version.get_untracked();
+                    if !baseline.is_empty() && health.version != baseline {
+                        new_version_available.set(true);
+                    }
+                }
+            });
+        });
+        interval.forget();
+    }
+
+    let reload_now = move |_| {
+        if let Some(w) = web_sys::window() {
+            let _ = w.location().reload();
+        }
+    };
+
     view! {
+        // #574: prominent, dismiss-free "new version" banner. Never yanks
+        // the page mid-action on its own — the operator clicks Reload when
+        // ready.
+        <Show when=move || new_version_available.get() fallback=|| ()>
+            <div class="operator__version-banner" data-role="version-update-banner">
+                <span>"A new version is available."</span>
+                <button
+                    type="button"
+                    data-role="version-update-reload"
+                    on:click=reload_now
+                >"Reload"</button>
+            </div>
+        </Show>
         <header class="operator__header">
             <div class="operator__header-left">
                 <div class="operator__header-brand">

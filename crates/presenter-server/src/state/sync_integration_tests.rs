@@ -555,7 +555,7 @@ async fn real_sync_loop_survives_past_startup_and_completes_multiple_cycles() {
 
     b.maybe_spawn_sync(Some(a_url));
 
-    b.nudge_sync();
+    b.nudge_sync().await;
     let first = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
     assert!(
         first.last_success.is_some(),
@@ -564,7 +564,7 @@ async fn real_sync_loop_survives_past_startup_and_completes_multiple_cycles() {
 
     // A second, independent nudge must ALSO complete a cycle - proving the
     // loop is still alive, not that it happened to survive one lucky race.
-    b.nudge_sync();
+    b.nudge_sync().await;
     let second = wait_for_next_cycle(&b, first.last_run, std::time::Duration::from_secs(10)).await;
     assert!(
         second.last_success.is_some(),
@@ -596,7 +596,7 @@ async fn two_spawns_on_one_app_state_leave_exactly_one_live_loop() {
     b.maybe_spawn_sync(Some(a_url.clone()));
     b.maybe_spawn_sync(Some(a_url)); // a second spawn call on the SAME AppState
 
-    b.nudge_sync();
+    b.nudge_sync().await;
     let first = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
     assert!(
         first.last_success.is_some(),
@@ -605,7 +605,7 @@ async fn two_spawns_on_one_app_state_leave_exactly_one_live_loop() {
 
     // A second, independent nudge must ALSO complete a cycle - proving the
     // surviving loop is still alive, not that it happened to run once.
-    b.nudge_sync();
+    b.nudge_sync().await;
     let second = wait_for_next_cycle(&b, first.last_run, std::time::Duration::from_secs(10)).await;
     assert!(
         second.last_success.is_some(),
@@ -656,7 +656,7 @@ async fn an_all_fail_cycle_reports_unhealthy_instead_of_success() {
     }
 
     b.maybe_spawn_sync(Some(a_url));
-    b.nudge_sync();
+    b.nudge_sync().await;
     let status = wait_for_next_cycle(&b, None, std::time::Duration::from_secs(10)).await;
 
     assert!(
@@ -778,5 +778,72 @@ async fn an_edit_op_lock_is_not_held_while_the_peer_content_fetch_is_in_flight()
     assert_eq!(
         applied, 1,
         "the sync cycle must still complete normally once the fetch is released"
+    );
+}
+
+#[tokio::test]
+async fn sync_apply_invalidates_the_ableset_cache_on_the_pulling_side() {
+    // #575 acceptance: a song arriving via PP<->SNV sync must become
+    // AbleSet-resolvable on the pulling side WITHOUT a settings re-save.
+    // Before the fix, `run_sync_cycle`'s post-apply `drop_presentation_caches`
+    // only cleared the per-id presentation cache — the separate AbleSet
+    // prefix->id cache never noticed a sync-applied change at all.
+    //
+    // The cache MUST be built NON-EMPTY before the sync cycle: an empty
+    // cache is already force-rebuilt on every resolve regardless of this
+    // fix (`ensure_ableset_cache`'s `cache.entries.is_empty()` escape
+    // hatch), which would make an empty-cache test pass even without the
+    // fix — a false negative.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+
+    // B already tracks a library named "Songs" via AbleSet and has an
+    // EXISTING song resolved into a non-empty cache.
+    let (_lib_id, existing_id) = make_song(&b, "Songs", "099 Existing").await;
+    let draft = presenter_core::AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: "Songs".to_string(),
+        song_prefix_length: 3,
+    };
+    b.update_ableset_settings(
+        draft,
+        presenter_persistence::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        b.resolve_ableset_presentation("099").await.unwrap(),
+        Some(existing_id),
+        "cache must be non-empty before the sync cycle — this is what proves the fix"
+    );
+
+    // A NEW song is created on A, in a library also named "Songs" (a
+    // separate row from B's — sync matches library by name).
+    make_song(&a, "Songs", "001 Amazing Grace").await;
+
+    // B pulls it via a real sync cycle — no AbleSet settings touched on B.
+    let (_pulled, applied, _errors) = run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert_eq!(applied, 1, "B must pull the new song from A");
+
+    let resolved = b
+        .resolve_ableset_presentation("001")
+        .await
+        .expect("resolve must not error");
+    assert!(
+        resolved.is_some(),
+        "a song that just arrived via sync must be AbleSet-resolvable without a \
+         settings re-save"
+    );
+    let libs = b.libraries().await.unwrap();
+    let synced = find_song(&libs, "001 Amazing Grace").expect("synced song exists on B");
+    assert_eq!(
+        resolved,
+        Some(synced.id),
+        "resolved id must be the newly synced-in presentation"
     );
 }
