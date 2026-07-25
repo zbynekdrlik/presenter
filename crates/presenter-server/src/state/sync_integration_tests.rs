@@ -847,3 +847,55 @@ async fn sync_apply_invalidates_the_ableset_cache_on_the_pulling_side() {
         "resolved id must be the newly synced-in presentation"
     );
 }
+
+#[tokio::test]
+async fn deleting_a_library_does_not_resurrect_via_sync() {
+    // #578 RED: `delete_library` used to HARD-delete the library row and
+    // cascade its presentations away with NO sync tombstone. The peer still
+    // held a LIVE copy, so the very next reverse sync cycle saw a sync_id the
+    // deleting side no longer held (`sync_should_apply`'s `local: None`
+    // branch) and RE-CREATED the whole library + song — a permanent
+    // resurrection loop (delete again, resurrect again, forever). The fix
+    // SOFT-deletes (tombstones) both the library and its presentations so the
+    // deletion propagates under LWW and never resurrects. Before the fix this
+    // fails at the "not resurrected" assert: A's pull of B's still-live copy
+    // recreates the song.
+    let a = AppState::in_memory().await.unwrap();
+    let b = AppState::in_memory().await.unwrap();
+    let a_url = serve(a.clone()).await;
+    let b_url = serve(b.clone()).await;
+    let (lib_id, _pres_id) = make_song(&a, "Songs", "Amazing Grace").await;
+
+    // B pulls A → B holds a LIVE copy of the song (stored with A's timestamp,
+    // no echo).
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert!(
+        find_song(&b.libraries().await.unwrap(), "Amazing Grace").is_some(),
+        "B must import the song created on A"
+    );
+
+    // Delete the whole library on A (a strictly-later timestamp than B's copy).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    a.delete_library(lib_id).await.unwrap();
+    assert!(
+        find_song(&a.libraries().await.unwrap(), "Amazing Grace").is_none(),
+        "the song is gone on A right after the library delete"
+    );
+
+    // A pulls B's still-live copy back. TODAY this resurrects the library +
+    // song on A (RED). After the fix, A holds a strictly-NEWER tombstone for
+    // that sync_id, so LWW skips it.
+    run_sync_cycle(&a, &b_url, &client()).await.unwrap();
+    assert!(
+        find_song(&a.libraries().await.unwrap(), "Amazing Grace").is_none(),
+        "a library deleted on A must NOT be resurrected from B's still-live copy"
+    );
+
+    // And the deletion must PROPAGATE to B: B pulls A's presentation tombstone
+    // and hides the song too.
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert!(
+        find_song(&b.libraries().await.unwrap(), "Amazing Grace").is_none(),
+        "the library deletion must propagate to B via the presentation tombstone"
+    );
+}
