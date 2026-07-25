@@ -63,9 +63,10 @@ pub fn LibraryModals() -> impl IntoView {
         let op = op.clone();
         move |ev: web_sys::SubmitEvent| {
             ev.prevent_default();
-            // #571: re-entry guard — create is NOT idempotent, so a
-            // double-submit during the round-trip must not fire twice (the
-            // button is also disabled off this signal; belt and braces).
+            // #571: re-entry guard — this handler also runs in "create"
+            // mode, which is NOT idempotent, so a double-submit during the
+            // round-trip must not fire twice (the button is also disabled
+            // off this signal; belt and braces).
             if op.submitting.get_untracked() {
                 return;
             }

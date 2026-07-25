@@ -200,6 +200,11 @@ impl AppState {
     }
 
     /// Restore a trashed song; a restore is a local edit that must propagate.
+    /// Deliberately calls BOTH `drop_presentation_caches()` (also clears the
+    /// AbleSet cache, #575) AND `nudge_sync()` (which does the same,
+    /// harmlessly redundant here) — the former handles the sync engine's own
+    /// bulk-apply path, the latter is the seam every OTHER local mutation
+    /// goes through; restore is the one call site that needs both.
     pub async fn restore_presentation(
         &self,
         presentation_id: presenter_core::PresentationId,

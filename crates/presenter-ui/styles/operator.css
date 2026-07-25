@@ -46,7 +46,10 @@ body.operator {
   top: 0;
   left: 0;
   right: 0;
-  z-index: 200;
+  /* Must outrank every modal overlay (library/playlist/presentation edit
+     modals sit at 1200/1300) — a deploy during an open modal must still
+     show the reload banner on top, not behind the modal backdrop. */
+  z-index: 2000;
   display: flex;
   align-items: center;
   justify-content: center;
