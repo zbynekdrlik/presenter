@@ -271,6 +271,56 @@ impl AppState {
         });
     }
 
+    /// Periodically hard-delete trash older than PRUNE_HORIZON — songs
+    /// (#555) then, on the SAME horizon, soft-deleted libraries (#578). Low
+    /// frequency (every 6h); months of use must not grow the tables unbounded.
+    /// #558 round-3 T8: PRUNE_HORIZON is the SAME constant `sync_apply.rs` uses
+    /// to distinguish a fresh unknown tombstone from an already-pruned one —
+    /// one shared source so the two can never drift apart. Extracted from
+    /// `spawn_background_tasks` to keep that fn under the 120-line gate (#578).
+    fn spawn_trash_prune_task(&self) {
+        let prune_state = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(TokioDuration::from_secs(6 * 3600));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                match prune_state
+                    .repository
+                    .prune_deleted_presentations(PRUNE_HORIZON)
+                    .await
+                {
+                    // #558 round-4 U7: log the horizon's actual VALUE (days),
+                    // not the Rust constant's name — a log reader can't look it up.
+                    Ok(n) if n > 0 => tracing::info!(
+                        pruned = n,
+                        horizon_days = PRUNE_HORIZON.num_days(),
+                        "pruned trashed songs older than the prune horizon"
+                    ),
+                    Ok(_) => {}
+                    Err(err) => warn!(?err, "trash prune failed"),
+                }
+                // #578: soft-deleted LIBRARIES age out on the SAME horizon.
+                // Runs AFTER the presentation prune so a still-live song in a
+                // to-be-pruned library is already tombstoned; the library
+                // hard-delete's FK cascade then clears whatever remains.
+                match prune_state
+                    .repository
+                    .prune_deleted_libraries(PRUNE_HORIZON)
+                    .await
+                {
+                    Ok(n) if n > 0 => tracing::info!(
+                        pruned = n,
+                        horizon_days = PRUNE_HORIZON.num_days(),
+                        "pruned trashed libraries older than the prune horizon"
+                    ),
+                    Ok(_) => {}
+                    Err(err) => warn!(?err, "library trash prune failed"),
+                }
+            }
+        });
+    }
+
     fn spawn_background_tasks(&self) {
         let timers_state = self.clone();
         tokio::spawn(async move {
@@ -299,38 +349,7 @@ impl AppState {
             }
         });
 
-        // #555: songs trashed longer than PRUNE_HORIZON are pruned for good.
-        // Low frequency — months of use must not grow the table unbounded.
-        // #558 round-3 T8: PRUNE_HORIZON is the SAME constant `sync_apply.rs`
-        // uses to distinguish a fresh unknown tombstone from an
-        // already-pruned one — one shared source so the two can never
-        // drift apart.
-        let prune_state = self.clone();
-        tokio::spawn(async move {
-            let mut ticker = interval(TokioDuration::from_secs(6 * 3600));
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            loop {
-                ticker.tick().await;
-                match prune_state
-                    .repository
-                    .prune_deleted_presentations(PRUNE_HORIZON)
-                    .await
-                {
-                    Ok(n) if n > 0 => {
-                        // #558 round-4 U7: log the horizon's actual VALUE
-                        // (days), not the Rust constant's name — a log
-                        // reader has no way to look up `PRUNE_HORIZON`.
-                        tracing::info!(
-                            pruned = n,
-                            horizon_days = PRUNE_HORIZON.num_days(),
-                            "pruned trashed songs older than the prune horizon"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(err) => warn!(?err, "trash prune failed"),
-                }
-            }
-        });
+        self.spawn_trash_prune_task();
 
         // NDI auto-reconnect: if a source is marked active in DB but no stream
         // is running, retry activation every 30 seconds. Handles the case where

@@ -34,17 +34,22 @@ impl AppState {
 
     pub async fn rename_library(&self, library_id: LibraryId, name: &str) -> anyhow::Result<()> {
         self.repository.rename_library(library_id, name).await?;
-        // #575: a rename can change whether this library matches the
-        // AbleSet-tracked library name.
-        self.invalidate_ableset_cache().await;
+        // #578: a library rename is a local edit that must propagate to the
+        // peer under LWW → nudge the sync loop. nudge_sync ALSO invalidates the
+        // resolved AbleSet cache (#575: a rename can change whether this
+        // library matches the AbleSet-tracked name), so no separate call.
+        self.nudge_sync().await;
         Ok(())
     }
 
     pub async fn delete_library(&self, library_id: LibraryId) -> anyhow::Result<()> {
         self.repository.delete_library(library_id).await?;
-        // #575: deleting a library cascades its presentations away — any
-        // resolved AbleSet entries pointing at them must not survive.
-        self.invalidate_ableset_cache().await;
+        // #578: a library delete now soft-deletes (tombstones) the library +
+        // its songs so the deletion propagates to the peer instead of
+        // resurrecting → nudge the sync loop. nudge_sync also invalidates the
+        // resolved AbleSet cache (#575: the now-hidden songs must not survive
+        // as resolved entries).
+        self.nudge_sync().await;
         Ok(())
     }
 

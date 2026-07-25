@@ -646,7 +646,14 @@ async fn rename_library_updates_name() {
 }
 
 #[tokio::test]
-async fn delete_library_removes_presentations_and_slides() {
+async fn delete_library_soft_deletes_library_and_its_presentations() {
+    // #578: `delete_library` used to HARD-delete the library and cascade its
+    // presentations + slides away with no sync tombstone — the peer's
+    // still-live copy then resurrected them on the next sync cycle. It now
+    // SOFT-deletes: the library row AND each live presentation are tombstoned
+    // (never hard-removed), so the deletion propagates under LWW and the
+    // tombstones survive in the sync manifests. This test was rewritten from
+    // the old hard-delete assertions to lock the new soft-delete semantics.
     let repo = Repository::connect_in_memory().await.unwrap();
     let library = sample_library();
     let presentation = library.presentations[0].clone();
@@ -654,14 +661,61 @@ async fn delete_library_removes_presentations_and_slides() {
 
     repo.delete_library(library.id).await.unwrap();
 
-    let libraries = repo.fetch_libraries().await.unwrap();
-    assert!(libraries.is_empty());
+    // Hidden from every LIVE listing…
+    assert!(
+        repo.fetch_libraries().await.unwrap().is_empty(),
+        "the tombstoned library is hidden from the live listing"
+    );
+    assert!(
+        repo.fetch_presentation_detail(presentation.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the tombstoned presentation is hidden from detail fetches"
+    );
 
-    let detail = repo
-        .fetch_presentation_detail(presentation.id)
+    // …but the library row SURVIVES as a tombstone (not hard-deleted).
+    let lib_row = repo
+        .list_library_sync_manifest()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|l| l.name == "Default")
+        .expect("the library row survives as a tombstone in the manifest");
+    assert!(
+        lib_row.deleted_at.is_some(),
+        "the library row is tombstoned, not hard-deleted"
+    );
+
+    // …and each presentation SURVIVES as a tombstone in the sync manifest —
+    // that survival is exactly what lets the peer converge on the deletion
+    // instead of resurrecting the song from its own still-live copy.
+    let pres_row = repo
+        .list_sync_manifest()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.name == presentation.name)
+        .expect("the presentation survives as a tombstone in the sync manifest");
+    assert!(
+        pres_row.deleted_at.is_some(),
+        "the presentation is tombstoned, not hard-deleted"
+    );
+
+    // Slides are preserved behind the tombstone (not cascaded away), so the
+    // content stays restorable.
+    use crate::entities::slide as slide_entity;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let surviving_slides = slide_entity::Entity::find()
+        .filter(slide_entity::Column::PresentationId.eq(presentation.id.to_string()))
+        .all(&repo.db)
         .await
         .unwrap();
-    assert!(detail.is_none());
+    assert_eq!(
+        surviving_slides.len(),
+        2,
+        "the presentation's slides survive the soft delete"
+    );
 }
 
 #[tokio::test]

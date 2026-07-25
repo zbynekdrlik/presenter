@@ -51,6 +51,30 @@ impl From<SyncPresentationDto> for SyncPresentation {
     }
 }
 
+/// #578 library-sync wire DTO — a library has no content to fetch, so the
+/// manifest row carries everything the apply needs. camelCase, and (like the
+/// other sync DTOs) NO `deny_unknown_fields`, so a future additive field never
+/// 422s an older peer mid-rollout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncLibraryManifestEntryDto {
+    pub sync_id: String,
+    pub name: String,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+impl From<SyncLibraryManifestEntryDto> for presenter_persistence::SyncLibraryManifestRow {
+    fn from(d: SyncLibraryManifestEntryDto) -> Self {
+        presenter_persistence::SyncLibraryManifestRow {
+            sync_id: d.sync_id,
+            name: d.name,
+            updated_at: d.updated_at,
+            deleted_at: d.deleted_at,
+        }
+    }
+}
+
 /// Trash row for the settings UI.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -532,6 +556,14 @@ pub(crate) async fn run_sync_cycle_with_clients(
 ) -> anyhow::Result<(usize, usize, usize)> {
     let repo = state.repository();
 
+    // #578: reconcile library identities (rename + tombstone propagation)
+    // FIRST — before presentations — so a synced presentation attaches by name
+    // to a library whose name/tombstone state already matches the peer.
+    // Best-effort and isolated (see `reconcile_libraries`): degrading here
+    // never blocks the presentation tombstones that actually fix the
+    // resurrection loop.
+    let libraries_applied = reconcile_libraries(state, manifest_client, peer_url).await;
+
     // Index our local identities → updated_at for the LWW gate.
     let local = repo.list_sync_manifest().await?;
     let mut local_map = std::collections::HashMap::new();
@@ -574,11 +606,71 @@ pub(crate) async fn run_sync_cycle_with_clients(
         )
         .await?;
     }
-    if applied > 0 {
-        // Synced-in changes must be visible to this instance's own UI/caches.
+    if applied > 0 || libraries_applied > 0 {
+        // Synced-in changes — songs OR library renames/tombstones (#578) —
+        // must be visible to this instance's own UI/caches, incl. the AbleSet
+        // resolved-name cache (#575) that `drop_presentation_caches` clears.
         state.drop_presentation_caches().await;
     }
     Ok((pulled, applied, errors))
+}
+
+/// #578: reconcile the peer's library identities (rename + tombstone
+/// propagation) under LWW. Best-effort and fully ISOLATED — a missing endpoint
+/// (an OLD peer during rollout skew answers 404), a decode failure, or any
+/// single-library apply error is logged and skipped, NEVER aborting the whole
+/// cycle. This is safe because the presentation-level tombstones (from
+/// `delete_library` soft-deleting each song) already fix the resurrection loop
+/// through the EXISTING presentation manifest with zero library-sync support;
+/// library sync only adds library-row rename + tombstone convergence on top.
+/// Returns the number of libraries actually written.
+async fn reconcile_libraries(state: &AppState, client: &reqwest::Client, peer_url: &str) -> usize {
+    let resp = match client
+        .get(format!("{peer_url}/sync/libraries/manifest"))
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(err) => {
+            warn!(
+                ?err,
+                "sync: library manifest fetch failed — skipping library reconciliation"
+            );
+            return 0;
+        }
+    };
+    if !resp.status().is_success() {
+        // An OLD peer (rollout skew) has no such endpoint → 404. Not an error.
+        info!(
+            status = %resp.status(),
+            "sync: peer has no library manifest (older peer?) — skipping library reconciliation"
+        );
+        return 0;
+    }
+    let manifest: Vec<SyncLibraryManifestEntryDto> = match resp.json().await {
+        Ok(manifest) => manifest,
+        Err(err) => {
+            warn!(
+                ?err,
+                "sync: library manifest decode failed — skipping library reconciliation"
+            );
+            return 0;
+        }
+    };
+    let repo = state.repository();
+    let mut applied = 0usize;
+    for entry in manifest {
+        let incoming: presenter_persistence::SyncLibraryManifestRow = entry.into();
+        match repo.apply_sync_library(&incoming).await {
+            Ok(outcome) if outcome.wrote() => applied += 1,
+            Ok(_) => {}
+            Err(err) => warn!(
+                ?err,
+                "sync: single-library apply failed — continuing with the next library"
+            ),
+        }
+    }
+    applied
 }
 
 /// Process ONE manifest entry within `run_sync_cycle_with_clients`'s loop —

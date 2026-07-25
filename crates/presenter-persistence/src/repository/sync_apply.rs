@@ -120,7 +120,18 @@ impl Repository {
                 info!("sync skip (not newer)");
                 return Ok((SyncApplyOutcome::SkippedNotNewer, None));
             }
-            let library_id = Self::ensure_library(&txn, &incoming.library_name).await?;
+            // #578: a TOMBSTONE keeps the presentation under its EXISTING
+            // library — never ensure/create a live library for a row being
+            // trashed. When the peer deleted the whole library, the local
+            // library is being tombstoned in the SAME cycle (library recon
+            // runs first), so `ensure_library`'s live-only lookup would miss
+            // it and create a fresh EMPTY LIVE library shell to hold the
+            // tombstone. Only a LIVE apply (re)attaches to the peer's library.
+            let library_id = if incoming.deleted_at.is_some() {
+                existing.library_id.clone()
+            } else {
+                Self::ensure_library(&txn, &incoming.library_name).await?
+            };
             Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
             txn.commit().await?;
             info!("sync updated");
@@ -175,8 +186,14 @@ impl Repository {
         conn: &C,
         library_name: &str,
     ) -> anyhow::Result<Option<String>> {
+        // #578: only a LIVE (non-tombstoned) library is a valid attachment
+        // target for a synced presentation. If the local same-named library
+        // is soft-deleted, `ensure_library` creates a fresh live one rather
+        // than reviving a tombstone (the partial name-unique index allows a
+        // live row beside the tombstone).
         Ok(library::Entity::find()
             .filter(library::Column::Name.eq(library_name.to_string()))
+            .filter(library::Column::DeletedAt.is_null())
             .one(conn)
             .await?
             .map(|l| l.id))
@@ -291,6 +308,48 @@ impl Repository {
             name: Set(library_name.to_string()),
             search_name: Set(fold_query(library_name)),
             created_at: Set(Utc::now().into()),
+            // #578: a library implicitly created to hold a synced presentation
+            // is live with a fresh sync identity; the library manifest sync
+            // converges that identity with the peer via the name-match adopt.
+            updated_at: Set(Utc::now().into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(None),
+        })
+        .exec(txn)
+        .await?;
+        Ok(id)
+    }
+
+    /// #578: resolve a library id for a brand-new TOMBSTONED presentation
+    /// WITHOUT creating an empty LIVE library shell. Attach to any existing
+    /// same-named library (live preferred, then tombstoned); if none exists,
+    /// create a TOMBSTONED library (its identity converges separately via the
+    /// peer's library manifest). Used only by `apply_unknown_sync_id` for a
+    /// tombstone — a live entry keeps using `ensure_library`.
+    async fn ensure_library_for_tombstone(
+        txn: &sea_orm::DatabaseTransaction,
+        library_name: &str,
+    ) -> anyhow::Result<String> {
+        // order_by DeletedAt ASC → live rows (NULL sorts first in SQLite) win
+        // over a tombstoned same-named row when both exist.
+        if let Some(row) = library::Entity::find()
+            .filter(library::Column::Name.eq(library_name.to_string()))
+            .order_by_asc(library::Column::DeletedAt)
+            .one(txn)
+            .await?
+        {
+            return Ok(row.id);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+        library::Entity::insert(library::ActiveModel {
+            id: Set(id.clone()),
+            name: Set(library_name.to_string()),
+            search_name: Set(fold_query(library_name)),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(Some(now.into())),
         })
         .exec(txn)
         .await?;
@@ -385,7 +444,16 @@ impl Repository {
             info!("sync skip (unknown tombstone past prune horizon)");
             return Ok((SyncApplyOutcome::SkippedNotNewer, None));
         }
-        let library_id = Self::ensure_library(txn, &incoming.library_name).await?;
+        // #578: a brand-new TOMBSTONE (a fresh peer's recently-trashed song we
+        // never held) must NOT spin up a fresh EMPTY LIVE library shell —
+        // attach it to any existing same-named library (live or tombstoned),
+        // or, if none exists, a TOMBSTONED library. A LIVE entry ensures a
+        // live library as before.
+        let library_id = if incoming.deleted_at.is_some() {
+            Self::ensure_library_for_tombstone(txn, &incoming.library_name).await?
+        } else {
+            Self::ensure_library(txn, &incoming.library_name).await?
+        };
         let new_id = uuid::Uuid::new_v4().to_string();
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(new_id.clone()),

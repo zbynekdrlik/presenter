@@ -9,7 +9,8 @@ use tracing::instrument;
 
 use super::AppError;
 use crate::state::sync::{
-    SyncManifestEntryDto, SyncPresentationDto, SyncStatus, TrashedPresentationDto,
+    SyncLibraryManifestEntryDto, SyncManifestEntryDto, SyncPresentationDto, SyncStatus,
+    TrashedPresentationDto,
 };
 use crate::state::AppState;
 use presenter_core::PresentationId;
@@ -24,6 +25,23 @@ pub(super) async fn get_sync_manifest(
             .map(|r| SyncManifestEntryDto {
                 sync_id: r.sync_id,
                 library_name: r.library_name,
+                name: r.name,
+                updated_at: r.updated_at,
+                deleted_at: r.deleted_at,
+            })
+            .collect(),
+    ))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_sync_library_manifest(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<SyncLibraryManifestEntryDto>>, AppError> {
+    let rows = state.repository().list_library_sync_manifest().await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| SyncLibraryManifestEntryDto {
+                sync_id: r.sync_id,
                 name: r.name,
                 updated_at: r.updated_at,
                 deleted_at: r.deleted_at,

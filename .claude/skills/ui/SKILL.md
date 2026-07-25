@@ -167,6 +167,19 @@ Connection/status indicators (Resolume chips etc.) live in the TOP brand/surface
 (`.operator__brand-nav`, next to the Stage/Camera/Tablet/Timer links), never next to the
 Stage Output controls in `operator__header-right`.
 
+## `(pointer: coarse)` CSS/JS scoping needs `hasTouch: true` in Playwright to test (#569)
+
+A touch-only UI behavior (a CSS `@media (pointer: coarse)` rule, or a JS
+`matchMedia("(pointer: coarse)")` gate — e.g. "only force-rotate / only auto-fullscreen on a real
+phone/tablet, never on a desktop browser window") needs the `(pointer: coarse)` media feature to
+actually MATCH in a test. Playwright/Chromium only reports a coarse pointer when the **browser
+context** declares touch support — a plain viewport resize (`setViewportSize`) does NOT do this;
+by default every Playwright context reports a FINE (mouse/trackpad) pointer regardless of window
+shape. Use `test.use({ hasTouch: true })` (works inside a nested `test.describe` block, doesn't
+disturb the file's top-level `beforeAll`/`afterAll`) to emulate a real touch device, and keep a
+SEPARATE test with the default (no `hasTouch`) context to prove the desktop/fine-pointer case is
+correctly left untouched — one test per side of the gate, not one test assuming both.
+
 ## `env!("CARGO_PKG_VERSION")` is USELESS here for server-version comparison (#574)
 
 `presenter-ui` has its OWN unrelated Cargo.toml `version` (e.g. `0.1.43` — bumped

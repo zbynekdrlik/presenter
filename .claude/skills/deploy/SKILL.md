@@ -98,6 +98,18 @@ To validate a stage/UI change with the real Playwright specs before pushing
    `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
    verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
 
+### Proving RED→GREEN locally with a real rebuild, not just commit order (#568/#569)
+
+`regression-test-first` requires RED before GREEN in commit order — but you can go one step
+further and actually PROVE the RED failure locally before committing: `git stash push -- <the fix
+files, NOT the new test files>` (leaves the new spec(s) staged/committed, reverts only the
+production code), rebuild WASM+server (steps 2–3), run the new spec(s) and confirm they fail for
+the RIGHT reason, then `git stash pop`, rebuild again, and confirm green. Costs ~2 extra
+build-and-test cycles (~15 min combined on this box) but catches two real classes of mistakes
+cheaply: (1) a test that can't actually fail (a tautology, or testing the wrong thing) stays green
+even with the fix reverted; (2) a fix so complete you forgot to also verify the OLD behavior was
+real (confirms you're not just adding a passing assertion to already-working code).
+
 ### GOTCHA — a stale/ambiguous `target/release/presenter-server` silently shadows your fresh fix (#558)
 
 `startTestServer` picks the NEWER of `target/debug/presenter-server` /

@@ -8,8 +8,9 @@ use presenter_core::{
     PresentationSummary,
 };
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, OnConflict},
+    ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 use tracing::instrument;
@@ -109,6 +110,11 @@ impl Repository {
             name: Set(library.name.clone()),
             search_name: Set(fold_query(&library.name)),
             created_at: Set(Utc::now().into()),
+            // #578: a re-import creates a live library with a fresh sync
+            // identity; it converges with the peer via the name-match adopt.
+            updated_at: Set(Utc::now().into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(None),
         };
         library::Entity::insert(lib_model).exec(&txn).await?;
 
@@ -143,6 +149,11 @@ impl Repository {
             name: Set(name.to_string()),
             search_name: Set(fold_query(name)),
             created_at: Set(Utc::now().into()),
+            // #578: a freshly created library is a live, brand-new sync
+            // identity — it converges with the peer via the name-match adopt.
+            updated_at: Set(Utc::now().into()),
+            sync_id: Set(uuid::Uuid::new_v4().to_string()),
+            deleted_at: Set(None),
         };
 
         library::Entity::insert(model).exec(&txn).await?;
@@ -155,27 +166,92 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn rename_library(&self, library_id: LibraryId, name: &str) -> anyhow::Result<()> {
         let id = library_id.to_string();
-        let mut model = library::Entity::find_by_id(id.clone())
-            .one(&self.db)
-            .await?
-            .ok_or_else(|| anyhow!("library not found"))?
-            .into_active_model();
-        model.name = Set(name.to_string());
-        model.search_name = Set(fold_query(name));
-        model.update(&self.db).await?;
+        // #578: bump `updated_at` in the SAME statement as the rename so the
+        // change propagates to the peer under LWW (mirrors rename_presentation
+        // — one atomic write, no separate touch that a concurrent sync apply
+        // could interleave with). Only a LIVE library can be renamed.
+        let result = library::Entity::update_many()
+            .col_expr(library::Column::Name, Expr::value(name))
+            .col_expr(library::Column::SearchName, Expr::value(fold_query(name)))
+            .col_expr(
+                library::Column::UpdatedAt,
+                Expr::value(Utc::now().to_rfc3339()),
+            )
+            .filter(library::Column::Id.eq(id))
+            .filter(library::Column::DeletedAt.is_null())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("library not found"));
+        }
         Ok(())
     }
 
     #[instrument(skip_all)]
     pub async fn delete_library(&self, library_id: LibraryId) -> anyhow::Result<()> {
+        use crate::entities::{playlist_entry, slide_stage_layout};
         let id = library_id.to_string();
-        let result = library::Entity::delete_by_id(id).exec(&self.db).await?;
-        if result.rows_affected == 0 {
+        // #578: SOFT delete. The library row AND all its live presentations are
+        // tombstoned in ONE transaction, so the deletion syncs like any edit
+        // under LWW and never resurrects from the peer's still-live copy. The
+        // library row is NEVER hard-deleted → the FK ON DELETE CASCADE never
+        // fires → the presentation tombstones survive (that survival is what
+        // lets the peer's next cycle see the newer tombstone and converge,
+        // instead of re-creating the song from its own still-live copy).
+        let txn = self.db.begin().await?;
+        let now = Utc::now().to_rfc3339();
+
+        let lib_result = library::Entity::update_many()
+            .col_expr(library::Column::DeletedAt, Expr::value(now.clone()))
+            .col_expr(library::Column::UpdatedAt, Expr::value(now.clone()))
+            .filter(library::Column::Id.eq(id.clone()))
+            .filter(library::Column::DeletedAt.is_null())
+            .exec(&txn)
+            .await?;
+        if lib_result.rows_affected == 0 {
+            // Missing (or already-deleted) library → NotFound; the router maps
+            // this exact message to 404 instead of a 500 (#578).
             return Err(anyhow!("library not found"));
         }
-        // #515: the FK cascade removed the library's slides — sweep their
-        // stage-layout marker rows (no FK on slide_stage_layouts).
-        self.prune_orphan_slide_stage_layouts().await?;
+
+        // The ids of the LIVE presentations we're about to tombstone — needed
+        // to scope the playlist-entry + stage-layout cleanup below (mirrors
+        // delete_presentation's per-song semantics, done set-wise).
+        let live_presentation_ids: Vec<String> = presentation_entity::Entity::find()
+            .select_only()
+            .column(presentation_entity::Column::Id)
+            .filter(presentation_entity::Column::LibraryId.eq(id.clone()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
+            .into_tuple()
+            .all(&txn)
+            .await?;
+
+        if !live_presentation_ids.is_empty() {
+            presentation_entity::Entity::update_many()
+                .col_expr(
+                    presentation_entity::Column::DeletedAt,
+                    Expr::value(now.clone()),
+                )
+                .col_expr(presentation_entity::Column::UpdatedAt, Expr::value(now))
+                .filter(presentation_entity::Column::LibraryId.eq(id))
+                .filter(presentation_entity::Column::DeletedAt.is_null())
+                .exec(&txn)
+                .await?;
+
+            // A deleted song leaves every playlist (mirrors delete_presentation).
+            playlist_entry::Entity::delete_many()
+                .filter(playlist_entry::Column::PresentationId.is_in(live_presentation_ids.clone()))
+                .exec(&txn)
+                .await?;
+
+            // #515 stage-layout markers go with the (now-hidden) songs.
+            slide_stage_layout::Entity::delete_many()
+                .filter(slide_stage_layout::Column::PresentationId.is_in(live_presentation_ids))
+                .exec(&txn)
+                .await?;
+        }
+
+        txn.commit().await?;
         Ok(())
     }
 
@@ -183,8 +259,10 @@ impl Repository {
     /// Optimized to use 3 queries total instead of 1 + n + (n*m) queries.
     #[instrument(skip_all)]
     pub async fn fetch_libraries(&self) -> anyhow::Result<Vec<Library>> {
-        // Query 1: Fetch all libraries
+        // Query 1: Fetch all LIVE libraries (#578: tombstoned libraries are
+        // hidden from every list/fetch, exactly like trashed presentations).
         let libraries = library::Entity::find()
+            .filter(library::Column::DeletedAt.is_null())
             .order_by_asc(library::Column::Name)
             .all(&self.db)
             .await?;
@@ -315,8 +393,9 @@ impl Repository {
         &self,
         filter: Option<&str>,
     ) -> anyhow::Result<Vec<LibrarySummary>> {
-        // Query 1: Fetch libraries (with optional filter)
-        let mut query = library::Entity::find();
+        // Query 1: Fetch LIVE libraries (with optional filter). #578: a
+        // tombstoned library never appears in a summary listing.
+        let mut query = library::Entity::find().filter(library::Column::DeletedAt.is_null());
         if let Some(filter) = filter {
             let pattern = format!("%{}%", sanitize_like_input(filter));
             query = query.filter(library::Column::Name.like(pattern));
