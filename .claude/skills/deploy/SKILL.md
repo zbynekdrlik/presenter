@@ -42,6 +42,47 @@ Build order matters (WASM embedded into server at compile time via `include_dir!
 
 5. **Verify**: `curl http://10.77.8.134:8080/healthz`
 
+## Disk budget — incremental compilation disabled (#585)
+
+`target/` dirs grew to **55 GB** on dev2 (41 GB workspace `target/` + 14 GB
+`crates/presenter-ui/target/`, 84% disk usage), **29 GB of it pure
+`incremental/` scratch cache** (20 GB `target/debug/incremental` + 5.0 GB
+`crates/presenter-ui/target/debug/incremental` + 4.3 GB
+`crates/presenter-ui/target/wasm32-unknown-unknown/{debug,release}/incremental`).
+Incremental compilation only pays off on repeated small edits to the SAME
+crate — our local runs are dominated by full `cargo test` / `cargo clippy
+--all-targets` sweeps and `build-ui.sh`, where it added disk + I/O for
+little wall-clock benefit (and this disk is shared with bakerion-ai's own
+`target/`).
+
+**Fixed as of v0.4.209**: `incremental = false` in BOTH `[build]` and
+`[profile.dev]` of the repo-root `.cargo/config.toml` (a profile-level
+`incremental` setting overrides `[build]`'s, so both must agree — and
+`CARGO_INCREMENTAL` in `[env]` must match too, since an env var overrides
+config/profile settings), plus the identical `[build]`/`[env]` pair in
+`crates/presenter-ui/.cargo/config.toml` (that crate is OUTSIDE the
+workspace — own `Cargo.lock`, own `target/` — so the root config never
+reaches it). Verified locally: a full `cargo test --workspace` +
+`bash scripts/build-ui.sh` after purging leaves `incremental/` either
+absent or an EMPTY 4 KB placeholder dir (cargo/trunk still `mkdir`s the
+slot; it just never writes cache content into it) under every `target/`
+tree — no more multi-GB growth.
+
+**Purge one-liner** (safe any time — these are pure scratch caches, never
+committed source, and Cargo regenerates whatever it still needs):
+```bash
+rm -rf target/debug/incremental target/release/incremental \
+  crates/presenter-ui/target/debug/incremental \
+  crates/presenter-ui/target/release/incremental \
+  crates/presenter-ui/target/wasm32-unknown-unknown/debug/incremental \
+  crates/presenter-ui/target/wasm32-unknown-unknown/release/incremental
+```
+Check current disk budget: `df -h /` and `du -sh target crates/presenter-ui/target`.
+If `target/` disk usage is climbing again despite the fix, suspect a NEW
+per-profile `incremental = true` override slipping into either
+`.cargo/config.toml` before reaching for the purge — the setting, not the
+purge, is the actual fix; purging just reclaims space already spent.
+
 ### Local WASM build — use `scripts/build-ui.sh`, NOT plain `trunk build` (#465 resolved)
 
 The local WASM build **works** — via `scripts/build-ui.sh`. The #465 symptom
@@ -257,22 +298,32 @@ healthy locally:** `systemctl status cloudflared` (daemon up?) → `journalctl -
 HTTP/2 drop-in above, and re-verify — don't chase the app/service layer when the daemon logs show
 the tunnel itself never reconnecting.
 
-## Post-deploy live verification on SNV/PP: NEVER delete a test library via `/libraries/{id}` (#578)
+## `delete_library` resurrection bug — FIXED as of v0.4.207/#578 (was previously live)
 
-When you create a throwaway test library+presentation on SNV or PP to verify a live fix,
-clean it up by deleting the **presentation** (`DELETE /presentations/{id}` — soft-delete,
-tombstoned, propagates the deletion through the #555 sync loop) and only THEN, if you
-want, the now-empty library. **Never delete the library first/only** — `delete_library`
-does a plain hard `Entity::delete_by_id` with NO sync tombstone (pre-existing bug, filed
-as #578), so if the peer (PP<->SNV) already pulled a copy of that presentation in the
-~30s since you created it, the very next sync cycle sees "we never held this" on the
-side that just hard-deleted it and RESURRECTS the whole library+presentation from the
-peer — repeatably, forever, no matter how many times you delete the library again. Live
-incident (2026-07-24/25, verifying #575/#571/#574): a canary library round-tripped
-resurrection twice before switching to presentation-level delete converged it for good.
-If you're left with an empty, obviously-test-named library shell on either side, that's
-the safe end state — leave it (deleting it again just risks re-triggering the loop if
-either side still holds a live copy of anything under that name).
+Historical note: before #578 landed, `DELETE /libraries/{id}` did a plain hard
+`Entity::delete_by_id` with NO sync tombstone — deleting a library that the peer
+(PP<->SNV) had already pulled a copy of could resurrect it forever on the next sync
+cycle. **This is fixed since v0.4.207**: `delete_library` now SOFT-deletes the library
+row AND its live presentations in one transaction (`repository/library.rs`), so the
+deletion propagates like any other edit under LWW. It is now safe to delete a library
+directly via `/libraries/{id}` for cleanup — no more presentation-first workaround
+needed. (v0.4.208 also closed the 3 review gaps found on that fix: search no longer
+surfaces a tombstoned library by name, a missing/already-deleted library 404s instead
+of 500, and the library's favorite row is cleaned up on delete — see #578 comments.)
+
+## `cargo test -p presenter-server --lib <test>` FAILS — it's a binary-only crate
+
+`presenter-server`'s `Cargo.toml` has no `[lib]` section and no `src/lib.rs` — only
+`src/main.rs`. Running `cargo test -p presenter-server --lib <path>` errors immediately
+with `error: no library targets found in package` (no compile, no test run — a fast
+false negative that looks like "the test doesn't exist"). Use `--bin presenter-server`
+instead:
+```bash
+cargo test -p presenter-server --bin presenter-server router::tests::my_test -- --nocapture
+```
+A bare `cargo test -p presenter-server` (no `--lib`/`--bin`) also works — cargo infers
+the single binary target. Only add `--bin presenter-server` when you need to pass a
+specific test-name filter alongside other flags.
 
 ## `cargo test --workspace 2>&1 | tail -N` SWALLOWS a real test failure's exit code
 

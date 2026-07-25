@@ -4,7 +4,7 @@
 //! crossed the 1000-line hard cap — the tests moved verbatim; shared helpers
 //! live in `sync_test_support`.
 use super::sync_test_support::{peer_song, repo, row, slide, updated_at_of};
-use crate::entities::{playlist_entry, presentation as presentation_entity};
+use crate::entities::{library, playlist_entry, presentation as presentation_entity};
 use sea_orm::EntityTrait;
 
 #[tokio::test]
@@ -496,5 +496,95 @@ async fn soft_delete_hides_the_song_but_keeps_the_row() {
     assert!(
         remaining.is_empty(),
         "playlist entries referencing the song are removed"
+    );
+}
+
+#[tokio::test]
+async fn ensure_library_picks_the_most_recent_tombstone_when_several_share_a_name() {
+    // #580 hardening: the partial unique index only guards LIVE rows
+    // (idx_libraries_name_live_unique), so repeated delete/recreate cycles
+    // of the same-named library leave MULTIPLE tombstoned rows behind.
+    // ensure_library's tombstone lookup must pick the MOST RECENT one (by
+    // updated_at) to compare against — picking an arbitrary/older one would
+    // LWW-compare the incoming presentation against the wrong tombstone
+    // entirely, e.g. wrongly reviving a long-superseded library.
+    let repo = repo().await;
+
+    let v1 = repo.create_library("Songs").await.unwrap();
+    repo.delete_library(v1.id).await.unwrap();
+    let v1_row_before = library::Entity::find_by_id(v1.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .expect("v1 row still exists, tombstoned");
+    let t1: chrono::DateTime<chrono::Utc> = v1_row_before.updated_at.into();
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let v2 = repo.create_library("Songs").await.unwrap();
+    repo.delete_library(v2.id).await.unwrap();
+    let v2_row_before = library::Entity::find_by_id(v2.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .expect("v2 row still exists, tombstoned");
+    let t2: chrono::DateTime<chrono::Utc> = v2_row_before.updated_at.into();
+    assert!(t2 > t1, "sanity: v2 was tombstoned strictly after v1");
+
+    // A live peer presentation whose updated_at sits STRICTLY BETWEEN the two
+    // tombstones: newer than v1's (would wrongly revive v1 if v1 were picked)
+    // but OLDER than v2's (correctly stays tombstoned when v2 -- the actually
+    // relevant, most recent tombstone -- is picked).
+    let between = t1 + (t2 - t1) / 2;
+    let peer = crate::SyncPresentation {
+        sync_id: "peer-p2-multi-tombstone".to_string(),
+        library_name: "Songs".to_string(),
+        name: "P2".to_string(),
+        updated_at: between,
+        deleted_at: None,
+        slides: vec![slide(0, "x")],
+    };
+    let (outcome, id) = repo
+        .apply_sync_presentation(&peer, &std::collections::HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Created);
+    let pres_row = row(&repo, id.expect("created presentation has an id")).await;
+
+    assert_eq!(
+        pres_row.library_id,
+        v2.id.to_string(),
+        "P2 must attach to v2 -- the MOST RECENT tombstone -- never v1 nor a \
+         freshly-minted third library"
+    );
+
+    let v1_row_after = library::Entity::find_by_id(v1.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        v1_row_after.deleted_at.is_some(),
+        "v1 is untouched -- still tombstoned"
+    );
+    let v2_row_after = library::Entity::find_by_id(v2.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        v2_row_after.deleted_at.is_some(),
+        "v2 stays tombstoned -- P2 is OLDER than v2's own tombstone, so no revival"
+    );
+
+    use sea_orm::{ColumnTrait, QueryFilter};
+    let all_songs = library::Entity::find()
+        .filter(library::Column::Name.eq("Songs".to_string()))
+        .all(&repo.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        all_songs.len(),
+        2,
+        "exactly v1 and v2 -- no third library was minted"
     );
 }
