@@ -257,22 +257,32 @@ healthy locally:** `systemctl status cloudflared` (daemon up?) → `journalctl -
 HTTP/2 drop-in above, and re-verify — don't chase the app/service layer when the daemon logs show
 the tunnel itself never reconnecting.
 
-## Post-deploy live verification on SNV/PP: NEVER delete a test library via `/libraries/{id}` (#578)
+## `delete_library` resurrection bug — FIXED as of v0.4.207/#578 (was previously live)
 
-When you create a throwaway test library+presentation on SNV or PP to verify a live fix,
-clean it up by deleting the **presentation** (`DELETE /presentations/{id}` — soft-delete,
-tombstoned, propagates the deletion through the #555 sync loop) and only THEN, if you
-want, the now-empty library. **Never delete the library first/only** — `delete_library`
-does a plain hard `Entity::delete_by_id` with NO sync tombstone (pre-existing bug, filed
-as #578), so if the peer (PP<->SNV) already pulled a copy of that presentation in the
-~30s since you created it, the very next sync cycle sees "we never held this" on the
-side that just hard-deleted it and RESURRECTS the whole library+presentation from the
-peer — repeatably, forever, no matter how many times you delete the library again. Live
-incident (2026-07-24/25, verifying #575/#571/#574): a canary library round-tripped
-resurrection twice before switching to presentation-level delete converged it for good.
-If you're left with an empty, obviously-test-named library shell on either side, that's
-the safe end state — leave it (deleting it again just risks re-triggering the loop if
-either side still holds a live copy of anything under that name).
+Historical note: before #578 landed, `DELETE /libraries/{id}` did a plain hard
+`Entity::delete_by_id` with NO sync tombstone — deleting a library that the peer
+(PP<->SNV) had already pulled a copy of could resurrect it forever on the next sync
+cycle. **This is fixed since v0.4.207**: `delete_library` now SOFT-deletes the library
+row AND its live presentations in one transaction (`repository/library.rs`), so the
+deletion propagates like any other edit under LWW. It is now safe to delete a library
+directly via `/libraries/{id}` for cleanup — no more presentation-first workaround
+needed. (v0.4.208 also closed the 3 review gaps found on that fix: search no longer
+surfaces a tombstoned library by name, a missing/already-deleted library 404s instead
+of 500, and the library's favorite row is cleaned up on delete — see #578 comments.)
+
+## `cargo test -p presenter-server --lib <test>` FAILS — it's a binary-only crate
+
+`presenter-server`'s `Cargo.toml` has no `[lib]` section and no `src/lib.rs` — only
+`src/main.rs`. Running `cargo test -p presenter-server --lib <path>` errors immediately
+with `error: no library targets found in package` (no compile, no test run — a fast
+false negative that looks like "the test doesn't exist"). Use `--bin presenter-server`
+instead:
+```bash
+cargo test -p presenter-server --bin presenter-server router::tests::my_test -- --nocapture
+```
+A bare `cargo test -p presenter-server` (no `--lib`/`--bin`) also works — cargo infers
+the single binary target. Only add `--bin presenter-server` when you need to pass a
+specific test-name filter alongside other flags.
 
 ## `cargo test --workspace 2>&1 | tail -N` SWALLOWS a real test failure's exit code
 
