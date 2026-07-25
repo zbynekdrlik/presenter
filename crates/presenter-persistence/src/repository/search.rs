@@ -91,6 +91,9 @@ impl Repository {
 
         let library_models = library::Entity::find()
             .filter(library_condition)
+            // #578 review gap: a tombstoned library must never surface in
+            // search, exactly like a trashed presentation/slide.
+            .filter(library::Column::DeletedAt.is_null())
             .order_by_asc(library::Column::Name)
             .limit(ctx.remaining() as u64)
             .all(&self.db)

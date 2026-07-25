@@ -98,7 +98,20 @@ pub(super) async fn delete_library(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    state.delete_library(LibraryId::from_uuid(id)).await?;
+    state
+        .delete_library(LibraryId::from_uuid(id))
+        .await
+        .map_err(|err| {
+            // EXACT match on the repository's refusal message — a substring
+            // test would mis-map any internal error that happens to contain
+            // "not found" to a client error (mirrors copy_presentation's
+            // mapping in presentations.rs). #578 review gap: a missing or
+            // already-deleted library used to fall through to 500.
+            match err.to_string().as_str() {
+                "library not found" => AppError::not_found("library not found"),
+                _ => err.into(),
+            }
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
 

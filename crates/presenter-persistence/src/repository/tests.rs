@@ -719,6 +719,47 @@ async fn delete_library_soft_deletes_library_and_its_presentations() {
 }
 
 #[tokio::test]
+async fn delete_library_removes_its_favorite_row() {
+    // #578 review gap: soft-deleting a library left its `library_favorites`
+    // row dangling — the library disappears from every list/fetch, but the
+    // favorite marker itself was never cleaned up.
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    repo.upsert_library(&library).await.unwrap();
+    repo.set_library_favorite(library.id, true).await.unwrap();
+
+    assert!(
+        repo.list_library_favorites()
+            .await
+            .unwrap()
+            .contains(&library.id),
+        "sanity: the library is favorited before delete"
+    );
+
+    repo.delete_library(library.id).await.unwrap();
+
+    assert!(
+        !repo
+            .list_library_favorites()
+            .await
+            .unwrap()
+            .contains(&library.id),
+        "a deleted library must not remain in the favorites list"
+    );
+
+    use crate::entities::library_favorite;
+    use sea_orm::EntityTrait;
+    assert!(
+        library_favorite::Entity::find_by_id(library.id.to_string())
+            .one(&repo.db)
+            .await
+            .unwrap()
+            .is_none(),
+        "the favorite row itself must be deleted, not just filtered out"
+    );
+}
+
+#[tokio::test]
 async fn replace_presentation_slides_overwrites_rows() {
     let repo = Repository::connect_in_memory().await.unwrap();
     let library = sample_library();
