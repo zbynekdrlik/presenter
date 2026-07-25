@@ -639,12 +639,18 @@ body.stage {
    autoplaying muted with frames flowing — desktop Chromium does not. The video
    IS playing (autoplay+muted+playsinline + explicit .play()); this only
    suppresses the UA media-control chrome so a clean fullscreen video shows on
-   the stage instead of a huge play-arrow. */
-.stage-ndi__video::-webkit-media-controls,
-.stage-ndi__video::-webkit-media-controls-enclosure,
-.stage-ndi__video::-webkit-media-controls-panel,
-.stage-ndi__video::-webkit-media-controls-overlay-play-button,
-.stage-ndi__video::-webkit-media-controls-start-playback-button {
+   the stage instead of a huge play-arrow.
+   #568: targets the [data-role="ndi-video"] attribute (set unconditionally by
+   <NdiVideo>, ndi_video.rs) rather than a single layout's class, so it covers
+   EVERY stage layout that mounts <NdiVideo> — ndi-fullscreen (.stage-ndi__video),
+   timer (.stage-timer__ndi), and api (.stage-api__ndi) — instead of only the
+   first one. A prior version of this rule targeted .stage-ndi__video alone,
+   which left the other two layouts showing the native play-arrow (#568). */
+[data-role="ndi-video"]::-webkit-media-controls,
+[data-role="ndi-video"]::-webkit-media-controls-enclosure,
+[data-role="ndi-video"]::-webkit-media-controls-panel,
+[data-role="ndi-video"]::-webkit-media-controls-overlay-play-button,
+[data-role="ndi-video"]::-webkit-media-controls-start-playback-button {
     display: none !important;
     -webkit-appearance: none;
     appearance: none;
