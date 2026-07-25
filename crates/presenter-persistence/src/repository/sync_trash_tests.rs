@@ -670,14 +670,22 @@ async fn ensure_library_tie_breaks_identical_updated_at_tombstones_by_sync_id() 
     };
     let low_id = uuid::Uuid::new_v4().to_string();
     let high_id = uuid::Uuid::new_v4().to_string();
-    // Inserted in an order that would pick the WRONG winner if the tie-break
-    // fell back to insertion order / row id instead of `sync_id` -- the
-    // lexicographically LOWER sync_id is inserted SECOND.
-    library::Entity::insert(make_tombstoned_row(high_id.clone(), "zzzzzzzz-tie-high"))
+    // Inserted with the row that must LOSE the tie-break FIRST and the row
+    // that must WIN it SECOND. SQLite's `ORDER BY UpdatedAt DESC` alone (no
+    // secondary sort) breaks a tie by returning matching rows in their
+    // natural/insertion order -- so if the `order_by_desc(SyncId)` line were
+    // ever deleted from `ensure_library`, an insertion-order fallback would
+    // pick whichever row was inserted FIRST. Inserting the loser (`low_id`)
+    // first means that fallback would wrongly return `low_id`, failing the
+    // assertion below -- proving the SyncId tie-break, not insertion order,
+    // is what selects `high_id`. (An earlier version of this test inserted
+    // the winner first, which coincidentally still passed with the tie-break
+    // line deleted -- a vacuous oracle caught by review.)
+    library::Entity::insert(make_tombstoned_row(low_id.clone(), "aaaaaaaa-tie-low"))
         .exec(&repo.db)
         .await
         .unwrap();
-    library::Entity::insert(make_tombstoned_row(low_id.clone(), "aaaaaaaa-tie-low"))
+    library::Entity::insert(make_tombstoned_row(high_id.clone(), "zzzzzzzz-tie-high"))
         .exec(&repo.db)
         .await
         .unwrap();
