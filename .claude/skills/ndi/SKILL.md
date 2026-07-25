@@ -442,3 +442,29 @@ impossible error — that exact mistake shipped once. The blindness the server r
 finder thread exits and the list stays empty forever) or it simply has not completed its first
 ~5 s scan yet (every restart). Ask `NdiManager::discovery_snapshot() -> Option<Vec<..>>`, which
 is `None` until the finder has published a scan.
+
+## Testing the `<video>` play/pause lifecycle without a live NDI source (#568)
+
+To E2E-test playback-recovery logic (a pause/ended/suspend listener, an autoplay retry) with NO
+NDI SDK/GPU needed: activate a not-producing bogus source (mounts `<video data-role="ndi-video">`
+with no real stream, per the "Deterministic stage-NDI E2E" pattern above), then bypass WHEP
+entirely by assigning a synthetic `canvas.captureStream(fps)` MediaStream directly onto that
+`<video>` element's `srcObject` from `page.evaluate` — repaint the canvas on an interval so the
+captured track has real frame changes. This produces a genuinely playing/pausable element your
+guard code reacts to exactly like a real stream, on any runner (`stage-ndi-playback-guard.spec.ts`).
+
+**A fast-reacting guard makes "confirm it paused" itself flaky — assert the EVENT, not the
+boolean.** If your fix makes the element recover from `pause()` near-instantly, a
+`expect.poll(() => video.paused).toBe(true)` sanity check can miss the brief paused window
+entirely (the poll only ever samples `false`). Attach a one-shot `pause` event listener that
+flips a flag BEFORE calling `.pause()`, and poll that flag instead — a discrete fact, not a
+racing sample of a fast-changing state.
+
+**Verify a `-webkit-media-controls*` CSS suppression rule via CSSOM, not `getComputedStyle`.**
+`getComputedStyle(el, '::-webkit-media-controls-overlay-play-button')` resolves inconsistently
+across headless Chromium builds for internal UA pseudo-elements. Instead, walk
+`document.styleSheets` → `CSSStyleRule`s whose `selectorText` contains `media-controls`, strip the
+`::-webkit-media-controls*` suffix from each comma-separated selector, and check
+`element.matches(strippedSelector)` + `rule.style.getPropertyValue('display') === 'none'`. This
+deterministically proves the rule's SELECTOR reaches the element — which is what #568 actually
+broke (the rule existed, it just didn't target two of the three stage layouts' video elements).

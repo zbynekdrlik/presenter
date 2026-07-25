@@ -417,3 +417,42 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   v0.4.205. Post-release bump to 0.4.206 (`e9832cc3`) needed a `git merge origin/main` first (dev was
   1 commit behind main's own merge commit — Branch Sync Check failure, fixed by syncing before the
   second push, `2cb00531`). Playbook doc-only follow-up `d1898a3d` (deploy + ui skills).
+
+## 2026-07-25 — #568 (stage NDI play-arrow overlay) + #569 (tablet orientation lock) (PR #579, v0.4.206)
+
+- **#568** native play-arrow overlay on stage NDI video. Two root causes: (a) the June #476 CSS
+  suppression (`::-webkit-media-controls*`) only targeted `.stage-ndi__video` (ndi-fullscreen layout)
+  — `.stage-timer__ndi`/`.stage-api__ndi` had none; (b) nothing re-initiated playback once the
+  `<video>` ended up paused. RED `c0690e3d` (new `stage-ndi-playback-guard.spec.ts`, verified by
+  literally `git stash`-ing the fix + rebuilding: 5/6 assertions failed) → GREEN `8e30b1a3`: CSS
+  generalized to `[data-role="ndi-video"]` (covers all 3 layouts); new
+  `ndi_playback_guard.rs` installs a bounded pause/ended/suspend/visibilitychange `.play()` replay
+  guard (max 5 attempts/30s, then defers to the existing frame-based Watchdog) once per `<NdiVideo>`
+  mount.
+- **#569** tablet UI (`/ui/tablet`) rotated with phone position despite the phone's OS rotate-lock.
+  Validator rescope: a PWA scaffold already existed (2026-03) but `manifest.json` had
+  `"orientation":"any"`. RED `0fe26fde` (new `tablet-orientation-lock.spec.ts`) → GREEN `b9ab00de`:
+  manifest → `"landscape"`; new `tablet_orientation.rs` first-tap fullscreen +
+  `screen.orientation.lock("landscape")` gesture (plain-tab flow); CSS
+  `@media (orientation:portrait)` counter-rotation fallback in `tablet.css` (algebraically derived
+  transform, verified via viewport emulation — no real phone reachable from this dev box).
+- **Deep-review fixup** `c4559e61` (dispatched `general-purpose` reviewer, `requesting-code-review`
+  skill): scoped BOTH the CSS fallback and the JS gesture to `(pointer: coarse)` (a narrow desktop
+  browser window must never get force-rotated/fullscreen-prompted — new touch-emulated
+  (`hasTouch: true`) + desktop-fine-pointer E2E tests prove both sides); added a `@video-codec`-tagged
+  test (real Chrome, `--autoplay-policy=user-gesture-required`) proving the replay guard survives
+  REAL autoplay enforcement, not just Playwright's relaxed default; extracted a shared
+  `play_and_log()` helper (removed ~10 duplicated lines between `attach_ontrack` and the new guard);
+  corrected "rolling window" → "fixed window that resets" in comments (implementation detail, not a
+  behavior change); commented on #569 documenting the intentional install-nudge-UX deferral (a
+  validator rescope item not required by any acceptance criterion).
+- One bundled PR (dev→main #579, Closes #568 #569), merged `69204948`. Main Deploy green → SNV
+  verified v0.4.206 live (Playwright: CSS suppression rule matches on all 3 layouts, pause→replay
+  recovery proven with a `canvas.captureStream()` synthetic stream, manifest `orientation:landscape`
+  served, version label v0.4.206 in DOM, 0 console errors — the real "cg" production source was
+  restored immediately after each throwaway-source check). GitHub Release v0.4.206 → `release.yml`
+  deploy-pp succeeded (no #469 recurrence) → PP verified v0.4.206. Post-release bump to 0.4.207
+  (`68400feb`).
+- **UNVERIFIED** (both issues): real stagebox TV / real phone confirmation — no physical device
+  reachable from this dev box. Playwright-verified on the live prod DOM instead; flagged for the
+  user's next in-person look.
