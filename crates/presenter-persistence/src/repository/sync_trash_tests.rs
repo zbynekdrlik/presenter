@@ -587,4 +587,114 @@ async fn ensure_library_picks_the_most_recent_tombstone_when_several_share_a_nam
         2,
         "exactly v1 and v2 -- no third library was minted"
     );
+
+    // #594 finding 4: the LWW boundary in `ensure_library` is a STRICT `>`
+    // (mirrors `sync_should_apply`'s own strict tie-break) — an incoming
+    // presentation whose `updated_at` is EXACTLY EQUAL to v2's must NOT
+    // revive it. Mutating the strict `>` to `>=` in production code would
+    // make this assertion fail.
+    let peer_tied = crate::SyncPresentation {
+        sync_id: "peer-p3-tied-with-v2".to_string(),
+        library_name: "Songs".to_string(),
+        name: "P3".to_string(),
+        updated_at: t2,
+        deleted_at: None,
+        slides: vec![slide(0, "x")],
+    };
+    let (outcome_tied, id_tied) = repo
+        .apply_sync_presentation(&peer_tied, &std::collections::HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome_tied, crate::SyncApplyOutcome::Created);
+    let pres_row_tied = row(&repo, id_tied.expect("created presentation has an id")).await;
+    assert_eq!(
+        pres_row_tied.library_id,
+        v2.id.to_string(),
+        "P3 (tied exactly with v2's own updated_at) still attaches to v2"
+    );
+    let v2_row_after_tie = library::Entity::find_by_id(v2.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        v2_row_after_tie.deleted_at.is_some(),
+        "an EXACTLY EQUAL updated_at must not revive the library -- the LWW \
+         boundary is strict `>`, not `>=`"
+    );
+}
+
+#[tokio::test]
+async fn ensure_library_tie_breaks_identical_updated_at_tombstones_by_sync_id() {
+    // #594 finding 3: the `order_by_desc(SyncId)` secondary key added
+    // alongside `order_by_desc(UpdatedAt)` in `ensure_library` (bd044c4e) is
+    // what makes two peers pick the SAME "most recent" tombstone when their
+    // `updated_at` values happen to be IDENTICAL (e.g. two rapid
+    // delete/recreate cycles landing on the same wall-clock millisecond).
+    // `ensure_library_picks_the_most_recent_tombstone_when_several_share_a_name`
+    // above never exercises this branch -- it deliberately sleeps 5ms so the
+    // two tombstones get DIFFERENT `updated_at` values. This test writes two
+    // tombstoned "Songs" rows with an IDENTICAL `updated_at` and distinct,
+    // known `sync_id`s directly (bypassing the sleep), so only the SyncId
+    // DESC tie-break decides the winner -- deterministic, independent of
+    // insertion order.
+    let repo = repo().await;
+    let tied_at: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+
+    let make_tombstoned_row = |id: String, sync_id: &str| library::ActiveModel {
+        id: sea_orm::Set(id),
+        name: sea_orm::Set("Songs".to_string()),
+        search_name: sea_orm::Set("songs".to_string()),
+        created_at: sea_orm::Set(tied_at.into()),
+        updated_at: sea_orm::Set(tied_at.into()),
+        sync_id: sea_orm::Set(sync_id.to_string()),
+        deleted_at: sea_orm::Set(Some(tied_at.into())),
+    };
+    let low_id = uuid::Uuid::new_v4().to_string();
+    let high_id = uuid::Uuid::new_v4().to_string();
+    // Inserted in an order that would pick the WRONG winner if the tie-break
+    // fell back to insertion order / row id instead of `sync_id` -- the
+    // lexicographically LOWER sync_id is inserted SECOND.
+    library::Entity::insert(make_tombstoned_row(high_id.clone(), "zzzzzzzz-tie-high"))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+    library::Entity::insert(make_tombstoned_row(low_id.clone(), "aaaaaaaa-tie-low"))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+
+    // A live peer presentation newer than the tied updated_at -- must attach
+    // to whichever tombstone wins the SyncId DESC tie-break: "zzzzzzzz...".
+    let peer = crate::SyncPresentation {
+        sync_id: "peer-p2-tied-tombstones".to_string(),
+        library_name: "Songs".to_string(),
+        name: "P2".to_string(),
+        updated_at: tied_at + chrono::Duration::seconds(5),
+        deleted_at: None,
+        slides: vec![slide(0, "x")],
+    };
+    let (outcome, id) = repo
+        .apply_sync_presentation(&peer, &std::collections::HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Created);
+    let pres_row = row(&repo, id.expect("created presentation has an id")).await;
+
+    assert_eq!(
+        pres_row.library_id, high_id,
+        "identical updated_at must tie-break on SyncId DESC -- the row with \
+         the lexicographically LATER sync_id ('zzzzzzzz...') wins, never an \
+         arbitrary/insertion-order pick"
+    );
+
+    let low_row_after = library::Entity::find_by_id(low_id)
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        low_row_after.deleted_at.is_some(),
+        "the losing tombstone (lower sync_id) is untouched -- still tombstoned"
+    );
 }

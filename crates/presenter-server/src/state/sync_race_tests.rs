@@ -214,4 +214,26 @@ async fn concurrent_library_delete_and_presentation_create_revives_library_when_
         find_song(&a.libraries().await.unwrap(), "AlreadyTrashed").is_none(),
         "reviving the LIBRARY must never revive a presentation tombstoned under it"
     );
+
+    // #594 finding 2: the test above only proves A's side of the race — at
+    // this point B is still DIVERGENT (its own library is still tombstoned,
+    // P2 is B's own live-but-orphaned row under it). Convergence is the
+    // PR's central claim, so it must be exercised on BOTH peers, mirroring
+    // the extra `run_sync_cycle` the stay-tombstoned test above already
+    // does for its own tie-break.
+    run_sync_cycle(&b, &a_url, &client()).await.unwrap();
+    assert_eq!(
+        library_is_deleted(&b, "Songs").await,
+        Some(false),
+        "B must also revive the library once it pulls A's newer, now-live copy"
+    );
+    assert_eq!(
+        library_row_count_by_name(&b, "Songs").await,
+        1,
+        "B must not end up with a duplicate library row either"
+    );
+    assert!(
+        find_song(&b.libraries().await.unwrap(), "P2").is_some(),
+        "P2 must be visible on B too, converged with A"
+    );
 }
