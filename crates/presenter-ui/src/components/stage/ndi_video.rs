@@ -169,6 +169,12 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let stage_signal_setters_for_effect = stage_signal_setters;
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
+        // #568: bounded pause/ended/suspend/visibility-restore replay guard —
+        // installed ONCE per <NdiVideo> mount (the element persists across
+        // every reconnect cycle below), independent of the WHEP session
+        // state, so it also covers a stream reassigned onto this element by
+        // any means. See ndi_playback_guard.rs for the bounded-retry rationale.
+        super::ndi_playback_guard::install(&video);
         let source_id = source_id_for_effect.clone();
         let cancelled = Arc::clone(&cancelled_for_effect);
         let stage_signal_setters = stage_signal_setters_for_effect.clone();
@@ -706,21 +712,7 @@ fn attach_ontrack(pc: &RtcPeerConnection, video: &HtmlVideoElement) {
 
             // Programmatic `.play()` is then permitted on muted + playsinline
             // video without user interaction.
-            let play_promise = video_clone.play();
-            match play_promise {
-                Ok(promise) => {
-                    spawn_local(async move {
-                        if let Err(e) = JsFuture::from(promise).await {
-                            leptos::logging::warn!(
-                                "video.play() rejected by browser autoplay policy: {e:?}"
-                            );
-                        }
-                    });
-                }
-                Err(e) => {
-                    leptos::logging::warn!("video.play() threw: {e:?}");
-                }
-            }
+            super::ndi_playback_guard::play_and_log(&video_clone, "attach_ontrack".to_string());
         }
     });
     pc.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));

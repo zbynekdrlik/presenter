@@ -8,3 +8,4 @@ pub mod operator;
 pub mod settings;
 pub mod stage;
 pub mod tablet;
+mod tablet_orientation;
