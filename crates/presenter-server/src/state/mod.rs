@@ -45,6 +45,8 @@ mod sync_integration_breaker_tests;
 #[cfg(test)]
 mod sync_integration_tests;
 #[cfg(test)]
+mod sync_race_tests;
+#[cfg(test)]
 mod tests;
 mod timers;
 pub(crate) mod video_source_status;
