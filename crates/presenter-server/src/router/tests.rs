@@ -798,6 +798,75 @@ async fn delete_library_endpoint_removes_library() {
 }
 
 #[tokio::test]
+async fn delete_library_endpoint_missing_library_returns_404() {
+    // #578 review gap: `delete_library`'s repository error ("library not
+    // found") had no exact-match mapping in the router, so it fell through
+    // the default `AppError::from(anyhow::Error)` conversion to 500 —
+    // instead of 404, the pattern already used by copy_presentation for its
+    // own "not found" refusals.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let create_body = serde_json::json!({ "name": "Disposable2" }).to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/libraries")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: Library = serde_json::from_slice(&bytes).unwrap();
+
+    // First delete succeeds.
+    let first_delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/libraries/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_delete.status(), StatusCode::NO_CONTENT);
+
+    // Second delete of the now-tombstoned library must be 404, not 500.
+    let second_delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/libraries/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_delete.status(), StatusCode::NOT_FOUND);
+
+    // A library id that never existed must also be 404.
+    let random_id = uuid::Uuid::new_v4();
+    let unknown_delete = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/libraries/{random_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown_delete.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn create_playlist_endpoint_supports_dashboard_flag() {
     let app = build_router(AppState::in_memory().await.unwrap());
     let create_body = serde_json::json!({
