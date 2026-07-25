@@ -233,7 +233,7 @@ impl Repository {
                     Expr::value(now.clone()),
                 )
                 .col_expr(presentation_entity::Column::UpdatedAt, Expr::value(now))
-                .filter(presentation_entity::Column::LibraryId.eq(id))
+                .filter(presentation_entity::Column::LibraryId.eq(id.clone()))
                 .filter(presentation_entity::Column::DeletedAt.is_null())
                 .exec(&txn)
                 .await?;
@@ -250,6 +250,17 @@ impl Repository {
                 .exec(&txn)
                 .await?;
         }
+
+        // #578 review gap: a soft-deleted library's favorite row was left
+        // dangling — the library is hidden from every list/fetch, but its
+        // `library_favorites` row (and thus its favorite status) survived,
+        // so a NEW library that later reused the same id (extremely
+        // unlikely but not impossible) — or a stale client still holding
+        // the id — could see a phantom favorite. Delete it in the same
+        // transaction as the tombstone, same as the cascade cleanups above.
+        library_favorite::Entity::delete_by_id(id)
+            .exec(&txn)
+            .await?;
 
         txn.commit().await?;
         Ok(())
