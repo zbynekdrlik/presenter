@@ -36,6 +36,41 @@ body.tablet {
   box-sizing: border-box;
 }
 
+/* #569: pure-CSS orientation-lock FALLBACK for the plain-browser-tab flow.
+   `screen.orientation.lock()` (attempted on the first tap — see
+   tablet_orientation.rs) only works inside a fullscreen context and is
+   unsupported entirely on iOS Safari, so a phone that never enters fullscreen
+   (or can't) still reports a PORTRAIT window. This media query rotates the
+   whole tablet UI 90° so it keeps rendering in its landscape design
+   orientation instead of flipping with phone position.
+
+   It is a fallback ONLY in effect, with no JS coordination needed: once
+   screen.orientation.lock("landscape") succeeds, the OS reports genuinely
+   landscape window dimensions, so this query simply stops matching on its
+   own. It also re-evaluates automatically on resize/orientationchange (a
+   media query, not a one-shot listener).
+
+   The transform math (verified algebraically, since no real phone is
+   reachable from a dev box — see #569 completion evidence): the box is
+   authored at the SWAPPED size (width=100vh, height=100vw — the actual
+   portrait viewport's height/width), pivoted at its own top-left corner
+   (transform-origin), translated up by its own full height, then rotated 90°
+   clockwise. That composition maps the box's four corners exactly onto
+   (0,0)-(100vw,100vh) — i.e. it fills the real portrait viewport edge to
+   edge with content that is internally composed as landscape (100vh x
+   100vw), pivoted into a phone-shaped screen. */
+@media screen and (orientation: portrait) {
+  body.tablet {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vh;
+    height: 100vw;
+    transform-origin: top left;
+    transform: rotate(90deg) translateY(-100%);
+  }
+}
+
 .tablet-header {
   display: flex;
   justify-content: space-between;

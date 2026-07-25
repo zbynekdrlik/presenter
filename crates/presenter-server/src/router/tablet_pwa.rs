@@ -14,7 +14,13 @@ pub async fn tablet_manifest() -> impl IntoResponse {
         "start_url": "/ui/tablet",
         "scope": "/ui/tablet",
         "display": "standalone",
-        "orientation": "any",
+        // #569: the tablet UI has one design orientation (landscape) and must
+        // never flip with phone position. An installed/standalone PWA honors
+        // this manifest field directly; the plain-browser-tab flow (not
+        // installed) is covered separately by a first-tap fullscreen +
+        // screen.orientation.lock() attempt plus a CSS counter-rotation
+        // fallback (see tablet_orientation.rs / tablet.css).
+        "orientation": "landscape",
         "background_color": "#0f172a",
         "theme_color": "#0f172a",
         "icons": [
