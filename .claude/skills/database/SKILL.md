@@ -43,6 +43,23 @@ To re-import source data (ProPresenter libraries, Bibles):
 3. Default mode (`--keep`) preserves existing data
 4. `--purge` mode replaces all libraries (WARNING: destroys playlists via FK cascade)
 
+## Testing a SQL secondary-sort tie-break — insert the LOSER first (#594 lesson)
+
+When testing that an `order_by_desc(SecondaryColumn)` tie-break actually matters (e.g.
+`ensure_library`'s `order_by_desc(UpdatedAt).order_by_desc(SyncId)` in
+`sync_apply.rs` — the `SyncId` tie-break decides which of several tombstoned rows sharing an
+identical `UpdatedAt` wins), **insert the row that must LOSE the tie-break FIRST and the row that
+must WIN it SECOND.** SQLite's `ORDER BY <primary> DESC` with NO secondary sort breaks a tie by
+returning matching rows in their natural/insertion order — so if you insert the expected WINNER
+first, the test still passes even with the real tie-break clause deleted from production code
+(insertion order coincidentally produces the same answer). This is a genuinely vacuous oracle: it
+looks like a real regression test but never fails when the thing it claims to test is removed.
+Caught by an independent `superpowers:requesting-code-review` pass on #594 (the reviewer
+empirically deleted the production tie-break line and reran the test to confirm). The fix costs
+nothing — just insert in loser-then-winner order — but you must think about it deliberately; it is
+not something `cargo test` or CI catches on its own, only a genuinely adversarial re-read (mutate
+the prod line, rerun the test, see if it fails) does.
+
 ## Library Management
 
 ProPresenter libraries are stored in `data/libraries/` as the single source of truth.

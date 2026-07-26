@@ -185,6 +185,13 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
   `build_driver` helpers + `stage_all`/`stage_main_meta` builders → all fns now ≤120). Check before
   editing: `bash scripts/dev/count_prod_lines.sh <file>` and
   `QC_TARGETS=<file> python3 scripts/dev/fn_length_check.py .`.
+  **#594 footgun: invoking `fn_length_check.py` with file PATHS as the argument (instead of `.` with
+  `QC_TARGETS` set) silently reports `{"violations": [], "warnings": []}` no matter what — the
+  script's only positional arg is `<repo_root>` to `os.walk`; a file path isn't a walkable directory,
+  so it silently walks nothing.** Appending finding-4's test onto an existing 88-line test function
+  once passed this false-negative local check, then failed CI's real `Quality Checks` job at 123
+  lines. ALWAYS invoke it exactly as shown above (repo root as arg 1, target file(s) via the
+  `QC_TARGETS` env var, newline-separated for multiple) — never pass a file path as argv[1].
   **Workaround when you must add code near an offender:** wire through a SMALL sibling file instead
   of the god-file (e.g. add the call in `state/integrations.rs`, not `state/mod.rs`), and put NEW
   tests in their OWN file (e.g. `resolume/latency_tests.rs`) so the bloated `tests.rs` stays out of
