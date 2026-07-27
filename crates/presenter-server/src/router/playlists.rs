@@ -197,7 +197,8 @@ pub(super) async fn replace_playlist_entries(
         .collect::<Result<Vec<_>, _>>()?;
     let playlist = state
         .replace_playlist_entries(PlaylistId::from_uuid(id), entries)
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     let enriched = state.enrich_playlist_with_names(playlist).await?;
     Ok(Json(enriched))
 }

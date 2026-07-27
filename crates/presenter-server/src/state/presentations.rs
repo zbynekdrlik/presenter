@@ -237,7 +237,9 @@ impl AppState {
         playlists
             .into_iter()
             .find(|playlist| playlist.id == playlist_id)
-            .ok_or_else(|| anyhow::anyhow!("playlist not found after update"))
+            // #608: typed refusal (#584/#586 pattern) — the router downcasts to
+            // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
+            .ok_or(presenter_persistence::RepositoryError::NotFound("playlist not found").into())
     }
 
     // Presentation detail and cache

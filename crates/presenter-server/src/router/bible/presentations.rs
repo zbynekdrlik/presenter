@@ -231,7 +231,8 @@ pub(crate) async fn update_bible_slide(
             payload.bible_translation_reference,
             existing_metadata,
         )
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
 
     Ok(Json(bible_slide_to_dto(&updated)))
 }

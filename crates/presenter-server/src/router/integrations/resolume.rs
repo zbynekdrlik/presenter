@@ -161,7 +161,8 @@ pub(crate) async fn test_resolume_host(
 ) -> Result<Json<TestConnectionResponse>, AppError> {
     let result = state
         .test_resolume_host_connection(ResolumeHostId::from_uuid(id))
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     Ok(Json(TestConnectionResponse {
         success: result.success,
         latency_ms: result.latency_ms,

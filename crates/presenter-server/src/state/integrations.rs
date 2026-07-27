@@ -114,7 +114,11 @@ impl AppState {
             .await?
             .into_iter()
             .find(|h| h.id == id)
-            .ok_or_else(|| anyhow::anyhow!("Resolume host not found"))?;
+            // #608: typed refusal (#584/#586 pattern) — the router downcasts to
+            // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
+            .ok_or(presenter_persistence::RepositoryError::NotFound(
+                "resolume host not found",
+            ))?;
         crate::resolume::test_connection(&host).await
     }
 
