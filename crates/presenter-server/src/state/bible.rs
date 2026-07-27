@@ -294,7 +294,7 @@ impl AppState {
             .await?
             // #587: typed refusal (#584 pattern) — the router downcasts to
             // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
-            .ok_or_else(|| RepositoryError::NotFound("bible presentation not found"))?;
+            .ok_or(RepositoryError::NotFound("bible presentation not found"))?;
 
         let before = presentation.slides.len();
         presentation.slides.retain(|s| s.id != slide_id);
@@ -329,7 +329,7 @@ impl AppState {
             .fetch_bible_presentation(presentation_id)
             .await?
             // #587: typed refusal (#584 pattern), see delete_bible_slide above.
-            .ok_or_else(|| RepositoryError::NotFound("bible presentation not found"))?;
+            .ok_or(RepositoryError::NotFound("bible presentation not found"))?;
 
         // Build a lookup of existing slides by ID.
         let mut by_id: HashMap<BibleSlideId, BiblePresentationSlide> = presentation
@@ -467,7 +467,7 @@ impl AppState {
                     .find_bible_passage(translation_code, reference)
                     .await?
                     .map(|p| p.translation)
-                    .ok_or_else(|| RepositoryError::NotFound("passage not found"))?
+                    .ok_or(RepositoryError::NotFound("passage not found"))?
             } else {
                 range[0].translation.clone()
             };
@@ -477,7 +477,7 @@ impl AppState {
             self.repository
                 .find_bible_passage(translation_code, reference)
                 .await?
-                .ok_or_else(|| RepositoryError::NotFound("passage not found"))?
+                .ok_or(RepositoryError::NotFound("passage not found"))?
         } else {
             // Combine multiple verses into a single passage
             let mut combined_text = String::new();

@@ -83,7 +83,7 @@ impl Repository {
             .one(&txn)
             .await?
             // #586: typed refusal (#584 pattern).
-            .ok_or_else(|| RepositoryError::NotFound("android stage display not found"))?;
+            .ok_or(RepositoryError::NotFound("android stage display not found"))?;
         let before = android_stage_display_model_to_domain(existing.clone())?;
         let before_json = serde_json::to_value(&before)?;
 

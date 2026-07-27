@@ -82,7 +82,7 @@ impl Repository {
             // #586: typed refusal — the router downcasts to
             // `RepositoryError` and maps `NotFound` to 404 instead of
             // matching a string (#584 pattern).
-            .ok_or_else(|| RepositoryError::NotFound("resolume host not found"))?;
+            .ok_or(RepositoryError::NotFound("resolume host not found"))?;
         let before = resolume_model_to_domain(existing.clone())?;
         let before_json = serde_json::to_value(&before)?;
         // #564: an explicit host/port edit invalidates any previously

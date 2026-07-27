@@ -93,7 +93,7 @@ impl Repository {
             .one(&txn)
             .await?
             // #586: typed refusal (#584 pattern).
-            .ok_or_else(|| RepositoryError::NotFound("video source not found"))?;
+            .ok_or(RepositoryError::NotFound("video source not found"))?;
         let before = video_source_model_to_domain(existing.clone())?;
         let before_json = serde_json::to_value(&before)?;
 
@@ -177,7 +177,7 @@ impl Repository {
             .one(&txn)
             .await?
             // #586: typed refusal (#584 pattern).
-            .ok_or_else(|| RepositoryError::NotFound("video source not found"))?;
+            .ok_or(RepositoryError::NotFound("video source not found"))?;
         let target_before = video_source_model_to_domain(existing.clone())?;
         let target_before_json = serde_json::to_value(&target_before)?;
 
