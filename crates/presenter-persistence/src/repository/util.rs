@@ -44,6 +44,19 @@ pub enum RepositoryError {
     InvalidAbleSetPort(i32),
     #[error("ableset song prefix length {0} out of range")]
     InvalidAbleSetPrefix(i32),
+    /// A repository operation targeted a resource (identified by the URL /
+    /// the operation's own subject) that does not exist, or is already
+    /// soft-deleted. The router maps this to 404 via `downcast_ref` — never
+    /// an exact-string match on `Display` text (#584).
+    #[error("{0}")]
+    NotFound(&'static str),
+    /// A repository operation was refused because a resource named in the
+    /// REQUEST BODY (not the URL) does not exist — e.g. `copy_presentation`'s
+    /// `targetLibraryId`. Kept distinct from `NotFound` because the router
+    /// maps it to 422 (the URL resource is fine; the payload references a
+    /// missing target), not 404 (#584).
+    #[error("{0}")]
+    TargetNotFound(&'static str),
 }
 
 pub(super) fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {
