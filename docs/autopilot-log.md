@@ -4,6 +4,34 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-07-27 — #590 split repository/mod.rs + router/bible.rs before the 1000-line hard fail
+
+- **Design note posted BEFORE any code:**
+  https://github.com/zbynekdrlik/presenter/issues/590#issuecomment-5092747639 (predates commit
+  `3b3a8531`) recorded the root cause (both files accreted independent CRUD/handler groups without
+  ever being split, unlike sibling domains already split by #486's precedent) and the chosen
+  approach (reuse the codebase's own established pattern verbatim, not a new one).
+- `repository/mod.rs` 859 -> 434 prod lines: extracted `android_stage_display` CRUD into new
+  `repository/android_stage.rs` (150 lines) and `video_source` CRUD + `activate_video_source`/
+  `deactivate_all_video_sources` into new `repository/video_source.rs` (305 lines) — same shape as
+  the existing `resolume.rs`/`audit.rs` split (`use super::Repository;` + own `impl Repository`
+  block, calling the shared `pub(super)` `record_settings_audit_on` from `audit.rs`, already proven
+  cross-file via `resolume.rs`). Commit `3b3a8531`.
+- Also extracted `insert_bible_passages_chunked` out of `replace_bible_translation_passages`
+  (116/120 -> 82 lines) in the same commit — the chunked-insert loop moved verbatim to a free fn.
+- `router/bible.rs` 885 lines -> `router/bible/` directory (mirrors `router/integrations/`):
+  `translations.rs` (75), `browse.rs` (135), `broadcast.rs` (259), `resolve.rs` (171, holds the
+  shared `BibleSlideDto`/`bible_slide_to_dto` reused by `presentations.rs`), `presentations.rs`
+  (297). `router.rs`'s route table unchanged in shape/paths, only re-qualified per submodule.
+  `router/tests.rs`'s one cross-reference (`BibleImportSummaryDto`) updated to the new
+  `bible::translations::` path — the only test edit, exactly the import-path adjustment the issue's
+  acceptance criteria allowed. Commit `ec580348`.
+- Pure code movement, zero behavior/route change — no new tests, existing suite is the safety net.
+  Verified locally without compiling (Tier 0, dev2): `count_prod_lines.sh` on every touched file
+  (all comfortably under 800), `fn_length_check.py` (zero violations, only the pre-existing 95-line
+  `activate_video_source` warning, unchanged), `cargo fmt --check` clean on both crates. Full
+  compile/test/clippy verification runs on CI per the box's local-build ban for this cycle.
+
 ## 2026-07-27 — #584 typed repository-refusal errors, mechanism-only slice (PR #603, v0.4.211)
 
 - **Scope:** per the issue owner's 2026-07-25 scoping comment, NOT the original body's
