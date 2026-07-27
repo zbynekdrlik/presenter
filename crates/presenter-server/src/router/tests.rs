@@ -3036,3 +3036,110 @@ async fn trigger_bible_broadcast_endpoint_missing_passage_returns_404() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_resolume_host_endpoint_missing_host_returns_404() {
+    // #608: `test_resolume_host_connection` (state/integrations.rs) still raised a bare
+    // `anyhow!("Resolume host not found")` after #586/#587 — the router file already had
+    // `map_repository_not_found` wired for other calls in the same file, but this site was
+    // simply missed during the #607 sweep.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/integrations/resolume/hosts/{random_id}/test"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn replace_playlist_entries_endpoint_missing_playlist_returns_404() {
+    // #608: `replace_playlist_entries` (state/presentations.rs) raises a bare
+    // `anyhow!("playlist not found after update")` on its tail `.find(...).ok_or_else` lookup —
+    // #586 named "playlist lookup / router/playlists.rs" generically and only the
+    // `showInDashboard` branch got mapped.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({ "entries": [] }).to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PUT)
+                .uri(format!("/playlists/{random_id}/entries"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn restore_presentation_endpoint_never_trashed_returns_404() {
+    // #608 item 4: `restore_presentation_endpoint_missing_trashed_presentation_returns_404`
+    // above claims to cover "an unknown id AND a never-trashed presentation" but only drives the
+    // unknown-id case. This drives the semantically distinct branch: the presentation EXISTS
+    // (`deleted_at IS NULL`), so `restore_presentation`'s `rows_affected == 0` check — not a
+    // plain existence check — is what must return 404. The underlying fix already landed in
+    // #586/#587; this closes the coverage gap the test comment overclaimed.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let create_library_body = serde_json::json!({ "name": "Restore Test Library" }).to_string();
+    let library_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/libraries")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_library_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let library_bytes = axum::body::to_bytes(library_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let library: Library = serde_json::from_slice(&library_bytes).unwrap();
+
+    let create_presentation_body = serde_json::json!({ "name": "Never Trashed" }).to_string();
+    let presentation_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/libraries/{}/presentations", library.id))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_presentation_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(presentation_response.status(), StatusCode::OK);
+    let presentation_bytes = axum::body::to_bytes(presentation_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: CreateLibraryPresentationResponse =
+        serde_json::from_slice(&presentation_bytes).unwrap();
+
+    let restore_response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!(
+                    "/presentations/{}/restore",
+                    payload.presentation.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restore_response.status(), StatusCode::NOT_FOUND);
+}
