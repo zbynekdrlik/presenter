@@ -37,6 +37,14 @@ policy. Note: cargo-deny/cargo-audit can transiently FAIL then PASS on an immedi
 DB / lock timing) — re-run once before treating a deny/audit failure as real. A >120 fn added by a
 feature → split a helper out (e.g. #514 split `extract_inbound_video` out of `post_client_stats`).
 
+**`quality-check.sh --strict` is NOT Tier-0-safe** (#586/#587 lesson) — it internally shells out to
+`cargo clippy -p presenter-server --tests` and `cargo check` (advisory sections, but they still
+COMPILE). A worker under a "no local Rust build/check/clippy" constraint must NOT run this script's
+`--strict` mode; use the two underlying non-compiling checks directly instead:
+`bash scripts/dev/count_prod_lines.sh <one-file-per-call>` and
+`QC_TARGETS=<comma-separated-files> python3 scripts/dev/fn_length_check.py .` — both are pure
+bash/Python and cover the two hard-fail gates (file size, function length) without touching cargo.
+
 ## Runner Management
 
 Local runner host: `10.77.8.134` (same machine as dev server), label `self-hosted`/`local`.

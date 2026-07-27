@@ -600,3 +600,35 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
 - **UNVERIFIED** (both issues): real stagebox TV / real phone confirmation — no physical device
   reachable from this dev box. Playwright-verified on the live prod DOM instead; flagged for the
   user's next in-person look.
+
+## 2026-07-27 — #586 + #587 typed 404 for remaining resolume/android-stage/video-source/playlist/bible/sync unknown-id refusals
+
+- **Design notes posted BEFORE any code** (predate the RED commit `28c311d1`):
+  https://github.com/zbynekdrlik/presenter/issues/586#issuecomment-5094251162 and
+  https://github.com/zbynekdrlik/presenter/issues/587#issuecomment-5094255429. Both re-verify the
+  site list against current `dev` (the #590 file split changed every line number the issue bodies
+  cited) — corrections: `update_resolume_host_active_port` has no HTTP consumer (dropped from
+  scope); `repository/bible/presentations.rs:169` (`replace_bible_presentation_slides`) is
+  TOCTOU-only, and the two ACTUALLY-reachable #587 500s (`delete_bible_slide`/`reorder_bible_slides`)
+  live in `state/bible.rs`, which the issue body omitted entirely.
+- Version bump `a4b97dde` (0.4.212 → 0.4.213).
+- RED `28c311d1`: 15 new `router/tests.rs` tests (unknown-id → 404 on a fresh in-memory DB). Pushed
+  alone and confirmed 14/15 FAIL with 500 on CI run 30287219099 (the 15th — bible-trigger
+  passage-not-found — already passed via the pre-existing string match, pinned before its
+  conversion).
+- GREEN `7f1b7ed8`: `RepositoryError::NotFound` conversions across `repository/{resolume,
+  android_stage, video_source, playlist, bible/presentations, sync}.rs` and `state/bible.rs`
+  (`delete_bible_slide`, `reorder_bible_slides`, `trigger_bible_passage`); a private
+  `map_repository_not_found` downcast helper added to each of the 7 touched router files
+  (`router/libraries.rs`/`presentations.rs` per-file convention from #584, not a shared helper);
+  `router/bible/broadcast.rs`'s string-match converted to the typed downcast. Follow-up
+  `8fe34e3e` fixed a clippy `unnecessary_lazy_evaluations` (8 sites: `ok_or_else(|| X)` →
+  `ok_or(X)` for the cheap `RepositoryError::NotFound` construction).
+- One bundled PR (dev→main #607, Closes #586 #587), merged `aae2d859`. Main Deploy green → prod
+  verified v0.4.213 live: DOM version label read via Playwright on `/ui/operator`, 0 console
+  errors/warnings, and all 7 previously-500ing endpoints spot-checked live now return 404
+  (resolume host PUT, android-stage DELETE, video-source activate, playlist favorite PATCH, bible
+  rename PATCH, presentation restore POST, bible trigger POST).
+- Left untouched (no HTTP consumer, so no user-visible bug): `update_resolume_host_active_port`
+  (internal port-drift background task only) and `repository/bible/import.rs`'s
+  `set_bible_source_digest` (CLI-only via `import-data.yml`).
