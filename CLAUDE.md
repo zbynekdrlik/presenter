@@ -29,7 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|
 | NDI pipeline, WebRTC testing, cleanup | `.claude/skills/ndi/SKILL.md` |
 | Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
-| Runner management, GPU wedge, probe cleanup | `.claude/skills/ci/SKILL.md` |
+| Runner management, GPU wedge, probe cleanup, branch-sync-after-merge | `.claude/skills/ci/SKILL.md` |
 | Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
