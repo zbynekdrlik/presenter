@@ -34,10 +34,15 @@ correct response is 404 (or 422 for a body-referenced missing target).
    `.context(...)` gets added anywhere upstream (the #578→#584 regression).
 3. This is a **per-file private helper**, duplicated across `router/libraries.rs`,
    `router/presentations.rs`, `router/playlists.rs`, `router/sync.rs`,
-   `router/bible/presentations.rs`, `router/integrations/{resolume,android_stage,video_source}.rs` —
-   NOT a shared/exported helper. Each PR that touches this pattern should keep it that way: a
-   shared helper is a bigger refactor than a scoped bug-fix batch needs, and increases review
-   surface for no behavior change.
+   `router/bible/presentations.rs`, `router/bible/broadcast.rs`,
+   `router/integrations/{resolume,android_stage,video_source}.rs` — 9 modules total (verify with
+   `grep -rln "fn map_repository_not_found\|fn map_repository_error" crates/presenter-server/src/router/`
+   if this list drifts again). NOT a shared/exported helper. Each PR that touches this pattern
+   should keep it that way: a shared helper is a bigger refactor than a scoped bug-fix batch needs,
+   and increases review surface for no behavior change.
+   **Naming exception:** every module above names the helper `map_repository_not_found` EXCEPT
+   `router/presentations.rs`, which names it `map_repository_error` — don't assume the name is
+   uniform when grepping for it.
 
 ## Clippy gotcha: `ok_or`, not `ok_or_else`
 
