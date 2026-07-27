@@ -196,6 +196,16 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
   of the god-file (e.g. add the call in `state/integrations.rs`, not `state/mod.rs`), and put NEW
   tests in their OWN file (e.g. `resolume/latency_tests.rs`) so the bloated `tests.rs` stays out of
   the diff. Then `git diff --name-only origin/main...HEAD` must NOT list the offender.
+  **The established split pattern (used by #486 for `resolume.rs`/`audit.rs`,
+  `router/integrations/*`, and #590 for `repository/android_stage.rs`+`video_source.rs` and
+  `router/bible/*`): one cohesive CRUD/handler group per sibling file, `use super::Repository;` (or
+  `use super::super::AppError;` one level deeper for a router subdirectory) + its own
+  `impl Repository { ... }` block or `pub(crate)` handler fns — inherent methods/handlers split
+  across files are invisible to callers, so the parent file's public surface is unchanged and no
+  route-table restructuring is needed. Before inventing a new split shape, grep for an existing
+  sibling (`resolume.rs`, `router/integrations/android_stage.rs`) and copy its shape — don't design
+  one from scratch.** #586/#587/#588/#589 (queued next, same 21-site sweep as #584/#590) will need
+  this exact same shape again.
 
 - **Mutation survivors (on-demand sweep only since #488 — NOT a per-PR gate anymore):** mutation no
   longer blocks PRs; the full-tree `/mutation-sweep` (`mutation-full.yml`) files survivors as

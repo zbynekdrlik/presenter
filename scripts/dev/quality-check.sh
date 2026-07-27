@@ -43,9 +43,14 @@ note() { printf '%s\n' "$*"; }
 warn() { warnings+=("$*"); }
 fail() { failures+=("$*"); }
 
-# 1) Router feature modules present
-for f in crates/presenter-server/src/router/{bible,libraries,playlists,presentations}.rs; do
-  [[ -f "$f" ]] || fail "Missing feature router: $f"
+# 1) Router feature modules present. A feature module may be a flat file
+#    (`router/<name>.rs`) OR a directory of submodules (`router/<name>/mod.rs`
+#    — e.g. `bible/`, split in #590 the same way `router/integrations/`
+#    already was) — either form satisfies the check.
+for name in bible libraries playlists presentations; do
+  flat="crates/presenter-server/src/router/${name}.rs"
+  dir_mod="crates/presenter-server/src/router/${name}/mod.rs"
+  [[ -f "$flat" || -f "$dir_mod" ]] || fail "Missing feature router: $flat (or $dir_mod)"
 done
 
 # 2) router.rs should not contain legacy presentation handlers

@@ -87,41 +87,7 @@ impl Repository {
             .await?;
 
         // 5. Batch-insert passages (no trigger overhead because triggers are dropped)
-        let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
-        for passage in passages {
-            let reference = &passage.reference;
-            let (code, number) = match &reference.book_code {
-                Some(c) => (c.clone(), reference.book_number.unwrap_or(0) as i32),
-                None => match canonical_book_by_name(&reference.book) {
-                    Some(meta) => (meta.code.to_string(), meta.number as i32),
-                    None => (reference.book.clone(), 0),
-                },
-            };
-            let model = bible_passage::ActiveModel {
-                id: Set(Uuid::new_v4().to_string()),
-                translation_code: Set(translation.code.clone()),
-                book: Set(reference.book.clone()),
-                book_code: Set(code),
-                book_number: Set(number),
-                chapter: Set(reference.chapter as i32),
-                verse_start: Set(reference.verse_start as i32),
-                verse_end: Set(reference.verse_end as i32),
-                content: Set(passage.text.clone()),
-                created_at: Set(Utc::now().into()),
-            };
-
-            chunk.push(model);
-            if chunk.len() == BIBLE_INSERT_CHUNK {
-                let to_insert = std::mem::take(&mut chunk);
-                bible_passage::Entity::insert_many(to_insert)
-                    .exec(&txn)
-                    .await?;
-            }
-        }
-
-        if !chunk.is_empty() {
-            bible_passage::Entity::insert_many(chunk).exec(&txn).await?;
-        }
+        insert_bible_passages_chunked(&txn, &translation.code, passages).await?;
 
         // 6. Bulk populate FTS from the freshly-inserted passages
         txn.execute(Statement::from_sql_and_values(
@@ -204,4 +170,52 @@ impl Repository {
             .await?;
         Ok(result.rows_affected)
     }
+}
+
+/// Batch-insert Bible passages in chunks of `BIBLE_INSERT_CHUNK` (no trigger
+/// overhead — the caller drops the `bible_passage_fts` triggers before this
+/// runs and recreates them after). Extracted from
+/// `replace_bible_translation_passages` (#590) to keep that function under
+/// the 120-line hard cap.
+async fn insert_bible_passages_chunked(
+    txn: &sea_orm::DatabaseTransaction,
+    translation_code: &str,
+    passages: Vec<presenter_core::bible::BiblePassage>,
+) -> anyhow::Result<()> {
+    let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
+    for passage in passages {
+        let reference = &passage.reference;
+        let (code, number) = match &reference.book_code {
+            Some(c) => (c.clone(), reference.book_number.unwrap_or(0) as i32),
+            None => match canonical_book_by_name(&reference.book) {
+                Some(meta) => (meta.code.to_string(), meta.number as i32),
+                None => (reference.book.clone(), 0),
+            },
+        };
+        let model = bible_passage::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            translation_code: Set(translation_code.to_string()),
+            book: Set(reference.book.clone()),
+            book_code: Set(code),
+            book_number: Set(number),
+            chapter: Set(reference.chapter as i32),
+            verse_start: Set(reference.verse_start as i32),
+            verse_end: Set(reference.verse_end as i32),
+            content: Set(passage.text.clone()),
+            created_at: Set(Utc::now().into()),
+        };
+
+        chunk.push(model);
+        if chunk.len() == BIBLE_INSERT_CHUNK {
+            let to_insert = std::mem::take(&mut chunk);
+            bible_passage::Entity::insert_many(to_insert)
+                .exec(txn)
+                .await?;
+        }
+    }
+
+    if !chunk.is_empty() {
+        bible_passage::Entity::insert_many(chunk).exec(txn).await?;
+    }
+    Ok(())
 }

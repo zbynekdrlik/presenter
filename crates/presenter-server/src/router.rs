@@ -59,56 +59,74 @@ pub fn build_router(state: AppState) -> Router {
             "/libraries/{id}/presentations/import",
             post(libraries::import_presentation),
         )
-        .route("/bible/translations", get(bible::list_bible_translations))
+        .route(
+            "/bible/translations",
+            get(bible::translations::list_bible_translations),
+        )
         .route(
             "/bible/translations/{code}",
-            patch(bible::update_bible_translation),
+            patch(bible::translations::update_bible_translation),
         )
-        .route("/bible/books", get(bible::list_bible_books))
-        .route("/bible/search", get(bible::search_bible_passages))
-        .route("/bible/passage", get(bible::get_bible_passage))
-        .route("/bible/resolve", post(bible::resolve_bible_slides))
+        .route("/bible/books", get(bible::browse::list_bible_books))
+        .route("/bible/search", get(bible::browse::search_bible_passages))
+        .route("/bible/passage", get(bible::browse::get_bible_passage))
+        .route("/bible/resolve", post(bible::resolve::resolve_bible_slides))
         .route(
             "/bible/translations/refresh",
-            post(bible::refresh_bible_translations),
+            post(bible::translations::refresh_bible_translations),
         )
         .route(
             "/bible/presentations",
-            get(bible::list_bible_presentations).post(bible::create_bible_presentation_handler),
+            get(bible::presentations::list_bible_presentations)
+                .post(bible::presentations::create_bible_presentation_handler),
         )
         .route(
             "/bible/presentations/{id}",
-            get(bible::get_bible_presentation)
-                .patch(bible::rename_bible_presentation_handler)
-                .delete(bible::delete_bible_presentation_handler),
+            get(bible::presentations::get_bible_presentation)
+                .patch(bible::presentations::rename_bible_presentation_handler)
+                .delete(bible::presentations::delete_bible_presentation_handler),
         )
         .route(
             "/bible/presentations/{id}/append",
-            post(bible::append_bible_presentation_handler),
+            post(bible::presentations::append_bible_presentation_handler),
         )
         .route(
             "/bible/presentations/{id}/slides/reorder",
-            post(bible::reorder_bible_presentation_slides),
+            post(bible::presentations::reorder_bible_presentation_slides),
         )
         .route(
             "/bible/presentations/{id}/slides/{slide_id}",
-            patch(bible::update_bible_slide).delete(bible::delete_bible_presentation_slide),
+            patch(bible::presentations::update_bible_slide)
+                .delete(bible::presentations::delete_bible_presentation_slide),
         )
         .route(
             "/bible/presentations/{id}/slides/{slide_id}/trigger",
-            post(bible::trigger_presentation_slide),
+            post(bible::broadcast::trigger_presentation_slide),
         )
-        .route("/bible/active", get(bible::get_active_bible_broadcast))
+        .route(
+            "/bible/active",
+            get(bible::broadcast::get_active_bible_broadcast),
+        )
         .route(
             "/bible/active-slide",
-            get(bible::get_active_bible_slide_output),
+            get(bible::broadcast::get_active_bible_slide_output),
         )
-        .route("/bible/trigger", post(bible::trigger_bible_broadcast))
-        .route("/bible/trigger-slide", post(bible::trigger_bible_slide))
-        .route("/bible/clear", post(bible::clear_bible_broadcast))
+        .route(
+            "/bible/trigger",
+            post(bible::broadcast::trigger_bible_broadcast),
+        )
+        .route(
+            "/bible/trigger-slide",
+            post(bible::broadcast::trigger_bible_slide),
+        )
+        .route(
+            "/bible/clear",
+            post(bible::broadcast::clear_bible_broadcast),
+        )
         .route(
             "/bible/preferences",
-            get(bible::get_bible_preferences).put(bible::update_bible_preferences),
+            get(bible::broadcast::get_bible_preferences)
+                .put(bible::broadcast::update_bible_preferences),
         )
         .route(
             "/playlists",
@@ -438,7 +456,8 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
 // Presentation request types and handlers live in router/presentations.rs
 
-// Bible UI handler is implemented in router/bible.rs
+// Bible UI handler is implemented in router/bible/ (split into per-concern
+// submodules — #590)
 
 // stage request/response moved to stage.rs
 
