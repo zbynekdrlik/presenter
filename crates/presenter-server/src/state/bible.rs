@@ -384,7 +384,12 @@ impl AppState {
             .repository
             .fetch_bible_presentation(presentation_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("bible presentation not found"))?;
+            // #608: typed refusal (#584/#586 pattern), for consistency with the other
+            // `update_bible_slide` refusal below and with `state/bible.rs`'s other converted
+            // sites — the router downcasts to `RepositoryError` and maps `NotFound` to 404
+            // instead of a bare 500 (TOCTOU-only in practice: masked by the router's own
+            // pre-checks under normal traffic, but a delete racing the pre-check would hit this).
+            .ok_or(RepositoryError::NotFound("bible presentation not found"))?;
 
         let main =
             SlideText::new(main_text).map_err(|err| anyhow::anyhow!("invalid main text: {err}"))?;
@@ -404,7 +409,7 @@ impl AppState {
             }
         }
         let updated_slide =
-            updated_slide.ok_or_else(|| anyhow::anyhow!("slide not found in presentation"))?;
+            updated_slide.ok_or(RepositoryError::NotFound("slide not found in presentation"))?;
 
         self.repository
             .replace_bible_presentation_slides(presentation_id, &presentation.slides)
