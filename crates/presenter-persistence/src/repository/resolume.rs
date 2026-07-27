@@ -3,7 +3,7 @@
 //! two-port model landed) — same pattern as `audit.rs`/`stage_state.rs`:
 //! a self-contained `impl Repository` block in its own file.
 
-use super::util::resolume_model_to_domain;
+use super::util::{resolume_model_to_domain, RepositoryError};
 use super::Repository;
 use crate::audit::SettingsAuditSource;
 use crate::entities::resolume_host;
@@ -79,7 +79,10 @@ impl Repository {
         let existing = resolume_host::Entity::find_by_id(id.to_string())
             .one(&txn)
             .await?
-            .ok_or_else(|| anyhow!("resolume host not found"))?;
+            // #586: typed refusal — the router downcasts to
+            // `RepositoryError` and maps `NotFound` to 404 instead of
+            // matching a string (#584 pattern).
+            .ok_or_else(|| RepositoryError::NotFound("resolume host not found"))?;
         let before = resolume_model_to_domain(existing.clone())?;
         let before_json = serde_json::to_value(&before)?;
         // #564: an explicit host/port edit invalidates any previously
@@ -181,7 +184,8 @@ impl Repository {
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("resolume host not found"));
+            // #586: typed refusal (#584 pattern) — see update_resolume_host above.
+            return Err(RepositoryError::NotFound("resolume host not found").into());
         }
         Self::record_settings_audit_on(
             &txn,

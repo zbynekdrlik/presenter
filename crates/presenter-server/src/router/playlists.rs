@@ -53,6 +53,18 @@ pub(super) enum PlaylistEntryPayload {
     },
 }
 
+/// Maps a repository refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant returned by the persistence layer — never a
+/// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
+/// `map_repository_not_found`, #584). Any other error falls through to the
+/// default 500 mapping.
+fn map_repository_not_found(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn list_playlists(
     State(state): State<AppState>,
@@ -108,7 +120,10 @@ pub(super) async fn update_playlist(
     }
 
     if let Some(favorite) = payload.show_in_dashboard {
-        state.set_playlist_favorite(playlist_id, favorite).await?;
+        state
+            .set_playlist_favorite(playlist_id, favorite)
+            .await
+            .map_err(map_repository_not_found)?;
     }
 
     let updated = state

@@ -88,18 +88,21 @@ pub(crate) async fn trigger_bible_broadcast(
         main_reference_label: payload.main_reference_label,
         translation_reference_label: payload.translation_reference_label,
     };
-    match state
+    state
         .trigger_bible_passage(&payload.translation, &reference, text_overrides)
         .await
-    {
-        Ok(broadcast) => Ok(Json(broadcast)),
-        Err(err) => {
-            if err.to_string().contains("passage not found") {
-                return Err(AppError::not_found("passage not found"));
-            }
-            Err(err.into())
-        }
-    }
+        .map(Json)
+        // #587: typed refusal (#584 pattern) — downcast to `RepositoryError`
+        // instead of matching the `Display` string, which silently stops
+        // matching the moment a `.context(...)` is added upstream.
+        .map_err(
+            |err| match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+                Some(presenter_persistence::RepositoryError::NotFound(msg)) => {
+                    AppError::not_found(*msg)
+                }
+                _ => err.into(),
+            },
+        )
 }
 
 /// Request body for the new single-source-of-truth trigger endpoint.

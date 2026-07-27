@@ -11,6 +11,7 @@ use presenter_core::{
     BibleSlideId, BibleSlideOutput, BibleTranslation, Slide, SlideText,
 };
 use presenter_importer::bible::BibleIngestionService;
+use presenter_persistence::RepositoryError;
 use std::collections::HashMap;
 
 /// Optional text overrides for triggered Bible slides (when the user edits text in the UI).
@@ -291,12 +292,14 @@ impl AppState {
             .repository
             .fetch_bible_presentation(presentation_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("bible presentation not found"))?;
+            // #587: typed refusal (#584 pattern) — the router downcasts to
+            // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
+            .ok_or_else(|| RepositoryError::NotFound("bible presentation not found"))?;
 
         let before = presentation.slides.len();
         presentation.slides.retain(|s| s.id != slide_id);
         if presentation.slides.len() == before {
-            return Err(anyhow::anyhow!("slide not found in presentation"));
+            return Err(RepositoryError::NotFound("slide not found in presentation").into());
         }
 
         self.repository
@@ -325,7 +328,8 @@ impl AppState {
             .repository
             .fetch_bible_presentation(presentation_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("bible presentation not found"))?;
+            // #587: typed refusal (#584 pattern), see delete_bible_slide above.
+            .ok_or_else(|| RepositoryError::NotFound("bible presentation not found"))?;
 
         // Build a lookup of existing slides by ID.
         let mut by_id: HashMap<BibleSlideId, BiblePresentationSlide> = presentation
@@ -463,7 +467,7 @@ impl AppState {
                     .find_bible_passage(translation_code, reference)
                     .await?
                     .map(|p| p.translation)
-                    .ok_or_else(|| anyhow::anyhow!("passage not found"))?
+                    .ok_or_else(|| RepositoryError::NotFound("passage not found"))?
             } else {
                 range[0].translation.clone()
             };
@@ -473,7 +477,7 @@ impl AppState {
             self.repository
                 .find_bible_passage(translation_code, reference)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("passage not found"))?
+                .ok_or_else(|| RepositoryError::NotFound("passage not found"))?
         } else {
             // Combine multiple verses into a single passage
             let mut combined_text = String::new();
