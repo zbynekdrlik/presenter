@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tower::ServiceExt;
 // Bring types from feature modules and core used only in tests
-use crate::router::bible::BibleImportSummaryDto;
+use crate::router::bible::translations::BibleImportSummaryDto;
 use crate::router::libraries::CreateLibraryPresentationResponse;
 use crate::router::playlists::UpdatePlaylistRequest;
 use crate::router::presentations::PresentationDetailDto;
