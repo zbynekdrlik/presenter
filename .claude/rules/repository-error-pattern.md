@@ -66,3 +66,14 @@ called only by the port-drift probe, which already `tracing::warn!`s and continu
 CLI-only path (e.g. `bible/import.rs`'s `set_bible_source_digest`, reachable only via
 `ingest_bibles` / the `import-data.yml` workflow). Converting those adds scope with zero
 user-visible bug fixed — check every caller before including a site in the batch.
+
+## Grep the router file for an ALREADY-EXISTING unwired helper before assuming one is missing (#608)
+
+A "sweep" batch (#586/#587) converts several sites across many files in one pass, and it is easy to
+add the `map_repository_not_found` helper to a file for site A while a DIFFERENT call in that same
+file (site B) still has a bare `?` — the helper exists and compiles fine, it's just not wired
+everywhere it could be. Both #608 misses (`router/integrations/resolume.rs`'s `test_resolume_host`,
+`router/playlists.rs`'s `replace_playlist_entries`) were exactly this: the helper was already
+defined and used elsewhere in the SAME file. Before adding a new helper to a router file, `grep -n
+"map_repository_not_found" <file>` first — if it exists, the fix is a one-line `.map_err(...)` wire,
+not a new helper.
