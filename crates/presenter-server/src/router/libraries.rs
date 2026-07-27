@@ -79,6 +79,19 @@ pub(super) async fn create_library(
     Ok(Json(library))
 }
 
+/// Maps a repository refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant returned by the persistence layer — never a
+/// string match on the `Display` text, which silently stops matching the
+/// moment a `.context(...)` is added anywhere between here and the
+/// repository (#578 review gap, fixed by #584). Any other error falls
+/// through to the default 500 mapping.
+fn map_repository_not_found(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn rename_library(
     State(state): State<AppState>,
@@ -89,7 +102,10 @@ pub(super) async fn rename_library(
     if name.is_empty() {
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
-    state.rename_library(LibraryId::from_uuid(id), name).await?;
+    state
+        .rename_library(LibraryId::from_uuid(id), name)
+        .await
+        .map_err(map_repository_not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -101,17 +117,7 @@ pub(super) async fn delete_library(
     state
         .delete_library(LibraryId::from_uuid(id))
         .await
-        .map_err(|err| {
-            // EXACT match on the repository's refusal message — a substring
-            // test would mis-map any internal error that happens to contain
-            // "not found" to a client error (mirrors copy_presentation's
-            // mapping in presentations.rs). #578 review gap: a missing or
-            // already-deleted library used to fall through to 500.
-            match err.to_string().as_str() {
-                "library not found" => AppError::not_found("library not found"),
-                _ => err.into(),
-            }
-        })?;
+        .map_err(map_repository_not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

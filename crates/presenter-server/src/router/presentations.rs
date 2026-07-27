@@ -95,6 +95,22 @@ pub(super) async fn get_presentation_detail(
     }
 }
 
+/// Maps a repository refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant returned by the persistence layer — never a
+/// string match on the `Display` text (#584; mirrors `libraries.rs`'s
+/// `map_repository_not_found`). `NotFound` (the URL resource itself is
+/// missing) maps to 404; `TargetNotFound` (a body-referenced resource is
+/// missing) maps to 422. Any other error falls through to the default 500.
+fn map_repository_error(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
+            AppError::unprocessable(*msg)
+        }
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn update_presentation(
     State(state): State<AppState>,
@@ -108,7 +124,8 @@ pub(super) async fn update_presentation(
     let presentation_uuid = super::parse_uuid("presentationId", &id)?;
     state
         .rename_presentation(PresentationId::from_uuid(presentation_uuid), name)
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -120,7 +137,8 @@ pub(super) async fn delete_presentation(
     let presentation_uuid = super::parse_uuid("presentationId", &id)?;
     state
         .delete_presentation(PresentationId::from_uuid(presentation_uuid))
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -140,18 +158,7 @@ pub(super) async fn copy_presentation(
             LibraryId::from_uuid(library_uuid),
         )
         .await
-        .map_err(|err| {
-            // EXACT match on the repository's two refusal messages — a
-            // substring test would mis-map any internal error that happens
-            // to contain "not found" to a client error.
-            match err.to_string().as_str() {
-                // The body-referenced target vanished — the REQUEST is
-                // unprocessable (422), not a missing URL resource.
-                "target library not found" => AppError::unprocessable("target library not found"),
-                "presentation not found" => AppError::not_found("presentation not found"),
-                _ => err.into(),
-            }
-        })?;
+        .map_err(map_repository_error)?;
     Ok((
         StatusCode::CREATED,
         Json(PresentationDetailDto {
