@@ -162,7 +162,10 @@ impl Repository {
             .await?
             .is_none()
         {
-            return Err(anyhow!("target library not found"));
+            // #584: typed refusal — a body-referenced target that vanished,
+            // distinct from `NotFound` because the router maps it to 422
+            // (unprocessable request), not 404.
+            return Err(RepositoryError::TargetNotFound("target library not found").into());
         }
 
         let source = presentation_entity::Entity::find()
@@ -170,7 +173,7 @@ impl Repository {
             .filter(presentation_entity::Column::DeletedAt.is_null())
             .one(&txn)
             .await?
-            .ok_or_else(|| anyhow!("presentation not found"))?;
+            .ok_or(RepositoryError::NotFound("presentation not found"))?;
 
         let source_slides = slide_entity::Entity::find()
             .filter(slide_entity::Column::PresentationId.eq(source_id.clone()))
@@ -258,7 +261,9 @@ impl Repository {
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("presentation not found"));
+            // #584: typed refusal — the router downcasts to `RepositoryError`
+            // and maps `NotFound` to 404 (previously a bare 500).
+            return Err(RepositoryError::NotFound("presentation not found").into());
         }
         touch_presentation(&txn, &id).await?;
         txn.commit().await?;
@@ -287,7 +292,9 @@ impl Repository {
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("presentation not found"));
+            // #584: typed refusal — the router downcasts to `RepositoryError`
+            // and maps `NotFound` to 404 (previously a bare 500).
+            return Err(RepositoryError::NotFound("presentation not found").into());
         }
 
         // Preserve today's behavior: a deleted song leaves every playlist.

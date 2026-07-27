@@ -4,6 +4,42 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-07-26 — #594 post-merge review findings on PR #591 (PR #596, v0.4.210)
+
+- **Context:** adversarial review of already-merged PR #591 found 5 small findings (0 critical),
+  filed as #594. All fixed in one PR, no production `.rs` logic changed.
+- **Finding 1 (doc):** `[env] CARGO_INCREMENTAL = { force = true }` comment falsely claimed it
+  guards against a shell-exported var overriding the build. Corrected in both
+  `.cargo/config.toml` files + `.claude/skills/deploy/SKILL.md` — Cargo's `[env]` only affects
+  spawned processes, never Cargo's own config (verified empirically, cargo 1.97.0).
+- **Finding 2 (test)** `crates/presenter-server/src/state/sync_race_tests.rs:237` — added the
+  missing peer-B convergence assertion to the revive-branch race test (previously only checked A).
+- **Finding 3 (test)** `crates/presenter-persistence/src/repository/sync_trash_tests.rs:646` — new
+  test proving the `SyncId DESC` tie-break for two tombstones sharing an identical `updated_at`.
+  **Gotcha:** first version inserted the expected winner FIRST, which coincidentally still passed
+  with the tie-break line deleted (SQLite's no-secondary-sort tie fallback = insertion order) —
+  caught by `superpowers:requesting-code-review`'s independent reviewer, which empirically deleted
+  the production line and reran. Fixed by inserting the loser first (commit `88826f12`).
+- **Finding 4 (test)** `sync_trash_tests.rs:593` — new test proving the strict `>` LWW boundary
+  in `ensure_library` (exact `updated_at` equality must NOT revive). **Gotcha:** first push
+  appended this to the existing multi-tombstone test, pushing it to 123 lines and tripping the
+  `Quality Checks` >120-line function-length hard cap — fixed by extracting it into its own
+  self-contained test function (commit `bb65cb83`). Local `fn_length_check.py` must be invoked as
+  `QC_TARGETS=<file> python3 scripts/dev/fn_length_check.py .` (repo root as arg 1) — passing file
+  paths directly as argv silently walks nothing and false-negatives.
+- **Finding 5 (doc):** `crates/presenter-ui/.cargo/config.toml` wrongly claimed the root
+  `.cargo/config.toml` "never applies" because the crate is outside the workspace. Cargo discovers
+  config by directory ancestry, not workspace membership — `build-ui.sh` `cd`s into the crate
+  first, so the root config DOES merge in. Reworded as defensive duplication.
+- **Tier 0 (no local build) discipline:** all verification done via CI (2 Pipeline cycles — first
+  caught the function-length gate, second was clean) plus a deep `requesting-code-review` pass
+  that caught the vacuous-oracle gap in finding 3's test after CI was already green (CI cannot
+  catch a weak test oracle, only a genuinely independent adversarial re-read can).
+- **PR #596** (dev→main, `Closes #594`), merged `5ade6a81`. Main CI green → SNV deployed +
+  verified v0.4.210 (Playwright: operator loads, WASM ready, 24 libraries, 0 console errors).
+  GitHub Release v0.4.210 → `release.yml` deploy-pp succeeded (no #469 recurrence) → PP verified
+  v0.4.210 (Playwright + healthz). Post-release bump to 0.4.211 (`622b7157`).
+
 ## 2026-07-25 — #580 library-delete-vs-presentation-create race + #585 disable incremental compilation (PR #591, v0.4.209)
 
 - **#580 (bug):** `ensure_library()` in `sync_apply.rs` only ever looked at LIVE libraries by

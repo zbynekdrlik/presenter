@@ -1,7 +1,6 @@
 use crate::entities::{
     library, library_favorite, presentation as presentation_entity, slide as slide_entity,
 };
-use anyhow::anyhow;
 use chrono::Utc;
 use presenter_core::{
     search::fold_query, Library, LibraryId, LibrarySummary, Presentation, PresentationId,
@@ -182,7 +181,9 @@ impl Repository {
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("library not found"));
+            // #584: typed refusal — the router downcasts to `RepositoryError`
+            // and maps `NotFound` to 404 instead of matching this string.
+            return Err(RepositoryError::NotFound("library not found").into());
         }
         Ok(())
     }
@@ -209,9 +210,10 @@ impl Repository {
             .exec(&txn)
             .await?;
         if lib_result.rows_affected == 0 {
-            // Missing (or already-deleted) library → NotFound; the router maps
-            // this exact message to 404 instead of a 500 (#578).
-            return Err(anyhow!("library not found"));
+            // Missing (or already-deleted) library → NotFound; the router
+            // downcasts to `RepositoryError::NotFound` and maps it to 404
+            // instead of a 500 (#578, typed via #584).
+            return Err(RepositoryError::NotFound("library not found").into());
         }
 
         // The ids of the LIVE presentations we're about to tombstone — needed

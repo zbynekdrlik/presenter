@@ -1,6 +1,7 @@
 //! #570: deep-copy a presentation into another library. Kept in its own file
 //! (not `tests.rs`, which is already over the file-size cap) per the
 //! presenter-ci playbook.
+use super::util::RepositoryError;
 use crate::entities::presentation as presentation_entity;
 use crate::Repository;
 use presenter_core::{LibraryId, Slide, SlideContent, SlideText};
@@ -136,6 +137,16 @@ async fn copy_into_a_missing_library_errors_and_writes_nothing() {
         .copy_presentation_to_library(source.id, LibraryId::new())
         .await
         .expect_err("copy into a vanished library must fail");
+    // #584: assert the TYPED variant the router downcasts on, not just the
+    // Display text — a `.context(...)` added upstream could still change
+    // `to_string()` without this assertion catching a regression.
+    assert!(
+        matches!(
+            err.downcast_ref::<RepositoryError>(),
+            Some(RepositoryError::TargetNotFound(_))
+        ),
+        "expected RepositoryError::TargetNotFound, got: {err}"
+    );
     assert!(
         err.to_string().contains("target library not found"),
         "{err}"
@@ -158,6 +169,14 @@ async fn copying_a_trashed_presentation_errors() {
         .copy_presentation_to_library(source.id, lib_b.id)
         .await
         .expect_err("a soft-deleted song must not be copyable");
+    // #584: assert the TYPED variant, not just the Display text.
+    assert!(
+        matches!(
+            err.downcast_ref::<RepositoryError>(),
+            Some(RepositoryError::NotFound(_))
+        ),
+        "expected RepositoryError::NotFound, got: {err}"
+    );
     assert!(err.to_string().contains("presentation not found"), "{err}");
 
     let live = presentation_entity::Entity::find()

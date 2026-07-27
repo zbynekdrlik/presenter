@@ -32,6 +32,9 @@ mod util;
 pub use library_sync::SyncLibraryManifestRow;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
 pub use sync_apply::{sync_should_apply, SyncApplyOutcome, PRUNE_HORIZON};
+// #584: exposed so the server crate can `downcast_ref` a repository refusal
+// to its typed variant instead of matching on the `Display` string.
+pub use util::RepositoryError;
 
 use util::{
     ableset_model_to_domain, android_stage_display_model_to_domain, osc_model_to_domain,

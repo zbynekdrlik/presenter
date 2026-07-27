@@ -867,6 +867,71 @@ async fn delete_library_endpoint_missing_library_returns_404() {
 }
 
 #[tokio::test]
+async fn rename_library_endpoint_missing_library_returns_404() {
+    // #584: `rename_library`'s repository refusal ("library not found") had
+    // NO router-side mapping at all — unlike `delete_library` it fell
+    // through the default `AppError::from(anyhow::Error)` conversion to a
+    // bare 500, instead of the 404 a missing URL resource should return.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let rename_body = serde_json::json!({ "name": "Doesn't matter" }).to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PATCH)
+                .uri(format!("/libraries/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(rename_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn rename_presentation_endpoint_missing_presentation_returns_404() {
+    // #584: `rename_presentation`'s repository refusal ("presentation not
+    // found") had NO router-side mapping — it fell through to a bare 500
+    // instead of 404.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let rename_body = serde_json::json!({ "name": "Doesn't matter" }).to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PATCH)
+                .uri(format!("/presentations/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(rename_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_presentation_endpoint_missing_presentation_returns_404() {
+    // #584: `delete_presentation`'s repository refusal ("presentation not
+    // found") had NO router-side mapping — it fell through to a bare 500
+    // instead of 404.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/presentations/{random_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn create_playlist_endpoint_supports_dashboard_flag() {
     let app = build_router(AppState::in_memory().await.unwrap());
     let create_body = serde_json::json!({
