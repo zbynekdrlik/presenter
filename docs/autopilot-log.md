@@ -31,6 +31,10 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
   (all comfortably under 800), `fn_length_check.py` (zero violations, only the pre-existing 95-line
   `activate_video_source` warning, unchanged), `cargo fmt --check` clean on both crates. Full
   compile/test/clippy verification runs on CI per the box's local-build ban for this cycle.
+- `pre-push-test-check.sh`'s bug-fix heuristic false-positived on the `Closes #590` trailer (its
+  `(closes|fixes|resolves)\s+#[0-9]+` regex assumes any closed issue is a bug), demanding a RED
+  test commit for a pure refactor. Bypassed with `[no-test: ...]` on the last commit — legitimate
+  per the hook's own escape hatch, since #590 is a maintenance/refactor issue, not a bug.
 
 ## 2026-07-27 — #584 typed repository-refusal errors, mechanism-only slice (PR #603, v0.4.211)
 
