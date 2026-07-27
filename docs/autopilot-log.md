@@ -4,6 +4,41 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-07-27 — #584 typed repository-refusal errors, mechanism-only slice (PR #603, v0.4.211)
+
+- **Scope:** per the issue owner's 2026-07-25 scoping comment, NOT the original body's
+  broader "sweep all 21 sites" framing — only `library.rs`/`presentation.rs` producer sites
+  + `router/libraries.rs`/`router/presentations.rs` router sites. The 21-site sweep is split
+  across #586/#587/#588/#589 (ordering: #584 -> #590 -> #586/#587 -> #588/#589).
+- `RepositoryError` (existing, `repository/util.rs`) gained `NotFound(&'static str)` and
+  `TargetNotFound(&'static str)` variants, exported from `presenter-persistence` crate root
+  so the server crate can `err.downcast_ref::<RepositoryError>()` — mirrors the existing
+  `TimerError` downcast pattern already in `router/timers.rs`. Cheaper than threading a new
+  `Result<T, E>` through repository -> state -> router (the `PasteSlidesError` model would
+  have cost ~1.3-1.5x the LoC for the same scope, per the owner's inventory).
+- RED commit `6ed864e0`: scaffolding (new enum variants + crate exports) + 3 new
+  router-level tests proving `rename_library`, `rename_presentation`, `delete_presentation`
+  returned a bare 500 (no router-side mapping existed at all) instead of 404 + updated
+  `presentation_copy_tests.rs` assertions on the typed variant, not just `Display` text.
+- GREEN commit `96f24154`: 6 producer sites converted (`library.rs::rename_library`/
+  `delete_library`, `presentation.rs::copy_presentation_to_library` both refusals/
+  `rename_presentation`/`delete_presentation`); router sites' exact-string matches replaced
+  with variant matches via a small `map_repository_not_found`/`map_repository_error` helper
+  per file. `Display` text preserved byte-for-byte — JSON error body unchanged except status.
+- Independent `superpowers:requesting-code-review` pass: 0 Critical/Important findings,
+  verdict "Ready to merge: Yes" (one Minor note about router-HTTP 422 coverage was already
+  satisfied by the pre-existing `copy_into_a_vanished_library_is_a_422` test).
+- **PR #603** (dev→main, `Closes #584`), merged `82cdac8b`. Main CI green (Build Release +
+  Deploy to Production). Prod verified: `/healthz` + operator DOM both show v0.4.211, 0
+  console errors; live functional check on 10.77.9.205 confirmed all 3 previously-500
+  endpoints now 404 with unchanged message text, and the pre-existing 422
+  (`copy_presentation` missing target library) unchanged — all probes hit the
+  missing-resource early-return path, zero writes / zero side effects on prod data.
+- **Tier 0 (no local cargo build/test/clippy) discipline** — verified formatting with a
+  standalone `rustfmt --check` (parse-only, no compile) and function/file-size gates with
+  the project's own `count_prod_lines.sh`/`fn_length_check.py` scripts before pushing;
+  everything else verified via CI (one clean pipeline cycle, no reruns needed).
+
 ## 2026-07-26 — #594 post-merge review findings on PR #591 (PR #596, v0.4.210)
 
 - **Context:** adversarial review of already-merged PR #591 found 5 small findings (0 critical),
