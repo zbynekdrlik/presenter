@@ -58,6 +58,18 @@ const fn default_resolume_port() -> u16 {
     8090
 }
 
+/// Maps a repository refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant returned by the persistence layer — never a
+/// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
+/// `map_repository_not_found`, #584). Any other error falls through to the
+/// default 500 mapping.
+fn map_repository_not_found(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn list_resolume_hosts(
     State(state): State<AppState>,
@@ -110,7 +122,8 @@ pub(crate) async fn update_resolume_host(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     let status = state.resolume_status_for(host.id).await;
     Ok(Json(ResolumeHostDto::from_host(host, status)))
 }
@@ -128,7 +141,8 @@ pub(crate) async fn delete_resolume_host(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

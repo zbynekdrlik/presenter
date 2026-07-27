@@ -1,7 +1,6 @@
 use crate::entities::{
     playlist, playlist_entry, playlist_favorite, presentation as presentation_entity,
 };
-use anyhow::anyhow;
 use chrono::Utc;
 use presenter_core::{playlist::PlaylistEntryKind, Playlist, PlaylistId, PresentationId};
 use sea_orm::{
@@ -131,7 +130,9 @@ impl Repository {
         if count > 0 {
             Ok(())
         } else {
-            Err(anyhow!("playlist not found"))
+            // #586: typed refusal (#584 pattern) — the router downcasts to
+            // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
+            Err(RepositoryError::NotFound("playlist not found").into())
         }
     }
 

@@ -136,7 +136,7 @@ impl Repository {
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("bible presentation not found"));
+            return Err(RepositoryError::NotFound("bible presentation not found").into());
         }
         Ok(())
     }
@@ -147,7 +147,7 @@ impl Repository {
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("bible presentation not found"));
+            return Err(RepositoryError::NotFound("bible presentation not found").into());
         }
         Ok(())
     }
@@ -166,7 +166,7 @@ impl Repository {
             .await?
             .is_none()
         {
-            return Err(anyhow!("bible presentation not found"));
+            return Err(RepositoryError::NotFound("bible presentation not found").into());
         }
 
         bible_slide::Entity::delete_many()
@@ -199,7 +199,7 @@ impl Repository {
             .await?
             .is_none()
         {
-            return Err(anyhow!("bible presentation not found"));
+            return Err(RepositoryError::NotFound("bible presentation not found").into());
         }
 
         let existing_count = bible_slide::Entity::find()

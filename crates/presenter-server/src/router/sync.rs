@@ -15,6 +15,18 @@ use crate::state::sync::{
 use crate::state::AppState;
 use presenter_core::PresentationId;
 
+/// Maps a repository refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant returned by the persistence layer — never a
+/// string match on the `Display` text (#587, mirrors `router/libraries.rs`'s
+/// `map_repository_not_found`, #584). Any other error falls through to the
+/// default 500 mapping.
+fn map_repository_not_found(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn get_sync_manifest(
     State(state): State<AppState>,
@@ -93,6 +105,7 @@ pub(super) async fn restore_presentation(
     let uuid = super::parse_uuid("presentationId", &id)?;
     state
         .restore_presentation(PresentationId::from_uuid(uuid))
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }

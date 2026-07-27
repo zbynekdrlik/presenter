@@ -4,7 +4,7 @@
 //! own file, calling the shared `Self::record_settings_audit_on` helper
 //! defined in `audit.rs`.
 
-use super::util::video_source_model_to_domain;
+use super::util::{video_source_model_to_domain, RepositoryError};
 use super::Repository;
 use crate::audit::SettingsAuditSource;
 use crate::entities::video_source;
@@ -92,7 +92,8 @@ impl Repository {
         let existing = video_source::Entity::find_by_id(id.to_string())
             .one(&txn)
             .await?
-            .ok_or_else(|| anyhow!("video source not found"))?;
+            // #586: typed refusal (#584 pattern).
+            .ok_or(RepositoryError::NotFound("video source not found"))?;
         let before = video_source_model_to_domain(existing.clone())?;
         let before_json = serde_json::to_value(&before)?;
 
@@ -140,7 +141,7 @@ impl Repository {
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("video source not found"));
+            return Err(RepositoryError::NotFound("video source not found").into());
         }
         Self::record_settings_audit_on(
             &txn,
@@ -175,7 +176,8 @@ impl Repository {
         let existing = video_source::Entity::find_by_id(id.to_string())
             .one(&txn)
             .await?
-            .ok_or_else(|| anyhow!("video source not found"))?;
+            // #586: typed refusal (#584 pattern).
+            .ok_or(RepositoryError::NotFound("video source not found"))?;
         let target_before = video_source_model_to_domain(existing.clone())?;
         let target_before_json = serde_json::to_value(&target_before)?;
 

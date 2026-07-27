@@ -79,6 +79,18 @@ fn normalize_launch_component(component: &str) -> String {
     }
 }
 
+/// Maps a repository refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant returned by the persistence layer — never a
+/// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
+/// `map_repository_not_found`, #584). Any other error falls through to the
+/// default 500 mapping.
+fn map_repository_not_found(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn list_android_stage_displays(
     State(state): State<AppState>,
@@ -135,7 +147,8 @@ pub(crate) async fn update_android_stage_display(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     let status = state.android_stage_status_for(display.id).await;
     Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
 }
@@ -153,7 +166,8 @@ pub(crate) async fn delete_android_stage_display(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await?;
+        .await
+        .map_err(map_repository_not_found)?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

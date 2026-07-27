@@ -2708,3 +2708,331 @@ async fn live_ws_preview_client_is_excluded_from_stage_count() {
     preview_ws.close(None).await.unwrap();
     server.abort();
 }
+
+// #586/#587: bare `anyhow!("... not found")` refusals from the repository/
+// state layer fall through the router's default `From<anyhow::Error> for
+// AppError` mapping to a 500, instead of the 404 a missing URL resource
+// should return. Same root cause + fix pattern as #584 (see
+// `rename_library_endpoint_missing_library_returns_404` above) — extended
+// here to the resolume/android-stage/video-source/playlist endpoints (#586)
+// and the bible/sync endpoints (#587). Every test below drives a FRESH
+// in-memory DB, so any UUID is guaranteed to be "not found".
+
+#[tokio::test]
+async fn update_resolume_host_endpoint_missing_host_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({
+        "label": "Test Host",
+        "host": "10.0.0.1",
+        "port": 8090,
+        "isEnabled": true
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PUT)
+                .uri(format!("/integrations/resolume/hosts/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_resolume_host_endpoint_missing_host_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/integrations/resolume/hosts/{random_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn update_android_stage_display_endpoint_missing_display_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({
+        "label": "Test Display",
+        "host": "10.0.0.1",
+        "port": 8080,
+        "launchComponent": "com.tcl.browser",
+        "isEnabled": true
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PUT)
+                .uri(format!("/integrations/android-stage/displays/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_android_stage_display_endpoint_missing_display_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/integrations/android-stage/displays/{random_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn update_video_source_endpoint_missing_source_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({
+        "label": "Test Camera",
+        "ndiName": "CAM1"
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PUT)
+                .uri(format!("/integrations/video-sources/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_video_source_endpoint_missing_source_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/integrations/video-sources/{random_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn activate_video_source_endpoint_missing_source_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/integrations/video-sources/{random_id}/activate"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn update_playlist_favorite_endpoint_missing_playlist_returns_404() {
+    // #586: `update_playlist`'s `showInDashboard` branch calls
+    // `set_playlist_favorite`, which repository-side calls
+    // `ensure_playlist_exists` — a bare `anyhow!("playlist not found")` with
+    // no router-side mapping, falling through to a bare 500.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({ "showInDashboard": true }).to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PATCH)
+                .uri(format!("/playlists/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn rename_bible_presentation_endpoint_missing_presentation_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({ "name": "Doesn't matter" }).to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PATCH)
+                .uri(format!("/bible/presentations/{random_id}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_bible_presentation_endpoint_missing_presentation_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/bible/presentations/{random_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn append_bible_presentation_slides_endpoint_missing_presentation_returns_404() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({
+        "slides": [
+            { "bibleMain": "Test main", "bibleTranslation": "Test translation" }
+        ]
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/bible/presentations/{random_id}/append"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_bible_presentation_slide_endpoint_missing_presentation_returns_404() {
+    // #587: `delete_bible_presentation_slide` → `state::bible::delete_bible_slide`
+    // fetches the presentation via a bare `anyhow!("bible presentation not
+    // found")` with no router-side mapping — falls through to a bare 500.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_presentation_id = uuid::Uuid::new_v4();
+    let random_slide_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!(
+                    "/bible/presentations/{random_presentation_id}/slides/{random_slide_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn reorder_bible_presentation_slides_endpoint_missing_presentation_returns_404() {
+    // #587: `reorder_bible_presentation_slides` → `state::bible::reorder_bible_slides`
+    // fetches the presentation via a bare `anyhow!("bible presentation not
+    // found")` with no router-side mapping — falls through to a bare 500.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let body = json!({ "slideIds": [] }).to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/bible/presentations/{random_id}/slides/reorder"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn restore_presentation_endpoint_missing_trashed_presentation_returns_404() {
+    // #587: `restore_presentation`'s repository refusal ("no trashed
+    // presentation to restore") had no router-side mapping — falls through
+    // to a bare 500 instead of 404, on both an unknown id AND a
+    // never-trashed presentation.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let random_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/presentations/{random_id}/restore"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn trigger_bible_broadcast_endpoint_missing_passage_returns_404() {
+    // #587: this 404 already worked, but via a fragile
+    // `err.to_string().contains("passage not found")` string match on the
+    // `Display` text rather than a typed `downcast_ref` — pin it with a
+    // regression test now that it's converted to the typed pattern.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let body = json!({
+        "translation": "kjv",
+        "book": "Genesis",
+        "chapter": 1,
+        "verseStart": 1
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/bible/trigger")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

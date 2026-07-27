@@ -155,7 +155,9 @@ impl Repository {
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow::anyhow!("no trashed presentation to restore"));
+            // #587: typed refusal (#584 pattern) — the router downcasts to
+            // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
+            return Err(RepositoryError::NotFound("no trashed presentation to restore").into());
         }
         Ok(())
     }

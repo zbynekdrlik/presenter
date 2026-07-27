@@ -4,7 +4,7 @@
 //! own file, calling the shared `Self::record_settings_audit_on` helper
 //! defined in `audit.rs`.
 
-use super::util::android_stage_display_model_to_domain;
+use super::util::{android_stage_display_model_to_domain, RepositoryError};
 use super::Repository;
 use crate::audit::SettingsAuditSource;
 use crate::entities::android_stage_display;
@@ -82,7 +82,8 @@ impl Repository {
         let existing = android_stage_display::Entity::find_by_id(id.to_string())
             .one(&txn)
             .await?
-            .ok_or_else(|| anyhow!("android stage display not found"))?;
+            // #586: typed refusal (#584 pattern).
+            .ok_or(RepositoryError::NotFound("android stage display not found"))?;
         let before = android_stage_display_model_to_domain(existing.clone())?;
         let before_json = serde_json::to_value(&before)?;
 
@@ -132,7 +133,7 @@ impl Repository {
             .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
-            return Err(anyhow!("android stage display not found"));
+            return Err(RepositoryError::NotFound("android stage display not found").into());
         }
         Self::record_settings_audit_on(
             &txn,
