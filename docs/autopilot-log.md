@@ -632,3 +632,30 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
 - Left untouched (no HTTP consumer, so no user-visible bug): `update_resolume_host_active_port`
   (internal port-drift background task only) and `repository/bible/import.rs`'s
   `set_bible_source_digest` (CLI-only via `import-data.yml`).
+
+## 2026-07-27 — #608 finish-the-job: 2 missed 500→404 sites + 3 review nits from #607
+
+- **Design notes posted BEFORE any code** (predates RED commit `69a494f8`):
+  https://github.com/zbynekdrlik/presenter/issues/608#issuecomment-5096304872. Root cause: #607's
+  manual per-site sweep missed `state/integrations.rs`'s `test_resolume_host_connection` and
+  `state/presentations.rs`'s `replace_playlist_entries` (both still bare `anyhow!`, both had the
+  consumer's `map_repository_not_found` helper already sitting unused in the same router file).
+- Version bump `426b7644` (0.4.213 → 0.4.214).
+- RED `69a494f8`: 3 new `router/tests.rs` tests. Pushed alone, confirmed on CI run 30301772738 —
+  exactly the 2 expected assertion failures (500 vs 404) on `test_resolume_host_endpoint_
+  missing_host_returns_404` and `replace_playlist_entries_endpoint_missing_playlist_returns_404`;
+  the 3rd (`restore_presentation_endpoint_never_trashed_returns_404`, a coverage-only addition —
+  the underlying behavior was already correct since #586/#587) passed as expected.
+- GREEN `ad1919be`: `RepositoryError::NotFound` at `state/integrations.rs:117` +
+  `state/presentations.rs:240`, wired to the ALREADY-PRESENT `map_repository_not_found` helpers in
+  `router/integrations/resolume.rs` and `router/playlists.rs`. Plus 3 nits: `state/bible.rs`'s
+  `update_bible_slide` (2 bare `anyhow!` sites) converted for consistency + wired at
+  `router/bible/presentations.rs:234`; `router/bible/broadcast.rs`'s inline `map_err` closure
+  extracted into the same named helper pattern; the never-trashed test closes the #608 item-4
+  comment overclaim. CI run 30302783323 fully green (Test, Build, all 3 E2E shards, NDI E2E,
+  Deploy to Dev).
+- PR #609 (Closes #608), merged `090f7efe`. Main Deploy CI run 30305963268 green. Prod verified
+  v0.4.214 live: DOM version label read via Playwright on `/ui/operator` (0 console
+  errors/warnings), plus curl-verified both fixed endpoints now return 404 on an unknown id
+  (`POST /integrations/resolume/hosts/{id}/test`, `PUT /playlists/{id}/entries`) and the restore
+  endpoint's sanity check still 404s.

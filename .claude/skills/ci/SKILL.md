@@ -37,13 +37,31 @@ policy. Note: cargo-deny/cargo-audit can transiently FAIL then PASS on an immedi
 DB / lock timing) — re-run once before treating a deny/audit failure as real. A >120 fn added by a
 feature → split a helper out (e.g. #514 split `extract_inbound_video` out of `post_client_stats`).
 
-**`quality-check.sh --strict` is NOT Tier-0-safe** (#586/#587 lesson) — it internally shells out to
-`cargo clippy -p presenter-server --tests` and `cargo check` (advisory sections, but they still
-COMPILE). A worker under a "no local Rust build/check/clippy" constraint must NOT run this script's
-`--strict` mode; use the two underlying non-compiling checks directly instead:
+**`quality-check.sh` is NOT Tier-0-safe in ANY mode** (#586/#587 lesson, corrected #610) — it
+unconditionally shells out to `cargo fmt --all --check`, `cargo clippy -p presenter-server --tests`,
+and `cargo check` regardless of `--strict`; that flag only decides whether a failing check is fatal,
+not whether these run. A worker under a "no local Rust build/check/clippy" constraint must NOT run
+this script at all, in any mode; use the two underlying non-compiling checks directly instead:
 `bash scripts/dev/count_prod_lines.sh <one-file-per-call>` and
 `QC_TARGETS=<comma-separated-files> python3 scripts/dev/fn_length_check.py .` — both are pure
 bash/Python and cover the two hard-fail gates (file size, function length) without touching cargo.
+
+## RED-before-GREEN verification under Tier-0 — push RED alone, read `--log-failed` (#608)
+
+A Tier-0 worker (no local `cargo test`) cannot run the new regression test locally to watch it
+fail. The only way to satisfy "verify it fails for the right reason" is via CI itself: commit the
+RED test(s), push ALONE (before the fix commit exists), poll the run, and once the `Test` job
+reaches a terminal `failure`, read `gh run view <id> --log-failed | grep -iE "FAILED|assertion"` to
+confirm the SPECIFIC new test names are the ones that failed (not some unrelated flake) and that
+the failure is the expected assertion (e.g. status-code mismatch), not a compile error or panic
+from something else. Only then commit + push the GREEN fix and poll again for a fully green run.
+This costs 2 pipeline runs instead of 1, but is the only way this project's Tier-0 constraint and
+`regression-test-first.md`'s RED-before-GREEN mandate can both be satisfied — do not skip the RED
+push to save a CI cycle (#607, #608 both did exactly this: RED push failed on cue, GREEN push went
+green). If the RED batch includes a coverage-only test alongside real bug-fix tests (a test that
+should already pass because the underlying behavior isn't actually broken), confirm from the SAME
+`--log-failed` output that it's absent from the failed-test list — that's your proof it wasn't
+accidentally testing the wrong thing.
 
 ## Runner Management
 

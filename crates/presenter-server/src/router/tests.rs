@@ -3060,18 +3060,67 @@ async fn test_resolume_host_endpoint_missing_host_returns_404() {
 
 #[tokio::test]
 async fn replace_playlist_entries_endpoint_missing_playlist_returns_404() {
-    // #608: `replace_playlist_entries` (state/presentations.rs) raises a bare
-    // `anyhow!("playlist not found after update")` on its tail `.find(...).ok_or_else` lookup —
-    // #586 named "playlist lookup / router/playlists.rs" generically and only the
-    // `showInDashboard` branch got mapped.
+    // #610: #608/#609 fixed the state-layer post-check, but
+    // `PlaylistRepository::replace_playlist_entries` (repository/playlist.rs) still has NO
+    // existence check of its own — it deletes (no-op for an unknown playlist), then INSERTs.
+    // With `PRAGMA foreign_keys = ON` + `fk_playlist_entries_playlist`, a NON-EMPTY `entries`
+    // array trips an FK violation on insert -> raw DbErr -> 500. An EMPTY array (#609's
+    // regression test) skips the insert loop entirely and never exercises that path, so it
+    // stayed green while every real client payload still 500s. This test seeds a real
+    // presentation and drives the actual insert path with a non-empty body.
     let app = build_router(AppState::in_memory().await.unwrap());
-    let random_id = uuid::Uuid::new_v4();
-    let body = json!({ "entries": [] }).to_string();
+
+    let create_library_body = json!({ "name": "Playlist Entries Test Library" }).to_string();
+    let library_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/libraries")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_library_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(library_response.status(), StatusCode::OK);
+    let library_bytes = axum::body::to_bytes(library_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let library: Library = serde_json::from_slice(&library_bytes).unwrap();
+
+    let create_presentation_body = json!({ "name": "Seed Presentation" }).to_string();
+    let presentation_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/libraries/{}/presentations", library.id))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_presentation_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(presentation_response.status(), StatusCode::OK);
+    let presentation_bytes = axum::body::to_bytes(presentation_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: CreateLibraryPresentationResponse =
+        serde_json::from_slice(&presentation_bytes).unwrap();
+
+    let random_playlist_id = uuid::Uuid::new_v4();
+    let body = json!({
+        "entries": [
+            { "type": "presentation", "presentationId": payload.presentation.id }
+        ]
+    })
+    .to_string();
     let response = app
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::PUT)
-                .uri(format!("/playlists/{random_id}/entries"))
+                .uri(format!("/playlists/{random_playlist_id}/entries"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .unwrap(),

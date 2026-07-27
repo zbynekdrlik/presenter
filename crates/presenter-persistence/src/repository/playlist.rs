@@ -150,6 +150,11 @@ impl Repository {
         playlist_id: PlaylistId,
         entries: &[presenter_core::PlaylistEntry],
     ) -> anyhow::Result<()> {
+        // #610: without this check, an unknown `playlist_id` with a NON-EMPTY `entries` slice
+        // trips `fk_playlist_entries_playlist` on the INSERT below (PRAGMA foreign_keys = ON) ->
+        // raw DbErr -> 500. An empty slice skipped the insert loop and never exercised that path.
+        self.ensure_playlist_exists(playlist_id).await?;
+
         let txn = self.db.begin().await?;
 
         playlist_entry::Entity::delete_many()
