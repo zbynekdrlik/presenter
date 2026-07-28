@@ -37,12 +37,31 @@ pub use lifecycle::PipelineStartError;
 /// `NdiConnectionStatus` events.
 pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 
-/// Sentinel error message returned by `whep_signaller_call` when the requested
-/// source has no active pipeline. The WHEP HTTP shim string-matches on this
-/// to translate the error into a 404. Exposed as a `pub const` so the shim
-/// imports the same literal — preventing silent 503-instead-of-404 drift if
-/// the message is ever rewritten.
-pub const SOURCE_NOT_ACTIVE_ERR: &str = "source not active";
+/// Typed WHEP-session refusal returned across the `presenter-ndi` →
+/// `presenter-server` HTTP-shim boundary. The router
+/// (`router/integrations/ndi_whep.rs`) `downcast_ref`s on this enum to pick
+/// an HTTP status — never a string match on `Display` text, which used to
+/// silently break the moment a `.context(...)` was added anywhere upstream
+/// (#589, mirrors the persistence-layer `RepositoryError` fix in
+/// #584/#586/#587 across a different crate boundary).
+///
+/// `Display` text is kept byte-identical to the pre-#589 raw strings
+/// (`SOURCE_NOT_ACTIVE_ERR` was `"source not active"`) so log output and the
+/// JSON error body are unchanged.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum NdiSessionError {
+    /// The requested source has no active pipeline.
+    #[error("source not active")]
+    SourceNotActive,
+    /// The per-source soft consumer cap (`MAX_CONSUMERS_PER_SOURCE`) was hit.
+    #[error("WHEP consumer cap reached ({max} per source) — try again later")]
+    ConsumerCapReached { max: usize },
+    /// A trickle-ICE PATCH referenced a `session_id` no longer in the
+    /// sessions map (the deployed flow is non-trickle, so this is a late/
+    /// stale candidate — see `NdiPipeline::add_ice_candidate`'s doc comment).
+    #[error("session not found: {session_id}")]
+    SessionNotFound { session_id: String },
+}
 
 /// One operation in the WHEP signaller protocol.
 pub enum WhepOp {

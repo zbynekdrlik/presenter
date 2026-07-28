@@ -47,6 +47,7 @@ use super::{
     build::consumer_h264_caps, AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot,
     StreamProfile, WhepAnswer,
 };
+use crate::manager::NdiSessionError;
 use crate::whep_session::{IceCandidate, LivenessState, WhepConnectionState, WhepSession};
 
 /// RAII owner of a consumer pipeline from the moment it is assembled until it
@@ -269,7 +270,9 @@ impl NdiPipeline {
         let sessions = self.sessions.lock().await;
         let session = sessions
             .get(session_id)
-            .ok_or_else(|| anyhow!("session not found: {session_id}"))?;
+            .ok_or_else(|| NdiSessionError::SessionNotFound {
+                session_id: session_id.to_string(),
+            })?;
         let webrtcbin = session.webrtcbin.clone();
         let candidate = candidate.to_string();
         drop(sessions);

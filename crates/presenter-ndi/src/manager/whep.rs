@@ -6,9 +6,9 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
+use crate::pipeline::{AddConsumerError, NdiPipeline, PipelineState, StreamProfile};
 
-use super::{ActiveSource, NdiManager, WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
+use super::{ActiveSource, NdiManager, NdiSessionError, WhepOp, WhepReply};
 
 impl NdiManager {
     /// Snapshot of every active pipeline's current state.
@@ -136,7 +136,7 @@ impl NdiManager {
         let active = self.active.lock().await;
         let src = active
             .get(source_id)
-            .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+            .ok_or(NdiSessionError::SourceNotActive)?;
         Self::ensure_streaming(src)?;
         Ok(std::sync::Arc::clone(&src.pipeline))
     }
@@ -152,7 +152,21 @@ impl NdiManager {
         turn_server: Option<String>,
     ) -> Result<WhepReply> {
         let pipeline = self.streaming_pipeline(source_id).await?;
-        let answer = pipeline.add_consumer(body, profile, turn_server).await?;
+        // `add_consumer` returns the pipeline's OWN typed `AddConsumerError`
+        // (its `CapReached` variant + a catch-all `Other(anyhow::Error)`) —
+        // translate `CapReached` into the shared `NdiSessionError` HERE, at
+        // the one place it crosses into the router-facing `anyhow::Result`,
+        // so `ndi_whep.rs` has a single downcast target for every WHEP
+        // status decision (#589). `Other` passes through unchanged.
+        let answer = pipeline
+            .add_consumer(body, profile, turn_server)
+            .await
+            .map_err(|err| match err {
+                AddConsumerError::CapReached { max } => {
+                    NdiSessionError::ConsumerCapReached { max }.into()
+                }
+                AddConsumerError::Other(err) => err,
+            })?;
         let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
         tracing::info!(
             source_id = %source_id,
@@ -232,7 +246,7 @@ impl NdiManager {
             let active = self.active.lock().await;
             let src = active
                 .get(source_id)
-                .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                .ok_or(NdiSessionError::SourceNotActive)?;
             std::sync::Arc::clone(&src.pipeline)
             // active lock dropped here
         };
