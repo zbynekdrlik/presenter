@@ -686,3 +686,49 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   push (merge-back per #591) CI run 30315091607 also fully green. Prod + dev both verified v0.4.215
   live via `/healthz`; functional check on both: `PUT /playlists/{unknown}/entries` with a real
   seeded presentation id now returns 404 `{"message":"playlist not found"}` (was 500).
+
+## 2026-07-28 — #588 + #589: stop hiding internal failures behind string-matched 404s (bundled batch)
+
+- Design notes posted BEFORE any code:
+  https://github.com/zbynekdrlik/presenter/issues/588#issuecomment-5099102993 (#588) and
+  https://github.com/zbynekdrlik/presenter/issues/589#issuecomment-5099104053 (#589) — both predate
+  their first RED commits (`73592290`, `7fa6dcd7`).
+- Version bump `b8b1a743` (0.4.215 → 0.4.216).
+- **#588** RED `73592290`: `router/stage.rs`'s `set_stage_layout_returns_500_on_internal_failure_not_404`
+  seeds the `timers` singleton row via a real layout switch, corrupts `countdown_state` with raw SQL
+  so the NEXT switch hits `RepositoryError::UnknownTimerState` deep in `broadcast_stage_snapshots` —
+  unrelated to the requested code — and asserts 500; failed on unfixed code (observed 404, the
+  blanket `.map_err(AppError::not_found)`). GREEN `398e53f7`: new `StageLayoutRefusal` enum
+  (`state/stage_display.rs`, `CameraCrew`/`UnknownCode`, `Display` byte-identical to the old
+  messages) + `map_stage_layout_refusal` in the router downcasting on it — everything else falls to
+  the default 500.
+- **#589** RED `7fa6dcd7`: `ndi_whep.rs`'s `map_signaller_error_source_not_active_survives_context_wrapping`
+  wraps `anyhow!(SOURCE_NOT_ACTIVE_ERR)` in `.context(...)` and asserts 404; failed on unfixed code
+  (the `.to_string().contains(...)` match only sees the outer context message, falls to 503). GREEN
+  `a133893b`: new `NdiSessionError` enum (`presenter_ndi::manager` — `SourceNotActive`,
+  `ConsumerCapReached{max}`, `SessionNotFound{session_id}`, `Display` byte-identical to the old raw
+  strings) replaces every `anyhow!(...)` raise site in `manager/whep.rs` + `pipeline/consumers.rs`;
+  the pipeline's own `AddConsumerError::CapReached` is translated into it at the single
+  `whep_post` boundary. Router's 3 status-deciding sites now `downcast_ref::<NdiSessionError>()`
+  instead of `.contains(...)`.
+- Fixup `5142ab32`: `cargo clippy -D warnings` failed on `unused_must_use` — the #588 RED test's
+  seed call discarded the handler's `#[must_use]` `Json<...>` with a bare `.unwrap();` statement;
+  fixed with `let _ = ...`.
+- Dispatched `superpowers:requesting-code-review` against `origin/main..HEAD` before merging (built
+  + ran the crates locally on dev2, per project policy) — 0 Critical/Important, 2 Minor (unused
+  `Clone` derive on `NdiSessionError`, an inline fully-qualified path instead of a `use` import);
+  both fixed in `6d5040d0`, which also caught a stale Cargo.lock (workspace versions still read
+  0.4.213 from before #590's version churn) and refreshed it to 0.4.216.
+- PR #613 (Closes #588, Closes #589), merged `3e86654a`. Main Deploy CI run 30328062127 green.
+  Prod + dev both verified v0.4.216 live via `/healthz`. Functional checks: `POST /stage/layout`
+  with an unknown code → 404 `{"message":"unknown stage layout: ..."}` on both; WHEP POST/DELETE
+  against an unknown/inactive NDI source → 204 on both (the #431-established not-active contract,
+  now typed instead of string-matched).
+- Playbook: `.claude/rules/repository-error-pattern.md` gained presenter-ndi to its `paths:`, plus
+  3 new sections — (1) not every refusal is a `RepositoryError`, a domain error decided outside the
+  persistence layer gets its OWN small `thiserror` enum (precedent: `router/timers.rs`'s
+  `TimerError` downcast already existed pre-#588); (2) `anyhow::Error::downcast_ref` provably walks
+  the WHOLE `.context(...)` chain (traced through `anyhow-1.0.103/src/error.rs`'s
+  `context_chain_downcast`) — that's WHY the pattern is robust and string-matching isn't; (3) the
+  `unused_must_use` clippy gotcha above. Landed after #613 merged, so it rides its own version bump
+  (0.4.216 → 0.4.217) and its own tiny PR to keep dev strictly ahead of main.
