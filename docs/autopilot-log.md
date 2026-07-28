@@ -659,3 +659,30 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   errors/warnings), plus curl-verified both fixed endpoints now return 404 on an unknown id
   (`POST /integrations/resolume/hosts/{id}/test`, `PUT /playlists/{id}/entries`) and the restore
   endpoint's sanity check still 404s.
+
+## #610: `PUT /playlists/{id}/entries` still 500s for a non-empty body — #609's own regression test dodged it
+
+- Design comment posted before any code: https://github.com/zbynekdrlik/presenter/issues/610#issuecomment-5097450786
+- Version bump `f19540e4` (0.4.214 → 0.4.215).
+- RED `27cff18e`: rewrote `replace_playlist_entries_endpoint_missing_playlist_returns_404` to seed
+  a real presentation over HTTP and PUT a non-empty `entries` array (previously `{"entries": []}`,
+  the one shape that skips the repository's insert loop). Pushed alone, CI run 30310638017 —
+  `Test` job failed exactly on this test, `left: 500, right: 404`, all other jobs green.
+- GREEN `90819e36`: `PlaylistRepository::replace_playlist_entries` (`repository/playlist.rs`) now
+  calls the existing `ensure_playlist_exists` helper as its first line, matching the typed-refusal
+  pattern already used elsewhere in the file. Traced all 4 callers (router HTTP path,
+  `ensure_demo_playlist`, 2 test seeders) — all create the playlist first, so no behavior change.
+  Plus 2 doc fixes: `.claude/skills/ci/SKILL.md`'s Tier-0 warning corrected to "NOT Tier-0-safe in
+  ANY mode" (fmt/clippy/check run unconditionally, `--strict` only controls fatality);
+  `.claude/rules/repository-error-pattern.md`'s module list gained the missing
+  `router/bible/broadcast.rs` (9 modules, not 8) + noted `router/presentations.rs`'s
+  `map_repository_error` naming exception. CI run 30311605427: first attempt's `NDI WebRTC E2E`
+  job failed on an UNRELATED dead `deb.nodesource.com` apt source on the self-hosted runner
+  (403 Forbidden, confirmed reproducible via direct `curl`/`apt-get update`) — fixed by removing
+  the stale `/etc/apt/sources.list.d/nodesource.list` + keyring on dev2 (unused: the runner's
+  actual node/npm come from nvm per `NVM_BIN` in the runner's `.env`); reran just the failed job,
+  fully green afterward (22/22 jobs incl. Deploy to Dev).
+- PR #612 (Closes #610), merged `8c650c81`. Main Deploy CI run 30314489187 green. Dev fast-forward
+  push (merge-back per #591) CI run 30315091607 also fully green. Prod + dev both verified v0.4.215
+  live via `/healthz`; functional check on both: `PUT /playlists/{unknown}/entries` with a real
+  seeded presentation id now returns 404 `{"message":"playlist not found"}` (was 500).

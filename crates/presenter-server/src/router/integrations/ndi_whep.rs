@@ -9,7 +9,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use presenter_ndi::manager::{WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
+use presenter_ndi::manager::{NdiSessionError, WhepOp, WhepReply};
 use presenter_ndi::StreamProfile;
 use tracing::instrument;
 
@@ -34,26 +34,30 @@ fn into_response(reply: WhepReply) -> Response {
         .expect("valid response")
 }
 
-/// Map a `whep_signaller_call` error string to the right HTTP status.
+/// Map a `whep_signaller_call` error to the right HTTP status via the TYPED
+/// `NdiSessionError` — never a string match on `Display` text (#589: that
+/// silently broke the moment `.context(...)` was added anywhere upstream in
+/// `presenter-ndi`, mirroring the persistence-layer `RepositoryError` fix in
+/// #584/#586/#587 across a different crate boundary).
 ///
-/// "source not active" → 404 (the WHEP spec calls for 404 when the resource
-/// doesn't exist). "consumer cap reached" → 503 + Retry-After: 60 (browser
+/// `SourceNotActive` → 404 (the WHEP spec calls for 404 when the resource
+/// doesn't exist). `ConsumerCapReached` → 503 + Retry-After: 60 (browser
 /// should back off, not hammer). Anything else (pipeline starting / stopped /
-/// errored, signaller emit failures) → 503 so WHEP clients back off and retry.
+/// errored, signaller emit failures, `SessionNotFound`) → 503 so WHEP clients
+/// back off and retry.
 fn map_signaller_error(err: anyhow::Error) -> AppError {
-    let msg = err.to_string();
-    if msg.contains(SOURCE_NOT_ACTIVE_ERR) {
-        AppError::not_found("NDI source not active")
-    } else if msg.contains("consumer cap reached") {
-        AppError::service_unavailable_with_retry(format!("WHEP: {msg}"), 60)
-    } else {
-        AppError::service_unavailable(format!("WHEP: {msg}"))
+    match err.downcast_ref::<NdiSessionError>() {
+        Some(NdiSessionError::SourceNotActive) => AppError::not_found("NDI source not active"),
+        Some(NdiSessionError::ConsumerCapReached { .. }) => {
+            AppError::service_unavailable_with_retry(format!("WHEP: {err}"), 60)
+        }
+        _ => AppError::service_unavailable(format!("WHEP: {err}")),
     }
 }
 
 /// #431: map a `whep_signaller_call` POST error to its WHEP response.
 ///
-/// A configured-but-not-currently-producing source (`SOURCE_NOT_ACTIVE_ERR`)
+/// A configured-but-not-currently-producing source (`NdiSessionError::SourceNotActive`)
 /// is a transient, EXPECTED state — answer 204 No Content, NOT 404. The stage
 /// only POSTs WHEP for a source the operator has activated (it never renders an
 /// `<NdiVideo>` for an unknown source), so "source not active" here means
@@ -65,18 +69,17 @@ fn map_signaller_error(err: anyhow::Error) -> AppError {
 /// (404 for unknown on the session-scoped paths, 503 otherwise).
 ///
 /// Pure + directly unit-tested (no live NdiManager needed) so the
-/// `SOURCE_NOT_ACTIVE_ERR` → 204 vs the fall-through → error distinction is
+/// `SourceNotActive` → 204 vs the fall-through → error distinction is
 /// exercised even on a host without libndi — which is required to KILL the
 /// mutation-testing mutants on this match guard.
 fn map_post_whep_error(err: anyhow::Error) -> Result<WhepReply, AppError> {
-    if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR) {
-        Ok(WhepReply {
+    match err.downcast_ref::<NdiSessionError>() {
+        Some(NdiSessionError::SourceNotActive) => Ok(WhepReply {
             status: 204,
             headers: Vec::new(),
             body: None,
-        })
-    } else {
-        Err(map_signaller_error(err))
+        }),
+        _ => Err(map_signaller_error(err)),
     }
 }
 
@@ -190,8 +193,11 @@ pub(crate) async fn delete_whep_session(
         // before the DELETE arrives; a 404 logged a browser console error
         // ("Failed to load resource") on every deactivate/navigation cycle.
         Err(err)
-            if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR)
-                || err.to_string().contains("session not found") =>
+            if matches!(
+                err.downcast_ref::<NdiSessionError>(),
+                Some(NdiSessionError::SourceNotActive)
+                    | Some(NdiSessionError::SessionNotFound { .. })
+            ) =>
         {
             WhepReply {
                 status: 204,
@@ -486,18 +492,17 @@ mod tests {
     }
 
     /// #431 + mutation-kill: `map_post_whep_error` must return a 204 reply for a
-    /// `SOURCE_NOT_ACTIVE_ERR` (configured-but-not-producing) and an Err for
-    /// anything else. Tested directly (no NdiManager) so the match-guard
-    /// `err.to_string().contains(SOURCE_NOT_ACTIVE_ERR)` is exercised on every
-    /// host — killing the cargo-mutants mutants that replace it with
-    /// `true`/`false` (which the handler-level tests couldn't catch on a
-    /// libndi-less CI runner, where the manager-missing 503 short-circuits
-    /// before the guard).
+    /// `NdiSessionError::SourceNotActive` (configured-but-not-producing) and an
+    /// Err for anything else. Tested directly (no NdiManager) so the
+    /// downcast-match guard is exercised on every host — killing the
+    /// cargo-mutants mutants that replace it with `true`/`false` (which the
+    /// handler-level tests couldn't catch on a libndi-less CI runner, where
+    /// the manager-missing 503 short-circuits before the guard).
     #[test]
     fn map_post_whep_error_returns_204_for_source_not_active() {
         // Guard MUST be true for a not-active error → 204 reply, NOT an Err.
         // Kills the "guard with false" mutant.
-        match map_post_whep_error(anyhow::anyhow!(SOURCE_NOT_ACTIVE_ERR)) {
+        match map_post_whep_error(NdiSessionError::SourceNotActive.into()) {
             Ok(reply) => {
                 assert_eq!(
                     reply.status, 204,
@@ -529,7 +534,7 @@ mod tests {
         }
 
         // A consumer-cap error also passes through (503 + Retry-After), never 204.
-        match map_post_whep_error(anyhow::anyhow!("WHEP consumer cap reached (8 per source)")) {
+        match map_post_whep_error(NdiSessionError::ConsumerCapReached { max: 8 }.into()) {
             Ok(reply) => panic!(
                 "consumer-cap must not become a 204 reply, got status {}",
                 reply.status
@@ -544,7 +549,7 @@ mod tests {
 
     #[test]
     fn map_signaller_error_consumer_cap_emits_503_with_retry_after() {
-        let err = anyhow::anyhow!("WHEP consumer cap reached (8 per source) — try again later");
+        let err: anyhow::Error = NdiSessionError::ConsumerCapReached { max: 8 }.into();
         let app_err = map_signaller_error(err);
         let resp = app_err.into_response();
         assert_eq!(
@@ -560,6 +565,28 @@ mod tests {
             retry_after,
             Some("60"),
             "Retry-After header must be 60 seconds"
+        );
+    }
+
+    /// #589: `map_signaller_error`'s SOURCE_NOT_ACTIVE_ERR → 404 branch had NO
+    /// unit test at all — only the consumer-cap branch was covered. Worse,
+    /// the branch decides status by `err.to_string().contains(...)`, which
+    /// breaks the moment upstream code wraps the error with `.context(...)`
+    /// (a `.context()` call replaces the anyhow `Display` text with the
+    /// context message — the original "source not active" text is no longer
+    /// visible to a string match, only to a downcast that walks the chain).
+    /// This test simulates exactly that: a genuinely "source not active"
+    /// error that picked up an unrelated context wrapper somewhere upstream.
+    /// It must still map to 404.
+    #[test]
+    fn map_signaller_error_source_not_active_survives_context_wrapping() {
+        let err = anyhow::Error::from(NdiSessionError::SourceNotActive)
+            .context("signaller call failed while forwarding to the pipeline");
+        let app_err = map_signaller_error(err);
+        assert_eq!(
+            app_err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "a source-not-active error must map to 404 even wrapped in extra context (#589)"
         );
     }
 

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::{parse_uuid, AppError};
+use crate::state::stage_display::StageLayoutRefusal;
 use crate::state::AppState;
 use axum::http::StatusCode;
 use presenter_core::{
@@ -64,6 +65,18 @@ pub(super) async fn get_stage_layout(
     }))
 }
 
+/// Maps a `set_stage_layout_code` refusal to its HTTP status via the TYPED
+/// `StageLayoutRefusal` error — never a blanket `.to_string()`-based 404
+/// (#588: that hid a genuine internal failure, e.g. a corrupted `timers` row
+/// surfaced by `broadcast_stage_snapshots`, as a benign "layout not found").
+/// Any other error falls through to the default 500 mapping.
+fn map_stage_layout_refusal(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<StageLayoutRefusal>() {
+        Some(refusal) => AppError::not_found(refusal.to_string()),
+        None => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn set_stage_layout(
     State(state): State<AppState>,
@@ -76,7 +89,7 @@ pub(super) async fn set_stage_layout(
     let layout = state
         .set_stage_layout_code(code)
         .await
-        .map_err(|err| AppError::not_found(err.to_string()))?;
+        .map_err(map_stage_layout_refusal)?;
     Ok(Json(StageLayoutResponse {
         code: layout.code.clone(),
         layout,
@@ -231,5 +244,92 @@ mod broadcast_live_handler_tests {
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(!state.broadcast_live());
+    }
+}
+
+/// #588: `set_stage_layout` must discriminate a genuine internal failure from
+/// an unknown/invalid layout code — not blanket-map every error to 404.
+#[cfg(test)]
+mod set_stage_layout_error_mapping_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    /// An internal failure unrelated to the layout code itself (here: a
+    /// corrupted `timers` row surfaced while `broadcast_stage_snapshots`
+    /// rebuilds the stage context after a VALID layout switch) must answer
+    /// 500 — never 404. Before the #588 fix, `set_stage_layout` mapped every
+    /// error from `set_stage_layout_code` to `AppError::not_found`, so this
+    /// genuine server fault was reported to the client as "layout not
+    /// found".
+    #[tokio::test]
+    async fn set_stage_layout_returns_500_on_internal_failure_not_404() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        // Seed the timers row (created lazily by the first stage-context
+        // rebuild) via an initial, unrelated valid layout switch.
+        let _ = set_stage_layout(
+            State(state.clone()),
+            Json(StageLayoutUpdateRequest {
+                code: "timer".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Corrupt the persisted timer state directly via raw SQL so the next
+        // stage-context rebuild hits `RepositoryError::UnknownTimerState` —
+        // a real internal fault, unrelated to the requested layout code.
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "UPDATE timers SET countdown_state = 'corrupted-state'".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        // Switch to a DIFFERENT valid, operator-selectable code so the
+        // early-return-on-unchanged-code guard doesn't short-circuit before
+        // `broadcast_stage_snapshots` runs.
+        let result = set_stage_layout(
+            State(state),
+            Json(StageLayoutUpdateRequest {
+                code: "preach".to_string(),
+            }),
+        )
+        .await;
+
+        let Err(err) = result else {
+            panic!("expected an error from the corrupted timers row, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "an internal failure on the layout-switch path must be 500, not 404 (#588)"
+        );
+    }
+
+    /// An unknown/invalid layout code must still answer 404 — the acceptance
+    /// criterion #588 must NOT regress.
+    #[tokio::test]
+    async fn set_stage_layout_returns_404_for_unknown_code() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        let result = set_stage_layout(
+            State(state),
+            Json(StageLayoutUpdateRequest {
+                code: "no-such-layout".to_string(),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for an unknown layout code, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "an unknown layout code must be 404"
+        );
     }
 }

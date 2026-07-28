@@ -6,6 +6,26 @@ use crate::live::LiveEvent;
 use presenter_core::{
     StageDisplayLayout, StageDisplaySnapshot, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
+use thiserror::Error;
+
+/// A `POST /stage/layout` request refused a `code` that is not a valid,
+/// operator-selectable layout. The router (`router/stage.rs`) downcasts on
+/// this TYPED error to answer 404 — never a blanket `.to_string()`-based
+/// mapping, which used to hide a genuine internal failure (e.g. a corrupted
+/// `timers` row surfaced while rebuilding the stage context) as a benign
+/// "layout not found" (#588). Any OTHER error from `set_stage_layout_code`
+/// falls through to the router's default 500 mapping.
+///
+/// `Display` text is kept byte-identical to the pre-#588 messages —
+/// `set_stage_layout_code_rejects_camera_crew` (`state/tests.rs`) asserts on
+/// the exact `CameraCrew` wording.
+#[derive(Debug, Error)]
+pub(crate) enum StageLayoutRefusal {
+    #[error("'{0}' is not an operator-selectable layout; it is served only at /ui/camera")]
+    CameraCrew(String),
+    #[error("unknown stage layout: {0}")]
+    UnknownCode(String),
+}
 
 /// `app_settings` key under which the operator-selected stage layout code is
 /// persisted so it survives a server restart/deploy (issue #384). Stored via
@@ -105,12 +125,10 @@ impl AppState {
     /// two paths can never drift apart).
     pub(super) fn validate_operator_selectable(code: &str) -> anyhow::Result<StageDisplayLayout> {
         if code == "camera-crew" {
-            return Err(anyhow::anyhow!(
-                "'camera-crew' is not an operator-selectable layout; it is served only at /ui/camera"
-            ));
+            return Err(StageLayoutRefusal::CameraCrew(code.to_string()).into());
         }
         StageDisplayLayout::find_operator_selectable(code)
-            .ok_or_else(|| anyhow::anyhow!("unknown stage layout: {code}"))
+            .ok_or_else(|| StageLayoutRefusal::UnknownCode(code.to_string()).into())
     }
 
     pub async fn set_stage_layout_code(&self, code: &str) -> anyhow::Result<StageDisplayLayout> {
