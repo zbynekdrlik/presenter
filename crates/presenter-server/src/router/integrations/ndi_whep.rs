@@ -563,6 +563,28 @@ mod tests {
         );
     }
 
+    /// #589: `map_signaller_error`'s SOURCE_NOT_ACTIVE_ERR → 404 branch had NO
+    /// unit test at all — only the consumer-cap branch was covered. Worse,
+    /// the branch decides status by `err.to_string().contains(...)`, which
+    /// breaks the moment upstream code wraps the error with `.context(...)`
+    /// (a `.context()` call replaces the anyhow `Display` text with the
+    /// context message — the original "source not active" text is no longer
+    /// visible to a string match, only to a downcast that walks the chain).
+    /// This test simulates exactly that: a genuinely "source not active"
+    /// error that picked up an unrelated context wrapper somewhere upstream.
+    /// It must still map to 404.
+    #[test]
+    fn map_signaller_error_source_not_active_survives_context_wrapping() {
+        let err = anyhow::anyhow!(SOURCE_NOT_ACTIVE_ERR)
+            .context("signaller call failed while forwarding to the pipeline");
+        let app_err = map_signaller_error(err);
+        assert_eq!(
+            app_err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "a source-not-active error must map to 404 even wrapped in extra context (#589)"
+        );
+    }
+
     #[test]
     fn into_response_defaults_to_empty_body_when_none() {
         let reply = WhepReply {
