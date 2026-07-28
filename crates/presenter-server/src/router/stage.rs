@@ -266,7 +266,7 @@ mod set_stage_layout_error_mapping_tests {
         let state = crate::state::AppState::in_memory().await.unwrap();
         // Seed the timers row (created lazily by the first stage-context
         // rebuild) via an initial, unrelated valid layout switch.
-        set_stage_layout(
+        let _ = set_stage_layout(
             State(state.clone()),
             Json(StageLayoutUpdateRequest {
                 code: "timer".to_string(),
