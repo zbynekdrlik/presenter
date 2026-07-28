@@ -88,6 +88,32 @@ CI has TWO runs per push: "PR Automation" (fast, Label/Validate) and "Pipeline" 
 Test→Build→E2E→deploy). `gh run list --limit 1` often returns PR Automation — filter:
 `gh run list --branch dev --limit 5 | grep Pipeline`.
 
+## Dead `deb.nodesource.com` apt source breaks `--with-deps` browser install (#610)
+
+The `NDI WebRTC E2E` job's "Install Playwright (branded Chrome for H.264)" step runs
+`npx playwright install --with-deps chromium chrome`, which internally does `apt-get update` across
+EVERY configured apt source — if ANY one source 403s, the whole `apt-get` call fails and Playwright
+reports "Failed to install browsers" / exit code 100, even though every OTHER OS dependency would
+have resolved fine.
+
+**Symptom:** job fails at that exact step with `E: Failed to fetch https://deb.nodesource.com/...
+403 Forbidden` / `The repository '...' is no longer signed.` Confirm it's a real dead endpoint (not
+a transient blip) with `curl -sI https://deb.nodesource.com/node_22.x/dists/nodistro/InRelease` —
+a Cloudflare/S3 `AccessDenied` on retry means the endpoint is genuinely gone, not flaky.
+
+**Why it's safe to just delete the source:** this runner's actual node/npm come from **nvm**
+(`NVM_BIN` is set in the runner's `~/actions-runner/.env`, e.g. `v24.12.0`), not the dpkg
+`nodejs` package `deb.nodesource.com` provides. The nodesource apt source is leftover
+provisioning cruft with no live consumer — check `which -a node npm` (nvm path first) and
+`cat ~/actions-runner/.env` before assuming otherwise.
+
+**Fix:**
+```bash
+sudo rm -f /etc/apt/sources.list.d/nodesource.list /usr/share/keyrings/nodesource.gpg
+sudo apt-get update   # should now complete cleanly, no 403s
+gh run rerun <run-id> --failed   # reruns only the failed job, others stay untouched
+```
+
 ## GPU Wedge Recovery (#445)
 
 **dev2's single RTX 5050 is SHARED** between Presenter CI runner (`presenter-local`) and
