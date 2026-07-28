@@ -48,7 +48,7 @@ pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 /// `Display` text is kept byte-identical to the pre-#589 raw strings
 /// (`SOURCE_NOT_ACTIVE_ERR` was `"source not active"`) so log output and the
 /// JSON error body are unchanged.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum NdiSessionError {
     /// The requested source has no active pipeline.
     #[error("source not active")]

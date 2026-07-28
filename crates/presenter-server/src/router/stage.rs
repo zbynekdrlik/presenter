@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::{parse_uuid, AppError};
+use crate::state::stage_display::StageLayoutRefusal;
 use crate::state::AppState;
 use axum::http::StatusCode;
 use presenter_core::{
@@ -70,7 +71,7 @@ pub(super) async fn get_stage_layout(
 /// surfaced by `broadcast_stage_snapshots`, as a benign "layout not found").
 /// Any other error falls through to the default 500 mapping.
 fn map_stage_layout_refusal(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<crate::state::stage_display::StageLayoutRefusal>() {
+    match err.downcast_ref::<StageLayoutRefusal>() {
         Some(refusal) => AppError::not_found(refusal.to_string()),
         None => err.into(),
     }
