@@ -37,7 +37,7 @@ mod seed;
 mod slide_stage_layout;
 pub(crate) mod slides;
 pub(crate) mod stage;
-mod stage_display;
+pub(crate) mod stage_display;
 mod stage_state;
 pub(crate) mod sync;
 #[cfg(test)]

@@ -64,6 +64,18 @@ pub(super) async fn get_stage_layout(
     }))
 }
 
+/// Maps a `set_stage_layout_code` refusal to its HTTP status via the TYPED
+/// `StageLayoutRefusal` error — never a blanket `.to_string()`-based 404
+/// (#588: that hid a genuine internal failure, e.g. a corrupted `timers` row
+/// surfaced by `broadcast_stage_snapshots`, as a benign "layout not found").
+/// Any other error falls through to the default 500 mapping.
+fn map_stage_layout_refusal(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<crate::state::stage_display::StageLayoutRefusal>() {
+        Some(refusal) => AppError::not_found(refusal.to_string()),
+        None => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn set_stage_layout(
     State(state): State<AppState>,
@@ -76,7 +88,7 @@ pub(super) async fn set_stage_layout(
     let layout = state
         .set_stage_layout_code(code)
         .await
-        .map_err(|err| AppError::not_found(err.to_string()))?;
+        .map_err(map_stage_layout_refusal)?;
     Ok(Json(StageLayoutResponse {
         code: layout.code.clone(),
         layout,
