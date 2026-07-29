@@ -66,6 +66,7 @@ pub(super) async fn list_slide_stage_layouts(
 mod tests {
     use super::*;
     use axum::extract::{Path, State};
+    use axum::response::IntoResponse;
 
     async fn seeded_state() -> (crate::state::AppState, presenter_core::Presentation) {
         let state = crate::state::AppState::in_memory().await.unwrap();
@@ -130,5 +131,64 @@ mod tests {
         )
         .await;
         assert!(result.is_err(), "unknown layout must be rejected");
+    }
+
+    /// #615: an unknown/invalid layout code must still answer 400 — the SAME
+    /// client-error status the route returns today. `StageLayoutRefusal` is
+    /// a client-side refusal (bad layout code), not an internal failure.
+    #[tokio::test]
+    async fn put_returns_400_for_unknown_layout_code() {
+        let (state, presentation) = seeded_state().await;
+        let slide_id = presentation.slides[0].id;
+
+        let result = set_slide_stage_layout(
+            State(state),
+            Path((presentation.id.to_string(), slide_id.to_string())),
+            Json(SlideStageLayoutRequest {
+                layout_code: Some("no-such-layout".to_string()),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for an unknown layout code, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::BAD_REQUEST,
+            "an unknown layout code must be 400 (same client-error status as today, #615)"
+        );
+    }
+
+    /// #615: a genuine internal failure (here: a non-existent presentation
+    /// causes `assign_slide_stage_layout` to `bail!("presentation not
+    /// found")`, an untyped `anyhow::Error` that is NOT a
+    /// `StageLayoutRefusal`) must answer 500 — never 400. Before the fix,
+    /// the blanket `.map_err(AppError::bad_request)` masked this as a
+    /// client error.
+    #[tokio::test]
+    async fn put_returns_500_on_internal_failure_not_400() {
+        let (state, _presentation) = seeded_state().await;
+        // A valid-format UUID that doesn't correspond to any seeded
+        // presentation: `presentation_detail` returns `None`, the state
+        // method `bail!`s — a non-typed error that must fall through to 500.
+        let random_uuid = uuid::Uuid::new_v4();
+        let random_slide = presenter_core::SlideId::new();
+
+        let result = set_slide_stage_layout(
+            State(state),
+            Path((random_uuid.to_string(), random_slide.to_string())),
+            Json(SlideStageLayoutRequest {
+                layout_code: Some("fulltext".to_string()),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "an internal failure must be 500, not 400 (#615)"
+        );
     }
 }
