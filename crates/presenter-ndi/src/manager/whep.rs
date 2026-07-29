@@ -6,9 +6,7 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::pipeline::{
-    AddConsumerError, NdiPipeline, PipelineState, StreamProfile, MAX_CONSUMERS_PER_SOURCE,
-};
+use crate::pipeline::{AddConsumerError, NdiPipeline, PipelineState, StreamProfile};
 
 use super::{ActiveSource, NdiManager, NdiSessionError, WhepOp, WhepReply};
 
@@ -291,6 +289,7 @@ fn translate_add_consumer_error(err: AddConsumerError) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::MAX_CONSUMERS_PER_SOURCE;
 
     /// #616 Gap A: `translate_add_consumer_error` is the ONLY place
     /// `AddConsumerError::CapReached` becomes
