@@ -83,6 +83,32 @@ fn map_post_whep_error(err: anyhow::Error) -> Result<WhepReply, AppError> {
     }
 }
 
+/// Idempotent DELETE: a session (or its whole source) that is already gone
+/// means the client's desired state holds — answer 204, not 404. The stage UI
+/// dispatches teardown DELETEs from both on_cleanup and pagehide, and after a
+/// server-side deactivate the session is gone before the DELETE arrives; a 404
+/// logged a browser console error ("Failed to load resource") on every
+/// deactivate/navigation cycle.
+///
+/// Pure + directly unit-tested (no live NdiManager needed) so the idempotency
+/// guard is exercised on every host — killing the cargo-mutants mutants that
+/// replace the match arms with `true`/`false` (which the handler-level test
+/// can't catch on a libndi-less CI runner, where the manager-missing 503
+/// short-circuits before the guard is reached). Same extraction shape as
+/// `map_post_whep_error` above (#431) and #616 Gap B.
+fn map_delete_whep_error(err: anyhow::Error) -> Result<WhepReply, AppError> {
+    match err.downcast_ref::<NdiSessionError>() {
+        Some(NdiSessionError::SourceNotActive) | Some(NdiSessionError::SessionNotFound { .. }) => {
+            Ok(WhepReply {
+                status: 204,
+                headers: Vec::new(),
+                body: None,
+            })
+        }
+        _ => Err(map_signaller_error(err)),
+    }
+}
+
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn post_whep_endpoint(
     Path(source_id): Path<String>,
@@ -188,24 +214,11 @@ pub(crate) async fn delete_whep_session(
         Ok(reply) => reply,
         // Idempotent DELETE: a session (or its whole source) that is already
         // gone means the client's desired state holds — answer 204, not 404.
-        // The stage UI dispatches teardown DELETEs from both on_cleanup and
-        // pagehide, and after a server-side deactivate the session is gone
-        // before the DELETE arrives; a 404 logged a browser console error
-        // ("Failed to load resource") on every deactivate/navigation cycle.
-        Err(err)
-            if matches!(
-                err.downcast_ref::<NdiSessionError>(),
-                Some(NdiSessionError::SourceNotActive)
-                    | Some(NdiSessionError::SessionNotFound { .. })
-            ) =>
-        {
-            WhepReply {
-                status: 204,
-                headers: Vec::new(),
-                body: None,
-            }
-        }
-        Err(err) => return Err(map_signaller_error(err)),
+        // Extracted into `map_delete_whep_error` (#616 Gap B) so the guard is
+        // directly unit-testable on CI runners without libndi (the handler
+        // short-circuits to 503 before reaching the guard when the manager is
+        // missing, mirroring #431's extraction of `map_post_whep_error`).
+        Err(err) => map_delete_whep_error(err)?,
     };
     Ok(into_response(reply))
 }
@@ -552,6 +565,7 @@ mod tests {
         let err: anyhow::Error = NdiSessionError::ConsumerCapReached { max: 8 }.into();
         let app_err = map_signaller_error(err);
         let resp = app_err.into_response();
+
         assert_eq!(
             resp.status(),
             StatusCode::SERVICE_UNAVAILABLE,
@@ -566,6 +580,83 @@ mod tests {
             Some("60"),
             "Retry-After header must be 60 seconds"
         );
+    }
+
+    /// #616 Gap B: `map_delete_whep_error` must return 204 for a
+    /// `SourceNotActive` — the DELETE is idempotent, a source that's already
+    /// gone means the client's desired state holds. The handler-level test
+    /// can't exercise this guard on a CI runner without libndi (the manager
+    /// is `None` → 503 short-circuit), so the extracted pure function is
+    /// tested directly. Kills the "guard with false" mutant.
+    #[test]
+    fn map_delete_whep_error_returns_204_for_source_not_active() {
+        match map_delete_whep_error(NdiSessionError::SourceNotActive.into()) {
+            Ok(reply) => {
+                assert_eq!(
+                    reply.status, 204,
+                    "DELETE of an inactive source must be 204 (idempotent)"
+                );
+                assert!(reply.body.is_none(), "204 reply carries no body");
+            }
+            Err(err) => panic!(
+                "not-active DELETE error must map to a 204 reply, got HTTP {}",
+                err.into_response().status()
+            ),
+        }
+    }
+
+    /// #616 Gap B: `SessionNotFound` is the other half of the idempotency
+    /// guard — a session that's already gone means the client's desired state
+    /// holds. Deliberately preserved even though production code rarely
+    /// reaches it (see the issue note about not "cleaning up" this branch).
+    #[test]
+    fn map_delete_whep_error_returns_204_for_session_not_found() {
+        match map_delete_whep_error(
+            NdiSessionError::SessionNotFound {
+                session_id: "test-session".to_string(),
+            }
+            .into(),
+        ) {
+            Ok(reply) => {
+                assert_eq!(
+                    reply.status, 204,
+                    "DELETE of a non-existent session must be 204 (idempotent)"
+                );
+            }
+            Err(err) => panic!(
+                "session-not-found DELETE error must map to a 204 reply, got HTTP {}",
+                err.into_response().status()
+            ),
+        }
+    }
+
+    /// #616 Gap B: a non-idempotent error must NOT become 204 — it maps to
+    /// `map_signaller_error` (503 for pipeline errors, 404 for unknown
+    /// sources via the generic path). Kills the "guard with true" mutant.
+    #[test]
+    fn map_delete_whep_error_passes_through_non_idempotent_errors() {
+        match map_delete_whep_error(anyhow::anyhow!("pipeline errored: ndisrc crash")) {
+            Ok(reply) => panic!(
+                "a non-idempotent error must NOT become a 204 reply, got status {}",
+                reply.status
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a generic pipeline error maps to 503, not 204"
+            ),
+        }
+    }
+
+    #[test]
+    fn into_response_defaults_to_empty_body_when_none() {
+        let reply = WhepReply {
+            status: 204,
+            headers: Vec::new(),
+            body: None,
+        };
+        let resp = into_response(reply);
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
     /// #589: `map_signaller_error`'s SOURCE_NOT_ACTIVE_ERR → 404 branch had NO
@@ -588,17 +679,6 @@ mod tests {
             StatusCode::NOT_FOUND,
             "a source-not-active error must map to 404 even wrapped in extra context (#589)"
         );
-    }
-
-    #[test]
-    fn into_response_defaults_to_empty_body_when_none() {
-        let reply = WhepReply {
-            status: 204,
-            headers: Vec::new(),
-            body: None,
-        };
-        let resp = into_response(reply);
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
     #[cfg(feature = "test-helpers")]

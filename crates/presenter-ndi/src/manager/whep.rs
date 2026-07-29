@@ -161,12 +161,7 @@ impl NdiManager {
         let answer = pipeline
             .add_consumer(body, profile, turn_server)
             .await
-            .map_err(|err| match err {
-                AddConsumerError::CapReached { max } => {
-                    NdiSessionError::ConsumerCapReached { max }.into()
-                }
-                AddConsumerError::Other(err) => err,
-            })?;
+            .map_err(translate_add_consumer_error)?;
         let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
         tracing::info!(
             source_id = %source_id,
@@ -271,5 +266,74 @@ impl NdiManager {
             PipelineState::Stopped => Err(anyhow!("pipeline stopped")),
             PipelineState::Errored(e) => Err(anyhow!("pipeline errored: {e}")),
         }
+    }
+}
+
+/// Translate the pipeline's OWN typed `AddConsumerError` into the shared
+/// router-facing `NdiSessionError` at the ONE place it crosses into
+/// `anyhow::Result` (`whep_post`), so `ndi_whep.rs` has a single downcast
+/// target for every WHEP status decision (#589). `Other` passes through
+/// unchanged.
+///
+/// Pure + directly unit-tested (no `NdiManager` / libndi needed) so the
+/// `CapReached` → `NdiSessionError::ConsumerCapReached` translation seam —
+/// which is the ONLY place that mapping happens — is exercised on every
+/// host, including CI runners without libndi (#616 Gap A).
+fn translate_add_consumer_error(err: AddConsumerError) -> anyhow::Error {
+    match err {
+        AddConsumerError::CapReached { max } => NdiSessionError::ConsumerCapReached { max }.into(),
+        AddConsumerError::Other(err) => err,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::MAX_CONSUMERS_PER_SOURCE;
+
+    /// #616 Gap A: `translate_add_consumer_error` is the ONLY place
+    /// `AddConsumerError::CapReached` becomes
+    /// `NdiSessionError::ConsumerCapReached`. Before this function was
+    /// extracted, no test exercised that translation seam — the pipeline
+    /// test asserted on `AddConsumerError::CapReached` (BEFORE), the router
+    /// test hand-built `NdiSessionError::ConsumerCapReached` (AFTER), and
+    /// nothing connected them. This test drives through the translation and
+    /// downcasts the result to assert the typed `NdiSessionError` variant
+    /// — not just `AddConsumerError`.
+    #[test]
+    fn cap_reached_translates_to_ndi_session_error() {
+        let err = translate_add_consumer_error(AddConsumerError::CapReached {
+            max: MAX_CONSUMERS_PER_SOURCE,
+        });
+        match err.downcast_ref::<NdiSessionError>() {
+            Some(NdiSessionError::ConsumerCapReached { max }) => {
+                assert_eq!(
+                    *max, MAX_CONSUMERS_PER_SOURCE,
+                    "cap value must survive the translation",
+                );
+            }
+            other => panic!(
+                "CapReached must translate to NdiSessionError::ConsumerCapReached, got: {other:?}"
+            ),
+        }
+    }
+
+    /// `Other(anyhow::Error)` must pass through UNCHANGED — the inner
+    /// error is extracted and returned as-is, not wrapped in an
+    /// `NdiSessionError` variant. The message text must survive verbatim.
+    #[test]
+    fn other_error_passes_through_unchanged() {
+        let err =
+            translate_add_consumer_error(AddConsumerError::Other(anyhow!("signaller emit failed")));
+        // Not an NdiSessionError at all — it's the raw inner anyhow.
+        assert!(
+            err.downcast_ref::<NdiSessionError>().is_none(),
+            "Other must NOT be wrapped in an NdiSessionError variant"
+        );
+        assert!(
+            err.to_string().contains("signaller emit failed"),
+            "inner error message must survive unchanged, got: {}",
+            err
+        );
     }
 }
