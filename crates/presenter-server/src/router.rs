@@ -632,6 +632,8 @@ mod presentations_copy_tests;
 #[cfg(test)]
 mod presentations_paste_tests;
 #[cfg(test)]
+mod presentations_slide_edit_tests;
+#[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
 mod tests;
