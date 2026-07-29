@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use tracing::instrument;
 
 use super::AppError;
+use crate::state::stage_display::StageLayoutRefusal;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -46,8 +47,24 @@ pub(super) async fn set_slide_stage_layout(
             code,
         )
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(map_slide_stage_layout_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Maps a `assign_slide_stage_layout` error to its HTTP status via the TYPED
+/// `StageLayoutRefusal` — never a blanket `AppError::bad_request` (#615: that
+/// hid a genuine internal failure, e.g. a missing presentation or a DB error,
+/// as a benign client-side 400). Same shape as #588's
+/// `map_stage_layout_refusal` in `router/stage.rs`, but maps to
+/// `bad_request_message` (400) — the SAME client-error status this route has
+/// ALWAYS returned for bad layout codes — so only the fallthrough to 500
+/// changes, not the typed-refusal status. Any other error falls through to
+/// the router's default 500 mapping.
+fn map_slide_stage_layout_error(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<StageLayoutRefusal>() {
+        Some(refusal) => AppError::bad_request_message(refusal.to_string()),
+        None => err.into(),
+    }
 }
 
 #[instrument(skip_all)]
