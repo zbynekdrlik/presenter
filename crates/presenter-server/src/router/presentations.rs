@@ -181,7 +181,8 @@ pub(super) async fn insert_slide(
             PresentationId::from_uuid(presentation_uuid),
             payload.position,
         )
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(Json(slides))
 }
 
@@ -197,7 +198,8 @@ pub(super) async fn duplicate_slide(
             PresentationId::from_uuid(presentation_uuid),
             SlideId::from_uuid(slide_uuid),
         )
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(Json(slides))
 }
 
@@ -213,7 +215,8 @@ pub(super) async fn delete_slide(
             PresentationId::from_uuid(presentation_uuid),
             SlideId::from_uuid(slide_uuid),
         )
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(Json(slides))
 }
 
@@ -231,7 +234,8 @@ pub(super) async fn reorder_slides(
         .collect();
     let slides = state
         .reorder_slides(PresentationId::from_uuid(presentation_uuid), order)
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(Json(slides))
 }
 
@@ -263,7 +267,9 @@ pub(super) async fn paste_slides(
         Err(crate::state::slides::PasteSlidesError::AnchorVanished) => Err(AppError::conflict(
             "the paste position no longer exists — refresh and try again",
         )),
-        Err(crate::state::slides::PasteSlidesError::Internal(err)) => Err(err.into()),
+        Err(crate::state::slides::PasteSlidesError::Internal(err)) => {
+            Err(map_repository_error(err))
+        }
     }
 }
 
@@ -285,7 +291,8 @@ pub(super) async fn update_slide_content(
             payload.group,
             payload.metadata,
         )
-        .await?;
+        .await
+        .map_err(map_repository_error)?;
     Ok(Json(updated))
 }
 
