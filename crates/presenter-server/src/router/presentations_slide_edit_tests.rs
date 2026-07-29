@@ -73,7 +73,11 @@ async fn duplicate_on_a_vanished_presentation_is_a_404() {
     let resp = request(
         &app,
         "POST",
-        &format!("/presentations/{}/slides/{}/duplicate", fresh_uuid(), fresh_uuid()),
+        &format!(
+            "/presentations/{}/slides/{}/duplicate",
+            fresh_uuid(),
+            fresh_uuid()
+        ),
         None,
     )
     .await;
@@ -201,6 +205,27 @@ async fn reorder_naming_an_unknown_slide_in_the_body_is_a_422() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// --- insert_slide: POST /presentations/{pid}/slides ---
+// The 6th consumer of `lock_and_read_presentation_for_edit` (the shared
+// helper whose `:113` site this sweep converts). Same vanished-presentation
+// path as the other snapshot-replace ops — wiring it here keeps the sweep
+// complete so #608/#610-style misses don't recur.
+
+#[tokio::test]
+async fn insert_on_a_vanished_presentation_is_a_404() {
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state);
+    let body = serde_json::json!({ "position": 0 });
+    let resp = request(
+        &app,
+        "POST",
+        &format!("/presentations/{}/slides", fresh_uuid()),
+        Some(body),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 // --- paste_slides: POST /presentations/{pid}/slides/paste ---

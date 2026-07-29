@@ -4,6 +4,7 @@
 
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{Presentation, PresentationId, Slide, SlideContent, SlideId, SlideText};
+use presenter_persistence::RepositoryError;
 use std::collections::HashMap;
 
 use super::super::stage::blank_slide_content;
@@ -110,7 +111,7 @@ impl AppState {
             .repository
             .fetch_presentation_detail(presentation_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
+            .ok_or(RepositoryError::NotFound("presentation not found"))?;
         Ok((guard, presentation))
     }
 
@@ -244,7 +245,7 @@ impl AppState {
             .slides
             .iter()
             .find(|slide| slide.id == slide_id)
-            .ok_or_else(|| anyhow::anyhow!("slide not found"))?
+            .ok_or(RepositoryError::NotFound("slide not found"))?
             .clone();
 
         let main_text = SlideText::new(main).map_err(|err| anyhow::anyhow!(err))?;
@@ -347,7 +348,7 @@ impl AppState {
         let index = slides
             .iter()
             .position(|slide| slide.id == slide_id)
-            .ok_or_else(|| anyhow::anyhow!("slide not found"))?;
+            .ok_or(RepositoryError::NotFound("slide not found"))?;
         let source = slides[index].clone();
         let duplicate = Slide::new(0, source.content.clone());
         let duplicate_id = duplicate.id;
@@ -400,7 +401,7 @@ impl AppState {
         let index = slides
             .iter()
             .position(|slide| slide.id == slide_id)
-            .ok_or_else(|| anyhow::anyhow!("slide not found"))?;
+            .ok_or(RepositoryError::NotFound("slide not found"))?;
         slides.remove(index);
         if slides.is_empty() {
             slides.push(Slide::new(0, blank_slide_content()));
@@ -447,9 +448,9 @@ impl AppState {
         }
         let mut slides = Vec::with_capacity(order.len());
         for id in order {
-            let slide = map
-                .remove(&id)
-                .ok_or_else(|| anyhow::anyhow!("unknown slide in reorder request"))?;
+            let slide = map.remove(&id).ok_or(RepositoryError::TargetNotFound(
+                "unknown slide in reorder request",
+            ))?;
             slides.push(slide);
         }
         Self::reindex_slides(&mut slides);
