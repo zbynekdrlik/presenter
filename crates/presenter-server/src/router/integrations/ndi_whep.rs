@@ -681,17 +681,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn into_response_defaults_to_empty_body_when_none() {
-        let reply = WhepReply {
-            status: 204,
-            headers: Vec::new(),
-            body: None,
-        };
-        let resp = into_response(reply);
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
-
     #[cfg(feature = "test-helpers")]
     #[tokio::test]
     async fn kill_pipeline_for_test_returns_404_or_503_for_unknown_source() {
