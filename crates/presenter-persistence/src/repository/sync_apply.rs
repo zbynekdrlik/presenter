@@ -935,9 +935,10 @@ mod tests {
         // Updated_at differs: older row = base-120min, newer row = base-0min.
         // Both are older than the presentation time we'll pass to ensure_library,
         // so no tombstone revival happens (pure resolution test).
-        for (id, updated_offset_min, sync_val) in
-            [("lib-older", 120_i64, "sync-aaa"), ("lib-newer", 0_i64, "sync-bbb")]
-        {
+        for (id, updated_offset_min, sync_val) in [
+            ("lib-older", 120_i64, "sync-aaa"),
+            ("lib-newer", 0_i64, "sync-bbb"),
+        ] {
             library::Entity::insert(library::ActiveModel {
                 id: Set(id.to_string()),
                 name: Set("Songs".to_string()),
