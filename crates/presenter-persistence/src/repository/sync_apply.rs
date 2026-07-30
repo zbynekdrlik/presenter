@@ -400,10 +400,17 @@ impl Repository {
         library_name: &str,
     ) -> anyhow::Result<String> {
         // order_by DeletedAt ASC → live rows (NULL sorts first in SQLite) win
-        // over a tombstoned same-named row when both exist.
+        // over a tombstoned same-named row when both exist. Secondary sort
+        // (#595): UpdatedAt DESC + SyncId DESC — the SAME tiebreak
+        // `ensure_library` uses for tombstones, so both helpers resolve to
+        // the SAME row when multiple same-named tombstones exist. Without
+        // this, equal deleted_at values fall back to rowid order and the
+        // two helpers can pick DIFFERENT tombstones.
         if let Some(row) = library::Entity::find()
             .filter(library::Column::Name.eq(library_name.to_string()))
             .order_by_asc(library::Column::DeletedAt)
+            .order_by_desc(library::Column::UpdatedAt)
+            .order_by_desc(library::Column::SyncId)
             .one(txn)
             .await?
         {

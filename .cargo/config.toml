@@ -2,11 +2,12 @@
 
 [build]
 # #585: incremental compilation disabled — the `incremental/` scratch cache
-# grew to 29 GB on dev2 for a Tier-1 (local-build) machine dominated by full
-# `cargo test` / `cargo clippy --all-targets` sweeps and build-ui.sh, where
-# incremental buys little wall-clock but costs real disk (also shared with
-# bakerion-ai's own target/ on the same disk). See .claude/skills/deploy for
-# the purge one-liner + disk-size expectations.
+# grew to 29 GB on dev2, dominated by full `cargo test` / `cargo clippy
+# --all-targets` sweeps and build-ui.sh, where incremental buys little
+# wall-clock but costs real disk (also shared with bakerion-ai's own
+# target/ on the same disk). Under Tier-0 (#592), builds run on CI runners
+# where incremental cache is irrelevant (fresh runner per job). See
+# .claude/skills/deploy for the purge one-liner + disk-size expectations.
 incremental = false
 
 # Use LLD linker for faster linking on Linux
