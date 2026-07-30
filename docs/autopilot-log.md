@@ -4,6 +4,26 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-07-29 — #615 + #616 typed error mapping + WHEP test coverage (one PR)
+
+- **Version bump:** `0.4.217` → `0.4.218` (commit `57006330`).
+- **Design comments posted BEFORE first code commit:**
+  - #615: https://github.com/zbynekdrlik/presenter/issues/615#issuecomment-5100347639 — root cause
+    (`slide_stage_layout.rs:48` blanket `AppError::bad_request` masked internal failures as 400),
+    approach (downcast `StageLayoutRefusal` to SAME 400, fallthrough to 500), rejected alternative
+    (mapping to 404 like `stage.rs` — visible behavior change beyond scope).
+  - #616: https://github.com/zbynekdrlik/presenter/issues/616#issuecomment-5100347823 — Gap A root
+    cause (inline translation in `whep_post` untestable without libndi), Gap B root cause (inline
+    DELETE guard unreachable on CI). Approach: extract both into pure fns, unit-test directly.
+    Rejected: constructing full `NdiManager` in tests.
+- **#615 RED commit `d2123d08`:** `put_returns_400_for_unknown_layout_code` + `put_returns_500_on_internal_failure_not_400`.
+- **#615 + #616 GREEN commit `08cc9e77`:** `map_slide_stage_layout_error` (#615) +
+  `translate_add_consumer_error` (#616 Gap A) + `map_delete_whep_error` (#616 Gap B) +
+  7 new unit tests (2 for #615, 2 for Gap A, 3 for Gap B).
+- **PR #617:** `Closes #615`, `Closes #616`.
+
+---
+
 ## 2026-07-27 — #590 split repository/mod.rs + router/bible.rs before the 1000-line hard fail
 
 - **Design note posted BEFORE any code:**

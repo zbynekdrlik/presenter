@@ -121,3 +121,7 @@ axum. A test that calls the handler directly ONLY to seed state (drop the actual
 `set_stage_layout(State(state.clone()), Json(payload)).await.unwrap();` with no assignment — fails
 `cargo clippy -- -D warnings` on `unused_must_use`, because `.unwrap()`'s returned `Json<T>` is a
 bare statement. Bind it: `let _ = handler(...).await.unwrap();`.
+
+## Test-only imports must live inside `#[cfg(test)]`, not at module level (#616)
+
+When you extract a pure function for testability (the `map_post_whep_error` / `translate_add_consumer_error` / `map_delete_whep_error` pattern) and the test uses a CONSTANT from the parent module's imports (e.g. `MAX_CONSUMERS_PER_SOURCE` from `crate::pipeline`), that constant MUST be imported INSIDE the `#[cfg(test)] mod tests` block — NOT at the module level alongside the function's own imports. CI runs `cargo clippy -- -D warnings`, which rejects a module-level import used only in tests as `unused import` in the non-test build. The fix: move the offending item from the top-level `use crate::pipeline::{..., MAX_CONSUMERS_PER_SOURCE}` into the test module's own `use crate::pipeline::MAX_CONSUMERS_PER_SOURCE;` line.

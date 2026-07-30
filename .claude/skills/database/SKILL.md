@@ -21,6 +21,57 @@ Schema is mutable during pre-release:
 - Imports happen only via the explicit Import Data workflow. Deploys never touch the database.
 - New server installations start with an empty libraries table. Run the Import Data workflow once after first deploy to populate it.
 
+## Inspecting a production database (read-only)
+
+Many data questions ("did this bug leave bad rows in production?", "how many
+favorites are dangling?") are answerable with a single read-only query. The
+live service holds the DB open in WAL mode, so a **read-only** handle cannot
+disturb it — inspect freely. Never re-derive the invocation from scratch; this
+is the standing procedure.
+
+The credential is **never** committed (skills are git-committed). Keep the
+value in local memory and reference it via the env-var form:
+
+```bash
+# SNV production (presenter.lan) — sqlite3 IS installed at /usr/bin/sqlite3
+sshpass -p "$PRESENTER_PROD_PW" ssh newlevel@presenter.lan \
+  "sqlite3 -readonly -header /opt/presenter/presenter.db 'SELECT ...'"
+
+# PP (companion-pp.lan) — same path; sqlite3 is installed there too
+sshpass -p "$PRESENTER_PROD_PW" ssh newlevel@companion-pp.lan \
+  "sqlite3 -readonly -header /opt/presenter/presenter.db 'SELECT ...'"
+```
+
+**Always `-readonly` for inspection.** It opens the handle in read-only mode,
+guaranteeing no statement can ever write — a safety net independent of the
+query text. The DB path is `/opt/presenter/presenter.db` on both hosts.
+
+**A prod-DB write / `DELETE` / `DROP` is a gated destructive action** and needs
+explicit user approval every time (per the global `no-destructive-remote-actions`
+rule). Inspection never does — but the moment a query mutates state, stop and
+ask first. Never run an ad-hoc `DELETE`/`UPDATE`/`DROP` against a production DB
+without approval, no matter how harmless it looks.
+
+The useful orientation query when investigating an integrity question — run it
+first to get a snapshot of the relevant counts:
+
+```sql
+SELECT (SELECT COUNT(*) FROM library_favorites),
+       (SELECT COUNT(*) FROM libraries),
+       (SELECT COUNT(*) FROM libraries WHERE deleted_at IS NOT NULL);
+```
+
+**Fallback when `sqlite3` is unavailable on a host** (a stripped-down image, a
+restricted shell): every Python install ships the `sqlite3` stdlib module, so
+the same read-only query works through it:
+
+```bash
+sshpass -p "$PRESENTER_PROD_PW" ssh newlevel@presenter.lan \
+  "python3 -c \"import sqlite3; c=sqlite3.connect('file:/opt/presenter/presenter.db?mode=ro', uri=True); print(list(c.execute('SELECT COUNT(*) FROM library_favorites')))\""
+```
+
+The `?mode=ro` URI enforces read-only the same way the CLI's `-readonly` does.
+
 ## Settings Audit Log
 
 All settings writes (ableset, osc, resolume hosts, android stage displays, video sources) are recorded in `settings_audit` (append-only). Each entry captures:
