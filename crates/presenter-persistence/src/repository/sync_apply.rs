@@ -400,10 +400,17 @@ impl Repository {
         library_name: &str,
     ) -> anyhow::Result<String> {
         // order_by DeletedAt ASC → live rows (NULL sorts first in SQLite) win
-        // over a tombstoned same-named row when both exist.
+        // over a tombstoned same-named row when both exist. Secondary sort
+        // (#595): UpdatedAt DESC + SyncId DESC — the SAME tiebreak
+        // `ensure_library` uses for tombstones, so both helpers resolve to
+        // the SAME row when multiple same-named tombstones exist. Without
+        // this, equal deleted_at values fall back to rowid order and the
+        // two helpers can pick DIFFERENT tombstones.
         if let Some(row) = library::Entity::find()
             .filter(library::Column::Name.eq(library_name.to_string()))
             .order_by_asc(library::Column::DeletedAt)
+            .order_by_desc(library::Column::UpdatedAt)
+            .order_by_desc(library::Column::SyncId)
             .one(txn)
             .await?
         {
@@ -905,6 +912,72 @@ fn raw_content_of(content: &presenter_core::SlideContent) -> RawSlideContent {
 mod tests {
     use super::{sync_should_apply, PRUNE_HORIZON};
     use chrono::{Duration, Utc};
+
+    #[tokio::test]
+    async fn tombstone_helpers_agree_on_same_named_tombstone() {
+        // #595 regression: ensure_library and ensure_library_for_tombstone
+        // must resolve to the SAME library row when multiple same-named
+        // tombstones exist. Before the fix, ensure_library_for_tombstone
+        // used only DeletedAt ASC — with equal deleted_at values, SQLite
+        // falls back to rowid (insertion) order and picks the OLDER row.
+        // ensure_library uses UpdatedAt DESC + SyncId DESC, picking the
+        // NEWER row → disagreement.
+        use crate::entities::library;
+        use sea_orm::{EntityTrait, Set, TransactionTrait};
+
+        let repo = super::Repository::connect_in_memory()
+            .await
+            .expect("in-memory db");
+        let base = Utc::now();
+        let delete_time = base - Duration::hours(1);
+
+        // Two tombstones: same name, same deleted_at, different updated_at/sync_id.
+        // Updated_at differs: older row = base-120min, newer row = base-0min.
+        // Both are older than the presentation time we'll pass to ensure_library,
+        // so no tombstone revival happens (pure resolution test).
+        for (id, updated_offset_min, sync_val) in [
+            ("lib-older", 120_i64, "sync-aaa"),
+            ("lib-newer", 0_i64, "sync-bbb"),
+        ] {
+            library::Entity::insert(library::ActiveModel {
+                id: Set(id.to_string()),
+                name: Set("Songs".to_string()),
+                search_name: Set("songs".to_string()),
+                created_at: Set((base - Duration::hours(2)).into()),
+                updated_at: Set((base - Duration::minutes(updated_offset_min)).into()),
+                sync_id: Set(sync_val.to_string()),
+                deleted_at: Set(Some(delete_time.into())),
+            })
+            .exec(&repo.db)
+            .await
+            .expect("insert tombstone");
+        }
+
+        // ensure_library_for_tombstone: among equal deleted_at, the secondary
+        // sort (after fix) must match ensure_library's UpdatedAt DESC.
+        let txn1 = repo.db.begin().await.expect("begin txn");
+        let id_from_tombstone_helper =
+            super::Repository::ensure_library_for_tombstone(&txn1, "Songs")
+                .await
+                .expect("resolve via tombstone helper");
+        txn1.rollback().await.expect("rollback");
+
+        // ensure_library: picks most recent tombstone by UpdatedAt DESC.
+        // presentation_updated_at is OLDER than both → no revival, pure read.
+        let txn2 = repo.db.begin().await.expect("begin txn");
+        let id_from_live_helper =
+            super::Repository::ensure_library(&txn2, "Songs", base - Duration::hours(3))
+                .await
+                .expect("resolve via live helper");
+        txn2.rollback().await.expect("rollback");
+
+        assert_eq!(
+            id_from_tombstone_helper, id_from_live_helper,
+            "both tombstone helpers must resolve to the same library row; \
+             tombstone helper picked {id_from_tombstone_helper}, \
+             live helper picked {id_from_live_helper}"
+        );
+    }
 
     #[test]
     fn lww_matrix() {

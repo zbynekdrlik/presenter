@@ -6,9 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Local Build Policy
 
-<!-- airuleset:local-builds=allowed -->
-
-**Local Rust builds (cargo build, cargo clippy, cargo test) are ALLOWED on this machine.** This is the powerful dev2 build machine. Run fmt, clippy, test, and build locally before pushing. The global airuleset default (CI-only) does NOT apply here.
+**This project is Tier-0 (CI-only builds).** Heavy builds (`cargo build`, `cargo clippy`, `cargo test`) run on GitHub-hosted runners, not on this machine. The `block-tier0-local-build.sh` hook enforces this — do NOT add a `local-builds=allowed` marker to disarm it. Only lint and cheap compile checks may run locally, per the global `local-builds` skill. Dev2 is the self-hosted runner host for E2E + deploys, but compilation happens on GitHub's runners.
 
 <!-- Global rules applied via airuleset modules (~/devel/airuleset/):
      core/complete-planned-work, core/completion-report, core/autonomous-verification,

@@ -14,10 +14,12 @@ triggers:
 
 # Presenter Deploy Skill
 
-## Local Build-Deploy-Iterate (Tier-1 Machine)
+## Local Build-Deploy-Iterate (Tier-0 Machine)
 
 CI takes ~38 min per push. Iterate locally; push only when the feature works end-to-end.
-This machine has `airuleset:local-builds=allowed` in CLAUDE.md => full builds are permitted.
+This project is Tier-0 (#592): heavy builds run on GitHub runners, not locally. The
+`block-tier0-local-build.sh` hook blocks local `cargo build`/`cargo test`. Use CI for
+compilation; this machine only runs the self-hosted E2E + deploy steps.
 
 Build order matters (WASM embedded into server at compile time via `include_dir!`):
 
