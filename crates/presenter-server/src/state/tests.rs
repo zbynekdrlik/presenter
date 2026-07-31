@@ -1535,3 +1535,179 @@ async fn video_source_status_route_is_not_shadowed_by_the_id_route() {
         "the status payload, not the by-id payload: {json}"
     );
 }
+
+// ── #600: AbleSet miss visibility + ring buffer ─────────────────────────────
+
+/// Helper: seed an in-memory state with a digit-prefixed library and enable
+/// AbleSet pointing at it, mirroring the existing AbleSet test setup.
+async fn seed_ableset_with_song(
+    library_name: &str,
+    song_name: &str,
+) -> (
+    crate::state::AppState,
+    presenter_core::PresentationId,
+) {
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library(library_name).await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, song_name, None)
+        .await
+        .unwrap();
+
+    let draft = presenter_core::AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: library_name.to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(
+            draft,
+            presenter_persistence::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    (state, presentation.id)
+}
+
+/// #600: a resolution MISS must be recorded in the attempt ring buffer with
+/// `found=false`. On prod a miss leaves zero evidence — a WARN log (asserted
+/// separately) and the ring buffer are the diagnostic trail operators need.
+#[tokio::test]
+async fn ableset_miss_is_recorded_in_attempt_ring_buffer() {
+    let (state, _) = seed_ableset_with_song("Hymnal", "001 Amazing Grace").await;
+
+    // Resolve a prefix that does NOT exist in the seeded library.
+    let result = state.resolve_ableset_presentation("999").await.unwrap();
+    assert_eq!(result, None, "unknown prefix must resolve to None");
+
+    // The ring buffer must have recorded this miss.
+    let cache = state.caches.ableset.read().await;
+    let attempts = cache.recent_attempts();
+    let last = attempts.last().expect("at least one attempt recorded");
+    assert_eq!(last.input, "999", "input prefix must be recorded");
+    assert_eq!(last.found, false, "a miss must be recorded as found=false");
+}
+
+/// #600: a resolution HIT must be recorded in the attempt ring buffer with
+/// `found=true`. This proves the buffer tracks every attempt, not just misses.
+#[tokio::test]
+async fn ableset_hit_is_recorded_in_attempt_ring_buffer() {
+    let (state, expected_id) = seed_ableset_with_song("Hymnal", "001 Amazing Grace").await;
+
+    let result = state.resolve_ableset_presentation("001").await.unwrap();
+    assert_eq!(result, Some(expected_id));
+
+    let cache = state.caches.ableset.read().await;
+    let attempts = cache.recent_attempts();
+    let last = attempts.last().expect("at least one attempt recorded");
+    assert_eq!(last.input, "001");
+    assert_eq!(last.found, true, "a hit must be recorded as found=true");
+}
+
+/// #600: the ring buffer must cap at 20 entries (FIFO eviction). Without a
+/// cap, a long-running prod instance accumulates entries forever.
+#[tokio::test]
+async fn ableset_ring_buffer_caps_at_twenty_entries() {
+    let (state, _) = seed_ableset_with_song("Hymnal", "001 Amazing Grace").await;
+
+    // Resolve 25 different prefixes to overflow the 20-entry cap.
+    for i in 0..25 {
+        let prefix = format!("{i:03}");
+        let _ = state.resolve_ableset_presentation(&prefix).await.unwrap();
+    }
+
+    let cache = state.caches.ableset.read().await;
+    let attempts = cache.recent_attempts();
+    assert_eq!(
+        attempts.len(),
+        20,
+        "ring buffer must cap at 20 entries, got {}",
+        attempts.len()
+    );
+    // The FIRST 5 entries (000-004) must have been evicted; the buffer must
+    // contain entries 005-024.
+    assert_eq!(
+        attempts.first().map(|a| a.input.as_str()),
+        Some("005"),
+        "oldest entries must have been evicted (FIFO)"
+    );
+    assert_eq!(
+        attempts.last().map(|a| a.input.as_str()),
+        Some("024"),
+        "newest entry must be the last one pushed"
+    );
+}
+
+/// #600: `cache_size`, `cache_last_updated`, and `cache_last_error` must be
+/// readable from the AbleSet cache so the status endpoint can surface them.
+/// This test verifies the cache struct exposes these (already-existing) fields
+/// through accessor methods that the status handler will use.
+#[tokio::test]
+async fn ableset_cache_exposes_size_last_updated_and_last_error_for_status() {
+    let (state, _) = seed_ableset_with_song("Hymnal", "001 Amazing Grace").await;
+
+    // A successful resolve triggers a cache rebuild (library matched, one
+    // presentation with a valid prefix).
+    let _ = state.resolve_ableset_presentation("001").await.unwrap();
+
+    let cache = state.caches.ableset.read().await;
+    assert_eq!(
+        cache.cache_size(),
+        1,
+        "cache_size must report the one seeded presentation"
+    );
+    assert!(
+        cache.last_updated().is_some(),
+        "last_updated must be set after a cache rebuild"
+    );
+    assert_eq!(
+        cache.last_error(),
+        None,
+        "last_error must be None when the library was found and has valid prefixes"
+    );
+}
+
+/// #600: when the tracked library does not exist in the DB, `last_error` must
+/// be "library not found" — surfaced so operators can see WHY resolution is
+/// failing without SSH access.
+#[tokio::test]
+async fn ableset_cache_records_library_not_found_error_on_rebuild() {
+    let state = AppState::in_memory().await.unwrap();
+
+    // Enable AbleSet pointing at a library that does NOT exist.
+    let draft = presenter_core::AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: "Nonexistent Library".to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(
+            draft,
+            presenter_persistence::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    let _ = state.resolve_ableset_presentation("001").await.unwrap();
+
+    let cache = state.caches.ableset.read().await;
+    assert_eq!(
+        cache.cache_size(),
+        0,
+        "no entries when the library does not exist"
+    );
+    assert_eq!(
+        cache.last_error().as_deref(),
+        Some("library not found"),
+        "last_error must explain the miss reason"
+    );
+}
+
