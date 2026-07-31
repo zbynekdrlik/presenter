@@ -4,7 +4,7 @@
 //! `BibleSlideDto`/`bible_slide_to_dto` from the sibling `resolve` module.
 
 use axum::extract::{Path, State};
-use StatusCode;
+use axum::http::StatusCode;
 use axum::Json;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{
