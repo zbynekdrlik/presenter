@@ -165,7 +165,7 @@ pub struct AbleSetStatusSnapshot {
     /// Ring buffer of recent resolution attempts (#600), newest last. Each
     /// entry records the prefix, timestamp, and whether it resolved. Empty
     /// until the first resolve call after startup.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_attempts: Vec<AbleSetResolutionAttempt>,
 }
 
