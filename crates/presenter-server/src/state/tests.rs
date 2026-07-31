@@ -1586,7 +1586,7 @@ async fn ableset_miss_is_recorded_in_attempt_ring_buffer() {
     let attempts = cache.recent_attempts();
     let last = attempts.back().expect("at least one attempt recorded");
     assert_eq!(last.input, "999", "input prefix must be recorded");
-    assert_eq!(last.found, false, "a miss must be recorded as found=false");
+    assert!(!last.found, "a miss must be recorded as found=false");
 }
 
 /// #600: a resolution HIT must be recorded in the attempt ring buffer with
@@ -1602,7 +1602,7 @@ async fn ableset_hit_is_recorded_in_attempt_ring_buffer() {
     let attempts = cache.recent_attempts();
     let last = attempts.back().expect("at least one attempt recorded");
     assert_eq!(last.input, "001");
-    assert_eq!(last.found, true, "a hit must be recorded as found=true");
+    assert!(last.found, "a hit must be recorded as found=true");
 }
 
 /// #600: the ring buffer must cap at 20 entries (FIFO eviction). Without a
@@ -1702,7 +1702,7 @@ async fn ableset_cache_records_library_not_found_error_on_rebuild() {
         "no entries when the library does not exist"
     );
     assert_eq!(
-        cache.last_error().as_deref(),
+        cache.last_error(),
         Some("library not found"),
         "last_error must explain the miss reason"
     );
