@@ -34,6 +34,14 @@ ignore = [
     "RUSTSEC-2026-0194",
     # https://rustsec.org/advisories/RUSTSEC-2026-0195
     "RUSTSEC-2026-0195",
+    # event-listener 5.4.1 StackSlot soundness issue — transitive via
+    # async-lock 3.4.2 → reactive_graph → leptos 0.7.8. INFO Unsound; we do
+    # not use the listener! macro or custom tags, so the unsafe path is
+    # unreachable. No upgrade path until async-lock bumps its event-listener
+    # requirement (>=5.4.2 patched). Same pattern as the leptos entries above.
+    # Keep in sync with .cargo/audit.toml.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0221
+    "RUSTSEC-2026-0221",
 ]
 
 [licenses]

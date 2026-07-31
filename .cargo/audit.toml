@@ -31,4 +31,11 @@ ignore = [
   # pair in deny.toml) once gst-plugin-ndi allows quick-xml >=0.41.
   "RUSTSEC-2026-0194", # quick-xml quadratic attr check (transitive, #522)
   "RUSTSEC-2026-0195", # quick-xml NsReader allocation DoS (transitive, #522)
+  # event-listener 5.4.1 soundness issue — StackSlot blindly implements Send/Sync
+  # for !Send tag types. Transitive dep via async-lock 3.4.2 → reactive_graph →
+  # leptos 0.7.8. INFO Unsound (not a vulnerability); we do not use the
+  # listener! macro or custom tags, so the unsafe code path is unreachable. No
+  # upgrade path until async-lock bumps its event-listener requirement
+  # (>=5.4.2 patched). Same transitive-blocked pattern as the leptos entries above.
+  "RUSTSEC-2026-0221", # event-listener StackSlot soundness (transitive via leptos)
 ]
