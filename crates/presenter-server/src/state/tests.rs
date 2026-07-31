@@ -1584,7 +1584,7 @@ async fn ableset_miss_is_recorded_in_attempt_ring_buffer() {
     // The ring buffer must have recorded this miss.
     let cache = state.caches.ableset.read().await;
     let attempts = cache.recent_attempts();
-    let last = attempts.last().expect("at least one attempt recorded");
+    let last = attempts.back().expect("at least one attempt recorded");
     assert_eq!(last.input, "999", "input prefix must be recorded");
     assert_eq!(last.found, false, "a miss must be recorded as found=false");
 }
@@ -1600,7 +1600,7 @@ async fn ableset_hit_is_recorded_in_attempt_ring_buffer() {
 
     let cache = state.caches.ableset.read().await;
     let attempts = cache.recent_attempts();
-    let last = attempts.last().expect("at least one attempt recorded");
+    let last = attempts.back().expect("at least one attempt recorded");
     assert_eq!(last.input, "001");
     assert_eq!(last.found, true, "a hit must be recorded as found=true");
 }
@@ -1628,12 +1628,12 @@ async fn ableset_ring_buffer_caps_at_twenty_entries() {
     // The FIRST 5 entries (000-004) must have been evicted; the buffer must
     // contain entries 005-024.
     assert_eq!(
-        attempts.first().map(|a| a.input.as_str()),
+        attempts.front().map(|a| a.input.as_str()),
         Some("005"),
         "oldest entries must have been evicted (FIFO)"
     );
     assert_eq!(
-        attempts.last().map(|a| a.input.as_str()),
+        attempts.back().map(|a| a.input.as_str()),
         Some("024"),
         "newest entry must be the last one pushed"
     );
