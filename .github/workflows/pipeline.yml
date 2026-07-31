@@ -371,6 +371,12 @@ jobs:
           # false-positive guard. Proves the detection logic with mock
           # wedged-vs-healthy facts (no real GPU needed on the hosted runner).
           bash tests/ci/gpu-preflight.test.sh
+          # Regression guard for #605: the feature-router presence check was
+          # flat-file-only (`router/<name>.rs`) and false-failed once #590 split
+          # `bible.rs` into a `bible/` directory. This self-test proves the
+          # generalized check (accepts flat OR directory) passes both shapes
+          # AND fails when a router is missing. Pins the fix from PR #604.
+          bash tests/ci/feature-router-gate.test.sh
           # Guards for what we SHIP to the hosts (#538, #539): the shared unit must
           # not hardcode one site's stage URL, every deploy must write its own
           # drop-in, and the encoder-ready gate must skip (not stall 30s) on a host
