@@ -2,17 +2,18 @@
 //! single-passage lookup. Split out of `router/bible.rs` (#590) — same
 //! pattern as `router/integrations/`.
 
-use super::super::AppError;
-use crate::state::AppState;
 use anyhow::Context;
 use axum::extract::{Query, State};
 use axum::Json;
-use presenter_core::{BiblePassage, BibleReference};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::instrument;
 
-#[derive(Debug, serde::Deserialize)]
+use super::super::AppError;
+use crate::state::AppState;
+use presenter_core::{BiblePassage, BibleReference};
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct BibleBooksQuery {
     pub(crate) translation: String,
 }
@@ -78,7 +79,7 @@ pub(crate) async fn list_bible_books(
     Ok(Json(books))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(crate) struct BibleSearchQuery {
     #[serde(default)]
     pub(crate) translation: Option<String>,
@@ -110,7 +111,7 @@ pub(crate) async fn search_bible_passages(
     Ok(Json(passages))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(crate) struct BiblePassageQuery {
     pub(crate) translation: String,
     pub(crate) book: String,
