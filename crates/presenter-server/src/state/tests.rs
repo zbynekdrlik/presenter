@@ -1543,10 +1543,7 @@ async fn video_source_status_route_is_not_shadowed_by_the_id_route() {
 async fn seed_ableset_with_song(
     library_name: &str,
     song_name: &str,
-) -> (
-    crate::state::AppState,
-    presenter_core::PresentationId,
-) {
+) -> (crate::state::AppState, presenter_core::PresentationId) {
     let state = AppState::in_memory().await.unwrap();
     let library = state.create_library(library_name).await.unwrap();
     let (_, _, presentation, _) = state
@@ -1710,4 +1707,3 @@ async fn ableset_cache_records_library_not_found_error_on_rebuild() {
         "last_error must explain the miss reason"
     );
 }
-
