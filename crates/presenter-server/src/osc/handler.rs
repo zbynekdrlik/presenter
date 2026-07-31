@@ -237,7 +237,11 @@ async fn trigger_slide(
     };
 
     let Some(presentation_id) = app_state.resolve_ableset_presentation(&song.prefix).await? else {
-        debug!(prefix = %song.prefix, "AbleSet prefix missing in library");
+        warn!(
+            prefix = %song.prefix,
+            song = %song.name,
+            "AbleSet prefix missing in library — resolution miss"
+        );
         return Ok(());
     };
 

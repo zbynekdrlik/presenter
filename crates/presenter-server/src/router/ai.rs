@@ -257,6 +257,23 @@ pub(super) struct StatusResponse {
     pub proxy: ProxyStatus,
 }
 
+/// Compute AI `connected` status by ANDing TCP-level connectivity with Claude
+/// OAuth validity (#597).
+///
+/// The connectivity check (`check_connectivity`) pings the proxy's `/models`
+/// endpoint — it succeeds whenever the CLIProxyAPI process is running and
+/// answering on its port, regardless of whether the underlying Claude OAuth
+/// token is still valid. When the token expires, every real AI request fails
+/// with `authentication_error`, but `connected` used to report `true` because
+/// only the TCP ping was considered. This function ensures `connected` is
+/// `true` ONLY when both signals are healthy.
+///
+/// Extracted as a pure function so the truth-table is unit-testable without
+/// constructing a live ProxyManager + network connectivity.
+pub(super) fn compute_ai_connected(connectivity_ok: bool, claude_authenticated: bool) -> bool {
+    connectivity_ok && claude_authenticated
+}
+
 #[instrument(skip_all)]
 pub(super) async fn check_status(
     State(state): State<AppState>,
@@ -264,19 +281,25 @@ pub(super) async fn check_status(
     let settings = get_settings_internal(&state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
-    let connection = crate::ai::client::check_connectivity(&settings).await;
-    match connection {
-        Ok(()) => Ok(Json(StatusResponse {
-            connected: true,
-            error: None,
-            proxy: proxy_status,
-        })),
-        Err(e) => Ok(Json(StatusResponse {
-            connected: false,
-            error: Some(e.to_string()),
-            proxy: proxy_status,
-        })),
-    }
+    let connectivity_ok = crate::ai::client::check_connectivity(&settings)
+        .await
+        .is_ok();
+
+    let connected = compute_ai_connected(connectivity_ok, proxy_status.claude_authenticated);
+
+    let error = if connected {
+        None
+    } else if !proxy_status.claude_authenticated {
+        Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
+    } else {
+        Some("AI proxy unreachable".to_string())
+    };
+
+    Ok(Json(StatusResponse {
+        connected,
+        error,
+        proxy: proxy_status,
+    }))
 }
 
 // ── Proxy management ──

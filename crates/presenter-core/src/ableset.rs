@@ -148,6 +148,39 @@ pub struct AbleSetStatusSnapshot {
     pub last_song: Option<AbleSetSongSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Number of resolved entries in the library-name → presentation cache
+    /// (#600). `None` when the cache has not been enriched by the router-level
+    /// status handler (the bridge's own `status_snapshot` leaves it `None`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_size: Option<usize>,
+    /// When the library cache was last rebuilt (#600). Mirrors `last_updated`
+    /// from `AbleSetLibraryCache`. `None` when the cache has not been built.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_last_updated: Option<DateTime<Utc>>,
+    /// Last error from a library cache rebuild (#600). Separate from
+    /// `last_error` (which is the bridge-level error) because a cache rebuild
+    /// can fail (e.g. "library not found") even when the bridge is healthy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_last_error: Option<String>,
+    /// Ring buffer of recent resolution attempts (#600), newest last. Each
+    /// entry records the prefix, timestamp, and whether it resolved. Empty
+    /// until the first resolve call after startup.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recent_attempts: Vec<AbleSetResolutionAttempt>,
+}
+
+/// A single AbleSet song-resolution attempt, surfaced read-only via
+/// `/integrations/ableset/status` (#600).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbleSetResolutionAttempt {
+    /// ISO-8601 timestamp of the resolution attempt.
+    pub timestamp: DateTime<Utc>,
+    /// The incoming prefix that was looked up.
+    pub input: String,
+    /// Whether the prefix resolved to a known presentation (`true`) or was a
+    /// cache miss (`false`).
+    pub found: bool,
 }
 
 pub fn extract_song_prefix(name: &str, length: u8) -> Option<String> {
