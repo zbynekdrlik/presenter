@@ -3,10 +3,8 @@
 //! `router/bible.rs` (#590) — same pattern as `router/integrations/`. Reuses
 //! `BibleSlideDto`/`bible_slide_to_dto` from the sibling `resolve` module.
 
-use super::super::AppError;
-use super::resolve::{bible_slide_to_dto, BibleSlideDto};
-use crate::state::AppState;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use StatusCode;
 use axum::Json;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{
@@ -14,6 +12,10 @@ use presenter_core::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+
+use super::super::AppError;
+use super::resolve::{bible_slide_to_dto, BibleSlideDto};
+use crate::state::AppState;
 
 // Bible Presentations
 #[derive(Debug, Serialize)]
@@ -139,7 +141,7 @@ pub(crate) async fn create_bible_presentation_handler(
 #[instrument(skip_all)]
 pub(crate) async fn get_bible_presentation(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     let presentation = state
         .bible_presentation_detail(BiblePresentationId::from_uuid(id))
@@ -151,9 +153,9 @@ pub(crate) async fn get_bible_presentation(
 #[instrument(skip_all)]
 pub(crate) async fn rename_bible_presentation_handler(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(id): Path<uuid::Uuid>,
     Json(payload): Json<RenameBiblePresentationRequest>,
-) -> Result<axum::http::StatusCode, AppError> {
+) -> Result<StatusCode, AppError> {
     let name = payload.name.trim();
     if name.is_empty() {
         return Err(AppError::bad_request_message("name cannot be empty"));
@@ -162,19 +164,19 @@ pub(crate) async fn rename_bible_presentation_handler(
         .rename_bible_presentation(BiblePresentationId::from_uuid(id), name)
         .await
         .map_err(map_repository_not_found)?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[instrument(skip_all)]
 pub(crate) async fn delete_bible_presentation_handler(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
-) -> Result<axum::http::StatusCode, AppError> {
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, AppError> {
     state
         .delete_bible_presentation(BiblePresentationId::from_uuid(id))
         .await
         .map_err(map_repository_not_found)?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Request body for updating a single Bible slide's text and references.
@@ -195,7 +197,7 @@ pub(crate) struct UpdateBibleSlideRequest {
 #[instrument(skip_all)]
 pub(crate) async fn update_bible_slide(
     State(state): State<AppState>,
-    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+    Path((presentation_id, slide_id)): Path<(String, String)>,
     Json(payload): Json<UpdateBibleSlideRequest>,
 ) -> Result<Json<BibleSlideDto>, AppError> {
     let pres_uuid = presentation_id
@@ -240,7 +242,7 @@ pub(crate) async fn update_bible_slide(
 #[instrument(skip_all)]
 pub(crate) async fn append_bible_presentation_handler(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(id): Path<uuid::Uuid>,
     Json(payload): Json<AppendBibleSlidesRequest>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     if payload.slides.is_empty() {
@@ -264,7 +266,7 @@ pub(crate) async fn append_bible_presentation_handler(
 #[instrument(skip_all)]
 pub(crate) async fn delete_bible_presentation_slide(
     State(state): State<AppState>,
-    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+    Path((presentation_id, slide_id)): Path<(String, String)>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     let pres_uuid = presentation_id
         .parse::<uuid::Uuid>()
@@ -296,7 +298,7 @@ pub(crate) struct ReorderBibleSlidesRequest {
 #[instrument(skip_all)]
 pub(crate) async fn reorder_bible_presentation_slides(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(id): Path<uuid::Uuid>,
     Json(payload): Json<ReorderBibleSlidesRequest>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     let mut slide_ids = Vec::with_capacity(payload.slide_ids.len());

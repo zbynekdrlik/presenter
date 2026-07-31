@@ -3,13 +3,14 @@
 //! pattern as `router/integrations/`: a handler-group file with `pub(crate)`
 //! items so `router.rs`'s route table can reference them directly.
 
-use super::super::AppError;
-use crate::state::AppState;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 use presenter_core::BibleTranslation;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+
+use super::super::AppError;
+use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +36,7 @@ pub(crate) async fn list_bible_translations(
     Ok(Json(translations))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UpdateBibleTranslationRequest {
     pub(crate) name: Option<String>,
@@ -46,7 +47,7 @@ pub(crate) struct UpdateBibleTranslationRequest {
 #[instrument(skip_all)]
 pub(crate) async fn update_bible_translation(
     State(state): State<AppState>,
-    axum::extract::Path(code): axum::extract::Path<String>,
+    axum::extract::Path(code): Path<String>,
     Json(payload): Json<UpdateBibleTranslationRequest>,
 ) -> Result<Json<BibleTranslation>, AppError> {
     let translation = state

@@ -3,19 +3,20 @@
 //! preferences get/set. Split out of `router/bible.rs` (#590) — same
 //! pattern as `router/integrations/`.
 
-use super::super::AppError;
-use crate::state::AppState;
 use anyhow::Context;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+
+use super::super::AppError;
+use crate::state::AppState;
 use presenter_core::{
     BiblePreferences, BiblePreferencesDraft, BiblePresentationId, BibleReference, BibleSlideId,
     BibleSlideOutput,
 };
-use serde::{Deserialize, Serialize};
-use tracing::instrument;
 
 /// Maps a repository refusal to its HTTP status via the TYPED
 /// `RepositoryError` variant returned by the persistence layer — never a
@@ -50,7 +51,7 @@ pub(crate) async fn get_active_bible_slide_output(
     Ok(Json(output))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BibleTriggerRequest {
     pub(crate) translation: String,
@@ -189,7 +190,7 @@ pub(crate) async fn trigger_bible_slide(
 #[instrument(skip_all)]
 pub(crate) async fn trigger_presentation_slide(
     State(state): State<AppState>,
-    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+    axum::extract::Path((presentation_id, slide_id)): Path<(String, String)>,
 ) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
     use crate::state::bible::BibleSlideReferenceMetadata;
 

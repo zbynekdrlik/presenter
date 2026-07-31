@@ -3,14 +3,15 @@
 //! the presentation CRUD handlers (`bible/presentations.rs`). Split out of
 //! `router/bible.rs` (#590) — same pattern as `router/integrations/`.
 
-use super::super::AppError;
-use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{BiblePresentationSlide, BibleTranslation, Slide};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+
+use super::super::AppError;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
