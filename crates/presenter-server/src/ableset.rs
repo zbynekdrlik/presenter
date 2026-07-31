@@ -236,6 +236,13 @@ impl AbleSetBridge {
                 )
             }),
             last_error: status.last_error.clone(),
+            // Cache enrichment is the router-level status handler's job (#600).
+            // The bridge does not own the library cache, so it leaves these
+            // fields at their None/empty defaults.
+            cache_size: None,
+            cache_last_updated: None,
+            cache_last_error: None,
+            recent_attempts: Vec::new(),
         }
     }
 
@@ -340,6 +347,10 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             song_prefix_length: settings.song_prefix_length,
             last_song: state.last_song.clone(),
             last_error: None,
+            cache_size: None,
+            cache_last_updated: None,
+            cache_last_error: None,
+            recent_attempts: Vec::new(),
         }
     } else {
         AbleSetStatusSnapshot {
@@ -353,6 +364,10 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             song_prefix_length: 3,
             last_song: state.last_song.clone(),
             last_error: None,
+            cache_size: None,
+            cache_last_updated: None,
+            cache_last_error: None,
+            recent_attempts: Vec::new(),
         }
     }
 }

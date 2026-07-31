@@ -396,6 +396,10 @@ mod tests {
                 Some(Utc::now()),
             )),
             last_error: None,
+            cache_size: None,
+            cache_last_updated: None,
+            cache_last_error: None,
+            recent_attempts: Vec::new(),
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         assert!(json.contains("followEnabled"), "expected camelCase: {json}");
@@ -438,6 +442,10 @@ mod tests {
             song_prefix_length: 3,
             last_song: None,
             last_error: Some("connection refused".to_string()),
+            cache_size: None,
+            cache_last_updated: None,
+            cache_last_error: None,
+            recent_attempts: Vec::new(),
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         assert!(json.contains("lastError"), "expected camelCase: {json}");

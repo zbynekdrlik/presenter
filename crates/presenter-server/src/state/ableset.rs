@@ -2,10 +2,31 @@ use chrono::{DateTime, Utc};
 use presenter_core::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot, PresentationId,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use tracing::warn;
 
 use super::AppState;
 use crate::ableset::AbleSetStatusSnapshot;
+
+/// Maximum number of recent resolution attempts retained in the ring buffer
+/// (#600). Enough to cover a typical worship set (15-20 songs) while bounding
+/// memory on a long-running instance.
+const MAX_RECENT_ATTEMPTS: usize = 20;
+
+/// A single AbleSet song-resolution attempt, retained for diagnostic purposes
+/// (#600). Surfaced read-only via `/integrations/ableset/status` so operators
+/// can answer "it didn't work 30 min ago" from data instead of memory.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AbleSetResolutionAttempt {
+    /// ISO-8601 timestamp of the resolution attempt.
+    pub(crate) timestamp: DateTime<Utc>,
+    /// The incoming prefix (trimmed) that was looked up.
+    pub(crate) input: String,
+    /// Whether the prefix resolved to a known presentation (`true`) or was a
+    /// cache miss (`false`).
+    pub(crate) found: bool,
+}
 
 #[derive(Default)]
 pub(crate) struct AbleSetLibraryCache {
@@ -14,6 +35,7 @@ pub(crate) struct AbleSetLibraryCache {
     pub(crate) entries: HashMap<String, PresentationId>,
     pub(crate) last_updated: Option<DateTime<Utc>>,
     pub(crate) last_error: Option<String>,
+    pub(crate) recent_attempts: VecDeque<AbleSetResolutionAttempt>,
 }
 
 impl AbleSetLibraryCache {
@@ -31,6 +53,39 @@ impl AbleSetLibraryCache {
         } else {
             false
         }
+    }
+
+    /// Number of resolved entries in the cache (#600 status surface).
+    pub(crate) fn cache_size(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// When the cache was last rebuilt (#600 status surface).
+    pub(crate) fn last_updated(&self) -> Option<DateTime<Utc>> {
+        self.last_updated
+    }
+
+    /// Last error from a cache rebuild, if any (#600 status surface).
+    pub(crate) fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// Read-only view of the recent resolution-attempt ring buffer (#600).
+    pub(crate) fn recent_attempts(&self) -> &VecDeque<AbleSetResolutionAttempt> {
+        &self.recent_attempts
+    }
+
+    /// Record a resolution attempt in the ring buffer, evicting the oldest
+    /// entry when the cap is reached (FIFO).
+    fn record_attempt(&mut self, input: &str, found: bool) {
+        if self.recent_attempts.len() >= MAX_RECENT_ATTEMPTS {
+            self.recent_attempts.pop_front();
+        }
+        self.recent_attempts.push_back(AbleSetResolutionAttempt {
+            timestamp: Utc::now(),
+            input: input.to_string(),
+            found,
+        });
     }
 }
 
@@ -71,8 +126,27 @@ impl AppState {
         Ok(settings)
     }
 
+    /// Build the status snapshot, enriched with library-cache state (#600).
+    /// The bridge contributes the live AbleSet connection/tracking fields; the
+    /// cache layer contributes `cache_size`, `cache_last_updated`,
+    /// `cache_last_error`, and the recent resolution attempts. This merged
+    /// snapshot is what `GET /integrations/ableset/status` returns.
     pub async fn ableset_status_snapshot(&self) -> AbleSetStatusSnapshot {
-        self.ableset_bridge.status_snapshot().await
+        let mut snapshot = self.ableset_bridge.status_snapshot().await;
+        let cache = self.caches.ableset.read().await;
+        snapshot.cache_size = Some(cache.cache_size());
+        snapshot.cache_last_updated = cache.last_updated();
+        snapshot.cache_last_error = cache.last_error().map(str::to_owned);
+        snapshot.recent_attempts = cache
+            .recent_attempts()
+            .iter()
+            .map(|a| presenter_core::AbleSetResolutionAttempt {
+                timestamp: a.timestamp,
+                input: a.input.clone(),
+                found: a.found,
+            })
+            .collect();
+        snapshot
     }
 
     pub async fn set_ableset_follow(&self, enabled: bool) -> AbleSetStatusSnapshot {
@@ -97,8 +171,31 @@ impl AppState {
         }
         self.ensure_ableset_cache(&settings).await?;
         let lookup = key.to_ascii_lowercase();
-        let cache = self.caches.ableset.read().await;
-        Ok(cache.entries.get(&lookup).copied())
+
+        let result = {
+            let cache = self.caches.ableset.read().await;
+            cache.entries.get(&lookup).copied()
+        };
+
+        // Record the attempt in the ring buffer and log misses at WARN (#600).
+        // The buffer read-lock is released before acquiring the write-lock to
+        // avoid holding both halves of the RwLock simultaneously.
+        {
+            let mut cache = self.caches.ableset.write().await;
+            cache.record_attempt(key, result.is_some());
+            if result.is_none() {
+                warn!(
+                    prefix = key,
+                    cache_size = cache.cache_size(),
+                    library_name = cache.library_name.as_deref().unwrap_or("?"),
+                    last_updated = ?cache.last_updated(),
+                    last_error = cache.last_error(),
+                    "AbleSet prefix resolution miss — prefix not in cache"
+                );
+            }
+        }
+
+        Ok(result)
     }
 
     async fn ensure_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {

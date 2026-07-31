@@ -628,6 +628,8 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
 }
 
 #[cfg(test)]
+mod ai_tests;
+#[cfg(test)]
 mod presentations_copy_tests;
 #[cfg(test)]
 mod presentations_paste_tests;
