@@ -218,4 +218,57 @@ mod tests {
             "a genuine internal failure must be 500, not 400 (#615) and not 404 (#629)"
         );
     }
+
+    /// #629: `presentation_id` is a URL-path resource — a non-existent one
+    /// must be a 404, matching the same check's typed refusal everywhere
+    /// else in the codebase (`state/slides/edit_ops.rs`, `state/bible.rs`),
+    /// never fall through to the router's default 500.
+    #[tokio::test]
+    async fn put_returns_404_for_unknown_presentation() {
+        let (state, _presentation) = seeded_state().await;
+        let random_uuid = uuid::Uuid::new_v4();
+        let random_slide = presenter_core::SlideId::new();
+
+        let result = set_slide_stage_layout(
+            State(state),
+            Path((random_uuid.to_string(), random_slide.to_string())),
+            Json(SlideStageLayoutRequest {
+                layout_code: Some("fulltext".to_string()),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "a non-existent presentation_id must be 404, not 500 (#629)"
+        );
+    }
+
+    /// #629: same as above, but for a `slide_id` that doesn't belong to an
+    /// otherwise-real presentation.
+    #[tokio::test]
+    async fn put_returns_404_for_unknown_slide() {
+        let (state, presentation) = seeded_state().await;
+        let random_slide = presenter_core::SlideId::new();
+
+        let result = set_slide_stage_layout(
+            State(state),
+            Path((presentation.id.to_string(), random_slide.to_string())),
+            Json(SlideStageLayoutRequest {
+                layout_code: Some("fulltext".to_string()),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent slide, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "a non-existent slide_id must be 404, not 500 (#629)"
+        );
+    }
 }
