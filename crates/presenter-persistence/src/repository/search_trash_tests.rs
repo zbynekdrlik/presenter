@@ -212,6 +212,111 @@ async fn presentation_under_a_tombstoned_library_is_not_searchable() {
     );
 }
 
+/// Tombstone ONLY the given library row directly, leaving its live
+/// presentations underneath untouched — mirrors
+/// `presentation_under_a_tombstoned_library_is_not_searchable` above.
+async fn tombstone_library_row_only(repo: &Repository, library_id: presenter_core::LibraryId) {
+    use crate::entities::library as library_entity;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    library_entity::Entity::update_many()
+        .col_expr(
+            library_entity::Column::DeletedAt,
+            sea_orm::sea_query::Expr::value(chrono::Utc::now().to_rfc3339()),
+        )
+        .filter(library_entity::Column::Id.eq(library_id.to_string()))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn search_limit_is_not_consumed_by_presentations_under_a_tombstoned_library() {
+    // #646: `search_presentations`'s `.limit(remaining)` was applied BEFORE
+    // the Rust-side tombstoned-library exclusion, so anomalous
+    // live-under-tombstoned rows sorting alphabetically EARLY consumed the
+    // LIMIT budget, starving a genuine live match sorting later in the same
+    // page. Seed 2 such anomalies (named to sort first) plus ONE genuine
+    // live match (sorts last) and search with limit=2 -- the genuine match
+    // must still come back.
+    let repo = repo().await;
+
+    let anomaly_lib = Library::new(
+        "AnomalyLib",
+        vec![
+            Presentation::new("Aardvark Anomaly Match", Vec::new()).unwrap(),
+            Presentation::new("Bumblebee Anomaly Match", Vec::new()).unwrap(),
+        ],
+    )
+    .unwrap();
+    let anomaly_lib_id = anomaly_lib.id;
+    repo.upsert_library(&anomaly_lib).await.unwrap();
+
+    let genuine_lib = Library::new(
+        "GenuineLib",
+        vec![Presentation::new("Zebra Anomaly Match", Vec::new()).unwrap()],
+    )
+    .unwrap();
+    repo.upsert_library(&genuine_lib).await.unwrap();
+
+    tombstone_library_row_only(&repo, anomaly_lib_id).await;
+
+    let results = repo.search_presenter("Anomaly Match", 2).await.unwrap();
+    assert!(
+        results
+            .iter()
+            .any(|r| r.presentation_name.as_deref() == Some("Zebra Anomaly Match")),
+        "the genuine live match must not be starved by anomalies consuming \
+         the LIMIT budget ahead of it, got: {results:?}"
+    );
+    assert!(
+        results.iter().all(|r| {
+            r.presentation_name.as_deref() != Some("Aardvark Anomaly Match")
+                && r.presentation_name.as_deref() != Some("Bumblebee Anomaly Match")
+        }),
+        "the anomalies themselves must never surface, got: {results:?}"
+    );
+}
+
+#[tokio::test]
+async fn search_limit_is_not_consumed_by_slides_under_a_tombstoned_library() {
+    // #646: same LIMIT-starvation shape as the presentations test above,
+    // one level down in `search_slides` (the join is via
+    // `presentation_entity`, not `library` directly). Insert the anomalies
+    // FIRST -- tied Position=0, no secondary sort in the slide-text query,
+    // so SQLite's tie-break falls back to insertion/rowid order, exactly
+    // what an unfiltered LIMIT would return first.
+    let repo = repo().await;
+
+    let anomaly_lib = Library::new(
+        "AnomalyLib2",
+        vec![
+            Presentation::new("A1", vec![slide_with_text("Starving Lyric One")]).unwrap(),
+            Presentation::new("A2", vec![slide_with_text("Starving Lyric Two")]).unwrap(),
+        ],
+    )
+    .unwrap();
+    let anomaly_lib_id = anomaly_lib.id;
+    repo.upsert_library(&anomaly_lib).await.unwrap();
+
+    let genuine_lib = Library::new(
+        "GenuineLib2",
+        vec![Presentation::new("G1", vec![slide_with_text("Starving Lyric Three")]).unwrap()],
+    )
+    .unwrap();
+    repo.upsert_library(&genuine_lib).await.unwrap();
+
+    tombstone_library_row_only(&repo, anomaly_lib_id).await;
+
+    let results = repo.search_presenter("Starving Lyric", 2).await.unwrap();
+    assert!(
+        results
+            .iter()
+            .any(|r| r.presentation_name.as_deref() == Some("G1")),
+        "the genuine live slide match must not be starved by anomalies \
+         consuming the LIMIT budget ahead of it, got: {results:?}"
+    );
+}
+
 #[tokio::test]
 async fn slide_under_a_library_row_that_no_longer_exists_at_all_is_dropped_silently() {
     // #646 test hardening: `backfill_live_library_names` already skips a
