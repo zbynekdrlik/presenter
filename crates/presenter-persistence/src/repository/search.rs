@@ -188,9 +188,14 @@ impl Repository {
             .await?;
 
         for (presentation_model, library_model_opt) in presentation_rows {
+            // #635: a tombstoned (soft-deleted) parent library must hide its
+            // presentations from search exactly like a trashed presentation
+            // hides itself — `library_model_opt` being `None` (library row
+            // gone entirely) was already excluded; a LIVE `Option` wrapping
+            // a TOMBSTONED row was not.
             let library_model = match library_model_opt {
-                Some(model) => model,
-                None => continue,
+                Some(model) if model.deleted_at.is_none() => model,
+                _ => continue,
             };
             if !ctx
                 .seen_presentation_ids
@@ -333,6 +338,33 @@ impl Repository {
             .all(&self.db)
             .await?;
 
+        let (pending, missing_library_ids) = Self::collect_pending_slides(ctx, slide_rows);
+        if !missing_library_ids.is_empty() {
+            self.backfill_live_library_names(ctx, missing_library_ids)
+                .await?;
+        }
+
+        for (slide_model, presentation_model) in pending {
+            if ctx.is_full() {
+                break;
+            }
+            Self::emit_slide_result(ctx, slide_model, presentation_model)?;
+        }
+
+        Ok(())
+    }
+
+    /// First pass over the raw slide-join rows: dedupe by slide id, drop rows
+    /// whose presentation vanished (`find_also_related` returned `None`), and
+    /// collect which library ids `ctx.library_names` doesn't know about yet
+    /// (extracted per the #558 round-3 function-length gate; #635 split).
+    fn collect_pending_slides(
+        ctx: &mut SearchContext,
+        slide_rows: Vec<(slide_entity::Model, Option<presentation_entity::Model>)>,
+    ) -> (
+        Vec<(slide_entity::Model, presentation_entity::Model)>,
+        HashSet<String>,
+    ) {
         let mut pending = Vec::new();
         let mut missing_library_ids: HashSet<String> = HashSet::new();
 
@@ -352,81 +384,104 @@ impl Repository {
             }
             pending.push((slide_model, presentation_model));
         }
+        (pending, missing_library_ids)
+    }
 
-        if !missing_library_ids.is_empty() {
-            let ids: Vec<String> = missing_library_ids.into_iter().collect();
-            let missing = library::Entity::find()
-                .filter(library::Column::Id.is_in(ids))
-                .all(&self.db)
-                .await?;
-            for model in missing {
+    /// Fetch and cache the names of libraries `ctx.library_names` doesn't
+    /// know about yet. #635: a TOMBSTONED library is deliberately NOT
+    /// inserted — `ctx.library_names` only ever holds LIVE libraries (every
+    /// phase enforces that invariant), and `emit_slide_result` skips any
+    /// presentation whose library has no entry here instead of falling back
+    /// to a blank name.
+    async fn backfill_live_library_names(
+        &self,
+        ctx: &mut SearchContext,
+        missing_library_ids: HashSet<String>,
+    ) -> anyhow::Result<()> {
+        let ids: Vec<String> = missing_library_ids.into_iter().collect();
+        let missing = library::Entity::find()
+            .filter(library::Column::Id.is_in(ids))
+            .all(&self.db)
+            .await?;
+        for model in missing {
+            if model.deleted_at.is_none() {
                 ctx.library_names
                     .insert(model.id.clone(), model.name.clone());
             }
         }
+        Ok(())
+    }
 
-        for (slide_model, presentation_model) in pending {
-            if ctx.is_full() {
-                break;
+    /// Classify + push ONE slide-text match into `ctx.results`, or skip it
+    /// silently (no library name known — tombstoned/missing library, #635;
+    /// token mismatch; or already emitted by `search_presentations`).
+    /// Extracted per the #558 round-3 function-length gate; #635 split.
+    fn emit_slide_result(
+        ctx: &mut SearchContext,
+        slide_model: slide_entity::Model,
+        presentation_model: presentation_entity::Model,
+    ) -> anyhow::Result<()> {
+        // #635: no entry means the library is tombstoned (or otherwise
+        // missing) — never fall back to a blank name, skip the slide
+        // entirely, exactly like a trashed presentation is skipped.
+        let Some(library_name) = ctx
+            .library_names
+            .get(&presentation_model.library_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let library_id = LibraryId::from_uuid(parse_uuid(&presentation_model.library_id)?);
+        let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
+
+        // Worship slide text fields (bible slides live in a separate table).
+        let eff_main = slide_model.worship_main.as_str();
+        let eff_main_search = slide_model.worship_main_search.as_str();
+        let eff_translation = slide_model.worship_translate.as_str();
+        let eff_translation_search = slide_model.worship_translate_search.as_str();
+        let eff_stage = slide_model.worship_stage.as_str();
+        let eff_stage_search = slide_model.worship_stage_search.as_str();
+
+        if ctx.has_tokens {
+            let combined = fold_query(&format!(
+                "{} {} {} {} {}",
+                library_name, presentation_model.name, eff_main, eff_translation, eff_stage
+            ));
+            if !ctx.tokens.iter().all(|token| combined.contains(token)) {
+                return Ok(());
             }
-            let library_name = ctx
-                .library_names
-                .get(&presentation_model.library_id)
-                .cloned()
-                .unwrap_or_default();
-            let library_id = LibraryId::from_uuid(parse_uuid(&presentation_model.library_id)?);
-            let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
-
-            // Worship slide text fields (bible slides live in a separate table).
-            let eff_main = slide_model.worship_main.as_str();
-            let eff_main_search = slide_model.worship_main_search.as_str();
-            let eff_translation = slide_model.worship_translate.as_str();
-            let eff_translation_search = slide_model.worship_translate_search.as_str();
-            let eff_stage = slide_model.worship_stage.as_str();
-            let eff_stage_search = slide_model.worship_stage_search.as_str();
-
-            if ctx.has_tokens {
-                let combined = fold_query(&format!(
-                    "{} {} {} {} {}",
-                    library_name, presentation_model.name, eff_main, eff_translation, eff_stage
-                ));
-                if !ctx.tokens.iter().all(|token| combined.contains(token)) {
-                    continue;
-                }
-            }
-
-            // Dedupe: a presentation already emitted by search_presentations
-            // (matched by name) must not be re-emitted from the slide-text
-            // phase. The insert returns false if the id was already present.
-            if !ctx
-                .seen_presentation_ids
-                .insert(presentation_model.id.clone())
-            {
-                continue;
-            }
-
-            let match_field = Self::classify_slide_match(
-                ctx,
-                eff_main,
-                eff_main_search,
-                eff_translation,
-                eff_translation_search,
-                eff_stage,
-                eff_stage_search,
-            );
-
-            ctx.results.push(SearchResult {
-                kind: SearchResultKind::Presentation,
-                library_id,
-                library_name: library_name.clone(),
-                presentation_id: Some(presentation_id),
-                presentation_name: Some(presentation_model.name.clone()),
-                slide_id: None,
-                match_field,
-                snippet: None,
-            });
         }
 
+        // Dedupe: a presentation already emitted by search_presentations
+        // (matched by name) must not be re-emitted from the slide-text
+        // phase. The insert returns false if the id was already present.
+        if !ctx
+            .seen_presentation_ids
+            .insert(presentation_model.id.clone())
+        {
+            return Ok(());
+        }
+
+        let match_field = Self::classify_slide_match(
+            ctx,
+            eff_main,
+            eff_main_search,
+            eff_translation,
+            eff_translation_search,
+            eff_stage,
+            eff_stage_search,
+        );
+
+        ctx.results.push(SearchResult {
+            kind: SearchResultKind::Presentation,
+            library_id,
+            library_name,
+            presentation_id: Some(presentation_id),
+            presentation_name: Some(presentation_model.name.clone()),
+            slide_id: None,
+            match_field,
+            snippet: None,
+        });
         Ok(())
     }
 }

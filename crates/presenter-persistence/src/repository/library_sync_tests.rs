@@ -80,6 +80,60 @@ async fn rename_in_place_by_sync_id_preserves_id_and_presentations() {
 }
 
 #[tokio::test]
+async fn rename_by_sync_id_disambiguates_instead_of_colliding_with_a_different_live_library() {
+    // #636 regression: a peer rename applying via `write_library_row`'s
+    // `update_many` wrote `incoming.name` unconditionally. If a DIFFERENT
+    // live local library already owns that name, the UPDATE throws a
+    // unique-constraint violation on `idx_libraries_name_live_unique`; before
+    // the fix, `reconcile_libraries` (state/sync.rs) caught this and only
+    // `warn!`ed -- every future cycle repeated the identical failure forever,
+    // so the two peers never converged on this library's rename at all.
+    let repo = repo().await;
+
+    // A pre-existing, DIFFERENT live library already named "Bar".
+    repo.create_library("Bar").await.unwrap();
+
+    // A separate identity "Foo" the peer is renaming to "Bar" too.
+    let foo = repo.create_library("Foo").await.unwrap();
+    let foo_sid = library_row_by_name(&repo, "Foo").await.sync_id;
+
+    let outcome = repo
+        .apply_sync_library(&incoming(&foo_sid, "Bar", 1, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        SyncApplyOutcome::Updated,
+        "the rename must apply -- never silently fail with a swallowed DB error"
+    );
+
+    // Both libraries survive, live, under DISTINCT names -- no data loss, no
+    // permanent silent-failure loop.
+    let libs = repo.fetch_libraries().await.unwrap();
+    assert_eq!(libs.len(), 2, "both libraries still exist, live");
+
+    let foo_row = library::Entity::find_by_id(foo.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        foo_row.deleted_at.is_none(),
+        "the renamed library stays live"
+    );
+    assert_ne!(
+        foo_row.name, "Bar",
+        "the colliding name must be disambiguated, never written verbatim \
+         over an existing live library's name"
+    );
+    assert!(
+        foo_row.name.starts_with("Bar"),
+        "the disambiguated name is still recognizably based on 'Bar', got: {}",
+        foo_row.name
+    );
+}
+
+#[tokio::test]
 async fn tombstone_by_sync_id_hides_the_library() {
     let repo = repo().await;
     let lib = repo.create_library("Songs").await.unwrap();

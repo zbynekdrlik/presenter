@@ -127,12 +127,19 @@ impl Repository {
             // runs first), so `ensure_library`'s live-only lookup would miss
             // it and create a fresh EMPTY LIVE library shell to hold the
             // tombstone. Only a LIVE apply (re)attaches to the peer's library.
-            let library_id = if incoming.deleted_at.is_some() {
-                existing.library_id.clone()
+            //
+            // #634: `ensure_library`'s second return value is `Some(ts)` when
+            // the target library stayed tombstoned (LWW decided NOT to
+            // revive it) — in that case THIS presentation must be written as
+            // tombstoned too, never left live under a dead parent (see
+            // `write_synced_row`'s `forced_delete` param).
+            let (library_id, forced_delete) = if incoming.deleted_at.is_some() {
+                (existing.library_id.clone(), None)
             } else {
                 Self::ensure_library(&txn, &incoming.library_name, incoming.updated_at).await?
             };
-            Self::write_synced_row(&txn, &existing.id, &library_id, incoming).await?;
+            Self::write_synced_row(&txn, &existing.id, &library_id, incoming, forced_delete)
+                .await?;
             txn.commit().await?;
             info!("sync updated");
             let id =
@@ -319,13 +326,28 @@ impl Repository {
     /// never changes, and reviving it never revives any presentation
     /// tombstoned under it (those carry their own tombstones with their own
     /// `updated_at` and settle by their own LWW).
+    ///
+    /// #634: returns `(library_id, forced_tombstone_at)`. `forced_tombstone_at`
+    /// is `Some(ts)` ONLY when the resolved library stayed tombstoned (the
+    /// LWW check above did NOT revive it) — the caller MUST then write the
+    /// presentation attaching here as tombstoned too, at `ts`, instead of
+    /// leaving it LIVE under a dead parent (a live row under a tombstoned
+    /// library was invisible — excluded from `fetch_libraries` — AND doomed
+    /// by the next `prune_deleted_libraries` CASCADE, with zero prior trace
+    /// it ever existed; real data loss, fixed here). `ts` is the LATER of
+    /// the two clocks (`presentation_updated_at.max(library_updated)`) so
+    /// the row's own clock only ever advances, letting a later sync cycle
+    /// still converge the peer onto the same tombstone once it too learns of
+    /// the deletion. `None` in every other case (live library found,
+    /// revived, or freshly created) — the caller's normal
+    /// `incoming.deleted_at`/`updated_at` apply unchanged.
     async fn ensure_library(
         txn: &sea_orm::DatabaseTransaction,
         library_name: &str,
         presentation_updated_at: DateTime<Utc>,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<(String, Option<DateTime<Utc>>)> {
         if let Some(id) = Self::find_library_id(txn, library_name).await? {
-            return Ok(id);
+            return Ok((id, None));
         }
         // Order by UpdatedAt DESC, SyncId DESC: repeated delete/recreate
         // cycles of the same-named library leave MULTIPLE tombstoned rows
@@ -368,8 +390,13 @@ impl Repository {
                     .filter(library::Column::DeletedAt.is_not_null())
                     .exec(txn)
                     .await?;
+                return Ok((tombstoned.id, None));
             }
-            return Ok(tombstoned.id);
+            // #634: the tombstone wins (not revived) -- the presentation
+            // attaching here must be written as tombstoned too, never live
+            // under a dead parent.
+            let forced_at = presentation_updated_at.max(library_updated);
+            return Ok((tombstoned.id, Some(forced_at)));
         }
         let id = uuid::Uuid::new_v4().to_string();
         library::Entity::insert(library::ActiveModel {
@@ -386,7 +413,7 @@ impl Repository {
         })
         .exec(txn)
         .await?;
-        Ok(id)
+        Ok((id, None))
     }
 
     /// #578: resolve a library id for a brand-new TOMBSTONED presentation
@@ -493,7 +520,9 @@ impl Repository {
             info!("sync skip (adopt-by-name, local newer)");
             return Ok(Some((SyncApplyOutcome::SkippedNotNewer, None)));
         }
-        Self::write_synced_row(txn, &existing.id, library_id, incoming).await?;
+        // `library_id` here always came from `find_library_id` (LIVE-only
+        // lookup) — never a tombstoned library, so no `forced_delete` needed.
+        Self::write_synced_row(txn, &existing.id, library_id, incoming, None).await?;
         info!("sync adopted-by-name");
         let id = presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&existing.id)?);
         Ok(Some((SyncApplyOutcome::AdoptedByName, Some(id))))
@@ -525,11 +554,21 @@ impl Repository {
         // attach it to any existing same-named library (live or tombstoned),
         // or, if none exists, a TOMBSTONED library. A LIVE entry ensures a
         // live library as before.
-        let library_id = if incoming.deleted_at.is_some() {
-            Self::ensure_library_for_tombstone(txn, &incoming.library_name).await?
+        //
+        // #634: for a LIVE entry, `ensure_library`'s second return value is
+        // `Some(ts)` when the target library stayed tombstoned (not
+        // revived) — this new presentation must then be written as
+        // tombstoned too, never live under a dead parent.
+        let (library_id, forced_delete) = if incoming.deleted_at.is_some() {
+            (
+                Self::ensure_library_for_tombstone(txn, &incoming.library_name).await?,
+                None,
+            )
         } else {
             Self::ensure_library(txn, &incoming.library_name, incoming.updated_at).await?
         };
+        let effective_updated_at = forced_delete.unwrap_or(incoming.updated_at);
+        let effective_deleted_at = forced_delete.or(incoming.deleted_at);
         let new_id = uuid::Uuid::new_v4().to_string();
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(new_id.clone()),
@@ -537,9 +576,9 @@ impl Repository {
             name: Set(incoming.name.clone()),
             search_name: Set(fold_query(&incoming.name)),
             created_at: Set(Utc::now().into()),
-            updated_at: Set(incoming.updated_at.into()),
+            updated_at: Set(effective_updated_at.into()),
             sync_id: Set(incoming.sync_id.clone()),
-            deleted_at: Set(incoming.deleted_at.map(Into::into)),
+            deleted_at: Set(effective_deleted_at.map(Into::into)),
         })
         .exec(txn)
         .await?;
@@ -552,15 +591,25 @@ impl Repository {
     /// Update an existing local row IN PLACE (preserving its id + playlist refs):
     /// name, search_name, library, sync_id (adopt), deleted_at, and the PEER's
     /// updated_at (never now() — that is what prevents echo). Then replace slides.
+    ///
+    /// `forced_delete` (#634): `Some(ts)` when `library_id` resolved to a
+    /// library that stayed tombstoned (`ensure_library` declined to revive
+    /// it) — overrides BOTH `deleted_at` and `updated_at` so this row is
+    /// written as an explicit tombstone at `ts` instead of silently LIVE
+    /// under a dead parent (which the 30-day tombstone-prune cascade would
+    /// otherwise hard-delete with no prior trace). `None` for every other
+    /// caller — the incoming row's own `deleted_at`/`updated_at` apply as-is.
     async fn write_synced_row<C: sea_orm::ConnectionTrait>(
         conn: &C,
         local_id: &str,
         library_id: &str,
         incoming: &SyncPresentation,
+        forced_delete: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
         use presentation_entity::Column;
-        let deleted = incoming
-            .deleted_at
+        let effective_updated_at = forced_delete.unwrap_or(incoming.updated_at);
+        let effective_deleted_at = forced_delete.or(incoming.deleted_at);
+        let deleted = effective_deleted_at
             .map(|d| Expr::value(d.to_rfc3339()))
             .unwrap_or_else(|| Expr::value(Option::<String>::None));
         presentation_entity::Entity::update_many()
@@ -570,7 +619,7 @@ impl Repository {
             .col_expr(Column::SyncId, Expr::value(incoming.sync_id.clone()))
             .col_expr(
                 Column::UpdatedAt,
-                Expr::value(incoming.updated_at.to_rfc3339()),
+                Expr::value(effective_updated_at.to_rfc3339()),
             )
             .col_expr(Column::DeletedAt, deleted)
             .filter(Column::Id.eq(local_id))
@@ -965,11 +1014,16 @@ mod tests {
         // ensure_library: picks most recent tombstone by UpdatedAt DESC.
         // presentation_updated_at is OLDER than both → no revival, pure read.
         let txn2 = repo.db.begin().await.expect("begin txn");
-        let id_from_live_helper =
+        let (id_from_live_helper, forced_delete) =
             super::Repository::ensure_library(&txn2, "Songs", base - Duration::hours(3))
                 .await
                 .expect("resolve via live helper");
         txn2.rollback().await.expect("rollback");
+        assert!(
+            forced_delete.is_some(),
+            "presentation_updated_at is older than the tombstone -- it stays \
+             tombstoned, so the caller must be told to force-tombstone too (#634)"
+        );
 
         assert_eq!(
             id_from_tombstone_helper, id_from_live_helper,
