@@ -1,6 +1,6 @@
 //! Stage display methods for `AppState`.
 
-use super::stage::build_stage_snapshot;
+use super::stage::{build_stage_snapshot, StageContext};
 use super::AppState;
 use crate::live::LiveEvent;
 use presenter_core::{
@@ -148,6 +148,27 @@ impl AppState {
         publish_snapshots: bool,
     ) -> anyhow::Result<StageDisplayLayout> {
         let layout = Self::validate_operator_selectable(code)?;
+
+        // Fast path: skip the DB read below entirely when the layout is
+        // already selected (the common "click the same layout again" case).
+        // The authoritative no-op check under the write-lock guard further
+        // down is unchanged.
+        if self.stage_layout_code().await == layout.code {
+            return Ok(layout);
+        }
+
+        // #631: build the stage snapshot context — the ONE fallible step in
+        // this whole switch — BEFORE any side effect. If it fails, the
+        // caller gets a genuine error and NOTHING has changed: no RwLock
+        // write, no persist, no broadcast. Previously this build happened
+        // AFTER the switch had already been applied, persisted, and
+        // broadcast (LiveEvent::StageLayout), so a failure here (e.g. a
+        // corrupted timers row) misreported an already-successful layout
+        // switch as a 500 to the caller.
+        let context = self
+            .context_for_pending_switch(&layout, publish_snapshots)
+            .await?;
+
         {
             let mut guard = self.stage_layout.write().await;
             if *guard == layout.code {
@@ -155,10 +176,40 @@ impl AppState {
             }
             *guard = layout.code.clone();
         }
-        // Persist the new layout so it survives a restart/deploy (#384). The
-        // in-memory RwLock above is the live source of truth for broadcasts;
-        // the DB write only seeds the RwLock on the next startup. A failed
-        // write must NOT abort the live layout switch, so log and continue.
+        self.persist_and_broadcast_switch(&layout, context).await;
+        Ok(layout)
+    }
+
+    /// The one fallible step of a layout switch (`#631`) — a DB read that
+    /// depends only on the CURRENT stage state, never on the layout being
+    /// switched TO, so it is safe to compute before any side effect. `None`
+    /// when no snapshot broadcast is needed at all (the api layout drives
+    /// its own snapshot separately; `publish_snapshots = false` callers
+    /// broadcast their own resolution right after, #515).
+    async fn context_for_pending_switch(
+        &self,
+        layout: &StageDisplayLayout,
+        publish_snapshots: bool,
+    ) -> anyhow::Result<Option<StageContext>> {
+        if layout.code == API_STAGE_LAYOUT_CODE || !publish_snapshots {
+            return Ok(None);
+        }
+        self.build_stage_context().await
+    }
+
+    /// Persist + broadcast a switch that has ALREADY been applied to the
+    /// in-memory RwLock. Both steps are best-effort: the switch itself
+    /// already committed, so neither a persist failure nor a broadcast
+    /// failure may turn an already-successful switch into a caller-visible
+    /// error (#384 for persist, #631 for the snapshot broadcast).
+    async fn persist_and_broadcast_switch(
+        &self,
+        layout: &StageDisplayLayout,
+        context: Option<StageContext>,
+    ) {
+        // Persist so the layout survives a restart/deploy (#384). The
+        // in-memory RwLock is the live source of truth for broadcasts; the
+        // DB write only seeds the RwLock on the next startup.
         if let Err(err) = self
             .repository()
             .set_app_setting(STAGE_LAYOUT_KEY, &layout.code)
@@ -184,10 +235,19 @@ impl AppState {
             // marker path also short-circuits on the api layout.
             let snapshot = self.api_stage_snapshot().await;
             self.live_hub.publish(LiveEvent::Stage { snapshot });
-        } else if publish_snapshots {
-            self.broadcast_stage_snapshots().await?;
+        } else if let Some(context) = context {
+            // #631: publish the ALREADY-BUILT context — this only maps it
+            // onto a snapshot and publishes (effectively infallible once
+            // `context` exists).
+            if let Err(err) = self.publish_stage_context(&context).await {
+                tracing::warn!(
+                    ?err,
+                    code = %layout.code,
+                    "failed to publish stage snapshot after layout switch — \
+                     the switch itself already committed"
+                );
+            }
         }
-        Ok(layout)
     }
 
     pub async fn stage_displays(&self) -> anyhow::Result<Vec<StageDisplayLayout>> {
