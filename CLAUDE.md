@@ -32,6 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
 | Repository refusal → HTTP 404/409/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |
+| Sync/LWW invariants (synthetic tombstones, clock bumps, best-effort recon) | `.claude/rules/sync-lww.md` (auto-loads on `repository/sync*`, `library_sync*`, `state/sync.rs`) |
 
 ## Always-Rules
 
