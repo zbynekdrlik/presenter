@@ -75,6 +75,33 @@ async function gotoAiPanel(page: Page) {
   );
 }
 
+test("an unresolved status check never shows the banner as a false accusation", async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  // Malformed 200 body — same technique `ai-status-chip.spec.ts` uses to
+  // exercise a failed status fetch without the browser's own non-2xx
+  // console noise. `check_status()` resolves `Err`, and never resolves
+  // `Ok`, for the lifetime of this test.
+  await page.route("**/ai/status", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+  });
+
+  await gotoAiPanel(page);
+
+  // #622 post-merge review finding 1: before the fix, `proxy_authenticated`
+  // defaulted to `false` and a failed fetch never touched it, so the banner
+  // painted "Nie si prihlásený" before any real response ever arrived (and
+  // would stay that way forever). The real state here is UNKNOWN — the
+  // banner must stay hidden, not accuse the operator of being logged out.
+  const banner = page.locator('[data-role="ai-login-banner"]');
+  await page.waitForTimeout(2_000);
+  await expect(banner).toHaveAttribute("data-visible", "false");
+
+  expect(consoleMessages).toEqual([]);
+});
+
 test("logged out shows the primary login banner with a visible CTA", async ({
   page,
 }) => {
@@ -158,6 +185,73 @@ test("an expired token is named in the logged-out banner's subtext", async ({
   // logged out, even though we DO know an expiry.
   const validity = page.locator('[data-role="ai-token-validity"]');
   await expect(validity).toHaveAttribute("data-visible", "false");
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("clicking the CTA starts the existing Claude login flow", async ({
+  page,
+}) => {
+  // #622 post-merge review finding 7: the CTA reuses `pages/ai.rs`'s
+  // existing `proxy_login()` flow (never a duplicate) — prove the click
+  // actually fires POST /ai/proxy/login, the same request the settings-drawer
+  // "Claude Login" button uses.
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await mockAiStatus(page, { claudeAuthenticated: false });
+
+  let loginRequested = false;
+  await page.route("**/ai/proxy/login", async (route) => {
+    loginRequested = true;
+    await route.fulfill({
+      json: { loginUrl: "https://claude.ai/oauth/authorize?fake=1" },
+    });
+  });
+
+  await gotoAiPanel(page);
+
+  const cta = page.locator('[data-role="ai-login-cta"]');
+  await expect(cta).toBeVisible();
+  await cta.click();
+
+  await expect.poll(() => loginRequested).toBe(true);
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("a chat auth error points the operator at the visible login banner", async ({
+  page,
+}) => {
+  // #622 post-merge review finding 6: before the fix, a chat-time auth
+  // failure only re-checked `/ai/status` silently — the displayed error text
+  // never told the operator WHERE to go. Mock an SSE "error" event from
+  // /ai/chat while /ai/status reports logged-out, and assert the error text
+  // carries the login hint (banner is already visible from the status mock).
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await mockAiStatus(page, { claudeAuthenticated: false });
+
+  await page.route("**/ai/chat", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: 'event: error\ndata: {"message":"authentication_error"}\n\n',
+    });
+  });
+
+  await gotoAiPanel(page);
+
+  const banner = page.locator('[data-role="ai-login-banner"]');
+  await expect(banner).toHaveAttribute("data-visible", "true", { timeout: 30_000 });
+
+  const textarea = page.locator('[data-role="ai-input"]');
+  await textarea.fill("ahoj");
+  await page.locator('[data-role="ai-send"]').click();
+
+  const error = page.locator('[data-role="ai-error"]');
+  await expect(error).toBeVisible({ timeout: 15_000 });
+  await expect(error).toContainText("authentication_error");
+  await expect(error).toContainText(/prihlásenie ku Claude vypršalo/);
 
   expect(consoleMessages).toEqual([]);
 });

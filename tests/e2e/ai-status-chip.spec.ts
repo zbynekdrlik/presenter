@@ -170,6 +170,16 @@ test("a failed poll shows the neutral checking state, never a false failure clai
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
 
+  // #622 post-merge review finding 4: the ORIGINAL version of this test
+  // mocked a failure from the very first load and asserted "checking" — the
+  // chip's INITIAL state before any response ever arrives, so the assertion
+  // was trivially true even if the poll's `Err` arm were deleted entirely.
+  // This version proves an actual OK -> checking TRANSITION caused by real
+  // poll failures: start authenticated (chip reaches "ok"), then break the
+  // route and wait for >=2 poll ticks (5s interval, STALE_AFTER_FAILURES=2)
+  // so the chip is FORCED to fall back to "checking" — a regression that
+  // deletes the `Err` arm leaves the chip stuck on "ok" and fails this.
+  //
   // A non-2xx status here would be closer to a "real" failure, but Chrome
   // itself logs a "Failed to load resource: the server responded with a
   // status of 500" console error for ANY non-2xx fetch response — that is
@@ -181,15 +191,22 @@ test("a failed poll shows the neutral checking state, never a false failure clai
   // returns `Err(ApiError::Deserialize(..))`, handled identically to
   // `ApiError::Status` by `ai_status.rs`'s `poll` closure — via a pure
   // Rust-side `serde_json::from_str` parse error, with a clean console.
-  await page.route("**/ai/status", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
-  });
+  await mockAiStatus(page, { running: true, binaryFound: true, claudeAuthenticated: true });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
 
   const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "checking", { timeout: 30_000 });
+  await expect(chip).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
+
+  await page.unroute("**/ai/status");
+  await page.route("**/ai/status", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+  });
+
+  // AI_STATUS_REFRESH_MS = 5_000, STALE_AFTER_FAILURES = 2 — two consecutive
+  // failed ticks land at ~10s; wait well past that for the transition.
+  await expect(chip).toHaveAttribute("data-state", "checking", { timeout: 20_000 });
   await expect(chip).toHaveText("AI: kontrolujem…");
 
   expect(consoleMessages).toEqual([]);

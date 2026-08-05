@@ -786,4 +786,48 @@ mod tests {
         assert!(status.claude_authenticated);
         assert_eq!(status.token_expires_at, None);
     }
+
+    /// #622 post-merge review finding 2 (RED — expected-red by inspection;
+    /// Tier-0 forbids running `cargo test -p presenter-server` locally, so
+    /// this cannot be executed on this box, only reasoned through the code
+    /// path): `authenticated` becomes `true` here ONLY via the fail-open
+    /// `Unknown` token — there is no fresh token anywhere in the scan. A
+    /// SEPARATE, genuinely expired token also sits in the same auth dir.
+    ///
+    /// Before the fix, `expires_at = fresh_max.or_else(|| expired_max)` — with
+    /// `fresh_max` empty, the EXPIRED token's past timestamp leaks through as
+    /// if it were the validity backing `authenticated: true`, and the UI would
+    /// show "Prihlásenie ku Claude platí do <a date in the past>". The fix
+    /// gates the fallback on `authenticated` itself: authenticated must only
+    /// ever surface a FRESH timestamp, `None` when the only backing evidence
+    /// is an Unknown token.
+    #[tokio::test]
+    async fn status_hides_expired_timestamp_when_authenticated_via_unknown_token_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let auth_dir = mgr.auth_dir();
+        tokio::fs::create_dir_all(&auth_dir).await.unwrap();
+        // Unparseable expiry — fail-open, makes `authenticated: true` with no
+        // fresh timestamp to back it.
+        tokio::fs::write(
+            auth_dir.join("claude-weird@example.com.json"),
+            r#"{"access_token":"a","type":"claude"}"#,
+        )
+        .await
+        .unwrap();
+        // A SEPARATE, genuinely expired token in the same auth dir.
+        let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        write_token(&mgr, "expired@example.com", &past).await;
+
+        let status = mgr.status().await;
+        assert!(
+            status.claude_authenticated,
+            "the Unknown token fail-opens auth"
+        );
+        assert_eq!(
+            status.token_expires_at, None,
+            "authenticated via the Unknown token alone must never surface the OTHER \
+             (unrelated, expired) token's past timestamp as if it were validity"
+        );
+    }
 }
