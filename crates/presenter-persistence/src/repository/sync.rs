@@ -146,6 +146,31 @@ impl Repository {
         presentation_id: presenter_core::PresentationId,
     ) -> anyhow::Result<()> {
         use presentation_entity::Column;
+        let existing = presentation_entity::Entity::find()
+            .filter(Column::Id.eq(presentation_id.to_string()))
+            .filter(Column::DeletedAt.is_not_null())
+            .one(&self.db)
+            .await?
+            .ok_or(RepositoryError::NotFound("no trashed presentation to restore"))?;
+
+        // #636: a restore that leaves the song under a STILL-tombstoned
+        // library accomplishes nothing durable -- the library's own
+        // deleted_at hides it from fetch_libraries, so the "restored" song
+        // stays unreachable, and it is now LIVE, so the next
+        // prune_deleted_libraries CASCADE hard-deletes it (worse than
+        // leaving it in the trash). Refuse cleanly instead of performing a
+        // mutation that helps nobody; no partial state change.
+        let library_tombstoned = library::Entity::find_by_id(existing.library_id.clone())
+            .one(&self.db)
+            .await?
+            .is_none_or(|lib| lib.deleted_at.is_some());
+        if library_tombstoned {
+            return Err(RepositoryError::Conflict(
+                "the presentation's library is still trashed — restore the library first",
+            )
+            .into());
+        }
+
         let now = Utc::now().to_rfc3339();
         let result = presentation_entity::Entity::update_many()
             .col_expr(Column::DeletedAt, Expr::value(Option::<String>::None))

@@ -69,7 +69,19 @@ impl Repository {
                 txn.commit().await?;
                 return Ok(SyncApplyOutcome::SkippedNotNewer);
             }
-            Self::write_library_row(&txn, &existing.id, incoming).await?;
+            // #636: a rename (this write leaves the row LIVE) can target a
+            // name a DIFFERENT live local library already owns —
+            // `idx_libraries_name_live_unique` would otherwise reject the
+            // UPDATE outright, and the caller (`reconcile_libraries`) only
+            // warn!ed and dropped it, forever, every cycle. A tombstone
+            // write is never at risk (the partial index only guards LIVE
+            // rows), so it always writes `incoming.name` verbatim.
+            let write_name = if incoming.deleted_at.is_none() {
+                Self::resolve_conflict_free_name(&txn, &incoming.name, &existing.id).await?
+            } else {
+                incoming.name.clone()
+            };
+            Self::write_library_row(&txn, &existing.id, incoming, &write_name).await?;
             txn.commit().await?;
             info!("sync library updated");
             return Ok(SyncApplyOutcome::Updated);
@@ -91,7 +103,9 @@ impl Repository {
                     txn.commit().await?;
                     return Ok(SyncApplyOutcome::SkippedNotNewer);
                 }
-                Self::write_library_row(&txn, &existing.id, incoming).await?;
+                // `existing` was found BY this exact name (`find_live_library_by_name`),
+                // so writing `incoming.name` verbatim can never newly collide.
+                Self::write_library_row(&txn, &existing.id, incoming, &incoming.name).await?;
                 txn.commit().await?;
                 info!("sync library adopted-by-name");
                 return Ok(SyncApplyOutcome::AdoptedByName);
@@ -142,10 +156,16 @@ impl Repository {
     /// (adopt), deleted_at, and the PEER's `updated_at` (never `now()` — an
     /// applied change is not a new local edit, which is what prevents an
     /// echo/ping-pong loop).
+    ///
+    /// `write_name` (#636) is the name actually WRITTEN to `Name`/`SearchName`
+    /// — usually `incoming.name` verbatim, but the rename call site passes an
+    /// already-disambiguated name (`resolve_conflict_free_name`) when
+    /// `incoming.name` collides with a DIFFERENT live library.
     async fn write_library_row(
         txn: &DatabaseTransaction,
         local_id: &str,
         incoming: &SyncLibraryManifestRow,
+        write_name: &str,
     ) -> anyhow::Result<()> {
         use library::Column;
         let deleted = incoming
@@ -153,8 +173,8 @@ impl Repository {
             .map(|d| Expr::value(d.to_rfc3339()))
             .unwrap_or_else(|| Expr::value(Option::<String>::None));
         library::Entity::update_many()
-            .col_expr(Column::Name, Expr::value(incoming.name.clone()))
-            .col_expr(Column::SearchName, Expr::value(fold_query(&incoming.name)))
+            .col_expr(Column::Name, Expr::value(write_name.to_string()))
+            .col_expr(Column::SearchName, Expr::value(fold_query(write_name)))
             .col_expr(Column::SyncId, Expr::value(incoming.sync_id.clone()))
             .col_expr(
                 Column::UpdatedAt,
@@ -165,6 +185,43 @@ impl Repository {
             .exec(txn)
             .await?;
         Ok(())
+    }
+
+    /// Resolve a name that is safe to write LIVE for `exclude_id` — i.e. one
+    /// no OTHER live library already owns (#636). Returns `desired` unchanged
+    /// when it's free; otherwise appends `" (2)"`, `" (3)"`, … until a free
+    /// name is found. This is what lets a peer rename that collides with a
+    /// DIFFERENT, already-known local identity always SUCCEED (both
+    /// libraries survive, live, under distinct names) instead of throwing a
+    /// `idx_libraries_name_live_unique` violation that used to be caught and
+    /// silently dropped forever by `reconcile_libraries`.
+    async fn resolve_conflict_free_name(
+        txn: &DatabaseTransaction,
+        desired: &str,
+        exclude_id: &str,
+    ) -> anyhow::Result<String> {
+        use sea_orm::QuerySelect;
+        let taken: std::collections::HashSet<String> = library::Entity::find()
+            .filter(library::Column::DeletedAt.is_null())
+            .filter(library::Column::Id.ne(exclude_id.to_string()))
+            .select_only()
+            .column(library::Column::Name)
+            .into_tuple()
+            .all(txn)
+            .await?
+            .into_iter()
+            .collect();
+        if !taken.contains(desired) {
+            return Ok(desired.to_string());
+        }
+        let mut suffix = 2u32;
+        loop {
+            let candidate = format!("{desired} ({suffix})");
+            if !taken.contains(&candidate) {
+                return Ok(candidate);
+            }
+            suffix += 1;
+        }
     }
 
     /// Hard-delete libraries tombstoned longer than `retain`. The FK

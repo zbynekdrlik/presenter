@@ -3192,3 +3192,78 @@ async fn restore_presentation_endpoint_never_trashed_returns_404() {
         .unwrap();
     assert_eq!(restore_response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn restore_presentation_endpoint_returns_409_when_library_is_tombstoned() {
+    // #636: restore_presentation now refuses (typed Conflict -> 409) when the
+    // presentation's parent library is still tombstoned, instead of silently
+    // resurrecting a song that stays unreachable and doomed by the next
+    // tombstone-prune cascade.
+    let app = build_router(AppState::in_memory().await.unwrap());
+
+    let create_library_body = serde_json::json!({ "name": "Trapped Library" }).to_string();
+    let library_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/libraries")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_library_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let library_bytes = axum::body::to_bytes(library_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let library: Library = serde_json::from_slice(&library_bytes).unwrap();
+
+    let create_presentation_body = serde_json::json!({ "name": "Trapped Song" }).to_string();
+    let presentation_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("/libraries/{}/presentations", library.id))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_presentation_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let presentation_bytes = axum::body::to_bytes(presentation_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: CreateLibraryPresentationResponse =
+        serde_json::from_slice(&presentation_bytes).unwrap();
+
+    // Deleting the library soft-deletes it AND the live presentation under it.
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(format!("/libraries/{}", library.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let restore_response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!(
+                    "/presentations/{}/restore",
+                    payload.presentation.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restore_response.status(), StatusCode::CONFLICT);
+}

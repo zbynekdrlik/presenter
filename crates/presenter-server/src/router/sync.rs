@@ -20,9 +20,15 @@ use presenter_core::PresentationId;
 /// string match on the `Display` text (#587, mirrors `router/libraries.rs`'s
 /// `map_repository_not_found`, #584). Any other error falls through to the
 /// default 500 mapping.
+///
+/// #636: also maps `Conflict` — `restore_presentation` refusing a song whose
+/// parent library is still tombstoned — to 409, mirroring the existing
+/// `PasteSlidesError::AnchorVanished` -> `AppError::conflict` mapping
+/// (`router/presentations.rs`).
 fn map_repository_not_found(err: anyhow::Error) -> AppError {
     match err.downcast_ref::<presenter_persistence::RepositoryError>() {
         Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        Some(presenter_persistence::RepositoryError::Conflict(msg)) => AppError::conflict(*msg),
         _ => err.into(),
     }
 }
