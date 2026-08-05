@@ -10,6 +10,40 @@ async fn repo() -> Repository {
         .expect("in-memory repo")
 }
 
+fn slide_with_text(main: &str) -> Slide {
+    Slide::new(
+        0,
+        SlideContent::new(
+            SlideText::new(main).unwrap(),
+            SlideText::new("").unwrap(),
+            SlideText::new("").unwrap(),
+            None,
+        ),
+    )
+}
+
+/// Build a Repository on a DEDICATED single-connection in-memory database
+/// (own schema copy, not the shared-cache pool `repo()` uses) so a raw
+/// `PRAGMA foreign_keys = OFF` reliably applies to the SAME connection that
+/// then hard-deletes a library row — letting a test construct a presentation
+/// whose `library_id` points at NO row at all, a state the FK-enforced
+/// schema makes unreachable through any normal write path (#646 test
+/// hardening for `backfill_live_library_names`'s silent drop).
+async fn repo_allowing_fk_bypass() -> Repository {
+    use presenter_migration::MigratorTrait;
+    use sea_orm::{ConnectOptions, Database};
+    let mut opts = ConnectOptions::new("sqlite::memory:");
+    opts.max_connections(1).min_connections(1);
+    let db = Database::connect(opts).await.expect("connect");
+    Repository::apply_sqlite_pragmas(&db)
+        .await
+        .expect("pragmas");
+    presenter_migration::Migrator::up(&db, None)
+        .await
+        .expect("migrate");
+    Repository { db }
+}
+
 #[tokio::test]
 async fn trashed_song_lyrics_are_not_searchable() {
     // S10 regression: search_presenter's two NAME-search phases
@@ -175,5 +209,64 @@ async fn presentation_under_a_tombstoned_library_is_not_searchable() {
         after_text.is_empty(),
         "a presentation under a tombstoned library must not surface by \
          slide text, got: {after_text:?}"
+    );
+}
+
+#[tokio::test]
+async fn slide_under_a_library_row_that_no_longer_exists_at_all_is_dropped_silently() {
+    // #646 test hardening: `backfill_live_library_names` already skips a
+    // TOMBSTONED library (see the test above); this pins the OTHER branch
+    // of the SAME `None` check -- a library row that is ENTIRELY MISSING
+    // (not merely tombstoned) must be dropped the same way, never falling
+    // back to a blank name.
+    let repo = repo_allowing_fk_bypass().await;
+    let presentation = Presentation::new(
+        "Orphaned By Deletion",
+        vec![slide_with_text("A vanished library lyric")],
+    )
+    .unwrap();
+    let library = Library::new("WillBeHardDeleted", vec![presentation]).unwrap();
+    let library_id = library.id;
+    repo.upsert_library(&library).await.unwrap();
+
+    // Sanity: searchable while the library row still exists.
+    let before = repo
+        .search_presenter("vanished library lyric", 10)
+        .await
+        .unwrap();
+    assert!(
+        before
+            .iter()
+            .any(|r| matches!(r.kind, SearchResultKind::Presentation)),
+        "sanity: searchable while the library row still exists"
+    );
+
+    // Hard-delete ONLY the library row, bypassing the FK's own ON DELETE
+    // CASCADE (which would otherwise remove the presentation + slide right
+    // along with it) -- the presentation row is left dangling, exactly the
+    // state `backfill_live_library_names` must defend against.
+    use crate::entities::library as library_entity;
+    use sea_orm::{ConnectionTrait, EntityTrait};
+    repo.db
+        .execute_unprepared("PRAGMA foreign_keys = OFF")
+        .await
+        .unwrap();
+    library_entity::Entity::delete_by_id(library_id.to_string())
+        .exec(&repo.db)
+        .await
+        .unwrap();
+    repo.db
+        .execute_unprepared("PRAGMA foreign_keys = ON")
+        .await
+        .unwrap();
+
+    let after = repo
+        .search_presenter("vanished library lyric", 10)
+        .await
+        .unwrap();
+    assert!(
+        after.is_empty(),
+        "a slide whose library row no longer exists at all must never \
+         surface in search results, got: {after:?}"
     );
 }
