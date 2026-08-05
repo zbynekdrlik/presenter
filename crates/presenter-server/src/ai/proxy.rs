@@ -30,12 +30,27 @@ const PROXY_BINARY_NAME: &str = "cli-proxy-api";
 
 /// Freshness classification of an on-disk Claude OAuth token (#438).
 enum TokenValidity {
-    /// Token's `expired` timestamp is in the future — usable.
-    Fresh,
+    /// Token's `expired` timestamp is in the future — usable. Carries the raw
+    /// RFC3339 string so #599 can surface it to the UI.
+    Fresh { expired: String },
     /// Token's `expired` timestamp is in the past — dead, re-login required.
     Expired { expired: String },
     /// File unreadable or has no parseable `expired` field — fail-open as valid.
     Unknown,
+}
+
+/// Result of scanning on-disk Claude auth state (#599): whether Presenter
+/// treats the account as authenticated, and — when derivable — the RFC3339
+/// expiry of the token that "wins" the scan. Surfaced in the UI so an
+/// operator can renew a login BEFORE it dies mid-event instead of only
+/// discovering it dead when an AI request silently fails (2026-07-26).
+struct AuthScan {
+    authenticated: bool,
+    /// The latest-expiring FRESH token's expiry when any token is fresh;
+    /// otherwise the most-recently-expired token's expiry (so the UI can say
+    /// "expired at X"); `None` for API-key auth, no tokens on disk, or tokens
+    /// with no parseable expiry at all.
+    expires_at: Option<String>,
 }
 
 /// State of the managed CLIProxyAPI process.
@@ -47,6 +62,10 @@ pub struct ProxyStatus {
     pub api_url: String,
     pub binary_found: bool,
     pub claude_authenticated: bool,
+    /// RFC3339 expiry of the token backing `claude_authenticated`, when
+    /// derivable from on-disk state (#599). `None` for API-key auth, no
+    /// tokens on disk, or tokens with no parseable expiry.
+    pub token_expires_at: Option<String>,
 }
 
 /// Configuration for the embedded proxy.
@@ -127,7 +146,8 @@ impl ProxyManager {
         self.deploy_dir.join("cli-proxy-api-config.yaml")
     }
 
-    /// Check if Claude credentials exist AND are still valid.
+    /// Check if Claude credentials exist AND are still valid, and — when
+    /// derivable (#599) — the expiry of the token backing that verdict.
     ///
     /// An explicit `claude-api-key` in the config counts as authenticated.
     /// Otherwise, OAuth token files (`claude-*.json`) are validated: a token
@@ -138,16 +158,29 @@ impl ProxyManager {
     /// #438 MVP scope). A token file with no parseable `expired` field is
     /// treated as valid (fail-open) so we never regress a working install on a
     /// format we don't recognise — only a *provably* expired token is rejected.
-    pub async fn is_claude_authenticated(&self) -> bool {
+    ///
+    /// Single pass so `status()` never has to read the same token files twice.
+    async fn scan_claude_auth(&self) -> AuthScan {
         if let Ok(content) = tokio::fs::read_to_string(self.config_path()).await {
             if content.contains("claude-api-key:") {
-                return true;
+                return AuthScan {
+                    authenticated: true,
+                    expires_at: None,
+                };
             }
         }
         let auth_dir = self.auth_dir();
         let Ok(mut entries) = tokio::fs::read_dir(&auth_dir).await else {
-            return false;
+            return AuthScan {
+                authenticated: false,
+                expires_at: None,
+            };
         };
+
+        let mut authenticated = false;
+        let mut fresh_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
+        let mut expired_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
+
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.contains("claude") {
@@ -166,26 +199,49 @@ impl ProxyManager {
                 }
             }
             match Self::token_validity(&entry.path()).await {
-                TokenValidity::Fresh => return true,
+                TokenValidity::Fresh { expired } => {
+                    authenticated = true;
+                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&expired) {
+                        let is_newer = fresh_max.as_ref().map_or(true, |(cur, _)| parsed > *cur);
+                        if is_newer {
+                            fresh_max = Some((parsed, expired));
+                        }
+                    }
+                }
                 TokenValidity::Unknown => {
                     // Unparseable expiry — fail-open, this token counts as valid.
                     warn!(token = %name, "Claude token has no parseable expiry; treating as valid");
-                    return true;
+                    authenticated = true;
                 }
                 TokenValidity::Expired { expired } => {
-                    // Each expired token is logged individually; reaching the end
-                    // of the loop without an early `return true` means every token
-                    // we inspected was present-but-expired → AI auth is dead and a
-                    // re-login is required.
+                    // Every expired token is logged — AI auth is dead unless a
+                    // fresh (or unknown, fail-open) token is found elsewhere in
+                    // the scan.
                     warn!(
                         token = %name,
                         expired = %expired,
                         "Claude OAuth token is EXPIRED — reporting not authenticated; re-login required"
                     );
+                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&expired) {
+                        let is_newer = expired_max.as_ref().map_or(true, |(cur, _)| parsed > *cur);
+                        if is_newer {
+                            expired_max = Some((parsed, expired));
+                        }
+                    }
                 }
             }
         }
-        false
+
+        // The freshest FRESH token wins when one exists; otherwise the most
+        // recently expired one so the UI can say "expired at X".
+        let expires_at = fresh_max
+            .map(|(_, s)| s)
+            .or_else(|| expired_max.map(|(_, s)| s));
+
+        AuthScan {
+            authenticated,
+            expires_at,
+        }
     }
 
     /// Inspect a `claude-*.json` OAuth token file and classify its freshness
@@ -207,7 +263,9 @@ impl ProxyManager {
                         expired: expired_str.to_string(),
                     }
                 } else {
-                    TokenValidity::Fresh
+                    TokenValidity::Fresh {
+                        expired: expired_str.to_string(),
+                    }
                 }
             }
             Err(_) => TokenValidity::Unknown,
@@ -322,12 +380,15 @@ request-retry: 2
         let port = config.port;
         drop(config);
 
+        let auth_scan = self.scan_claude_auth().await;
+
         ProxyStatus {
             running: self.is_running().await,
             port,
             api_url: format!("http://127.0.0.1:{port}/v1"),
             binary_found: self.binary_path().await.is_some(),
-            claude_authenticated: self.is_claude_authenticated().await,
+            claude_authenticated: auth_scan.authenticated,
+            token_expires_at: auth_scan.expires_at,
         }
     }
 
@@ -555,7 +616,7 @@ mod tests {
     }
 
     /// Regression for #438: an EXPIRED OAuth token must report NOT authenticated.
-    /// Before the fix, `is_claude_authenticated()` only checked file existence,
+    /// Before the fix, `scan_claude_auth()` only checked file existence,
     /// so a dead/expired token reported `claudeAuthenticated:true` (masked the
     /// 2026-06-20 PP outage). No network — pure file + timestamp check.
     #[tokio::test]
@@ -565,7 +626,7 @@ mod tests {
         let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
         write_token(&mgr, "expired@example.com", &past).await;
         assert!(
-            !mgr.is_claude_authenticated().await,
+            !mgr.scan_claude_auth().await.authenticated,
             "an expired token must not count as authenticated"
         );
     }
@@ -578,7 +639,7 @@ mod tests {
         let future = (Utc::now() + Duration::hours(8)).to_rfc3339();
         write_token(&mgr, "fresh@example.com", &future).await;
         assert!(
-            mgr.is_claude_authenticated().await,
+            mgr.scan_claude_auth().await.authenticated,
             "a fresh token must count as authenticated"
         );
     }
@@ -593,7 +654,7 @@ mod tests {
         write_token(&mgr, "dead@example.com", &past).await;
         write_token(&mgr, "live@example.com", &future).await;
         assert!(
-            mgr.is_claude_authenticated().await,
+            mgr.scan_claude_auth().await.authenticated,
             "a fresh token alongside an expired one must count as authenticated"
         );
     }
@@ -604,7 +665,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mgr = ProxyManager::new(tmp.path().to_path_buf());
         assert!(
-            !mgr.is_claude_authenticated().await,
+            !mgr.scan_claude_auth().await.authenticated,
             "no token files means not authenticated"
         );
     }
@@ -626,7 +687,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            mgr.is_claude_authenticated().await,
+            mgr.scan_claude_auth().await.authenticated,
             "a token with no parseable expiry must fail open as authenticated"
         );
     }
@@ -645,8 +706,84 @@ mod tests {
         let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
         write_token(&mgr, "expired@example.com", &past).await;
         assert!(
-            !mgr.is_claude_authenticated().await,
+            !mgr.scan_claude_auth().await.authenticated,
             "a claude-named subdir must not grant authentication while the only token is expired"
         );
+    }
+
+    /// #599: `status().token_expires_at` surfaces a fresh token's expiry so
+    /// the UI can show the operator how long the login stays valid.
+    #[tokio::test]
+    async fn status_reports_fresh_token_expiry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let future = (Utc::now() + Duration::hours(8)).to_rfc3339();
+        write_token(&mgr, "fresh@example.com", &future).await;
+        let status = mgr.status().await;
+        assert!(status.claude_authenticated);
+        assert_eq!(status.token_expires_at, Some(future));
+    }
+
+    /// #599: when every token is expired, `token_expires_at` still surfaces
+    /// the newest expiry — "expired at X" — even though `claude_authenticated`
+    /// is false, so the login banner can name when the last login died.
+    #[tokio::test]
+    async fn status_reports_newest_expiry_when_all_tokens_expired() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let older = (Utc::now() - Duration::hours(5)).to_rfc3339();
+        let newer = (Utc::now() - Duration::hours(1)).to_rfc3339();
+        write_token(&mgr, "older@example.com", &older).await;
+        write_token(&mgr, "newer@example.com", &newer).await;
+        let status = mgr.status().await;
+        assert!(!status.claude_authenticated);
+        assert_eq!(status.token_expires_at, Some(newer));
+    }
+
+    /// #599: among several FRESH tokens, the one expiring LATEST wins —
+    /// the UI should report the longest remaining validity, not an
+    /// arbitrary one.
+    #[tokio::test]
+    async fn status_reports_latest_expiry_among_multiple_fresh_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let sooner = (Utc::now() + Duration::hours(2)).to_rfc3339();
+        let later = (Utc::now() + Duration::hours(9)).to_rfc3339();
+        write_token(&mgr, "sooner@example.com", &sooner).await;
+        write_token(&mgr, "later@example.com", &later).await;
+        let status = mgr.status().await;
+        assert!(status.claude_authenticated);
+        assert_eq!(status.token_expires_at, Some(later));
+    }
+
+    /// #599: no tokens on disk at all → `token_expires_at` is `None`, never a
+    /// guessed/placeholder timestamp.
+    #[tokio::test]
+    async fn status_reports_no_expiry_when_no_tokens_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let status = mgr.status().await;
+        assert!(!status.claude_authenticated);
+        assert_eq!(status.token_expires_at, None);
+    }
+
+    /// #599: a token with no parseable `expired` field carries no timestamp
+    /// to surface — `token_expires_at` stays `None` even though the fail-open
+    /// behavior still reports authenticated.
+    #[tokio::test]
+    async fn status_reports_no_expiry_for_unparseable_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let auth_dir = mgr.auth_dir();
+        tokio::fs::create_dir_all(&auth_dir).await.unwrap();
+        tokio::fs::write(
+            auth_dir.join("claude-weird@example.com.json"),
+            r#"{"access_token":"a","type":"claude"}"#,
+        )
+        .await
+        .unwrap();
+        let status = mgr.status().await;
+        assert!(status.claude_authenticated);
+        assert_eq!(status.token_expires_at, None);
     }
 }

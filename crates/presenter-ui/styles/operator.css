@@ -2888,6 +2888,55 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   font-size: 0.8rem;
 }
 
+/* Primary logged-out banner (#599) — always mounted, toggled via
+   data-visible so E2E asserts the attribute rather than element presence. */
+.ai-chat__login-banner {
+  margin: 0.75rem 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  flex-shrink: 0;
+}
+
+.ai-chat__login-banner[data-visible="false"] {
+  display: none;
+}
+
+.ai-chat__login-banner-title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: var(--operator-text);
+}
+
+.ai-chat__login-banner-subtext {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  color: var(--operator-muted);
+}
+
+.ai-chat__btn--primary {
+  background: var(--operator-accent);
+  color: #fff;
+  border-color: var(--operator-accent);
+  font-weight: 600;
+}
+
+.ai-chat__btn--primary:hover {
+  background: var(--operator-accent-dark);
+}
+
+.ai-chat__token-validity {
+  margin: 0.4rem 1rem 0;
+  font-size: 0.75rem;
+  color: var(--operator-muted);
+  flex-shrink: 0;
+}
+
+.ai-chat__token-validity[data-visible="false"] {
+  display: none;
+}
+
 /* Network mode indicator (LAN/WAN pill) */
 .network-indicator {
   font-size: 0.75rem;

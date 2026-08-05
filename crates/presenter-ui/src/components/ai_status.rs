@@ -162,6 +162,7 @@ mod tests {
                 api_url: "http://127.0.0.1:18787/v1".to_string(),
                 binary_found,
                 claude_authenticated,
+                token_expires_at: None,
             },
         }
     }
