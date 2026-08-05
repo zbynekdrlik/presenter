@@ -63,6 +63,16 @@ struct AuthScan {
     expires_at: Option<String>,
 }
 
+/// Accumulated state from walking the auth directory's `claude-*` token
+/// files: whether any token is fresh, the latest-expiring fresh/expired
+/// timestamps seen so far, and every expired token (for the post-scan log).
+struct AuthDirScan {
+    authenticated: bool,
+    fresh_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
+    expired_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
+    expired_tokens: Vec<(String, String)>,
+}
+
 /// State of the managed CLIProxyAPI process.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,21 +189,53 @@ impl ProxyManager {
                 };
             }
         }
-        let auth_dir = self.auth_dir();
-        let Ok(mut entries) = tokio::fs::read_dir(&auth_dir).await else {
-            return AuthScan {
-                authenticated: false,
-                expires_at: None,
-            };
+
+        let scan = Self::scan_auth_dir(&self.auth_dir()).await;
+
+        // #622 post-merge review finding 2: gate the fallback on the
+        // AGGREGATE `authenticated` verdict, not merely on whether a fresh
+        // token happens to exist. Before this, `fresh_max.or_else(expired_max)`
+        // let an EXPIRED token's past timestamp leak through as "validity"
+        // whenever `authenticated` was true ONLY via a fail-open `Unknown`
+        // token (no fresh token at all) — the UI would show "Prihlásenie
+        // platí do <a date in the past>". Authenticated must only ever
+        // surface a FRESH timestamp (`None` when no fresh token backs it);
+        // not-authenticated keeps showing the newest expired timestamp so
+        // the "vypršalo X" banner subtext still works.
+        let expires_at = if scan.authenticated {
+            scan.fresh_max.map(|(_, s)| s)
+        } else {
+            scan.expired_max.map(|(_, s)| s)
         };
 
-        let mut authenticated = false;
-        let mut fresh_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
-        let mut expired_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
-        // Collected, not logged immediately — the WARN-vs-DEBUG decision
-        // (finding 3b) can only be made once the aggregate `authenticated`
-        // verdict is known, after the loop.
-        let mut expired_tokens: Vec<(String, String)> = Vec::new();
+        Self::report_auth_transition(scan.authenticated, &scan.expired_tokens);
+
+        AuthScan {
+            authenticated: scan.authenticated,
+            expires_at,
+        }
+    }
+
+    /// Walk `auth_dir`, classifying every `claude-*` token file, and
+    /// aggregate the authenticated verdict plus the fresh/expired timestamps
+    /// and expired-token list `scan_claude_auth` needs afterward. A
+    /// non-existent (or unreadable) `auth_dir` yields the same all-`None`,
+    /// not-authenticated result the caller previously got from its own early
+    /// return.
+    async fn scan_auth_dir(auth_dir: &Path) -> AuthDirScan {
+        let mut scan = AuthDirScan {
+            authenticated: false,
+            fresh_max: None,
+            expired_max: None,
+            // Collected, not logged immediately — the WARN-vs-DEBUG decision
+            // (finding 3b) can only be made once the aggregate `authenticated`
+            // verdict is known, after the loop.
+            expired_tokens: Vec::new(),
+        };
+
+        let Ok(mut entries) = tokio::fs::read_dir(auth_dir).await else {
+            return scan;
+        };
 
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -214,57 +256,51 @@ impl ProxyManager {
             }
             match Self::token_validity(&entry.path()).await {
                 TokenValidity::Fresh { expired } => {
-                    authenticated = true;
+                    scan.authenticated = true;
                     if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&expired) {
-                        let is_newer = fresh_max.as_ref().map_or(true, |(cur, _)| parsed > *cur);
+                        let is_newer = scan
+                            .fresh_max
+                            .as_ref()
+                            .map_or(true, |(cur, _)| parsed > *cur);
                         if is_newer {
-                            fresh_max = Some((parsed, expired));
+                            scan.fresh_max = Some((parsed, expired));
                         }
                     }
                 }
                 TokenValidity::Unknown => {
                     // Unparseable expiry — fail-open, this token counts as valid.
                     warn!(token = %name, "Claude token has no parseable expiry; treating as valid");
-                    authenticated = true;
+                    scan.authenticated = true;
                 }
                 TokenValidity::Expired { expired } => {
                     // AI auth is dead unless a fresh (or unknown, fail-open)
                     // token is found elsewhere in the scan. Logged after the
                     // loop, once, at WARN or DEBUG depending on whether this
                     // is a new transition (finding 3b).
-                    expired_tokens.push((name.clone(), expired.clone()));
+                    scan.expired_tokens.push((name.clone(), expired.clone()));
                     if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&expired) {
-                        let is_newer = expired_max.as_ref().map_or(true, |(cur, _)| parsed > *cur);
+                        let is_newer = scan
+                            .expired_max
+                            .as_ref()
+                            .map_or(true, |(cur, _)| parsed > *cur);
                         if is_newer {
-                            expired_max = Some((parsed, expired));
+                            scan.expired_max = Some((parsed, expired));
                         }
                     }
                 }
             }
         }
 
-        // #622 post-merge review finding 2: gate the fallback on the
-        // AGGREGATE `authenticated` verdict, not merely on whether a fresh
-        // token happens to exist. Before this, `fresh_max.or_else(expired_max)`
-        // let an EXPIRED token's past timestamp leak through as "validity"
-        // whenever `authenticated` was true ONLY via a fail-open `Unknown`
-        // token (no fresh token at all) — the UI would show "Prihlásenie
-        // platí do <a date in the past>". Authenticated must only ever
-        // surface a FRESH timestamp (`None` when no fresh token backs it);
-        // not-authenticated keeps showing the newest expired timestamp so
-        // the "vypršalo X" banner subtext still works.
-        let expires_at = if authenticated {
-            fresh_max.map(|(_, s)| s)
-        } else {
-            expired_max.map(|(_, s)| s)
-        };
+        scan
+    }
 
-        // #622 post-merge review finding 3b: WARN only on the TRANSITION into
-        // not-authenticated (this scan found expired token(s) and last time
-        // we were authenticated, or this is the very first scan); repeat
-        // scans of an already-known-dead login log at DEBUG instead. A
-        // recovered login resets the tracked state so the NEXT time it dies
-        // we warn again rather than staying silent forever.
+    /// #622 post-merge review finding 3b: WARN only on the TRANSITION into
+    /// not-authenticated (this scan found expired token(s) and last time we
+    /// were authenticated, or this is the very first scan); repeat scans of
+    /// an already-known-dead login log at DEBUG instead. A recovered login
+    /// resets the tracked state so the NEXT time it dies we warn again
+    /// rather than staying silent forever.
+    fn report_auth_transition(authenticated: bool, expired_tokens: &[(String, String)]) {
         if authenticated {
             if let Ok(mut last) = LAST_REPORTED_AUTH.lock() {
                 *last = Some(true);
@@ -278,7 +314,7 @@ impl ProxyManager {
                 }
                 Err(_) => true,
             };
-            for (name, expired) in &expired_tokens {
+            for (name, expired) in expired_tokens {
                 if transitioned {
                     warn!(
                         token = %name,
@@ -293,11 +329,6 @@ impl ProxyManager {
                     );
                 }
             }
-        }
-
-        AuthScan {
-            authenticated,
-            expires_at,
         }
     }
 
