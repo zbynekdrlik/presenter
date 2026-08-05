@@ -117,7 +117,10 @@ async fn rename_by_sync_id_disambiguates_instead_of_colliding_with_a_different_l
         .await
         .unwrap()
         .unwrap();
-    assert!(foo_row.deleted_at.is_none(), "the renamed library stays live");
+    assert!(
+        foo_row.deleted_at.is_none(),
+        "the renamed library stays live"
+    );
     assert_ne!(
         foo_row.name, "Bar",
         "the colliding name must be disambiguated, never written verbatim \

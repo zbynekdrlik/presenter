@@ -151,7 +151,9 @@ impl Repository {
             .filter(Column::DeletedAt.is_not_null())
             .one(&self.db)
             .await?
-            .ok_or(RepositoryError::NotFound("no trashed presentation to restore"))?;
+            .ok_or(RepositoryError::NotFound(
+                "no trashed presentation to restore",
+            ))?;
 
         // #636: a restore that leaves the song under a STILL-tombstoned
         // library accomplishes nothing durable -- the library's own
