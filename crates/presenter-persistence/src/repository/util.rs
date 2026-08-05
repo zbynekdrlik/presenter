@@ -57,6 +57,15 @@ pub enum RepositoryError {
     /// missing target), not 404 (#584).
     #[error("{0}")]
     TargetNotFound(&'static str),
+    /// A repository operation was refused because the resource is in a
+    /// state that makes it impossible right now — e.g. `restore_presentation`
+    /// refusing to restore a song whose PARENT LIBRARY is still tombstoned
+    /// (#636). The URL resource exists and is valid; the request just can't
+    /// be satisfied until other state changes. The router maps this to 409
+    /// via `downcast_ref` (`AppError::conflict`), mirroring the existing
+    /// `PasteSlidesError::AnchorVanished` -> 409 mapping.
+    #[error("{0}")]
+    Conflict(&'static str),
 }
 
 pub(super) fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {

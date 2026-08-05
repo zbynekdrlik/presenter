@@ -331,6 +331,45 @@ async fn trash_lists_restores_and_prunes() {
 }
 
 #[tokio::test]
+async fn restore_presentation_refuses_when_the_parent_library_is_tombstoned() {
+    // #636 regression: restore_presentation used to clear the presentation's
+    // OWN deleted_at unconditionally, with no check on its parent library. A
+    // song "restored" under a still-tombstoned library becomes reachable by
+    // nothing (fetch_libraries excludes the library) AND is now LIVE, so the
+    // next tombstone-prune cascade hard-deletes it -- restoring it
+    // accomplished nothing durable and actively made things worse.
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let (_, _, song) = repo
+        .create_presentation(lib.id, "Trapped Song", Some(&[slide(0, "a")]))
+        .await
+        .unwrap();
+    // delete_library soft-deletes the library AND its live presentations in
+    // one transaction -- the realistic path that traps a song under a
+    // tombstoned library.
+    repo.delete_library(lib.id).await.unwrap();
+
+    let err = repo
+        .restore_presentation(song.id)
+        .await
+        .expect_err("restore must refuse while the parent library is tombstoned");
+    assert!(
+        matches!(
+            err.downcast_ref::<crate::RepositoryError>(),
+            Some(crate::RepositoryError::Conflict(_))
+        ),
+        "expected RepositoryError::Conflict, got: {err}"
+    );
+
+    let still_trashed = row(&repo, song.id).await;
+    assert!(
+        still_trashed.deleted_at.is_some(),
+        "a refused restore must leave the presentation exactly as tombstoned \
+         as before -- no partial mutation"
+    );
+}
+
+#[tokio::test]
 async fn reimport_preserves_a_trashed_songs_tombstone() {
     // S2 regression: upsert_library inserted EVERY incoming row with
     // deleted_at: None and updated_at: now() unconditionally — so
