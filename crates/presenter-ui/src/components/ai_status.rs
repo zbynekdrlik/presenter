@@ -124,7 +124,12 @@ pub fn AiStatusChip() -> impl IntoView {
     interval.forget();
 
     let state = move || status.with(|s| ai_chip_state(s.as_ref()));
-    let dot_class = move || format!("operator__ai-dot operator__ai-dot--{}", ai_chip_dot(state()));
+    let dot_class = move || {
+        format!(
+            "operator__ai-dot operator__ai-dot--{}",
+            ai_chip_dot(state())
+        )
+    };
     let label = move || ai_chip_label(state());
     let tooltip = move || ai_chip_tooltip(state());
 
