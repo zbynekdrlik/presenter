@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::api::bible as bible_api;
+use crate::components::ai_status::AiStatusChip;
 use crate::components::resolume_status::ResolumeStatusChips;
 use crate::components::stage_preview::StagePreview;
 use crate::components::surface_nav::SurfaceNav;
@@ -212,6 +213,7 @@ pub fn Header() -> impl IntoView {
                     <div class="operator__brand-nav">
                         <SurfaceNav />
                         <ResolumeStatusChips />
+                        <AiStatusChip />
                     </div>
                 </div>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
