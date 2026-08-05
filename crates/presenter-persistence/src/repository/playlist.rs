@@ -136,6 +136,49 @@ impl Repository {
         }
     }
 
+    /// #632: `presentation_id` is the twin FK to `playlist_id` above
+    /// (`fk_playlist_entries_presentation`), but had no equivalent pre-write
+    /// check — a `Presentation`-kind entry naming an unknown presentation
+    /// reached the raw INSERT unchecked and tripped the SQLite FK
+    /// constraint (`PRAGMA foreign_keys = ON`) -> DbErr -> 500. `presentation_id`
+    /// is BODY-referenced (the entries array), not the URL, so the refusal is
+    /// `TargetNotFound` (422), not `NotFound` (404) — the router maps it
+    /// alongside `NotFound`. Deliberately does NOT filter on `deleted_at IS
+    /// NULL`: a soft-deleted presentation's row still physically exists, so
+    /// it would NOT trip the FK constraint either — this check matches
+    /// exactly what the FK itself would reject, no stricter.
+    async fn ensure_presentation_targets_exist(
+        &self,
+        entries: &[presenter_core::PlaylistEntry],
+    ) -> anyhow::Result<()> {
+        let mut ids: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| match &entry.kind {
+                PlaylistEntryKind::Presentation {
+                    presentation_id, ..
+                } => Some(presentation_id.to_string()),
+                PlaylistEntryKind::Separator { .. } => None,
+            })
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        ids.sort();
+        ids.dedup();
+        let existing = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::Id.is_in(ids.clone()))
+            .count(&self.db)
+            .await?;
+        if existing as usize == ids.len() {
+            Ok(())
+        } else {
+            Err(RepositoryError::TargetNotFound(
+                "one or more playlist entries reference an unknown presentation",
+            )
+            .into())
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn delete_playlist(&self, playlist_id: PlaylistId) -> anyhow::Result<()> {
         playlist::Entity::delete_by_id(playlist_id.to_string())
@@ -154,6 +197,8 @@ impl Repository {
         // trips `fk_playlist_entries_playlist` on the INSERT below (PRAGMA foreign_keys = ON) ->
         // raw DbErr -> 500. An empty slice skipped the insert loop and never exercised that path.
         self.ensure_playlist_exists(playlist_id).await?;
+        // #632: the twin FK check for `presentation_id` (see doc comment above).
+        self.ensure_presentation_targets_exist(entries).await?;
 
         let txn = self.db.begin().await?;
 
