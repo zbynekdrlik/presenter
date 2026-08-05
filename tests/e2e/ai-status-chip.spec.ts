@@ -170,8 +170,19 @@ test("a failed poll shows the neutral checking state, never a false failure clai
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
 
+  // A non-2xx status here would be closer to a "real" failure, but Chrome
+  // itself logs a "Failed to load resource: the server responded with a
+  // status of 500" console error for ANY non-2xx fetch response — that is
+  // browser-generated, unrelated to app code, and unavoidable, so the
+  // combination of "mock a 500" + "assert zero console" can never pass
+  // (`crates/presenter-ui/src/api/mod.rs`'s `get_json` returns
+  // `Err(ApiError::Status(..))` before ever touching the body). A malformed
+  // 200 body exercises the exact same client failure branch — `check_status()`
+  // returns `Err(ApiError::Deserialize(..))`, handled identically to
+  // `ApiError::Status` by `ai_status.rs`'s `poll` closure — via a pure
+  // Rust-side `serde_json::from_str` parse error, with a clean console.
   await page.route("**/ai/status", async (route) => {
-    await route.fulfill({ status: 500, body: "boom" });
+    await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
   });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
