@@ -361,6 +361,55 @@ body.operator {
   background: #ef4444;
 }
 
+/* #598: AI connection indicator — a single chip mirroring the Resolume
+   chips' visual language (same `.operator__brand-nav` group, same dot +
+   pill shape), but rendered as a link straight to the AI panel
+   (`/ui/operator/ai`) since there's exactly one AI proxy to check, not one
+   chip per host. */
+.operator__ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: var(--operator-panel);
+  border: 1px solid var(--operator-border);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.operator__ai-chip:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.operator__ai-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #475569;
+}
+
+/* Green = fully connected + authenticated. Yellow = genuinely unknown (first
+   poll, or 2+ consecutive poll failures). Red = a confirmed real problem —
+   logged out, proxy down, or the binary is missing (the label text says
+   which). */
+.operator__ai-dot--green {
+  background: #22c55e;
+}
+
+.operator__ai-dot--yellow {
+  background: #f59e0b;
+}
+
+.operator__ai-dot--red {
+  background: #ef4444;
+}
+
 .operator__stage-layout {
   display: flex;
   flex-direction: column;
@@ -2837,6 +2886,55 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   background: var(--operator-bg);
   color: var(--operator-text);
   font-size: 0.8rem;
+}
+
+/* Primary logged-out banner (#599) — always mounted, toggled via
+   data-visible so E2E asserts the attribute rather than element presence. */
+.ai-chat__login-banner {
+  margin: 0.75rem 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  flex-shrink: 0;
+}
+
+.ai-chat__login-banner[data-visible="false"] {
+  display: none;
+}
+
+.ai-chat__login-banner-title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: var(--operator-text);
+}
+
+.ai-chat__login-banner-subtext {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  color: var(--operator-muted);
+}
+
+.ai-chat__btn--primary {
+  background: var(--operator-accent);
+  color: #fff;
+  border-color: var(--operator-accent);
+  font-weight: 600;
+}
+
+.ai-chat__btn--primary:hover {
+  background: var(--operator-accent-dark);
+}
+
+.ai-chat__token-validity {
+  margin: 0.4rem 1rem 0;
+  font-size: 0.75rem;
+  color: var(--operator-muted);
+  flex-shrink: 0;
+}
+
+.ai-chat__token-validity[data-visible="false"] {
+  display: none;
 }
 
 /* Network mode indicator (LAN/WAN pill) */

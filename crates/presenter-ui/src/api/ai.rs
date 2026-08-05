@@ -51,6 +51,11 @@ pub struct ProxyStatus {
     pub api_url: String,
     pub binary_found: bool,
     pub claude_authenticated: bool,
+    /// RFC3339 expiry of the token backing `claude_authenticated` (#599).
+    /// `#[serde(default)]` so an OLDER server payload (before this field
+    /// existed) still deserializes cleanly — the #600 lesson.
+    #[serde(default)]
+    pub token_expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

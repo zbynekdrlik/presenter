@@ -1,3 +1,5 @@
+pub mod ai_login_banner;
+pub mod ai_status;
 pub mod header;
 pub mod info_popover;
 pub mod library_list;
