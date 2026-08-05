@@ -575,6 +575,16 @@ async fn ensure_library_picks_the_most_recent_tombstone_when_several_share_a_nam
         v2_row_after.deleted_at.is_some(),
         "v2 stays tombstoned -- P2 is OLDER than v2's own tombstone, so no revival"
     );
+    // #634 regression: P2 attaches to a library that stays tombstoned, so P2
+    // itself must ALSO be written as tombstoned -- a LIVE presentation
+    // parented to a dead library is invisible (excluded from
+    // fetch_libraries) and gets hard-deleted by the next tombstone-prune
+    // cascade with zero prior trace it ever existed.
+    assert!(
+        pres_row.deleted_at.is_some(),
+        "P2 must be written as tombstoned -- it attaches to v2, which stays \
+         tombstoned; a live row under a dead library is silent data loss (#634)"
+    );
 
     use sea_orm::{ColumnTrait, QueryFilter};
     let all_songs = library::Entity::find()
@@ -639,6 +649,15 @@ async fn ensure_library_boundary_is_strict_greater_than_not_greater_or_equal() {
         lib_row_after.deleted_at.is_some(),
         "an EXACTLY EQUAL updated_at must not revive the library -- the LWW \
          boundary is strict `>`, not `>=`"
+    );
+    // #634 regression: same reasoning as the multi-tombstone test above --
+    // P2 stays attached to a library that stays tombstoned, so P2 must be
+    // written as tombstoned too, never silently live under a dead parent.
+    assert!(
+        pres_row.deleted_at.is_some(),
+        "P2 must be written as tombstoned -- the library it attaches to \
+         stays tombstoned; a live row under a dead library is silent data \
+         loss (#634)"
     );
 }
 
@@ -722,5 +741,74 @@ async fn ensure_library_tie_breaks_identical_updated_at_tombstones_by_sync_id() 
     assert!(
         low_row_after.deleted_at.is_some(),
         "the losing tombstone (lower sync_id) is untouched -- still tombstoned"
+    );
+}
+
+#[tokio::test]
+async fn moving_an_existing_song_onto_a_tombstoned_library_tombstones_the_song_too() {
+    // #634 regression, step-1 path (existing local row matched by sync_id,
+    // UPDATED) -- the tombstone tests above exercise the SAME `ensure_library`
+    // bug via step-3 (brand-new sync_id, `apply_unknown_sync_id`). This proves
+    // the fix also covers an UPDATE: the peer moved an already-known
+    // presentation to a library that, locally, only exists tombstoned.
+    let repo = repo().await;
+    repo.create_library("Old").await.unwrap();
+
+    let initial = crate::SyncPresentation {
+        sync_id: "peer-move-test".to_string(),
+        library_name: "Old".to_string(),
+        name: "Moved Song".to_string(),
+        updated_at: chrono::Utc::now() - chrono::Duration::minutes(10),
+        deleted_at: None,
+        slides: vec![slide(0, "x")],
+    };
+    let (outcome, id) = repo
+        .apply_sync_presentation(&initial, &std::collections::HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Created);
+    let pres_id = id.expect("created presentation has an id");
+
+    let new_lib = repo.create_library("New").await.unwrap();
+    repo.delete_library(new_lib.id).await.unwrap();
+
+    // Peer moved the song to "New": newer than the song's own last-known
+    // updated_at (so LWW allows the update to apply) but OLDER than "New"'s
+    // own tombstone time (so the tombstone wins -- "New" stays dead).
+    let moved = crate::SyncPresentation {
+        sync_id: "peer-move-test".to_string(),
+        library_name: "New".to_string(),
+        name: "Moved Song".to_string(),
+        updated_at: chrono::Utc::now() - chrono::Duration::minutes(5),
+        deleted_at: None,
+        slides: vec![slide(0, "x")],
+    };
+    let (outcome, _) = repo
+        .apply_sync_presentation(&moved, &std::collections::HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Updated);
+
+    let pres_row = row(&repo, pres_id).await;
+    assert_eq!(
+        pres_row.library_id,
+        new_lib.id.to_string(),
+        "the song reattaches to 'New' even though 'New' stays tombstoned"
+    );
+    assert!(
+        pres_row.deleted_at.is_some(),
+        "the song must be written as tombstoned -- it now lives under a \
+         library that stays tombstoned; leaving it LIVE is silent data \
+         loss (#634)"
+    );
+
+    let new_lib_row = library::Entity::find_by_id(new_lib.id.to_string())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        new_lib_row.deleted_at.is_some(),
+        "'New' stays tombstoned -- the move is older than its own tombstone"
     );
 }
