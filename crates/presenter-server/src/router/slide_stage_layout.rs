@@ -176,36 +176,46 @@ mod tests {
         );
     }
 
-    /// #615: a genuine internal failure (here: a non-existent presentation
-    /// causes `assign_slide_stage_layout` to `bail!("presentation not
-    /// found")`, an untyped `anyhow::Error` that is NOT a
-    /// `StageLayoutRefusal`) must answer 500 — never 400. Before the fix,
-    /// the blanket `.map_err(AppError::bad_request)` masked this as a
-    /// client error.
+    /// #629 (was wrong before this fix): the ORIGINAL version of this test
+    /// used a fake/non-existent presentation UUID and asserted 500 — but a
+    /// missing presentation is a MISSING URL RESOURCE, not an internal
+    /// failure, and cementing 500 as its "correct" response is exactly the
+    /// regression #629 reports (see the sibling 404 tests below for the
+    /// actual fix). A genuine internal failure — unrelated to any missing id
+    /// or bad layout code — is a real presentation + real slide whose
+    /// `slide_stage_layouts` table has been dropped out from under the
+    /// final upsert, so `set_slide_stage_layout`'s INSERT hits a raw DbErr.
     #[tokio::test]
     async fn put_returns_500_on_internal_failure_not_400() {
-        let (state, _presentation) = seeded_state().await;
-        // A valid-format UUID that doesn't correspond to any seeded
-        // presentation: `presentation_detail` returns `None`, the state
-        // method `bail!`s — a non-typed error that must fall through to 500.
-        let random_uuid = uuid::Uuid::new_v4();
-        let random_slide = presenter_core::SlideId::new();
+        let (state, presentation) = seeded_state().await;
+        let slide_id = presentation.slides[0].id;
+
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "DROP TABLE slide_stage_layouts".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
 
         let result = set_slide_stage_layout(
             State(state),
-            Path((random_uuid.to_string(), random_slide.to_string())),
+            Path((presentation.id.to_string(), slide_id.to_string())),
             Json(SlideStageLayoutRequest {
                 layout_code: Some("fulltext".to_string()),
             }),
         )
         .await;
         let Err(err) = result else {
-            panic!("expected an error for a non-existent presentation, got Ok");
+            panic!("expected an error from the dropped table, got Ok");
         };
         assert_eq!(
             err.into_response().status(),
             StatusCode::INTERNAL_SERVER_ERROR,
-            "an internal failure must be 500, not 400 (#615)"
+            "a genuine internal failure must be 500, not 400 (#615) and not 404 (#629)"
         );
     }
 }
