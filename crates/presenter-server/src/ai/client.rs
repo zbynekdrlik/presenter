@@ -1,6 +1,25 @@
 use super::AiSettings;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+
+/// Shared HTTP client for `/ai/status` connectivity probes ONLY (#622
+/// post-merge review finding 3a). `check_connectivity` is polled every 5s by
+/// the operator-header status chip (`ai_status.rs`) — building a fresh
+/// `reqwest::Client` (own connection pool + TLS setup) on every single poll
+/// was needless per-call cost. `call_chat_completions` keeps its OWN client:
+/// a chat call is a one-off with a much longer 120s timeout, so reuse would
+/// not meaningfully help there.
+static CONNECTIVITY_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn connectivity_client() -> &'static reqwest::Client {
+    CONNECTIVITY_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
 
 /// OpenAI-compatible chat completion request.
 #[derive(Debug, Serialize)]
@@ -98,11 +117,13 @@ pub async fn call_chat_completions(
         .context("failed to parse AI API response")
 }
 
-/// Ping the AI API to verify connectivity.
+/// Ping the AI API to verify connectivity. Uses the shared, lazily-built
+/// `connectivity_client()` (3s timeout) rather than a fresh client per call —
+/// this is polled every 5s by the status chip (#622 post-merge review
+/// finding 3a).
 pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
     let url = format!("{}/models", settings.api_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
-    let mut req = client.get(&url);
+    let mut req = connectivity_client().get(&url);
 
     if let Some(key) = &settings.api_key {
         if !key.is_empty() {
@@ -110,11 +131,7 @@ pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
         }
     }
 
-    let response = req
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .context("failed to reach AI API")?;
+    let response = req.send().await.context("failed to reach AI API")?;
 
     if !response.status().is_success() {
         anyhow::bail!("AI API returned status {}", response.status());

@@ -86,30 +86,54 @@ pub(crate) fn ai_chip_tooltip(state: &str) -> &'static str {
 pub fn AiStatusChip() -> impl IntoView {
     let status = RwSignal::new(None::<AiStatusResponse>);
     let poll_failures = RwSignal::new(0u32);
+    // #622 post-merge review finding 3(c): an in-flight guard (never start a
+    // new poll while one is still awaiting a response — no pile-up) plus a
+    // monotonic sequence counter (a response that is no longer the LATEST
+    // issued poll can never apply its data — defense in depth if a call ever
+    // races the guard, e.g. a future manual "check now" trigger).
+    let in_flight = RwSignal::new(false);
+    let poll_seq = RwSignal::new(0u64);
 
     let poll = move || {
+        if in_flight.get_untracked() {
+            return;
+        }
+        let seq = poll_seq.get_untracked() + 1;
+        poll_seq.set(seq);
+        in_flight.set(true);
         leptos::task::spawn_local(async move {
-            match check_status().await {
-                Ok(resp) => {
-                    poll_failures.set(0);
-                    status.set(Some(resp));
-                }
-                // One failure is a blip — never swallow the second, but
-                // never scream at the first either (see `STALE_AFTER_FAILURES`).
-                Err(err) => {
-                    let failures = poll_failures.get_untracked() + 1;
-                    poll_failures.set(failures);
-                    if is_stale(failures) {
-                        if !is_stale(failures - 1) {
-                            leptos::logging::warn!(
-                                "AI status poll failed {failures}x in a row — \
-                                 showing the chip as unknown rather than stale: {err}"
-                            );
+            let result = check_status().await;
+            if poll_seq.get_untracked() == seq {
+                match result {
+                    Ok(resp) => {
+                        poll_failures.set(0);
+                        status.set(Some(resp));
+                    }
+                    // One failure is a blip — never swallow the second, but
+                    // never scream at the first either (see `STALE_AFTER_FAILURES`).
+                    Err(err) => {
+                        let failures = poll_failures.get_untracked() + 1;
+                        poll_failures.set(failures);
+                        if is_stale(failures) {
+                            if !is_stale(failures - 1) {
+                                // #622 post-merge review finding 4: this used
+                                // to be `warn!`, which fires a console.warn on
+                                // every genuine 2nd-consecutive-failure — the
+                                // E2E zero-console assertion (rightly) treats
+                                // that as a bug. `log!` (console.log) is not
+                                // collected by the zero-console helper and
+                                // this is still fully visible in devtools.
+                                leptos::logging::log!(
+                                    "AI status poll failed {failures}x in a row — \
+                                     showing the chip as unknown rather than stale: {err}"
+                                );
+                            }
+                            status.set(None);
                         }
-                        status.set(None);
                     }
                 }
             }
+            in_flight.set(false);
         });
     };
     poll();

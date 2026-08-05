@@ -50,7 +50,15 @@ pub fn AiPage() -> impl IntoView {
     // Proxy signals
     let proxy_running: RwSignal<bool> = RwSignal::new(false);
     let proxy_binary_found: RwSignal<bool> = RwSignal::new(false);
-    let proxy_authenticated: RwSignal<bool> = RwSignal::new(false);
+    // #622 post-merge review finding 1: tri-state — `None` means "no
+    // confirmed answer yet" (first status fetch still in flight, or the
+    // last fetch failed). Before the fix this was a plain `bool` defaulting
+    // to `false`, and a failed fetch never touched it — the login banner
+    // painted "Nie si prihlásený" before any real response arrived, and
+    // permanently after any single failed poll. Only a SUCCESSFUL fetch may
+    // ever set `Some(true)`/`Some(false)`; every fallible call site resets
+    // to `None` on `Err`.
+    let proxy_authenticated: RwSignal<Option<bool>> = RwSignal::new(None);
     // #599: expiry of the token backing `proxy_authenticated`, when known —
     // surfaced so the operator can renew BEFORE an event instead of only
     // discovering a dead login mid-service.
@@ -71,9 +79,11 @@ pub fn AiPage() -> impl IntoView {
                 connected.set(status.connected);
                 proxy_running.set(status.proxy.running);
                 proxy_binary_found.set(status.proxy.binary_found);
-                proxy_authenticated.set(status.proxy.claude_authenticated);
+                proxy_authenticated.set(Some(status.proxy.claude_authenticated));
                 token_expires_at.set(status.proxy.token_expires_at);
             }
+            // On `Err` `proxy_authenticated` stays at its initial `None` —
+            // unknown, never a guessed "logged out" (finding 1).
             // Restore conversation from server
             if let Ok(conv) = ai_api::get_conversation().await {
                 let restored: Vec<DisplayMessage> = conv
@@ -204,10 +214,15 @@ pub fn AiPage() -> impl IntoView {
                     connected.set(status.connected);
                     proxy_running.set(status.proxy.running);
                     proxy_binary_found.set(status.proxy.binary_found);
-                    proxy_authenticated.set(status.proxy.claude_authenticated);
+                    proxy_authenticated.set(Some(status.proxy.claude_authenticated));
                     token_expires_at.set(status.proxy.token_expires_at);
                 }
-                Err(_) => connected.set(false),
+                Err(_) => {
+                    connected.set(false);
+                    // Finding 1: a failed status fetch means UNKNOWN, never a
+                    // guessed "logged out" — reset, don't leave stale state.
+                    proxy_authenticated.set(None);
+                }
             }
         });
     };
@@ -371,7 +386,11 @@ pub fn AiPage() -> impl IntoView {
                                     {move || if proxy_running.get() { "Running" } else { "Stopped" }}
                                 </span>
                                 <span class="ai-chat__proxy-auth">
-                                    {move || if proxy_authenticated.get() { " | Claude: authenticated" } else { " | Claude: not authenticated" }}
+                                    {move || match proxy_authenticated.get() {
+                                        Some(true) => " | Claude: authenticated",
+                                        Some(false) => " | Claude: not authenticated",
+                                        None => " | Claude: unknown",
+                                    }}
                                 </span>
                                 <div class="ai-chat__proxy-buttons">
                                     <button
@@ -453,7 +472,7 @@ pub fn AiPage() -> impl IntoView {
                                                             match ai_api::proxy_complete_login(&url).await {
                                                                 Ok(status) => {
                                                                     proxy_running.set(status.running);
-                                                                    proxy_authenticated.set(status.claude_authenticated);
+                                                                    proxy_authenticated.set(Some(status.claude_authenticated));
                                                                     token_expires_at.set(status.token_expires_at);
                                                                     login_url.set(None);
                                                                     callback_input.set(String::new());
@@ -609,7 +628,7 @@ async fn send_message_sse(
     tool_progress: RwSignal<Vec<ToolProgress>>,
     error: RwSignal<Option<String>>,
     connected: RwSignal<bool>,
-    proxy_authenticated: RwSignal<bool>,
+    proxy_authenticated: RwSignal<Option<bool>>,
     token_expires_at: RwSignal<Option<String>>,
 ) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
@@ -708,7 +727,7 @@ fn process_sse_event(
     tool_progress: &RwSignal<Vec<ToolProgress>>,
     error: &RwSignal<Option<String>>,
     connected: RwSignal<bool>,
-    proxy_authenticated: RwSignal<bool>,
+    proxy_authenticated: RwSignal<Option<bool>>,
     token_expires_at: RwSignal<Option<String>>,
 ) {
     let mut event_type = "";
@@ -776,11 +795,39 @@ fn process_sse_event(
             // re-check status so the primary login banner reacts immediately
             // instead of staying stale until the operator reloads or manually
             // checks the status dot.
+            //
+            // `error` is `&RwSignal<..>` (a borrowed reference, unlike the
+            // by-value `connected`/`proxy_authenticated`/`token_expires_at`
+            // params) — `RwSignal` is `Copy`, so dereference to an owned
+            // value the `'static` async block can hold (finding 6).
+            let error = *error;
             leptos::task::spawn_local(async move {
-                if let Ok(status) = ai_api::check_status().await {
-                    connected.set(status.connected);
-                    proxy_authenticated.set(status.proxy.claude_authenticated);
-                    token_expires_at.set(status.proxy.token_expires_at);
+                match ai_api::check_status().await {
+                    Ok(status) => {
+                        connected.set(status.connected);
+                        proxy_authenticated.set(Some(status.proxy.claude_authenticated));
+                        token_expires_at.set(status.proxy.token_expires_at);
+                        // #622 post-merge review finding 6: the recheck used
+                        // to be silent — the operator saw "AI error: ..." with
+                        // no hint that the fix is the already-visible login
+                        // banner above. Once the recheck CONFIRMS the auth is
+                        // dead, say so in the same error line.
+                        if !status.proxy.claude_authenticated {
+                            error.update(|current| {
+                                if let Some(text) = current {
+                                    text.push_str(
+                                        " — prihlásenie ku Claude vypršalo, použi \
+                                         Prihlásiť sa vyššie.",
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    Err(_) => {
+                        // Finding 1: a failed recheck is UNKNOWN, never a
+                        // guessed state either way.
+                        proxy_authenticated.set(None);
+                    }
                 }
             });
         }

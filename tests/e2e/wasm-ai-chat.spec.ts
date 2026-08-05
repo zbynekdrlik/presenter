@@ -357,6 +357,15 @@ test.describe("AI Chat Connection Status", () => {
     expect(data).toHaveProperty("proxy");
     expect(data.proxy).toHaveProperty("running");
     expect(data.proxy).toHaveProperty("binaryFound");
+    // #622 post-merge review finding 5: #599 added `tokenExpiresAt` to
+    // `ProxyStatus` (no `skip_serializing_if`, so the key is always present,
+    // `null` when unknown) but no test ever proved it at the REAL HTTP
+    // boundary — only via mocked `/ai/status` responses in other specs. This
+    // is coverage-closing, not a regression guard: it already passes against
+    // current server code (the field has shipped since #622), and stays
+    // green as long as nobody adds a `skip_serializing_if` that would hide
+    // the key when the server has no known expiry.
+    expect(data.proxy).toHaveProperty("tokenExpiresAt");
   });
 });
 

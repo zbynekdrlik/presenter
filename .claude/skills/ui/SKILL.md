@@ -191,3 +191,15 @@ pre-existing, out-of-scope display quirk, left alone in #574). Do NOT reach for
 tab" — it would mismatch on every single load. Instead capture the baseline from the
 tab's OWN first `/healthz` response (`header.rs`'s `known_version` signal) and compare
 LATER polls against that captured value, never against a build-time constant.
+
+## E2E: NEVER mock a non-2xx response in a zero-console spec (#598)
+
+Chrome itself logs `Failed to load resource: the server responded with a status of <N>`
+for EVERY non-2xx fetch — `page.route` mocks included. A spec that fulfills a route with
+`status: 500` (or 401/404) and also asserts `expect(consoleMessages).toEqual([])` can
+NEVER pass; it fails identically on retry (not flake). To exercise a client fetch-failure
+branch with a clean console, fulfill with a MALFORMED 200 instead:
+`route.fulfill({ status: 200, contentType: "application/json", body: "not-json" })` —
+`get_json()` in `crates/presenter-ui/src/api/mod.rs` funnels non-2xx (`ApiError::Status`)
+and parse failure (`ApiError::Deserialize`) into the same `Err` path, and gloo-net's
+`json()` parses in pure Rust (zero browser console noise).
