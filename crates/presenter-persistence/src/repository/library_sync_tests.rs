@@ -121,15 +121,10 @@ async fn rename_by_sync_id_disambiguates_instead_of_colliding_with_a_different_l
         foo_row.deleted_at.is_none(),
         "the renamed library stays live"
     );
-    assert_ne!(
-        foo_row.name, "Bar",
-        "the colliding name must be disambiguated, never written verbatim \
-         over an existing live library's name"
-    );
-    assert!(
-        foo_row.name.starts_with("Bar"),
-        "the disambiguated name is still recognizably based on 'Bar', got: {}",
-        foo_row.name
+    assert_eq!(
+        foo_row.name, "Bar (2)",
+        "#646 test hardening: the disambiguated name is deterministic, not \
+         just 'recognizably based on Bar'"
     );
 }
 
