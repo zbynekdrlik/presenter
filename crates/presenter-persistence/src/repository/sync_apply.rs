@@ -327,20 +327,30 @@ impl Repository {
     /// tombstoned under it (those carry their own tombstones with their own
     /// `updated_at` and settle by their own LWW).
     ///
-    /// #634: returns `(library_id, forced_tombstone_at)`. `forced_tombstone_at`
-    /// is `Some(ts)` ONLY when the resolved library stayed tombstoned (the
-    /// LWW check above did NOT revive it) — the caller MUST then write the
-    /// presentation attaching here as tombstoned too, at `ts`, instead of
-    /// leaving it LIVE under a dead parent (a live row under a tombstoned
-    /// library was invisible — excluded from `fetch_libraries` — AND doomed
-    /// by the next `prune_deleted_libraries` CASCADE, with zero prior trace
-    /// it ever existed; real data loss, fixed here). `ts` is the LATER of
-    /// the two clocks (`presentation_updated_at.max(library_updated)`) so
-    /// the row's own clock only ever advances, letting a later sync cycle
-    /// still converge the peer onto the same tombstone once it too learns of
-    /// the deletion. `None` in every other case (live library found,
-    /// revived, or freshly created) — the caller's normal
-    /// `incoming.deleted_at`/`updated_at` apply unchanged.
+    /// #634/#646: returns `(library_id, forced_tombstone_at)`.
+    /// `forced_tombstone_at` is `Some(library_updated)` — the LIBRARY's OWN
+    /// tombstone time, ONLY — when the resolved library stayed tombstoned
+    /// (the LWW check above did NOT revive it). The caller writes the
+    /// presentation attaching here as tombstoned too (`deleted_at` only —
+    /// `updated_at` stays the incoming row's own clock, untouched), instead
+    /// of leaving it LIVE under a dead parent (invisible to
+    /// `fetch_libraries`, doomed by the next `prune_deleted_libraries`
+    /// CASCADE with zero prior trace; real data loss, fixed here).
+    ///
+    /// #646: this used to be `presentation_updated_at.max(library_updated)`,
+    /// applied to BOTH `updated_at` and `deleted_at` — that let the forced
+    /// row's clock jump past its true incoming value, LWW-beating the
+    /// peer's own live copy of the same song and, past `PRUNE_HORIZON`,
+    /// risking a zero-trash-window hard-delete. Returning only the
+    /// library's own clock (paired with the incoming row's UNCHANGED
+    /// `updated_at` at the call site) keeps the forced tombstone
+    /// LWW-neutral: equal clocks + the strict `>` gate mean it never
+    /// propagates to the peer and never beats a live copy — deletion only
+    /// ever reaches the peer through the library-level channel.
+    ///
+    /// `None` in every other case (live library found, revived, or freshly
+    /// created) — the caller's normal `incoming.deleted_at`/`updated_at`
+    /// apply unchanged.
     async fn ensure_library(
         txn: &sea_orm::DatabaseTransaction,
         library_name: &str,
@@ -392,11 +402,12 @@ impl Repository {
                     .await?;
                 return Ok((tombstoned.id, None));
             }
-            // #634: the tombstone wins (not revived) -- the presentation
-            // attaching here must be written as tombstoned too, never live
-            // under a dead parent.
-            let forced_at = presentation_updated_at.max(library_updated);
-            return Ok((tombstoned.id, Some(forced_at)));
+            // #634/#646: the tombstone wins (not revived) -- the
+            // presentation attaching here must be written as tombstoned
+            // too, never live under a dead parent. `library_updated` alone
+            // (never max'd against `presentation_updated_at`) -- see the
+            // doc comment above for why maxing was the #646 data-loss bug.
+            return Ok((tombstoned.id, Some(library_updated)));
         }
         let id = uuid::Uuid::new_v4().to_string();
         library::Entity::insert(library::ActiveModel {
@@ -567,7 +578,9 @@ impl Repository {
         } else {
             Self::ensure_library(txn, &incoming.library_name, incoming.updated_at).await?
         };
-        let effective_updated_at = forced_delete.unwrap_or(incoming.updated_at);
+        // #646: `updated_at` is ALWAYS the incoming row's own clock, never
+        // overridden -- only `deleted_at` is forced. See `ensure_library`'s
+        // doc comment.
         let effective_deleted_at = forced_delete.or(incoming.deleted_at);
         let new_id = uuid::Uuid::new_v4().to_string();
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
@@ -576,13 +589,13 @@ impl Repository {
             name: Set(incoming.name.clone()),
             search_name: Set(fold_query(&incoming.name)),
             created_at: Set(Utc::now().into()),
-            updated_at: Set(effective_updated_at.into()),
+            updated_at: Set(incoming.updated_at.into()),
             sync_id: Set(incoming.sync_id.clone()),
             deleted_at: Set(effective_deleted_at.map(Into::into)),
         })
         .exec(txn)
         .await?;
-        Self::replace_slides(txn, &new_id, incoming).await?;
+        Self::replace_slides(txn, &new_id, incoming, effective_deleted_at.is_some()).await?;
         info!("sync created");
         let id = presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&new_id)?);
         Ok((SyncApplyOutcome::Created, Some(id)))
@@ -592,13 +605,12 @@ impl Repository {
     /// name, search_name, library, sync_id (adopt), deleted_at, and the PEER's
     /// updated_at (never now() — that is what prevents echo). Then replace slides.
     ///
-    /// `forced_delete` (#634): `Some(ts)` when `library_id` resolved to a
-    /// library that stayed tombstoned (`ensure_library` declined to revive
-    /// it) — overrides BOTH `deleted_at` and `updated_at` so this row is
-    /// written as an explicit tombstone at `ts` instead of silently LIVE
-    /// under a dead parent (which the 30-day tombstone-prune cascade would
-    /// otherwise hard-delete with no prior trace). `None` for every other
-    /// caller — the incoming row's own `deleted_at`/`updated_at` apply as-is.
+    /// `forced_delete` (#634, restated by #646): `Some(library_tombstone_at)`
+    /// when `library_id` resolved to a library that stayed tombstoned —
+    /// overrides ONLY `deleted_at` (to the library's own honest tombstone
+    /// time); `updated_at` is NEVER overridden (see `ensure_library`'s doc
+    /// comment for why). `None` for every other caller — the incoming row's
+    /// own `deleted_at` applies as-is.
     async fn write_synced_row<C: sea_orm::ConnectionTrait>(
         conn: &C,
         local_id: &str,
@@ -607,7 +619,6 @@ impl Repository {
         forced_delete: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
         use presentation_entity::Column;
-        let effective_updated_at = forced_delete.unwrap_or(incoming.updated_at);
         let effective_deleted_at = forced_delete.or(incoming.deleted_at);
         let deleted = effective_deleted_at
             .map(|d| Expr::value(d.to_rfc3339()))
@@ -619,21 +630,44 @@ impl Repository {
             .col_expr(Column::SyncId, Expr::value(incoming.sync_id.clone()))
             .col_expr(
                 Column::UpdatedAt,
-                Expr::value(effective_updated_at.to_rfc3339()),
+                // #646: NEVER forced -- always the incoming row's own clock.
+                Expr::value(incoming.updated_at.to_rfc3339()),
             )
             .col_expr(Column::DeletedAt, deleted)
             .filter(Column::Id.eq(local_id))
             .exec(conn)
             .await?;
-        Self::replace_slides(conn, local_id, incoming).await
+
+        if forced_delete.is_some() {
+            // #646 finding 3: clean playlist references the SAME way
+            // `delete_library`/`delete_presentation` do on a real local
+            // delete. Markers are handled below via `replace_slides`.
+            // Scoped to the FORCED case per the settled design -- a
+            // GENUINE incoming tombstone's own gap is filed as #649.
+            use crate::entities::playlist_entry;
+            playlist_entry::Entity::delete_many()
+                .filter(playlist_entry::Column::PresentationId.eq(local_id.to_string()))
+                .exec(conn)
+                .await?;
+        }
+
+        Self::replace_slides(conn, local_id, incoming, effective_deleted_at.is_some()).await
     }
 
     /// Wholesale slide replacement carrying the peer's slide ids (global v4 uniqueness
     /// makes id collisions a non-issue).
+    ///
+    /// `effective_deleted` (#646): whether this write's row ends up
+    /// tombstoned — the CALLER's decision, which can differ from
+    /// `incoming.deleted_at` for a force-tombstone (incoming is live, the
+    /// local write is forced dead). The old code read `incoming.deleted_at`
+    /// directly here, so a forced tombstone wrongly REMAPPED its old
+    /// markers instead of clearing them (#646 finding 3).
     async fn replace_slides<C: sea_orm::ConnectionTrait>(
         conn: &C,
         presentation_id: &str,
         incoming: &SyncPresentation,
+        effective_deleted: bool,
     ) -> anyhow::Result<()> {
         // #558 S9 + R4: capture the OLD stage-layout markers BEFORE the
         // wholesale slide replacement, together with the OLD slide's own
@@ -649,8 +683,10 @@ impl Repository {
         // `delete_presentation`'s local-delete behavior and CLEAR the
         // song's markers instead of carrying them across the trash
         // boundary — else a later restore flips the stage to a stale
-        // layout the operator never re-applied.
-        let (old_markers, old_content) = if incoming.deleted_at.is_some() {
+        // layout the operator never re-applied. #646: gated on the
+        // EFFECTIVE deleted status (see doc comment above), not
+        // `incoming.deleted_at` directly.
+        let (old_markers, old_content) = if effective_deleted {
             (Vec::new(), Vec::new())
         } else {
             Self::markers_with_content(conn, presentation_id).await?

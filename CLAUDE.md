@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
-| Repository refusal → HTTP 404/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |
+| Repository refusal → HTTP 404/409/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |
 
 ## Always-Rules
 

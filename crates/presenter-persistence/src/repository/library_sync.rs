@@ -76,12 +76,28 @@ impl Repository {
             // warn!ed and dropped it, forever, every cycle. A tombstone
             // write is never at risk (the partial index only guards LIVE
             // rows), so it always writes `incoming.name` verbatim.
-            let write_name = if incoming.deleted_at.is_none() {
-                Self::resolve_conflict_free_name(&txn, &incoming.name, &existing.id).await?
+            //
+            // #646: when disambiguation actually changed the name, the
+            // write is stamped with LOCAL `Utc::now()` instead of
+            // `incoming.updated_at` — otherwise both sites hold the SAME
+            // clock for this sync_id (the peer's own rename time) and the
+            // strict `>` LWW gate skips our disambiguated name FOREVER on
+            // the peer's next pull, so the two sites never converge. A
+            // non-colliding rename (the common case) is unaffected.
+            let (write_name, write_updated_at) = if incoming.deleted_at.is_none() {
+                let resolved =
+                    Self::resolve_conflict_free_name(&txn, &incoming.name, &existing.id).await?;
+                let stamp = if resolved == incoming.name {
+                    incoming.updated_at
+                } else {
+                    Utc::now()
+                };
+                (resolved, stamp)
             } else {
-                incoming.name.clone()
+                (incoming.name.clone(), incoming.updated_at)
             };
-            Self::write_library_row(&txn, &existing.id, incoming, &write_name).await?;
+            Self::write_library_row(&txn, &existing.id, incoming, &write_name, write_updated_at)
+                .await?;
             txn.commit().await?;
             info!("sync library updated");
             return Ok(SyncApplyOutcome::Updated);
@@ -105,7 +121,14 @@ impl Repository {
                 }
                 // `existing` was found BY this exact name (`find_live_library_by_name`),
                 // so writing `incoming.name` verbatim can never newly collide.
-                Self::write_library_row(&txn, &existing.id, incoming, &incoming.name).await?;
+                Self::write_library_row(
+                    &txn,
+                    &existing.id,
+                    incoming,
+                    &incoming.name,
+                    incoming.updated_at,
+                )
+                .await?;
                 txn.commit().await?;
                 info!("sync library adopted-by-name");
                 return Ok(SyncApplyOutcome::AdoptedByName);
@@ -161,11 +184,18 @@ impl Repository {
     /// — usually `incoming.name` verbatim, but the rename call site passes an
     /// already-disambiguated name (`resolve_conflict_free_name`) when
     /// `incoming.name` collides with a DIFFERENT live library.
+    ///
+    /// `write_updated_at` (#646) is the `UpdatedAt` actually WRITTEN —
+    /// usually `incoming.updated_at` verbatim, but the rename call site
+    /// passes LOCAL `Utc::now()` when `write_name` was disambiguated, so
+    /// this instance's rename outranks what the peer just pushed on its
+    /// next pull (see the call site's doc comment).
     async fn write_library_row(
         txn: &DatabaseTransaction,
         local_id: &str,
         incoming: &SyncLibraryManifestRow,
         write_name: &str,
+        write_updated_at: DateTime<Utc>,
     ) -> anyhow::Result<()> {
         use library::Column;
         let deleted = incoming
@@ -178,7 +208,7 @@ impl Repository {
             .col_expr(Column::SyncId, Expr::value(incoming.sync_id.clone()))
             .col_expr(
                 Column::UpdatedAt,
-                Expr::value(incoming.updated_at.to_rfc3339()),
+                Expr::value(write_updated_at.to_rfc3339()),
             )
             .col_expr(Column::DeletedAt, deleted)
             .filter(Column::Id.eq(local_id))

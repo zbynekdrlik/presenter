@@ -6,7 +6,9 @@ use super::Repository;
 use crate::entities::{library, presentation as presentation_entity, slide as slide_entity};
 use chrono::{DateTime, Utc};
 use presenter_core::Slide;
-use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
+};
 use tracing::instrument;
 
 /// One manifest row — identity + timestamps, ALL songs including trashed.
@@ -146,32 +148,31 @@ impl Repository {
         presentation_id: presenter_core::PresentationId,
     ) -> anyhow::Result<()> {
         use presentation_entity::Column;
+        // #646: the library probe + the update now share ONE transaction
+        // (previously two independent, unlocked reads + a write) so a
+        // concurrent library prune/tombstone can never land between the
+        // check and the write.
+        let txn = self.db.begin().await?;
         let existing = presentation_entity::Entity::find()
             .filter(Column::Id.eq(presentation_id.to_string()))
             .filter(Column::DeletedAt.is_not_null())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or(RepositoryError::NotFound(
                 "no trashed presentation to restore",
             ))?;
 
-        // #636: a restore that leaves the song under a STILL-tombstoned
+        // #636/#646: a restore that leaves the song under a STILL-tombstoned
         // library accomplishes nothing durable -- the library's own
         // deleted_at hides it from fetch_libraries, so the "restored" song
         // stays unreachable, and it is now LIVE, so the next
-        // prune_deleted_libraries CASCADE hard-deletes it (worse than
-        // leaving it in the trash). Refuse cleanly instead of performing a
-        // mutation that helps nobody; no partial state change.
-        let library_tombstoned = library::Entity::find_by_id(existing.library_id.clone())
-            .one(&self.db)
-            .await?
-            .is_none_or(|lib| lib.deleted_at.is_some());
-        if library_tombstoned {
-            return Err(RepositoryError::Conflict(
-                "the presentation's library is still trashed — restore the library first",
-            )
-            .into());
-        }
+        // prune_deleted_libraries CASCADE hard-deletes it. A library row
+        // that is MISSING ENTIRELY is a DIFFERENT situation (404, not 409)
+        // -- see `classify_restore_library`.
+        let library = library::Entity::find_by_id(existing.library_id.clone())
+            .one(&txn)
+            .await?;
+        classify_restore_library(library.as_ref())?;
 
         let now = Utc::now().to_rfc3339();
         let result = presentation_entity::Entity::update_many()
@@ -179,13 +180,14 @@ impl Repository {
             .col_expr(Column::UpdatedAt, Expr::value(now))
             .filter(Column::Id.eq(presentation_id.to_string()))
             .filter(Column::DeletedAt.is_not_null())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             // #587: typed refusal (#584 pattern) — the router downcasts to
             // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
             return Err(RepositoryError::NotFound("no trashed presentation to restore").into());
         }
+        txn.commit().await?;
         Ok(())
     }
 
@@ -203,5 +205,69 @@ impl Repository {
             .exec(&self.db)
             .await?;
         Ok(res.rows_affected)
+    }
+}
+
+/// #646: classify what `restore_presentation` must do based on the parent
+/// library's state. `None` (the row is entirely missing) is `NotFound`
+/// (404) — a DIFFERENT situation from `Some(tombstoned)` (still trashed,
+/// 409) that the old `is_none_or` folded into the same `Conflict`. A pure
+/// function so both branches are directly unit-testable without needing to
+/// defeat the schema's own FK constraint (which makes a genuinely dangling
+/// `library_id` unreachable through any normal write path) just to exercise
+/// the "missing" branch.
+fn classify_restore_library(library: Option<&library::Model>) -> Result<(), RepositoryError> {
+    match library {
+        None => Err(RepositoryError::NotFound(
+            "the presentation's library no longer exists",
+        )),
+        Some(lib) if lib.deleted_at.is_some() => Err(RepositoryError::Conflict(
+            "the presentation's library is still trashed — restore the library first",
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_restore_library;
+    use crate::entities::library;
+    use crate::RepositoryError;
+    use chrono::Utc;
+
+    fn library_model(deleted: bool) -> library::Model {
+        let now = Utc::now();
+        library::Model {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Songs".to_string(),
+            search_name: "songs".to_string(),
+            created_at: now.into(),
+            updated_at: now.into(),
+            sync_id: uuid::Uuid::new_v4().to_string(),
+            deleted_at: deleted.then_some(now.into()),
+        }
+    }
+
+    #[test]
+    fn missing_library_row_is_not_found() {
+        assert!(matches!(
+            classify_restore_library(None),
+            Err(RepositoryError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn tombstoned_library_row_is_conflict() {
+        let tombstoned = library_model(true);
+        assert!(matches!(
+            classify_restore_library(Some(&tombstoned)),
+            Err(RepositoryError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn live_library_row_is_ok() {
+        let live = library_model(false);
+        assert!(classify_restore_library(Some(&live)).is_ok());
     }
 }

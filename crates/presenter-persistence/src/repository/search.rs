@@ -3,12 +3,29 @@ use presenter_core::{
     search::{fold_query, query_tokens},
     LibraryId, PresentationId, SearchMatchField, SearchResult, SearchResultKind,
 };
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    sea_query::{Query, SelectStatement},
+    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 use std::collections::{HashMap, HashSet};
 use tracing::instrument;
 
 use super::util::parse_uuid;
 use super::Repository;
+
+/// SQL subquery selecting the ids of LIVE (non-tombstoned) libraries (#646).
+/// Filtering `LibraryId.in_subquery(...)` with this BEFORE `.limit()` keeps
+/// an excluded (live-under-tombstoned-library) row from ever consuming a
+/// result slot — the OLD code applied this exclusion AFTER the SQL `LIMIT`,
+/// in Rust, so a page full of excluded rows sorting early could starve a
+/// genuine match sorting later in the same page.
+fn live_library_ids_subquery() -> SelectStatement {
+    Query::select()
+        .column(library::Column::Id)
+        .from(library::Entity)
+        .and_where(library::Column::DeletedAt.is_null())
+        .to_owned()
+}
 
 struct SearchContext {
     tokens: Vec<String>,
@@ -181,6 +198,10 @@ impl Repository {
         let presentation_rows = presentation_entity::Entity::find()
             .filter(presentation_condition)
             .filter(presentation_entity::Column::DeletedAt.is_null())
+            // #646: exclude a tombstoned-library row's presentations IN
+            // SQL, before `.limit()` — see `live_library_ids_subquery`'s
+            // doc comment. The Rust-side check below stays as a cheap belt.
+            .filter(presentation_entity::Column::LibraryId.in_subquery(live_library_ids_subquery()))
             .order_by_asc(presentation_entity::Column::Name)
             .limit(remaining as u64)
             .find_also_related(library::Entity)
@@ -332,6 +353,9 @@ impl Repository {
         let slide_rows = slide_entity::Entity::find()
             .filter(slide_condition)
             .filter(presentation_entity::Column::DeletedAt.is_null())
+            // #646: same SQL-side exclusion as `search_presentations` —
+            // see `live_library_ids_subquery`'s doc comment.
+            .filter(presentation_entity::Column::LibraryId.in_subquery(live_library_ids_subquery()))
             .order_by_asc(slide_entity::Column::Position)
             .limit(remaining as u64)
             .find_also_related(presentation_entity::Entity)

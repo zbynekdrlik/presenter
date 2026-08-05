@@ -17,8 +17,10 @@ correct response is 404 (or 422 for a body-referenced missing target).
 ## The pattern
 
 1. **Producer** (repository or state method): `RepositoryError::NotFound(&'static str)` (URL
-   resource missing → 404) or `RepositoryError::TargetNotFound(&'static str)` (a resource named in
-   the request BODY is missing → 422) — both already defined in
+   resource missing → 404), `RepositoryError::TargetNotFound(&'static str)` (a resource named in
+   the request BODY is missing → 422), or `RepositoryError::Conflict(&'static str)` (the resource
+   exists but its current state forbids the operation — e.g. #636's restore_presentation under a
+   still-tombstoned library → 409) — all defined in
    `crates/presenter-persistence/src/repository/util.rs`. Use `.ok_or(RepositoryError::NotFound("..."))?`
    or `return Err(RepositoryError::NotFound("...").into());` — see "clippy gotcha" below for why
    `ok_or`, not `ok_or_else`.

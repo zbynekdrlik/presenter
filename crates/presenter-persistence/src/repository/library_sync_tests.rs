@@ -4,7 +4,7 @@
 use super::Repository;
 use crate::entities::library;
 use crate::{SyncApplyOutcome, SyncLibraryManifestRow};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 async fn repo() -> Repository {
@@ -121,15 +121,109 @@ async fn rename_by_sync_id_disambiguates_instead_of_colliding_with_a_different_l
         foo_row.deleted_at.is_none(),
         "the renamed library stays live"
     );
-    assert_ne!(
-        foo_row.name, "Bar",
-        "the colliding name must be disambiguated, never written verbatim \
-         over an existing live library's name"
+    assert_eq!(
+        foo_row.name, "Bar (2)",
+        "#646 test hardening: the disambiguated name is deterministic, not \
+         just 'recognizably based on Bar'"
     );
+}
+
+#[tokio::test]
+async fn rename_disambiguation_bumps_updated_at_so_the_rename_converges() {
+    // #646 settled design: after writing the disambiguated name,
+    // `write_library_row` must bump ITS `updated_at` to LOCAL now() --
+    // never the incoming rename's own clock -- so this instance's rename
+    // wins the NEXT round and the peer converges onto the disambiguated
+    // name. Before this fix, the disambiguated write reused the peer's OWN
+    // `updated_at`: equal clocks on both sites + the strict `>` LWW
+    // tie-break meant the peer's next pull skipped the disambiguated name
+    // FOREVER -- the two sites permanently held different names for the
+    // same sync_id.
+    let repo = repo().await;
+    repo.create_library("Bar").await.unwrap();
+
+    // Insert "Foo" directly with a deliberately OLD updated_at -- the peer
+    // rename below is unambiguously newer under LWW, with a huge margin
+    // under "real now" for the bump assertion, with no reliance on
+    // sub-millisecond wall-clock ordering.
+    let foo_id = uuid::Uuid::new_v4().to_string();
+    let foo_sid = "peer-foo-sid".to_string();
+    let old = Utc::now() - Duration::hours(1);
+    library::Entity::insert(library::ActiveModel {
+        id: sea_orm::Set(foo_id.clone()),
+        name: sea_orm::Set("Foo".to_string()),
+        search_name: sea_orm::Set("foo".to_string()),
+        created_at: sea_orm::Set(old.into()),
+        updated_at: sea_orm::Set(old.into()),
+        sync_id: sea_orm::Set(foo_sid.clone()),
+        deleted_at: sea_orm::Set(None),
+    })
+    .exec(&repo.db)
+    .await
+    .unwrap();
+
+    let peer_rename_at = Utc::now() - Duration::minutes(30);
+    let peer_rename = SyncLibraryManifestRow {
+        sync_id: foo_sid.clone(),
+        name: "Bar".to_string(),
+        updated_at: peer_rename_at,
+        deleted_at: None,
+    };
+    let outcome = repo.apply_sync_library(&peer_rename).await.unwrap();
+    assert_eq!(outcome, SyncApplyOutcome::Updated);
+
+    let row = library::Entity::find_by_id(foo_id.clone())
+        .one(&repo.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.name, "Bar (2)", "deterministic disambiguated name");
+    let stored_updated_at: DateTime<Utc> = row.updated_at.into();
     assert!(
-        foo_row.name.starts_with("Bar"),
-        "the disambiguated name is still recognizably based on 'Bar', got: {}",
-        foo_row.name
+        stored_updated_at > peer_rename_at,
+        "the disambiguated write must be stamped strictly newer than the \
+         incoming rename it disambiguated -- otherwise a peer pull sees \
+         equal clocks and the strict `>` LWW gate skips it forever"
+    );
+
+    // Second round: a PEER still holding the pre-disambiguation state
+    // (name "Bar", at its own rename's clock) receives OUR disambiguated
+    // write as an incoming manifest entry -- it must adopt "Bar (2)".
+    // (Calling the helper via `self::` since `repo` is already shadowed by
+    // the local variable above.)
+    let peer_repo = self::repo().await;
+    library::Entity::insert(library::ActiveModel {
+        id: sea_orm::Set(uuid::Uuid::new_v4().to_string()),
+        name: sea_orm::Set("Bar".to_string()),
+        search_name: sea_orm::Set("bar".to_string()),
+        created_at: sea_orm::Set(old.into()),
+        updated_at: sea_orm::Set(peer_rename_at.into()),
+        sync_id: sea_orm::Set(foo_sid.clone()),
+        deleted_at: sea_orm::Set(None),
+    })
+    .exec(&peer_repo.db)
+    .await
+    .unwrap();
+
+    let our_disambiguated = SyncLibraryManifestRow {
+        sync_id: foo_sid.clone(),
+        name: row.name.clone(),
+        updated_at: stored_updated_at,
+        deleted_at: None,
+    };
+    let second_round = peer_repo
+        .apply_sync_library(&our_disambiguated)
+        .await
+        .unwrap();
+    assert_eq!(
+        second_round,
+        SyncApplyOutcome::Updated,
+        "the peer must accept our disambiguated name on the next round"
+    );
+    let peer_row = library_row_by_name(&peer_repo, "Bar (2)").await;
+    assert_eq!(
+        peer_row.sync_id, foo_sid,
+        "converged onto the same identity"
     );
 }
 
