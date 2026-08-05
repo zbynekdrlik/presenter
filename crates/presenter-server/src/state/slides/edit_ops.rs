@@ -444,7 +444,11 @@ impl AppState {
             map.insert(slide.id, slide);
         }
         if order.len() != map.len() {
-            return Err(anyhow::anyhow!("slide order length mismatch"));
+            // #628: typed refusal, matching the per-id lookup guard below —
+            // a stale/short body (e.g. after a concurrent edit shrank the
+            // slide list) is a body-referenced mismatch, not an internal
+            // fault. A bare anyhow! here fell through to a 500.
+            return Err(RepositoryError::TargetNotFound("slide order length mismatch").into());
         }
         let mut slides = Vec::with_capacity(order.len());
         for id in order {
