@@ -7,6 +7,7 @@
 
 use super::AppState;
 use presenter_core::{PresentationId, SlideId};
+use presenter_persistence::RepositoryError;
 use std::collections::HashMap;
 
 impl AppState {
@@ -19,11 +20,15 @@ impl AppState {
         slide_id: SlideId,
         layout_code: Option<&str>,
     ) -> anyhow::Result<()> {
+        // #629: presentation_id/slide_id are URL-path resources — a missing
+        // one is a typed 404, matching the same check everywhere else in the
+        // codebase (state/slides/edit_ops.rs, state/bible.rs), never a bare
+        // anyhow! that falls through to the router's default 500.
         let Some((_, _, presentation)) = self.presentation_detail(presentation_id).await? else {
-            anyhow::bail!("presentation not found");
+            return Err(RepositoryError::NotFound("presentation not found").into());
         };
         if !presentation.slides.iter().any(|slide| slide.id == slide_id) {
-            anyhow::bail!("slide not found in presentation");
+            return Err(RepositoryError::NotFound("slide not found").into());
         }
 
         match layout_code {

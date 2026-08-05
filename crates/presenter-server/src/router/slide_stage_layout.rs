@@ -51,20 +51,25 @@ pub(super) async fn set_slide_stage_layout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Maps a `assign_slide_stage_layout` error to its HTTP status via the TYPED
-/// `StageLayoutRefusal` — never a blanket `AppError::bad_request` (#615: that
-/// hid a genuine internal failure, e.g. a missing presentation or a DB error,
-/// as a benign client-side 400). Same shape as #588's
-/// `map_stage_layout_refusal` in `router/stage.rs`, but maps to
-/// `bad_request_message` (400) — the SAME client-error status this route has
-/// ALWAYS returned for bad layout codes — so only the fallthrough to 500
-/// changes, not the typed-refusal status. Any other error falls through to
-/// the router's default 500 mapping.
+/// Maps a `assign_slide_stage_layout` error to its HTTP status via TWO typed
+/// error types — never a blanket `AppError::bad_request` (#615: that hid a
+/// genuine internal failure, e.g. a DB error, as a benign client-side 400).
+/// `StageLayoutRefusal` (bad/unknown layout code) maps to `bad_request_message`
+/// (400) — the SAME client-error status this route has ALWAYS returned for
+/// bad layout codes. `RepositoryError::NotFound` (a missing `presentation_id`
+/// or `slide_id` — both URL-path resources) maps to `not_found` (404, #629):
+/// before #629 these were bare `anyhow!`s that also fell through to 500. Any
+/// other error still falls through to the router's default 500 mapping.
 fn map_slide_stage_layout_error(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<StageLayoutRefusal>() {
-        Some(refusal) => AppError::bad_request_message(refusal.to_string()),
-        None => err.into(),
+    if let Some(refusal) = err.downcast_ref::<StageLayoutRefusal>() {
+        return AppError::bad_request_message(refusal.to_string());
     }
+    if let Some(presenter_persistence::RepositoryError::NotFound(msg)) =
+        err.downcast_ref::<presenter_persistence::RepositoryError>()
+    {
+        return AppError::not_found(*msg);
+    }
+    err.into()
 }
 
 #[instrument(skip_all)]
