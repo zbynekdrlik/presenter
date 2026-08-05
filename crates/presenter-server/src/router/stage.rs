@@ -311,6 +311,58 @@ mod set_stage_layout_error_mapping_tests {
         );
     }
 
+    /// #631: a failure while assembling the fresh stage snapshot must NOT
+    /// have already applied, persisted, and broadcast the layout switch — a
+    /// client that receives this exact 500 must find NOTHING changed. Same
+    /// corrupted-timers-row setup as the sibling test above, but the
+    /// corruption happens BEFORE the switch attempt (not after), so the
+    /// failure surfaces from the pre-switch snapshot-context build rather
+    /// than from a step that runs after the switch already committed.
+    #[tokio::test]
+    async fn set_stage_layout_failure_does_not_apply_the_switch() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        // Seed the timers row via an initial valid switch.
+        let _ = set_stage_layout(
+            State(state.clone()),
+            Json(StageLayoutUpdateRequest {
+                code: "timer".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Corrupt it so the NEXT switch's snapshot-context build fails.
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "UPDATE timers SET countdown_state = 'corrupted-state'".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = set_stage_layout(
+            State(state.clone()),
+            Json(StageLayoutUpdateRequest {
+                code: "preach".to_string(),
+            }),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "expected the corrupted-state failure to surface as an error"
+        );
+        assert_eq!(
+            state.stage_layout_code().await,
+            "timer",
+            "#631: a failed switch must not have applied the layout change — \
+             the client's 500 must mean nothing changed"
+        );
+    }
+
     /// An unknown/invalid layout code must still answer 404 — the acceptance
     /// criterion #588 must NOT regress.
     #[tokio::test]
