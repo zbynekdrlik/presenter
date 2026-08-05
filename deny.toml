@@ -44,11 +44,14 @@ ignore = [
     "RUSTSEC-2026-0221",
     # rkyv 0.7.46 insufficient archive validation can cause out-of-bounds
     # reads in archives containing Rc/Arc. Optional dependency of
-    # rust_decimal 1.41.0 (transitive via sea-orm 1.1.20 → sqlx 0.8.6); the
-    # feature that pulls rkyv is never enabled in our dependency graph —
-    # `cargo tree -i rkyv` prints nothing, so the code is never compiled. No
-    # upgrade path until sea-orm/sqlx move off rust_decimal 1.41.0 (fix
-    # requires rkyv >=0.8.17). Keep in sync with .cargo/audit.toml.
+    # rust_decimal 1.41.0, which sea-orm 1.1.20 depends on DIRECTLY (#622
+    # post-merge review finding 12 — this used to say "transitive via sea-orm
+    # → sqlx", which is wrong: sqlx 0.8.6 also depends on rust_decimal
+    # directly and independently, there is no sea-orm→sqlx→rust_decimal
+    # chain). The feature that pulls rkyv is never enabled in our dependency
+    # graph — `cargo tree -i rkyv` prints nothing, so the code is never
+    # compiled. No upgrade path until sea-orm/sqlx move off rust_decimal
+    # 1.41.0 (fix requires rkyv >=0.8.17). Keep in sync with .cargo/audit.toml.
     # https://rustsec.org/advisories/RUSTSEC-2026-0235
     "RUSTSEC-2026-0235",
 ]

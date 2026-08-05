@@ -2888,6 +2888,14 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   font-size: 0.8rem;
 }
 
+/* Wrapper around the login banner + validity note (#622 post-merge review
+   finding 9): THIS is the actual flex item inside `.ai-chat` (display:flex)
+   now that both children are nested one level deeper — flex-shrink on the
+   children themselves is a no-op once they're no longer direct flex items. */
+.ai-chat__login-status {
+  flex-shrink: 0;
+}
+
 /* Primary logged-out banner (#599) — always mounted, toggled via
    data-visible so E2E asserts the attribute rather than element presence. */
 .ai-chat__login-banner {
@@ -2896,7 +2904,6 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   border: 1px solid rgba(239, 68, 68, 0.4);
   border-radius: 8px;
   background: rgba(239, 68, 68, 0.1);
-  flex-shrink: 0;
 }
 
 .ai-chat__login-banner[data-visible="false"] {
@@ -2930,7 +2937,6 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   margin: 0.4rem 1rem 0;
   font-size: 0.75rem;
   color: var(--operator-muted);
-  flex-shrink: 0;
 }
 
 .ai-chat__token-validity[data-visible="false"] {

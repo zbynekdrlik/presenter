@@ -7,11 +7,21 @@
 //! an event and were fixed via SSH instead of through the GUI.
 //!
 //! This banner is keyed ONLY on the observable `proxy.claudeAuthenticated`
-//! (there is no `authentication_error` typed error anywhere in the code —
-//! see issue #599 comment recording that design decision). It is ALWAYS
-//! mounted (never conditionally rendered) so E2E tests assert on
-//! `data-visible`, never on element presence — the same discipline as the
-//! toast component.
+//! (no TYPED `authentication_error` exists in the router — `authentication_error`
+//! is only ever a free-text string an UPSTREAM call embeds in its failure
+//! message, named as such in `router/ai.rs`'s `compute_ai_connected` doc
+//! comment; there is nothing to pattern-match on client-side, so the UI keys
+//! on `claudeAuthenticated == false` instead). It is ALWAYS mounted (never
+//! conditionally rendered) so E2E tests assert on `data-visible`, never on
+//! element presence — the same discipline as the toast component.
+//!
+//! `authenticated` is tri-state (`Option<bool>`, #622 post-merge review
+//! finding 1): `None` means "no confirmed answer yet" (first status fetch
+//! still in flight, or the last fetch failed) and must NEVER be treated as
+//! "logged out" — before this, a failed fetch left the caller's plain `bool`
+//! at its initial `false` default forever, painting a false accusation. Only
+//! `Some(false)` — an actual, successful "not authenticated" response — shows
+//! the logged-out content.
 //!
 //! The CTA reuses the EXISTING `proxy_login`/`proxy_complete_login` flow
 //! already wired in `pages/ai.rs` (never duplicated here) — clicking it
@@ -21,30 +31,29 @@
 
 use leptos::prelude::*;
 
-/// Whether the primary logged-out banner should be shown at all.
-pub(crate) fn show_login_banner(authenticated: bool) -> bool {
-    !authenticated
+/// Whether the primary logged-out banner should be shown at all — ONLY on a
+/// CONFIRMED `Some(false)`. `None` (unknown: no answer yet, or the last fetch
+/// failed) must stay hidden — never accuse the operator of being logged out
+/// on a guess (#622 post-merge review finding 1).
+pub(crate) fn show_login_banner(authenticated: Option<bool>) -> bool {
+    authenticated == Some(false)
 }
 
 /// Whether the "still valid, renew soon" note should be shown — only while
-/// authenticated via a token whose expiry is actually known (never for
-/// API-key auth, which carries no expiry at all).
-pub(crate) fn show_validity_note(authenticated: bool, expires_at: Option<&str>) -> bool {
-    authenticated && expires_at.is_some()
+/// CONFIRMED authenticated (`Some(true)`) via a token whose expiry is
+/// actually known (never for API-key auth, which carries no expiry at all,
+/// and never while the auth state is merely unknown).
+pub(crate) fn show_validity_note(authenticated: Option<bool>, expires_at: Option<&str>) -> bool {
+    authenticated == Some(true) && expires_at.is_some()
 }
 
-/// Format an RFC3339 timestamp as `dd.mm.yyyy HH:MM` local time, mirroring
-/// `pages/settings::format_timestamp`. Falls back to the raw string when it
-/// cannot be parsed — never hide the operator-relevant timestamp.
+/// Format an RFC3339 timestamp as `dd.mm.yyyy HH:MM` local time. Thin
+/// wrapper over the shared `utils::timestamp::format_local_timestamp`
+/// (#622 post-merge review finding 10 — this used to duplicate
+/// `pages/settings::format_timestamp`'s parse/format/fallback body wholesale,
+/// differing only in the strftime pattern).
 pub(crate) fn format_expiry(value: &str) -> String {
-    use chrono::{DateTime, Local};
-    match value.parse::<DateTime<chrono::Utc>>() {
-        Ok(dt) => dt
-            .with_timezone(&Local)
-            .format("%d.%m.%Y %H:%M")
-            .to_string(),
-        Err(_) => value.to_string(),
-    }
+    crate::utils::timestamp::format_local_timestamp(value, "%d.%m.%Y %H:%M")
 }
 
 /// Subtext under the CTA — names WHEN the last login died (when known) so
@@ -67,7 +76,7 @@ pub(crate) fn validity_text(expires_at: &str) -> String {
 
 #[component]
 pub fn AiLoginBanner<F>(
-    authenticated: RwSignal<bool>,
+    authenticated: RwSignal<Option<bool>>,
     token_expires_at: RwSignal<Option<String>>,
     on_login: F,
 ) -> impl IntoView
@@ -79,11 +88,18 @@ where
     let validity_visible = move || {
         show_validity_note(authenticated.get(), token_expires_at.get().as_deref()).to_string()
     };
-    let validity = move || {
-        token_expires_at
-            .get()
-            .map(|ts| validity_text(&ts))
-            .unwrap_or_default()
+    // #622 post-merge review finding 8: gate the validity-note TEXT NODE's
+    // render on `show_validity_note` itself, not only on the wrapper's
+    // CSS-hidden `data-visible` attribute — the wrapper div stays always
+    // mounted (E2E asserts `data-visible`, same discipline as the login
+    // banner above), but its text content is never computed while hidden.
+    let validity_content = move || {
+        let expires = token_expires_at.get();
+        if show_validity_note(authenticated.get(), expires.as_deref()) {
+            expires.map(|ts| validity_text(&ts))
+        } else {
+            None
+        }
     };
 
     view! {
@@ -109,7 +125,7 @@ where
                 data-role="ai-token-validity"
                 data-visible=validity_visible
             >
-                {validity}
+                {validity_content}
             </div>
         </div>
     }
@@ -120,16 +136,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn banner_shown_only_when_not_authenticated() {
-        assert!(show_login_banner(false));
-        assert!(!show_login_banner(true));
+    fn banner_shown_only_on_confirmed_not_authenticated() {
+        assert!(show_login_banner(Some(false)));
+        assert!(!show_login_banner(Some(true)));
+    }
+
+    /// #622 post-merge review finding 1: `None` (no confirmed answer yet —
+    /// first fetch still in flight, or the last fetch failed) must NEVER be
+    /// treated as "logged out". Before the fix this state didn't exist —
+    /// callers collapsed it onto `false`, which is exactly the false
+    /// accusation this test guards against.
+    #[test]
+    fn banner_hidden_while_auth_state_is_unknown() {
+        assert!(!show_login_banner(None));
     }
 
     #[test]
-    fn validity_note_needs_both_authenticated_and_a_known_expiry() {
-        assert!(!show_validity_note(false, Some("2026-08-05T10:00:00Z")));
-        assert!(!show_validity_note(true, None));
-        assert!(show_validity_note(true, Some("2026-08-05T10:00:00Z")));
+    fn validity_note_needs_both_confirmed_authenticated_and_a_known_expiry() {
+        assert!(!show_validity_note(
+            Some(false),
+            Some("2026-08-05T10:00:00Z")
+        ));
+        assert!(!show_validity_note(Some(true), None));
+        assert!(show_validity_note(Some(true), Some("2026-08-05T10:00:00Z")));
+    }
+
+    #[test]
+    fn validity_note_hidden_while_auth_state_is_unknown_even_with_a_known_expiry() {
+        assert!(!show_validity_note(None, Some("2026-08-05T10:00:00Z")));
     }
 
     #[test]

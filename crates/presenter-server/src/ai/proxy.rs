@@ -6,11 +6,21 @@
 //! native `-claude-login` flow with callback URL forwarding.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+
+/// Last-reported overall Claude auth state, process-wide (#622 post-merge
+/// review finding 3b): `None` = never reported yet, `Some(true)` = last
+/// scan was authenticated, `Some(false)` = last scan was NOT authenticated.
+/// Used so the "token is EXPIRED" log only WARNs on the TRANSITION into
+/// not-authenticated — a steady-state dead login, polled every 5s by the
+/// status chip, used to re-warn on every single scan (~12x/minute for the
+/// exact same already-known problem). One process runs one `ProxyManager`
+/// in practice, so a process-global is the right scope here.
+static LAST_REPORTED_AUTH: Mutex<Option<bool>> = Mutex::new(None);
 
 /// Holds a login child process and its stdout handle.
 /// The stdout must be kept alive to prevent SIGPIPE from killing the process.
@@ -180,6 +190,10 @@ impl ProxyManager {
         let mut authenticated = false;
         let mut fresh_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
         let mut expired_max: Option<(chrono::DateTime<chrono::FixedOffset>, String)> = None;
+        // Collected, not logged immediately — the WARN-vs-DEBUG decision
+        // (finding 3b) can only be made once the aggregate `authenticated`
+        // verdict is known, after the loop.
+        let mut expired_tokens: Vec<(String, String)> = Vec::new();
 
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -214,14 +228,11 @@ impl ProxyManager {
                     authenticated = true;
                 }
                 TokenValidity::Expired { expired } => {
-                    // Every expired token is logged — AI auth is dead unless a
-                    // fresh (or unknown, fail-open) token is found elsewhere in
-                    // the scan.
-                    warn!(
-                        token = %name,
-                        expired = %expired,
-                        "Claude OAuth token is EXPIRED — reporting not authenticated; re-login required"
-                    );
+                    // AI auth is dead unless a fresh (or unknown, fail-open)
+                    // token is found elsewhere in the scan. Logged after the
+                    // loop, once, at WARN or DEBUG depending on whether this
+                    // is a new transition (finding 3b).
+                    expired_tokens.push((name.clone(), expired.clone()));
                     if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&expired) {
                         let is_newer = expired_max.as_ref().map_or(true, |(cur, _)| parsed > *cur);
                         if is_newer {
@@ -232,11 +243,57 @@ impl ProxyManager {
             }
         }
 
-        // The freshest FRESH token wins when one exists; otherwise the most
-        // recently expired one so the UI can say "expired at X".
-        let expires_at = fresh_max
-            .map(|(_, s)| s)
-            .or_else(|| expired_max.map(|(_, s)| s));
+        // #622 post-merge review finding 2: gate the fallback on the
+        // AGGREGATE `authenticated` verdict, not merely on whether a fresh
+        // token happens to exist. Before this, `fresh_max.or_else(expired_max)`
+        // let an EXPIRED token's past timestamp leak through as "validity"
+        // whenever `authenticated` was true ONLY via a fail-open `Unknown`
+        // token (no fresh token at all) — the UI would show "Prihlásenie
+        // platí do <a date in the past>". Authenticated must only ever
+        // surface a FRESH timestamp (`None` when no fresh token backs it);
+        // not-authenticated keeps showing the newest expired timestamp so
+        // the "vypršalo X" banner subtext still works.
+        let expires_at = if authenticated {
+            fresh_max.map(|(_, s)| s)
+        } else {
+            expired_max.map(|(_, s)| s)
+        };
+
+        // #622 post-merge review finding 3b: WARN only on the TRANSITION into
+        // not-authenticated (this scan found expired token(s) and last time
+        // we were authenticated, or this is the very first scan); repeat
+        // scans of an already-known-dead login log at DEBUG instead. A
+        // recovered login resets the tracked state so the NEXT time it dies
+        // we warn again rather than staying silent forever.
+        if authenticated {
+            if let Ok(mut last) = LAST_REPORTED_AUTH.lock() {
+                *last = Some(true);
+            }
+        } else if !expired_tokens.is_empty() {
+            let transitioned = match LAST_REPORTED_AUTH.lock() {
+                Ok(mut last) => {
+                    let changed = *last != Some(false);
+                    *last = Some(false);
+                    changed
+                }
+                Err(_) => true,
+            };
+            for (name, expired) in &expired_tokens {
+                if transitioned {
+                    warn!(
+                        token = %name,
+                        expired = %expired,
+                        "Claude OAuth token is EXPIRED — reporting not authenticated; re-login required"
+                    );
+                } else {
+                    debug!(
+                        token = %name,
+                        expired = %expired,
+                        "Claude OAuth token still expired — not authenticated (already reported)"
+                    );
+                }
+            }
+        }
 
         AuthScan {
             authenticated,
