@@ -325,16 +325,71 @@ mod tests {
     }
 
     #[test]
-    fn normalize_title_for_mismatch_treats_inner_whitespace_as_insignificant() {
-        // Design revision (CI fix on top of #601): the #601 SNV boundary
-        // case "10000 armad" vs "10 000 armád" is a diacritic-only pair with
-        // incidental spacing — it must be silently equal, same as any other
-        // whitespace/diacritic formatting variance, not flagged as a
-        // genuine mismatch. This replaces the original conservative
-        // "whitespace stays significant" assertion this test used to make.
+    fn normalize_title_for_mismatch_removes_whitespace_only_between_digits() {
+        // Re-settled design (#655 F11/F12), replacing BOTH prior designs: the
+        // ORIGINAL design kept all inner whitespace significant (too narrow —
+        // missed the #601 SNV "10000 armad" vs "10 000 armád" case); the
+        // `fix(ci)` commit on top of it went too far under CI pressure and
+        // stripped ALL whitespace, erasing genuine word boundaries. The
+        // re-settled design: a whitespace run BETWEEN DIGITS ("10 000"
+        // grouping) is formatting noise and is removed, same class as a
+        // diacritic-only difference; every OTHER whitespace run collapses to
+        // a single space but is never removed.
         assert_eq!(
-            normalize_title_for_mismatch("10000 armad"),
-            normalize_title_for_mismatch("10 000 armád")
+            normalize_title_for_mismatch("102 10 000 armád"),
+            normalize_title_for_mismatch("102 10000 armad"),
+            "a whitespace run between two digits must be treated as formatting noise"
+        );
+    }
+
+    #[test]
+    fn normalize_title_for_mismatch_still_differs_when_non_digit_spacing_differs() {
+        // Counterpart to the test above: a whitespace run that is NOT
+        // between two digits is a genuine word boundary, not formatting
+        // noise — two titles differing only by whether that boundary has a
+        // space must still compare as different. This is exactly the
+        // over-broad-stripping regression the `fix(ci)` design introduced
+        // (and this re-settled design fixes): stripping ALL whitespace would
+        // make "Arriba Song" and "ArribaSong" compare equal.
+        assert_ne!(
+            normalize_title_for_mismatch("Arriba Song"),
+            normalize_title_for_mismatch("ArribaSong"),
+            "a non-digit whitespace boundary must not be silently erased"
+        );
+    }
+
+    #[test]
+    fn normalize_title_for_mismatch_folds_non_decomposable_letters() {
+        // #655 F13: ł, ø, đ, ħ, ŧ (and their uppercase forms) are single base
+        // glyphs with a stroke, not a base letter + combining mark — NFD
+        // mark-stripping alone does not touch them. A tiny explicit fold
+        // table closes the gap so these still compare equal to their plain
+        // Latin counterpart, the same way a diacritic (mark-based) letter
+        // already does.
+        assert_eq!(
+            normalize_title_for_mismatch("Łódź"),
+            normalize_title_for_mismatch("Lodz"),
+            "ł/Ł must fold to l/L"
+        );
+        assert_eq!(
+            normalize_title_for_mismatch("Øresund"),
+            normalize_title_for_mismatch("Oresund"),
+            "ø/Ø must fold to o/O"
+        );
+        assert_eq!(
+            normalize_title_for_mismatch("Đorđe"),
+            normalize_title_for_mismatch("Dorde"),
+            "đ/Đ must fold to d/D"
+        );
+        assert_eq!(
+            normalize_title_for_mismatch("Ħamrun"),
+            normalize_title_for_mismatch("Hamrun"),
+            "ħ/Ħ must fold to h/H"
+        );
+        assert_eq!(
+            normalize_title_for_mismatch("Ŧullio"),
+            normalize_title_for_mismatch("Tullio"),
+            "ŧ/Ŧ must fold to t/T"
         );
     }
 
