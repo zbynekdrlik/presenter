@@ -242,4 +242,47 @@ mod tests {
             Some("456".to_string())
         );
     }
+
+    // #601 — strip_song_prefix / normalize_title_for_mismatch. RED (this
+    // commit) is the compile-time proof: neither function exists yet; the
+    // GREEN commit adds them, restoring the crate to a buildable state.
+
+    #[test]
+    fn strip_song_prefix_removes_digits_and_following_space() {
+        assert_eq!(strip_song_prefix("017 Viem, ze Ty Pan", 3), "Viem, ze Ty Pan");
+    }
+
+    #[test]
+    fn strip_song_prefix_falls_back_to_trimmed_name_without_a_valid_prefix() {
+        assert_eq!(strip_song_prefix("Song Title", 3), "Song Title");
+        assert_eq!(strip_song_prefix("  Song Title", 3), "Song Title");
+    }
+
+    #[test]
+    fn normalize_title_for_mismatch_ignores_diacritics_case_and_punctuation() {
+        assert_eq!(
+            normalize_title_for_mismatch("Viem, že Ty Pán?!"),
+            normalize_title_for_mismatch("viem ze ty pan")
+        );
+    }
+
+    #[test]
+    fn normalize_title_for_mismatch_keeps_inner_whitespace_significant() {
+        // The #601 SNV boundary case: "10000 armad" vs "10 000 armád" must
+        // NOT be silently equal — an inner-space difference stays reportable
+        // (acknowledgeable like any other deliberate variant), never
+        // auto-silenced, per the settled design's conservative choice.
+        assert_ne!(
+            normalize_title_for_mismatch("10000 armad"),
+            normalize_title_for_mismatch("10 000 armád")
+        );
+    }
+
+    #[test]
+    fn normalize_title_for_mismatch_detects_genuinely_different_titles() {
+        assert_ne!(
+            normalize_title_for_mismatch("Tvoja blízkosť je nebo"),
+            normalize_title_for_mismatch("Viem, ze Ty Pan")
+        );
+    }
 }

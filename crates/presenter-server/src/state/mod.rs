@@ -21,6 +21,7 @@
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
 
 mod ableset;
+mod ableset_mismatch;
 mod api_stage;
 pub(crate) mod bible;
 mod bible_manager;
