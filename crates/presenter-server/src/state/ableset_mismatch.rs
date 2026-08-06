@@ -33,6 +33,7 @@ const ABLESET_MISMATCH_ACK_SETTING_KEY: &str = "ableset_mismatch_acks";
 /// changes, the ack no longer matches and the warning returns (a later
 /// renumbering must never silently inherit an old "this is fine").
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct AbleSetMismatchAck {
     pub(crate) ableset_title: String,
     pub(crate) presenter_title: String,

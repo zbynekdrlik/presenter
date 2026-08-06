@@ -29,23 +29,31 @@ fn should_auto_restore_ndi_requires_manager_and_encoder() {
 
 /// Structural regression (deep-review 🔵 #7): the predicate is correct in
 /// isolation, but item 6's safety depends on EVERY auto-restore site
-/// consulting it. There are two sites in `mod.rs`: the one-shot startup
-/// restore and the 30s background reconnect loop. A refactor that drops
-/// one of the call sites would silently re-introduce the 2026-05-24 wedge
-/// failure mode without breaking any other test. This test pins the call
-/// sites lexically — if you legitimately refactor (e.g. extract to a
-/// shared helper), update the expected count and the comment.
+/// consulting it. There are two sites, in two DIFFERENT files after the
+/// #486-style split of `state/mod.rs`: the one-shot startup restore stayed
+/// in `mod.rs` (`restore_active_ndi_source`), and the 30s background
+/// reconnect loop moved to `background_tasks.rs` (`spawn_background_tasks`).
+/// A refactor that drops one of the call sites would silently re-introduce
+/// the 2026-05-24 wedge failure mode without breaking any other test. This
+/// test pins the call sites lexically, one per file — if you legitimately
+/// refactor (e.g. extract to a shared helper, or move a site to yet another
+/// file), update the expected counts and the comment.
 #[test]
 fn auto_restore_sites_invoke_encoder_gate_predicate() {
-    let src = include_str!("mod.rs");
-    let occurrences = src
-        .matches("should_auto_restore_ndi(manager_loaded, encoder_available)")
-        .count();
+    const CALL: &str = "should_auto_restore_ndi(manager_loaded, encoder_available)";
+    let mod_rs = include_str!("mod.rs");
+    let background_tasks_rs = include_str!("background_tasks.rs");
+    let mod_rs_occurrences = mod_rs.matches(CALL).count();
+    let background_tasks_occurrences = background_tasks_rs.matches(CALL).count();
+    let total = mod_rs_occurrences + background_tasks_occurrences;
     assert_eq!(
-        occurrences, 2,
-        "expected exactly 2 call sites to should_auto_restore_ndi(manager_loaded, encoder_available) \
-         in state/mod.rs (one-shot startup restore + 30s reconnect loop); found {occurrences}. \
-         If a call site was intentionally removed or refactored, update this test \
+        (mod_rs_occurrences, background_tasks_occurrences),
+        (1, 1),
+        "expected exactly 1 call site to should_auto_restore_ndi(manager_loaded, encoder_available) \
+         in state/mod.rs (one-shot startup restore) AND exactly 1 in state/background_tasks.rs \
+         (30s reconnect loop) — found {mod_rs_occurrences} in mod.rs and {background_tasks_occurrences} \
+         in background_tasks.rs (total {total}). \
+         If a call site was intentionally removed, moved, or refactored, update this test \
          AND the supporting comments to match. Otherwise #333 item 6's protection \
          has a hole — restore the gate before merging."
     );
