@@ -62,10 +62,18 @@ impl AppState {
 
     /// All markers of a presentation as `slide_id → layout_code` (operator UI
     /// indicators).
+    ///
+    /// #652 F8: checks presentation existence FIRST — the same check
+    /// `assign_slide_stage_layout` (PUT) already performs — so GET and PUT
+    /// agree on the SAME URL resource. Without it, an unknown/trashed
+    /// presentation returned a misleading 200 `{}` instead of 404.
     pub async fn slide_stage_layouts(
         &self,
         presentation_id: PresentationId,
     ) -> anyhow::Result<HashMap<String, String>> {
+        if self.presentation_detail(presentation_id).await?.is_none() {
+            return Err(RepositoryError::NotFound("presentation not found").into());
+        }
         self.repository
             .list_slide_stage_layouts(presentation_id)
             .await

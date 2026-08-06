@@ -3167,6 +3167,56 @@ async fn replace_playlist_entries_endpoint_unknown_presentation_id_is_a_422() {
 }
 
 #[tokio::test]
+async fn replace_playlist_entries_endpoint_tombstoned_presentation_is_a_422() {
+    // #652 F2: `ensure_presentation_targets_exist` (#632) had no `DeletedAt`
+    // filter, unlike the twin name-lookup in the same file — a trashed
+    // presentation's row still physically exists (soft delete), so a stale
+    // editor's full-array PUT re-persisting it as an entry silently
+    // resurrected it into the playlist, undoing #555's "a deleted song
+    // leaves every playlist". A trashed target IS the "body-referenced
+    // target does not exist" case the 422 already describes.
+    let state = AppState::in_memory().await.unwrap();
+    let library = state
+        .create_library("F2 Tombstone Test Library")
+        .await
+        .unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "To Be Trashed", None)
+        .await
+        .unwrap();
+    state.delete_presentation(presentation.id).await.unwrap();
+    let playlist = state
+        .create_playlist("Stale Editor Playlist", false)
+        .await
+        .unwrap();
+    let app = build_router(state);
+
+    let body = json!({
+        "entries": [
+            { "type": "presentation", "presentationId": presentation.id }
+        ]
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PUT)
+                .uri(format!("/playlists/{}/entries", playlist.id))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a trashed presentation referenced in the entries array must be rejected, not \
+         silently re-persisted into the playlist (#652 F2)"
+    );
+}
+
+#[tokio::test]
 async fn restore_presentation_endpoint_never_trashed_returns_404() {
     // #608 item 4: `restore_presentation_endpoint_missing_trashed_presentation_returns_404`
     // above claims to cover "an unknown id AND a never-trashed presentation" but only drives the

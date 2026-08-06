@@ -100,13 +100,17 @@ pub(super) async fn get_presentation_detail(
 /// string match on the `Display` text (#584; mirrors `libraries.rs`'s
 /// `map_repository_not_found`). `NotFound` (the URL resource itself is
 /// missing) maps to 404; `TargetNotFound` (a body-referenced resource is
-/// missing) maps to 422. Any other error falls through to the default 500.
+/// missing) maps to 422; `Conflict` (the resource exists but its current
+/// state forbids the operation — e.g. #652 F5's reorder length mismatch)
+/// maps to 409, mirroring `PasteSlidesError::AnchorVanished` below. Any
+/// other error falls through to the default 500.
 fn map_repository_error(err: anyhow::Error) -> AppError {
     match err.downcast_ref::<presenter_persistence::RepositoryError>() {
         Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
         Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
             AppError::unprocessable(*msg)
         }
+        Some(presenter_persistence::RepositoryError::Conflict(msg)) => AppError::conflict(*msg),
         _ => err.into(),
     }
 }

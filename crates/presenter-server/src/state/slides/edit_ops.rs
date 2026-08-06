@@ -444,11 +444,16 @@ impl AppState {
             map.insert(slide.id, slide);
         }
         if order.len() != map.len() {
-            // #628: typed refusal, matching the per-id lookup guard below —
-            // a stale/short body (e.g. after a concurrent edit shrank the
-            // slide list) is a body-referenced mismatch, not an internal
-            // fault. A bare anyhow! here fell through to a 500.
-            return Err(RepositoryError::TargetNotFound("slide order length mismatch").into());
+            // #628: typed refusal — a bare anyhow! here fell through to 500.
+            // #652 F5: reclassified from `TargetNotFound` (422) to
+            // `Conflict` (409) — this is a STALE-SET conflict (the body was
+            // built against a slide count that has since changed via a
+            // concurrent edit), not a body-referenced missing target; the
+            // client should refresh and retry, mirroring
+            // `PasteSlidesError::AnchorVanished`'s 409. The per-id lookup
+            // guard below (a genuinely UNKNOWN slide id) stays
+            // `TargetNotFound`/422.
+            return Err(RepositoryError::Conflict("slide order length mismatch").into());
         }
         let mut slides = Vec::with_capacity(order.len());
         for id in order {

@@ -4,8 +4,8 @@ use crate::entities::{
 use chrono::Utc;
 use presenter_core::{playlist::PlaylistEntryKind, Playlist, PlaylistId, PresentationId};
 use sea_orm::{
-    sea_query::Expr, sea_query::OnConflict, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    sea_query::Expr, sea_query::OnConflict, ColumnTrait, ConnectionTrait, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 use tracing::instrument;
@@ -90,7 +90,7 @@ impl Repository {
         playlist_id: PlaylistId,
         favorite: bool,
     ) -> anyhow::Result<()> {
-        self.ensure_playlist_exists(playlist_id).await?;
+        self.ensure_playlist_exists(&self.db, playlist_id).await?;
         self.set_playlist_favorite_internal(playlist_id, favorite)
             .await
     }
@@ -122,10 +122,18 @@ impl Repository {
         Ok(())
     }
 
-    async fn ensure_playlist_exists(&self, playlist_id: PlaylistId) -> anyhow::Result<()> {
+    /// #652 F3: takes the connection generically so callers that need the
+    /// check to run INSIDE their own transaction (`replace_playlist_entries`)
+    /// can pass `&txn`; callers with no transaction of their own pass
+    /// `&self.db` (`set_playlist_favorite`).
+    async fn ensure_playlist_exists(
+        &self,
+        conn: &impl ConnectionTrait,
+        playlist_id: PlaylistId,
+    ) -> anyhow::Result<()> {
         let count = playlist::Entity::find()
             .filter(playlist::Column::Id.eq(playlist_id.to_string()))
-            .count(&self.db)
+            .count(conn)
             .await?;
         if count > 0 {
             Ok(())
@@ -143,12 +151,26 @@ impl Repository {
     /// constraint (`PRAGMA foreign_keys = ON`) -> DbErr -> 500. `presentation_id`
     /// is BODY-referenced (the entries array), not the URL, so the refusal is
     /// `TargetNotFound` (422), not `NotFound` (404) — the router maps it
-    /// alongside `NotFound`. Deliberately does NOT filter on `deleted_at IS
-    /// NULL`: a soft-deleted presentation's row still physically exists, so
-    /// it would NOT trip the FK constraint either — this check matches
-    /// exactly what the FK itself would reject, no stricter.
+    /// alongside `NotFound`.
+    ///
+    /// #652 F2: DOES filter on `deleted_at IS NULL` (reversing the original
+    /// #632 rationale) — a trashed presentation's row still physically
+    /// exists so it would NOT trip the raw FK constraint either, but a
+    /// trashed target IS the "body-referenced target does not exist" case
+    /// this 422 already describes. Without the filter, a stale editor's
+    /// full-array PUT could silently re-persist a trashed song as a
+    /// nameless, un-triggerable ghost entry — undoing #555's "a deleted song
+    /// leaves every playlist" (the same filter the name lookup in this file
+    /// already applies).
+    ///
+    /// #652 F3: takes the connection generically — `replace_playlist_entries`
+    /// passes `&txn` so this guard runs INSIDE the same transaction as the
+    /// delete+insert below it, closing the window where a concurrent hard
+    /// delete (sync apply / purge) between a guard on `&self.db` and the
+    /// insert could still trip the raw FK 500 this guard exists to prevent.
     async fn ensure_presentation_targets_exist(
         &self,
+        conn: &impl ConnectionTrait,
         entries: &[presenter_core::PlaylistEntry],
     ) -> anyhow::Result<()> {
         let mut ids: Vec<String> = entries
@@ -165,11 +187,15 @@ impl Repository {
         }
         ids.sort();
         ids.dedup();
+        // #652 F10: capture the length before `ids` moves into `.is_in(ids)`
+        // — cloning just to keep `ids.len()` alive afterward was needless.
+        let expected = ids.len();
         let existing = presentation_entity::Entity::find()
-            .filter(presentation_entity::Column::Id.is_in(ids.clone()))
-            .count(&self.db)
+            .filter(presentation_entity::Column::Id.is_in(ids))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
+            .count(conn)
             .await?;
-        if existing as usize == ids.len() {
+        if existing as usize == expected {
             Ok(())
         } else {
             Err(RepositoryError::TargetNotFound(
@@ -193,14 +219,22 @@ impl Repository {
         playlist_id: PlaylistId,
         entries: &[presenter_core::PlaylistEntry],
     ) -> anyhow::Result<()> {
+        // #652 F3: begin the transaction FIRST and run BOTH existence guards
+        // against `&txn` — running them on `&self.db` before the txn began
+        // (pre-#652) left a window where a concurrent hard delete (sync
+        // apply / purge) between a guard and the insert below could still
+        // trip the raw FK 500 these guards exist to prevent. A guard failure
+        // returns via `?` before `txn.commit()`, so the transaction is
+        // dropped and rolled back — no delete_many/insert below has run yet.
+        let txn = self.db.begin().await?;
+
         // #610: without this check, an unknown `playlist_id` with a NON-EMPTY `entries` slice
         // trips `fk_playlist_entries_playlist` on the INSERT below (PRAGMA foreign_keys = ON) ->
         // raw DbErr -> 500. An empty slice skipped the insert loop and never exercised that path.
-        self.ensure_playlist_exists(playlist_id).await?;
+        self.ensure_playlist_exists(&txn, playlist_id).await?;
         // #632: the twin FK check for `presentation_id` (see doc comment above).
-        self.ensure_presentation_targets_exist(entries).await?;
-
-        let txn = self.db.begin().await?;
+        self.ensure_presentation_targets_exist(&txn, entries)
+            .await?;
 
         playlist_entry::Entity::delete_many()
             .filter(playlist_entry::Column::PlaylistId.eq(playlist_id.to_string()))

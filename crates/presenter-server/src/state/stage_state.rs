@@ -9,6 +9,7 @@ use super::stage::{
 };
 use super::AppState;
 use presenter_core::{PlaylistId, PresentationId, Slide, SlideId, StageState};
+use presenter_persistence::RepositoryError;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -25,18 +26,30 @@ impl AppState {
         let start = Instant::now();
 
         let validate_start = Instant::now();
+        // #652 F4: `presentation_id` is the trigger's SUBJECT — a missing one
+        // is the typed refusal (#584 pattern) the router downcasts to 404,
+        // never a bare `anyhow!` that falls through to the router's default
+        // 500 mapping.
         let Some((_, library_name, presentation)) =
             self.presentation_detail(presentation_id).await?
         else {
-            anyhow::bail!("presentation not found");
+            return Err(RepositoryError::NotFound("presentation not found").into());
         };
 
+        // #652 F4: `currentSlideId`/`nextSlideId` are BODY-referenced (not
+        // the URL) — a stale client sending an id that doesn't belong to
+        // this presentation is a body-referenced missing target, matching
+        // the established convention used by `paste_slides`/`reorder_slides`
+        // (422), not a bare `anyhow!` that fell through to 500 (or, before
+        // this fix, was blanket-mapped to 400 at the router).
         if !presentation
             .slides
             .iter()
             .any(|slide| slide.id == current_slide_id)
         {
-            anyhow::bail!("current slide not found in presentation");
+            return Err(
+                RepositoryError::TargetNotFound("current slide not found in presentation").into(),
+            );
         }
 
         if let Some(next_slide_id) = next_slide_id {
@@ -45,7 +58,10 @@ impl AppState {
                 .iter()
                 .any(|slide| slide.id == next_slide_id)
             {
-                anyhow::bail!("next slide not found in presentation");
+                return Err(RepositoryError::TargetNotFound(
+                    "next slide not found in presentation",
+                )
+                .into());
             }
         }
         let t_validate_ms = validate_start.elapsed().as_secs_f64() * 1000.0;

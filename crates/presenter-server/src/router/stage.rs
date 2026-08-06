@@ -112,6 +112,24 @@ pub(super) struct StageStateRequest {
     pub(super) entry_index: Option<u32>,
 }
 
+/// Maps an `update_stage_state` refusal to its HTTP status via the TYPED
+/// `RepositoryError` variant — never the blanket `.map_err(AppError::bad_request)`
+/// this replaces (#652 F4, the #615 anti-pattern: a genuine internal fault
+/// used to answer 400, and an unknown/trashed `presentationId` answered 400
+/// instead of 404). `NotFound` (the triggered presentation no longer exists)
+/// maps to 404; `TargetNotFound` (the body's `currentSlideId`/`nextSlideId`
+/// doesn't belong to that presentation) maps to 422. Any other error falls
+/// through to the router's default 500 mapping.
+fn map_repository_not_found(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
+            AppError::unprocessable(*msg)
+        }
+        _ => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn update_stage_state(
     State(state): State<AppState>,
@@ -138,7 +156,7 @@ pub(super) async fn update_stage_state(
             payload.entry_index,
         )
         .await
-        .map_err(AppError::bad_request)?;
+        .map_err(map_repository_not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -256,12 +274,13 @@ mod set_stage_layout_error_mapping_tests {
     use axum::response::IntoResponse;
 
     /// An internal failure unrelated to the layout code itself (here: a
-    /// corrupted `timers` row surfaced while `broadcast_stage_snapshots`
-    /// rebuilds the stage context after a VALID layout switch) must answer
-    /// 500 — never 404. Before the #588 fix, `set_stage_layout` mapped every
-    /// error from `set_stage_layout_code` to `AppError::not_found`, so this
-    /// genuine server fault was reported to the client as "layout not
-    /// found".
+    /// corrupted `timers` row surfaced while the PRE-SWITCH validation probe
+    /// — `context_for_pending_switch` building the stage context BEFORE the
+    /// switch itself commits, #631/#652 F1 — rebuilds the stage context)
+    /// must answer 500 — never 404. Before the #588 fix, `set_stage_layout`
+    /// mapped every error from `set_stage_layout_code` to
+    /// `AppError::not_found`, so this genuine server fault was reported to
+    /// the client as "layout not found".
     #[tokio::test]
     async fn set_stage_layout_returns_500_on_internal_failure_not_404() {
         let state = crate::state::AppState::in_memory().await.unwrap();
@@ -292,7 +311,8 @@ mod set_stage_layout_error_mapping_tests {
 
         // Switch to a DIFFERENT valid, operator-selectable code so the
         // early-return-on-unchanged-code guard doesn't short-circuit before
-        // `broadcast_stage_snapshots` runs.
+        // the pre-switch validation probe (`context_for_pending_switch`)
+        // runs.
         let result = set_stage_layout(
             State(state),
             Json(StageLayoutUpdateRequest {
@@ -318,8 +338,15 @@ mod set_stage_layout_error_mapping_tests {
     /// corruption happens BEFORE the switch attempt (not after), so the
     /// failure surfaces from the pre-switch snapshot-context build rather
     /// than from a step that runs after the switch already committed.
+    ///
+    /// #652 F1: extended to also assert the PERSISTED layout setting and the
+    /// `LiveEvent::StageLayout` broadcast are untouched — the original test
+    /// only asserted the in-memory code (review finding F6).
     #[tokio::test]
     async fn set_stage_layout_failure_does_not_apply_the_switch() {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
         let state = crate::state::AppState::in_memory().await.unwrap();
         // Seed the timers row via an initial valid switch.
         let _ = set_stage_layout(
@@ -343,6 +370,11 @@ mod set_stage_layout_error_mapping_tests {
         .await
         .unwrap();
 
+        // Subscribe AFTER the corruption, BEFORE the failing attempt, so a
+        // spurious `LiveEvent::StageLayout` from the failed switch would be
+        // observed here.
+        let mut rx = state.live_hub().subscribe();
+
         let result = set_stage_layout(
             State(state.clone()),
             Json(StageLayoutUpdateRequest {
@@ -360,6 +392,20 @@ mod set_stage_layout_error_mapping_tests {
             "timer",
             "#631: a failed switch must not have applied the layout change — \
              the client's 500 must mean nothing changed"
+        );
+        assert_eq!(
+            state
+                .repository()
+                .get_app_setting(crate::state::stage_display::STAGE_LAYOUT_KEY)
+                .await
+                .unwrap(),
+            Some("timer".to_string()),
+            "#652 F1: a failed switch must not have persisted the new layout code either"
+        );
+        let no_event = timeout(Duration::from_millis(50), rx.recv()).await;
+        assert!(
+            no_event.is_err(),
+            "#652 F1: a failed switch must not have published LiveEvent::StageLayout either"
         );
     }
 
@@ -382,6 +428,120 @@ mod set_stage_layout_error_mapping_tests {
             err.into_response().status(),
             StatusCode::NOT_FOUND,
             "an unknown layout code must be 404"
+        );
+    }
+}
+
+/// #652 F4: `POST /stage/state` blanket-mapped EVERY error to 400 (the #615
+/// anti-pattern) via `.map_err(AppError::bad_request)` — an unknown/trashed
+/// `presentationId` answered 400 instead of 404, a body-referenced slide id
+/// answered 400 instead of 422, and a genuine internal failure answered 400
+/// instead of 500 (client blamed for a server fault).
+#[cfg(test)]
+mod update_stage_state_error_mapping_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn update_stage_state_returns_404_for_unknown_presentation() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        let random_presentation = uuid::Uuid::new_v4();
+        let random_slide = uuid::Uuid::new_v4();
+
+        let result = update_stage_state(
+            State(state),
+            Json(StageStateRequest {
+                presentation_id: random_presentation.to_string(),
+                current_slide_id: random_slide.to_string(),
+                next_slide_id: None,
+                playlist_id: None,
+                entry_index: None,
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "an unknown presentationId must be 404, not 400 (#652 F4)"
+        );
+    }
+
+    /// A genuine internal fault (here: the `stage_state` table dropped out
+    /// from under the upsert) unrelated to the request body must answer 500
+    /// — never 400.
+    #[tokio::test]
+    async fn update_stage_state_returns_500_on_internal_failure_not_400() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        crate::state::seed_sample_library(&state).await.unwrap();
+        let libraries = state.libraries().await.unwrap();
+        let presentation = &libraries[0].presentations[0];
+        let current_slide = presentation.slides[0].id;
+
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "DROP TABLE stage_state".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = update_stage_state(
+            State(state),
+            Json(StageStateRequest {
+                presentation_id: presentation.id.to_string(),
+                current_slide_id: current_slide.to_string(),
+                next_slide_id: None,
+                playlist_id: None,
+                entry_index: None,
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error from the dropped table, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a genuine internal failure must be 500, not 400 (#652 F4)"
+        );
+    }
+
+    /// A `currentSlideId` that doesn't belong to the presentation is a
+    /// body-referenced missing target — 422, not 400 (traced alongside the
+    /// presentation-not-found bail per the settled design's "trace every
+    /// caller" instruction).
+    #[tokio::test]
+    async fn update_stage_state_returns_422_for_slide_not_in_presentation() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        crate::state::seed_sample_library(&state).await.unwrap();
+        let libraries = state.libraries().await.unwrap();
+        let presentation = &libraries[0].presentations[0];
+
+        let result = update_stage_state(
+            State(state),
+            Json(StageStateRequest {
+                presentation_id: presentation.id.to_string(),
+                current_slide_id: SlideId::new().to_string(),
+                next_slide_id: None,
+                playlist_id: None,
+                entry_index: None,
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a slide not in the presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a currentSlideId not in the presentation must be 422, not 400 (#652 F4)"
         );
     }
 }
