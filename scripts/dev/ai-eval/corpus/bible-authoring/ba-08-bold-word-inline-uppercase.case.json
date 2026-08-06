@@ -1,0 +1,20 @@
+{
+  "id": "ba-08-bold-word-inline-uppercase",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad MIL:\n\n##Ján 1:12## Ale všetkým, ktorí ho prijali, dal právo stať sa Božími deťmi – tým, ktorí ##veria## v jeho meno,",
+  "setup": {
+    "description": "A single word ('veria') is bolded INSIDE a verse — the ##word## inline-emphasis case. Per agent.rs system prompt step 4 and style_guide.md rule 3, this becomes an uppercase transform inline in the SAME verse item; it must NOT spawn a separate emphasis slide."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "overriddenVerses": [
+      {
+        "ref": "Ján 1:12",
+        "translation": "MIL",
+        "expectedText": "Ale všetkým, ktorí ho prijali, dal právo stať sa Božími deťmi – tým, ktorí VERIA v jeho meno,",
+        "dbText": "Ale všetkým, ktorí ho prijali, dal právo stať sa Božími deťmi – tým, ktorí veria v jeho meno,"
+      }
+    ],
+    "notes": "Hard-case category: inline ##word## emphasis. Only the single word 'veria' becomes uppercase ('VERIA'); the rest of the verse text is untouched — this is the single-item, in-place-transform sibling of ba-04's harder cross-verse span. Layer-1 failure modes to catch: (a) creating a second slide/item just for 'VERIA' (should stay one verse item), (b) leaving '##veria##' unstripped (unprocessed_bold_markers), (c) uppercasing the WHOLE verse instead of just the marked word."
+  }
+}

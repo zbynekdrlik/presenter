@@ -1,0 +1,20 @@
+{
+  "id": "ba-10-wrong-verse-number-quoted",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH:\n\n##Ján 3:16## Lebo neposlal Bôh na svet svojho Syna, aby súdil svet, ale aby bol svet spasený skrze neho.",
+  "setup": {
+    "description": "This reproduces the EXACT example agent.rs's own system prompt gives the model for what to do when the pastor's cited verse number does not match the DB text: the reference says 'Ján 3:16' but the quoted wording is the REAL text of Ján 3:17 (ROH: 'Lebo neposlal Bôh na svet svojho Syna, aby súdil svet, ale aby bol svet spasený skrze neho.'). The prompt's own instruction: 'keep the sermon's text and the sermon's verse number.'"
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "overriddenVerses": [
+      {
+        "ref": "Ján 3:16",
+        "translation": "ROH",
+        "expectedText": "Lebo neposlal Bôh na svet svojho Syna, aby súdil svet, ale aby bol svet spasený skrze neho.",
+        "dbText": "Lebo tak miloval Bôh svet, že svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život."
+      }
+    ],
+    "notes": "Hard-case category: pastor cites the wrong verse number for the text quoted (this is the literal worked example baked into the system prompt, so a candidate that fails this one is failing on a case the model was DIRECTLY told how to handle). Final slide must read '16. Lebo neposlal Bôh na svet svojho Syna...' — verse NUMBER 16 (the sermon's citation) paired with verse 17's real wording (the sermon's quoted text). A wrong answer either silently substitutes the DB's real v16 text, or relabels it '17.' to match the wording instead of the citation — both are explicitly the WRONG behaviour per the prompt."
+  }
+}

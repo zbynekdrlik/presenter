@@ -1,0 +1,15 @@
+{
+  "id": "ba-11-title-nazov-form",
+  "slice": "bible-authoring",
+  "userMessage": "Názov: Kristovo víťazstvo\n\nSprac do biblickej prezentácie, preklad SEVP:\n\n##Židom 4:13## A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať.",
+  "setup": {
+    "description": "Uses the OTHER title convention documented in style_guide.md's 'Other formatting rules' section ('Nazov:' or 'Nazov:' -> presentation title), distinct from a leading ##title## bold marker (covered indirectly by ba-05's negative case). This is the plain, correct-usage baseline: the literal string after 'Názov:' becomes the presentation name."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Židom 4:13", "translation": "SEVP", "text": "A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať." }
+    ],
+    "notes": "Hard-case category: title convention variant ('Názov:' prefix, not a ##title## bold marker). create_bible_presentation's name argument must be exactly 'Kristovo víťazstvo', not 'Nazov: Kristovo víťazstvo' (the prefix itself must be stripped) and not a name derived from the verse reference instead."
+  }
+}

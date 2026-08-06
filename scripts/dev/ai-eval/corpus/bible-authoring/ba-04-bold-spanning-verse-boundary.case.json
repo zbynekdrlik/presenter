@@ -1,0 +1,12 @@
+{
+  "id": "ba-04-bold-spanning-verse-boundary",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH:\n\n##Ján 3:16-17## Lebo tak miloval Bôh svet, že ##svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život. Lebo neposlal Bôh na svet svojho Syna##, aby súdil svet, ale aby bol svet spasený skrze neho.",
+  "setup": {
+    "description": "The pastor's bold markup opens partway through verse 16 and closes partway through verse 17 — a case NOT covered by style_guide.md at all (its ##word## rule assumes emphasis stays inside one verse). This tests what a model does when the literal markup instruction doesn't map cleanly onto the per-verse item structure create_bible_presentation requires: each verse is its own item, so a bold span crossing the boundary must be split into two per-verse uppercase ranges when building the items[] text fields."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Hard-case category: bold spanning a verse boundary. There is no single mechanically-correct output (the style guide is silent on this exact input), so this is scored primarily under Layer-2 (verse-fidelity / naturalness rubric): did the model (a) keep BOTH verses' non-bolded wording intact and unchanged outside the marked span, (b) uppercase the marked span within EACH verse's own item text, and (c) avoid inventing a merged single verse or dropping verse 17 entirely. Layer-1 only asserts that unprocessed_bold_markers is NOT among validationErrors (the ## must not leak through to the composed slide) and that both v16 and v17 appear as separate verse items feeding create_bible_presentation."
+  }
+}

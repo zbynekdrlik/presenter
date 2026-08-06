@@ -1,0 +1,29 @@
+{
+  "id": "wc-07-delete-gate-allowed-cz",
+  "slice": "worship-crud",
+  "userMessage": "Smazat slajd s druhou slohou v piesni \"9. ráno\" v SOYER, je tam duplicitne.",
+  "setup": {
+    "description": "Czech delete keyword ('smazat' — the only Czech entry in agent.rs's DELETE_KEYWORDS). Real song title from data/libraries/SOYER/9. ráno.pro. Targets delete_slide, not delete_presentation, to also confirm the gate's 'delete_' PREFIX match covers delete_slide the same as delete_presentation.",
+    "seed": {
+      "libraries": [
+        {
+          "name": "SOYER",
+          "presentations": [
+            {
+              "name": "9. ráno",
+              "slides": [
+                { "main": "Ráno prichádza nová nádej", "translation": "", "stage": "", "group": "Verse 1" },
+                { "main": "Ráno prichádza nová nádej", "translation": "", "stage": "", "group": "Verse 2" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expected": {
+    "toolSequence": ["get_presentation", "delete_slide"],
+    "deleteGate": "allowed",
+    "notes": "Delete-gate probe: Czech keyword PRESENT ('smazat'). Confirms delete_intent_allowed matches Czech, and that the gate's tc.function.name.starts_with(\"delete_\") check applies uniformly to delete_slide (not just delete_presentation)."
+  }
+}

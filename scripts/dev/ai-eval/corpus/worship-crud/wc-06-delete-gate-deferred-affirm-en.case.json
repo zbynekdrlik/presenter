@@ -1,0 +1,28 @@
+{
+  "id": "wc-06-delete-gate-deferred-affirm-en",
+  "slice": "worship-crud",
+  "userMessage": "yes",
+  "setup": {
+    "description": "Regression #310 scenario reproduced verbatim from agent.rs's own unit test (turn_intent_grants_when_prior_user_message_asked_to_delete), but as a full-turn case for the eval harness rather than a unit test of delete_intent_for_turn in isolation: the user asked to delete two presentations, the assistant asked for confirmation, and the CURRENT message is just the affirmative 'yes'. The gate must walk back exactly one prior user turn and grant, per the bounded-lookback design (agent.rs delete_intent_for_turn doc comment).",
+    "seed": {
+      "libraries": [
+        {
+          "name": "SOYER",
+          "presentations": [
+            { "name": "ANGELS WE HAVE HEARD ON HIGH", "slides": [ { "main": "Angels we have heard on high", "translation": "", "stage": "", "group": "Verse 1" } ] },
+            { "name": "DRIVING HOME FOR CHRISTMAS", "slides": [ { "main": "Driving home for Christmas", "translation": "", "stage": "", "group": "Verse 1" } ] }
+          ]
+        }
+      ]
+    },
+    "priorTurns": [
+      { "role": "user", "content": "vymaž tie dve vianočné piesne z SOYER, Angels We Have Heard On High a Driving Home For Christmas" },
+      { "role": "assistant", "content": "Potvrdzujete, že chcete vymazať obe piesne — \"ANGELS WE HAVE HEARD ON HIGH\" a \"DRIVING HOME FOR CHRISTMAS\" z knižnice SOYER?" }
+    ]
+  },
+  "expected": {
+    "toolSequence": ["delete_presentation", "delete_presentation"],
+    "deleteGate": "allowed",
+    "notes": "Cross-turn deferred-intent delete-gate probe (English 'yes'). The gate must grant on BOTH delete_presentation calls this turn because the immediately preceding user turn contained 'vymaž' and the current message ('yes') is affirmative. This is the single hardest gate case to get right with a weaker model, because the CURRENT message alone carries zero delete keyword — the model (and the gate) must use conversation context, not just the last user string."
+  }
+}

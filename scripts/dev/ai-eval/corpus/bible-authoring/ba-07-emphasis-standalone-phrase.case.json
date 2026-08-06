@@ -1,0 +1,15 @@
+{
+  "id": "ba-07-emphasis-standalone-phrase",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad SEVP:\n\n##Židom 4:13## A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať.\n\n##Boh vidí všetko!##\n\nA práve preto máme žiť v úprimnosti pred Ním, lebo pred Ním niet skrytého miesta.",
+  "setup": {
+    "description": "'##Boh vidí všetko!##' is a standalone bold rallying phrase between two blocks of prose — not a Bible reference, not inside a verse. Straightforward per style_guide.md rule 4, included here as the plain baseline that the harder ba-04/ba-05 cases build on."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Židom 4:13", "translation": "SEVP", "text": "A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať." }
+    ],
+    "notes": "Hard-case category: standalone emphasis phrase (baseline). Expect an items[] with a verse item for Židom 4:13, then a {kind: emphasis, text: 'BOH VIDÍ VŠETKO!'} item — uppercase, exclamation mark preserved. The trailing prose sentence after the phrase is NOT part of any marker and should not become its own slide or leak '##' into any field."
+  }
+}

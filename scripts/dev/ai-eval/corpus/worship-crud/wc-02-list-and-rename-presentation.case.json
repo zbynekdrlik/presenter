@@ -1,0 +1,28 @@
+{
+  "id": "wc-02-list-and-rename-presentation",
+  "slice": "worship-crud",
+  "userMessage": "V knižnici SOYER premenuj pieseň \"WONDER\" na \"WONDER (akustická verzia)\".",
+  "setup": {
+    "description": "Seeds a real library name from data/libraries/ (SOYER is an actual church-band library directory) with one real song title (WONDER.pro exists on disk) so the model must first resolve the library and presentation by name before renaming — it cannot invent a UUID.",
+    "seed": {
+      "libraries": [
+        {
+          "name": "SOYER",
+          "presentations": [
+            {
+              "name": "WONDER",
+              "slides": [
+                { "main": "You are the wonder that I see", "translation": "", "stage": "", "group": "Verse 1" },
+                { "main": "You are the reason I believe", "translation": "", "stage": "", "group": "Verse 1" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expected": {
+    "toolSequence": ["list_libraries", "list_presentations", "rename_presentation"],
+    "notes": "Worship CRUD happy path requiring resolve-by-name before write: the model must call list_libraries and/or list_presentations to find the real UUIDs before calling rename_presentation. Tests that it does NOT hallucinate an id, and that the new name is exactly 'WONDER (akustická verzia)'."
+  }
+}

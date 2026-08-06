@@ -1,0 +1,15 @@
+{
+  "id": "ba-01-verbatim-single-verse-seb",
+  "slice": "bible-authoring",
+  "userMessage": "Spracuj mi tento úryvok z kázne do biblickej prezentácie, použi ekumenický preklad (SEB):\n\n##Ján 3:16## Veď Boh tak miloval svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale mal večný život.",
+  "setup": {
+    "description": "The simplest bible-authoring happy path: one verse, one translation, quoted VERBATIM matching the real slk-seb DB text word-for-word. No paraphrase, no markup complexity — this is the baseline every candidate model must clear before any harder case matters."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Ján 3:16", "translation": "SEB", "text": "Veď Boh tak miloval svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale mal večný život." }
+    ],
+    "notes": "Hard-case category: verbatim quote (baseline, not actually hard — a regression floor). The final slide's main text (after the '16. ' prefix) must equal the SEB DB text exactly. main_reference must be 'Ján 3:16 (SEB)'."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "adv-04-unprocessed-bold-markers-reference",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad SEVP. Kazateľ použil skrátený názov knihy v zátvorke bold:\n\n##Žid.## 4:13 A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať.",
+  "setup": {
+    "description": "Compound difficulty: the bold-wrapped reference token is an ABBREVIATION with a trailing period ('##Žid.##', not the full book name) that must resolve via style_guide.md's Slovak book abbreviation table (Žid -> Židom) AND have its ## wrapper fully stripped before it becomes the `book` field on the verse item. main_reference is server-built by state/slides/compose.rs::group_reference as `\"{book} {chapter}:{verses} ({translation})\"` — if any stray '#' survives in the `book` value the model supplies (e.g. it strips only one of the two markers, or keeps the trailing period as part of a mis-tokenized 'Žid.#'), the composed main_reference itself will contain '##' or '#' and rule 3 (checked BEFORE rule 1's regex) fires on main_reference rather than main."
+  },
+  "expected": {
+    "validationErrors": ["unprocessed_bold_markers"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets UnprocessedBoldMarkers via the main_reference path (main_reference.contains(\"##\")) — the harder-to-hit sibling of adv-03, since main_reference is never directly written by the LLM; it only leaks a stray '#' through the `book` argument it supplies. Correct resolution: book = 'Židom' (abbreviation resolved AND markers fully stripped), producing main_reference = 'Židom 4:13 (SEVP)' with zero '#' characters anywhere."
+  }
+}

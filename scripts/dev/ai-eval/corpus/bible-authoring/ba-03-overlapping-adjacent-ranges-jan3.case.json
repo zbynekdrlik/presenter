@@ -1,0 +1,18 @@
+{
+  "id": "ba-03-overlapping-adjacent-ranges-jan3",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH:\n\n##Ján 3:16-17## Lebo tak miloval Bôh svet, že svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život. Lebo neposlal Bôh na svet svojho Syna, aby súdil svet, ale aby bol svet spasený skrze neho.\n\n[...kázeň pokračuje ďalším výkladom...]\n\nA teraz si ešte raz pripomeňme ten kľúčový verš — ##Ján 3:16## Lebo tak miloval Bôh svet, že svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život. — lebo v tom je celé evanjelium.\n\nPokračujeme ďalej: ##Ján 3:18-19## Kto verí v neho, nebude odsúdený, ale ten, kto neverí, už je odsúdený, lebo neuveril v meno jednorodeného Syna Božieho. A to je ten súd, že svetlo prišlo na svet, ale ľudia viacej milovali tmu ako svetlo, lebo ich skutky boli zlé.",
+  "setup": {
+    "description": "Two hard patterns in one sermon: (1) an OVERLAPPING re-quote — verse 16 is quoted once inside the 3:16-17 range, then quoted AGAIN on its own a few paragraphs later for emphasis (a real, common preaching pattern: repeat the key verse); (2) an ADJACENT range — 3:18-19 continues immediately after 3:16-17 with commentary in between, not a single load_bible_verses(16,19) call. The model must not get confused into merging the two into one incorrect range, and must not silently drop the deliberate repeat of v16."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Ján 3:16", "translation": "ROH", "text": "Lebo tak miloval Bôh svet, že svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život." },
+      { "ref": "Ján 3:17", "translation": "ROH", "text": "Lebo neposlal Bôh na svet svojho Syna, aby súdil svet, ale aby bol svet spasený skrze neho." },
+      { "ref": "Ján 3:18", "translation": "ROH", "text": "Kto verí v neho, nebude odsúdený, ale ten, kto neverí, už je odsúdený, lebo neuveril v meno jednorodeného Syna Božieho." },
+      { "ref": "Ján 3:19", "translation": "ROH", "text": "A to je ten súd, že svetlo prišlo na svet, ale ľudia viacej milovali tmu ako svetlo, lebo ich skutky boli zlé." }
+    ],
+    "notes": "Hard-case category: overlapping AND adjacent verse ranges in one sermon. Layer-1 verbatimVerses checks each quoted verse's text fidelity independently (each appearance of v16 must be correct, however many slides it ends up on). Whether the sermon's deliberate re-quote of v16 produces one slide or two separate slides is a REASONABLENESS judgment (no single correct slide count) — score that dimension under Layer-2 (slide-splitting rubric), not as a hard Layer-1 pass/fail."
+  }
+}

@@ -1,0 +1,7 @@
+This directory holds the versioned claude-opus-4-6 reference traces, one JSON file per
+corpus case (golden/<caseId>.json), captured in ONE sitting immediately after a fresh
+CLIProxyAPI login — see ../README.md "How golden traces get captured" for the full procedure
+and warnings before running that capture.
+
+Empty for now (report §8 step 9 — golden capture — has not run yet). This placeholder file
+exists only so git tracks the directory; delete it once the first real golden/*.json lands.

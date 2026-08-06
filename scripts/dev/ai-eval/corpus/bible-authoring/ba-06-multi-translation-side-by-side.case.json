@@ -1,0 +1,16 @@
+{
+  "id": "ba-06-multi-translation-side-by-side",
+  "slice": "bible-authoring",
+  "userMessage": "Chcem ukázať ten istý verš v dvoch jazykoch pre našich anglicky hovoriacich hostí. Sprac do biblickej prezentácie:\n\n##Ján 3:16## po slovensky (SEB): Veď Boh tak miloval svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale mal večný život.\n\n##Ján 3:16## in English (KJV): For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life.",
+  "setup": {
+    "description": "Same verse (Ján 3:16 / John 3:16), same verse NUMBER, but two different translations back to back — SEB then KJV. compose_bible_items_into_slides forces a slide break on a translation change even when book/chapter/verse-number are identical (state/slides/compose.rs: 'Translation / book / chapter change forces a slide break'), so this must NOT collapse into one slide or get merged by the same-verse-number continuation logic (which only merges items sharing the SAME translation)."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Ján 3:16", "translation": "SEB", "text": "Veď Boh tak miloval svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale mal večný život." },
+      { "ref": "John 3:16", "translation": "KJV", "text": "For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life." }
+    ],
+    "notes": "Hard-case category: multi-translation. Two load_bible_verses calls with different translation codes for the same book/chapter/verse. The two verse items must carry translation: 'SEB' and translation: 'KJV' respectively so the composer's group-change break fires, producing two slides even though the verse number (16) repeats — this specifically exercises the part of compose.rs NOT covered by ba-03 (which varies chapter/verse only, never translation)."
+  }
+}

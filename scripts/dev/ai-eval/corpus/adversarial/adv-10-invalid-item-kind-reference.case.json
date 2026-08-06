@@ -1,0 +1,14 @@
+{
+  "id": "adv-10-invalid-item-kind-reference",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH:\n\n##Mt 26:26-29##\n\nA keď jedli, vzal Ježiš chlieb, a keď bol dobrorečil, lámal a dával učeníkom a povedal: Vezmite, jedzte: toto je moje telo. Potom vzal kalich a poďakujúc dal im so slovami: Pite z neho všetci, lebo toto je moja tej novej smluvy krv, ktorá sa vylieva za mnohých na odpustenie hriechov. Ale hovorím vám, že odteraz nebudem nikdy piť z tohoto plodu viniča, až do toho dňa, keď ho budem piť s vami nový v kráľovstve svojho Otca.",
+  "setup": {
+    "description": "'##Mt 26:26-29##' is exactly the bold-section-header reference pattern style_guide.md's rule 1 calls out by name ('e.g. ##Mt26:26-29##, ##Rim5:17##: Bold section header — do NOT create a slide for it. Use it to identify which Bible passage follows.'). The items[] schema's `kind` enum is strictly ['verse', 'emphasis'] (tool_defs.rs) — there is no 'reference' or 'header' kind. A model that (correctly) recognises this bold span as a reference marker but then (incorrectly) tries to represent that recognition AS an item in the stream, rather than simply using it to parse book/chapter/verse for the FOLLOWING verse items and emitting nothing for the marker itself, invents an unsupported kind value."
+  },
+  "expected": {
+    "validationErrors": ["invalid_item_kind"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets parse_bible_items' invalid_item_kind error via kind='reference' (or any value outside {'verse','emphasis'}). Correct behaviour: the bold reference resolves the book ('Matúš', from the 'Mt' abbreviation), chapter (26), and verse range (26-29) used to tag the FOUR verse items that follow — it produces ZERO items of its own, per style_guide.md's explicit 'do NOT create a slide for it'."
+  }
+}

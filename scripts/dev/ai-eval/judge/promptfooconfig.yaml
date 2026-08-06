@@ -1,0 +1,68 @@
+# scripts/dev/ai-eval/judge/promptfooconfig.yaml
+#
+# STATUS: skeleton, not yet runnable. Written per report §6.2/§6.3 as the Layer-2 judge
+# wiring — it reads PRE-CAPTURED traces from ../traces/ and NEVER drives a candidate model
+# itself (that is the drive stage, `ai_eval.rs`, report §8 step 8, out of scope for this PR).
+# This file will not do anything useful until:
+#   1. ai_eval.rs exists and has produced trace JSON under ../traces/*.json (step 8), and
+#   2. Node 22 + `npx promptfoo` are available (already true on the dev2 self-hosted runner
+#      per CLAUDE.md's Runner Architecture section — nothing to install for CI; do NOT
+#      `npm install` on this box as part of building this skeleton).
+# See ../README.md "Status" for the full list of what this PR does and does not implement.
+#
+# Trace JSON shape this config's provider expects: documented in full at the top of
+# ./trace_provider.js — one JSON object per case, written to ../traces/<caseId>.json by the
+# future driver (and, once captured, the SAME shape under ../golden/<caseId>.json for the
+# claude-opus-4-6 reference run — report §8 step 9).
+
+description: >-
+  Presenter AI-eval Layer-2 judge (#662). Grades pre-captured agent-loop traces against four
+  binary rubrics (verse-fidelity, slide-splitting, slovak-naturalness, final-reply-language).
+  Never drives a model — Layer-1 (structural, deterministic) lives in ai_eval.rs; this is
+  judgment-only, for what a deterministic scorer cannot check.
+
+# One "provider" here is a misnomer in the usual promptfoo sense: it never queries a model to
+# PRODUCE output, only loads and reshapes an already-captured trace so the llm-rubric assertions
+# below have something to grade. See trace_provider.js.
+providers:
+  - id: file://./trace_provider.js
+
+# The prompt is intentionally trivial — the real content comes from the provider's `output`,
+# which IS the rendered trace. promptfoo requires at least one prompt template even when the
+# provider ignores it.
+prompts:
+  - "{{caseId}}"
+
+# Tests are generated dynamically, one per file under ../traces/*.json — see
+# tests_from_traces.js for why (no captured trace = nothing to judge, so a static list here
+# would silently drift from whatever has actually been driven).
+tests: file://./tests_from_traces.js
+
+# Judge model is FIXED for the life of a run, per report §6.4: "Fixed judge = claude-opus-4-6,
+# version-pinned for the life of a run, for every candidate." Pointwise rubric grading against
+# fixed binary criteria — NEVER pairwise "which is better" (self-preference bias, arXiv
+# 2410.21819 / 2604.22891, cited in the report). Each rubric file in ./rubrics/*.md IS the
+# binary checklist; do not replace a rubric file's checklist with a bare 1-10 "rate this"
+# prompt — verbosity/format bias rewards longer, more-structured-looking answers regardless of
+# correctness (futureagi.com 2026, cited in the report).
+defaultTest:
+  options:
+    provider:
+      id: anthropic:messages:claude-opus-4-6
+      config:
+        temperature: 0
+
+# Caching: unchanged fixtures should never re-bill the judge model. Report §6.6: "Candidate and
+# judge pinned to temperature 0 and explicit model IDs; PROMPTFOO_CACHE_PATH set so unchanged
+# fixtures don't re-bill." Set PROMPTFOO_CACHE_PATH in the environment that invokes `npx
+# promptfoo eval` (ai-eval.yml, report §8 step 11) — not hardcoded here, since the right cache
+# location differs between a local run and the self-hosted CI runner.
+cache: true
+
+# Report §6.4: "Judge at temperature 0, 3 runs, majority verdict for anything near threshold —
+# even greedy decoding isn't fully reproducible." promptfoo's `repeat` re-runs each test N times;
+# the majority-verdict AGGREGATION across those repeats (only for cases landing near the §6.5
+# pass/fail bar) is gate-stage logic that belongs in run.sh's `judge`/`gate` stages once they
+# exist, not in this config — promptfoo reports per-repeat results, it does not itself compute
+# "majority of 3 near a threshold".
+repeat: 3

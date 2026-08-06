@@ -1,0 +1,14 @@
+{
+  "id": "adv-11-invalid-item-kind-title",
+  "slice": "adversarial",
+  "userMessage": "##Nová zmluva##\n\nSprac do biblickej prezentácie, preklad ROH:\n\n##Ján 1:1## Na počiatku bolo Slovo a to Slovo bolo u Boha a to Slovo bol Bôh.",
+  "setup": {
+    "description": "'##Nová zmluva##' at the VERY START is the presentation-TITLE case (agent.rs system prompt rule 1: 'any ##title## at the very start ... use as presentation name'). Title handling is entirely OUT-OF-BAND — it becomes the `name` argument to create_bible_presentation, never an entry in `items[]`. A model that correctly identifies 'this bold phrase at the start is the title' but then represents that recognition as an items[] entry (e.g. {kind: 'title', text: 'NOVÁ ZMLUVA'}) instead of routing it to the `name` parameter invents a second unsupported kind value distinct from adv-10's 'reference'."
+  },
+  "expected": {
+    "validationErrors": ["invalid_item_kind"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets parse_bible_items' invalid_item_kind error via kind='title' — the second distinguishable confusion for this rule alongside adv-10's kind='reference'. Correct behaviour: create_bible_presentation(name: 'Nová zmluva', items: [{kind: 'verse', number: 1, text: '...', book: 'Ján', chapter: 1, translation: 'ROH'}]) — the title never appears inside items[] at all."
+  }
+}

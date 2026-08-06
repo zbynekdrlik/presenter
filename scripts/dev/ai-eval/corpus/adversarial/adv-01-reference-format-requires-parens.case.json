@@ -1,0 +1,14 @@
+{
+  "id": "adv-01-reference-format-requires-parens",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie. Kázeň bola napísaná v emaili takto (preklad je napísaný malými písmenami, presne ako to poslal kazateľ):\n\n##Židom 4:13## (preklad: seb) A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať.",
+  "setup": {
+    "description": "The pastor's raw source casually writes the translation in lowercase ('seb'). The composer server-side ALWAYS wraps the item's `translation` field in parens when building main_reference ('Book Ch:V (CODE)') — so the LLM never writes the reference string directly, it only supplies book/chapter/translation on the verse item. The failure mode this targets is copying the pastor's casual lowercase 'seb' straight into the `translation` field instead of normalising it to the canonical uppercase code 'SEB' (get_style_guide's translation-code mapping table), which reproduces bible_validator.rs's own regression test `reference_format_rejects_lowercase_code` (REFERENCE_RE requires `\\([A-Z]+\\)` — all caps)."
+  },
+  "expected": {
+    "validationErrors": ["reference_format_requires_parens"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets bible_validator::ValidationRule::ReferenceFormatRequiresParens via the lowercase-translation-code path (not a hand-written reference string — the LLM never writes main_reference directly, only the composer does, from book/chapter/translation). On the typed error (with `expected` text mentioning parens), the model must self-correct by re-submitting with translation: 'SEB' (uppercase) rather than repeating 'seb' or giving up."
+  }
+}

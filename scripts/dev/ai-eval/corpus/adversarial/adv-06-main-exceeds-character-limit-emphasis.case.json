@@ -1,0 +1,14 @@
+{
+  "id": "adv-06-main-exceeds-character-limit-emphasis",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH:\n\n##Ján 3:16## Lebo tak miloval Bôh svet, že svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život.\n\n##Toto je najdôležitejšia pravda celého Písma, ktorú si dnes musíme zapamätať a odniesť si ju domov do našich sŕdc, do našich rodín, do našej každodennej práce aj odpočinku, lebo bez nej nemá náš život žiadny skutočný zmysel ani nádej na večnosť##",
+  "setup": {
+    "description": "The standalone bold phrase is deliberately long (well over a typical 320-character default character_limit) — a real pattern where a pastor bolds an entire closing sentence for dramatic effect rather than a short slogan. Unlike a verse (which the #394 lone-whole-verse exception protects), an emphasis/title slide has NO such exception: is_lone_whole_verse returns false when main_reference is empty, so an oversized emphasis item is a genuine MainExceedsCharacterLimit hit by design, not a false positive."
+  },
+  "expected": {
+    "validationErrors": ["main_exceeds_character_limit"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets bible_validator::ValidationRule::MainExceedsCharacterLimit via the emphasis/title branch specifically (the validator's own doc comment distinguishes this from the verse branch, which is protected by the #394 lone-whole-verse exception and can never trigger this rule for a single verse). Correct self-correction: shorten the phrase to a genuinely emphasis-length slogan (the style guide's own examples are short, e.g. 'NOVÁ ZMLUVA') rather than retry-with-no-change or split the phrase across multiple emphasis items (which the schema doesn't support as a 'split marker')."
+  }
+}
