@@ -226,11 +226,8 @@ async fn ack_persists_and_silences_mismatch_then_unack_restores_it() {
     );
 }
 
-/// #655 F16 — RED (this commit): a resolution attempt while AbleSet is
-/// disabled currently returns early WITHOUT calling `record_attempt` — the
-/// ring buffer stays empty, so this assertion fails today. GREEN records
-/// the attempt on the disabled path too, so `recentAttempts` shows evidence
-/// instead of silence.
+/// #655 F16: a resolution attempt while AbleSet is disabled must still be
+/// recorded in the ring buffer.
 #[tokio::test]
 async fn disabled_resolution_still_records_attempt_in_ring_buffer() {
     let state = AppState::in_memory().await.unwrap();
@@ -246,4 +243,55 @@ async fn disabled_resolution_still_records_attempt_in_ring_buffer() {
         "a disabled-path resolution attempt must still be recorded, not silently dropped"
     );
     assert!(!snapshot.recent_attempts[0].found);
+}
+
+/// #655 F7/F10: races many concurrent resolves (each capable of triggering
+/// a rebuild) against concurrent explicit invalidations. Before F7, a
+/// rebuild that lost the #639 CAS race simply dropped its result with no
+/// retry; this proves the cache still converges to a correct, populated
+/// state after the contention settles instead of getting stuck permanently
+/// empty.
+#[tokio::test]
+async fn refresh_survives_concurrent_invalidate_races() {
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Hymnal").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "001 Amazing Grace", None)
+        .await
+        .unwrap();
+
+    let draft = AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: "Hymnal".to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(draft, SettingsAuditSource::HttpSetter, "test")
+        .await
+        .unwrap();
+
+    let mut handles = Vec::new();
+    for _ in 0..20 {
+        let resolve_state = state.clone();
+        handles.push(tokio::spawn(async move {
+            let _ = resolve_state.resolve_ableset_presentation("001").await;
+        }));
+        let invalidate_state = state.clone();
+        handles.push(tokio::spawn(async move {
+            invalidate_state.invalidate_ableset_cache().await;
+        }));
+    }
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
+    let resolved = state.resolve_ableset_presentation("001").await.unwrap();
+    assert_eq!(
+        resolved,
+        Some(presentation.id),
+        "cache must converge to a correct, populated state after concurrent invalidate races (#655 F7)"
+    );
 }
