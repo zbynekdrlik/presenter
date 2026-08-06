@@ -200,6 +200,19 @@ pub(super) async fn replace_playlist_entries(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    // #652 F9: reject a payload with a duplicate `entryId` HERE — pure body
+    // validation, before the request ever reaches state/repository. Left
+    // unchecked, a repeated id reaches the repository's raw INSERT unchanged
+    // and trips a PK violation on the second row -> 500 (hardening; no UI
+    // path emits this today).
+    let mut seen_ids = std::collections::HashSet::with_capacity(entries.len());
+    for entry in &entries {
+        if !seen_ids.insert(entry.id) {
+            return Err(AppError::unprocessable("duplicate playlist entry id"));
+        }
+    }
+
     let playlist = state
         .replace_playlist_entries(PlaylistId::from_uuid(id), entries)
         .await
