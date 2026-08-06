@@ -400,10 +400,30 @@ impl AppState {
         state
             .configure_companion_service(companion_enabled, companion_port)
             .await?;
+        state.backfill_orphaned_playlist_entries_on_boot().await;
         state.spawn_background_tasks();
         state.maybe_spawn_sync(config.sync.peer_url.clone());
         state.ai_proxy.auto_start().await;
         Ok(state)
+    }
+
+    /// One-time startup backfill (#658): sweep `playlist_entry` rows a
+    /// GENUINE incoming tombstone left dangling before the #649 fix landed
+    /// (the old code only cleaned a FORCED tombstone's entries, and the
+    /// stale tombstone re-arriving today is `SkippedNotNewer` under the
+    /// strict LWW gate, so it can never re-trigger the cleanup on its own).
+    /// Never blocks boot — logs and continues on failure, matching the
+    /// periodic trash-prune tasks in `background_tasks.rs`. Extracted from
+    /// `from_config` to keep that constructor under the function-length cap.
+    async fn backfill_orphaned_playlist_entries_on_boot(&self) {
+        match self.repository.backfill_orphaned_playlist_entries().await {
+            Ok(n) if n > 0 => tracing::info!(
+                deleted = n,
+                "backfilled playlist entries orphaned by the pre-#649 tombstone bug"
+            ),
+            Ok(_) => {}
+            Err(err) => tracing::warn!(?err, "playlist-entry backfill sweep failed"),
+        }
     }
 
     /// Restore the active NDI video source on startup, gated on BOTH the NDI

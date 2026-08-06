@@ -7,7 +7,8 @@
 //! gate's target cap (989 prod lines).
 use super::Repository;
 use crate::entities::playlist_entry;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use anyhow::Context;
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use tracing::instrument;
 
 impl Repository {
@@ -47,18 +48,24 @@ impl Repository {
     /// historical residue, it is not a recurring maintenance need.
     #[instrument(skip_all)]
     pub async fn backfill_orphaned_playlist_entries(&self) -> anyhow::Result<u64> {
-        // #658 RED: no sweep exists yet — this stub is exactly the gap this
-        // ticket closes: nothing currently revisits a `playlist_entry` left
-        // dangling by the pre-#649 tombstone bug. The GREEN commit replaces
-        // this with the real DELETE.
-        Ok(0)
+        let backend = self.db.get_database_backend();
+        let result = self
+            .db
+            .execute(sea_orm::Statement::from_string(
+                backend,
+                "DELETE FROM playlist_entries \
+                 WHERE presentation_id IN (SELECT id FROM presentations WHERE deleted_at IS NOT NULL)",
+            ))
+            .await
+            .context("failed to backfill orphaned playlist entries")?;
+        Ok(result.rows_affected())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::repository::sync_test_support::repo;
     use crate::entities::{playlist_entry, presentation as presentation_entity};
+    use crate::repository::sync_test_support::repo;
     use sea_orm::{sea_query::Expr, ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
     /// #658 RED: seeds a tombstoned presentation with a dangling
