@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot, PresentationId,
+    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
+    AbleSetTitleMismatch, PresentationId,
 };
 use std::collections::{HashMap, VecDeque};
 use tracing::warn;
@@ -36,6 +37,10 @@ pub(crate) struct AbleSetLibraryCache {
     pub(crate) last_updated: Option<DateTime<Utc>>,
     pub(crate) last_error: Option<String>,
     pub(crate) recent_attempts: VecDeque<AbleSetResolutionAttempt>,
+    /// Per-number AbleSet<->Presenter title disagreements from the most
+    /// recent successful rebuild (#601). Cleared alongside `entries` on
+    /// invalidation.
+    pub(crate) mismatches: Vec<AbleSetTitleMismatch>,
 }
 
 impl AbleSetLibraryCache {
@@ -45,6 +50,7 @@ impl AbleSetLibraryCache {
         self.song_prefix_length = 0;
         self.last_updated = None;
         self.last_error = None;
+        self.mismatches.clear();
     }
 
     pub(crate) fn matches(&self, library_name: &str, prefix_len: u8) -> bool {
@@ -75,6 +81,11 @@ impl AbleSetLibraryCache {
         &self.recent_attempts
     }
 
+    /// Read-only view of the current title-mismatch report (#601).
+    pub(crate) fn mismatches(&self) -> &[AbleSetTitleMismatch] {
+        &self.mismatches
+    }
+
     /// Record a resolution attempt in the ring buffer, evicting the oldest
     /// entry when the cap is reached (FIFO).
     fn record_attempt(&mut self, input: &str, found: bool) {
@@ -95,15 +106,18 @@ impl AppState {
     }
 
     /// Invalidate the resolved AbleSet song-name cache (#575). Cheap — clears
-    /// only the resolved `prefix -> id` map; `ensure_ableset_cache` lazily
-    /// rebuilds it from the DB on the next `resolve_ableset_presentation`
+    /// only the resolved `prefix -> id` map (and the #601 mismatch report,
+    /// which is derived from the same data); `ensure_ableset_cache` lazily
+    /// rebuilds both from the DB on the next `resolve_ableset_presentation`
     /// call. Call this after ANY mutation that changes which presentations
     /// exist, their names, or which library they belong to. The AbleSet
     /// settings themselves (which library / prefix length to track) are
     /// untouched by these mutations, so a full struct reset is unnecessary —
     /// only the resolved entries can go stale.
     pub(crate) async fn invalidate_ableset_cache(&self) {
-        self.caches.ableset.write().await.entries.clear();
+        let mut cache = self.caches.ableset.write().await;
+        cache.entries.clear();
+        cache.mismatches.clear();
     }
 
     pub async fn update_ableset_settings(
@@ -126,11 +140,12 @@ impl AppState {
         Ok(settings)
     }
 
-    /// Build the status snapshot, enriched with library-cache state (#600).
-    /// The bridge contributes the live AbleSet connection/tracking fields; the
-    /// cache layer contributes `cache_size`, `cache_last_updated`,
-    /// `cache_last_error`, and the recent resolution attempts. This merged
-    /// snapshot is what `GET /integrations/ableset/status` returns.
+    /// Build the status snapshot, enriched with library-cache state (#600)
+    /// and the title-mismatch report (#601). The bridge contributes the live
+    /// AbleSet connection/tracking fields; the cache layer contributes
+    /// `cache_size`, `cache_last_updated`, `cache_last_error`, the recent
+    /// resolution attempts, and `mismatches`. This merged snapshot is what
+    /// `GET /integrations/ableset/status` returns.
     pub async fn ableset_status_snapshot(&self) -> AbleSetStatusSnapshot {
         let mut snapshot = self.ableset_bridge.status_snapshot().await;
         let cache = self.caches.ableset.read().await;
@@ -146,6 +161,7 @@ impl AppState {
                 found: a.found,
             })
             .collect();
+        snapshot.mismatches = cache.mismatches().to_vec();
         snapshot
     }
 
@@ -210,6 +226,8 @@ impl AppState {
         Ok(())
     }
 
+    /// Rebuild the resolved `prefix -> presentation` cache from the DB, plus
+    /// the #601 title-mismatch report against the live AbleSet setlist.
     pub(super) async fn refresh_ableset_cache(
         &self,
         settings: &AbleSetStatusSnapshot,
@@ -218,28 +236,78 @@ impl AppState {
         let target = summaries
             .into_iter()
             .find(|summary| summary.name.eq_ignore_ascii_case(&settings.library_name));
+
+        let (entries, presenter_titles, error) = match target {
+            Some(summary) => {
+                build_ableset_entries(summary.presentations, settings.song_prefix_length)
+            }
+            None => (
+                HashMap::new(),
+                HashMap::new(),
+                Some("library not found".to_string()),
+            ),
+        };
+
+        let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
+        let acks = match self.load_ableset_mismatch_acks().await {
+            Ok(acks) => acks,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "failed to load AbleSet mismatch acknowledgements — treating as none (#601)"
+                );
+                super::ableset_mismatch::AckMap::new()
+            }
+        };
+        let mismatches = super::ableset_mismatch::compute_ableset_mismatches(
+            &presenter_titles,
+            &ableset_songs,
+            settings.song_prefix_length,
+            &acks,
+        );
+        for mismatch in &mismatches {
+            warn!(
+                number = %mismatch.number,
+                ableset_title = %mismatch.ableset_title,
+                presenter_title = %mismatch.presenter_title,
+                "AbleSet/Presenter numbering disagreement — verify before the service (#601)"
+            );
+        }
+
         let mut cache = self.caches.ableset.write().await;
         cache.library_name = Some(settings.library_name.clone());
         cache.song_prefix_length = settings.song_prefix_length;
-        cache.entries.clear();
+        cache.entries = entries;
         cache.last_updated = Some(Utc::now());
-        cache.last_error = None;
-        if let Some(summary) = target {
-            for presentation in summary.presentations {
-                if let Some(prefix) =
-                    extract_song_prefix(&presentation.name, settings.song_prefix_length)
-                {
-                    cache
-                        .entries
-                        .insert(prefix.to_ascii_lowercase(), presentation.id);
-                }
-            }
-            if cache.entries.is_empty() {
-                cache.last_error = Some("no presentations with valid prefix".to_string());
-            }
-        } else {
-            cache.last_error = Some("library not found".to_string());
-        }
+        cache.last_error = error;
+        cache.mismatches = mismatches;
         Ok(())
     }
+}
+
+/// Build the resolved `prefix -> presentation` map and the parallel
+/// `prefix -> title` map (the latter feeds the #601 mismatch report) from a
+/// resolved library's presentations. Returns `error` set when the library
+/// has no presentation with a valid prefix.
+fn build_ableset_entries(
+    presentations: Vec<presenter_core::PresentationSummary>,
+    prefix_length: u8,
+) -> (
+    HashMap<String, PresentationId>,
+    HashMap<String, String>,
+    Option<String>,
+) {
+    let mut entries = HashMap::new();
+    let mut presenter_titles = HashMap::new();
+    for presentation in presentations {
+        if let Some(prefix) = extract_song_prefix(&presentation.name, prefix_length) {
+            let key = prefix.to_ascii_lowercase();
+            presenter_titles.insert(key.clone(), presentation.name.clone());
+            entries.insert(key, presentation.id);
+        }
+    }
+    let error = entries
+        .is_empty()
+        .then_some("no presentations with valid prefix".to_string());
+    (entries, presenter_titles, error)
 }

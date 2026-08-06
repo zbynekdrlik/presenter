@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AbleSetSettingsValidationError {
@@ -167,6 +168,25 @@ pub struct AbleSetStatusSnapshot {
     /// until the first resolve call after startup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_attempts: Vec<AbleSetResolutionAttempt>,
+    /// Per-number AbleSet<->Presenter title disagreements not currently
+    /// acknowledged by the operator (#601). Recomputed on every library
+    /// cache rebuild — see `presenter-server`'s `state::ableset_mismatch`.
+    /// Empty means the two sides' numbering is aligned; this NEVER blocks
+    /// resolution/projection, it is a pre-service checklist only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mismatches: Vec<AbleSetTitleMismatch>,
+}
+
+/// One AbleSet<->Presenter numbering disagreement for `GET
+/// /integrations/ableset/status` (#601). `ableset_title`/`presenter_title`
+/// is empty when the number is missing on that side entirely (a structural
+/// gap, always reported, never acknowledgeable).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbleSetTitleMismatch {
+    pub number: String,
+    pub ableset_title: String,
+    pub presenter_title: String,
 }
 
 /// A single AbleSet song-resolution attempt, surfaced read-only via
@@ -193,6 +213,40 @@ pub fn extract_song_prefix(name: &str, length: u8) -> Option<String> {
         return Some(digits[..length as usize].to_string());
     }
     None
+}
+
+/// Returns `name` with its leading `length`-digit numeric prefix (and any
+/// whitespace immediately after it) removed, for #601's title comparison —
+/// the prefix itself is the identity key, not part of the title being
+/// compared. Falls back to the trimmed name unchanged when
+/// `extract_song_prefix` would not recognise a valid prefix (digits are
+/// ASCII, so byte-slicing at `length` is always a valid char boundary).
+#[must_use]
+pub fn strip_song_prefix(name: &str, length: u8) -> &str {
+    let trimmed = name.trim_start();
+    if extract_song_prefix(trimmed, length).is_none() {
+        return trimmed;
+    }
+    trimmed[length as usize..].trim_start()
+}
+
+/// Normalise a song title for the AbleSet<->Presenter mismatch comparison
+/// (#601): diacritic-, punctuation-, and case-insensitive. Internal
+/// whitespace is deliberately kept SIGNIFICANT — the settled design
+/// (issue #601 comments) chose the conservative side after finding
+/// `10000 armad` vs `10 000 armád` on prod SNV: collapsing inner whitespace
+/// would silence that pair for free, but would just as readily hide a
+/// genuinely different title whose words happen to run together. Titles
+/// that differ only by inner spacing go through the same explicit
+/// acknowledgement path as any other deliberate variant.
+#[must_use]
+pub fn normalize_title_for_mismatch(title: &str) -> String {
+    let no_diacritics: String = title.nfd().filter(|ch| !is_combining_mark(*ch)).collect();
+    no_diacritics
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .collect::<String>()
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -249,7 +303,10 @@ mod tests {
 
     #[test]
     fn strip_song_prefix_removes_digits_and_following_space() {
-        assert_eq!(strip_song_prefix("017 Viem, ze Ty Pan", 3), "Viem, ze Ty Pan");
+        assert_eq!(
+            strip_song_prefix("017 Viem, ze Ty Pan", 3),
+            "Viem, ze Ty Pan"
+        );
     }
 
     #[test]

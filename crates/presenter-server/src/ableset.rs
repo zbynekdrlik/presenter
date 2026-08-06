@@ -202,6 +202,25 @@ impl AbleSetBridge {
         })
     }
 
+    /// Full tracked AbleSet setlist as `(prefix, name)` pairs, valid-prefix
+    /// songs only (#601). Unlike `song_snapshot` (the one song currently
+    /// ACTIVE), this returns every song AbleSet is tracking right now — the
+    /// basis for the number<->title mismatch report against the Presenter
+    /// library. Skipped songs are excluded: a skipped song will not play
+    /// tonight, so a stale/missing title for it is not actionable.
+    pub async fn setlist_song_titles(&self) -> Vec<(String, String)> {
+        let status = self.inner.status.read().await;
+        status
+            .setlist_songs
+            .iter()
+            .filter(|song| !song.skipped)
+            .filter_map(|song| {
+                extract_song_prefix(&song.name, status.song_prefix_length)
+                    .map(|prefix| (prefix, song.name.clone()))
+            })
+            .collect()
+    }
+
     pub async fn next_song_name(&self) -> Option<String> {
         let status = self.inner.status.read().await;
         let last_song = status.last_song.as_ref()?;
@@ -243,6 +262,7 @@ impl AbleSetBridge {
             cache_last_updated: None,
             cache_last_error: None,
             recent_attempts: Vec::new(),
+            mismatches: Vec::new(),
         }
     }
 
@@ -351,6 +371,7 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             cache_last_updated: None,
             cache_last_error: None,
             recent_attempts: Vec::new(),
+            mismatches: Vec::new(),
         }
     } else {
         AbleSetStatusSnapshot {
@@ -368,6 +389,7 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             cache_last_updated: None,
             cache_last_error: None,
             recent_attempts: Vec::new(),
+            mismatches: Vec::new(),
         }
     }
 }
@@ -675,5 +697,39 @@ mod tests {
         }
         let next = bridge.next_song_name().await;
         assert_eq!(next, None);
+    }
+
+    #[tokio::test]
+    async fn setlist_song_titles_excludes_skipped_and_no_prefix_songs() {
+        // #601: the mismatch report is built from this list, so it must
+        // exclude songs that cannot ever be a resolvable AbleSet number.
+        let bridge = AbleSetBridge::new();
+        {
+            let mut status = bridge.inner.status.write().await;
+            status.song_prefix_length = 3;
+            status.setlist_songs = vec![
+                SetlistCachedSong {
+                    id: "s1".into(),
+                    name: "017 Viem, ze Ty Pan".into(),
+                    skipped: false,
+                },
+                SetlistCachedSong {
+                    id: "s2".into(),
+                    name: "140 Pane zosli".into(),
+                    skipped: true,
+                },
+                SetlistCachedSong {
+                    id: "s3".into(),
+                    name: "No Number Intro".into(),
+                    skipped: false,
+                },
+            ];
+        }
+        let titles = bridge.setlist_song_titles().await;
+        assert_eq!(
+            titles,
+            vec![("017".to_string(), "017 Viem, ze Ty Pan".to_string())],
+            "skipped songs and songs without a valid numeric prefix must be excluded"
+        );
     }
 }
