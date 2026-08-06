@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot, PresentationId,
+    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
+    AbleSetTitleMismatch, PresentationId,
 };
 use std::collections::{HashMap, VecDeque};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::AppState;
 use crate::ableset::AbleSetStatusSnapshot;
@@ -36,6 +37,16 @@ pub(crate) struct AbleSetLibraryCache {
     pub(crate) last_updated: Option<DateTime<Utc>>,
     pub(crate) last_error: Option<String>,
     pub(crate) recent_attempts: VecDeque<AbleSetResolutionAttempt>,
+    /// Bumped on every invalidation (#639 TOCTOU fix). A refresh captures
+    /// this BEFORE its async DB fetch and re-checks it, under the same write
+    /// lock as the install, before writing the fetched data back. A mismatch
+    /// means a concurrent invalidate raced the fetch — see
+    /// `install_if_current`.
+    pub(crate) generation: u64,
+    /// Per-number AbleSet<->Presenter title disagreements from the most
+    /// recent successful rebuild (#601). Cleared alongside `entries` on
+    /// invalidation — see `install_if_current` and the invalidate methods.
+    pub(crate) mismatches: Vec<AbleSetTitleMismatch>,
 }
 
 impl AbleSetLibraryCache {
@@ -45,6 +56,20 @@ impl AbleSetLibraryCache {
         self.song_prefix_length = 0;
         self.last_updated = None;
         self.last_error = None;
+        self.mismatches.clear();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Clear only the resolved entries, keeping library/prefix identity
+    /// (#575) — used after a local mutation that can change which
+    /// presentations exist without touching AbleSet settings. Bumps
+    /// `generation` (#639) so a refresh already past its async DB fetch
+    /// detects this race and discards its stale result instead of
+    /// resurrecting what this call just cleared.
+    pub(crate) fn invalidate_entries(&mut self) {
+        self.entries.clear();
+        self.mismatches.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub(crate) fn matches(&self, library_name: &str, prefix_len: u8) -> bool {
@@ -75,6 +100,48 @@ impl AbleSetLibraryCache {
         &self.recent_attempts
     }
 
+    /// Read-only view of the current title-mismatch report (#601).
+    pub(crate) fn mismatches(&self) -> &[AbleSetTitleMismatch] {
+        &self.mismatches
+    }
+
+    /// Current generation counter (#639) — captured by a refresh BEFORE its
+    /// async DB fetch, so its eventual install can detect a concurrent
+    /// invalidate.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Install a freshly-fetched refresh, but only if `expected_generation`
+    /// still matches the current generation (#639 compare-and-swap). A
+    /// mismatch means a concurrent invalidate (a settings change or a local
+    /// mutation) landed between the caller's DB read and this install — the
+    /// fetched data may already be stale relative to that invalidation, so
+    /// it is discarded rather than overwriting the cache. The next
+    /// `ensure_ableset_cache` call sees `entries` still empty (the
+    /// invalidate's own effect, left untouched) and retries cleanly.
+    /// Returns whether the install happened.
+    pub(crate) fn install_if_current(
+        &mut self,
+        expected_generation: u64,
+        library_name: String,
+        prefix_len: u8,
+        entries: HashMap<String, PresentationId>,
+        error: Option<String>,
+        mismatches: Vec<AbleSetTitleMismatch>,
+    ) -> bool {
+        if self.generation != expected_generation {
+            return false;
+        }
+        self.library_name = Some(library_name);
+        self.song_prefix_length = prefix_len;
+        self.entries = entries;
+        self.last_updated = Some(Utc::now());
+        self.last_error = error;
+        self.mismatches = mismatches;
+        true
+    }
+
     /// Record a resolution attempt in the ring buffer, evicting the oldest
     /// entry when the cap is reached (FIFO).
     fn record_attempt(&mut self, input: &str, found: bool) {
@@ -103,7 +170,7 @@ impl AppState {
     /// untouched by these mutations, so a full struct reset is unnecessary —
     /// only the resolved entries can go stale.
     pub(crate) async fn invalidate_ableset_cache(&self) {
-        self.caches.ableset.write().await.entries.clear();
+        self.caches.ableset.write().await.invalidate_entries();
     }
 
     pub async fn update_ableset_settings(
@@ -126,11 +193,12 @@ impl AppState {
         Ok(settings)
     }
 
-    /// Build the status snapshot, enriched with library-cache state (#600).
-    /// The bridge contributes the live AbleSet connection/tracking fields; the
-    /// cache layer contributes `cache_size`, `cache_last_updated`,
-    /// `cache_last_error`, and the recent resolution attempts. This merged
-    /// snapshot is what `GET /integrations/ableset/status` returns.
+    /// Build the status snapshot, enriched with library-cache state (#600)
+    /// and the title-mismatch report (#601). The bridge contributes the live
+    /// AbleSet connection/tracking fields; the cache layer contributes
+    /// `cache_size`, `cache_last_updated`, `cache_last_error`, the recent
+    /// resolution attempts, and `mismatches`. This merged snapshot is what
+    /// `GET /integrations/ableset/status` returns.
     pub async fn ableset_status_snapshot(&self) -> AbleSetStatusSnapshot {
         let mut snapshot = self.ableset_bridge.status_snapshot().await;
         let cache = self.caches.ableset.read().await;
@@ -146,6 +214,7 @@ impl AppState {
                 found: a.found,
             })
             .collect();
+        snapshot.mismatches = cache.mismatches().to_vec();
         snapshot
     }
 
@@ -167,6 +236,14 @@ impl AppState {
         }
         let settings = self.ableset_bridge.status_snapshot().await;
         if !settings.enabled {
+            // #623: #600 named this exact early return as the one that
+            // "fails EVERY song with no log" — an operator who forgot to
+            // (re-)enable the integration otherwise sees only silent
+            // no-ops on every incoming song change.
+            warn!(
+                prefix = key,
+                "AbleSet resolution skipped — AbleSet integration is disabled"
+            );
             return Ok(None);
         }
         self.ensure_ableset_cache(&settings).await?;
@@ -210,36 +287,221 @@ impl AppState {
         Ok(())
     }
 
+    /// Rebuild the resolved `prefix -> presentation` cache from the DB, plus
+    /// the #601 title-mismatch report, and install both atomically under a
+    /// #639 compare-and-swap guard against a concurrent invalidate.
     pub(super) async fn refresh_ableset_cache(
         &self,
         settings: &AbleSetStatusSnapshot,
     ) -> anyhow::Result<()> {
+        let expected_generation = self.caches.ableset.read().await.generation();
         let summaries = self.repository.list_library_summaries(None).await?;
         let target = summaries
             .into_iter()
             .find(|summary| summary.name.eq_ignore_ascii_case(&settings.library_name));
+
+        let (entries, presenter_titles, error) = match target {
+            Some(summary) => {
+                build_ableset_entries(summary.presentations, settings.song_prefix_length)
+            }
+            None => {
+                // #623: previously silent — only recorded into `last_error`,
+                // never logged, even though a missing library means EVERY
+                // resolution will miss forever until someone notices.
+                warn!(
+                    library_name = %settings.library_name,
+                    "AbleSet cache rebuild found no library with this name — \
+                     resolution will keep missing every song"
+                );
+                (
+                    HashMap::new(),
+                    HashMap::new(),
+                    Some("library not found".to_string()),
+                )
+            }
+        };
+
+        let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
+        let acks = match self.load_ableset_mismatch_acks().await {
+            Ok(acks) => acks,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "failed to load AbleSet mismatch acknowledgements — treating as none (#601)"
+                );
+                super::ableset_mismatch::AckMap::new()
+            }
+        };
+        let mismatches = super::ableset_mismatch::compute_ableset_mismatches(
+            &presenter_titles,
+            &ableset_songs,
+            settings.song_prefix_length,
+            &acks,
+        );
+
+        let entries_found = entries.len();
         let mut cache = self.caches.ableset.write().await;
-        cache.library_name = Some(settings.library_name.clone());
-        cache.song_prefix_length = settings.song_prefix_length;
-        cache.entries.clear();
-        cache.last_updated = Some(Utc::now());
-        cache.last_error = None;
-        if let Some(summary) = target {
-            for presentation in summary.presentations {
-                if let Some(prefix) =
-                    extract_song_prefix(&presentation.name, settings.song_prefix_length)
-                {
-                    cache
-                        .entries
-                        .insert(prefix.to_ascii_lowercase(), presentation.id);
-                }
-            }
-            if cache.entries.is_empty() {
-                cache.last_error = Some("no presentations with valid prefix".to_string());
-            }
-        } else {
-            cache.last_error = Some("library not found".to_string());
-        }
+        let installed = cache.install_if_current(
+            expected_generation,
+            settings.library_name.clone(),
+            settings.song_prefix_length,
+            entries,
+            error,
+            mismatches,
+        );
+        log_ableset_rebuild_result(
+            installed,
+            &settings.library_name,
+            settings.song_prefix_length,
+            entries_found,
+            cache.mismatches(),
+        );
         Ok(())
+    }
+}
+
+/// Log the outcome of a `refresh_ableset_cache` install — extracted to keep
+/// that function under the repo's per-function line cap. `installed = false`
+/// is the #639 race-lost path (a concurrent invalidate won); `true` is the
+/// normal path, which also emits the #601 per-mismatch WARN and #623's
+/// previously-missing cache-rebuild INFO.
+fn log_ableset_rebuild_result(
+    installed: bool,
+    library_name: &str,
+    prefix_length: u8,
+    entries_found: usize,
+    mismatches: &[AbleSetTitleMismatch],
+) {
+    if !installed {
+        // #639: the cache is already whatever the racing invalidate left it
+        // as (entries/mismatches cleared) — discarding here, instead of
+        // overwriting, is what stops the invalidate from being silently
+        // lost. The next `ensure_ableset_cache` call sees `entries.is_empty()`
+        // and retries without racing.
+        warn!(
+            library_name = library_name,
+            "AbleSet cache rebuild lost a race with a concurrent invalidate (#639) — \
+             discarding stale fetch; the next resolution attempt will retry cleanly"
+        );
+        return;
+    }
+    // #623: the rebuild itself was previously silent end-to-end.
+    info!(
+        library_name = library_name,
+        prefix_length = prefix_length,
+        entries_found = entries_found,
+        mismatch_count = mismatches.len(),
+        "AbleSet cache rebuild complete"
+    );
+    for mismatch in mismatches {
+        warn!(
+            number = %mismatch.number,
+            ableset_title = %mismatch.ableset_title,
+            presenter_title = %mismatch.presenter_title,
+            "AbleSet/Presenter numbering disagreement — verify before the service (#601)"
+        );
+    }
+}
+
+/// Build the resolved `prefix -> presentation` map and the parallel
+/// `prefix -> title` map (the latter feeds the #601 mismatch report) from a
+/// resolved library's presentations. Extracted from `refresh_ableset_cache`
+/// to keep that function under the repo's per-function line cap. Returns
+/// `error` set when the library has no presentation with a valid prefix.
+fn build_ableset_entries(
+    presentations: Vec<presenter_core::PresentationSummary>,
+    prefix_length: u8,
+) -> (
+    HashMap<String, PresentationId>,
+    HashMap<String, String>,
+    Option<String>,
+) {
+    let mut entries = HashMap::new();
+    let mut presenter_titles = HashMap::new();
+    for presentation in presentations {
+        if let Some(prefix) = extract_song_prefix(&presentation.name, prefix_length) {
+            let key = prefix.to_ascii_lowercase();
+            presenter_titles.insert(key.clone(), presentation.name.clone());
+            entries.insert(key, presentation.id);
+        }
+    }
+    let error = entries
+        .is_empty()
+        .then_some("no presentations with valid prefix".to_string());
+    (entries, presenter_titles, error)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    // #639 — RED (this commit): `generation`/`install_if_current` prove the
+    // compare-and-swap that closes the TOCTOU window described in the issue
+    // ("An invalidate request that lands in the window between the read and
+    // the install is silently lost — the installed (stale) cache overwrites
+    // the invalidation"). GREEN wires them into `refresh_ableset_cache`.
+
+    #[test]
+    fn install_if_current_rejects_a_stale_generation() {
+        let mut cache = AbleSetLibraryCache::default();
+        let captured_generation = cache.generation();
+
+        // Simulate a concurrent invalidate landing WHILE a refresh's async DB
+        // fetch was in flight — exactly the #639 race window.
+        cache.invalidate_entries();
+
+        let installed = cache.install_if_current(
+            captured_generation,
+            "Hymnal".to_string(),
+            3,
+            HashMap::from([("001".to_string(), PresentationId::new())]),
+            None,
+            Vec::new(),
+        );
+
+        assert!(
+            !installed,
+            "a refresh whose generation went stale during its fetch must be rejected, \
+             not silently overwrite what the concurrent invalidate just cleared"
+        );
+        assert!(
+            cache.entries.is_empty(),
+            "the rejected install must leave the cache exactly as the invalidate left it"
+        );
+    }
+
+    #[test]
+    fn install_if_current_succeeds_when_generation_is_unchanged() {
+        let mut cache = AbleSetLibraryCache::default();
+        let captured_generation = cache.generation();
+        let id = PresentationId::new();
+
+        let installed = cache.install_if_current(
+            captured_generation,
+            "Hymnal".to_string(),
+            3,
+            HashMap::from([("001".to_string(), id)]),
+            None,
+            Vec::new(),
+        );
+
+        assert!(
+            installed,
+            "a refresh with no concurrent invalidate must install normally"
+        );
+        assert_eq!(cache.entries.get("001"), Some(&id));
+    }
+
+    #[test]
+    fn invalidate_entries_bumps_generation() {
+        let mut cache = AbleSetLibraryCache::default();
+        let before = cache.generation();
+        cache.invalidate_entries();
+        assert_ne!(
+            before,
+            cache.generation(),
+            "invalidate_entries must bump the generation counter so an in-flight \
+             refresh detects the race (#639)"
+        );
     }
 }

@@ -240,6 +240,14 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::ableset::set_ableset_follow),
         )
         .route(
+            "/integrations/ableset/mismatches/acknowledge",
+            post(integrations::ableset::acknowledge_ableset_mismatch),
+        )
+        .route(
+            "/integrations/ableset/mismatches/unacknowledge",
+            post(integrations::ableset::unacknowledge_ableset_mismatch),
+        )
+        .route(
             "/integrations/video-sources",
             get(integrations::video_source::list_video_sources)
                 .post(integrations::video_source::create_video_source),

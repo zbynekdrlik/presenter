@@ -32,8 +32,9 @@ pub mod video_source;
 pub mod feature_flags;
 
 pub use ableset::{
-    extract_song_prefix, AbleSetResolutionAttempt, AbleSetSettings, AbleSetSettingsDraft,
-    AbleSetSettingsValidationError, AbleSetSongSnapshot, AbleSetStatusSnapshot,
+    extract_song_prefix, normalize_title_for_mismatch, strip_song_prefix, AbleSetResolutionAttempt,
+    AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError, AbleSetSongSnapshot,
+    AbleSetStatusSnapshot, AbleSetTitleMismatch,
 };
 pub use android_stage_display::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,
