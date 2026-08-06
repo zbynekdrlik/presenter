@@ -78,9 +78,14 @@ pub(super) async fn list_slide_stage_layouts(
     Path(presentation_id): Path<String>,
 ) -> Result<Json<HashMap<String, String>>, AppError> {
     let presentation_uuid = super::parse_uuid("presentationId", &presentation_id)?;
+    // #652 F8: reuse the SAME error-mapping helper the PUT handler above
+    // uses — `slide_stage_layouts` now raises the same typed
+    // `RepositoryError::NotFound` for an unknown presentation, so GET and
+    // PUT agree on the same URL resource (404, not 200 `{}`).
     let map = state
         .slide_stage_layouts(PresentationId::from_uuid(presentation_uuid))
-        .await?;
+        .await
+        .map_err(map_slide_stage_layout_error)?;
     Ok(Json(map))
 }
 
