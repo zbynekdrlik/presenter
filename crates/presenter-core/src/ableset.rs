@@ -230,23 +230,80 @@ pub fn strip_song_prefix(name: &str, length: u8) -> &str {
     trimmed[length as usize..].trim_start()
 }
 
+/// Folds a small set of non-decomposable Latin letters (#655 F13) — ł, ø, đ,
+/// ħ, ŧ (and their uppercase forms) are single base glyphs with a stroke,
+/// not a base letter plus a combining mark, so NFD decomposition followed by
+/// combining-mark removal never touches them. Any other character passes
+/// through unchanged. Applied AFTER mark-stripping in
+/// `normalize_title_for_mismatch`, same as a diacritic would be.
+fn fold_non_decomposable_letter(ch: char) -> char {
+    match ch {
+        'ł' | 'Ł' => 'l',
+        'ø' | 'Ø' => 'o',
+        'đ' | 'Đ' => 'd',
+        'ħ' | 'Ħ' => 'h',
+        'ŧ' | 'Ŧ' => 't',
+        other => other,
+    }
+}
+
+/// Collapses whitespace runs for `normalize_title_for_mismatch` (#655
+/// F11/F12, re-settled design): a run bordered by a digit on BOTH sides is
+/// formatting noise (a thousands-grouping space, e.g. "10 000" -> "10000")
+/// and is removed entirely; every other whitespace run — including one
+/// bordered by a digit on only one side — collapses to a single space, never
+/// erased, so a genuine word boundary is preserved. `title` is expected to
+/// already have punctuation filtered out (see caller), so "digit" here means
+/// any ASCII digit immediately adjacent in the filtered string.
+fn collapse_whitespace_digit_aware(title: &str) -> String {
+    let chars: Vec<char> = title.chars().collect();
+    let mut result = String::with_capacity(title.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            let mut j = i;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            let prev_is_digit = result
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_digit());
+            let next_is_digit = chars.get(j).is_some_and(|c| c.is_ascii_digit());
+            if !(prev_is_digit && next_is_digit) {
+                result.push(' ');
+            }
+            i = j;
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
 /// Normalise a song title for the AbleSet<->Presenter mismatch comparison
-/// (#601): diacritic-, whitespace-, punctuation-, and case-insensitive.
-/// Whitespace is treated as FORMATTING variance, the same class as
-/// diacritics — the original settled design kept inner whitespace
-/// significant, but that misclassified the exact `10000 armad` vs
-/// `10 000 armád` prod SNV case (a diacritic-only difference in every
-/// respect except spacing) as a genuine mismatch, producing a false-positive
-/// warning. Titles that differ ONLY by inner spacing are now silent, same as
-/// a diacritic-only difference; a genuinely different title stays reported
-/// regardless of its spacing.
+/// (#601, re-settled by #655 F11/F12): diacritic-, punctuation-, and
+/// case-insensitive, plus the non-decomposable-letter fold (F13). Whitespace
+/// is digit-aware: a run BETWEEN DIGITS is formatting noise and is removed
+/// (e.g. the prod SNV `10000 armad` vs `10 000 armád` case); every other
+/// whitespace run collapses to a single space but is never erased, so a
+/// genuine word-boundary difference still compares as a mismatch. An earlier
+/// design stripped ALL whitespace unconditionally under CI pressure — that
+/// went too far and erased word boundaries; this replaces it.
 #[must_use]
 pub fn normalize_title_for_mismatch(title: &str) -> String {
     let no_diacritics: String = title.nfd().filter(|ch| !is_combining_mark(*ch)).collect();
-    no_diacritics
+    let folded: String = no_diacritics
         .chars()
-        .filter(|ch| ch.is_alphanumeric())
-        .collect::<String>()
+        .map(fold_non_decomposable_letter)
+        .collect();
+    let filtered: String = folded
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .collect();
+    collapse_whitespace_digit_aware(&filtered)
+        .trim()
         .to_lowercase()
 }
 
