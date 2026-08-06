@@ -158,7 +158,7 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.whep_signaller_call(source_id, op).await,
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::whep_signaller_call is never exercised"),
+            Self::Fake(f) => f.whep_signaller_call(source_id, op).await,
         }
     }
 
@@ -198,6 +198,39 @@ pub(crate) struct FakeNdiControl {
     /// `true` = the finder has never completed a scan (it failed to start, or the server
     /// has only just booted), so this server cannot see the network at all (#546).
     finder_never_scanned: Mutex<bool>,
+    /// What `whep_signaller_call` should return (#630 call-site wiring tests).
+    whep_outcome: Mutex<Option<WhepOutcome>>,
+}
+
+/// What [`FakeNdiControl::whep_signaller_call`] should return.
+///
+/// Holds real [`presenter_ndi::manager::NdiSessionError`] variants (via
+/// [`Self::to_result`]) rather than a bare string, so `map_signaller_error`'s
+/// `downcast_ref` in `router/integrations/ndi_whep.rs` genuinely matches —
+/// the fake exercises the SAME typed-error path a live `NdiManager` failure
+/// would take, not a stand-in string comparison (#630). Only the variants the
+/// #630 wiring tests actually need are here — extend when a new call site
+/// needs a different outcome, per MVP philosophy (no speculative variants).
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) enum WhepOutcome {
+    /// `NdiSessionError::SourceNotActive`.
+    SourceNotActive,
+    /// `NdiSessionError::ConsumerCapReached { max }`.
+    ConsumerCapReached { max: usize },
+}
+
+#[cfg(test)]
+impl WhepOutcome {
+    fn to_result(&self) -> anyhow::Result<presenter_ndi::manager::WhepReply> {
+        use presenter_ndi::manager::NdiSessionError;
+        match self {
+            Self::SourceNotActive => Err(NdiSessionError::SourceNotActive.into()),
+            Self::ConsumerCapReached { max } => {
+                Err(NdiSessionError::ConsumerCapReached { max: *max }.into())
+            }
+        }
+    }
 }
 
 /// One recorded call against [`FakeNdiControl`].
@@ -229,6 +262,13 @@ impl FakeNdiControl {
     pub(crate) fn with_outcome(outcome: StartOutcome) -> Arc<Self> {
         let fake = Self::default();
         *fake.start_outcome.lock().expect("start_outcome lock") = outcome;
+        Arc::new(fake)
+    }
+
+    /// A fake whose `whep_signaller_call` returns the chosen outcome (#630).
+    pub(crate) fn with_whep_outcome(outcome: WhepOutcome) -> Arc<Self> {
+        let fake = Self::default();
+        *fake.whep_outcome.lock().expect("whep_outcome lock") = Some(outcome);
         Arc::new(fake)
     }
 
@@ -342,5 +382,28 @@ impl FakeNdiControl {
         self.record(NdiCall::StopOtherPipelines {
             keep_id: keep_id.to_string(),
         });
+    }
+
+    /// #630: return the configured [`WhepOutcome`] — real typed
+    /// `NdiSessionError` variants (or a generic error), so a router-level
+    /// test can exercise the `.map_err(map_signaller_error)?` call-site
+    /// wiring in `post_whep_session`/`patch_whep_session` deterministically,
+    /// without a live NdiManager.
+    async fn whep_signaller_call(
+        &self,
+        _source_id: &str,
+        _op: presenter_ndi::manager::WhepOp,
+    ) -> anyhow::Result<presenter_ndi::manager::WhepReply> {
+        match self
+            .whep_outcome
+            .lock()
+            .expect("whep_outcome lock")
+            .as_ref()
+        {
+            Some(outcome) => outcome.to_result(),
+            None => Err(anyhow::anyhow!(
+                "FakeNdiControl: no whep_outcome configured — use with_whep_outcome"
+            )),
+        }
     }
 }

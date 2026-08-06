@@ -34,7 +34,7 @@ mod cache_manager;
 mod companion;
 mod companion_manager;
 mod integrations;
-mod ndi_control;
+pub(crate) mod ndi_control;
 mod osc;
 mod presentation_lock;
 mod presentations;
