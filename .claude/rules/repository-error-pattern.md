@@ -20,7 +20,9 @@ correct response is 404 (or 422 for a body-referenced missing target).
    resource missing → 404), `RepositoryError::TargetNotFound(&'static str)` (a resource named in
    the request BODY is missing → 422), or `RepositoryError::Conflict(&'static str)` (the resource
    exists but its current state forbids the operation — e.g. #636's restore_presentation under a
-   still-tombstoned library → 409) — all defined in
+   still-tombstoned library → 409; ALSO for stale-SET conflicts where the client's view of a
+   collection is outdated — #652 F5's reorder length mismatch, "refresh and retry", matching the
+   `PasteSlidesError::AnchorVanished` precedent; a stale set is NOT `TargetNotFound`) — all defined in
    `crates/presenter-persistence/src/repository/util.rs`. Use `.ok_or(RepositoryError::NotFound("..."))?`
    or `return Err(RepositoryError::NotFound("...").into());` — see "clippy gotcha" below for why
    `ok_or`, not `ok_or_else`.
@@ -55,6 +57,25 @@ correct response is 404 (or 422 for a body-referenced missing target).
 string literal is cheap enough that clippy wants the eager form:
 `.ok_or(RepositoryError::NotFound("..."))?`. This bit #586/#587 (8 sites, caught by CI's Clippy job,
 fixed in a follow-up commit) — get it right the first time.
+
+## The MIRROR anti-pattern: a blanket `.map_err(AppError::bad_request)` (#615, #652 F4)
+
+A bare anyhow → 500 has a mirror: a router handler wrapping the WHOLE state call in
+`.map_err(AppError::bad_request)` maps a genuine internal fault to 400 (the client is blamed for a
+server bug — worse than a 500) AND flattens every refusal to one status. `POST /stage/state` did
+exactly this until #652 F4. When touching a handler, grep it for blanket `bad_request`/`map_err`
+wrappers — the fix is the same typed pattern: typed variants in the state method, per-file map
+helper, everything unmatched falls through to 500.
+
+## Live-verifying refusal paths with curl: WRITE DTOs are camelCase (#652 verification gotcha)
+
+GET responses serialize snake_case (`presentation_id`, `id`), but WRITE payloads deserialize
+camelCase (`presentationId`, `slideIds`, `entryId` — serde renames). There is no
+`deny_unknown_fields`, so a wrong field name is SILENTLY ignored and can look like success (a
+duplicate-`id` payload got 200 with fresh server-generated ids; only `entryId` hits the guard).
+When a verification curl returns an unexpected 200/405/serde-422, check the DTO field names and
+the route in `router.rs` (e.g. reorder is `POST /presentations/{id}/slides/reorder`, entries
+listing is `/presentations/{id}/slide-stage-layouts`) before concluding the fix regressed.
 
 ## Trace every CALLER before assuming the repository layer is the only 500 source
 
