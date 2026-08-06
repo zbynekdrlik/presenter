@@ -232,15 +232,17 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
 
 - **File-size (>1000 prod lines) + fn-length (>120 lines, tests NOT exempt):** TOUCHING an
   already-over-cap file/function pulls it into the diff and HARD-FAILS your PR — even if your edit
-  is unrelated. **#654/#656 correction: the STRICT gate fails changed files already at the 800-line
-  TARGET, not only the 1000 hard cap** — a ONE-LINE addition (a `mod x;` declaration) to an
-  868-line `state/mod.rs` hard-failed the PR ("exceeds target size (800 lines)"). Budget prod-lines
-  to ≤790 on every file your diff touches. Same batch's fn-growth trap: inlining a feature into an
+  is unrelated. **#654 post-mortem CORRECTION (verified against quality-check.sh source + run
+  31068027673 log): the 800-line TARGET is WARN-only even under `--strict` — only >1000 prod
+  lines hard-fails.** The round-1 "state/mod.rs exceeds target size (800): 868" line sat under
+  `[quality] Warnings:`; the job's actual Failure was the serde convention check
+  (`AbleSetMismatchAck` missing `#[serde(rename_all = "camelCase")]`). Do NOT split files
+  defensively at 800 — the hard budget is the 1000 cap (an 989-line direct edit passed in #626/#649). Same batch's fn-growth trap: inlining a feature into an
   existing 100-119-line fn (`run_tracker` 110→126, `from_config` 119→122) flips it past the 120
   hard cap — extract a helper proactively when a touched fn is already >100 lines. And a meta-test
   that source-scans a directory (`state/*.rs`) counts its OWN pattern occurrences in test files —
   exclude `tests.rs`/`*_tests.rs` from such scans. Known offender: `state/mod.rs` (was ~1117, #486;
-  re-split in #656 to 783 — near the 800 target, split further before adding). `resolume/tests.rs`
+  re-split in #656 to 783 — split again before it approaches the 1000 hard cap). `resolume/tests.rs`
   was fixed in #487 (shared `mount_composition`/`mount_params`/`mount_clips`/`mount_full_composition`/
   `build_driver` helpers + `stage_all`/`stage_main_meta` builders → all fns now ≤120). Check before
   editing: `bash scripts/dev/count_prod_lines.sh <file>` and

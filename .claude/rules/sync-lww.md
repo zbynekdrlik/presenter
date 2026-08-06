@@ -35,7 +35,10 @@ Two-site LWW sync (PP↔SNV), strict-`>` gate on `updated_at` (sync_id tie-break
    path, AND a genuine (non-forced) incoming tombstone (#649, fixed) all do, via the shared
    `clean_playlist_entries_for_tombstone` helper (`sync_apply_tombstone_cleanup.rs`) gated on
    `effective_deleted_at.is_some()` in `write_synced_row` — a new tombstone-writing path must
-   call it too.
+   call it too. A tombstone that arrived BEFORE a cleanup gap was fixed never gets a second
+   chance to clean up on its own (its re-arrival is `SkippedNotNewer` under the strict `>` gate,
+   invariant 1) — `Repository::backfill_orphaned_playlist_entries` (same file) is the one-time
+   startup sweep that backfills that pre-fix residue on deployed DBs (#658).
 
 5. Known open flaw: presentations join libraries by NAME on the wire (`SyncPresentation.library_name`)
    → mis-filing/phantom libraries across rename races (#647, cross-cutting protocol change).
