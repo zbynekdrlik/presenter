@@ -185,14 +185,19 @@ async fn reorder_on_a_vanished_presentation_is_a_404() {
 }
 
 #[tokio::test]
-async fn reorder_with_fewer_slide_ids_than_exist_is_a_422() {
+async fn reorder_with_fewer_slide_ids_than_exist_is_a_409() {
     // #628: the length-mismatch guard directly above the per-id lookup guard
-    // (`edit_ops.rs:446`) was left as a bare `anyhow!`, unlike its sibling
-    // (`:451`, covered by `reorder_naming_an_unknown_slide_in_the_body_is_a_422`
+    // in `reorder_slides` was left as a bare `anyhow!`, unlike its sibling
+    // (covered by `reorder_naming_an_unknown_slide_in_the_body_is_a_422`
     // below), so a stale/short body (e.g. after a concurrent edit shrank the
-    // slide list) fell through to a 500 instead of the intended 422. Sending
-    // only ONE of the seeded presentation's two slide ids hits the
-    // length-mismatch guard specifically (not the per-id lookup).
+    // slide list) fell through to a 500 instead of a typed refusal.
+    //
+    // #652 F5: reclassified 422 -> 409 — a length mismatch is a STALE-SET
+    // conflict (the body was built against a slide count that has since
+    // changed), not a missing-target refusal; the client should refresh and
+    // retry, mirroring `PasteSlidesError::AnchorVanished`'s 409. Sending only
+    // ONE of the seeded presentation's two slide ids hits the length-
+    // mismatch guard specifically (not the per-id lookup).
     let state = AppState::in_memory().await.unwrap();
     let (pres_id, [real_a, _real_b]) = seed(&state).await;
     let app = build_router(state);
@@ -204,7 +209,7 @@ async fn reorder_with_fewer_slide_ids_than_exist_is_a_422() {
         Some(body),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -214,8 +219,9 @@ async fn reorder_naming_an_unknown_slide_in_the_body_is_a_422() {
     // target → 422 (TargetNotFound), not 404 — matching the established
     // `paste_slides` UnknownSlides→422 convention in the same module. The
     // bogus id is sent ALONGSIDE a real one with matching length so the
-    // request reaches the per-slide lookup (`:452`), not the earlier
-    // length-mismatch guard (`:446`).
+    // request reaches the per-slide lookup in `reorder_slides`, not the
+    // earlier length-mismatch guard
+    // (`reorder_with_fewer_slide_ids_than_exist_is_a_409`, now 409 — #652 F5).
     let state = AppState::in_memory().await.unwrap();
     let (pres_id, [real_a, _real_b]) = seed(&state).await;
     let app = build_router(state);
