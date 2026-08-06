@@ -225,3 +225,25 @@ async fn ack_persists_and_silences_mismatch_then_unack_restores_it() {
         "revoking the ack must re-raise the warning on the next recompute"
     );
 }
+
+/// #655 F16 — RED (this commit): a resolution attempt while AbleSet is
+/// disabled currently returns early WITHOUT calling `record_attempt` — the
+/// ring buffer stays empty, so this assertion fails today. GREEN records
+/// the attempt on the disabled path too, so `recentAttempts` shows evidence
+/// instead of silence.
+#[tokio::test]
+async fn disabled_resolution_still_records_attempt_in_ring_buffer() {
+    let state = AppState::in_memory().await.unwrap();
+    // AbleSet is disabled by default on a fresh in-memory state
+    // (`AbleSetSettingsDraft::default()`).
+    let result = state.resolve_ableset_presentation("017").await.unwrap();
+    assert_eq!(result, None);
+
+    let snapshot = state.ableset_status_snapshot().await;
+    assert_eq!(
+        snapshot.recent_attempts.len(),
+        1,
+        "a disabled-path resolution attempt must still be recorded, not silently dropped"
+    );
+    assert!(!snapshot.recent_attempts[0].found);
+}
