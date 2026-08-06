@@ -9,7 +9,8 @@
 //! checklist that catches it: it NEVER blocks projection (per the issue's
 //! explicit decision — this is a report to read before the service, not a
 //! runtime gate). It is recomputed on every AbleSet cache rebuild
-//! (`ableset.rs::refresh_ableset_cache`) and surfaced read-only via `GET
+//! (`ableset.rs::refresh_ableset_cache`), atomically with the #639
+//! generation guard, and surfaced read-only via `GET
 //! /integrations/ableset/status`.
 
 use std::collections::{BTreeSet, HashMap};
