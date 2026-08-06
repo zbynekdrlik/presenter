@@ -256,12 +256,13 @@ mod set_stage_layout_error_mapping_tests {
     use axum::response::IntoResponse;
 
     /// An internal failure unrelated to the layout code itself (here: a
-    /// corrupted `timers` row surfaced while `broadcast_stage_snapshots`
-    /// rebuilds the stage context after a VALID layout switch) must answer
-    /// 500 — never 404. Before the #588 fix, `set_stage_layout` mapped every
-    /// error from `set_stage_layout_code` to `AppError::not_found`, so this
-    /// genuine server fault was reported to the client as "layout not
-    /// found".
+    /// corrupted `timers` row surfaced while the PRE-SWITCH validation probe
+    /// — `context_for_pending_switch` building the stage context BEFORE the
+    /// switch itself commits, #631/#652 F1 — rebuilds the stage context)
+    /// must answer 500 — never 404. Before the #588 fix, `set_stage_layout`
+    /// mapped every error from `set_stage_layout_code` to
+    /// `AppError::not_found`, so this genuine server fault was reported to
+    /// the client as "layout not found".
     #[tokio::test]
     async fn set_stage_layout_returns_500_on_internal_failure_not_404() {
         let state = crate::state::AppState::in_memory().await.unwrap();
@@ -292,7 +293,8 @@ mod set_stage_layout_error_mapping_tests {
 
         // Switch to a DIFFERENT valid, operator-selectable code so the
         // early-return-on-unchanged-code guard doesn't short-circuit before
-        // `broadcast_stage_snapshots` runs.
+        // the pre-switch validation probe (`context_for_pending_switch`)
+        // runs.
         let result = set_stage_layout(
             State(state),
             Json(StageLayoutUpdateRequest {
@@ -318,8 +320,15 @@ mod set_stage_layout_error_mapping_tests {
     /// corruption happens BEFORE the switch attempt (not after), so the
     /// failure surfaces from the pre-switch snapshot-context build rather
     /// than from a step that runs after the switch already committed.
+    ///
+    /// #652 F1: extended to also assert the PERSISTED layout setting and the
+    /// `LiveEvent::StageLayout` broadcast are untouched — the original test
+    /// only asserted the in-memory code (review finding F6).
     #[tokio::test]
     async fn set_stage_layout_failure_does_not_apply_the_switch() {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
         let state = crate::state::AppState::in_memory().await.unwrap();
         // Seed the timers row via an initial valid switch.
         let _ = set_stage_layout(
@@ -343,6 +352,11 @@ mod set_stage_layout_error_mapping_tests {
         .await
         .unwrap();
 
+        // Subscribe AFTER the corruption, BEFORE the failing attempt, so a
+        // spurious `LiveEvent::StageLayout` from the failed switch would be
+        // observed here.
+        let mut rx = state.live_hub().subscribe();
+
         let result = set_stage_layout(
             State(state.clone()),
             Json(StageLayoutUpdateRequest {
@@ -360,6 +374,20 @@ mod set_stage_layout_error_mapping_tests {
             "timer",
             "#631: a failed switch must not have applied the layout change — \
              the client's 500 must mean nothing changed"
+        );
+        assert_eq!(
+            state
+                .repository()
+                .get_app_setting(crate::state::stage_display::STAGE_LAYOUT_KEY)
+                .await
+                .unwrap(),
+            Some("timer".to_string()),
+            "#652 F1: a failed switch must not have persisted the new layout code either"
+        );
+        let no_event = timeout(Duration::from_millis(50), rx.recv()).await;
+        assert!(
+            no_event.is_err(),
+            "#652 F1: a failed switch must not have published LiveEvent::StageLayout either"
         );
     }
 
