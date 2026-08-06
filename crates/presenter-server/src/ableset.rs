@@ -472,6 +472,54 @@ fn setlist_fingerprint(songs: &[SetlistSong]) -> u64 {
     hasher.finish()
 }
 
+/// #655 F1: the setlist LIST can change (loaded, reordered, songs
+/// skipped/unskipped) independent of the active song -- a setlist loaded
+/// before the service starts never has an active song at all, so gating the
+/// rebuild on the active-song id alone left it permanently empty
+/// pre-service. Fingerprint-compares the current tick's setlist against the
+/// last tick's and rebuilds the cached `status.setlist_songs` only when it
+/// actually changed, to avoid unnecessary allocations every 250ms.
+///
+/// Extracted from `run_tracker` (#655 F17) to keep it under the
+/// function-length cap. Pure motion: the caller still updates
+/// `prev_setlist_fingerprint` and fires `setlist_changed_tx` itself, AFTER
+/// releasing the status write lock, exactly as before this extraction —
+/// this fn only returns `(list_changed, new_fingerprint)` so the caller can
+/// do that unchanged.
+fn refresh_setlist_songs(
+    status: &mut AbleSetStatusInner,
+    setlist: &SetlistResponse,
+    prev_setlist_fingerprint: Option<u64>,
+) -> (bool, u64) {
+    let new_fingerprint = setlist_fingerprint(&setlist.songs);
+    let list_changed = prev_setlist_fingerprint != Some(new_fingerprint);
+
+    if list_changed {
+        // Rebuild cached song list only when the list actually changed to
+        // avoid unnecessary allocations every 250ms.
+        status.setlist_songs = setlist
+            .songs
+            .iter()
+            .map(|s| {
+                let name = s
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
+                    .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
+                    .unwrap_or_default();
+                let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
+                SetlistCachedSong {
+                    id: s.id.clone().unwrap_or_default(),
+                    name,
+                    skipped,
+                }
+            })
+            .collect();
+    }
+
+    (list_changed, new_fingerprint)
+}
+
 async fn run_tracker(
     inner: Arc<AbleSetInner>,
     config: AbleSetTrackerConfig,
@@ -498,31 +546,13 @@ async fn run_tracker(
                     Ok(Some(setlist)) => {
                         let new_active_id = setlist.active_song_id.clone();
                         let song_changed = new_active_id != prev_active_id;
-                        // #655 F1: the setlist LIST can change (loaded, reordered,
-                        // songs skipped/unskipped) independent of the active song
-                        // -- a setlist loaded before the service starts never has
-                        // an active song at all, so gating the rebuild on
-                        // song_changed alone left it permanently empty pre-service.
-                        let new_fingerprint = setlist_fingerprint(&setlist.songs);
-                        let list_changed = prev_setlist_fingerprint != Some(new_fingerprint);
                         let mut status = inner.status.write().await;
-
-                        if list_changed {
-                            // Rebuild cached song list only when the list actually
-                            // changed to avoid unnecessary allocations every 250ms.
-                            status.setlist_songs = setlist.songs.iter().map(|s| {
-                                let name = s.meta.as_ref()
-                                    .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
-                                    .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
-                                    .unwrap_or_default();
-                                let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
-                                SetlistCachedSong {
-                                    id: s.id.clone().unwrap_or_default(),
-                                    name,
-                                    skipped,
-                                }
-                            }).collect();
-                        }
+                        // #655 F1/F17: fingerprint-compares the setlist LIST itself
+                        // (independent of the active song) and rebuilds
+                        // status.setlist_songs on a real change — see
+                        // refresh_setlist_songs's doc comment for the full "why".
+                        let (list_changed, new_fingerprint) =
+                            refresh_setlist_songs(&mut status, &setlist, prev_setlist_fingerprint);
 
                         if let Some(active_id) = &setlist.active_song_id {
                             let mut found = false;

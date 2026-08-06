@@ -173,6 +173,55 @@ pub(crate) fn should_auto_restore_ndi(manager_loaded: bool, encoder_available: b
     manager_loaded && encoder_available
 }
 
+/// Resolve the Companion feature-enabled flag and listen port from config
+/// overrides + persisted app settings, persisting any new/changed values
+/// back to the DB. Extracted from `from_config` (#655 F2's subscriber wiring
+/// pushed it over the function-length cap) to keep the constructor under
+/// the cap. Pure motion: takes the two `Copy` override fields rather than
+/// `&CompanionConfig` because `from_config` already partially moves
+/// `config.companion.token` out before this point.
+async fn resolve_companion_settings(
+    repo: &Repository,
+    enabled_override: Option<bool>,
+    port_override: Option<u16>,
+) -> anyhow::Result<(bool, u16)> {
+    let stored_companion = repo
+        .get_app_setting(COMPANION_FEATURE_KEY)
+        .await?
+        .and_then(|value| parse_bool_flag(&value))
+        .unwrap_or(false);
+
+    let companion_enabled = enabled_override.unwrap_or(stored_companion);
+
+    if let Some(value) = enabled_override {
+        repo.set_app_setting(COMPANION_FEATURE_KEY, if value { "1" } else { "0" })
+            .await?;
+    }
+
+    let raw_port = repo.get_app_setting(COMPANION_PORT_KEY).await?;
+    let mut persist_port = false;
+    let stored_port = raw_port
+        .as_deref()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port >= 1);
+    let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
+    if stored_port.is_none() {
+        persist_port = true;
+    }
+
+    if let Some(port_override) = port_override {
+        companion_port = port_override;
+        persist_port = true;
+    }
+
+    if persist_port {
+        repo.set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
+            .await?;
+    }
+
+    Ok((companion_enabled, companion_port))
+}
+
 impl AppState {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(
@@ -265,42 +314,16 @@ impl AppState {
         let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
         let companion_token = config.companion.token;
 
-        let stored_companion = repo
-            .get_app_setting(COMPANION_FEATURE_KEY)
-            .await?
-            .and_then(|value| parse_bool_flag(&value))
-            .unwrap_or(false);
-
-        let companion_enabled = config
-            .companion
-            .enabled_override
-            .unwrap_or(stored_companion);
-
-        if let Some(value) = config.companion.enabled_override {
-            repo.set_app_setting(COMPANION_FEATURE_KEY, if value { "1" } else { "0" })
-                .await?;
-        }
-
-        let raw_port = repo.get_app_setting(COMPANION_PORT_KEY).await?;
-        let mut persist_port = false;
-        let stored_port = raw_port
-            .as_deref()
-            .and_then(|value| value.parse::<u16>().ok())
-            .filter(|port| *port >= 1);
-        let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
-        if stored_port.is_none() {
-            persist_port = true;
-        }
-
-        if let Some(port_override) = config.companion.port_override {
-            companion_port = port_override;
-            persist_port = true;
-        }
-
-        if persist_port {
-            repo.set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
-                .await?;
-        }
+        // Resolve the enabled flag + listen port from config overrides and
+        // persisted app settings (persisting anything new). Extracted to
+        // keep from_config under the function-length cap (#655 F2's
+        // subscriber wiring pushed it over 120 lines).
+        let (companion_enabled, companion_port) = resolve_companion_settings(
+            &repo,
+            config.companion.enabled_override,
+            config.companion.port_override,
+        )
+        .await?;
 
         let registry = ResolumeRegistry::new()?;
         let android_stage_registry = AndroidStageRegistry::new();

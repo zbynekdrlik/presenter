@@ -53,14 +53,30 @@ fn auto_restore_sites_invoke_encoder_gate_predicate() {
         if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
             continue;
         }
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        // Exclude test files from the scan. This meta-test guards PROD call
+        // sites only — without this exclusion the whole-directory walk counts
+        // its OWN `CALL` string literal (this very file, tests.rs, mentions it
+        // above in doc comments / assert messages) and would falsely fail the
+        // moment a second reference to the string appeared here. `*_tests.rs` /
+        // `*_test.rs` also covers sibling test-module files under state/ (e.g.
+        // ableset_integration_tests.rs, sync_integration_tests.rs) so a future
+        // one mentioning the predicate name can't trip this the same way. Test
+        // code is not a call site #333 item 6's gate needs to protect — only
+        // prod code paths are.
+        if file_name == "tests.rs"
+            || file_name.ends_with("_tests.rs")
+            || file_name.ends_with("_test.rs")
+        {
+            continue;
+        }
         let contents = std::fs::read_to_string(&path).expect("read a state/*.rs file");
         let occurrences = contents.matches(CALL).count();
         if occurrences > 0 {
-            let file_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_string();
             counts.insert(file_name, occurrences);
         }
     }
