@@ -413,3 +413,117 @@ mod set_stage_layout_error_mapping_tests {
         );
     }
 }
+
+/// #652 F4: `POST /stage/state` blanket-mapped EVERY error to 400 (the #615
+/// anti-pattern) via `.map_err(AppError::bad_request)` — an unknown/trashed
+/// `presentationId` answered 400 instead of 404, a body-referenced slide id
+/// answered 400 instead of 422, and a genuine internal failure answered 400
+/// instead of 500 (client blamed for a server fault).
+#[cfg(test)]
+mod update_stage_state_error_mapping_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn update_stage_state_returns_404_for_unknown_presentation() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        let random_presentation = uuid::Uuid::new_v4();
+        let random_slide = uuid::Uuid::new_v4();
+
+        let result = update_stage_state(
+            State(state),
+            Json(StageStateRequest {
+                presentation_id: random_presentation.to_string(),
+                current_slide_id: random_slide.to_string(),
+                next_slide_id: None,
+                playlist_id: None,
+                entry_index: None,
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "an unknown presentationId must be 404, not 400 (#652 F4)"
+        );
+    }
+
+    /// A genuine internal fault (here: the `stage_state` table dropped out
+    /// from under the upsert) unrelated to the request body must answer 500
+    /// — never 400.
+    #[tokio::test]
+    async fn update_stage_state_returns_500_on_internal_failure_not_400() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        crate::state::seed_sample_library(&state).await.unwrap();
+        let libraries = state.libraries().await.unwrap();
+        let presentation = &libraries[0].presentations[0];
+        let current_slide = presentation.slides[0].id;
+
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "DROP TABLE stage_state".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = update_stage_state(
+            State(state),
+            Json(StageStateRequest {
+                presentation_id: presentation.id.to_string(),
+                current_slide_id: current_slide.to_string(),
+                next_slide_id: None,
+                playlist_id: None,
+                entry_index: None,
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error from the dropped table, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a genuine internal failure must be 500, not 400 (#652 F4)"
+        );
+    }
+
+    /// A `currentSlideId` that doesn't belong to the presentation is a
+    /// body-referenced missing target — 422, not 400 (traced alongside the
+    /// presentation-not-found bail per the settled design's "trace every
+    /// caller" instruction).
+    #[tokio::test]
+    async fn update_stage_state_returns_422_for_slide_not_in_presentation() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        crate::state::seed_sample_library(&state).await.unwrap();
+        let libraries = state.libraries().await.unwrap();
+        let presentation = &libraries[0].presentations[0];
+
+        let result = update_stage_state(
+            State(state),
+            Json(StageStateRequest {
+                presentation_id: presentation.id.to_string(),
+                current_slide_id: SlideId::new().to_string(),
+                next_slide_id: None,
+                playlist_id: None,
+                entry_index: None,
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a slide not in the presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a currentSlideId not in the presentation must be 422, not 400 (#652 F4)"
+        );
+    }
+}
