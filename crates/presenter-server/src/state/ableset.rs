@@ -817,4 +817,49 @@ mod cache_tests {
         assert_eq!(summary.total, 10);
         assert_eq!(summary.sample.len(), 5, "the log sample must cap at 5");
     }
+
+    // #655 F14 — RED (this commit): `build_ableset_entries` currently lets a
+    // duplicate song number silently overwrite via `HashMap::insert` — no
+    // error is set, so `error.expect(...)` below panics. GREEN detects the
+    // collision and sets `error`.
+    #[test]
+    fn build_ableset_entries_reports_duplicate_song_numbers() {
+        use presenter_core::PresentationSummary;
+
+        let presentations = vec![
+            PresentationSummary {
+                id: PresentationId::new(),
+                name: "017 First Song".to_string(),
+            },
+            PresentationSummary {
+                id: PresentationId::new(),
+                name: "017 Second Song".to_string(),
+            },
+        ];
+
+        let (entries, _presenter_titles, error) = build_ableset_entries(presentations, 3);
+        assert_eq!(
+            entries.len(),
+            1,
+            "the colliding number resolves to exactly one entry"
+        );
+        let error = error.expect("a duplicate song number must set an error");
+        assert!(
+            error.contains("017") && error.contains("duplicate"),
+            "error must name the colliding number: {error}"
+        );
+    }
+
+    #[test]
+    fn build_ableset_entries_reports_no_valid_prefix_when_none_collide() {
+        use presenter_core::PresentationSummary;
+
+        let presentations = vec![PresentationSummary {
+            id: PresentationId::new(),
+            name: "No Number Intro".to_string(),
+        }];
+        let (entries, _presenter_titles, error) = build_ableset_entries(presentations, 3);
+        assert!(entries.is_empty());
+        assert_eq!(error.as_deref(), Some("no presentations with valid prefix"));
+    }
 }
