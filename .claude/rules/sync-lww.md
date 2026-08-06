@@ -31,8 +31,11 @@ Two-site LWW sync (PP↔SNV), strict-`>` gate on `updated_at` (sync_id tie-break
    current; the peer may have revived/renamed a library you still hold tombstoned.
 
 4. **Tombstone cascades must clean dependents everywhere**: `playlist_entry` rows +
-   `slide_stage_layout` markers — `delete_library`/`delete_presentation` and the forced-tombstone
-   path all do; a new tombstone-writing path must too (gap for genuine incoming tombstones: #649).
+   `slide_stage_layout` markers — `delete_library`/`delete_presentation`, the forced-tombstone
+   path, AND a genuine (non-forced) incoming tombstone (#649, fixed) all do, via the shared
+   `clean_playlist_entries_for_tombstone` helper (`sync_apply_tombstone_cleanup.rs`) gated on
+   `effective_deleted_at.is_some()` in `write_synced_row` — a new tombstone-writing path must
+   call it too.
 
 5. Known open flaw: presentations join libraries by NAME on the wire (`SyncPresentation.library_name`)
    → mis-filing/phantom libraries across rename races (#647, cross-cutting protocol change).

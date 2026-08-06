@@ -262,3 +262,71 @@ async fn forced_tombstone_cleans_playlist_entries_and_clears_stage_layout_marker
          cleared, never remapped onto its replacement slides"
     );
 }
+
+#[tokio::test]
+async fn genuine_incoming_tombstone_cleans_playlist_entries() {
+    // #649: a GENUINE peer-initiated tombstone (the peer deleted the song
+    // for real -- no library cascade involved, unlike the #646 forced case
+    // above) must clean `playlist_entry` rows the same way a local delete
+    // (`delete_presentation`) does. Before the fix, `write_synced_row` only
+    // ran the playlist-entry cleanup when `forced_delete.is_some()`, so this
+    // ordinary case -- matched by `sync_id`, `incoming.deleted_at: Some(_)`,
+    // no library cascade -- left the reference behind.
+    let repo = repo().await;
+    repo.create_library("Songs").await.unwrap();
+
+    let initial = peer_song("peer-genuine-tombstone", "Genuine Song", "verse one", 30);
+    let (outcome, id) = repo
+        .apply_sync_presentation(&initial, &HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Created);
+    let pres_id = id.expect("created presentation has an id");
+
+    let playlist = repo.create_playlist("Sunday", false).await.unwrap();
+    playlist_entry::Entity::insert(playlist_entry::ActiveModel {
+        id: sea_orm::Set(uuid::Uuid::new_v4().to_string()),
+        playlist_id: sea_orm::Set(playlist.id.to_string()),
+        entry_type: sea_orm::Set("presentation".to_string()),
+        presentation_id: sea_orm::Set(Some(pres_id.to_string())),
+        position: sea_orm::Set(0),
+        midi_note: sea_orm::Set(None),
+        label: sea_orm::Set(None),
+    })
+    .exec(&repo.db)
+    .await
+    .unwrap();
+
+    // The peer's own, real deletion of this song -- same library, no
+    // cascade, `deleted_at: Some(_)` -- strictly newer than the initial
+    // apply so it's accepted.
+    let tombstone = crate::SyncPresentation {
+        sync_id: "peer-genuine-tombstone".to_string(),
+        library_name: "Songs".to_string(),
+        name: "Genuine Song".to_string(),
+        updated_at: chrono::Utc::now() - chrono::Duration::minutes(5),
+        deleted_at: Some(chrono::Utc::now() - chrono::Duration::minutes(5)),
+        slides: vec![slide(0, "verse one")],
+    };
+    let (outcome, _) = repo
+        .apply_sync_presentation(&tombstone, &HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, crate::SyncApplyOutcome::Updated);
+    let pres_row = row(&repo, pres_id).await;
+    assert!(
+        pres_row.deleted_at.is_some(),
+        "sanity: genuinely tombstoned"
+    );
+
+    let remaining_entries = playlist_entry::Entity::find()
+        .filter(playlist_entry::Column::PresentationId.eq(pres_id.to_string()))
+        .all(&repo.db)
+        .await
+        .unwrap();
+    assert!(
+        remaining_entries.is_empty(),
+        "playlist entries referencing a genuinely (non-forced) tombstoned \
+         song must be removed, same as a local delete"
+    );
+}
