@@ -73,7 +73,7 @@ fn mismatch_for_number(
                 != normalize_title_for_mismatch(strip_song_prefix(p, prefix_length));
             let acknowledged = acks
                 .get(number)
-                .is_some_and(|ack| ack.ableset_title == a && ack.presenter_title == p);
+                .is_some_and(|ack| ack_matches_current_titles(ack, a, p, prefix_length));
             if differs && !acknowledged {
                 Some(AbleSetTitleMismatch {
                     number: number.to_string(),
@@ -96,6 +96,29 @@ fn mismatch_for_number(
         }),
         (None, None) => None,
     }
+}
+
+/// Whether a stored acknowledgement still covers the CURRENT pair of titles
+/// (#655 F9e, re-settled): compares both sides through
+/// `normalize_title_for_mismatch` (the same fold used for the mismatch
+/// decision itself) rather than raw `==`. The ack is stored RAW (exactly the
+/// strings the operator saw on `GET status`), but a purely cosmetic change on
+/// either side (diacritics, extra whitespace, case) must not silently
+/// re-raise a warning the operator already dismissed — while a genuine title
+/// change (this function returning `false`) still must.
+fn ack_matches_current_titles(
+    ack: &super::ableset_ack::AbleSetMismatchAck,
+    current_ableset_title: &str,
+    current_presenter_title: &str,
+    prefix_length: u8,
+) -> bool {
+    normalize_title_for_mismatch(strip_song_prefix(&ack.ableset_title, prefix_length))
+        == normalize_title_for_mismatch(strip_song_prefix(current_ableset_title, prefix_length))
+        && normalize_title_for_mismatch(strip_song_prefix(&ack.presenter_title, prefix_length))
+            == normalize_title_for_mismatch(strip_song_prefix(
+                current_presenter_title,
+                prefix_length,
+            ))
 }
 
 #[cfg(test)]

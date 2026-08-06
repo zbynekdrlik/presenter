@@ -21,7 +21,7 @@
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
 
 mod ableset;
-mod ableset_ack;
+pub(crate) mod ableset_ack;
 #[cfg(test)]
 mod ableset_integration_tests;
 mod ableset_mismatch;
@@ -149,6 +149,10 @@ pub struct AppState {
     /// snapshot-replace slide-edit op and the sync-apply call site — so
     /// the two can never interleave on the same presentation.
     presentation_locks: PresentationLockRegistry,
+    /// #655 F9a: serializes AbleSet mismatch-acknowledgement mutations
+    /// (load->mutate->save, and the F9b prune) so two concurrent
+    /// ack/unack/prune calls can never lose one's update to the other.
+    ableset_ack_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -240,6 +244,7 @@ impl AppState {
             turn: TurnService::from_env(),
             sync: sync::SyncCoordinator::new(),
             presentation_locks: PresentationLockRegistry::new(),
+            ableset_ack_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         state.spawn_heartbeat_tasks();
         state

@@ -6,6 +6,7 @@ use presenter_core::{
 use std::collections::{HashMap, VecDeque};
 use tracing::{info, warn};
 
+use super::ableset_ack::AckMap;
 use super::AppState;
 use crate::ableset::AbleSetStatusSnapshot;
 
@@ -47,6 +48,20 @@ pub(crate) struct AbleSetLibraryCache {
     /// recent successful rebuild (#601). Cleared alongside `entries` on
     /// invalidation — see `install_if_current` and the invalidate methods.
     pub(crate) mismatches: Vec<AbleSetTitleMismatch>,
+    /// `prefix -> full presentation name` from the most recent successful
+    /// rebuild (#655 F5c/F8) — lets an ack/unack recompute the mismatch
+    /// report WITHOUT a full DB rescan, and lets `refresh_ableset_cache`
+    /// avoid re-fetching it. Cleared alongside `entries` on invalidation.
+    pub(crate) presenter_titles: HashMap<String, String>,
+    /// Mirror of the persisted AbleSet mismatch-acknowledgement store (#655
+    /// F8) — updated ONLY by `acknowledge_ableset_mismatch` /
+    /// `unacknowledge_ableset_mismatch` / the F9b prune, never reloaded from
+    /// the DB inside a normal `refresh_ableset_cache` rebuild. This is what
+    /// narrows the #639 CAS window down to the one remaining unavoidable DB
+    /// fetch (the library summaries). Survives `invalidate`/
+    /// `invalidate_entries` — an ack is keyed on song NUMBER, not on which
+    /// library is currently tracked.
+    pub(crate) acks: AckMap,
 }
 
 impl AbleSetLibraryCache {
@@ -57,6 +72,7 @@ impl AbleSetLibraryCache {
         self.last_updated = None;
         self.last_error = None;
         self.mismatches.clear();
+        self.presenter_titles.clear();
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -69,6 +85,7 @@ impl AbleSetLibraryCache {
     pub(crate) fn invalidate_entries(&mut self) {
         self.entries.clear();
         self.mismatches.clear();
+        self.presenter_titles.clear();
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -105,6 +122,17 @@ impl AbleSetLibraryCache {
         &self.mismatches
     }
 
+    /// Read-only view of the `prefix -> title` map from the last successful
+    /// rebuild (#655 F5c).
+    pub(crate) fn presenter_titles(&self) -> &HashMap<String, String> {
+        &self.presenter_titles
+    }
+
+    /// Read-only view of the cached acknowledgement-store mirror (#655 F8).
+    pub(crate) fn acks(&self) -> &AckMap {
+        &self.acks
+    }
+
     /// Current generation counter (#639) — captured by a refresh BEFORE its
     /// async DB fetch, so its eventual install can detect a concurrent
     /// invalidate.
@@ -121,6 +149,7 @@ impl AbleSetLibraryCache {
     /// `ensure_ableset_cache` call sees `entries` still empty (the
     /// invalidate's own effect, left untouched) and retries cleanly.
     /// Returns whether the install happened.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn install_if_current(
         &mut self,
         expected_generation: u64,
@@ -129,6 +158,7 @@ impl AbleSetLibraryCache {
         entries: HashMap<String, PresentationId>,
         error: Option<String>,
         mismatches: Vec<AbleSetTitleMismatch>,
+        presenter_titles: HashMap<String, String>,
     ) -> bool {
         if self.generation != expected_generation {
             return false;
@@ -139,6 +169,7 @@ impl AbleSetLibraryCache {
         self.last_updated = Some(Utc::now());
         self.last_error = error;
         self.mismatches = mismatches;
+        self.presenter_titles = presenter_titles;
         true
     }
 
@@ -324,22 +355,28 @@ impl AppState {
         };
 
         let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
-        let acks = match self.load_ableset_mismatch_acks().await {
-            Ok(acks) => acks,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    "failed to load AbleSet mismatch acknowledgements — treating as none (#601)"
-                );
-                super::ableset_ack::AckMap::new()
-            }
-        };
+        // #655 F8: read the cached ack mirror instead of the DB — the mirror
+        // is kept current by acknowledge/unacknowledge/prune, and NOT
+        // reloading it here removes a DB await that used to sit inside the
+        // #639 CAS window (between the generation capture above and the
+        // install below), narrowing that window to just the one remaining
+        // unavoidable fetch (`list_library_summaries`).
+        let acks = self.caches.ableset.read().await.acks().clone();
         let mismatches = super::ableset_mismatch::compute_ableset_mismatches(
             &presenter_titles,
             &ableset_songs,
             settings.song_prefix_length,
             &acks,
         );
+
+        // #655 F9b: prune acks no longer present on EITHER side — only when
+        // both sides are non-empty (a real comparison), so an empty/disabled
+        // tick never wrongly prunes acks for numbers that simply weren't
+        // compared this round.
+        if !presenter_titles.is_empty() && !ableset_songs.is_empty() {
+            self.prune_stale_ableset_acks(&presenter_titles, &ableset_songs)
+                .await;
+        }
 
         let entries_found = entries.len();
         let mut cache = self.caches.ableset.write().await;
@@ -350,6 +387,7 @@ impl AppState {
             entries,
             error,
             mismatches,
+            presenter_titles,
         );
         log_ableset_rebuild_result(
             installed,
@@ -522,6 +560,7 @@ mod cache_tests {
             HashMap::from([("001".to_string(), PresentationId::new())]),
             None,
             Vec::new(),
+            HashMap::new(),
         );
 
         assert!(
@@ -548,6 +587,7 @@ mod cache_tests {
             HashMap::from([("001".to_string(), id)]),
             None,
             Vec::new(),
+            HashMap::new(),
         );
 
         assert!(
