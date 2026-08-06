@@ -22,6 +22,7 @@ mod sync;
 mod sync_apply;
 #[cfg(test)]
 mod sync_apply_review_tests;
+mod sync_apply_tombstone_cleanup;
 #[cfg(test)]
 mod sync_restore_review_tests;
 #[cfg(test)]

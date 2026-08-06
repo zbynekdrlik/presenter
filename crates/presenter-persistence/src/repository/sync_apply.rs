@@ -635,17 +635,14 @@ impl Repository {
             .exec(conn)
             .await?;
 
-        if forced_delete.is_some() {
-            // #646 finding 3: clean playlist references the SAME way
+        if effective_deleted_at.is_some() {
+            // #646 finding 3 + #649: clean playlist references the SAME way
             // `delete_library`/`delete_presentation` do on a real local
-            // delete. Markers are handled below via `replace_slides`.
-            // Scoped to the FORCED case per the settled design -- a
-            // GENUINE incoming tombstone's own gap is filed as #649.
-            use crate::entities::playlist_entry;
-            playlist_entry::Entity::delete_many()
-                .filter(playlist_entry::Column::PresentationId.eq(local_id.to_string()))
-                .exec(conn)
-                .await?;
+            // delete -- for BOTH a forced tombstone (library cascade) and a
+            // GENUINE, non-forced tombstone the peer sent us. Markers are
+            // handled below via `replace_slides`. See
+            // `sync_apply_tombstone_cleanup.rs`.
+            Self::clean_playlist_entries_for_tombstone(conn, local_id).await?;
         }
 
         Self::replace_slides(conn, local_id, incoming, effective_deleted_at.is_some()).await
