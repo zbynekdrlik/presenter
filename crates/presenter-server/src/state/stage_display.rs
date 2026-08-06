@@ -165,9 +165,19 @@ impl AppState {
         // broadcast (LiveEvent::StageLayout), so a failure here (e.g. a
         // corrupted timers row) misreported an already-successful layout
         // switch as a 500 to the caller.
-        let context = self
+        //
+        // #652 F1: this build is now a VALIDATION PROBE ONLY — its result is
+        // discarded (`.is_some()`), never threaded through to the publish
+        // below. Reusing the pre-built context for the publish widened the
+        // stale-broadcast window: a stage trigger landing between this probe
+        // and the persist/broadcast below could publish its own fresh
+        // snapshot, only for THIS switch to then overwrite it with the
+        // stale, pre-built one. `persist_and_broadcast_switch` re-derives a
+        // FRESH context via `broadcast_stage_snapshots()` instead.
+        let needs_snapshot_broadcast = self
             .context_for_pending_switch(&layout, publish_snapshots)
-            .await?;
+            .await?
+            .is_some();
 
         {
             let mut guard = self.stage_layout.write().await;
@@ -176,7 +186,8 @@ impl AppState {
             }
             *guard = layout.code.clone();
         }
-        self.persist_and_broadcast_switch(&layout, context).await;
+        self.persist_and_broadcast_switch(&layout, needs_snapshot_broadcast)
+            .await;
         Ok(layout)
     }
 
@@ -186,6 +197,10 @@ impl AppState {
     /// when no snapshot broadcast is needed at all (the api layout drives
     /// its own snapshot separately; `publish_snapshots = false` callers
     /// broadcast their own resolution right after, #515).
+    ///
+    /// #652 F1: the caller only inspects `.is_some()` — the built
+    /// `StageContext` itself is a validation PROBE and is never published
+    /// (see `switch_stage_layout`).
     async fn context_for_pending_switch(
         &self,
         layout: &StageDisplayLayout,
@@ -202,10 +217,18 @@ impl AppState {
     /// already committed, so neither a persist failure nor a broadcast
     /// failure may turn an already-successful switch into a caller-visible
     /// error (#384 for persist, #631 for the snapshot broadcast).
+    ///
+    /// `needs_snapshot_broadcast` is the OUTCOME of the pre-switch
+    /// validation probe (`context_for_pending_switch`), never its actual
+    /// `StageContext` value (#652 F1) — when a broadcast is needed, this
+    /// re-derives a FRESH context via `broadcast_stage_snapshots()` rather
+    /// than publishing the (potentially now-stale) probed one, so a stage
+    /// trigger that landed in the probe-to-persist window is never
+    /// overwritten by this switch's stale snapshot.
     async fn persist_and_broadcast_switch(
         &self,
         layout: &StageDisplayLayout,
-        context: Option<StageContext>,
+        needs_snapshot_broadcast: bool,
     ) {
         // Persist so the layout survives a restart/deploy (#384). The
         // in-memory RwLock is the live source of truth for broadcasts; the
@@ -235,11 +258,10 @@ impl AppState {
             // marker path also short-circuits on the api layout.
             let snapshot = self.api_stage_snapshot().await;
             self.live_hub.publish(LiveEvent::Stage { snapshot });
-        } else if let Some(context) = context {
-            // #631: publish the ALREADY-BUILT context — this only maps it
-            // onto a snapshot and publishes (effectively infallible once
-            // `context` exists).
-            if let Err(err) = self.publish_stage_context(&context).await {
+        } else if needs_snapshot_broadcast {
+            // #652 F1: re-derive a FRESH context here rather than reusing
+            // the probe's (potentially stale) result.
+            if let Err(err) = self.broadcast_stage_snapshots().await {
                 tracing::warn!(
                     ?err,
                     code = %layout.code,
