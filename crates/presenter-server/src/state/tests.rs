@@ -27,32 +27,55 @@ fn should_auto_restore_ndi_requires_manager_and_encoder() {
     assert!(!super::should_auto_restore_ndi(false, false));
 }
 
-/// Structural regression (deep-review 🔵 #7): the predicate is correct in
-/// isolation, but item 6's safety depends on EVERY auto-restore site
-/// consulting it. There are two sites, in two DIFFERENT files after the
-/// #486-style split of `state/mod.rs`: the one-shot startup restore stayed
-/// in `mod.rs` (`restore_active_ndi_source`), and the 30s background
-/// reconnect loop moved to `background_tasks.rs` (`spawn_background_tasks`).
-/// A refactor that drops one of the call sites would silently re-introduce
-/// the 2026-05-24 wedge failure mode without breaking any other test. This
-/// test pins the call sites lexically, one per file — if you legitimately
-/// refactor (e.g. extract to a shared helper, or move a site to yet another
-/// file), update the expected counts and the comment.
+/// Structural regression (deep-review 🔵 #7, generalized #655 F17): the
+/// predicate is correct in isolation, but item 6's safety depends on EVERY
+/// auto-restore site consulting it. There are two sites, in two DIFFERENT
+/// files after the #486-style split of `state/mod.rs`: the one-shot startup
+/// restore stayed in `mod.rs` (`restore_active_ndi_source`), and the 30s
+/// background reconnect loop moved to `background_tasks.rs`
+/// (`spawn_background_tasks`).
+///
+/// #655 F17: the ORIGINAL version of this test was a two-file ALLOW-LIST
+/// (`include_str!("mod.rs")` + `include_str!("background_tasks.rs")`) — it
+/// would stay green even if a THIRD call site appeared in some OTHER
+/// `state/*.rs` file, because that file was simply never scanned. This
+/// version walks the ENTIRE `state/` directory (`std::fs::read_dir`) and
+/// asserts the call-site count is a crate-wide invariant: EXACTLY 2 total,
+/// in EXACTLY these two files — a third call site anywhere else in
+/// `state/` now fails this test instead of silently escaping it.
 #[test]
 fn auto_restore_sites_invoke_encoder_gate_predicate() {
     const CALL: &str = "should_auto_restore_ndi(manager_loaded, encoder_available)";
-    let mod_rs = include_str!("mod.rs");
-    let background_tasks_rs = include_str!("background_tasks.rs");
-    let mod_rs_occurrences = mod_rs.matches(CALL).count();
-    let background_tasks_occurrences = background_tasks_rs.matches(CALL).count();
-    let total = mod_rs_occurrences + background_tasks_occurrences;
+    let state_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/state");
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(state_dir).expect("read the state/ directory") {
+        let path = entry.expect("state/ dir entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let contents = std::fs::read_to_string(&path).expect("read a state/*.rs file");
+        let occurrences = contents.matches(CALL).count();
+        if occurrences > 0 {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            counts.insert(file_name, occurrences);
+        }
+    }
+    let total: usize = counts.values().sum();
+    let expected: std::collections::BTreeMap<String, usize> = [
+        ("mod.rs".to_string(), 1),
+        ("background_tasks.rs".to_string(), 1),
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(
-        (mod_rs_occurrences, background_tasks_occurrences),
-        (1, 1),
+        counts, expected,
         "expected exactly 1 call site to should_auto_restore_ndi(manager_loaded, encoder_available) \
          in state/mod.rs (one-shot startup restore) AND exactly 1 in state/background_tasks.rs \
-         (30s reconnect loop) — found {mod_rs_occurrences} in mod.rs and {background_tasks_occurrences} \
-         in background_tasks.rs (total {total}). \
+         (30s reconnect loop), and NOWHERE ELSE under state/ — found: {counts:?} (total {total}). \
          If a call site was intentionally removed, moved, or refactored, update this test \
          AND the supporting comments to match. Otherwise #333 item 6's protection \
          has a hole — restore the gate before merging."
