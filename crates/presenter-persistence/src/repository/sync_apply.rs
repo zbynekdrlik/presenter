@@ -359,31 +359,11 @@ impl Repository {
         if let Some(id) = Self::find_library_id(txn, library_name).await? {
             return Ok((id, None));
         }
-        // Order by UpdatedAt DESC, SyncId DESC: repeated delete/recreate
-        // cycles of the same-named library leave MULTIPLE tombstoned rows
-        // behind (the partial unique index only guards LIVE rows — see
-        // idx_libraries_name_live_unique), and `.one()` with no explicit
-        // order picks an arbitrary one. Always deciding against the MOST
-        // RECENT tombstone is the one that's actually relevant to this
-        // race; an older, already-superseded tombstone would compare the
-        // presentation against the wrong timestamp entirely. `SyncId` is
-        // the tie-breaker for an EXACT `updated_at` collision (two rapid
-        // delete/recreate cycles can land on the same wall-clock
-        // millisecond) — it MUST be a peer-stable key, never a local-only
-        // one like the row `Id` (`find_live_by_name_candidate`'s own
-        // secondary sort), or two peers holding the same two tombstoned
-        // rows could break the tie in DIFFERENT directions and pick a
-        // DIFFERENT "most recent" tombstone each — reintroducing the exact
-        // divergence class this fix closes. `sync_id` converges identically
-        // on both sides once synced, so ordering by it is deterministic
-        // peer-to-peer.
-        if let Some(tombstoned) = library::Entity::find()
-            .filter(library::Column::Name.eq(library_name.to_string()))
-            .filter(library::Column::DeletedAt.is_not_null())
-            .order_by_desc(library::Column::UpdatedAt)
-            .order_by_desc(library::Column::SyncId)
-            .one(txn)
-            .await?
+        // #626: resolved via the SHARED `find_most_recent_tombstoned_library`
+        // helper — see its doc comment for why this must be the ONE query
+        // both this function and `ensure_library_for_tombstone` use.
+        if let Some(tombstoned) =
+            Self::find_most_recent_tombstoned_library(txn, library_name).await?
         {
             let library_updated: DateTime<Utc> = tombstoned.updated_at.into();
             if presentation_updated_at > library_updated {
@@ -427,9 +407,37 @@ impl Repository {
         Ok((id, None))
     }
 
+    /// The most recently updated TOMBSTONED library row named `library_name`,
+    /// or `None` if none exists. Ties break by `SyncId` DESC (peer-stable —
+    /// never the local-only `Id`, or two peers could break a tie in
+    /// DIFFERENT directions and diverge).
+    ///
+    /// Shared by `ensure_library` and `ensure_library_for_tombstone` so the
+    /// two can never independently order the same tombstones differently
+    /// (#626: the latter used to run its OWN `DeletedAt ASC`-primary query,
+    /// which only agreed with this one when every same-named tombstone
+    /// shared the exact same `deleted_at` — #595's own test covered only
+    /// that case. An ordinary delete/recreate cycle leaves DIFFERENT
+    /// `deleted_at` values per attempt, and the two independently-sorted
+    /// queries then picked DIFFERENT rows).
+    async fn find_most_recent_tombstoned_library(
+        txn: &sea_orm::DatabaseTransaction,
+        library_name: &str,
+    ) -> anyhow::Result<Option<library::Model>> {
+        Ok(library::Entity::find()
+            .filter(library::Column::Name.eq(library_name.to_string()))
+            .filter(library::Column::DeletedAt.is_not_null())
+            .order_by_desc(library::Column::UpdatedAt)
+            .order_by_desc(library::Column::SyncId)
+            .one(txn)
+            .await?)
+    }
+
     /// #578: resolve a library id for a brand-new TOMBSTONED presentation
     /// WITHOUT creating an empty LIVE library shell. Attach to any existing
-    /// same-named library (live preferred, then tombstoned); if none exists,
+    /// same-named library (a LIVE one always wins via `find_library_id`;
+    /// otherwise the most recently updated TOMBSTONED one via the shared
+    /// `find_most_recent_tombstoned_library` helper — #626); if none exists,
     /// create a TOMBSTONED library (its identity converges separately via the
     /// peer's library manifest). Used only by `apply_unknown_sync_id` for a
     /// tombstone — a live entry keeps using `ensure_library`.
@@ -437,21 +445,10 @@ impl Repository {
         txn: &sea_orm::DatabaseTransaction,
         library_name: &str,
     ) -> anyhow::Result<String> {
-        // order_by DeletedAt ASC → live rows (NULL sorts first in SQLite) win
-        // over a tombstoned same-named row when both exist. Secondary sort
-        // (#595): UpdatedAt DESC + SyncId DESC — the SAME tiebreak
-        // `ensure_library` uses for tombstones, so both helpers resolve to
-        // the SAME row when multiple same-named tombstones exist. Without
-        // this, equal deleted_at values fall back to rowid order and the
-        // two helpers can pick DIFFERENT tombstones.
-        if let Some(row) = library::Entity::find()
-            .filter(library::Column::Name.eq(library_name.to_string()))
-            .order_by_asc(library::Column::DeletedAt)
-            .order_by_desc(library::Column::UpdatedAt)
-            .order_by_desc(library::Column::SyncId)
-            .one(txn)
-            .await?
-        {
+        if let Some(id) = Self::find_library_id(txn, library_name).await? {
+            return Ok(id);
+        }
+        if let Some(row) = Self::find_most_recent_tombstoned_library(txn, library_name).await? {
             return Ok(row.id);
         }
         let id = uuid::Uuid::new_v4().to_string();
