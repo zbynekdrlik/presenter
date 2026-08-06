@@ -287,21 +287,20 @@ pub(super) fn compute_ai_connected(connectivity_ok: bool, claude_authenticated: 
 /// Extracted as a pure function so the branch logic is unit-testable without
 /// constructing a live ProxyManager + network connectivity (same rationale
 /// as `compute_ai_connected` above).
-///
-/// #624 RED: this stub still drops `connectivity_error` — the exact bug this
-/// ticket fixes. The GREEN commit embeds it in the returned message.
 pub(super) fn compute_ai_status_error(
     connected: bool,
     claude_authenticated: bool,
     connectivity_error: Option<&str>,
 ) -> Option<String> {
-    let _ = connectivity_error;
     if connected {
         None
     } else if !claude_authenticated {
         Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
     } else {
-        Some("AI proxy unreachable".to_string())
+        Some(match connectivity_error {
+            Some(err) => format!("AI proxy unreachable: {err}"),
+            None => "AI proxy unreachable".to_string(),
+        })
     }
 }
 
