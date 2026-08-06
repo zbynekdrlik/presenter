@@ -118,9 +118,8 @@ impl AppState {
 /// and report per-number title disagreements the operator has not
 /// acknowledged (#601). Three outcomes per number:
 ///
-/// - both sides present and agree once normalised (diacritics/punctuation/
-///   case folded, internal whitespace kept significant — see
-///   `normalize_title_for_mismatch`) → silent.
+/// - both sides present and agree once normalised (diacritics/whitespace/
+///   punctuation/case folded — see `normalize_title_for_mismatch`) → silent.
 /// - both sides present, titles genuinely differ, NOT acknowledged for this
 ///   exact pair → reported.
 /// - present on only one side → ALWAYS reported; acknowledgement does not
