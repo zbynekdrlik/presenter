@@ -66,7 +66,7 @@ impl Repository {
 mod tests {
     use crate::entities::{playlist_entry, presentation as presentation_entity};
     use crate::repository::sync_test_support::repo;
-    use sea_orm::{sea_query::Expr, ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+    use sea_orm::{sea_query::Expr, ColumnTrait, EntityTrait, QueryFilter, Set};
 
     /// #658 RED: seeds a tombstoned presentation with a dangling
     /// `playlist_entry` — the exact pre-#649 residue shape (the presentation
@@ -102,7 +102,7 @@ mod tests {
 
         let playlist = repo.create_playlist("Sunday", false).await.unwrap();
         let live_entry_id = uuid::Uuid::new_v4().to_string();
-        playlist_entry::ActiveModel {
+        playlist_entry::Entity::insert(playlist_entry::ActiveModel {
             id: Set(live_entry_id.clone()),
             playlist_id: Set(playlist.id.to_string()),
             entry_type: Set("presentation".to_string()),
@@ -110,13 +110,13 @@ mod tests {
             position: Set(0),
             midi_note: Set(None),
             label: Set(None),
-        }
-        .insert(&repo.db)
+        })
+        .exec(&repo.db)
         .await
         .unwrap();
 
         let dangling_entry_id = uuid::Uuid::new_v4().to_string();
-        playlist_entry::ActiveModel {
+        playlist_entry::Entity::insert(playlist_entry::ActiveModel {
             id: Set(dangling_entry_id.clone()),
             playlist_id: Set(playlist.id.to_string()),
             entry_type: Set("presentation".to_string()),
@@ -124,8 +124,8 @@ mod tests {
             position: Set(1),
             midi_note: Set(None),
             label: Set(None),
-        }
-        .insert(&repo.db)
+        })
+        .exec(&repo.db)
         .await
         .unwrap();
 
