@@ -276,4 +276,24 @@ mod tests {
             "a non-existent slide_id must be 404, not 500 (#629)"
         );
     }
+
+    /// #652 F8: GET and PUT must agree on an unknown presentation — they
+    /// name the SAME URL resource. PUT already 404s (see
+    /// `put_returns_404_for_unknown_presentation` above); GET currently
+    /// returns a misleading 200 `{}` instead.
+    #[tokio::test]
+    async fn get_returns_404_for_unknown_presentation() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        let random_uuid = uuid::Uuid::new_v4();
+
+        let result = list_slide_stage_layouts(State(state), Path(random_uuid.to_string())).await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent presentation, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "GET on an unknown presentation must be 404, matching PUT (#652 F8)"
+        );
+    }
 }
