@@ -435,6 +435,50 @@ fn build_ableset_entries(
 mod cache_tests {
     use super::*;
 
+    // #655 F15 — RED (this commit): `cap_mismatches_for_status` does not
+    // exist yet, so this fails to compile — the established pattern in this
+    // codebase for a new API being introduced (see the #601 strip_song_prefix
+    // precedent in presenter-core). GREEN adds the function and wires it
+    // into `ableset_status_snapshot`.
+    #[test]
+    fn cap_mismatches_for_status_caps_at_25_and_reports_total_count() {
+        let mismatches: Vec<AbleSetTitleMismatch> = (0..30)
+            .map(|i| AbleSetTitleMismatch {
+                number: format!("{i:03}"),
+                ableset_title: format!("AbleSet {i}"),
+                presenter_title: format!("Presenter {i}"),
+            })
+            .collect();
+
+        let (capped, total) = cap_mismatches_for_status(&mismatches);
+
+        assert_eq!(
+            capped.len(),
+            25,
+            "a 5s-polled status endpoint must cap the inline mismatch list at 25"
+        );
+        assert_eq!(
+            total, 30,
+            "the total count must reflect ALL mismatches, not just the capped slice"
+        );
+        assert_eq!(
+            capped[0].number, "000",
+            "the capped slice must be the FIRST 25, not an arbitrary subset"
+        );
+    }
+
+    #[test]
+    fn cap_mismatches_for_status_does_not_truncate_under_the_cap() {
+        let mismatches = vec![AbleSetTitleMismatch {
+            number: "001".to_string(),
+            ableset_title: "A".to_string(),
+            presenter_title: "B".to_string(),
+        }];
+        let (capped, total) = cap_mismatches_for_status(&mismatches);
+        assert_eq!(capped.len(), 1);
+        assert_eq!(total, 1);
+    }
+
     // #639 — RED (this commit): `generation`/`install_if_current` prove the
     // compare-and-swap that closes the TOCTOU window described in the issue
     // ("An invalidate request that lands in the window between the read and
