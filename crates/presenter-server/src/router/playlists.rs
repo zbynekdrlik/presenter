@@ -207,3 +207,50 @@ pub(super) async fn replace_playlist_entries(
     let enriched = state.enrich_playlist_with_names(playlist).await?;
     Ok(Json(enriched))
 }
+
+#[cfg(test)]
+mod duplicate_entry_id_tests {
+    use super::*;
+    use axum::extract::{Path, State};
+    use axum::response::IntoResponse;
+
+    /// #652 F9: a replace payload with two entries sharing the SAME explicit
+    /// `entryId` reaches the repository's raw INSERT unchanged and trips a
+    /// PK violation -> 500 (hardening; no UI path emits this today).
+    /// Settled design: reject it in the ROUTER handler — pure body
+    /// validation, no repository call at all — before the request ever
+    /// reaches state.
+    #[tokio::test]
+    async fn replace_entries_rejects_duplicate_entry_id() {
+        let state = AppState::in_memory().await.unwrap();
+        let playlist = state.create_playlist("Dup Test", false).await.unwrap();
+        let shared_id = Uuid::new_v4();
+
+        let result = replace_playlist_entries(
+            State(state),
+            Path(playlist.id.into_uuid()),
+            Json(UpdatePlaylistEntriesRequest {
+                entries: vec![
+                    PlaylistEntryPayload::Separator {
+                        entry_id: Some(shared_id),
+                        name: "A".to_string(),
+                    },
+                    PlaylistEntryPayload::Separator {
+                        entry_id: Some(shared_id),
+                        name: "B".to_string(),
+                    },
+                ],
+            }),
+        )
+        .await;
+
+        let Err(err) = result else {
+            panic!("expected a duplicate-entry-id refusal, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a duplicate playlist entry id must be 422, not a raw PK-violation 500 (#652 F9)"
+        );
+    }
+}
