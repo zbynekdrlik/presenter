@@ -699,6 +699,65 @@ mod tests {
         assert_eq!(next, None);
     }
 
+    /// #655 F1 — RED (this commit): a setlist loaded before the service
+    /// starts (nothing playing yet, `activeSongId: null`) must populate
+    /// `setlist_song_titles()` immediately — this is #601's primary
+    /// pre-service-checklist use case. Before the fix, `run_tracker` only
+    /// rebuilds `setlist_songs` inside `if song_changed`, and
+    /// `prev_active_id` starts `None`; with no active song ever reported,
+    /// `new_active_id (None) != prev_active_id (None)` is always `false`, so
+    /// the rebuild never runs and the mismatch report stays "all gaps"
+    /// indefinitely, until the first song is played (too late).
+    #[tokio::test]
+    async fn setlist_populates_before_any_active_song_is_played() {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/setlist"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "activeSongId": null,
+                "songs": [
+                    { "id": "s1", "meta": { "name": "017 Viem, ze Ty Pan" } },
+                    { "id": "s2", "meta": { "name": "018 Another Song" } }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let bridge = AbleSetBridge::new();
+        let addr = mock_server.address();
+        let settings = AbleSetSettings::new(
+            true,
+            addr.ip().to_string(),
+            39051,
+            addr.port(),
+            "Hymnal".to_string(),
+            3,
+            Utc::now(),
+            Utc::now(),
+        );
+        bridge.apply_settings(settings).await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if !bridge.setlist_song_titles().await.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "setlist_song_titles() must populate from a loaded setlist even with \
+                 no active song (activeSongId: null) — #655 F1"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let titles = bridge.setlist_song_titles().await;
+        assert_eq!(
+            titles.len(),
+            2,
+            "both setlist songs must be present pre-service: {titles:?}"
+        );
+    }
+
     #[tokio::test]
     async fn setlist_song_titles_excludes_skipped_and_no_prefix_songs() {
         // #601: the mismatch report is built from this list, so it must
