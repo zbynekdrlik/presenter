@@ -1069,6 +1069,77 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn tombstone_helpers_agree_on_same_named_tombstone_with_different_deleted_at() {
+        // #626 regression: the #595 test above only proves agreement when
+        // BOTH same-named tombstones share the EXACT same `deleted_at` --
+        // in that case DeletedAt ASC can't discriminate between them and
+        // the query falls through to UpdatedAt DESC, which happens to
+        // agree with `ensure_library`. An ordinary delete/recreate/delete
+        // cycle leaves DIFFERENT `deleted_at` values per attempt: here the
+        // most-recently-UPDATED row is deliberately NOT the earliest-
+        // DELETED row, so the OLD `ensure_library_for_tombstone` (DeletedAt
+        // ASC primary sort) and `ensure_library` (UpdatedAt DESC) pick
+        // DIFFERENT rows.
+        use crate::entities::library;
+        use sea_orm::{EntityTrait, Set, TransactionTrait};
+
+        let repo = super::Repository::connect_in_memory()
+            .await
+            .expect("in-memory db");
+        let base = Utc::now();
+
+        // "lib-recent-update": most recently UPDATED, but NOT the earliest
+        // deleted (deleted only 10 min ago) -- ensure_library (UpdatedAt
+        // DESC) must pick this one.
+        // "lib-earliest-delete": updated 2h ago, but deleted earliest (5h
+        // ago) -- the OLD ensure_library_for_tombstone (DeletedAt ASC
+        // primary) wrongly picks this one instead.
+        for (id, updated_offset_min, deleted_offset_min, sync_val) in [
+            ("lib-recent-update", 0_i64, 10_i64, "sync-aaa"),
+            ("lib-earliest-delete", 120_i64, 300_i64, "sync-bbb"),
+        ] {
+            library::Entity::insert(library::ActiveModel {
+                id: Set(id.to_string()),
+                name: Set("Songs".to_string()),
+                search_name: Set("songs".to_string()),
+                created_at: Set((base - Duration::hours(6)).into()),
+                updated_at: Set((base - Duration::minutes(updated_offset_min)).into()),
+                sync_id: Set(sync_val.to_string()),
+                deleted_at: Set(Some((base - Duration::minutes(deleted_offset_min)).into())),
+            })
+            .exec(&repo.db)
+            .await
+            .expect("insert tombstone");
+        }
+
+        let txn1 = repo.db.begin().await.expect("begin txn");
+        let id_from_tombstone_helper =
+            super::Repository::ensure_library_for_tombstone(&txn1, "Songs")
+                .await
+                .expect("resolve via tombstone helper");
+        txn1.rollback().await.expect("rollback");
+
+        // presentation_updated_at older than every tombstone -> no revival.
+        let txn2 = repo.db.begin().await.expect("begin txn");
+        let (id_from_live_helper, forced_delete) =
+            super::Repository::ensure_library(&txn2, "Songs", base - Duration::hours(7))
+                .await
+                .expect("resolve via live helper");
+        txn2.rollback().await.expect("rollback");
+        assert!(
+            forced_delete.is_some(),
+            "presentation_updated_at is older than every tombstone -- stays tombstoned"
+        );
+
+        assert_eq!(
+            id_from_tombstone_helper, id_from_live_helper,
+            "both tombstone helpers must resolve to the same library row even when \
+             deleted_at values differ; tombstone helper picked {id_from_tombstone_helper}, \
+             live helper picked {id_from_live_helper}"
+        );
+    }
+
     #[test]
     fn lww_matrix() {
         let now = Utc::now();
