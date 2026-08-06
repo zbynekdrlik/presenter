@@ -96,6 +96,19 @@ pub(crate) struct AbleSetLibraryCache {
     /// `invalidate_entries` — an ack is keyed on song NUMBER, not on which
     /// library is currently tracked.
     pub(crate) acks: AckMap,
+    /// Whether `acks` has been primed from the persisted store yet (#655 F8
+    /// deviation 4). The mirror above starts empty via `#[derive(Default)]`
+    /// on every process boot and is otherwise only ever written by
+    /// `acknowledge_ableset_mismatch` / `unacknowledge_ableset_mismatch` — so
+    /// without this flag, a freshly restarted process would silence NO
+    /// mismatch until an operator happened to touch an ack, re-reporting
+    /// every already-acknowledged mismatch after every restart.
+    /// `ensure_ableset_acks_loaded` (`ableset_ack.rs`) consults this to load
+    /// the mirror from `app_settings` exactly ONCE per process lifetime.
+    /// Survives `invalidate`/`invalidate_entries` for the same reason `acks`
+    /// itself does — an ack is keyed on song NUMBER, not on which library is
+    /// currently tracked.
+    pub(crate) acks_initialized: bool,
     /// Timestamp of the last rebuild attempt that produced ZERO entries
     /// (#655 F5a) — consulted by `ensure_ableset_cache`'s `entries.is_empty()`
     /// retry escape hatch so a persistently broken configuration (e.g. a
@@ -504,6 +517,12 @@ impl AppState {
         // (`list_library_summaries`) instead of also spanning an ack-store
         // DB read that used to happen after the capture.
         let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
+        // #655 F8 deviation 4: prime the ack mirror from the persisted store
+        // on its FIRST use this process — a no-op after the first call (see
+        // `ensure_ableset_acks_loaded`). Without this, a freshly restarted
+        // process reads the still-empty `#[derive(Default)]` mirror below and
+        // reports every already-acknowledged mismatch as brand new.
+        self.ensure_ableset_acks_loaded().await;
         let (expected_generation, acks) = {
             let cache = self.caches.ableset.read().await;
             (cache.generation(), cache.acks().clone())

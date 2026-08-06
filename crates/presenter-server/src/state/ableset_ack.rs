@@ -181,6 +181,32 @@ impl AppState {
         Ok(self.ableset_status_snapshot().await)
     }
 
+    /// #655 F8 deviation 4: lazily prime the in-memory ack mirror from the
+    /// persisted store EXACTLY ONCE per process lifetime — the mirror starts
+    /// empty on every boot (`#[derive(Default)]`) and, absent this, is only
+    /// ever populated as a side effect of `acknowledge_ableset_mismatch` /
+    /// `unacknowledge_ableset_mismatch`. Without a boot-time load, a freshly
+    /// restarted server silences NO mismatch until an operator happens to
+    /// touch an ack, re-reporting every already-acknowledged mismatch on
+    /// every restart — defeating the whole point of persisting acks (#601).
+    /// Called from `refresh_ableset_cache_once` before it reads the mirror.
+    /// Serialized under `ableset_ack_lock` (same lock/order as ack/unack) so
+    /// two concurrent callers can never both load; the double-checked read
+    /// keeps the common (already-initialized) case lock-free.
+    pub(super) async fn ensure_ableset_acks_loaded(&self) {
+        if self.caches.ableset.read().await.acks_initialized {
+            return;
+        }
+        let _guard = self.ableset_ack_lock.lock().await;
+        if self.caches.ableset.read().await.acks_initialized {
+            return; // a concurrent caller already won the race and loaded it
+        }
+        let acks = self.load_ableset_mismatch_acks().await.unwrap_or_default();
+        let mut cache = self.caches.ableset.write().await;
+        cache.acks = acks;
+        cache.acks_initialized = true;
+    }
+
     /// #655 F8: mirror the freshly-persisted ack map into the in-memory
     /// cache — `refresh_ableset_cache`'s heavy DB rescan no longer reloads
     /// acks from the DB on every rebuild, it reads this mirror instead,
@@ -196,6 +222,13 @@ impl AppState {
         let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
         let mut cache = self.caches.ableset.write().await;
         cache.acks = acks;
+        // The load just above (in `acknowledge_ableset_mismatch` /
+        // `unacknowledge_ableset_mismatch`) always reads the FULL persisted
+        // map, so the mirror is now fully in sync with the DB — mark it
+        // initialized so `ensure_ableset_acks_loaded` never redundantly
+        // reloads it on the next rebuild (#655 F8's "exactly one load per
+        // process lifetime" guarantee).
+        cache.acks_initialized = true;
         let mismatches = super::ableset_mismatch::compute_ableset_mismatches(
             cache.presenter_titles(),
             &ableset_songs,
