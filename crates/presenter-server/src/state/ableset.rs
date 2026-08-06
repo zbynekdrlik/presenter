@@ -609,4 +609,75 @@ mod cache_tests {
              refresh detects the race (#639)"
         );
     }
+
+    // #655 F5a — RED (this commit): `recently_failed_rebuild` does not exist
+    // yet. GREEN adds it and consults it from `ensure_ableset_cache`'s
+    // `entries.is_empty()` retry escape hatch.
+
+    #[test]
+    fn recently_failed_rebuild_is_false_with_no_prior_attempt() {
+        let cache = AbleSetLibraryCache::default();
+        assert!(!cache.recently_failed_rebuild());
+    }
+
+    #[test]
+    fn recently_failed_rebuild_is_true_immediately_after_a_failed_attempt() {
+        let mut cache = AbleSetLibraryCache::default();
+        cache.last_failed_rebuild_attempt = Some(Utc::now());
+        assert!(cache.recently_failed_rebuild());
+    }
+
+    #[test]
+    fn recently_failed_rebuild_expires_after_the_cooldown() {
+        let mut cache = AbleSetLibraryCache::default();
+        cache.last_failed_rebuild_attempt = Some(Utc::now() - chrono::Duration::seconds(10));
+        assert!(
+            !cache.recently_failed_rebuild(),
+            "a failed attempt older than the cooldown must no longer suppress a retry"
+        );
+    }
+
+    // #655 F5b — RED (this commit): `summarize_mismatches` does not exist
+    // yet. GREEN adds it and wires it into `refresh_ableset_cache`'s
+    // logging, replacing the old per-mismatch WARN loop.
+
+    #[test]
+    fn summarize_mismatches_splits_gaps_from_title_disagreements() {
+        let mismatches = vec![
+            AbleSetTitleMismatch {
+                number: "001".to_string(),
+                ableset_title: "A".to_string(),
+                presenter_title: String::new(), // gap
+            },
+            AbleSetTitleMismatch {
+                number: "002".to_string(),
+                ableset_title: String::new(), // gap
+                presenter_title: "B".to_string(),
+            },
+            AbleSetTitleMismatch {
+                number: "003".to_string(),
+                ableset_title: "C".to_string(),
+                presenter_title: "D".to_string(), // genuine disagreement
+            },
+        ];
+        let summary = summarize_mismatches(&mismatches);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.gaps, 2);
+        assert_eq!(summary.title_disagreements, 1);
+        assert_eq!(summary.sample.len(), 3);
+    }
+
+    #[test]
+    fn summarize_mismatches_bounds_the_sample_to_five() {
+        let mismatches: Vec<AbleSetTitleMismatch> = (0..10)
+            .map(|i| AbleSetTitleMismatch {
+                number: format!("{i:03}"),
+                ableset_title: "A".to_string(),
+                presenter_title: "B".to_string(),
+            })
+            .collect();
+        let summary = summarize_mismatches(&mismatches);
+        assert_eq!(summary.total, 10);
+        assert_eq!(summary.sample.len(), 5, "the log sample must cap at 5");
+    }
 }
