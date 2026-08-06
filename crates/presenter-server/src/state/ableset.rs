@@ -4,7 +4,7 @@ use presenter_core::{
     AbleSetTitleMismatch, PresentationId,
 };
 use std::collections::{HashMap, VecDeque};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::AppState;
 use crate::ableset::AbleSetStatusSnapshot;
@@ -183,6 +183,14 @@ impl AppState {
         }
         let settings = self.ableset_bridge.status_snapshot().await;
         if !settings.enabled {
+            // #623: #600 named this exact early return as the one that
+            // "fails EVERY song with no log" — an operator who forgot to
+            // (re-)enable the integration otherwise sees only silent
+            // no-ops on every incoming song change.
+            warn!(
+                prefix = key,
+                "AbleSet resolution skipped — AbleSet integration is disabled"
+            );
             return Ok(None);
         }
         self.ensure_ableset_cache(&settings).await?;
@@ -241,11 +249,21 @@ impl AppState {
             Some(summary) => {
                 build_ableset_entries(summary.presentations, settings.song_prefix_length)
             }
-            None => (
-                HashMap::new(),
-                HashMap::new(),
-                Some("library not found".to_string()),
-            ),
+            None => {
+                // #623: previously silent — only recorded into `last_error`,
+                // never logged, even though a missing library means EVERY
+                // resolution will miss forever until someone notices.
+                warn!(
+                    library_name = %settings.library_name,
+                    "AbleSet cache rebuild found no library with this name — \
+                     resolution will keep missing every song"
+                );
+                (
+                    HashMap::new(),
+                    HashMap::new(),
+                    Some("library not found".to_string()),
+                )
+            }
         };
 
         let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
@@ -273,6 +291,15 @@ impl AppState {
                 "AbleSet/Presenter numbering disagreement — verify before the service (#601)"
             );
         }
+
+        // #623: the rebuild itself was previously silent end-to-end.
+        info!(
+            library_name = %settings.library_name,
+            prefix_length = settings.song_prefix_length,
+            entries_found = entries.len(),
+            mismatch_count = mismatches.len(),
+            "AbleSet cache rebuild complete"
+        );
 
         let mut cache = self.caches.ableset.write().await;
         cache.library_name = Some(settings.library_name.clone());
