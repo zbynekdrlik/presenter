@@ -108,7 +108,11 @@ impl AppState {
         Ok(())
     }
 
-    async fn publish_stage_context(&self, context: &StageContext) -> anyhow::Result<()> {
+    /// `pub(super)` (not private) so `stage_display.rs`'s `switch_stage_layout`
+    /// can publish an already-built context AFTER the layout switch commits
+    /// (#631) — same cross-module-within-`state`-tree visibility
+    /// `build_stage_context` below already uses.
+    pub(super) async fn publish_stage_context(&self, context: &StageContext) -> anyhow::Result<()> {
         let code = self.stage_layout_code().await;
         let context = self.enrich_stage_context(context).await;
 

@@ -185,6 +185,29 @@ async fn reorder_on_a_vanished_presentation_is_a_404() {
 }
 
 #[tokio::test]
+async fn reorder_with_fewer_slide_ids_than_exist_is_a_422() {
+    // #628: the length-mismatch guard directly above the per-id lookup guard
+    // (`edit_ops.rs:446`) was left as a bare `anyhow!`, unlike its sibling
+    // (`:451`, covered by `reorder_naming_an_unknown_slide_in_the_body_is_a_422`
+    // below), so a stale/short body (e.g. after a concurrent edit shrank the
+    // slide list) fell through to a 500 instead of the intended 422. Sending
+    // only ONE of the seeded presentation's two slide ids hits the
+    // length-mismatch guard specifically (not the per-id lookup).
+    let state = AppState::in_memory().await.unwrap();
+    let (pres_id, [real_a, _real_b]) = seed(&state).await;
+    let app = build_router(state);
+    let body = serde_json::json!({ "slideIds": [real_a] });
+    let resp = request(
+        &app,
+        "POST",
+        &format!("/presentations/{pres_id}/slides/reorder"),
+        Some(body),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn reorder_naming_an_unknown_slide_in_the_body_is_a_422() {
     // The `slideIds` are BODY-referenced (not in the URL path), so a slide id
     // that does not belong to the presentation is a body-referenced missing

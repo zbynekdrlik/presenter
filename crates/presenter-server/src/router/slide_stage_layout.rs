@@ -51,20 +51,25 @@ pub(super) async fn set_slide_stage_layout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Maps a `assign_slide_stage_layout` error to its HTTP status via the TYPED
-/// `StageLayoutRefusal` — never a blanket `AppError::bad_request` (#615: that
-/// hid a genuine internal failure, e.g. a missing presentation or a DB error,
-/// as a benign client-side 400). Same shape as #588's
-/// `map_stage_layout_refusal` in `router/stage.rs`, but maps to
-/// `bad_request_message` (400) — the SAME client-error status this route has
-/// ALWAYS returned for bad layout codes — so only the fallthrough to 500
-/// changes, not the typed-refusal status. Any other error falls through to
-/// the router's default 500 mapping.
+/// Maps a `assign_slide_stage_layout` error to its HTTP status via TWO typed
+/// error types — never a blanket `AppError::bad_request` (#615: that hid a
+/// genuine internal failure, e.g. a DB error, as a benign client-side 400).
+/// `StageLayoutRefusal` (bad/unknown layout code) maps to `bad_request_message`
+/// (400) — the SAME client-error status this route has ALWAYS returned for
+/// bad layout codes. `RepositoryError::NotFound` (a missing `presentation_id`
+/// or `slide_id` — both URL-path resources) maps to `not_found` (404, #629):
+/// before #629 these were bare `anyhow!`s that also fell through to 500. Any
+/// other error still falls through to the router's default 500 mapping.
 fn map_slide_stage_layout_error(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<StageLayoutRefusal>() {
-        Some(refusal) => AppError::bad_request_message(refusal.to_string()),
-        None => err.into(),
+    if let Some(refusal) = err.downcast_ref::<StageLayoutRefusal>() {
+        return AppError::bad_request_message(refusal.to_string());
     }
+    if let Some(presenter_persistence::RepositoryError::NotFound(msg)) =
+        err.downcast_ref::<presenter_persistence::RepositoryError>()
+    {
+        return AppError::not_found(*msg);
+    }
+    err.into()
 }
 
 #[instrument(skip_all)]
@@ -176,18 +181,56 @@ mod tests {
         );
     }
 
-    /// #615: a genuine internal failure (here: a non-existent presentation
-    /// causes `assign_slide_stage_layout` to `bail!("presentation not
-    /// found")`, an untyped `anyhow::Error` that is NOT a
-    /// `StageLayoutRefusal`) must answer 500 — never 400. Before the fix,
-    /// the blanket `.map_err(AppError::bad_request)` masked this as a
-    /// client error.
+    /// #629 (was wrong before this fix): the ORIGINAL version of this test
+    /// used a fake/non-existent presentation UUID and asserted 500 — but a
+    /// missing presentation is a MISSING URL RESOURCE, not an internal
+    /// failure, and cementing 500 as its "correct" response is exactly the
+    /// regression #629 reports (see the sibling 404 tests below for the
+    /// actual fix). A genuine internal failure — unrelated to any missing id
+    /// or bad layout code — is a real presentation + real slide whose
+    /// `slide_stage_layouts` table has been dropped out from under the
+    /// final upsert, so `set_slide_stage_layout`'s INSERT hits a raw DbErr.
     #[tokio::test]
     async fn put_returns_500_on_internal_failure_not_400() {
+        let (state, presentation) = seeded_state().await;
+        let slide_id = presentation.slides[0].id;
+
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "DROP TABLE slide_stage_layouts".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result = set_slide_stage_layout(
+            State(state),
+            Path((presentation.id.to_string(), slide_id.to_string())),
+            Json(SlideStageLayoutRequest {
+                layout_code: Some("fulltext".to_string()),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error from the dropped table, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a genuine internal failure must be 500, not 400 (#615) and not 404 (#629)"
+        );
+    }
+
+    /// #629: `presentation_id` is a URL-path resource — a non-existent one
+    /// must be a 404, matching the same check's typed refusal everywhere
+    /// else in the codebase (`state/slides/edit_ops.rs`, `state/bible.rs`),
+    /// never fall through to the router's default 500.
+    #[tokio::test]
+    async fn put_returns_404_for_unknown_presentation() {
         let (state, _presentation) = seeded_state().await;
-        // A valid-format UUID that doesn't correspond to any seeded
-        // presentation: `presentation_detail` returns `None`, the state
-        // method `bail!`s — a non-typed error that must fall through to 500.
         let random_uuid = uuid::Uuid::new_v4();
         let random_slide = presenter_core::SlideId::new();
 
@@ -204,8 +247,33 @@ mod tests {
         };
         assert_eq!(
             err.into_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "an internal failure must be 500, not 400 (#615)"
+            StatusCode::NOT_FOUND,
+            "a non-existent presentation_id must be 404, not 500 (#629)"
+        );
+    }
+
+    /// #629: same as above, but for a `slide_id` that doesn't belong to an
+    /// otherwise-real presentation.
+    #[tokio::test]
+    async fn put_returns_404_for_unknown_slide() {
+        let (state, presentation) = seeded_state().await;
+        let random_slide = presenter_core::SlideId::new();
+
+        let result = set_slide_stage_layout(
+            State(state),
+            Path((presentation.id.to_string(), random_slide.to_string())),
+            Json(SlideStageLayoutRequest {
+                layout_code: Some("fulltext".to_string()),
+            }),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an error for a non-existent slide, got Ok");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "a non-existent slide_id must be 404, not 500 (#629)"
         );
     }
 }

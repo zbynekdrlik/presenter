@@ -56,11 +56,16 @@ pub(super) enum PlaylistEntryPayload {
 /// Maps a repository refusal to its HTTP status via the TYPED
 /// `RepositoryError` variant returned by the persistence layer — never a
 /// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
-/// `map_repository_not_found`, #584). Any other error falls through to the
-/// default 500 mapping.
+/// `map_repository_not_found`, #584). `NotFound` (the URL's `playlist_id`
+/// itself is missing) maps to 404; `TargetNotFound` (a body-referenced
+/// `presentation_id` inside `entries` is missing, #632) maps to 422. Any
+/// other error falls through to the default 500 mapping.
 fn map_repository_not_found(err: anyhow::Error) -> AppError {
     match err.downcast_ref::<presenter_persistence::RepositoryError>() {
         Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
+        Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
+            AppError::unprocessable(*msg)
+        }
         _ => err.into(),
     }
 }

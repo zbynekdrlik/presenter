@@ -3131,6 +3131,42 @@ async fn replace_playlist_entries_endpoint_missing_playlist_returns_404() {
 }
 
 #[tokio::test]
+async fn replace_playlist_entries_endpoint_unknown_presentation_id_is_a_422() {
+    // #632: `ensure_playlist_exists` (#610) guards the `fk_playlist_entries_playlist`
+    // FK, but the twin FK on `presentation_id` has no equivalent guard — an entry
+    // referencing an unknown presentation trips the raw `fk_playlist_entries_presentation`
+    // constraint on INSERT -> DbErr -> 500. presentation_id is BODY-referenced (not the
+    // URL), so the correct typed refusal is TargetNotFound -> 422, matching the
+    // established body-referenced-missing-target convention.
+    let state = AppState::in_memory().await.unwrap();
+    let playlist = state
+        .create_playlist("FK Test Playlist", false)
+        .await
+        .unwrap();
+    let app = build_router(state);
+
+    let random_presentation_id = uuid::Uuid::new_v4();
+    let body = json!({
+        "entries": [
+            { "type": "presentation", "presentationId": random_presentation_id }
+        ]
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::PUT)
+                .uri(format!("/playlists/{}/entries", playlist.id))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn restore_presentation_endpoint_never_trashed_returns_404() {
     // #608 item 4: `restore_presentation_endpoint_missing_trashed_presentation_returns_404`
     // above claims to cover "an unknown id AND a never-trashed presentation" but only drives the
