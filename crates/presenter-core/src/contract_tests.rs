@@ -401,6 +401,7 @@ mod tests {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         assert!(json.contains("followEnabled"), "expected camelCase: {json}");
@@ -448,6 +449,7 @@ mod tests {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         assert!(json.contains("lastError"), "expected camelCase: {json}");

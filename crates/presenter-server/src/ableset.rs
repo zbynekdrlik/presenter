@@ -279,6 +279,7 @@ impl AbleSetBridge {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         }
     }
 
@@ -388,6 +389,7 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         }
     } else {
         AbleSetStatusSnapshot {
@@ -406,6 +408,7 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         }
     }
 }

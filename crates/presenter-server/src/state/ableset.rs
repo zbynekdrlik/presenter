@@ -214,7 +214,9 @@ impl AppState {
                 found: a.found,
             })
             .collect();
-        snapshot.mismatches = cache.mismatches().to_vec();
+        let (mismatches, mismatch_count) = cap_mismatches_for_status(cache.mismatches());
+        snapshot.mismatches = mismatches;
+        snapshot.mismatch_count = mismatch_count;
         snapshot
     }
 
@@ -429,6 +431,25 @@ fn build_ableset_entries(
         .is_empty()
         .then_some("no presentations with valid prefix".to_string());
     (entries, presenter_titles, error)
+}
+
+/// Cap the mismatch list surfaced on the 5s-polled `GET
+/// /integrations/ableset/status` endpoint at 25 entries (#655 F15) — an
+/// unbounded list scales with the size of the pre-service checklist gap,
+/// which can briefly be large right after a library switch. Returns the
+/// capped slice (the FIRST 25, stable order) plus the TRUE total count so
+/// the operator can tell "showing 25 of N".
+fn cap_mismatches_for_status(
+    mismatches: &[AbleSetTitleMismatch],
+) -> (Vec<AbleSetTitleMismatch>, usize) {
+    const MAX_STATUS_MISMATCHES: usize = 25;
+    let total = mismatches.len();
+    let capped = mismatches
+        .iter()
+        .take(MAX_STATUS_MISMATCHES)
+        .cloned()
+        .collect();
+    (capped, total)
 }
 
 #[cfg(test)]

@@ -175,6 +175,13 @@ pub struct AbleSetStatusSnapshot {
     /// resolution/projection, it is a pre-service checklist only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mismatches: Vec<AbleSetTitleMismatch>,
+    /// Total number of AbleSet<->Presenter mismatches BEFORE truncation to
+    /// the bounded `mismatches` list above (#655 F15) — the inline list caps
+    /// at 25 entries for a 5s-polled status endpoint; this field tells the
+    /// operator how many more exist beyond what is shown. `#[serde(default)]`
+    /// for the UI round-trip (same precedent as `recent_attempts`, #600).
+    #[serde(default)]
+    pub mismatch_count: usize,
 }
 
 /// One AbleSet<->Presenter numbering disagreement for `GET
