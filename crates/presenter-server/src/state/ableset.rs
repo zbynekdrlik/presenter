@@ -331,7 +331,7 @@ impl AppState {
                     ?err,
                     "failed to load AbleSet mismatch acknowledgements — treating as none (#601)"
                 );
-                super::ableset_mismatch::AckMap::new()
+                super::ableset_ack::AckMap::new()
             }
         };
         let mismatches = super::ableset_mismatch::compute_ableset_mismatches(

@@ -21,6 +21,7 @@
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
 
 mod ableset;
+mod ableset_ack;
 mod ableset_mismatch;
 mod api_stage;
 mod background_tasks;
