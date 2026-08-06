@@ -143,10 +143,17 @@ impl Repository {
     /// constraint (`PRAGMA foreign_keys = ON`) -> DbErr -> 500. `presentation_id`
     /// is BODY-referenced (the entries array), not the URL, so the refusal is
     /// `TargetNotFound` (422), not `NotFound` (404) — the router maps it
-    /// alongside `NotFound`. Deliberately does NOT filter on `deleted_at IS
-    /// NULL`: a soft-deleted presentation's row still physically exists, so
-    /// it would NOT trip the FK constraint either — this check matches
-    /// exactly what the FK itself would reject, no stricter.
+    /// alongside `NotFound`.
+    ///
+    /// #652 F2: DOES filter on `deleted_at IS NULL` (reversing the original
+    /// #632 rationale) — a trashed presentation's row still physically
+    /// exists so it would NOT trip the raw FK constraint either, but a
+    /// trashed target IS the "body-referenced target does not exist" case
+    /// this 422 already describes. Without the filter, a stale editor's
+    /// full-array PUT could silently re-persist a trashed song as a
+    /// nameless, un-triggerable ghost entry — undoing #555's "a deleted song
+    /// leaves every playlist" (the same filter the name lookup in this file
+    /// already applies).
     async fn ensure_presentation_targets_exist(
         &self,
         entries: &[presenter_core::PlaylistEntry],
@@ -167,6 +174,7 @@ impl Repository {
         ids.dedup();
         let existing = presentation_entity::Entity::find()
             .filter(presentation_entity::Column::Id.is_in(ids.clone()))
+            .filter(presentation_entity::Column::DeletedAt.is_null())
             .count(&self.db)
             .await?;
         if existing as usize == ids.len() {
