@@ -274,6 +274,37 @@ pub(super) fn compute_ai_connected(connectivity_ok: bool, claude_authenticated: 
     connectivity_ok && claude_authenticated
 }
 
+/// Build the `/ai/status` `error` message (#624).
+///
+/// `check_status` used to discard the real underlying error from
+/// `check_connectivity` via `.is_ok()`, replacing it with a constant
+/// "AI proxy unreachable" string — which is misleading when the actual
+/// failure is an HTTP-level error such as 401 (bad/expired API key) or 500
+/// (proxy-side crash). `connectivity_error` carries that real message
+/// (`check_connectivity`'s `anyhow::Error` rendered via `.to_string()`) so
+/// the caller can see WHY the proxy is unreachable, not just that it is.
+///
+/// Extracted as a pure function so the branch logic is unit-testable without
+/// constructing a live ProxyManager + network connectivity (same rationale
+/// as `compute_ai_connected` above).
+///
+/// #624 RED: this stub still drops `connectivity_error` — the exact bug this
+/// ticket fixes. The GREEN commit embeds it in the returned message.
+pub(super) fn compute_ai_status_error(
+    connected: bool,
+    claude_authenticated: bool,
+    connectivity_error: Option<&str>,
+) -> Option<String> {
+    let _ = connectivity_error;
+    if connected {
+        None
+    } else if !claude_authenticated {
+        Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
+    } else {
+        Some("AI proxy unreachable".to_string())
+    }
+}
+
 #[instrument(skip_all)]
 pub(super) async fn check_status(
     State(state): State<AppState>,
@@ -281,19 +312,17 @@ pub(super) async fn check_status(
     let settings = get_settings_internal(&state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
-    let connectivity_ok = crate::ai::client::check_connectivity(&settings)
-        .await
-        .is_ok();
+    let connectivity_result = crate::ai::client::check_connectivity(&settings).await;
+    let connectivity_ok = connectivity_result.is_ok();
+    let connectivity_err_msg = connectivity_result.err().map(|e| e.to_string());
 
     let connected = compute_ai_connected(connectivity_ok, proxy_status.claude_authenticated);
 
-    let error = if connected {
-        None
-    } else if !proxy_status.claude_authenticated {
-        Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
-    } else {
-        Some("AI proxy unreachable".to_string())
-    };
+    let error = compute_ai_status_error(
+        connected,
+        proxy_status.claude_authenticated,
+        connectivity_err_msg.as_deref(),
+    );
 
     Ok(Json(StatusResponse {
         connected,

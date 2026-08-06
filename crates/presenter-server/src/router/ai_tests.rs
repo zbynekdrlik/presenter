@@ -3,7 +3,7 @@
 //! connectivity check is necessary but not sufficient — actual AI readiness
 //! requires a valid Claude OAuth session as well.
 
-use crate::router::ai::compute_ai_connected;
+use crate::router::ai::{compute_ai_connected, compute_ai_status_error};
 
 #[test]
 fn connected_is_false_when_claude_not_authenticated_even_if_connectivity_ok() {
@@ -42,5 +42,48 @@ fn connected_is_false_when_both_signals_fail() {
     assert!(
         !compute_ai_connected(false, false),
         "connected must be false when neither connectivity nor auth is present"
+    );
+}
+
+// #624: `check_status` discarded the real error from `check_connectivity`
+// behind a hardcoded "AI proxy unreachable" string, even when the actual
+// failure was an HTTP-level error (401/500) that explains WHY. These pin
+// `compute_ai_status_error`'s full branch table — previously the handler
+// itself (not just `compute_ai_connected`'s truth table) had zero coverage.
+
+#[test]
+fn status_error_is_none_when_connected() {
+    assert_eq!(compute_ai_status_error(true, true, None), None);
+}
+
+#[test]
+fn status_error_reports_unauthenticated_regardless_of_connectivity_error() {
+    // claude_authenticated=false takes priority even if a connectivity error
+    // string happens to be present — the auth message is the more actionable one.
+    assert_eq!(
+        compute_ai_status_error(false, false, Some("AI API returned status 500")),
+        Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
+    );
+}
+
+#[test]
+fn status_error_surfaces_the_real_connectivity_failure_message() {
+    // The regression this ticket fixes: a 401 from the proxy must be visible
+    // to the caller, not silently replaced by a generic "unreachable" string.
+    let error = compute_ai_status_error(false, true, Some("AI API returned status 401"));
+    assert_eq!(
+        error,
+        Some("AI proxy unreachable: AI API returned status 401".to_string()),
+        "the real connectivity error must be surfaced, not replaced by a generic message"
+    );
+}
+
+#[test]
+fn status_error_falls_back_to_generic_message_when_no_error_string_available() {
+    // Defensive branch: connectivity_ok=false with no captured error string
+    // (shouldn't normally happen, but must not panic or fabricate text).
+    assert_eq!(
+        compute_ai_status_error(false, true, None),
+        Some("AI proxy unreachable".to_string())
     );
 }
