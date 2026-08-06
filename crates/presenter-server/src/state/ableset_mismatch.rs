@@ -177,6 +177,26 @@ mod tests {
         );
     }
 
+    // #655 F9e — RED (this commit): the ack comparison is currently raw
+    // `==`, so a purely cosmetic edit (whitespace/case here) on either title
+    // WRONGLY re-raises a warning the operator already dismissed. GREEN
+    // switches the comparison to `normalize_title_for_mismatch` on both
+    // sides.
+    #[test]
+    fn ack_survives_a_purely_cosmetic_title_change() {
+        let presenter = HashMap::from([("088".to_string(), "088 Alive With  You".to_string())]);
+        let ableset = vec![("088".to_string(), "088 alive with you kids".to_string())];
+        let acks = AckMap::from([(
+            "088".to_string(),
+            ack("088 Alive with you KIDS", "088 Alive with you"),
+        )]);
+        let mismatches = compute_ableset_mismatches(&presenter, &ableset, 3, &acks);
+        assert!(
+            mismatches.is_empty(),
+            "a purely cosmetic title edit must not re-raise an acknowledged mismatch: {mismatches:?}"
+        );
+    }
+
     #[test]
     fn number_missing_from_presenter_is_always_reported_even_if_acked() {
         let presenter = HashMap::new();

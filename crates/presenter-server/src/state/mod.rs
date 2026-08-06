@@ -22,6 +22,8 @@
 
 mod ableset;
 mod ableset_ack;
+#[cfg(test)]
+mod ableset_integration_tests;
 mod ableset_mismatch;
 mod api_stage;
 mod background_tasks;

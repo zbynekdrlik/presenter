@@ -104,3 +104,33 @@ impl AppState {
         Ok(self.ableset_status_snapshot().await)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #655 F9d — RED (this commit): `validate_ableset_ack_number` does not
+    // exist yet, so this fails to compile. GREEN adds it and wires it into
+    // `acknowledge_ableset_mismatch`/`unacknowledge_ableset_mismatch`.
+
+    #[test]
+    fn validate_ableset_ack_number_accepts_exact_length_all_digits() {
+        assert!(validate_ableset_ack_number("017", 3).is_ok());
+    }
+
+    #[test]
+    fn validate_ableset_ack_number_rejects_empty() {
+        assert!(validate_ableset_ack_number("", 3).is_err());
+    }
+
+    #[test]
+    fn validate_ableset_ack_number_rejects_wrong_length() {
+        assert!(validate_ableset_ack_number("17", 3).is_err());
+        assert!(validate_ableset_ack_number("0017", 3).is_err());
+    }
+
+    #[test]
+    fn validate_ableset_ack_number_rejects_non_digits() {
+        assert!(validate_ableset_ack_number("01a", 3).is_err());
+    }
+}
