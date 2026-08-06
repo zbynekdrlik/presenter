@@ -37,6 +37,13 @@ struct AbleSetInner {
     status: RwLock<AbleSetStatusInner>,
     tracker: Mutex<Option<TrackerGuard>>,
     song_changed_tx: tokio::sync::broadcast::Sender<()>,
+    /// Fires whenever the tracked SETLIST (song list/order/skip-flags)
+    /// changes, independent of whether the active song changed (#655 F1/F2)
+    /// — a setlist can be loaded, reordered, or edited before the service
+    /// starts, well before any song becomes active. `state::mod`'s
+    /// `spawn_ableset_setlist_change_refresh` subscribes to this to keep the
+    /// #601 mismatch report from freezing at boot.
+    setlist_changed_tx: tokio::sync::broadcast::Sender<()>,
 }
 
 struct AbleSetStatusInner {
@@ -145,6 +152,7 @@ impl AbleSetBridge {
                 }),
                 tracker: Mutex::new(None),
                 song_changed_tx: tokio::sync::broadcast::channel(16).0,
+                setlist_changed_tx: tokio::sync::broadcast::channel(16).0,
             }),
         }
     }
@@ -152,6 +160,14 @@ impl AbleSetBridge {
     /// Returns a receiver that fires whenever the active song changes.
     pub fn subscribe_song_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.inner.song_changed_tx.subscribe()
+    }
+
+    /// Returns a receiver that fires whenever the tracked SETLIST changes
+    /// (#655 F1/F2) — song list membership, order, or skip flags, independent
+    /// of whether the active song changed. Used to keep the #601 mismatch
+    /// report from freezing at the last active-song change.
+    pub fn subscribe_setlist_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.inner.setlist_changed_tx.subscribe()
     }
 
     pub async fn apply_settings(&self, mut settings: AbleSetSettings) -> anyhow::Result<()> {
@@ -429,6 +445,30 @@ impl AbleSetClient for MockAbleSetClient {
     }
 }
 
+/// Cheap per-tick fingerprint of the raw AbleSet setlist (#655 F1) — hashes
+/// id/name/skipped-flag for every song WITHOUT cloning any strings, so it can
+/// run on every 250ms poll tick regardless of whether anything changed. Only
+/// a fingerprint CHANGE triggers the allocation-heavy `setlist_songs` rebuild
+/// below (preserves the original allocation guard); comparing this instead of
+/// only the active-song id is what lets a setlist loaded/reordered/edited
+/// BEFORE the service starts (no active song yet) still be detected.
+fn setlist_fingerprint(songs: &[SetlistSong]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for song in songs {
+        song.id.hash(&mut hasher);
+        let name: Option<&str> = song
+            .meta
+            .as_ref()
+            .and_then(|m| m.name.as_deref().or(m.raw.as_deref()))
+            .or_else(|| song.cue.as_ref().and_then(|c| c.name.as_deref()));
+        name.hash(&mut hasher);
+        let skipped = song.internal_meta.as_ref().is_some_and(|m| m.skipped);
+        skipped.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 async fn run_tracker(
     inner: Arc<AbleSetInner>,
     config: AbleSetTrackerConfig,
@@ -441,6 +481,7 @@ async fn run_tracker(
         song_prefix_length,
     } = config;
     let mut prev_active_id: Option<String> = None;
+    let mut prev_setlist_fingerprint: Option<u64> = None;
     let mut interval = interval(Duration::from_millis(POLL_INTERVAL_MS));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -454,11 +495,18 @@ async fn run_tracker(
                     Ok(Some(setlist)) => {
                         let new_active_id = setlist.active_song_id.clone();
                         let song_changed = new_active_id != prev_active_id;
+                        // #655 F1: the setlist LIST can change (loaded, reordered,
+                        // songs skipped/unskipped) independent of the active song
+                        // -- a setlist loaded before the service starts never has
+                        // an active song at all, so gating the rebuild on
+                        // song_changed alone left it permanently empty pre-service.
+                        let new_fingerprint = setlist_fingerprint(&setlist.songs);
+                        let list_changed = prev_setlist_fingerprint != Some(new_fingerprint);
                         let mut status = inner.status.write().await;
 
-                        if song_changed {
-                            // Rebuild cached song list only when the active song
-                            // changes to avoid unnecessary allocations every 250ms
+                        if list_changed {
+                            // Rebuild cached song list only when the list actually
+                            // changed to avoid unnecessary allocations every 250ms.
                             status.setlist_songs = setlist.songs.iter().map(|s| {
                                 let name = s.meta.as_ref()
                                     .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
@@ -477,11 +525,11 @@ async fn run_tracker(
                             let mut found = false;
                             for (idx, song) in setlist.songs.iter().enumerate() {
                                 if song.id.as_deref() == Some(active_id.as_str()) {
-                                    let name = if song_changed {
-                                        status.setlist_songs[idx].name.clone()
-                                    } else if let Some(last) = &status.last_song {
-                                        last.name.clone()
-                                    } else {
+                                    // `status.setlist_songs` is always current here:
+                                    // freshly rebuilt above if the list changed, or
+                                    // left as-is from a prior tick whose fingerprint
+                                    // proves it is still identical to `setlist.songs`.
+                                    let Some(name) = status.setlist_songs.get(idx).map(|s| s.name.clone()) else {
                                         continue;
                                     };
                                     if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
@@ -515,6 +563,10 @@ async fn run_tracker(
                             status.last_error = None;
                         }
                         drop(status);
+                        if list_changed {
+                            prev_setlist_fingerprint = Some(new_fingerprint);
+                            let _ = inner.setlist_changed_tx.send(());
+                        }
                         if song_changed {
                             prev_active_id = new_active_id;
                             let _ = inner.song_changed_tx.send(());
@@ -525,6 +577,10 @@ async fn run_tracker(
                         status.last_song = None;
                         status.setlist_songs.clear();
                         status.last_error = None;
+                        drop(status);
+                        if prev_setlist_fingerprint.take().is_some() {
+                            let _ = inner.setlist_changed_tx.send(());
+                        }
                     }
                     Err(err) => {
                         let mut status = inner.status.write().await;
@@ -713,13 +769,15 @@ mod tests {
         let mock_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/setlist"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "activeSongId": null,
-                "songs": [
-                    { "id": "s1", "meta": { "name": "017 Viem, ze Ty Pan" } },
-                    { "id": "s2", "meta": { "name": "018 Another Song" } }
-                ]
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "activeSongId": null,
+                    "songs": [
+                        { "id": "s1", "meta": { "name": "017 Viem, ze Ty Pan" } },
+                        { "id": "s2", "meta": { "name": "018 Another Song" } }
+                    ]
+                })),
+            )
             .mount(&mock_server)
             .await;
 

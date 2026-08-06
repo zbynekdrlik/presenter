@@ -356,6 +356,9 @@ impl AppState {
 
         // Re-broadcast stage snapshots whenever AbleSet switches songs.
         state.spawn_ableset_rebroadcast(&ableset_bridge);
+        // Refresh the AbleSet mismatch report whenever AbleSet's tracked
+        // setlist changes, not only on boot/ack (#655 F2).
+        state.spawn_ableset_setlist_change_refresh(&ableset_bridge);
 
         state
             .configure_companion_service(companion_enabled, companion_port)
@@ -435,6 +438,48 @@ impl AppState {
                             tracing::warn!(
                                 ?err,
                                 "failed to broadcast stage after AbleSet song change"
+                            );
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    /// Debounce window for the setlist-changed-triggered cache refresh (#655
+    /// F2) — coalesces a burst of AbleSet setlist-changed signals (e.g.
+    /// several reorders/edits in quick succession) into at most one
+    /// mismatch-cache rebuild per window, instead of one rebuild per signal.
+    const ABLESET_SETLIST_REFRESH_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Spawn the background task that refreshes the AbleSet mismatch cache
+    /// whenever AbleSet's tracked SETLIST changes (#655 F2) — song list
+    /// loaded, reordered, or a song's skip flag flipped. Without this, the
+    /// #601 mismatch report only recomputes on boot, a Presenter-side edit,
+    /// or an ack/unack: a setlist loaded at 09:30 (AbleSet was off/empty at
+    /// boot) would otherwise stay frozen at whatever the boot-time report
+    /// said, indefinitely. Extracted from `from_config` to keep that
+    /// constructor under the repo's per-function line cap, mirroring
+    /// `spawn_ableset_rebroadcast`.
+    fn spawn_ableset_setlist_change_refresh(&self, ableset_bridge: &AbleSetBridge) {
+        let mut rx = ableset_bridge.subscribe_setlist_changes();
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(()) => {
+                        // Debounce/coalesce: wait out the window, then drain
+                        // any further signals that arrived during it, so a
+                        // burst of setlist edits triggers exactly one rebuild.
+                        tokio::time::sleep(Self::ABLESET_SETLIST_REFRESH_DEBOUNCE).await;
+                        while rx.try_recv().is_ok() {}
+                        let settings = app.ableset_bridge.status_snapshot().await;
+                        if let Err(err) = app.refresh_ableset_cache(&settings).await {
+                            tracing::warn!(
+                                ?err,
+                                "failed to refresh AbleSet cache after a setlist change"
                             );
                         }
                     }
