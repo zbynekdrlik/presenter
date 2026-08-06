@@ -32,6 +32,19 @@ pub(crate) struct UnacknowledgeAbleSetMismatchPayload {
     pub(super) number: String,
 }
 
+/// Maps an ack/unack refusal to its HTTP status via the TYPED
+/// `AbleSetAckRefusal` domain error (#655 F4/F9) — a one-sided structural
+/// gap, an invalid number, or a full acknowledgement store all answer 422,
+/// never a blanket 200 or 500. Any other error falls through to the
+/// router's default 500 mapping. Per
+/// `.claude/rules/repository-error-pattern.md`'s domain-error pattern.
+fn map_ableset_ack_refusal(err: anyhow::Error) -> AppError {
+    match err.downcast_ref::<crate::state::ableset_ack::AbleSetAckRefusal>() {
+        Some(refusal) => AppError::unprocessable(refusal.to_string()),
+        None => err.into(),
+    }
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn get_ableset_settings(
     State(state): State<AppState>,
@@ -70,10 +83,12 @@ pub(crate) async fn set_ableset_follow(
     Ok(Json(snapshot))
 }
 
-/// #601: "visible/revocable" per the settled design. Idempotent — there is
-/// no NotFound case (acknowledging a number that isn't currently mismatched
-/// just sits unused until it applies), so a genuine failure here is a real
-/// internal fault and falls through to the router's default 500.
+/// #601: "visible/revocable" per the settled design. Idempotent for an
+/// UNKNOWN (but validly-shaped) number — acknowledging one that isn't
+/// currently mismatched just sits unused until it applies. A structural gap,
+/// a malformed number, or a full store (#655 F4/F9) answer 422 via
+/// `map_ableset_ack_refusal`; any other failure is a real internal fault and
+/// falls through to the router's default 500.
 #[instrument(skip_all)]
 pub(crate) async fn acknowledge_ableset_mismatch(
     State(state): State<AppState>,
@@ -85,7 +100,8 @@ pub(crate) async fn acknowledge_ableset_mismatch(
             &payload.ableset_title,
             &payload.presenter_title,
         )
-        .await?;
+        .await
+        .map_err(map_ableset_ack_refusal)?;
     Ok(Json(snapshot))
 }
 
@@ -96,6 +112,7 @@ pub(crate) async fn unacknowledge_ableset_mismatch(
 ) -> Result<Json<crate::ableset::AbleSetStatusSnapshot>, AppError> {
     let snapshot = state
         .unacknowledge_ableset_mismatch(&payload.number)
-        .await?;
+        .await
+        .map_err(map_ableset_ack_refusal)?;
     Ok(Json(snapshot))
 }

@@ -4,8 +4,10 @@ use presenter_core::{
     AbleSetTitleMismatch, PresentationId,
 };
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::Ordering;
 use tracing::{info, warn};
 
+use super::ableset_ack::AckMap;
 use super::AppState;
 use crate::ableset::AbleSetStatusSnapshot;
 
@@ -13,6 +15,25 @@ use crate::ableset::AbleSetStatusSnapshot;
 /// (#600). Enough to cover a typical worship set (15-20 songs) while bounding
 /// memory on a long-running instance.
 const MAX_RECENT_ATTEMPTS: usize = 20;
+
+/// Bounded retry count for a single `refresh_ableset_cache` call (#655 F7):
+/// a #639 CAS rejection means a concurrent invalidate won the race, not that
+/// the fetched data is wrong — retrying the SAME logical rebuild lets it win
+/// against a one-off collision instead of silently dropping the current
+/// resolution attempt (a regression the #639 fix introduced: pre-#639 a lost
+/// race at least projected stale-but-usually-correct data; post-#639 it
+/// projected nothing until the NEXT trigger).
+const MAX_REFRESH_ATTEMPTS: u8 = 3;
+
+/// Number of sample mismatches carried in the #655 F5b summary WARN — the
+/// full list is still available in full on the status endpoint (bounded
+/// separately, see `cap_mismatches_for_status`).
+const MISMATCH_LOG_SAMPLE_SIZE: usize = 5;
+
+/// Cooldown window for the `entries.is_empty()` retry escape hatch in
+/// `ensure_ableset_cache` (#655 F5a) — a library-name typo means EVERY
+/// resolve call would otherwise re-trigger a full DB rescan + WARN burst.
+const FAILED_REBUILD_RETRY_COOLDOWN: chrono::Duration = chrono::Duration::seconds(5);
 
 /// A single AbleSet song-resolution attempt, retained for diagnostic purposes
 /// (#600). Surfaced read-only via `/integrations/ableset/status` so operators
@@ -27,6 +48,20 @@ pub(crate) struct AbleSetResolutionAttempt {
     /// Whether the prefix resolved to a known presentation (`true`) or was a
     /// cache miss (`false`).
     pub(crate) found: bool,
+}
+
+/// Internal tri-state result of an AbleSet prefix resolution attempt (#655
+/// F16) — lets `osc::handler::trigger_slide` log the ACCURATE reason a
+/// trigger produced no presentation instead of always claiming "prefix
+/// missing in library" even when the integration was simply disabled. The
+/// public `resolve_ableset_presentation` (used by the existing ~15 call
+/// sites/tests) keeps its `Option<PresentationId>` signature unchanged —
+/// this is an additive internal API, not a breaking one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbleSetResolution {
+    Resolved(PresentationId),
+    Disabled,
+    NoMatch,
 }
 
 #[derive(Default)]
@@ -47,6 +82,39 @@ pub(crate) struct AbleSetLibraryCache {
     /// recent successful rebuild (#601). Cleared alongside `entries` on
     /// invalidation — see `install_if_current` and the invalidate methods.
     pub(crate) mismatches: Vec<AbleSetTitleMismatch>,
+    /// `prefix -> full presentation name` from the most recent successful
+    /// rebuild (#655 F5c/F8) — lets an ack/unack recompute the mismatch
+    /// report WITHOUT a full DB rescan, and lets `refresh_ableset_cache`
+    /// avoid re-fetching it. Cleared alongside `entries` on invalidation.
+    pub(crate) presenter_titles: HashMap<String, String>,
+    /// Mirror of the persisted AbleSet mismatch-acknowledgement store (#655
+    /// F8) — updated ONLY by `acknowledge_ableset_mismatch` /
+    /// `unacknowledge_ableset_mismatch` / the F9b prune, never reloaded from
+    /// the DB inside a normal `refresh_ableset_cache` rebuild. This is what
+    /// narrows the #639 CAS window down to the one remaining unavoidable DB
+    /// fetch (the library summaries). Survives `invalidate`/
+    /// `invalidate_entries` — an ack is keyed on song NUMBER, not on which
+    /// library is currently tracked.
+    pub(crate) acks: AckMap,
+    /// Whether `acks` has been primed from the persisted store yet (#655 F8
+    /// deviation 4). The mirror above starts empty via `#[derive(Default)]`
+    /// on every process boot and is otherwise only ever written by
+    /// `acknowledge_ableset_mismatch` / `unacknowledge_ableset_mismatch` — so
+    /// without this flag, a freshly restarted process would silence NO
+    /// mismatch until an operator happened to touch an ack, re-reporting
+    /// every already-acknowledged mismatch after every restart.
+    /// `ensure_ableset_acks_loaded` (`ableset_ack.rs`) consults this to load
+    /// the mirror from `app_settings` exactly ONCE per process lifetime.
+    /// Survives `invalidate`/`invalidate_entries` for the same reason `acks`
+    /// itself does — an ack is keyed on song NUMBER, not on which library is
+    /// currently tracked.
+    pub(crate) acks_initialized: bool,
+    /// Timestamp of the last rebuild attempt that produced ZERO entries
+    /// (#655 F5a) — consulted by `ensure_ableset_cache`'s `entries.is_empty()`
+    /// retry escape hatch so a persistently broken configuration (e.g. a
+    /// library-name typo) doesn't re-trigger a full DB rescan on every single
+    /// resolve call.
+    pub(crate) last_failed_rebuild_attempt: Option<DateTime<Utc>>,
 }
 
 impl AbleSetLibraryCache {
@@ -57,6 +125,8 @@ impl AbleSetLibraryCache {
         self.last_updated = None;
         self.last_error = None;
         self.mismatches.clear();
+        self.presenter_titles.clear();
+        self.last_failed_rebuild_attempt = None;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -69,6 +139,8 @@ impl AbleSetLibraryCache {
     pub(crate) fn invalidate_entries(&mut self) {
         self.entries.clear();
         self.mismatches.clear();
+        self.presenter_titles.clear();
+        self.last_failed_rebuild_attempt = None;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -105,11 +177,29 @@ impl AbleSetLibraryCache {
         &self.mismatches
     }
 
+    /// Read-only view of the `prefix -> title` map from the last successful
+    /// rebuild (#655 F5c).
+    pub(crate) fn presenter_titles(&self) -> &HashMap<String, String> {
+        &self.presenter_titles
+    }
+
+    /// Read-only view of the cached acknowledgement-store mirror (#655 F8).
+    pub(crate) fn acks(&self) -> &AckMap {
+        &self.acks
+    }
+
     /// Current generation counter (#639) — captured by a refresh BEFORE its
     /// async DB fetch, so its eventual install can detect a concurrent
     /// invalidate.
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Whether the most recent rebuild attempt produced zero entries within
+    /// the retry cooldown window (#655 F5a).
+    pub(crate) fn recently_failed_rebuild(&self) -> bool {
+        self.last_failed_rebuild_attempt
+            .is_some_and(|at| Utc::now().signed_duration_since(at) < FAILED_REBUILD_RETRY_COOLDOWN)
     }
 
     /// Install a freshly-fetched refresh, but only if `expected_generation`
@@ -121,6 +211,7 @@ impl AbleSetLibraryCache {
     /// `ensure_ableset_cache` call sees `entries` still empty (the
     /// invalidate's own effect, left untouched) and retries cleanly.
     /// Returns whether the install happened.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn install_if_current(
         &mut self,
         expected_generation: u64,
@@ -129,6 +220,7 @@ impl AbleSetLibraryCache {
         entries: HashMap<String, PresentationId>,
         error: Option<String>,
         mismatches: Vec<AbleSetTitleMismatch>,
+        presenter_titles: HashMap<String, String>,
     ) -> bool {
         if self.generation != expected_generation {
             return false;
@@ -139,6 +231,7 @@ impl AbleSetLibraryCache {
         self.last_updated = Some(Utc::now());
         self.last_error = error;
         self.mismatches = mismatches;
+        self.presenter_titles = presenter_titles;
         true
     }
 
@@ -184,6 +277,13 @@ impl AppState {
             .upsert_ableset_settings(&draft, source, actor)
             .await?;
         self.ableset_bridge.apply_settings(settings.clone()).await?;
+        if settings.enabled {
+            // #655 F16: re-arm the edge-triggered disabled-WARN so the NEXT
+            // disable is logged again, instead of staying silently
+            // suppressed forever by a flag left over from a previous disable.
+            self.ableset_disabled_warn_shown
+                .store(false, Ordering::SeqCst);
+        }
         {
             let mut cache = self.caches.ableset.write().await;
             cache.invalidate();
@@ -214,7 +314,9 @@ impl AppState {
                 found: a.found,
             })
             .collect();
-        snapshot.mismatches = cache.mismatches().to_vec();
+        let (mismatches, mismatch_count) = cap_mismatches_for_status(cache.mismatches());
+        snapshot.mismatches = mismatches;
+        snapshot.mismatch_count = mismatch_count;
         snapshot
     }
 
@@ -226,25 +328,56 @@ impl AppState {
         self.ableset_bridge.song_snapshot().await
     }
 
+    /// #655 F16: kept as a thin `Option<PresentationId>` wrapper over
+    /// [`Self::resolve_ableset_presentation_detailed`] so the ~15 existing
+    /// call sites/tests need no change. Production code (`osc::handler`) now
+    /// calls the `_detailed` tri-state directly for accurate logging; this
+    /// wrapper's only remaining callers are tests, hence the dead-code
+    /// allowance outside `cfg(test)`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn resolve_ableset_presentation(
         &self,
         prefix: &str,
     ) -> anyhow::Result<Option<PresentationId>> {
+        Ok(
+            match self.resolve_ableset_presentation_detailed(prefix).await? {
+                AbleSetResolution::Resolved(id) => Some(id),
+                AbleSetResolution::Disabled | AbleSetResolution::NoMatch => None,
+            },
+        )
+    }
+
+    /// Tri-state resolution (#655 F16) — see [`AbleSetResolution`]. Lets
+    /// `osc::handler::trigger_slide` distinguish "integration disabled" from
+    /// a genuine cache miss and log the accurate reason for each, instead of
+    /// always claiming "prefix missing in library".
+    pub(crate) async fn resolve_ableset_presentation_detailed(
+        &self,
+        prefix: &str,
+    ) -> anyhow::Result<AbleSetResolution> {
         let key = prefix.trim();
         if key.is_empty() {
-            return Ok(None);
+            return Ok(AbleSetResolution::NoMatch);
         }
         let settings = self.ableset_bridge.status_snapshot().await;
         if !settings.enabled {
-            // #623: #600 named this exact early return as the one that
-            // "fails EVERY song with no log" — an operator who forgot to
-            // (re-)enable the integration otherwise sees only silent
-            // no-ops on every incoming song change.
-            warn!(
-                prefix = key,
-                "AbleSet resolution skipped — AbleSet integration is disabled"
-            );
-            return Ok(None);
+            // #655 F16: edge-triggered — WARN only on the enabled->disabled
+            // transition (previously this fired on EVERY OSC event while
+            // disabled — up to once per slide advance — with zero new
+            // information after the first).
+            if !self
+                .ableset_disabled_warn_shown
+                .swap(true, Ordering::SeqCst)
+            {
+                warn!(
+                    prefix = key,
+                    "AbleSet resolution skipped — AbleSet integration is disabled"
+                );
+            }
+            // #655 F16: record the attempt even on the disabled path so
+            // `recentAttempts` shows evidence instead of silence.
+            self.caches.ableset.write().await.record_attempt(key, false);
+            return Ok(AbleSetResolution::Disabled);
         }
         self.ensure_ableset_cache(&settings).await?;
         let lookup = key.to_ascii_lowercase();
@@ -272,14 +405,26 @@ impl AppState {
             }
         }
 
-        Ok(result)
+        Ok(match result {
+            Some(id) => AbleSetResolution::Resolved(id),
+            None => AbleSetResolution::NoMatch,
+        })
     }
 
     async fn ensure_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
         let needs_refresh = {
             let cache = self.caches.ableset.read().await;
-            !cache.matches(&settings.library_name, settings.song_prefix_length)
-                || cache.entries.is_empty()
+            if !cache.matches(&settings.library_name, settings.song_prefix_length) {
+                true
+            } else if cache.entries.is_empty() {
+                // #655 F5a: don't re-attempt a rebuild that JUST failed to
+                // produce any entries within the cooldown window — without
+                // this, a library-name typo means every single resolve call
+                // re-triggers a full DB rescan + WARN burst.
+                !cache.recently_failed_rebuild()
+            } else {
+                false
+            }
         };
         if needs_refresh {
             self.refresh_ableset_cache(settings).await?;
@@ -289,27 +434,60 @@ impl AppState {
 
     /// Rebuild the resolved `prefix -> presentation` cache from the DB, plus
     /// the #601 title-mismatch report, and install both atomically under a
-    /// #639 compare-and-swap guard against a concurrent invalidate.
+    /// #639 compare-and-swap guard against a concurrent invalidate. #655 F7:
+    /// retries the single-attempt build+install up to `MAX_REFRESH_ATTEMPTS`
+    /// times when a concurrent invalidate wins the CAS race — the #639 fix
+    /// correctly avoided resurrecting stale data on a lost race, but
+    /// silently dropping the CURRENT resolution attempt on every single
+    /// collision was itself a regression (pre-#639, a lost race at least
+    /// projected stale-but-usually-correct data; post-#639-only it projected
+    /// nothing until the next trigger). Retrying lets the same logical
+    /// rebuild attempt win against a one-off collision.
     pub(super) async fn refresh_ableset_cache(
         &self,
         settings: &AbleSetStatusSnapshot,
     ) -> anyhow::Result<()> {
-        let expected_generation = self.caches.ableset.read().await.generation();
+        for attempt in 1..=MAX_REFRESH_ATTEMPTS {
+            if self.refresh_ableset_cache_once(settings).await? {
+                return Ok(());
+            }
+            if attempt == MAX_REFRESH_ATTEMPTS {
+                warn!(
+                    library_name = %settings.library_name,
+                    attempts = MAX_REFRESH_ATTEMPTS,
+                    "AbleSet cache rebuild kept losing the race with a concurrent invalidate (#639/#655 F7) — \
+                     giving up for this trigger; the next resolution attempt will retry cleanly"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Fetch the tracked library and resolve it into the `prefix ->
+    /// presentation` / `prefix -> title` maps. Extracted from
+    /// `refresh_ableset_cache_once` to keep that function under the repo's
+    /// per-function line cap. The none-found branch logs the #623 "library
+    /// not found" WARN — previously silent, only recorded into `last_error`,
+    /// even though a missing library means EVERY resolution will miss
+    /// forever until someone notices.
+    async fn resolve_ableset_library_entries(
+        &self,
+        library_name: &str,
+        prefix_length: u8,
+    ) -> anyhow::Result<(
+        HashMap<String, PresentationId>,
+        HashMap<String, String>,
+        Option<String>,
+    )> {
         let summaries = self.repository.list_library_summaries(None).await?;
         let target = summaries
             .into_iter()
-            .find(|summary| summary.name.eq_ignore_ascii_case(&settings.library_name));
-
-        let (entries, presenter_titles, error) = match target {
-            Some(summary) => {
-                build_ableset_entries(summary.presentations, settings.song_prefix_length)
-            }
+            .find(|summary| summary.name.eq_ignore_ascii_case(library_name));
+        Ok(match target {
+            Some(summary) => build_ableset_entries(summary.presentations, prefix_length),
             None => {
-                // #623: previously silent — only recorded into `last_error`,
-                // never logged, even though a missing library means EVERY
-                // resolution will miss forever until someone notices.
                 warn!(
-                    library_name = %settings.library_name,
+                    library_name = %library_name,
                     "AbleSet cache rebuild found no library with this name — \
                      resolution will keep missing every song"
                 );
@@ -319,25 +497,68 @@ impl AppState {
                     Some("library not found".to_string()),
                 )
             }
+        })
+    }
+
+    /// Single build+CAS-install attempt, extracted so `refresh_ableset_cache`
+    /// can retry it (#655 F7) without duplicating the DB-fetch + install
+    /// sequence. Returns whether the install succeeded — `false` means a
+    /// concurrent invalidate won the #639 CAS race and the caller decides
+    /// whether to retry.
+    async fn refresh_ableset_cache_once(
+        &self,
+        settings: &AbleSetStatusSnapshot,
+    ) -> anyhow::Result<bool> {
+        // #655 F8: read the bridge-side setlist BEFORE capturing the
+        // generation — a cheap in-memory read (no DB) — and snapshot the
+        // cached ack mirror under the SAME lock acquisition as the
+        // generation capture. Together this shrinks the #639 CAS window
+        // down to just the one remaining unavoidable DB fetch below
+        // (`list_library_summaries`) instead of also spanning an ack-store
+        // DB read that used to happen after the capture.
+        let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
+        // #655 F8 deviation 4: prime the ack mirror from the persisted store
+        // on its FIRST use this process — a no-op after the first call (see
+        // `ensure_ableset_acks_loaded`). Without this, a freshly restarted
+        // process reads the still-empty `#[derive(Default)]` mirror below and
+        // reports every already-acknowledged mismatch as brand new.
+        self.ensure_ableset_acks_loaded().await;
+        let (expected_generation, acks) = {
+            let cache = self.caches.ableset.read().await;
+            (cache.generation(), cache.acks().clone())
         };
 
-        let ableset_songs = self.ableset_bridge.setlist_song_titles().await;
-        let acks = match self.load_ableset_mismatch_acks().await {
-            Ok(acks) => acks,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    "failed to load AbleSet mismatch acknowledgements — treating as none (#601)"
-                );
-                super::ableset_mismatch::AckMap::new()
-            }
+        let (entries, presenter_titles, error) = self
+            .resolve_ableset_library_entries(&settings.library_name, settings.song_prefix_length)
+            .await?;
+
+        // #655 F3: an empty/disabled tracked setlist previously reported as
+        // a misleading WARN burst ("166 gaps") — an absent/empty setlist
+        // carries no information about which numbers "should" exist, so
+        // skip mismatch computation entirely and log ONE INFO instead.
+        let short_circuited = !settings.enabled || !settings.tracking || ableset_songs.is_empty();
+        let mismatches = if short_circuited {
+            info!(
+                library_name = %settings.library_name,
+                "AbleSet setlist empty or integration disabled — mismatch check idle (#655 F3)"
+            );
+            Vec::new()
+        } else {
+            super::ableset_mismatch::compute_ableset_mismatches(
+                &presenter_titles,
+                &ableset_songs,
+                settings.song_prefix_length,
+                &acks,
+            )
         };
-        let mismatches = super::ableset_mismatch::compute_ableset_mismatches(
-            &presenter_titles,
-            &ableset_songs,
-            settings.song_prefix_length,
-            &acks,
-        );
+
+        if !short_circuited {
+            // #655 F9b: prune acks no longer present on EITHER side — only
+            // valid when a real comparison ran (never on the short-circuit
+            // above, where "absent" carries no information about anything).
+            self.prune_stale_ableset_acks(&presenter_titles, &ableset_songs)
+                .await;
+        }
 
         let entries_found = entries.len();
         let mut cache = self.caches.ableset.write().await;
@@ -348,56 +569,87 @@ impl AppState {
             entries,
             error,
             mismatches,
+            presenter_titles,
         );
-        log_ableset_rebuild_result(
-            installed,
-            &settings.library_name,
-            settings.song_prefix_length,
-            entries_found,
-            cache.mismatches(),
-        );
-        Ok(())
+        if entries_found == 0 {
+            // #655 F5a: anchor for the `ensure_ableset_cache` retry cooldown.
+            cache.last_failed_rebuild_attempt = Some(Utc::now());
+        }
+        // #655 F6: copy out the counts + a bounded sample, THEN drop the
+        // write lock before logging. The previous per-mismatch WARN loop ran
+        // while STILL holding this lock — up to 166 blocking stdout writes
+        // per rebuild stalling the live projection path behind it.
+        let log_data = installed.then(|| summarize_mismatches(cache.mismatches()));
+        drop(cache);
+
+        if let Some(summary) = log_data {
+            log_ableset_rebuild_summary(
+                &settings.library_name,
+                settings.song_prefix_length,
+                entries_found,
+                &summary,
+            );
+        }
+        Ok(installed)
     }
 }
 
-/// Log the outcome of a `refresh_ableset_cache` install — extracted to keep
-/// that function under the repo's per-function line cap. `installed = false`
-/// is the #639 race-lost path (a concurrent invalidate won); `true` is the
-/// normal path, which also emits the #601 per-mismatch WARN and #623's
-/// previously-missing cache-rebuild INFO.
-fn log_ableset_rebuild_result(
-    installed: bool,
+/// #655 F5b: bounded summary of a mismatch list for logging — replaces the
+/// old per-mismatch WARN loop (up to 166 lines on a badly mis-numbered
+/// setlist) with ONE line carrying the counts and a small sample. The full
+/// list stays available on the status endpoint (capped separately at 25 —
+/// see `cap_mismatches_for_status`).
+struct MismatchSummary {
+    total: usize,
+    gaps: usize,
+    title_disagreements: usize,
+    sample: Vec<AbleSetTitleMismatch>,
+}
+
+/// #655 F5b/F3: splits a mismatch list into structural gaps (one side
+/// missing entirely — F3's "split the WARN into two distinct messages")
+/// versus genuine title disagreements (both sides present but differ), plus
+/// a small ordered sample for the summary WARN.
+fn summarize_mismatches(mismatches: &[AbleSetTitleMismatch]) -> MismatchSummary {
+    let gaps = mismatches
+        .iter()
+        .filter(|m| m.ableset_title.is_empty() || m.presenter_title.is_empty())
+        .count();
+    MismatchSummary {
+        total: mismatches.len(),
+        gaps,
+        title_disagreements: mismatches.len() - gaps,
+        sample: mismatches
+            .iter()
+            .take(MISMATCH_LOG_SAMPLE_SIZE)
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Log the outcome of a successful `refresh_ableset_cache_once` install —
+/// extracted to keep that function under the repo's per-function line cap.
+/// Silent on the mismatch WARN when there is nothing to report.
+fn log_ableset_rebuild_summary(
     library_name: &str,
     prefix_length: u8,
     entries_found: usize,
-    mismatches: &[AbleSetTitleMismatch],
+    summary: &MismatchSummary,
 ) {
-    if !installed {
-        // #639: the cache is already whatever the racing invalidate left it
-        // as (entries/mismatches cleared) — discarding here, instead of
-        // overwriting, is what stops the invalidate from being silently
-        // lost. The next `ensure_ableset_cache` call sees `entries.is_empty()`
-        // and retries without racing.
-        warn!(
-            library_name = library_name,
-            "AbleSet cache rebuild lost a race with a concurrent invalidate (#639) — \
-             discarding stale fetch; the next resolution attempt will retry cleanly"
-        );
-        return;
-    }
     // #623: the rebuild itself was previously silent end-to-end.
     info!(
         library_name = library_name,
         prefix_length = prefix_length,
         entries_found = entries_found,
-        mismatch_count = mismatches.len(),
+        mismatch_count = summary.total,
         "AbleSet cache rebuild complete"
     );
-    for mismatch in mismatches {
+    if summary.total > 0 {
         warn!(
-            number = %mismatch.number,
-            ableset_title = %mismatch.ableset_title,
-            presenter_title = %mismatch.presenter_title,
+            mismatch_count = summary.total,
+            gaps = summary.gaps,
+            title_disagreements = summary.title_disagreements,
+            sample = ?summary.sample,
             "AbleSet/Presenter numbering disagreement — verify before the service (#601)"
         );
     }
@@ -407,7 +659,12 @@ fn log_ableset_rebuild_result(
 /// `prefix -> title` map (the latter feeds the #601 mismatch report) from a
 /// resolved library's presentations. Extracted from `refresh_ableset_cache`
 /// to keep that function under the repo's per-function line cap. Returns
-/// `error` set when the library has no presentation with a valid prefix.
+/// `error` set when the library has no presentation with a valid prefix, OR
+/// (#655 F14) when two or more presentations collide on the SAME numeric
+/// prefix — a silent `HashMap::insert` overwrite there means whichever
+/// presentation is scanned LAST wins non-deterministically, with zero
+/// operator visibility. A collision takes priority over the "no valid
+/// prefix" message since it is the more actionable diagnosis.
 fn build_ableset_entries(
     presentations: Vec<presenter_core::PresentationSummary>,
     prefix_length: u8,
@@ -418,22 +675,102 @@ fn build_ableset_entries(
 ) {
     let mut entries = HashMap::new();
     let mut presenter_titles = HashMap::new();
+    let mut colliding_numbers = Vec::new();
     for presentation in presentations {
         if let Some(prefix) = extract_song_prefix(&presentation.name, prefix_length) {
             let key = prefix.to_ascii_lowercase();
             presenter_titles.insert(key.clone(), presentation.name.clone());
-            entries.insert(key, presentation.id);
+            if entries.insert(key.clone(), presentation.id).is_some() {
+                colliding_numbers.push(key);
+            }
         }
     }
-    let error = entries
-        .is_empty()
-        .then_some("no presentations with valid prefix".to_string());
+    let error = if colliding_numbers.is_empty() {
+        entries
+            .is_empty()
+            .then_some("no presentations with valid prefix".to_string())
+    } else {
+        colliding_numbers.sort();
+        colliding_numbers.dedup();
+        warn!(
+            numbers = ?colliding_numbers,
+            "AbleSet cache rebuild found presentations with DUPLICATE song numbers — \
+             resolution for these numbers is non-deterministic (#655 F14)"
+        );
+        Some(format!(
+            "duplicate song number(s): {}",
+            colliding_numbers.join(", ")
+        ))
+    };
     (entries, presenter_titles, error)
+}
+
+/// Cap the mismatch list surfaced on the 5s-polled `GET
+/// /integrations/ableset/status` endpoint at 25 entries (#655 F15) — an
+/// unbounded list scales with the size of the pre-service checklist gap,
+/// which can briefly be large right after a library switch. Returns the
+/// capped slice (the FIRST 25, stable order) plus the TRUE total count so
+/// the operator can tell "showing 25 of N".
+fn cap_mismatches_for_status(
+    mismatches: &[AbleSetTitleMismatch],
+) -> (Vec<AbleSetTitleMismatch>, usize) {
+    const MAX_STATUS_MISMATCHES: usize = 25;
+    let total = mismatches.len();
+    let capped = mismatches
+        .iter()
+        .take(MAX_STATUS_MISMATCHES)
+        .cloned()
+        .collect();
+    (capped, total)
 }
 
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    // #655 F15 — RED (this commit): `cap_mismatches_for_status` does not
+    // exist yet, so this fails to compile — the established pattern in this
+    // codebase for a new API being introduced (see the #601 strip_song_prefix
+    // precedent in presenter-core). GREEN adds the function and wires it
+    // into `ableset_status_snapshot`.
+    #[test]
+    fn cap_mismatches_for_status_caps_at_25_and_reports_total_count() {
+        let mismatches: Vec<AbleSetTitleMismatch> = (0..30)
+            .map(|i| AbleSetTitleMismatch {
+                number: format!("{i:03}"),
+                ableset_title: format!("AbleSet {i}"),
+                presenter_title: format!("Presenter {i}"),
+            })
+            .collect();
+
+        let (capped, total) = cap_mismatches_for_status(&mismatches);
+
+        assert_eq!(
+            capped.len(),
+            25,
+            "a 5s-polled status endpoint must cap the inline mismatch list at 25"
+        );
+        assert_eq!(
+            total, 30,
+            "the total count must reflect ALL mismatches, not just the capped slice"
+        );
+        assert_eq!(
+            capped[0].number, "000",
+            "the capped slice must be the FIRST 25, not an arbitrary subset"
+        );
+    }
+
+    #[test]
+    fn cap_mismatches_for_status_does_not_truncate_under_the_cap() {
+        let mismatches = vec![AbleSetTitleMismatch {
+            number: "001".to_string(),
+            ableset_title: "A".to_string(),
+            presenter_title: "B".to_string(),
+        }];
+        let (capped, total) = cap_mismatches_for_status(&mismatches);
+        assert_eq!(capped.len(), 1);
+        assert_eq!(total, 1);
+    }
 
     // #639 — RED (this commit): `generation`/`install_if_current` prove the
     // compare-and-swap that closes the TOCTOU window described in the issue
@@ -457,6 +794,7 @@ mod cache_tests {
             HashMap::from([("001".to_string(), PresentationId::new())]),
             None,
             Vec::new(),
+            HashMap::new(),
         );
 
         assert!(
@@ -483,6 +821,7 @@ mod cache_tests {
             HashMap::from([("001".to_string(), id)]),
             None,
             Vec::new(),
+            HashMap::new(),
         );
 
         assert!(
@@ -503,5 +842,121 @@ mod cache_tests {
             "invalidate_entries must bump the generation counter so an in-flight \
              refresh detects the race (#639)"
         );
+    }
+
+    // #655 F5a — RED (this commit): `recently_failed_rebuild` does not exist
+    // yet. GREEN adds it and consults it from `ensure_ableset_cache`'s
+    // `entries.is_empty()` retry escape hatch.
+
+    #[test]
+    fn recently_failed_rebuild_is_false_with_no_prior_attempt() {
+        let cache = AbleSetLibraryCache::default();
+        assert!(!cache.recently_failed_rebuild());
+    }
+
+    #[test]
+    fn recently_failed_rebuild_is_true_immediately_after_a_failed_attempt() {
+        let mut cache = AbleSetLibraryCache::default();
+        cache.last_failed_rebuild_attempt = Some(Utc::now());
+        assert!(cache.recently_failed_rebuild());
+    }
+
+    #[test]
+    fn recently_failed_rebuild_expires_after_the_cooldown() {
+        let mut cache = AbleSetLibraryCache::default();
+        cache.last_failed_rebuild_attempt = Some(Utc::now() - chrono::Duration::seconds(10));
+        assert!(
+            !cache.recently_failed_rebuild(),
+            "a failed attempt older than the cooldown must no longer suppress a retry"
+        );
+    }
+
+    // #655 F5b — RED (this commit): `summarize_mismatches` does not exist
+    // yet. GREEN adds it and wires it into `refresh_ableset_cache`'s
+    // logging, replacing the old per-mismatch WARN loop.
+
+    #[test]
+    fn summarize_mismatches_splits_gaps_from_title_disagreements() {
+        let mismatches = vec![
+            AbleSetTitleMismatch {
+                number: "001".to_string(),
+                ableset_title: "A".to_string(),
+                presenter_title: String::new(), // gap
+            },
+            AbleSetTitleMismatch {
+                number: "002".to_string(),
+                ableset_title: String::new(), // gap
+                presenter_title: "B".to_string(),
+            },
+            AbleSetTitleMismatch {
+                number: "003".to_string(),
+                ableset_title: "C".to_string(),
+                presenter_title: "D".to_string(), // genuine disagreement
+            },
+        ];
+        let summary = summarize_mismatches(&mismatches);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.gaps, 2);
+        assert_eq!(summary.title_disagreements, 1);
+        assert_eq!(summary.sample.len(), 3);
+    }
+
+    #[test]
+    fn summarize_mismatches_bounds_the_sample_to_five() {
+        let mismatches: Vec<AbleSetTitleMismatch> = (0..10)
+            .map(|i| AbleSetTitleMismatch {
+                number: format!("{i:03}"),
+                ableset_title: "A".to_string(),
+                presenter_title: "B".to_string(),
+            })
+            .collect();
+        let summary = summarize_mismatches(&mismatches);
+        assert_eq!(summary.total, 10);
+        assert_eq!(summary.sample.len(), 5, "the log sample must cap at 5");
+    }
+
+    // #655 F14 — RED (this commit): `build_ableset_entries` currently lets a
+    // duplicate song number silently overwrite via `HashMap::insert` — no
+    // error is set, so `error.expect(...)` below panics. GREEN detects the
+    // collision and sets `error`.
+    #[test]
+    fn build_ableset_entries_reports_duplicate_song_numbers() {
+        use presenter_core::PresentationSummary;
+
+        let presentations = vec![
+            PresentationSummary {
+                id: PresentationId::new(),
+                name: "017 First Song".to_string(),
+            },
+            PresentationSummary {
+                id: PresentationId::new(),
+                name: "017 Second Song".to_string(),
+            },
+        ];
+
+        let (entries, _presenter_titles, error) = build_ableset_entries(presentations, 3);
+        assert_eq!(
+            entries.len(),
+            1,
+            "the colliding number resolves to exactly one entry"
+        );
+        let error = error.expect("a duplicate song number must set an error");
+        assert!(
+            error.contains("017") && error.contains("duplicate"),
+            "error must name the colliding number: {error}"
+        );
+    }
+
+    #[test]
+    fn build_ableset_entries_reports_no_valid_prefix_when_none_collide() {
+        use presenter_core::PresentationSummary;
+
+        let presentations = vec![PresentationSummary {
+            id: PresentationId::new(),
+            name: "No Number Intro".to_string(),
+        }];
+        let (entries, _presenter_titles, error) = build_ableset_entries(presentations, 3);
+        assert!(entries.is_empty());
+        assert_eq!(error.as_deref(), Some("no presentations with valid prefix"));
     }
 }

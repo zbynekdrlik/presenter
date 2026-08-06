@@ -37,6 +37,13 @@ struct AbleSetInner {
     status: RwLock<AbleSetStatusInner>,
     tracker: Mutex<Option<TrackerGuard>>,
     song_changed_tx: tokio::sync::broadcast::Sender<()>,
+    /// Fires whenever the tracked SETLIST (song list/order/skip-flags)
+    /// changes, independent of whether the active song changed (#655 F1/F2)
+    /// — a setlist can be loaded, reordered, or edited before the service
+    /// starts, well before any song becomes active. `state::mod`'s
+    /// `spawn_ableset_setlist_change_refresh` subscribes to this to keep the
+    /// #601 mismatch report from freezing at boot.
+    setlist_changed_tx: tokio::sync::broadcast::Sender<()>,
 }
 
 struct AbleSetStatusInner {
@@ -145,6 +152,7 @@ impl AbleSetBridge {
                 }),
                 tracker: Mutex::new(None),
                 song_changed_tx: tokio::sync::broadcast::channel(16).0,
+                setlist_changed_tx: tokio::sync::broadcast::channel(16).0,
             }),
         }
     }
@@ -152,6 +160,14 @@ impl AbleSetBridge {
     /// Returns a receiver that fires whenever the active song changes.
     pub fn subscribe_song_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.inner.song_changed_tx.subscribe()
+    }
+
+    /// Returns a receiver that fires whenever the tracked SETLIST changes
+    /// (#655 F1/F2) — song list membership, order, or skip flags, independent
+    /// of whether the active song changed. Used to keep the #601 mismatch
+    /// report from freezing at the last active-song change.
+    pub fn subscribe_setlist_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.inner.setlist_changed_tx.subscribe()
     }
 
     pub async fn apply_settings(&self, mut settings: AbleSetSettings) -> anyhow::Result<()> {
@@ -263,6 +279,7 @@ impl AbleSetBridge {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         }
     }
 
@@ -372,6 +389,7 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         }
     } else {
         AbleSetStatusSnapshot {
@@ -390,6 +408,7 @@ fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
             cache_last_error: None,
             recent_attempts: Vec::new(),
             mismatches: Vec::new(),
+            mismatch_count: 0,
         }
     }
 }
@@ -429,6 +448,78 @@ impl AbleSetClient for MockAbleSetClient {
     }
 }
 
+/// Cheap per-tick fingerprint of the raw AbleSet setlist (#655 F1) — hashes
+/// id/name/skipped-flag for every song WITHOUT cloning any strings, so it can
+/// run on every 250ms poll tick regardless of whether anything changed. Only
+/// a fingerprint CHANGE triggers the allocation-heavy `setlist_songs` rebuild
+/// below (preserves the original allocation guard); comparing this instead of
+/// only the active-song id is what lets a setlist loaded/reordered/edited
+/// BEFORE the service starts (no active song yet) still be detected.
+fn setlist_fingerprint(songs: &[SetlistSong]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for song in songs {
+        song.id.hash(&mut hasher);
+        let name: Option<&str> = song
+            .meta
+            .as_ref()
+            .and_then(|m| m.name.as_deref().or(m.raw.as_deref()))
+            .or_else(|| song.cue.as_ref().and_then(|c| c.name.as_deref()));
+        name.hash(&mut hasher);
+        let skipped = song.internal_meta.as_ref().is_some_and(|m| m.skipped);
+        skipped.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// #655 F1: the setlist LIST can change (loaded, reordered, songs
+/// skipped/unskipped) independent of the active song -- a setlist loaded
+/// before the service starts never has an active song at all, so gating the
+/// rebuild on the active-song id alone left it permanently empty
+/// pre-service. Fingerprint-compares the current tick's setlist against the
+/// last tick's and rebuilds the cached `status.setlist_songs` only when it
+/// actually changed, to avoid unnecessary allocations every 250ms.
+///
+/// Extracted from `run_tracker` (#655 F17) to keep it under the
+/// function-length cap. Pure motion: the caller still updates
+/// `prev_setlist_fingerprint` and fires `setlist_changed_tx` itself, AFTER
+/// releasing the status write lock, exactly as before this extraction —
+/// this fn only returns `(list_changed, new_fingerprint)` so the caller can
+/// do that unchanged.
+fn refresh_setlist_songs(
+    status: &mut AbleSetStatusInner,
+    setlist: &SetlistResponse,
+    prev_setlist_fingerprint: Option<u64>,
+) -> (bool, u64) {
+    let new_fingerprint = setlist_fingerprint(&setlist.songs);
+    let list_changed = prev_setlist_fingerprint != Some(new_fingerprint);
+
+    if list_changed {
+        // Rebuild cached song list only when the list actually changed to
+        // avoid unnecessary allocations every 250ms.
+        status.setlist_songs = setlist
+            .songs
+            .iter()
+            .map(|s| {
+                let name = s
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
+                    .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
+                    .unwrap_or_default();
+                let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
+                SetlistCachedSong {
+                    id: s.id.clone().unwrap_or_default(),
+                    name,
+                    skipped,
+                }
+            })
+            .collect();
+    }
+
+    (list_changed, new_fingerprint)
+}
+
 async fn run_tracker(
     inner: Arc<AbleSetInner>,
     config: AbleSetTrackerConfig,
@@ -441,6 +532,7 @@ async fn run_tracker(
         song_prefix_length,
     } = config;
     let mut prev_active_id: Option<String> = None;
+    let mut prev_setlist_fingerprint: Option<u64> = None;
     let mut interval = interval(Duration::from_millis(POLL_INTERVAL_MS));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -455,33 +547,22 @@ async fn run_tracker(
                         let new_active_id = setlist.active_song_id.clone();
                         let song_changed = new_active_id != prev_active_id;
                         let mut status = inner.status.write().await;
-
-                        if song_changed {
-                            // Rebuild cached song list only when the active song
-                            // changes to avoid unnecessary allocations every 250ms
-                            status.setlist_songs = setlist.songs.iter().map(|s| {
-                                let name = s.meta.as_ref()
-                                    .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
-                                    .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
-                                    .unwrap_or_default();
-                                let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
-                                SetlistCachedSong {
-                                    id: s.id.clone().unwrap_or_default(),
-                                    name,
-                                    skipped,
-                                }
-                            }).collect();
-                        }
+                        // #655 F1/F17: fingerprint-compares the setlist LIST itself
+                        // (independent of the active song) and rebuilds
+                        // status.setlist_songs on a real change — see
+                        // refresh_setlist_songs's doc comment for the full "why".
+                        let (list_changed, new_fingerprint) =
+                            refresh_setlist_songs(&mut status, &setlist, prev_setlist_fingerprint);
 
                         if let Some(active_id) = &setlist.active_song_id {
                             let mut found = false;
                             for (idx, song) in setlist.songs.iter().enumerate() {
                                 if song.id.as_deref() == Some(active_id.as_str()) {
-                                    let name = if song_changed {
-                                        status.setlist_songs[idx].name.clone()
-                                    } else if let Some(last) = &status.last_song {
-                                        last.name.clone()
-                                    } else {
+                                    // `status.setlist_songs` is always current here:
+                                    // freshly rebuilt above if the list changed, or
+                                    // left as-is from a prior tick whose fingerprint
+                                    // proves it is still identical to `setlist.songs`.
+                                    let Some(name) = status.setlist_songs.get(idx).map(|s| s.name.clone()) else {
                                         continue;
                                     };
                                     if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
@@ -515,6 +596,10 @@ async fn run_tracker(
                             status.last_error = None;
                         }
                         drop(status);
+                        if list_changed {
+                            prev_setlist_fingerprint = Some(new_fingerprint);
+                            let _ = inner.setlist_changed_tx.send(());
+                        }
                         if song_changed {
                             prev_active_id = new_active_id;
                             let _ = inner.song_changed_tx.send(());
@@ -525,6 +610,10 @@ async fn run_tracker(
                         status.last_song = None;
                         status.setlist_songs.clear();
                         status.last_error = None;
+                        drop(status);
+                        if prev_setlist_fingerprint.take().is_some() {
+                            let _ = inner.setlist_changed_tx.send(());
+                        }
                     }
                     Err(err) => {
                         let mut status = inner.status.write().await;
@@ -697,6 +786,67 @@ mod tests {
         }
         let next = bridge.next_song_name().await;
         assert_eq!(next, None);
+    }
+
+    /// #655 F1 — RED (this commit): a setlist loaded before the service
+    /// starts (nothing playing yet, `activeSongId: null`) must populate
+    /// `setlist_song_titles()` immediately — this is #601's primary
+    /// pre-service-checklist use case. Before the fix, `run_tracker` only
+    /// rebuilds `setlist_songs` inside `if song_changed`, and
+    /// `prev_active_id` starts `None`; with no active song ever reported,
+    /// `new_active_id (None) != prev_active_id (None)` is always `false`, so
+    /// the rebuild never runs and the mismatch report stays "all gaps"
+    /// indefinitely, until the first song is played (too late).
+    #[tokio::test]
+    async fn setlist_populates_before_any_active_song_is_played() {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/setlist"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "activeSongId": null,
+                    "songs": [
+                        { "id": "s1", "meta": { "name": "017 Viem, ze Ty Pan" } },
+                        { "id": "s2", "meta": { "name": "018 Another Song" } }
+                    ]
+                })),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let bridge = AbleSetBridge::new();
+        let addr = mock_server.address();
+        let settings = AbleSetSettings::new(
+            true,
+            addr.ip().to_string(),
+            39051,
+            addr.port(),
+            "Hymnal".to_string(),
+            3,
+            Utc::now(),
+            Utc::now(),
+        );
+        bridge.apply_settings(settings).await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if !bridge.setlist_song_titles().await.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "setlist_song_titles() must populate from a loaded setlist even with \
+                 no active song (activeSongId: null) — #655 F1"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let titles = bridge.setlist_song_titles().await;
+        assert_eq!(
+            titles.len(),
+            2,
+            "both setlist songs must be present pre-service: {titles:?}"
+        );
     }
 
     #[tokio::test]

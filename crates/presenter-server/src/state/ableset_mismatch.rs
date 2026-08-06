@@ -1,5 +1,9 @@
-//! AbleSet<->Presenter song-number/title mismatch detection (#601) and its
-//! per-number operator acknowledgement store.
+//! Pure AbleSet<->Presenter song-number/title mismatch COMPARISON logic
+//! (#601). The acknowledgement store (persistence) lives in the sibling
+//! `ableset_ack.rs` (#655 — split out to keep both files under the repo's
+//! per-file size cap, same precedent as `state/background_tasks.rs`; F4's
+//! domain refusal enum and F9's mutex/prune/cap/validation land there in a
+//! follow-up commit).
 //!
 //! The song NUMBER is the only link between AbleSet and Presenter —
 //! `resolve_ableset_presentation` matches purely on the numeric prefix, so a
@@ -15,105 +19,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::Context;
 use presenter_core::{normalize_title_for_mismatch, strip_song_prefix, AbleSetTitleMismatch};
-use tracing::warn;
 
-use super::AppState;
-use crate::ableset::AbleSetStatusSnapshot;
-
-const ABLESET_MISMATCH_ACK_SETTING_KEY: &str = "ableset_mismatch_acks";
-
-/// An operator's explicit "yes, these two titles are the same song"
-/// acknowledgement for one song number. The settled design rejected a
-/// similarity threshold (a genuinely wrong pair could easily look similar,
-/// and a deliberate variant like "Alive with you KIDS" can look very
-/// different) — only an explicit human call is safe here. Bound to the
-/// EXACT title pair it was granted for: if either side's title later
-/// changes, the ack no longer matches and the warning returns (a later
-/// renumbering must never silently inherit an old "this is fine").
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AbleSetMismatchAck {
-    pub(crate) ableset_title: String,
-    pub(crate) presenter_title: String,
-}
-
-pub(crate) type AckMap = HashMap<String, AbleSetMismatchAck>;
-
-impl AppState {
-    /// Load the persisted acknowledgement map from the generic `app_settings`
-    /// key-value store — no schema migration needed, this is a JSON blob
-    /// under one well-known key. A corrupt/unparseable blob degrades to
-    /// "no acknowledgements" (loud rebuild warnings) rather than failing the
-    /// whole cache rebuild.
-    pub(super) async fn load_ableset_mismatch_acks(&self) -> anyhow::Result<AckMap> {
-        let Some(raw) = self
-            .repository
-            .get_app_setting(ABLESET_MISMATCH_ACK_SETTING_KEY)
-            .await?
-        else {
-            return Ok(AckMap::new());
-        };
-        Ok(serde_json::from_str(&raw).unwrap_or_else(|err| {
-            warn!(
-                ?err,
-                "corrupt AbleSet mismatch acknowledgement store — treating as empty (#601)"
-            );
-            AckMap::new()
-        }))
-    }
-
-    async fn save_ableset_mismatch_acks(&self, acks: &AckMap) -> anyhow::Result<()> {
-        let raw = serde_json::to_string(acks)
-            .context("failed to serialize AbleSet mismatch acknowledgements")?;
-        self.repository
-            .set_app_setting(ABLESET_MISMATCH_ACK_SETTING_KEY, &raw)
-            .await
-    }
-
-    async fn refresh_current_ableset_cache(&self) -> anyhow::Result<()> {
-        let settings = self.ableset_bridge.status_snapshot().await;
-        self.refresh_ableset_cache(&settings).await
-    }
-
-    /// Record (or overwrite) the operator's acknowledgement that `number`'s
-    /// two CURRENT titles are deliberately different names for the same
-    /// song, then rebuild the cache immediately so the mismatch report drops
-    /// it right away rather than waiting for the next unrelated rebuild.
-    pub async fn acknowledge_ableset_mismatch(
-        &self,
-        number: &str,
-        ableset_title: &str,
-        presenter_title: &str,
-    ) -> anyhow::Result<AbleSetStatusSnapshot> {
-        let mut acks = self.load_ableset_mismatch_acks().await.unwrap_or_default();
-        acks.insert(
-            number.to_string(),
-            AbleSetMismatchAck {
-                ableset_title: ableset_title.to_string(),
-                presenter_title: presenter_title.to_string(),
-            },
-        );
-        self.save_ableset_mismatch_acks(&acks).await?;
-        self.refresh_current_ableset_cache().await?;
-        Ok(self.ableset_status_snapshot().await)
-    }
-
-    /// Revoke a prior acknowledgement (the report is "visible/revocable" per
-    /// the settled design) — the warning returns on the immediate rebuild
-    /// triggered here if the titles still disagree.
-    pub async fn unacknowledge_ableset_mismatch(
-        &self,
-        number: &str,
-    ) -> anyhow::Result<AbleSetStatusSnapshot> {
-        let mut acks = self.load_ableset_mismatch_acks().await.unwrap_or_default();
-        acks.remove(number);
-        self.save_ableset_mismatch_acks(&acks).await?;
-        self.refresh_current_ableset_cache().await?;
-        Ok(self.ableset_status_snapshot().await)
-    }
-}
+use super::ableset_ack::AckMap;
 
 /// Compare the live AbleSet setlist against the resolved Presenter library
 /// and report per-number title disagreements the operator has not
@@ -165,7 +73,7 @@ fn mismatch_for_number(
                 != normalize_title_for_mismatch(strip_song_prefix(p, prefix_length));
             let acknowledged = acks
                 .get(number)
-                .is_some_and(|ack| ack.ableset_title == a && ack.presenter_title == p);
+                .is_some_and(|ack| ack_matches_current_titles(ack, a, p, prefix_length));
             if differs && !acknowledged {
                 Some(AbleSetTitleMismatch {
                     number: number.to_string(),
@@ -190,8 +98,32 @@ fn mismatch_for_number(
     }
 }
 
+/// Whether a stored acknowledgement still covers the CURRENT pair of titles
+/// (#655 F9e, re-settled): compares both sides through
+/// `normalize_title_for_mismatch` (the same fold used for the mismatch
+/// decision itself) rather than raw `==`. The ack is stored RAW (exactly the
+/// strings the operator saw on `GET status`), but a purely cosmetic change on
+/// either side (diacritics, extra whitespace, case) must not silently
+/// re-raise a warning the operator already dismissed — while a genuine title
+/// change (this function returning `false`) still must.
+fn ack_matches_current_titles(
+    ack: &super::ableset_ack::AbleSetMismatchAck,
+    current_ableset_title: &str,
+    current_presenter_title: &str,
+    prefix_length: u8,
+) -> bool {
+    normalize_title_for_mismatch(strip_song_prefix(&ack.ableset_title, prefix_length))
+        == normalize_title_for_mismatch(strip_song_prefix(current_ableset_title, prefix_length))
+        && normalize_title_for_mismatch(strip_song_prefix(&ack.presenter_title, prefix_length))
+            == normalize_title_for_mismatch(strip_song_prefix(
+                current_presenter_title,
+                prefix_length,
+            ))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::ableset_ack::AbleSetMismatchAck;
     use super::*;
 
     fn ack(ableset_title: &str, presenter_title: &str) -> AbleSetMismatchAck {
@@ -265,6 +197,26 @@ mod tests {
             mismatches.len(),
             1,
             "a title change after acknowledgement must re-raise the warning, not stay silent"
+        );
+    }
+
+    // #655 F9e — RED (this commit): the ack comparison is currently raw
+    // `==`, so a purely cosmetic edit (whitespace/case here) on either title
+    // WRONGLY re-raises a warning the operator already dismissed. GREEN
+    // switches the comparison to `normalize_title_for_mismatch` on both
+    // sides.
+    #[test]
+    fn ack_survives_a_purely_cosmetic_title_change() {
+        let presenter = HashMap::from([("088".to_string(), "088 Alive With  You".to_string())]);
+        let ableset = vec![("088".to_string(), "088 alive with you kids".to_string())];
+        let acks = AckMap::from([(
+            "088".to_string(),
+            ack("088 Alive with you KIDS", "088 Alive with you"),
+        )]);
+        let mismatches = compute_ableset_mismatches(&presenter, &ableset, 3, &acks);
+        assert!(
+            mismatches.is_empty(),
+            "a purely cosmetic title edit must not re-raise an acknowledged mismatch: {mismatches:?}"
         );
     }
 
