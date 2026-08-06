@@ -338,3 +338,80 @@ fn build_ableset_entries(
         .then_some("no presentations with valid prefix".to_string());
     (entries, presenter_titles, error)
 }
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    // #639 — RED (this commit): `generation()`/`install_if_current()`/
+    // `invalidate_entries()` do not exist yet — the crate does not build.
+    // These prove the compare-and-swap that closes the TOCTOU window
+    // described in the issue ("An invalidate request that lands in the
+    // window between the read and the install is silently lost — the
+    // installed (stale) cache overwrites the invalidation"). GREEN adds
+    // them and wires the CAS into `refresh_ableset_cache`.
+
+    #[test]
+    fn install_if_current_rejects_a_stale_generation() {
+        let mut cache = AbleSetLibraryCache::default();
+        let captured_generation = cache.generation();
+
+        // Simulate a concurrent invalidate landing WHILE a refresh's async DB
+        // fetch was in flight — exactly the #639 race window.
+        cache.invalidate_entries();
+
+        let installed = cache.install_if_current(
+            captured_generation,
+            "Hymnal".to_string(),
+            3,
+            HashMap::from([("001".to_string(), PresentationId::new())]),
+            None,
+            Vec::new(),
+        );
+
+        assert!(
+            !installed,
+            "a refresh whose generation went stale during its fetch must be rejected, \
+             not silently overwrite what the concurrent invalidate just cleared"
+        );
+        assert!(
+            cache.entries.is_empty(),
+            "the rejected install must leave the cache exactly as the invalidate left it"
+        );
+    }
+
+    #[test]
+    fn install_if_current_succeeds_when_generation_is_unchanged() {
+        let mut cache = AbleSetLibraryCache::default();
+        let captured_generation = cache.generation();
+        let id = PresentationId::new();
+
+        let installed = cache.install_if_current(
+            captured_generation,
+            "Hymnal".to_string(),
+            3,
+            HashMap::from([("001".to_string(), id)]),
+            None,
+            Vec::new(),
+        );
+
+        assert!(
+            installed,
+            "a refresh with no concurrent invalidate must install normally"
+        );
+        assert_eq!(cache.entries.get("001"), Some(&id));
+    }
+
+    #[test]
+    fn invalidate_entries_bumps_generation() {
+        let mut cache = AbleSetLibraryCache::default();
+        let before = cache.generation();
+        cache.invalidate_entries();
+        assert_ne!(
+            before,
+            cache.generation(),
+            "invalidate_entries must bump the generation counter so an in-flight \
+             refresh detects the race (#639)"
+        );
+    }
+}
