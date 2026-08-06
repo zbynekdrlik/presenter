@@ -584,7 +584,12 @@ fn log_ableset_rebuild_summary(
 /// `prefix -> title` map (the latter feeds the #601 mismatch report) from a
 /// resolved library's presentations. Extracted from `refresh_ableset_cache`
 /// to keep that function under the repo's per-function line cap. Returns
-/// `error` set when the library has no presentation with a valid prefix.
+/// `error` set when the library has no presentation with a valid prefix, OR
+/// (#655 F14) when two or more presentations collide on the SAME numeric
+/// prefix — a silent `HashMap::insert` overwrite there means whichever
+/// presentation is scanned LAST wins non-deterministically, with zero
+/// operator visibility. A collision takes priority over the "no valid
+/// prefix" message since it is the more actionable diagnosis.
 fn build_ableset_entries(
     presentations: Vec<presenter_core::PresentationSummary>,
     prefix_length: u8,
@@ -595,16 +600,33 @@ fn build_ableset_entries(
 ) {
     let mut entries = HashMap::new();
     let mut presenter_titles = HashMap::new();
+    let mut colliding_numbers = Vec::new();
     for presentation in presentations {
         if let Some(prefix) = extract_song_prefix(&presentation.name, prefix_length) {
             let key = prefix.to_ascii_lowercase();
             presenter_titles.insert(key.clone(), presentation.name.clone());
-            entries.insert(key, presentation.id);
+            if entries.insert(key.clone(), presentation.id).is_some() {
+                colliding_numbers.push(key);
+            }
         }
     }
-    let error = entries
-        .is_empty()
-        .then_some("no presentations with valid prefix".to_string());
+    let error = if colliding_numbers.is_empty() {
+        entries
+            .is_empty()
+            .then_some("no presentations with valid prefix".to_string())
+    } else {
+        colliding_numbers.sort();
+        colliding_numbers.dedup();
+        warn!(
+            numbers = ?colliding_numbers,
+            "AbleSet cache rebuild found presentations with DUPLICATE song numbers — \
+             resolution for these numbers is non-deterministic (#655 F14)"
+        );
+        Some(format!(
+            "duplicate song number(s): {}",
+            colliding_numbers.join(", ")
+        ))
+    };
     (entries, presenter_titles, error)
 }
 
