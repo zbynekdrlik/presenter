@@ -20,7 +20,7 @@
 //! If future changes require holding multiple locks, establish and document a consistent
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
 
-mod ableset;
+pub(crate) mod ableset;
 pub(crate) mod ableset_ack;
 #[cfg(test)]
 mod ableset_integration_tests;
@@ -153,6 +153,11 @@ pub struct AppState {
     /// (load->mutate->save, and the F9b prune) so two concurrent
     /// ack/unack/prune calls can never lose one's update to the other.
     ableset_ack_lock: Arc<tokio::sync::Mutex<()>>,
+    /// #655 F16: edge-triggered "AbleSet integration is disabled" WARN —
+    /// set on the first disabled resolution attempt, cleared when settings
+    /// are next saved with `enabled: true`, so the warning logs once per
+    /// enabled->disabled transition instead of once per OSC event.
+    ableset_disabled_warn_shown: Arc<AtomicBool>,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -245,6 +250,7 @@ impl AppState {
             sync: sync::SyncCoordinator::new(),
             presentation_locks: PresentationLockRegistry::new(),
             ableset_ack_lock: Arc::new(tokio::sync::Mutex::new(())),
+            ableset_disabled_warn_shown: Arc::new(AtomicBool::new(false)),
         };
         state.spawn_heartbeat_tasks();
         state

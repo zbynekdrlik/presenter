@@ -14,6 +14,7 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
+use crate::state::ableset::AbleSetResolution;
 use crate::state::AppState;
 
 use super::parser::{extract_note_velocity, Extracted};
@@ -236,13 +237,30 @@ async fn trigger_slide(
         return Ok(());
     };
 
-    let Some(presentation_id) = app_state.resolve_ableset_presentation(&song.prefix).await? else {
-        warn!(
-            prefix = %song.prefix,
-            song = %song.name,
-            "AbleSet prefix missing in library — resolution miss"
-        );
-        return Ok(());
+    // #655 F16: the tri-state resolution lets this log the ACCURATE reason
+    // instead of always claiming "prefix missing in library" even when the
+    // integration is simply disabled.
+    let presentation_id = match app_state
+        .resolve_ableset_presentation_detailed(&song.prefix)
+        .await?
+    {
+        AbleSetResolution::Resolved(id) => id,
+        AbleSetResolution::Disabled => {
+            debug!(
+                prefix = %song.prefix,
+                song = %song.name,
+                "AbleSet OSC trigger skipped — AbleSet integration is disabled"
+            );
+            return Ok(());
+        }
+        AbleSetResolution::NoMatch => {
+            warn!(
+                prefix = %song.prefix,
+                song = %song.name,
+                "AbleSet prefix missing in library — resolution miss"
+            );
+            return Ok(());
+        }
     };
 
     let detail = app_state

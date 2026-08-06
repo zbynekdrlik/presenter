@@ -4,6 +4,7 @@ use presenter_core::{
     AbleSetTitleMismatch, PresentationId,
 };
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::Ordering;
 use tracing::{info, warn};
 
 use super::ableset_ack::AckMap;
@@ -47,6 +48,20 @@ pub(crate) struct AbleSetResolutionAttempt {
     /// Whether the prefix resolved to a known presentation (`true`) or was a
     /// cache miss (`false`).
     pub(crate) found: bool,
+}
+
+/// Internal tri-state result of an AbleSet prefix resolution attempt (#655
+/// F16) — lets `osc::handler::trigger_slide` log the ACCURATE reason a
+/// trigger produced no presentation instead of always claiming "prefix
+/// missing in library" even when the integration was simply disabled. The
+/// public `resolve_ableset_presentation` (used by the existing ~15 call
+/// sites/tests) keeps its `Option<PresentationId>` signature unchanged —
+/// this is an additive internal API, not a breaking one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbleSetResolution {
+    Resolved(PresentationId),
+    Disabled,
+    NoMatch,
 }
 
 #[derive(Default)]
@@ -249,6 +264,13 @@ impl AppState {
             .upsert_ableset_settings(&draft, source, actor)
             .await?;
         self.ableset_bridge.apply_settings(settings.clone()).await?;
+        if settings.enabled {
+            // #655 F16: re-arm the edge-triggered disabled-WARN so the NEXT
+            // disable is logged again, instead of staying silently
+            // suppressed forever by a flag left over from a previous disable.
+            self.ableset_disabled_warn_shown
+                .store(false, Ordering::SeqCst);
+        }
         {
             let mut cache = self.caches.ableset.write().await;
             cache.invalidate();
@@ -293,25 +315,56 @@ impl AppState {
         self.ableset_bridge.song_snapshot().await
     }
 
+    /// #655 F16: kept as a thin `Option<PresentationId>` wrapper over
+    /// [`Self::resolve_ableset_presentation_detailed`] so the ~15 existing
+    /// call sites/tests need no change. Production code (`osc::handler`) now
+    /// calls the `_detailed` tri-state directly for accurate logging; this
+    /// wrapper's only remaining callers are tests, hence the dead-code
+    /// allowance outside `cfg(test)`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn resolve_ableset_presentation(
         &self,
         prefix: &str,
     ) -> anyhow::Result<Option<PresentationId>> {
+        Ok(
+            match self.resolve_ableset_presentation_detailed(prefix).await? {
+                AbleSetResolution::Resolved(id) => Some(id),
+                AbleSetResolution::Disabled | AbleSetResolution::NoMatch => None,
+            },
+        )
+    }
+
+    /// Tri-state resolution (#655 F16) — see [`AbleSetResolution`]. Lets
+    /// `osc::handler::trigger_slide` distinguish "integration disabled" from
+    /// a genuine cache miss and log the accurate reason for each, instead of
+    /// always claiming "prefix missing in library".
+    pub(crate) async fn resolve_ableset_presentation_detailed(
+        &self,
+        prefix: &str,
+    ) -> anyhow::Result<AbleSetResolution> {
         let key = prefix.trim();
         if key.is_empty() {
-            return Ok(None);
+            return Ok(AbleSetResolution::NoMatch);
         }
         let settings = self.ableset_bridge.status_snapshot().await;
         if !settings.enabled {
-            // #623: #600 named this exact early return as the one that
-            // "fails EVERY song with no log" — an operator who forgot to
-            // (re-)enable the integration otherwise sees only silent
-            // no-ops on every incoming song change.
-            warn!(
-                prefix = key,
-                "AbleSet resolution skipped — AbleSet integration is disabled"
-            );
-            return Ok(None);
+            // #655 F16: edge-triggered — WARN only on the enabled->disabled
+            // transition (previously this fired on EVERY OSC event while
+            // disabled — up to once per slide advance — with zero new
+            // information after the first).
+            if !self
+                .ableset_disabled_warn_shown
+                .swap(true, Ordering::SeqCst)
+            {
+                warn!(
+                    prefix = key,
+                    "AbleSet resolution skipped — AbleSet integration is disabled"
+                );
+            }
+            // #655 F16: record the attempt even on the disabled path so
+            // `recentAttempts` shows evidence instead of silence.
+            self.caches.ableset.write().await.record_attempt(key, false);
+            return Ok(AbleSetResolution::Disabled);
         }
         self.ensure_ableset_cache(&settings).await?;
         let lookup = key.to_ascii_lowercase();
@@ -339,7 +392,10 @@ impl AppState {
             }
         }
 
-        Ok(result)
+        Ok(match result {
+            Some(id) => AbleSetResolution::Resolved(id),
+            None => AbleSetResolution::NoMatch,
+        })
     }
 
     async fn ensure_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
