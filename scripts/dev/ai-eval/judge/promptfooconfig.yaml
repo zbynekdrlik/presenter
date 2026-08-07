@@ -52,12 +52,14 @@ defaultTest:
       config:
         temperature: 0
 
-# Caching: unchanged fixtures should never re-bill the judge model. Report §6.6: "Candidate and
-# judge pinned to temperature 0 and explicit model IDs; PROMPTFOO_CACHE_PATH set so unchanged
-# fixtures don't re-bill." Set PROMPTFOO_CACHE_PATH in the environment that invokes `npx
-# promptfoo eval` (ai-eval.yml, report §8 step 11) — not hardcoded here, since the right cache
-# location differs between a local run and the self-hosted CI runner.
-cache: true
+# Caching MUST stay off here: `repeat: 3` below exists to get 3 INDEPENDENT judge samples at
+# temperature 0 ("even greedy decoding isn't fully reproducible", report §6.4). At temperature 0
+# every repeat is a byte-identical request, so promptfoo's cache would serve repeats 2 and 3
+# straight from the cache of repeat 1 — degenerating the majority-of-3 vote into one sample
+# wearing a 3x label. Re-enable caching only if this ever moves to genuinely-different repeated
+# requests (e.g. varied few-shot ordering); until then it directly undermines the majority-vote
+# design this file exists to implement.
+cache: false
 
 # Report §6.4: "Judge at temperature 0, 3 runs, majority verdict for anything near threshold —
 # even greedy decoding isn't fully reproducible." promptfoo's `repeat` re-runs each test N times;

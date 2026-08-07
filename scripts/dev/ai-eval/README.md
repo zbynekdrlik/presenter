@@ -25,8 +25,11 @@ installs, no ssh). Concretely:
 | The remaining ~70/~90 bulk corpus cases (corpus generator + more hand-written fixtures) | ❌ Not built — report §8 steps 6-7 |
 | CI wiring (`ai-eval.yml`, per-PR Layer-1-only lane) | ❌ Not built — report §8 step 11 |
 
-Running `./run.sh` today will count the corpus (currently 30 cases) and then fail loudly at
-whichever stage needs the driver — that is the intended, honest behavior of a skeleton, not a bug.
+Running bare `./run.sh` today fails loudly immediately, on the `drive` stage's missing
+`--candidate-url`/`--model` arguments — it never gets far enough to count the corpus. Passing
+both (`./run.sh --candidate-url <url> --model <name>`) gets past that check and THEN counts the
+corpus (currently 30 cases) before failing loudly at whichever stage needs the not-yet-built
+driver — that is the intended, honest behavior of a skeleton, not a bug.
 
 ## What this evaluates, and how
 
