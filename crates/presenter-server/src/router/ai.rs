@@ -281,8 +281,9 @@ pub(super) fn compute_ai_connected(connectivity_ok: bool, claude_authenticated: 
 /// "AI proxy unreachable" string — which is misleading when the actual
 /// failure is an HTTP-level error such as 401 (bad/expired API key) or 500
 /// (proxy-side crash). `connectivity_error` carries that real message
-/// (`check_connectivity`'s `anyhow::Error` rendered via `.to_string()`) so
-/// the caller can see WHY the proxy is unreachable, not just that it is.
+/// (`check_connectivity`'s `anyhow::Error` rendered via
+/// `render_connectivity_error`, see below) so the caller can see WHY the
+/// proxy is unreachable, not just that it is.
 ///
 /// Extracted as a pure function so the branch logic is unit-testable without
 /// constructing a live ProxyManager + network connectivity (same rationale
@@ -312,7 +313,7 @@ pub(super) fn compute_ai_status_error(
 /// context and silently drops the real cause — this uses anyhow's
 /// alternate-mode formatting (`{:#}`) to render the full chain instead.
 pub(super) fn render_connectivity_error(e: &anyhow::Error) -> String {
-    e.to_string()
+    format!("{e:#}")
 }
 
 #[instrument(skip_all)]
