@@ -1,0 +1,14 @@
+{
+  "id": "adv-12-invalid-verse-item-corrupted-number",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH. Pozor, mail od kazateľa mal pri čísle verša zjavne poškodené kódovanie (zobrazilo sa obrovské číslo namiesto '16'):\n\n##Ján 3:4294967297## Lebo tak miloval Bôh svet, že svojho jednorodeného Syna dal, aby nikto, kto verí v neho, nezahynul, ale mal večný život.",
+  "setup": {
+    "description": "A corrupted/mangled verse number in the source email (a real MVP-grade failure mode: encoding glitches, copy-paste from a PDF, or an OCR artifact turning '16' into a garbage large number) — 4294967297 = 2^32 + 1, deliberately chosen to land past u32::MAX (4294967295). parse_bible_items' own code comment explicitly calls out this exact class of input: 'try_from(u64->u32): any u64 that does not fit in u32 collapses to 0 and is rejected ... Avoids the silent truncation of e.g. 2^33+5 -> 5 that a raw `as u32` cast would do.' The text itself is unambiguously the real Ján 3:16 wording, so a model with reasonable judgement should recognise the number is nonsensical and either ask the user or infer the correct verse number (16) from context — never pass the corrupted number straight through as the item's `number` field."
+  },
+  "expected": {
+    "validationErrors": ["invalid_verse_item"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Second flavour of invalid_verse_item, testing the number-field overflow path specifically (server-side: u32::try_from(raw[\"number\"].as_u64()...).unwrap_or(0) collapses any out-of-range u64 to 0, which then fails the number>=1 check). The realistic and desired self-correction is inferring the correct verse number (16) from the verse text's obvious match to load_bible_verses' Ján 3 results, NOT passing 4294967297 through verbatim and NOT silently guessing an unrelated number."
+  }
+}

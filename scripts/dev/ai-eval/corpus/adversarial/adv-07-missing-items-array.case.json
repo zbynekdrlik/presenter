@@ -1,0 +1,14 @@
+{
+  "id": "adv-07-missing-items-array",
+  "slice": "adversarial",
+  "userMessage": "Vytvor prázdnu biblickú prezentáciu s názvom \"Večera Pánova\", slajdy doplním ručne neskôr.",
+  "setup": {
+    "description": "An explicit request for a presentation with NO content yet. bible_presentation.rs's create_bible_presentation handler explicitly supports this: an empty `items: []` array is accepted and produces an intentionally-empty presentation (the code comment calls this out as used by tests and the operator UI). The correct tool call is create_bible_presentation(name: 'Večera Pánova', items: []) — but a model that has never seen an empty-collection case in its training distribution for a 'required' array field may omit the `items` key from the call arguments entirely instead of supplying an explicit empty array, which is what actually triggers missing_items (args[\"items\"].as_array() returns None only when the key is absent or not a JSON array — NOT when it is present but empty)."
+  },
+  "expected": {
+    "validationErrors": ["missing_items"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["create_bible_presentation"],
+    "notes": "Targets the create_bible_presentation dispatch's own 'missing_items' error (bible_presentation.rs, not bible_validator.rs — this one keys on \"error\", not \"rule\", but is read by the LLM the same way for self-correction). Correct end state: a bible presentation named exactly 'Večera Pánova' with slide_count 0. No load_bible_verses call is expected — there is no passage to look up."
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "id": "ba-02-paraphrase-vs-db-text-jan1",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad SEB:\n\n##Ján 1:1## Na úplnom začiatku, ešte skôr než čokoľvek iné vzniklo, tam už bolo Slovo – a to Slovo bolo priamo u Boha, áno, to Slovo bolo sám Boh.",
+  "setup": {
+    "description": "The pastor paraphrased Ján 1:1 in his own words instead of quoting the SEB translation verbatim. The real slk-seb DB text for Ján 1:1 is 'Na počiatku bolo Slovo, to Slovo bolo u Boha a to Slovo bolo Boh.' — noticeably different wording from the sermon. Per agent.rs system prompt step 3 ('The sermon is authoritative for text content. If they differ, REPLACE the text field with the sermon's wording.'), the model must call load_bible_verses (to get the DB text as a reference baseline / to confirm the passage exists) but then OVERRIDE the main text with the sermon's paraphrase, not silently keep the DB wording."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "overriddenVerses": [
+      {
+        "ref": "Ján 1:1",
+        "translation": "SEB",
+        "expectedText": "Na úplnom začiatku, ešte skôr než čokoľvek iné vzniklo, tam už bolo Slovo – a to Slovo bolo priamo u Boha, áno, to Slovo bolo sám Boh.",
+        "dbText": "Na počiatku bolo Slovo, to Slovo bolo u Boha a to Slovo bolo Boh."
+      }
+    ],
+    "notes": "Hard-case category: paraphrase vs verbatim. The most likely failure mode for a weaker model is silently reverting to the DB text it just loaded (the 'safe-looking' answer) instead of trusting the sermon's own wording — this is exactly the fidelity direction verbatimVerses cannot catch, which is why overriddenVerses exists as its mirror check."
+  }
+}

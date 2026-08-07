@@ -1,0 +1,14 @@
+{
+  "id": "adv-03-unprocessed-bold-markers-main",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad MIL:\n\n##Ján 1:12## Ale všetkým, ktorí ho prijali, dal právo stať sa Božími deťmi – tým, ktorí ##veria## v jeho meno,",
+  "setup": {
+    "description": "Same source verse as ba-08 (the plain baseline for inline ##word## handling), but here to deliberately size the case as adversarial: the sermon has a single inline bold word inside a verse. A weak model may pass the item's `text` field through with the raw '##veria##' markers still embedded instead of stripping them and uppercasing the word — the most direct, most common way unprocessed_bold_markers fires on `main`."
+  },
+  "expected": {
+    "validationErrors": ["unprocessed_bold_markers"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets bible_validator::ValidationRule::UnprocessedBoldMarkers via the `main` field path (main.contains(\"##\")). On the typed error (rule + 'got' showing the offending string), the model must self-correct to 'VERIA' uppercase with no '##' remaining — this is the single most likely small-model failure per the report's #4.4 (D4-adjacent) concern about markup leaking into visible output."
+  }
+}

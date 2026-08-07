@@ -1,0 +1,13 @@
+{
+  "id": "adv-05-empty-main-on-emphasis-slide",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad SEVP:\n\n##Židom 4:13## A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať.\n\n####\n\nA to je posolstvo, ktoré si dnes odnesme domov.",
+  "setup": {
+    "description": "IMPORTANT FINDING recorded here rather than invented as a synthetic reproduction: bible_validator::ValidationRule::EmptyMainOnEmphasisSlide guards a composed slide with an empty (or whitespace-only) `main` and an empty `main_reference` — but parse_bible_items ALREADY rejects an emphasis item whose text.trim().is_empty() BEFORE the composer or validator ever run (returns invalid_emphasis_item instead). The sermon's stray '####' (an empty bold marker pair, likely a pastor's typo or a leftover markdown separator from the source email) is exactly the kind of input that COULD produce an empty emphasis item — but the moment such an item reaches create_bible_presentation, parse_bible_items intercepts it first. This rule appears to guard the same pre-#236 direct-string dispatch path described in adv-02's finding, and is likewise unreachable via the current create_bible_presentation tool surface for the same reason."
+  },
+  "expected": {
+    "validationErrors": [],
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "REGRESSION-GUARD case (see setup.description finding). The CORRECT model behaviour on the stray '####' is simply to recognise it carries no content and skip it entirely — emitting only the Židom 4:13 verse item (and possibly a genuine emphasis item for the closing sentence, at the model's discretion, scored under Layer-2 reasonableness rather than a hard pass/fail). If a candidate model instead tries to submit an item with empty text, the error it will actually see is invalid_emphasis_item (adv-09's target), never empty_main_on_emphasis_slide — flagging the same follow-up note as adv-02 for whoever builds ai_eval.rs."
+  }
+}

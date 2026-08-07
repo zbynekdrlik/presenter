@@ -1,0 +1,14 @@
+{
+  "id": "adv-09-invalid-emphasis-item-empty-text",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad SEVP:\n\n##Židom 4:13## A nieto tvora skrytého pred Ním, všetko je obnažené a odkryté očiam Toho, ktorému sa budeme zodpovedať.\n\n####\n\nA to je posolstvo, ktoré si dnes odnesme domov.",
+  "setup": {
+    "description": "Same stray '####' source text as adv-05, but this fixture targets what ACTUALLY fires when a model tries to submit it as emphasis content rather than skipping it: if the model treats the empty span between the two '##' pairs as an emphasis phrase and submits {kind: 'emphasis', text: ''} (or text consisting only of whitespace), parse_bible_items rejects it directly with invalid_emphasis_item BEFORE the composer or bible_validator ever see it — this is the reachable counterpart to adv-05's unreachable empty_main_on_emphasis_slide finding."
+  },
+  "expected": {
+    "validationErrors": ["invalid_emphasis_item"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets parse_bible_items' invalid_emphasis_item error via an empty/whitespace-only emphasis text field. Correct self-correction: drop the empty item entirely (the '####' carries no actual content, so the right answer is to not emit any emphasis item for it at all) rather than retry with the same empty text or substitute a fabricated phrase the sermon never said."
+  }
+}

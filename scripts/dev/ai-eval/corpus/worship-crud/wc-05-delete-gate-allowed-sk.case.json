@@ -1,0 +1,23 @@
+{
+  "id": "wc-05-delete-gate-allowed-sk",
+  "slice": "worship-crud",
+  "userMessage": "Vymaž pieseň \"DECK THE HALLS\" z knižnice SOYER, už ju nepoužívame.",
+  "setup": {
+    "description": "'Vymaž' is a direct hit in agent.rs's Slovak DELETE_KEYWORDS list. The gate must allow the delete_presentation call through to execution.",
+    "seed": {
+      "libraries": [
+        {
+          "name": "SOYER",
+          "presentations": [
+            { "name": "DECK THE HALLS", "slides": [ { "main": "Deck the halls with boughs of holly", "translation": "", "stage": "", "group": "Verse 1" } ] }
+          ]
+        }
+      ]
+    }
+  },
+  "expected": {
+    "toolSequence": ["list_presentations", "delete_presentation"],
+    "deleteGate": "allowed",
+    "notes": "Delete-gate probe: keyword PRESENT ('vymaž'). The model must resolve the real presentation id (via list_presentations/get_presentation, never inventing one) then call delete_presentation; the gate must NOT block it since delete_intent_allowed('vymaž pieseň ...') is true."
+  }
+}

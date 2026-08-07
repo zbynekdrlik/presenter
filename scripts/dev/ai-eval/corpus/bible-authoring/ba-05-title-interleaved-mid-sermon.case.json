@@ -1,0 +1,16 @@
+{
+  "id": "ba-05-title-interleaved-mid-sermon",
+  "slice": "bible-authoring",
+  "userMessage": "Dnes budeme hovoriť o vzťahu medzi starým a novým poriadkom. Boh nám dal zasľúbenie už dávno, ale naplnenie prišlo neskôr.\n\n##Ján 1:12## preklad MIL: Ale všetkým, ktorí ho prijali, dal právo stať sa Božími deťmi – tým, ktorí veria v jeho meno,\n\n##Nová zmluva##\n\n##Židom 4:13## preklad ROH: A nieto stvorenia, ktoré by bolo neviditeľné pred ním, ale všetko je nahé a odkryté očiam toho, s ktorým máme do činenia.",
+  "setup": {
+    "description": "'##Nová zmluva##' appears as a standalone bold phrase in the MIDDLE of the sermon, not at the very start. agent.rs's system prompt rule 1 says a ##title## is only recognised 'at the very start' (used as the presentation name); anywhere else, style_guide.md rule 4 applies instead: a standalone bold phrase that is not a reference and not inside a verse becomes its own EMPHASIS slide. A weak model may conflate 'looks like a title-shaped phrase' with 'is the ##title## marker' regardless of position."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Ján 1:12", "translation": "MIL", "text": "Ale všetkým, ktorí ho prijali, dal právo stať sa Božími deťmi – tým, ktorí veria v jeho meno," },
+      { "ref": "Židom 4:13", "translation": "ROH", "text": "A nieto stvorenia, ktoré by bolo neviditeľné pred ním, ale všetko je nahé a odkryté očiam toho, s ktorým máme do činenia." }
+    ],
+    "notes": "Hard-case category: title marker interleaved with verses (i.e. NOT at the very start). Correct handling: create_bible_presentation's name comes from elsewhere (the model should ask, or derive a sensible name from the sermon topic — there is no ##title## at position 0) and 'Nová zmluva' becomes a {kind: emphasis, text: 'NOVÁ ZMLUVA'} item positioned between the two verse items, exactly mirroring the worked example in agent.rs's own system prompt (step 6's items[] sample uses this literal phrase). A failure mode to watch for: treating 'Nová zmluva' as the presentation title anyway despite its position, or silently dropping it."
+  }
+}

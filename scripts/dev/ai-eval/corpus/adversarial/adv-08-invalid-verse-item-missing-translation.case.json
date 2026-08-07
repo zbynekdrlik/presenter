@@ -1,0 +1,14 @@
+{
+  "id": "adv-08-invalid-verse-item-missing-translation",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie. Kazateľ v maile neuviedol, z akého prekladu cituje:\n\n##Ján 3:16## Lebo tak miloval Boh svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale mal večný život.",
+  "setup": {
+    "description": "The sermon quotes a verse without stating which translation it is (the wording is close to both ROH and SEB, so it is genuinely ambiguous from the text alone). Every verse item field is REQUIRED (parse_bible_items: number>=1, non-empty text, non-empty book, chapter>=1, non-empty translation) — a model unsure which translation to tag may either ask the user (correct), pick its best guess (acceptable), or — the failure this case targets — omit the `translation` field from the item entirely because it has no confident answer, which parse_bible_items rejects outright rather than defaulting."
+  },
+  "expected": {
+    "validationErrors": ["invalid_verse_item"],
+    "selfCorrectWithinRetries": 3,
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "Targets parse_bible_items' invalid_verse_item error via a missing `translation` field specifically (the same error also covers number==0, empty text, empty book, chapter==0 — this fixture isolates the translation-field variant since it is the one most likely to be omitted by an uncertain model rather than malformed by a confident-but-wrong one). Acceptable recoveries: call load_bible_verses against one of the available translations from live context and tag items with that code, or ask the user which translation to use — either way the retried create_bible_presentation call must carry a non-empty translation on every verse item."
+  }
+}

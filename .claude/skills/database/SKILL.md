@@ -124,3 +124,12 @@ ProPresenter libraries are stored in `data/libraries/` as the single source of t
 5. Run Import Data workflow if needed
 
 Deploy workflows automatically sync `data/libraries/` to `/opt/presenter*/libraries/` on target servers.
+
+## SeaORM test seeding: NEVER `ActiveModel::insert()` on String-PK entities (#658)
+
+`playlist_entry`'s `id` has `#[sea_orm(primary_key)]` with no `auto_increment = false`, so the
+derive defaults it to auto-increment. `ActiveModel::insert(db)` then re-fetches the inserted row
+via `last_insert_rowid()` — which can never find a String PK → `RecordNotFound("Failed to find
+inserted item")` at runtime (compiles fine; first CI execution fails). Seed tests the way the real
+writers do: `Entity::insert(active_model).exec(&db)` (plain INSERT, no readback) — the pattern in
+`repository/playlist.rs`, `sync_apply_review_tests.rs`, `sync_trash_tests.rs`.

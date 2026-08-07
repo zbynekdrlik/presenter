@@ -1,0 +1,29 @@
+{
+  "id": "wc-03-reorder-slides",
+  "slice": "worship-crud",
+  "userMessage": "V piesni \"MOJE SVETLO\" v knižnici SOYER daj refrén (Chorus) pred prvú slohu (Verse 1).",
+  "setup": {
+    "description": "Real song title from data/libraries/SOYER/MOJE SVETLO.pro. Four slides seeded in the 'wrong' order (verse, verse, chorus) — the model must swap the chorus ahead of the first verse using reorder_slides with the full slide_ids array, not a partial one.",
+    "seed": {
+      "libraries": [
+        {
+          "name": "SOYER",
+          "presentations": [
+            {
+              "name": "MOJE SVETLO",
+              "slides": [
+                { "main": "Ty si moje svetlo v tme", "translation": "", "stage": "", "group": "Verse 1" },
+                { "main": "Vedieš ma, kam mám ísť", "translation": "", "stage": "", "group": "Verse 1" },
+                { "main": "Ty si moje svetlo, moja pieseň", "translation": "", "stage": "", "group": "Chorus" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expected": {
+    "toolSequence": ["get_presentation", "reorder_slides"],
+    "notes": "Worship CRUD reorder path. Model must call get_presentation to read the current slide_ids/groups, then reorder_slides with ALL slide_ids in the new order (the tool takes the full ordered array, not a move-one-slide delta) — puts the Chorus slide id first."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "wc-01-create-library",
+  "slice": "worship-crud",
+  "userMessage": "Vytvor novú knižnicu piesní s názvom \"Mládežnícke chvály\".",
+  "setup": {
+    "description": "Fresh state — no pre-existing seed needed. Tests the simplest worship-CRUD path: a single create_library call with the exact name the user gave."
+  },
+  "expected": {
+    "toolSequence": ["create_library"],
+    "notes": "Baseline worship CRUD happy path. Checks the model calls create_library (not create_presentation, and NOT a bible_* tool — 'Mládežnícke chvály' is a worship library name, agent.rs rule 1/2 must route it correctly) with name exactly 'Mládežnícke chvály'."
+  }
+}

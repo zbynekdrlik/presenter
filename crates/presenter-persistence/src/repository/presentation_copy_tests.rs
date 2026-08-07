@@ -160,6 +160,97 @@ async fn copy_into_a_missing_library_errors_and_writes_nothing() {
     assert_eq!(count, 1, "no copy row may be written on failure");
 }
 
+/// #642: `copy_presentation_to_library` has no special-case for "target ==
+/// source library" — every existing test above targets a DISTINCT
+/// destination. This pins that a same-library copy still succeeds and still
+/// produces a fully independent row (fresh id, fresh sync_id, own slides),
+/// landing the app in a state with TWO same-named presentations in ONE
+/// library. That duplicate-name state is a pre-existing, general
+/// characteristic of the app — NOT something `copy_presentation_to_library`
+/// introduces or is expected to guard against: `rename_presentation`
+/// (`presentation.rs`) performs no uniqueness check either, so a user can
+/// already reach two same-named songs in one library by renaming, with or
+/// without ever copying. There is no per-library name-uniqueness constraint
+/// in the schema (see `presenter-migration`). Given that, this ticket's own
+/// "auto-rename or dedupe?" question is answered here as: neither — doing so
+/// only for the copy path would be an inconsistent partial fix for a
+/// system-wide allowance. AbleSet's name-based last-write-wins resolution
+/// silently picking one of the two is a known, accepted consequence of
+/// allowing duplicate names at all (documented on the ticket), not a defect
+/// in this function.
+#[tokio::test]
+async fn copy_into_the_same_library_creates_an_independent_duplicate() {
+    let repo = repo().await;
+    let lib = repo.create_library("Songs").await.unwrap();
+    let slides = vec![slide(0, "verse", Some("Verse 1")), slide(1, "chorus", None)];
+    let (_, _, source) = repo
+        .create_presentation(lib.id, "Amazing Song", Some(&slides))
+        .await
+        .unwrap();
+
+    let (copied_lib, copied_lib_name, copy) = repo
+        .copy_presentation_to_library(source.id, lib.id)
+        .await
+        .expect("copying into the same library must succeed");
+
+    assert_eq!(copied_lib, lib.id, "copy stays in the same library");
+    assert_eq!(copied_lib_name, "Songs");
+    assert_ne!(
+        copy.id, source.id,
+        "copy must be a NEW presentation, not a rename"
+    );
+    assert_eq!(
+        copy.name, source.name,
+        "same-library copy duplicates the name — this is the collision AbleSet's \
+         name-based resolution has to tolerate (documented on #642), not a bug here"
+    );
+    assert_eq!(copy.slides.len(), source.slides.len());
+    for (copied, original) in copy.slides.iter().zip(source.slides.iter()) {
+        assert_eq!(copied.content, original.content, "content copied verbatim");
+        assert_ne!(copied.id, original.id, "every slide id must be fresh");
+    }
+
+    // Both presentations now live, side by side, in the ONE library.
+    let in_library = presentation_entity::Entity::find()
+        .filter(presentation_entity::Column::LibraryId.eq(lib.id.to_string()))
+        .filter(presentation_entity::Column::DeletedAt.is_null())
+        .all(&repo.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        in_library.len(),
+        2,
+        "source and copy must both be live in the same library"
+    );
+    let sync_ids: Vec<String> = in_library.into_iter().map(|m| m.sync_id).collect();
+    assert_ne!(
+        sync_ids[0], sync_ids[1],
+        "sync_id must be fresh even for a same-library copy (#555 — never pairs with the original)"
+    );
+
+    // Independence: editing/trashing the ORIGINAL must not touch the copy,
+    // even though both now share a library and a name.
+    repo.update_slide_content(
+        source.id,
+        source.slides[0].id,
+        &slide(0, "rewritten", None).content,
+    )
+    .await
+    .unwrap();
+    repo.delete_presentation(source.id).await.unwrap();
+
+    let (_, _, copy_after) = repo
+        .fetch_presentation_detail(copy.id)
+        .await
+        .unwrap()
+        .expect("the copy must survive edits + deletion of the same-library original");
+    assert_eq!(
+        copy_after.slides[0].content.main.value(),
+        "verse",
+        "the copy's content must not follow the original's edits"
+    );
+}
+
 #[tokio::test]
 async fn copying_a_trashed_presentation_errors() {
     let (repo, _, lib_b, source) = setup().await;

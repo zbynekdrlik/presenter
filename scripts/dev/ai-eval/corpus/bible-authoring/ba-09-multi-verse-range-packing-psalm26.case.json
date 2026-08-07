@@ -1,0 +1,17 @@
+{
+  "id": "ba-09-multi-verse-range-packing-psalm26",
+  "slice": "bible-authoring",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad ROH:\n\n##Žalm 26:1-3## Žalm Dávidov. Súď ma, Hospodine, lebo ja chodím vo svojej bezúhonnosti a nadejem sa na Hospodina; nepohnem sa. Zkús ma, Hospodine, a sprobuj. Prepáľ na zkúšku moje ľadviny aj moje srdce; lebo tvoja milosť je pred mojimi očima, a chodím v tvojej pravde.",
+  "setup": {
+    "description": "A 3-verse range, well within a normal character limit (~320) when packed together — the plain multi-verse packing baseline (no forced breaks: same book/chapter/translation throughout, no emphasis items). Exercises the composer's greedy-pack path with real data rather than a synthetic string, and gives the corpus a case where 'one slide, three verse lines' is the objectively correct outcome."
+  },
+  "expected": {
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "verbatimVerses": [
+      { "ref": "Žalm 26:1", "translation": "ROH", "text": "Žalm Dávidov. Súď ma, Hospodine, lebo ja chodím vo svojej bezúhonnosti a nadejem sa na Hospodina; nepohnem sa." },
+      { "ref": "Žalm 26:2", "translation": "ROH", "text": "Zkús ma, Hospodine, a sprobuj. Prepáľ na zkúšku moje ľadviny aj moje srdce;" },
+      { "ref": "Žalm 26:3", "translation": "ROH", "text": "lebo tvoja milosť je pred mojimi očima, a chodím v tvojej pravde." }
+    ],
+    "notes": "Hard-case category: multi-verse range packing (baseline, not adversarial — the three verses fit comfortably under any reasonable character limit). main_reference for every resulting slide must be the FULL group range 'Žalm 26:1-3 (ROH)' per style_guide.md's multi-slide rule, even if the composer happens to produce more than one slide (it should not, at default limits, but the reference-label invariant holds regardless)."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "adv-02-missing-verse-number-prefix",
+  "slice": "adversarial",
+  "userMessage": "Sprac tento úryvok z kázne do biblickej prezentácie, preklad SEB:\n\n##Ján 3:16## Veď Boh tak miloval svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale mal večný život.",
+  "setup": {
+    "description": "IMPORTANT FINDING recorded here rather than invented as a synthetic reproduction: bible_validator::ValidationRule::MissingVerseNumberPrefix guards a shape that, as far as this investigation could determine, is UNREACHABLE through the current create_bible_presentation tool surface. The composer (state/slides/compose.rs::compose_bible_items_into_slides) unconditionally builds every verse line as `format!(\"{number}. {text}\")` — the LLM supplies `number` and `text` separately via the items[] schema, never the pre-formatted 'N. text' string directly. parse_bible_items already rejects number == 0 as invalid_verse_item before the composer ever runs, so there is no items[] payload that reaches the composer with a verse-shaped slide lacking its numeric prefix. This rule (and its sibling regex VERSE_PREFIX_RE) appear to be a holdover from the pre-#236 architecture the module doc comment describes, when the LLM called add_bible_slide/update_bible_slide directly with raw main/main_reference strings — those tools are no longer in tool_defs.rs's exposed tool list."
+  },
+  "expected": {
+    "validationErrors": [],
+    "toolSequence": ["load_bible_verses", "create_bible_presentation"],
+    "notes": "REGRESSION-GUARD case, not a true 'trip' case (see setup.description finding above). This case is the plain verbatim baseline (identical in content to ba-01); its purpose in the adversarial suite is to serve as a canary — if a future refactor ever lets create_bible_presentation bypass the composer's automatic 'N. ' prefixing (e.g. a new tool exposing raw main text again), this case's expected.validationErrors (currently []) should be revisited alongside the rule's reachability. Flagging this finding for the human reviewer: MissingVerseNumberPrefix may be dead code from the AI's perspective and worth a follow-up look when the ai_eval.rs driver (report §8 step 8) is built, since a driver that constructs items[] payloads directly (bypassing a live LLM) COULD still exercise it for the unit-test-equivalent purpose bible_validator.rs's own #[cfg(test)] module already covers."
+  }
+}

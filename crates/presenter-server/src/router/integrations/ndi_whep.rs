@@ -264,6 +264,7 @@ pub(crate) async fn kill_pipeline_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ndi_control::{FakeNdiControl, NdiManagerHandle, WhepOutcome};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
@@ -678,6 +679,86 @@ mod tests {
             app_err.into_response().status(),
             StatusCode::NOT_FOUND,
             "a source-not-active error must map to 404 even wrapped in extra context (#589)"
+        );
+    }
+
+    /// #630 (Gap A from #616): the two existing `map_signaller_error` tests
+    /// above call the pure function DIRECTLY — they never prove it is still
+    /// wired via `.map_err(map_signaller_error)?` at `post_whep_session`'s
+    /// real call site. On a libndi-free CI runner `ndi_manager()` is always
+    /// `None`, so that line is never reached by any existing handler-level
+    /// test (the "manager missing" 503 short-circuits first) — if the wiring
+    /// were dropped (e.g. swapped for a bare `?` that loses the typed
+    /// downcast), every existing test would stay green. `set_ndi_handle`
+    /// injects a `Fake` manager so the call site is reached deterministically,
+    /// regardless of libndi.
+    #[tokio::test]
+    async fn post_whep_session_wires_map_signaller_error_at_its_call_site() {
+        let mut state = fresh_state().await;
+        state.set_ndi_handle(NdiManagerHandle::Fake(FakeNdiControl::with_whep_outcome(
+            WhepOutcome::ConsumerCapReached { max: 8 },
+        )));
+        let result = post_whep_session(
+            Path((
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "session-id".to_string(),
+            )),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an Err mapped via map_signaller_error");
+        };
+        let resp = err.into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ConsumerCapReached must map to 503 via map_signaller_error"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()),
+            Some("60"),
+            "map_signaller_error must set Retry-After: 60 for the consumer cap"
+        );
+    }
+
+    /// Same call-site-wiring gap as above, for `patch_whep_session`'s
+    /// `.map_err(map_signaller_error)?`. Uses `SourceNotActive` to also pin
+    /// that the session-scoped PATCH path has NO special "not active" → 204
+    /// branch (unlike `post_whep_endpoint`/`delete_whep_session`) — it always
+    /// falls through to `map_signaller_error`'s 404, per the doc comment on
+    /// `map_signaller_error` ("404 for unknown on the session-scoped paths").
+    #[tokio::test]
+    async fn patch_whep_session_wires_map_signaller_error_at_its_call_site() {
+        let mut state = fresh_state().await;
+        state.set_ndi_handle(NdiManagerHandle::Fake(FakeNdiControl::with_whep_outcome(
+            WhepOutcome::SourceNotActive,
+        )));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            "application/trickle-ice-sdpfrag".parse().unwrap(),
+        );
+        let result = patch_whep_session(
+            Path((
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "session-id".to_string(),
+            )),
+            State(state),
+            headers,
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected an Err mapped via map_signaller_error");
+        };
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::NOT_FOUND,
+            "SourceNotActive must map to 404 via map_signaller_error on the session-scoped PATCH path"
         );
     }
 
