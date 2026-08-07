@@ -203,6 +203,9 @@ fn set_clipboard(ctx: &AppContext, op: &OperatorState, mode: ClipboardMode) {
         mode,
         presentation_id: pres_id,
     }));
+    // #602 defect 3: entering the clipboard begins the "choosing a paste
+    // target" interaction — this is what turns the grid single-column.
+    op.choosing_paste_target.set(true);
 }
 
 /// Clear the clipboard, selection, anchor, and paste target (Escape / Clear /
@@ -212,6 +215,7 @@ pub(super) fn clear_selection_and_clipboard(op: &OperatorState) {
     op.selected_slide_ids.set(std::collections::HashSet::new());
     op.selection_anchor_id.set(None);
     op.paste_target_gap.set(None);
+    op.choosing_paste_target.set(false);
 }
 
 /// The slide id CURRENTLY at index `gap` — the anchor a paste inserted at
@@ -308,10 +312,17 @@ fn paste_copy(
         match api::presentations::paste_slides(&pres_id, ids, anchor_slide_id).await {
             Ok(slides) => {
                 apply_slides_guarded(&ctx, &op, pres_id, slides, my_seq).await;
-                // Copy clipboard is KEPT so the user can paste again.
+                // Copy clipboard is KEPT so the user can paste again — but
+                // the "choosing a paste target" interaction (#602 defect 3)
+                // is OVER: this completed paste, so the grid returns to its
+                // normal multi-column layout. A later re-paste (toolbar
+                // Paste button / Ctrl+V) still works from the retained
+                // clipboard without re-entering single-column mode.
+                op.choosing_paste_target.set(false);
             }
             Err(ApiError::Status(422, _)) => {
                 op.clipboard.set(None);
+                op.choosing_paste_target.set(false);
                 ctx.show_toast("Those slides no longer exist", "error");
             }
             Err(ApiError::Status(409, _)) => {
@@ -488,7 +499,10 @@ pub(super) fn setup_clipboard_keyboard(ctx: AppContext, op: OperatorState) {
 /// The sticky selection panel above the slide list (edit mode). Shows the count
 /// and Copy / Cut / Paste / Clear, plus a draggable block handle when the
 /// clipboard is non-empty. Visible only when something is selected OR the
-/// clipboard is non-empty.
+/// clipboard is non-empty. #602 defect 2: each action button carries its
+/// keyboard shortcut as VISIBLE text (not just a hover `title`) so the
+/// clipboard actions are discoverable without prior knowledge the moment a
+/// selection exists.
 #[component]
 pub fn SlideSelectionPanel() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
@@ -529,20 +543,35 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 class="operator__list-action"
                                 data-action="copy"
                                 data-role="slide-copy"
+                                title="Copy the selected slides (Ctrl+C)"
                                 on:click=move |_| copy_selection(&ctx_copy, &op_copy)
-                            >"Copy"</button>
+                            >
+                                "Copy "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Ctrl+C"</span>
+                            </button>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="cut"
                                 data-role="slide-cut"
+                                title="Cut the selected slides (Ctrl+X)"
                                 on:click=move |_| cut_selection(&ctx_cut, &op_cut)
-                            >"Cut"</button>
+                            >
+                                "Cut "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Ctrl+X"</span>
+                            </button>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="paste"
                                 data-role="slide-paste"
+                                title="Paste at the highlighted gap (Ctrl+V)"
                                 prop:disabled=move || clipboard.get().is_none()
                                 on:click=move |_| {
                                     let len = current_slide_ids(&ctx_paste).len();
@@ -553,14 +582,27 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                         .min(len);
                                     paste_at_gap(&ctx_paste, &op_paste, gap);
                                 }
-                            >"Paste"</button>
+                            >
+                                "Paste "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Ctrl+V"</span>
+                            </button>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="clear"
                                 data-role="slide-clear"
+                                title="Clear the selection and clipboard (Esc)"
                                 on:click=move |_| clear_selection_and_clipboard(&op_clear)
-                            >"Clear"</button>
+                            >
+                                "Clear "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Esc"</span>
+                            </button>
                             <Show when=move || clipboard.get().is_some() fallback=|| ()>
                                 {
                                     let dragging_clipboard = op_drag.dragging_clipboard;
