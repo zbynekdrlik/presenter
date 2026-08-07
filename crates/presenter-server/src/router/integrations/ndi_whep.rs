@@ -264,7 +264,7 @@ pub(crate) async fn kill_pipeline_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ndi_control::{FakeNdiControl, NdiManagerHandle, WhepOutcome};
+    use crate::state::{FakeNdiControl, NdiManagerHandle, WhepOutcome};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
