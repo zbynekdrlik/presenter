@@ -47,11 +47,19 @@ fail() { failures+=("$*"); }
 #    (`router/<name>.rs`) OR a directory of submodules (`router/<name>/mod.rs`
 #    — e.g. `bible/`, split in #590 the same way `router/integrations/`
 #    already was) — either form satisfies the check.
-for name in bible libraries playlists presentations; do
-  flat="crates/presenter-server/src/router/${name}.rs"
-  dir_mod="crates/presenter-server/src/router/${name}/mod.rs"
-  [[ -f "$flat" || -f "$dir_mod" ]] || fail "Missing feature router: $flat (or $dir_mod)"
-done
+#
+# The check itself lives in scripts/dev/feature_router_check.sh (#625) so the
+# gate self-test (tests/ci/feature-router-gate.test.sh) can invoke the EXACT
+# SAME logic this gate runs, instead of a hand-copied duplicate that stays
+# green even if this check regresses to the old flat-file-only assumption.
+set +e
+router_check_out=$(bash "$ROOT_DIR/scripts/dev/feature_router_check.sh" "$ROOT_DIR")
+router_check_rc=$?
+set -e
+if (( router_check_rc != 0 )); then
+  missing_name="${router_check_out#MISSING:}"
+  fail "Missing feature router: crates/presenter-server/src/router/${missing_name}.rs (or .../${missing_name}/mod.rs)"
+fi
 
 # 2) router.rs should not contain legacy presentation handlers
 if command -v rg >/dev/null 2>&1 && rg -n "(insert_slide_handler|duplicate_slide_handler|delete_slide_handler|reorder_slides_handler|update_slide_content_handler)" crates/presenter-server/src/router.rs >/dev/null; then
