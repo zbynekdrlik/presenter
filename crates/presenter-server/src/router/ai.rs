@@ -325,7 +325,9 @@ pub(super) async fn check_status(
 
     let connectivity_result = crate::ai::client::check_connectivity(&settings).await;
     let connectivity_ok = connectivity_result.is_ok();
-    let connectivity_err_msg = connectivity_result.err().map(|e| render_connectivity_error(&e));
+    let connectivity_err_msg = connectivity_result
+        .err()
+        .map(|e| render_connectivity_error(&e));
 
     let connected = compute_ai_connected(connectivity_ok, proxy_status.claude_authenticated);
 
