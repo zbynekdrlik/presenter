@@ -762,6 +762,63 @@ mod tests {
         );
     }
 
+    /// #630 follow-up: the two wiring tests above cover `post_whep_session`
+    /// and `patch_whep_session`'s `.map_err(map_signaller_error)?` call
+    /// sites, but leave `post_whep_endpoint`'s `map_post_whep_error(err)?`
+    /// (line ~139) unproven the same way — on a libndi-free CI runner
+    /// `ndi_manager()` is always `None`, so the "manager missing" 503
+    /// short-circuits before that line is ever reached by an existing
+    /// handler-level test. `set_ndi_handle` injects a `Fake` manager so the
+    /// call site is reached deterministically, regardless of libndi.
+    #[tokio::test]
+    async fn post_whep_endpoint_wires_map_post_whep_error_at_its_call_site() {
+        let mut state = fresh_state().await;
+        state.set_ndi_handle(NdiManagerHandle::Fake(FakeNdiControl::with_whep_outcome(
+            WhepOutcome::SourceNotActive,
+        )));
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery::default()),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        let resp = result.expect(
+            "map_post_whep_error must translate SourceNotActive into an Ok(204) reply, not an Err",
+        );
+        assert_eq!(
+            resp.status(),
+            StatusCode::NO_CONTENT,
+            "map_post_whep_error must map SourceNotActive to 204, not fall through to map_signaller_error's 404"
+        );
+    }
+
+    /// Same call-site-wiring gap as above, for `delete_whep_session`'s
+    /// `map_delete_whep_error(err)?` (line ~221).
+    #[tokio::test]
+    async fn delete_whep_session_wires_map_delete_whep_error_at_its_call_site() {
+        let mut state = fresh_state().await;
+        state.set_ndi_handle(NdiManagerHandle::Fake(FakeNdiControl::with_whep_outcome(
+            WhepOutcome::SourceNotActive,
+        )));
+        let result = delete_whep_session(
+            Path((
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "session-id".to_string(),
+            )),
+            State(state),
+        )
+        .await;
+        let resp = result.expect(
+            "map_delete_whep_error must translate SourceNotActive into an Ok(204) reply, not an Err",
+        );
+        assert_eq!(
+            resp.status(),
+            StatusCode::NO_CONTENT,
+            "map_delete_whep_error must map SourceNotActive to 204 (idempotent delete), not fall through to map_signaller_error's 404"
+        );
+    }
+
     #[cfg(feature = "test-helpers")]
     #[tokio::test]
     async fn kill_pipeline_for_test_returns_404_or_503_for_unknown_source() {
