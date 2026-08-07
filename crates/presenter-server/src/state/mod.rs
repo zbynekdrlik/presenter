@@ -34,7 +34,9 @@ mod cache_manager;
 mod companion;
 mod companion_manager;
 mod integrations;
-pub(crate) mod ndi_control;
+mod ndi_control;
+#[cfg(test)]
+pub(crate) use ndi_control::{FakeNdiControl, NdiManagerHandle, WhepOutcome};
 mod osc;
 mod presentation_lock;
 mod presentations;

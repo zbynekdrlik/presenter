@@ -10,6 +10,16 @@
 // Each test's `vars.caseId` selects the matching trace via trace_provider.js, and each of the
 // four rubric dimensions is attached as its own llm-rubric assertion so a single test's pass/fail
 // output shows exactly which dimension(s) failed rather than one blended verdict.
+//
+// Two failure-handling rules, both #662 follow-ups:
+//   1. No traces directory, or a traces directory with zero *.json files, is an ERROR, not an
+//      empty test list — an empty `tests:` array makes promptfoo report 0/0 and exit 0 (green),
+//      which would silently mask "the drive stage never ran" as a passing judge run.
+//   2. A single truncated/corrupt trace file must NOT abort the whole generator (and therefore
+//      every other case's judge run) via an unguarded JSON.parse throw. Each file is parsed in
+//      its own try/catch; a parse failure becomes a test that always FAILS (via a rubric that
+//      can never pass), carrying the filename and parse error in its description, so the one
+//      bad trace shows up as one visible failure instead of taking the rest of the suite down.
 
 const fs = require("fs");
 const path = require("path");
@@ -21,10 +31,30 @@ const RUBRICS = [
   "final-reply-language.md",
 ];
 
+function parseFailureTest(file, error) {
+  const caseId = file.replace(/\.json$/, "");
+  return {
+    description: `${caseId}: FAILED TO PARSE trace file (${error.message})`,
+    vars: { caseId },
+    assert: [
+      {
+        type: "equals",
+        // Deliberately unsatisfiable: the provider's actual output can never equal this
+        // sentinel, so the test always fails and surfaces the parse error in the report
+        // instead of being silently dropped from the suite.
+        value: `__UNPARSEABLE_TRACE__:${file}:${error.message}`,
+      },
+    ],
+  };
+}
+
 module.exports = function generateTests() {
   const tracesDir = path.join(__dirname, "..", "traces");
   if (!fs.existsSync(tracesDir)) {
-    return [];
+    throw new Error(
+      `no traces found — expected trace JSON under ${tracesDir}; run the drive stage first ` +
+        `(scripts/dev/ai-eval/run.sh --stage drive)`
+    );
   }
 
   const files = fs
@@ -32,9 +62,21 @@ module.exports = function generateTests() {
     .filter((f) => f.endsWith(".json"))
     .sort();
 
+  if (files.length === 0) {
+    throw new Error(
+      `no traces found — ${tracesDir} exists but contains no *.json files; run the drive stage ` +
+        `first (scripts/dev/ai-eval/run.sh --stage drive)`
+    );
+  }
+
   return files.map((file) => {
     const caseId = file.replace(/\.json$/, "");
-    const trace = JSON.parse(fs.readFileSync(path.join(tracesDir, file), "utf8"));
+    let trace;
+    try {
+      trace = JSON.parse(fs.readFileSync(path.join(tracesDir, file), "utf8"));
+    } catch (error) {
+      return parseFailureTest(file, error);
+    }
 
     return {
       description: `${caseId} (${trace.slice || "unknown-slice"})`,

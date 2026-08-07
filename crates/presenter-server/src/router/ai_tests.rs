@@ -3,7 +3,7 @@
 //! connectivity check is necessary but not sufficient — actual AI readiness
 //! requires a valid Claude OAuth session as well.
 
-use crate::router::ai::{compute_ai_connected, compute_ai_status_error};
+use crate::router::ai::{compute_ai_connected, compute_ai_status_error, render_connectivity_error};
 
 #[test]
 fn connected_is_false_when_claude_not_authenticated_even_if_connectivity_ok() {
@@ -85,5 +85,24 @@ fn status_error_falls_back_to_generic_message_when_no_error_string_available() {
     assert_eq!(
         compute_ai_status_error(false, true, None),
         Some("AI proxy unreachable".to_string())
+    );
+}
+
+// #624 follow-up: `.to_string()` on an anyhow error only renders the
+// OUTERMOST `.context(...)` layer — `check_connectivity`'s real transport
+// failure (DNS/TLS/timeout/connection-refused) gets silently dropped behind
+// the "failed to reach AI API" wrapper context. `render_connectivity_error`
+// must render the FULL chain so the underlying cause stays visible.
+#[test]
+fn connectivity_error_renders_full_anyhow_chain() {
+    let err = anyhow::anyhow!("connection refused").context("failed to reach AI API");
+    let rendered = render_connectivity_error(&err);
+    assert!(
+        rendered.contains("failed to reach AI API"),
+        "rendered error must keep the outer context: {rendered}"
+    );
+    assert!(
+        rendered.contains("connection refused"),
+        "rendered error must keep the underlying cause, not just the outer context: {rendered}"
     );
 }
