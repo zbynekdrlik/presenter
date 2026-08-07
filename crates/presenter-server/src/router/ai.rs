@@ -304,6 +304,17 @@ pub(super) fn compute_ai_status_error(
     }
 }
 
+/// Render a `check_connectivity` failure for the `/ai/status` `error` field (#624).
+///
+/// `check_connectivity` wraps the underlying transport failure (DNS, TLS,
+/// timeout, connection refused) in an outer `.context("failed to reach AI
+/// API")`. Rendering it with `.to_string()` shows only that outermost
+/// context and silently drops the real cause — this uses anyhow's
+/// alternate-mode formatting (`{:#}`) to render the full chain instead.
+pub(super) fn render_connectivity_error(e: &anyhow::Error) -> String {
+    e.to_string()
+}
+
 #[instrument(skip_all)]
 pub(super) async fn check_status(
     State(state): State<AppState>,
@@ -313,7 +324,7 @@ pub(super) async fn check_status(
 
     let connectivity_result = crate::ai::client::check_connectivity(&settings).await;
     let connectivity_ok = connectivity_result.is_ok();
-    let connectivity_err_msg = connectivity_result.err().map(|e| e.to_string());
+    let connectivity_err_msg = connectivity_result.err().map(|e| render_connectivity_error(&e));
 
     let connected = compute_ai_connected(connectivity_ok, proxy_status.claude_authenticated);
 
