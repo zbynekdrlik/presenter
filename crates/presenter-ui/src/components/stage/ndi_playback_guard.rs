@@ -143,11 +143,17 @@ pub(crate) fn install(video: &HtmlVideoElement) -> PlaybackGuardHandle {
 
 /// Disposer returned by [`install`]. Owns the guard's event-listener
 /// `Closure`s — NOT `forget()`-leaked — so [`dispose`](Self::dispose) can
-/// remove them from the DOM before dropping them. Call `dispose()` from
-/// `on_cleanup` when the `<NdiVideo>` mount that owns the guarded `video`
-/// unmounts (see `ndi_video.rs`). Merely dropping the handle without calling
-/// `dispose()` still frees the closures' Rust-side allocation, but leaves the
-/// JS-side DOM listeners registered — always dispose explicitly on unmount.
+/// remove them from the DOM before dropping them. ALWAYS call `dispose()`
+/// explicitly from `on_cleanup` when the `<NdiVideo>` mount that owns the
+/// guarded `video` unmounts (see `ndi_video.rs`) — the `Drop` impl below is
+/// only a defense-in-depth safety net (same posture as `Watchdog`'s
+/// `stop()`/`Drop` pairing in `ndi_watchdog.rs`), never the primary teardown
+/// path. If a handle is EVER dropped without `dispose()` (e.g. a future bug
+/// that replaces a live, undisposed handle in `ndi_video.rs`'s
+/// `playback_guard_holder`), a still-registered listener firing on the
+/// now-destroyed `wasm_bindgen` `Closure` PANICS ("closure invoked
+/// recursively or destroyed already") — it does not merely leak — which is
+/// exactly what `Drop` here prevents by removing the listeners first.
 pub(crate) struct PlaybackGuardHandle {
     video: HtmlVideoElement,
     video_listeners: Vec<(&'static str, Closure<dyn FnMut()>)>,
@@ -156,9 +162,10 @@ pub(crate) struct PlaybackGuardHandle {
 }
 
 impl PlaybackGuardHandle {
-    /// Remove every listener this guard installed, then drop the closures.
-    /// Consumes `self` — call at most once per handle.
-    pub(crate) fn dispose(self) {
+    /// Remove every listener this guard installed. Idempotent — the DOM's
+    /// `removeEventListener` on an already-removed listener is a documented
+    /// no-op — so it's safe to call from both `dispose()` and `Drop` below.
+    fn remove_listeners(&self) {
         for (event_name, cb) in &self.video_listeners {
             let _ = self
                 .video
@@ -170,6 +177,22 @@ impl PlaybackGuardHandle {
                 cb.as_ref().unchecked_ref(),
             );
         }
+    }
+
+    /// Remove every listener this guard installed, then drop the closures.
+    /// This is the PRIMARY teardown path — call it explicitly on unmount.
+    pub(crate) fn dispose(self) {
+        self.remove_listeners();
+    }
+}
+
+/// Safety net mirroring `Watchdog`'s `stop()`/`Drop` pairing (`ndi_watchdog.rs`):
+/// removes the listeners even if a handle is ever dropped without an explicit
+/// `dispose()` call, so a stale registered listener can never fire on a
+/// destroyed `Closure` (see the struct doc above for why that would panic).
+impl Drop for PlaybackGuardHandle {
+    fn drop(&mut self) {
+        self.remove_listeners();
     }
 }
 
