@@ -6,6 +6,7 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -251,11 +252,7 @@ test.describe("WASM Operator Modals", () => {
     page,
   }) => {
     const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
+    attachConsoleErrorCollector(page, consoleMessages);
 
     await initPage(page);
 
@@ -399,11 +396,7 @@ test.describe("WASM Operator Modals", () => {
     page,
   }) => {
     const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
+    attachConsoleErrorCollector(page, consoleMessages);
 
     await initPage(page);
 

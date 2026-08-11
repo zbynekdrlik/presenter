@@ -7,8 +7,10 @@
 import path from "path";
 import { test, expect } from "@playwright/test";
 import {
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
+  REPO_ROOT,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -80,7 +82,7 @@ async function openLibrary(
 }
 
 const IMPORT_FIXTURE = path.join(
-  process.cwd(),
+  REPO_ROOT,
   "tests",
   "e2e",
   "fixtures",
@@ -517,11 +519,7 @@ Multiple lines here`;
     request,
   }) => {
     const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
+    attachConsoleErrorCollector(page, consoleMessages);
 
     const lib = await createLibrary(request, `DblSubmitPasteLib${Date.now()}`);
     await openLibrary(page, lib.id);
@@ -599,11 +597,7 @@ Multiple lines here`;
     request,
   }) => {
     const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
+    attachConsoleErrorCollector(page, consoleMessages);
 
     const lib = await createLibrary(request, `DblSubmitImportLib${Date.now()}`);
     await openLibrary(page, lib.id);
