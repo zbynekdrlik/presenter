@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:20128",
+    "ANTHROPIC_AUTH_TOKEN": "sk-fda006aa2eae9640-cbfc4f-037fb198",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-omniroute-thinking-marker: off"
+  }
+}

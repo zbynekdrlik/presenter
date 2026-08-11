@@ -20,8 +20,8 @@ use super::slide_save::{
 };
 use super::slide_selection::{
     cut_memo, render_insertion_bar, render_select_checkbox, selected_memo,
-    setup_clipboard_keyboard, setup_paste_chooser_clear_on_live,
-    setup_selection_clear_on_switch, SlideSelectionPanel,
+    setup_clipboard_keyboard, setup_paste_chooser_clear_on_live, setup_selection_clear_on_switch,
+    SlideSelectionPanel,
 };
 
 #[component]
