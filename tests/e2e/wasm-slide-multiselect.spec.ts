@@ -119,17 +119,33 @@ async function switchToPresentation(
     .first();
   await expect(result).toBeVisible({ timeout: 15_000 });
   await result.click();
+  // F7: scoped to the worship panel — the operator shell mounts the Bible
+  // grid (`[data-view-panel="bible"]`) ALWAYS, even when it's not the
+  // active view, and it renders its own `[data-slide-id]` cards
+  // (pages/bible_slides.rs). An unscoped document-wide query can match a
+  // slide id that ALSO happens to exist in the (hidden) Bible grid — these
+  // specs pass today only because they never prepare a Bible passage.
   await page.waitForFunction(
-    (slideId) => document.querySelector(`[data-slide-id="${slideId}"]`) !== null,
+    (slideId) =>
+      document.querySelector(
+        `[data-view-panel="worship"] [data-slide-id="${slideId}"]`,
+      ) !== null,
     firstExpectedSlideId,
     { timeout: 15_000 },
   );
 }
 
-/** The main texts of the slide cards in DOM order (edit-mode textareas). */
+/** The main texts of the slide cards in DOM order (edit-mode textareas).
+ * F7: scoped to `[data-view-panel="worship"]` — see the comment in
+ * `switchToPresentation` above for why an unscoped `[data-slide-id]` query
+ * is unsafe (the always-mounted Bible grid renders the same attribute). */
 async function mainTextsInOrder(page: import("@playwright/test").Page) {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll("[data-slide-id]")).map(
+    Array.from(
+      document.querySelectorAll(
+        '[data-view-panel="worship"] [data-slide-id]',
+      ),
+    ).map(
       (card) =>
         (card.querySelector('textarea[data-field="main"]') as HTMLTextAreaElement | null)
           ?.value ?? "",
@@ -137,11 +153,14 @@ async function mainTextsInOrder(page: import("@playwright/test").Page) {
   );
 }
 
+/** F7: scoped to `[data-view-panel="worship"]` — see `mainTextsInOrder`. */
 async function domSlideOrder(page: import("@playwright/test").Page) {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll("[data-slide-id]")).map((s) =>
-      s.getAttribute("data-slide-id"),
-    ),
+    Array.from(
+      document.querySelectorAll(
+        '[data-view-panel="worship"] [data-slide-id]',
+      ),
+    ).map((s) => s.getAttribute("data-slide-id")),
   );
 }
 
@@ -982,6 +1001,188 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     // ...WITHOUT discarding the retained Copy clipboard — the toolbar Paste
     // button must still be enabled for a re-paste with no re-copy needed.
     await expect(page.locator('[data-role="slide-paste"]')).toBeEnabled();
+
+    expect(consoleIssues, `console issues: ${consoleIssues.join(" | ")}`).toEqual([]);
+  });
+
+  test("switching to LIVE mode disarms an armed paste chooser — grid never stays stuck single-column (F1)", async ({
+    page,
+    request,
+  }) => {
+    const consoleIssues: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleIssues.push(`${msg.type()}: ${msg.text()}`);
+      }
+    });
+
+    const lib = `E2E MSel F1 LiveSwitch ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 4, lib);
+    await openPresentationInEditMode(page, lib);
+
+    await checkboxFor(page, slideIds[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+
+    // Chooser armed: single column, "Paste here" bars visible + clickable.
+    await expect(insertBar(page, 0)).toBeVisible();
+    expect(await gridColumnCount(page)).toBe(1);
+
+    // Switch to LIVE mode WHILE the chooser is still armed — the exact
+    // sequence F1 flags. Escape and the selection panel's Clear button
+    // (the only two normal ways to disarm it) are BOTH gated on edit mode,
+    // so without the fix the grid stays stuck single-column with a
+    // clickable bar that could mutate slide order during a live service.
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-mode") === "live",
+      { timeout: 5_000 },
+    );
+
+    // The grid must return to normal multi-column and the bars must be
+    // gone — never present, let alone clickable, in live mode.
+    await expect
+      .poll(() => gridColumnCount(page), { timeout: 10_000 })
+      .toBeGreaterThan(1);
+    await expect(page.locator('[data-role="slide-insert-bar"]')).toHaveCount(0);
+
+    // Switching back to edit must NOT silently re-arm the chooser — the
+    // clipboard is still retained (Copy semantics keep it for a re-paste),
+    // but the operator must explicitly press Paste again to choose a NEW
+    // target; the grid stays multi-column until they do.
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-mode") === "edit",
+      { timeout: 5_000 },
+    );
+    expect(await gridColumnCount(page)).toBeGreaterThan(1);
+    await expect(page.locator('[data-role="slide-insert-bar"]')).toHaveCount(0);
+    await expect(page.locator('[data-role="slide-paste"]')).toBeEnabled();
+
+    expect(consoleIssues, `console issues: ${consoleIssues.join(" | ")}`).toEqual([]);
+  });
+
+  test("a late successful paste for an abandoned presentation never disarms a FRESH chooser on the one switched to (F2)", async ({
+    page,
+    request,
+  }) => {
+    const libA = `E2E MSel F2 GuardA ${Date.now()}`;
+    const { slideIds: idsA } = await createPresentationWithSlides(request, 2, libA);
+    const libB = `E2E MSel F2 GuardB ${Date.now()}`;
+    const { slideIds: idsB } = await createPresentationWithSlides(request, 2, libB);
+
+    await openPresentationInEditMode(page, libA);
+    await checkboxFor(page, idsA[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+
+    // Hold A's paste response open until this test explicitly releases it —
+    // same technique as the #558 V4 race test above.
+    let releaseA: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const pasteResponse = page.waitForResponse(
+      (r) => r.url().includes("/slides/paste") && r.request().method() === "POST",
+    );
+    await page.route("**/slides/paste", async (route) => {
+      const response = await request.fetch(route.request());
+      const body = await response.body();
+      await released;
+      await route.fulfill({
+        status: response.status(),
+        headers: response.headers(),
+        body,
+      });
+    });
+
+    await insertBar(page, 0).click(); // fires A's (now-delayed) paste
+
+    // Switch to B WHILE A's paste is still in flight, and start a FRESH
+    // copy/chooser there.
+    await switchToPresentation(page, libB, idsB[0]);
+    await checkboxFor(page, idsB[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+    await expect(insertBar(page, 0)).toBeVisible();
+    expect(await gridColumnCount(page)).toBe(1);
+
+    // Let A's delayed SUCCESS response land on B's page. Without the F2
+    // guard, its Ok-arm writes (`choosing_paste_target=false`,
+    // `paste_target_gap=None`) run unconditionally and would disarm B's
+    // FRESH chooser out from under the operator.
+    releaseA();
+    await pasteResponse;
+    // Positive sentinel, not a poll on the negative condition (see the V4
+    // race test's own rationale above): the browser drains A's already-
+    // resolved response continuation before dispatching a new UI input, so
+    // by the time this click's effect is visible A's response is fully
+    // processed.
+    await checkboxFor(page, idsB[1]).click();
+    await expect(
+      page.locator('[data-role="slide-selection-count"]'),
+    ).toHaveText("2 selected");
+
+    // B's chooser must still be armed — A's late success must not have
+    // touched it.
+    await expect(insertBar(page, 0)).toBeVisible();
+    expect(await gridColumnCount(page)).toBe(1);
+    // And B's own slide order is untouched by A's paste result.
+    expect(await domSlideOrder(page)).toEqual(idsB);
+  });
+
+  test("a second Paste activation with no gap armed does not silently paste at the end (F3)", async ({
+    page,
+    request,
+  }) => {
+    const consoleIssues: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleIssues.push(`${msg.type()}: ${msg.text()}`);
+      }
+    });
+
+    const lib = `E2E MSel F3 Rearm ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 3, lib);
+    await openPresentationInEditMode(page, lib);
+
+    // Fail the test outright if a paste POST is EVER fired by the inert
+    // activations below — the old bug's silent end-of-list paste was
+    // exactly this network call firing when it should not have.
+    let unexpectedPaste = false;
+    page.on("request", (req) => {
+      if (req.url().includes("/slides/paste") && req.method() === "POST") {
+        unexpectedPaste = true;
+      }
+    });
+
+    await checkboxFor(page, slideIds[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+    // Copy already arms the chooser (`choosing_paste_target=true`) with NO
+    // gap hovered — clicking Paste now, and again, is exactly the
+    // "activation with no gap armed" the old guard
+    // (`gap.is_none() && !choosing`) only deferred ONCE before falling
+    // through to `unwrap_or(len)` on any later activation.
+    await expect(insertBar(page, 0)).toBeVisible();
+
+    await page.locator('[data-role="slide-paste"]').click();
+    await page.locator('[data-role="slide-paste"]').click();
+
+    expect(
+      unexpectedPaste,
+      "an inert Paste activation (no gap armed) must never fire a paste request",
+    ).toBe(false);
+    expect(await mainTextsInOrder(page)).toEqual([
+      "Slide 1",
+      "Slide 2",
+      "Slide 3",
+    ]);
+
+    // The chooser must still be ARMED and usable — pick the real gap now,
+    // and it must paste EXACTLY once (not twice, from a queued end-of-list
+    // paste the old bug would have already fired).
+    await insertBar(page, 0).click();
+    await expect
+      .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
+      .toEqual(["Slide 1", "Slide 1", "Slide 2", "Slide 3"]);
+    expect(await mainTextsInOrder(page)).toHaveLength(4);
 
     expect(consoleIssues, `console issues: ${consoleIssues.join(" | ")}`).toEqual([]);
   });
