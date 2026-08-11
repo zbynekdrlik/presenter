@@ -57,8 +57,15 @@ router_check_out=$(bash "$ROOT_DIR/scripts/dev/feature_router_check.sh" "$ROOT_D
 router_check_rc=$?
 set -e
 if (( router_check_rc != 0 )); then
-  missing_name="${router_check_out#MISSING:}"
-  fail "Missing feature router: crates/presenter-server/src/router/${missing_name}.rs (or .../${missing_name}/mod.rs)"
+  # F5: the checker now reports EVERY missing router (one "MISSING:<name>"
+  # line each), not just the first — walk all of them so a single run
+  # surfaces every gap instead of making the operator re-run the gate to
+  # discover the next one.
+  while IFS= read -r router_line; do
+    [[ "$router_line" == MISSING:* ]] || continue
+    missing_name="${router_line#MISSING:}"
+    fail "Missing feature router: crates/presenter-server/src/router/${missing_name}.rs (or .../${missing_name}/mod.rs)"
+  done <<< "$router_check_out"
 fi
 
 # 2) router.rs should not contain legacy presentation handlers

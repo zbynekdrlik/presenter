@@ -25,18 +25,30 @@ set -euo pipefail
 #
 # Exit codes:
 #   0  all four routers present (prints "OK")
-#   1  a router is missing (prints "MISSING:<name>", the first one found)
+#   1  one or more routers are missing (prints "MISSING:<name>" for EVERY
+#      missing router, one per line, before exiting — F5: the extraction
+#      into this script had turned the old inline loop's "check ALL four,
+#      report ALL of them" behavior into "exit on the FIRST missing one",
+#      so the operator had to re-run the gate to discover the next
+#      missing router instead of seeing every gap in one pass)
 # ============================================================================
 
 SEARCH_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
+missing=()
 for name in bible libraries playlists presentations; do
   flat="$SEARCH_ROOT/crates/presenter-server/src/router/${name}.rs"
   dir_mod="$SEARCH_ROOT/crates/presenter-server/src/router/${name}/mod.rs"
   if [[ ! -f "$flat" && ! -f "$dir_mod" ]]; then
-    echo "MISSING:${name}"
-    exit 1
+    missing+=("$name")
   fi
 done
+
+if (( ${#missing[@]} > 0 )); then
+  for name in "${missing[@]}"; do
+    echo "MISSING:${name}"
+  done
+  exit 1
+fi
 
 echo "OK"
