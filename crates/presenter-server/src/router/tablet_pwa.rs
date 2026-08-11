@@ -20,7 +20,13 @@ pub async fn tablet_manifest() -> impl IntoResponse {
         // installed) is covered separately by a first-tap fullscreen +
         // screen.orientation.lock() attempt plus a CSS counter-rotation
         // fallback (see tablet_orientation.rs / tablet.css).
-        "orientation": "landscape",
+        //
+        // #638: "landscape-primary" (not generic "landscape") — generic
+        // "landscape" is honored by resolving to EITHER landscape-primary or
+        // landscape-secondary, so an installed PWA could still visually flip
+        // 180° on a physical turn. The specific value pins the exact single
+        // orientation the design assumes.
+        "orientation": "landscape-primary",
         "background_color": "#0f172a",
         "theme_color": "#0f172a",
         "icons": [

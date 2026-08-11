@@ -39,13 +39,21 @@ body.operator {
 }
 
 /* #574: prominent banner shown when the server was redeployed under an
-   open operator tab — fixed above everything (including the sticky
-   header) so it is impossible to miss regardless of scroll position. */
+   open operator tab. #640: `position: relative` (not `fixed`) — `body`
+   is `display: flex; flex-direction: column` and this banner is the FIRST
+   child (see operator.rs), so as an ordinary flex item it naturally takes
+   its own row and PUSHES `.operator__header` down instead of overlaying
+   it — no JS measurement needed. `position: relative` still lets
+   `z-index` apply, so it keeps outranking every modal overlay
+   (library/playlist/presentation edit modals sit at 1200/1300): the
+   banner and those modals are both un-nested descendants of `body`
+   sharing the same stacking context (no transform/filter/opacity/
+   isolation on any ancestor between them), so `relative` vs `fixed`
+   doesn't change that ordering. `body` itself never scrolls
+   (`overflow: hidden` above), so nothing here needs to stay pinned
+   through a scroll — it is impossible to miss regardless either way. */
 .operator__version-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: relative;
   /* Must outrank every modal overlay (library/playlist/presentation edit
      modals sit at 1200/1300) — a deploy during an open modal must still
      show the reload banner on top, not behind the modal backdrop. */

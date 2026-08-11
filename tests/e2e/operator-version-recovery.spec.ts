@@ -33,20 +33,26 @@ test("shows a one-click reload banner when the server version changes under an o
   const config = deriveTestConfig(testInfo);
   await refreshDevData(config.dbUrl);
   const server = await startTestServer(config.port, config.dbUrl);
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
 
   try {
-    // Pass the REAL /healthz response through for the first few seconds
-    // (covers this tab's own initial-load fetches), then start reporting a
-    // DIFFERENT version — simulating a deploy that happened while this tab
-    // stayed open. Gated on elapsed time, not call count: the operator page
-    // fires more than one independent /healthz fetch at mount (the header
-    // badge + the shared VersionLabel footer), so a call-count gate would
-    // be racy.
-    const testStartedAt = Date.now();
-    const GRACE_MS = 3_000;
+    // Pass the REAL /healthz response through until THIS tab's own baseline
+    // is actually captured (`__presenterVersionBaselineKnown()`), then start
+    // reporting a DIFFERENT version — simulating a deploy that happened
+    // while this tab stayed open. Gated on the app's OWN state (#640), not a
+    // fixed wall-clock delay: WASM init + the first fetch are each budgeted
+    // up to 30s, so a hardcoded few-second grace window can capture the
+    // ALREADY-simulated value as the baseline on a slow boot and never
+    // observe a mismatch at all.
+    let simulateNewVersion = false;
     await page.route("**/healthz", async (route) => {
       const response = await route.fetch();
-      if (Date.now() - testStartedAt < GRACE_MS) {
+      if (!simulateNewVersion) {
         await route.fulfill({ response });
         return;
       }
@@ -63,21 +69,107 @@ test("shows a one-click reload banner when the server version changes under an o
       timeout: 30_000,
     });
 
-    // No banner immediately after load (still within the grace window /
-    // before the first poll tick observes a mismatch).
+    // No banner before the baseline is even known.
     await expect(
       page.locator('[data-role="version-update-banner"]'),
     ).toHaveCount(0);
 
+    await page.waitForFunction(
+      () => (window as any).__presenterVersionBaselineKnown?.() === true,
+      { timeout: 30_000 },
+    );
+    simulateNewVersion = true;
+
     // The periodic poll must observe the mismatch and show the banner.
-    await expect(
-      page.locator('[data-role="version-update-banner"]'),
-    ).toBeVisible({ timeout: 30_000 });
+    const banner = page.locator('[data-role="version-update-banner"]');
+    await expect(banner).toBeVisible({ timeout: 30_000 });
+
+    // #640: the banner must PUSH the header down, never overlap it — it
+    // used to sit `position: fixed` above everything with no offset applied
+    // for the sticky header's own height.
+    const header = page.locator(".operator__header");
+    const bannerBox = await banner.boundingBox();
+    const headerBox = await header.boundingBox();
+    expect(bannerBox).not.toBeNull();
+    expect(headerBox).not.toBeNull();
+    if (bannerBox && headerBox) {
+      expect(bannerBox.y + bannerBox.height).toBeLessThanOrEqual(headerBox.y);
+    }
 
     // Clicking Reload actually reloads the page (one-click recovery).
     const navigated = page.waitForEvent("load");
     await page.locator('[data-role="version-update-reload"]').click();
     await navigated;
+
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test("self-heals version-drift detection even when the tab's first /healthz calls fail (#640)", async ({
+  page,
+}, testInfo) => {
+  const config = deriveTestConfig(testInfo);
+  await refreshDevData(config.dbUrl);
+  const server = await startTestServer(config.port, config.dbUrl);
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  try {
+    // The operator page fires exactly two independent /healthz calls at
+    // mount (the header badge + the shared VersionLabel footer). Fail BOTH
+    // unconditionally by REQUEST COUNT (never wall clock — that would just
+    // reintroduce the #640 F3 race) to reproduce a transient failure during
+    // boot. A malformed 200 (not an abort / non-2xx status) reproduces a
+    // fetch that fails to PARSE without adding a browser-console
+    // "Failed to load resource" entry — get_json() funnels both failure
+    // shapes into the same Err path (see the ui skill's #598 note).
+    let healthzCalls = 0;
+    await page.route("**/healthz", async (route) => {
+      healthzCalls += 1;
+      if (healthzCalls <= 2) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "not-json",
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${config.baseURL}/ui/operator`);
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+
+    // Before #640: `known_version` was set ONLY by the (now-failed) mount
+    // fetch, so this would time out forever. The fix lets the periodic 15s
+    // poll self-heal the baseline on its own next successful call.
+    await page.waitForFunction(
+      () => (window as any).__presenterVersionBaselineKnown?.() === true,
+      { timeout: 30_000 },
+    );
+
+    // Prove the self-healed baseline actually WORKS for drift detection —
+    // not just that some baseline exists.
+    await page.route("**/healthz", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.version = `${body.version}-simulated-newer`;
+      await route.fulfill({ response, json: body });
+    });
+
+    await expect(
+      page.locator('[data-role="version-update-banner"]'),
+    ).toBeVisible({ timeout: 30_000 });
+
+    expect(consoleMessages).toEqual([]);
   } finally {
     await stopServer(server);
   }
