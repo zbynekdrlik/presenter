@@ -20,7 +20,8 @@ use super::slide_save::{
 };
 use super::slide_selection::{
     cut_memo, render_insertion_bar, render_select_checkbox, selected_memo,
-    setup_clipboard_keyboard, setup_selection_clear_on_switch, SlideSelectionPanel,
+    setup_clipboard_keyboard, setup_paste_chooser_clear_on_live, setup_selection_clear_on_switch,
+    SlideSelectionPanel,
 };
 
 #[component]
@@ -78,9 +79,12 @@ pub fn SlideList() -> impl IntoView {
     }
 
     // #554: clear selection/clipboard on song switch + the window C/X/V/Escape
-    // shortcut listener. Both are one-time setups.
+    // shortcut listener. F1: also disarm the paste-target chooser on a
+    // switch to live mode (Escape/Clear can't reach it there — see
+    // `setup_paste_chooser_clear_on_live`). All one-time setups.
     setup_selection_clear_on_switch(ctx.clone(), op.clone());
     setup_clipboard_keyboard(ctx.clone(), op.clone());
+    setup_paste_chooser_clear_on_live(ctx.clone(), op.clone());
 
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();

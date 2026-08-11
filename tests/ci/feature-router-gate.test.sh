@@ -32,6 +32,28 @@ set -euo pipefail
 #      directory-only fixture. This pins the FIX, not just current behavior.
 #   5. RED   — the real gate script FAILS when one router is MISSING (the
 #      core negative case — catches accidental deletion of a router).
+#   6. RED, ALL reported — the real gate script reports EVERY missing router
+#      (not just the first) when SEVERAL are missing at once (F6/#666 — the
+#      #625 extraction had silently turned the old inline loop's "check all
+#      four, report all of them" into "exit on the first missing one").
+#   7. WIRING — quality-check.sh's section 1 still actually CALLS
+#      feature_router_check.sh, and the call is not neutered with a trailing
+#      `|| true` (F6/#666: the #625 fix pinned the SCRIPT but not the CALLER
+#      wiring — deleting the call from quality-check.sh, or `|| true`-ing it,
+#      left every assertion above green while quietly disabling the real
+#      gate).
+#   8. RED, END-TO-END — quality-check.sh's OWN section-1 code, extracted
+#      VERBATIM from the live file (never a hand-copy, so this can't drift
+#      out of sync with a later edit the way #625 itself did), executed
+#      against a fixture with a missing router: the real `fail()` call must
+#      actually fire. This is the strong proof #666/F6 asks for — it
+#      reproduces both the "call deleted" AND the "call `|| true`'d" failure
+#      modes assertion 7 checks for statically, but by literally RUNNING the
+#      current wiring instead of pattern-matching its text. Runs in
+#      isolation from the REST of quality-check.sh (cargo fmt/clippy/
+#      deny/audit etc.) — those are irrelevant to what this gate pins and,
+#      on this project's Tier-0 dev box, clippy/build steps are policy-
+#      forbidden to run locally at all.
 #
 # Run in CI by the Test job's "Run CI shell tests" step (alongside the other
 # tests/ci/*.test.sh regression tests). Exits 0 only when all assertions pass.
@@ -39,9 +61,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHECKER="$ROOT_DIR/scripts/dev/feature_router_check.sh"
+QC_SCRIPT="$ROOT_DIR/scripts/dev/quality-check.sh"
 
 if [[ ! -f "$CHECKER" ]]; then
   echo "::error::feature-router gate self-test: feature_router_check.sh not found at $CHECKER" >&2
+  exit 1
+fi
+
+if [[ ! -f "$QC_SCRIPT" ]]; then
+  echo "::error::feature-router gate self-test: quality-check.sh not found at $QC_SCRIPT" >&2
   exit 1
 fi
 
@@ -210,6 +238,75 @@ else
 fi
 rm -rf "$WORK"
 trap - EXIT
+
+# --- Assertion 6: RED, ALL reported — F5: every missing router is listed,
+# not just the first ----------------------------------------------------------
+echo ""
+echo "[6] TWO missing routers at once (must report BOTH, not just the first — F5):"
+WORK="$(build_fixture dir)"
+trap 'rm -rf "$WORK"' EXIT
+rm -rf "$WORK/$ROUTER_BASE/bible" "$WORK/$ROUTER_BASE/presentations"
+set +e
+res="$(check_routers_present "$WORK")"
+rc=$?
+set -e
+if (( rc == 1 )) && grep -qx "MISSING:bible" <<< "$res" && grep -qx "MISSING:presentations" <<< "$res"; then
+  ok "both missing routers reported in one run (bible AND presentations) — output: ${res//$'\n'/, }"
+else
+  bad "did not report ALL missing routers in one run (exit $rc, res='$res')"
+fi
+rm -rf "$WORK"
+trap - EXIT
+
+# --- Assertion 7: WIRING — quality-check.sh still calls the real checker,
+# not deleted and not neutered with '|| true' (F6/#666) -----------------------
+echo ""
+echo "[7] quality-check.sh WIRING — section 1 must still invoke"
+echo "    feature_router_check.sh, not deleted and not '|| true'-neutered:"
+if grep -Fq 'bash "$ROOT_DIR/scripts/dev/feature_router_check.sh" "$ROOT_DIR"' "$QC_SCRIPT" \
+   && ! grep -F 'feature_router_check.sh' "$QC_SCRIPT" | grep -q '|| true'; then
+  ok "quality-check.sh still calls feature_router_check.sh, not neutered with '|| true'"
+else
+  bad "quality-check.sh no longer wires in feature_router_check.sh (deleted, renamed, or '|| true'-neutered)"
+fi
+
+# --- Assertion 8: RED, END-TO-END — quality-check.sh's OWN section-1 code,
+# extracted VERBATIM from the live file (never a hand-copy), genuinely fails
+# on a missing router (F6/#666 — the strongest proof: this is the code that
+# ships, actually executed, not a description of it) --------------------------
+echo ""
+echo "[8] quality-check.sh's ACTUAL section-1 code (extracted live, not"
+echo "    hand-copied), run against a fixture with a MISSING router — must"
+echo "    genuinely record a failure via its own fail() call:"
+section1="$(sed -n '/^# 1) Router feature modules present\./,/^# 2) router\.rs should not contain/p' "$QC_SCRIPT" | sed '$d')"
+if [[ -z "$section1" ]]; then
+  bad "could not locate quality-check.sh's section 1 by its marker comments — did the markers move?"
+else
+  WORK="$(build_fixture dir)"
+  trap 'rm -rf "$WORK"' EXIT
+  # The extracted text calls "$ROOT_DIR/scripts/dev/feature_router_check.sh"
+  # — give the fixture its own copy of the REAL current checker so ROOT_DIR
+  # can be pointed entirely at the fixture (both the "search root" arg AND
+  # the script lookup resolve inside it), matching how quality-check.sh
+  # really runs (repo root serves both roles there too).
+  mkdir -p "$WORK/scripts/dev"
+  cp "$CHECKER" "$WORK/scripts/dev/feature_router_check.sh"
+  rm -rf "$WORK/$ROUTER_BASE/bible"
+  extraction_fail_count="$(
+    ROOT_DIR="$WORK"
+    failures=()
+    fail() { failures+=("$*"); }
+    eval "$section1"
+    printf '%s\n' "${#failures[@]}"
+  )"
+  rm -rf "$WORK"
+  trap - EXIT
+  if [[ "$extraction_fail_count" =~ ^[1-9][0-9]*$ ]]; then
+    ok "quality-check.sh's real section-1 code recorded a failure for the missing router (fail() fired ${extraction_fail_count}x)"
+  else
+    bad "quality-check.sh's real section-1 code did NOT record a failure for a missing router (fail() fired '$extraction_fail_count' times) — the #625 gap has recurred at the CALLER"
+  fi
+fi
 
 # --- Summary ----------------------------------------------------------------
 echo ""

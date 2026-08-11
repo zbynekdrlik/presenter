@@ -255,8 +255,19 @@ fn anchor_slide_id_for_gap(ctx: &AppContext, gap: usize) -> Option<String> {
 /// Paste the clipboard at `gap` (0..=len). Copy → the paste endpoint (by
 /// ANCHOR slide id, #558 V8); Cut → the existing reorder endpoint via
 /// `cut_splice_order` (already carries the full target order, so it has no
-/// raw-index race to fix).
+/// raw-index race to fix). This is the ONE entry point every paste trigger
+/// (insertion-bar click/drop, the toolbar Paste button, Ctrl+V) funnels
+/// through, so it is also the single place that guards against queuing a
+/// second paste while one is already resolving (F3).
 pub(super) fn paste_at_gap(ctx: &AppContext, op: &OperatorState, gap: usize) {
+    // F3: never queue a second paste while one is still in flight — without
+    // this, a rapid double-click on the Paste button, held Ctrl+V
+    // key-repeat, or a stray extra bar click could each fire their own
+    // paste back-to-back, every one landing wherever the end of the list
+    // happened to be when IT resolved, with no undo.
+    if op.paste_in_flight.get_untracked() {
+        return;
+    }
     let Some(clipboard) = op.clipboard.get_untracked() else {
         return;
     };
@@ -269,6 +280,7 @@ pub(super) fn paste_at_gap(ctx: &AppContext, op: &OperatorState, gap: usize) {
         clear_selection_and_clipboard(op);
         return;
     }
+    op.paste_in_flight.set(true);
     match clipboard.mode {
         ClipboardMode::Copy => {
             let anchor_slide_id = anchor_slide_id_for_gap(ctx, gap);
@@ -323,6 +335,18 @@ async fn apply_slides_guarded(
     }
 }
 
+/// Is `pres_id` still the presentation currently open? An async paste
+/// response can resolve well after the operator has switched away — or
+/// switched to a different presentation and started a FRESH copy there
+/// (F2). A late response for an abandoned presentation must never
+/// disarm/wipe the state belonging to whatever is open now.
+fn still_on_presentation(ctx: &AppContext, pres_id: &str) -> bool {
+    ctx.selected_presentation
+        .get_untracked()
+        .map(|pres| pres.id.to_string() == pres_id)
+        .unwrap_or(false)
+}
+
 fn paste_copy(
     ctx: &AppContext,
     op: &OperatorState,
@@ -337,23 +361,36 @@ fn paste_copy(
     leptos::task::spawn_local(async move {
         match api::presentations::paste_slides(&pres_id, ids, anchor_slide_id).await {
             Ok(slides) => {
+                let pres_id_for_guard = pres_id.clone();
                 apply_slides_guarded(&ctx, &op, pres_id, slides, my_seq).await;
-                // Copy clipboard is KEPT so the user can paste again — but
-                // the "choosing a paste target" interaction (#602 defect 3)
-                // is OVER: this completed paste, so the grid returns to its
-                // normal multi-column layout. A later re-paste (toolbar
-                // Paste button / Ctrl+V) re-arms the chooser instead of
-                // silently reusing this now-stale gap (#602 re-paste
-                // regression) — `paste_target_gap` must not survive a
-                // completed interaction either.
-                op.choosing_paste_target.set(false);
-                op.paste_target_gap.set(None);
+                // F2: guard with the SAME still-here check the 409 arm
+                // below uses. Without it, a success response landing after
+                // the operator switched presentations and started a FRESH
+                // copy/cut there would disarm the FRESH chooser out from
+                // under them.
+                if still_on_presentation(&ctx, &pres_id_for_guard) {
+                    // Copy clipboard is KEPT so the user can paste again —
+                    // but the "choosing a paste target" interaction (#602
+                    // defect 3) is OVER: this completed paste, so the grid
+                    // returns to its normal multi-column layout. A later
+                    // re-paste (toolbar Paste button / Ctrl+V) re-arms the
+                    // chooser instead of silently reusing this now-stale
+                    // gap (#602 re-paste regression) — `paste_target_gap`
+                    // must not survive a completed interaction either.
+                    op.choosing_paste_target.set(false);
+                    op.paste_target_gap.set(None);
+                }
             }
             Err(ApiError::Status(422, _)) => {
-                op.clipboard.set(None);
-                op.choosing_paste_target.set(false);
-                op.paste_target_gap.set(None);
-                ctx.show_toast("Those slides no longer exist", "error");
+                // F2: same still-here guard — a stale 422 for an abandoned
+                // presentation must not wipe a FRESH clipboard the operator
+                // may have already set up on whatever they switched to.
+                if still_on_presentation(&ctx, &pres_id) {
+                    op.clipboard.set(None);
+                    op.choosing_paste_target.set(false);
+                    op.paste_target_gap.set(None);
+                    ctx.show_toast("Those slides no longer exist", "error");
+                }
             }
             Err(ApiError::Status(409, _)) => {
                 // #558 V8: the anchor slide vanished (a concurrent structural
@@ -370,27 +407,19 @@ fn paste_copy(
                 // selected would be exactly the V4 bug this guards against.
                 // Recover ONLY if `pres_id` is STILL the selected
                 // presentation; otherwise there is nothing to recover onto.
-                let still_here = ctx
-                    .selected_presentation
-                    .get_untracked()
-                    .map(|pres| pres.id.to_string() == pres_id)
-                    .unwrap_or(false);
-                if still_here {
+                if still_on_presentation(&ctx, &pres_id) {
                     // #558 X1: the W1 guard above only covers the window
                     // BEFORE this recovery GET — its OWN `.await` opens a
                     // SECOND window the operator can switch presentations
-                    // (or make another edit) in. Re-check BOTH `still_here`
+                    // (or make another edit) in. Re-check BOTH still-here
                     // and the `slide_edit_seq` guard (the identical idiom
                     // `apply_slides_guarded` uses on the success path) once
                     // the GET resolves; apply only if both still hold, else
                     // drop the response silently — nothing to recover onto.
                     if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
-                        let still_here_after_fetch = ctx
-                            .selected_presentation
-                            .get_untracked()
-                            .map(|pres| pres.id.to_string() == pres_id)
-                            .unwrap_or(false);
-                        if still_here_after_fetch && op.slide_edit_seq.get_untracked() == my_seq {
+                        if still_on_presentation(&ctx, &pres_id)
+                            && op.slide_edit_seq.get_untracked() == my_seq
+                        {
                             ctx.selected_presentation.set(Some(detail.presentation));
                             ctx.show_toast(
                                 "Paste position changed — refreshed, try again",
@@ -411,34 +440,50 @@ fn paste_copy(
                 ctx.show_toast("Paste failed — try again", "error");
             }
         }
+        // F3: the request has now fully resolved (every arm above,
+        // including the 409 arm's own nested `.await`, has run) — clear
+        // the in-flight guard so the NEXT paste activation is allowed.
+        op.paste_in_flight.set(false);
     });
 }
 
-/// Paste at the currently armed gap — or, if nothing is armed and the
-/// chooser isn't already active, RE-ARM it instead of silently pasting at a
-/// stale/default gap. A completed paste clears both `choosing_paste_target`
-/// and `paste_target_gap` (#602 defect 3), so a later Paste button / Ctrl+V
+/// Paste at the currently armed gap — or, if nothing is armed, RE-ARM the
+/// chooser and wait instead of silently pasting at a stale/default gap. A
+/// completed paste clears both `choosing_paste_target` and
+/// `paste_target_gap` (#602 defect 3), so a later Paste button / Ctrl+V
 /// with a retained clipboard must ask "where?" again — exactly like Copy/Cut
 /// starting a fresh interaction — rather than reuse the last-hovered gap or
 /// silently land at the end (#602 re-paste-into-several-gaps regression).
+///
+/// F3: the OLD guard here (`gap.is_none() && !choosing`) only deferred the
+/// FIRST activation with nothing hovered — a SECOND activation (an ordinary
+/// double-click on the Paste button, or Ctrl+V key-repeat) found
+/// `choosing_paste_target` already `true` and fell through to
+/// `unwrap_or(len)`, silently pasting at the END of the list with no undo.
+/// Falling through is gone: with no gap armed, EVERY activation just
+/// (re-)arms the chooser and returns, no matter how many times it fires.
 fn paste_at_target_or_rearm(ctx: &AppContext, op: &OperatorState) {
     if op.clipboard.get_untracked().is_none() {
         return;
     }
-    if op.paste_target_gap.get_untracked().is_none() && !op.choosing_paste_target.get_untracked() {
+    let Some(gap) = op.paste_target_gap.get_untracked() else {
         op.choosing_paste_target.set(true);
         return;
-    }
+    };
     let len = current_slide_ids(ctx).len();
-    let gap = op.paste_target_gap.get_untracked().unwrap_or(len).min(len);
-    paste_at_gap(ctx, op, gap);
+    paste_at_gap(ctx, op, gap.min(len));
 }
 
 fn paste_cut(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<String>, gap: usize) {
     let current = current_slide_ids(ctx);
     let Some(final_order) = cut_splice_order(&current, &ids, gap) else {
         // A stale cut (an id vanished): drop the clipboard + marks.
+        // `paste_at_gap` already set `paste_in_flight` before calling in —
+        // this early return never reaches the spawned task below, so it
+        // must clear the flag itself or every later paste would be
+        // permanently blocked (F3).
         clear_selection_and_clipboard(op);
+        op.paste_in_flight.set(false);
         ctx.show_toast("Those slides no longer exist", "error");
         return;
     };
@@ -458,6 +503,8 @@ fn paste_cut(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<Str
                 ctx.show_toast("Move failed — try again", "error");
             }
         }
+        // F3: request fully resolved — allow the next paste activation.
+        op.paste_in_flight.set(false);
     });
 }
 
@@ -473,6 +520,29 @@ pub(super) fn setup_selection_clear_on_switch(ctx: AppContext, op: OperatorState
             }
         }
         current
+    });
+}
+
+/// Disarm the "choosing a paste target" interaction the moment the view
+/// switches to LIVE mode (F1). `choosing_paste_target` is what drives
+/// `slide_list.rs`'s single-column grid class and its clickable "paste
+/// here" insertion bars — but BOTH normal ways to clear it are themselves
+/// gated on edit mode and so are dead once live mode is active: Escape
+/// early-returns on `mode == "live"` in `setup_clipboard_keyboard` above,
+/// and the panel hosting the Clear button is hidden by its own
+/// `mode != "live"` visibility check in `SlideSelectionPanel`. Without this
+/// watcher, a chooser armed right before switching to live stays armed
+/// forever — the grid stays stuck single-column with a bar a stray click
+/// can use to silently reorder slides during a live service. Root-caused
+/// here (one watcher) rather than adding an `is_edit &&` guard at every
+/// render site that reads the flag. Called once from `SlideList`.
+pub(super) fn setup_paste_chooser_clear_on_live(ctx: AppContext, op: OperatorState) {
+    let mode = ctx.mode;
+    Effect::new(move |_| {
+        if mode.get() == "live" {
+            op.choosing_paste_target.set(false);
+            op.paste_target_gap.set(None);
+        }
     });
 }
 
@@ -559,6 +629,7 @@ pub fn SlideSelectionPanel() -> impl IntoView {
     let mode = ctx.mode;
     let selected_slide_ids = op.selected_slide_ids;
     let clipboard = op.clipboard;
+    let paste_target_gap = op.paste_target_gap;
     let visible = move || {
         mode.get() != "live"
             && (!selected_slide_ids.with(|s| s.is_empty()) || clipboard.get().is_some())
@@ -619,7 +690,19 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 class="operator__list-action"
                                 data-action="paste"
                                 data-role="slide-paste"
-                                title="Paste at the highlighted gap (Ctrl+V)"
+                                // F3: this activation may just be ARMING the
+                                // chooser (no gap highlighted yet) rather
+                                // than pasting — the static "at the
+                                // highlighted gap" wording was wrong for
+                                // that first click. Reflect which state
+                                // this button is actually in.
+                                title=move || {
+                                    if paste_target_gap.get().is_some() {
+                                        "Paste at the highlighted gap (Ctrl+V)"
+                                    } else {
+                                        "Click a gap to choose where to paste, then Paste again (Ctrl+V)"
+                                    }
+                                }
                                 prop:disabled=move || clipboard.get().is_none()
                                 on:click=move |_| paste_at_target_or_rearm(&ctx_paste, &op_paste)
                             >

@@ -161,6 +161,14 @@ pub struct OperatorState {
     /// (only Clear/Escape/reload recovered it) because the class was keyed
     /// on `clipboard.is_some()`, which Copy never clears.
     pub choosing_paste_target: RwSignal<bool>,
+    /// True from the moment a paste request is dispatched (`paste_at_gap`)
+    /// until its response (success or error) has been fully handled (F3).
+    /// Guards against queuing a second paste while one is still resolving —
+    /// without it, a rapid double-click on the Paste button, or held
+    /// Ctrl+V key-repeat, could fire several pastes back-to-back, each
+    /// landing wherever the end of the list happened to be when IT
+    /// resolved, with no undo.
+    pub paste_in_flight: RwSignal<bool>,
 }
 
 impl OperatorState {
@@ -212,6 +220,7 @@ impl OperatorState {
             paste_target_gap: RwSignal::new(None),
             dragging_clipboard: RwSignal::new(false),
             choosing_paste_target: RwSignal::new(false),
+            paste_in_flight: RwSignal::new(false),
         }
     }
 }
