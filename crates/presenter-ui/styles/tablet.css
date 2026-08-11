@@ -78,6 +78,20 @@ body.tablet {
   }
 }
 
+/* #638: the CSS `orientation` media feature above is inherently 2-state
+   (portrait/landscape) and cannot see a tablet turned 180° while STAYING
+   landscape-shaped (landscape-primary <-> landscape-secondary both keep
+   width > height, so the query above never re-evaluates for this turn).
+   `install_orientation_flip_watcher` (tablet_orientation.rs) is the runtime
+   layer that closes this gap: it reads `screen.orientation.type` — the one
+   API that actually distinguishes primary from secondary — and mirrors it
+   onto this attribute. The design is authored for landscape-primary, so a
+   plain 180° rotation around the element's own center (no width/height
+   swap needed here, unlike the portrait fallback above) restores it. */
+body.tablet[data-tablet-flip="true"] {
+  transform: rotate(180deg);
+}
+
 .tablet-header {
   display: flex;
   justify-content: space-between;
