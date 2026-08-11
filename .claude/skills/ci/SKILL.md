@@ -368,3 +368,40 @@ gh api "repos/zbynekdrlik/presenter/actions/runs?head_sha=$(git rev-parse HEAD)"
 ```
 
 Only if it stays absent for ~15+ min consider `gh workflow run pipeline.yml --ref dev`.
+
+## CI waiters are a convenience, NEVER the source of truth (2026-08-11)
+
+The background `gh run view` poll loop this project uses to wait out a ~40-min Pipeline
+**gets killed by the harness at unpredictable moments** (3 kills in one session on
+2026-08-11; the notification reads `was stopped`, distinct from the `stopped by Claude`
+wording of a deliberate `TaskStop`, and distinct from a non-zero exit — so it is external
+task-cleanup, not a crash of the command). The CI run itself is completely unaffected.
+
+The failure mode to avoid is waiting BLIND on a success-only signal: a dead waiter sends
+neither "done" nor "failed", so a session that trusts silence hangs forever.
+
+Protocol, every single wake-up:
+
+1. Re-derive the run's state from the DURABLE resource: `gh run view <id> --json status,conclusion`.
+2. Only if it is still `in_progress`, relaunch **one** fresh waiter. Never rerun/cancel the
+   CI run itself — nothing is wrong with it.
+3. Never infer "still running" from the absence of a notification.
+
+A killed waiter costs nothing when this is followed; it cost 3 × ~1 min of re-derivation.
+
+## `cargo fmt --all` does NOT cover presenter-ui — CI checks it separately (2026-08-11)
+
+The Format job runs TWO steps: `cargo fmt --all -- --check` at the workspace root, then a
+second `cargo fmt --check` **inside `crates/presenter-ui`**. That crate is workspace-`exclude`d
+(own `Cargo.lock`), so the root `--all` sweep silently skips it — a local `cargo fmt --all --check`
+can be perfectly clean while CI's Format job fails with `Diff in .../presenter-ui/src/...`.
+
+Before any push that touches `crates/presenter-ui`, run BOTH:
+
+```bash
+cargo fmt --all -- --check
+(cd crates/presenter-ui && cargo fmt --check)
+```
+
+Same trap applies to `cargo check`/`clippy` on that crate (`cargo <cmd> -p presenter-ui` from
+the root fails — run it from `crates/presenter-ui/`, see the deploy skill).
