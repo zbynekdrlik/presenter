@@ -85,14 +85,21 @@ pub(crate) fn should_attempt_replay(state: &mut RetryWindow, now_ms: f64) -> boo
 /// `NdiVideo` mount; reconnects reuse the same element (see `ndi_video.rs`),
 /// so this is called ONCE per mount, not per WHEP session.
 ///
-/// The closures are intentionally `forget()`-leaked into JS, same rationale as
-/// `install_pagehide_teardown` in `ndi_video.rs`: one bounded set per
-/// `NdiVideo` mount lifetime, each capturing only a cloned `HtmlVideoElement` +
-/// a shared `Rc<RefCell<RetryWindow>>` (a few dozen bytes) — negligible next
-/// to a page-load-scoped stage display, and released with everything else
-/// when the page unloads/reloads.
-pub(crate) fn install(video: &HtmlVideoElement) {
+/// Returns a [`PlaybackGuardHandle`] the caller MUST dispose of (from
+/// `on_cleanup`) when the mount that owns `video` unmounts. `<NdiVideo>` is
+/// NOT page-load-scoped — `<Show>` (`ndi_fullscreen.rs`) tears the component
+/// down and remounts it on every source (de)activation within one page load.
+/// An earlier version of this function `forget()`-leaked these closures under
+/// the false assumption that a `NdiVideo` mount lifetime coincides with the
+/// page lifetime; in fact every unmount/remount cycle leaked one more
+/// document-level `visibilitychange` listener plus the detached `<video>`
+/// element it held a strong clone of, unbounded, for the life of the page
+/// (#637). The caller (`ndi_video.rs`) stores the handle and calls
+/// `.dispose()` on it from `on_cleanup`, symmetric with how the WHEP session
+/// and watchdog are torn down there.
+pub(crate) fn install(video: &HtmlVideoElement) -> PlaybackGuardHandle {
     let state = Rc::new(RefCell::new(RetryWindow::new(now_ms())));
+    let mut video_listeners: Vec<(&'static str, Closure<dyn FnMut()>)> = Vec::with_capacity(3);
 
     for event_name in ["pause", "ended", "suspend"] {
         let video_clone = video.clone();
@@ -101,7 +108,7 @@ pub(crate) fn install(video: &HtmlVideoElement) {
             replay_if_within_budget(&video_clone, &state_clone, event_name);
         });
         let _ = video.add_event_listener_with_callback(event_name, cb.as_ref().unchecked_ref());
-        cb.forget();
+        video_listeners.push((event_name, cb));
     }
 
     // The page/app returning to the foreground (Android TV WebViews often
@@ -110,7 +117,9 @@ pub(crate) fn install(video: &HtmlVideoElement) {
     // on every visibility restore. `replay_if_within_budget` itself checks
     // `video.paused()` first, so a visibility flip while genuinely playing is
     // a cheap no-op.
-    if let Some(document) = leptos::web_sys::window().and_then(|w| w.document()) {
+    let document = leptos::web_sys::window().and_then(|w| w.document());
+    let mut document_listener = None;
+    if let Some(document) = &document {
         let video_clone = video.clone();
         let state_clone = Rc::clone(&state);
         let document_for_check = document.clone();
@@ -121,7 +130,69 @@ pub(crate) fn install(video: &HtmlVideoElement) {
         });
         let _ = document
             .add_event_listener_with_callback("visibilitychange", cb.as_ref().unchecked_ref());
-        cb.forget();
+        document_listener = Some(cb);
+    }
+
+    PlaybackGuardHandle {
+        video: video.clone(),
+        video_listeners,
+        document,
+        document_listener,
+    }
+}
+
+/// Disposer returned by [`install`]. Owns the guard's event-listener
+/// `Closure`s — NOT `forget()`-leaked — so [`dispose`](Self::dispose) can
+/// remove them from the DOM before dropping them. ALWAYS call `dispose()`
+/// explicitly from `on_cleanup` when the `<NdiVideo>` mount that owns the
+/// guarded `video` unmounts (see `ndi_video.rs`) — the `Drop` impl below is
+/// only a defense-in-depth safety net (same posture as `Watchdog`'s
+/// `stop()`/`Drop` pairing in `ndi_watchdog.rs`), never the primary teardown
+/// path. If a handle is EVER dropped without `dispose()` (e.g. a future bug
+/// that replaces a live, undisposed handle in `ndi_video.rs`'s
+/// `playback_guard_holder`), a still-registered listener firing on the
+/// now-destroyed `wasm_bindgen` `Closure` PANICS ("closure invoked
+/// recursively or destroyed already") — it does not merely leak — which is
+/// exactly what `Drop` here prevents by removing the listeners first.
+pub(crate) struct PlaybackGuardHandle {
+    video: HtmlVideoElement,
+    video_listeners: Vec<(&'static str, Closure<dyn FnMut()>)>,
+    document: Option<leptos::web_sys::Document>,
+    document_listener: Option<Closure<dyn FnMut()>>,
+}
+
+impl PlaybackGuardHandle {
+    /// Remove every listener this guard installed. Idempotent — the DOM's
+    /// `removeEventListener` on an already-removed listener is a documented
+    /// no-op — so it's safe to call from both `dispose()` and `Drop` below.
+    fn remove_listeners(&self) {
+        for (event_name, cb) in &self.video_listeners {
+            let _ = self
+                .video
+                .remove_event_listener_with_callback(event_name, cb.as_ref().unchecked_ref());
+        }
+        if let (Some(document), Some(cb)) = (&self.document, &self.document_listener) {
+            let _ = document.remove_event_listener_with_callback(
+                "visibilitychange",
+                cb.as_ref().unchecked_ref(),
+            );
+        }
+    }
+
+    /// Remove every listener this guard installed, then drop the closures.
+    /// This is the PRIMARY teardown path — call it explicitly on unmount.
+    pub(crate) fn dispose(self) {
+        self.remove_listeners();
+    }
+}
+
+/// Safety net mirroring `Watchdog`'s `stop()`/`Drop` pairing (`ndi_watchdog.rs`):
+/// removes the listeners even if a handle is ever dropped without an explicit
+/// `dispose()` call, so a stale registered listener can never fire on a
+/// destroyed `Closure` (see the struct doc above for why that would panic).
+impl Drop for PlaybackGuardHandle {
+    fn drop(&mut self) {
+        self.remove_listeners();
     }
 }
 
