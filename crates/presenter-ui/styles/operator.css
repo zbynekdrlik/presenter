@@ -2166,6 +2166,12 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 .operator__slides {
   flex: 1;
   overflow-y: auto;
+  /* F4: restored after #602 removed the OTHER `.operator__slides` rule
+     above as a dead duplicate — `overscroll-behavior` was declared ONLY
+     there, so it silently vanished from the whole stylesheet along with
+     the genuinely-dead properties. Without it, a touch/trackpad scroll
+     past the end of this grid chains to scrolling the page underneath. */
+  overscroll-behavior: contain;
   padding: 0.35rem;
   /* #556 F5: see the other .operator__slides rule above — the song bubble
      reserves its own space as an in-flow sticky grid row now, no manual
