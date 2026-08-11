@@ -238,6 +238,23 @@ library happens to be first. Create a **fresh, never-favorited library via the A
 (`request.post` `/libraries`) and select it through the `#570` "Show all libraries"
 modal instead — guaranteed empty, no dependency on seed-data contents.
 
+## A self-consuming `dispose(self)` + `impl Drop` pairing ALWAYS double-fires — guard with a flag (#637)
+
+The `Watchdog`-style pattern (`ndi_watchdog.rs`'s `stop(&self)` + `Drop`) is safe because `stop`
+takes `&self` and the caller keeps the value alive afterward — `Drop` only ever fires later, once,
+at actual scope-end. Copying that pattern onto a handle whose primary teardown method takes `self`
+by VALUE (`pub(crate) fn dispose(self) { self.remove_listeners(); }`) is NOT equivalent: the moment
+`dispose()` returns, `self` still runs through Rust's normal drop glue, so `Drop::drop` fires
+**immediately afterward on every ordinary call**, not just in the "caller forgot to dispose"
+fallback case the doc comment describes. If the shared cleanup method (`remove_listeners`) isn't
+provably idempotent from the CALLER's observable side (here: an E2E test counting
+`removeEventListener` invocations, not just DOM correctness — `tests/e2e/stage-ndi-playback-guard.spec.ts`),
+this reads as a leak-looking net-count failure even though the real DOM never errors. Fix: add a
+`disposed: Cell<bool>` (or similar) flag inside the shared cleanup fn, `if self.disposed.replace(true) { return; }`
+before doing the actual work — makes the second call (always `Drop`, right after `dispose()`) a true
+no-op, restoring the "Drop = safety net only" intent instead of the pair always double-executing.
+See `ndi_playback_guard.rs`'s `PlaybackGuardHandle`.
+
 ## Reuse `attachConsoleErrorCollector` + `REPO_ROOT` from `support.ts` — don't hand-roll them (#641)
 
 `tests/e2e/support.ts` already exports `attachConsoleErrorCollector(page, errors)` (the

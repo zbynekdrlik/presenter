@@ -20,7 +20,7 @@
 //! source that truly cannot recover, so this guard backs off and defers to it
 //! rather than retrying without limit.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use leptos::wasm_bindgen::{closure::Closure, JsCast};
@@ -138,6 +138,7 @@ pub(crate) fn install(video: &HtmlVideoElement) -> PlaybackGuardHandle {
         video_listeners,
         document,
         document_listener,
+        disposed: Cell::new(false),
     }
 }
 
@@ -159,13 +160,30 @@ pub(crate) struct PlaybackGuardHandle {
     video_listeners: Vec<(&'static str, Closure<dyn FnMut()>)>,
     document: Option<leptos::web_sys::Document>,
     document_listener: Option<Closure<dyn FnMut()>>,
+    /// Guards against `remove_listeners` actually touching the DOM twice.
+    /// `dispose(self)` consumes `self` by value — when it returns, `self`
+    /// still runs through Rust's normal drop glue, so `Drop::drop` fires
+    /// RIGHT AFTER `dispose`'s own explicit call, on every ordinary
+    /// teardown, not only the "forgotten dispose" fallback case the struct
+    /// doc above describes. Without this flag `remove_listeners` — and thus
+    /// each `removeEventListener` — ran twice per unmount: harmless to the
+    /// DOM itself (a documented no-op on an already-removed listener) but it
+    /// defeats `tests/e2e/stage-ndi-playback-guard.spec.ts`'s net
+    /// add/remove-count assertion (#637), which is the exact regression
+    /// this flag closes.
+    disposed: Cell<bool>,
 }
 
 impl PlaybackGuardHandle {
-    /// Remove every listener this guard installed. Idempotent — the DOM's
-    /// `removeEventListener` on an already-removed listener is a documented
-    /// no-op — so it's safe to call from both `dispose()` and `Drop` below.
+    /// Remove every listener this guard installed — but only the FIRST time
+    /// this is called for a given handle. `dispose()` and `Drop` both call
+    /// this; the `disposed` flag makes the second call (whichever path
+    /// fires it) a genuine no-op instead of re-issuing `removeEventListener`
+    /// for listeners already removed.
     fn remove_listeners(&self) {
+        if self.disposed.replace(true) {
+            return;
+        }
         for (event_name, cb) in &self.video_listeners {
             let _ = self
                 .video
@@ -190,6 +208,8 @@ impl PlaybackGuardHandle {
 /// removes the listeners even if a handle is ever dropped without an explicit
 /// `dispose()` call, so a stale registered listener can never fire on a
 /// destroyed `Closure` (see the struct doc above for why that would panic).
+/// Guarded by `disposed` so this is a true no-op on the (normal) path where
+/// `dispose()` already ran `remove_listeners()`.
 impl Drop for PlaybackGuardHandle {
     fn drop(&mut self) {
         self.remove_listeners();
