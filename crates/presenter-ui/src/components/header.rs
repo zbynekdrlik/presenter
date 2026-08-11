@@ -10,6 +10,46 @@ use crate::components::surface_nav::SurfaceNav;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
+// #640 [red]: `classify_version_poll` does not exist yet — this module
+// intentionally fails to COMPILE until the next (GREEN) commit defines it.
+// It captures the required self-healing behavior: before this fix,
+// `known_version` was set ONLY by the one-shot mount fetch, so a single
+// failed `/healthz` call (a transient blip) permanently disabled
+// version-drift detection for the tab's whole lifetime — the periodic poll
+// only ever COMPARED against the baseline, it never seeded it. Every poll
+// observation (mount AND periodic) must route through this pure decision
+// function so the baseline self-heals on the NEXT successful call, whenever
+// that happens — not just the very first one. Host-testable (no
+// `web_sys`/fetch/WASM) via `cd crates/presenter-ui && cargo test --lib`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_baseline_seeds_regardless_of_observed_value() {
+        assert_eq!(
+            classify_version_poll("1.2.3", ""),
+            VersionPollOutcome::SeedBaseline
+        );
+    }
+
+    #[test]
+    fn known_baseline_matching_observed_is_unchanged() {
+        assert_eq!(
+            classify_version_poll("1.2.3", "1.2.3"),
+            VersionPollOutcome::Unchanged
+        );
+    }
+
+    #[test]
+    fn known_baseline_differing_observed_is_mismatch() {
+        assert_eq!(
+            classify_version_poll("1.2.4", "1.2.3"),
+            VersionPollOutcome::Mismatch
+        );
+    }
+}
+
 #[component]
 pub fn Header() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
