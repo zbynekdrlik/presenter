@@ -371,3 +371,274 @@ test("NdiVideo replays a stalled stream after pause() under real Chrome autoplay
     await deactivateAndDelete(page, sourceId);
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// #637 — `install()` (ndi_playback_guard.rs) `.forget()`-leaked its
+// pause/ended/suspend/visibilitychange listeners under the false assumption
+// that <NdiVideo> mounts exactly once per page load. It does not:
+// ndi_fullscreen.rs's `<Show when=move || ndi_active.get()>` unmounts and
+// remounts <NdiVideo> on every source (de)activation, so a long-running
+// stage display accumulated one dead listener set (plus one detached
+// <video> element handle) per cycle, forever.
+//
+// This proves the fix by instrumenting `EventTarget.prototype.add/removeEventListener`
+// BEFORE the WASM bundle boots (page.addInitScript), tracking the NET
+// (adds - removes) count for the guard's 4 event types. Only
+// `ndi_playback_guard.rs` registers "pause"/"ended"/"suspend" anywhere in
+// this crate; "visibilitychange" is ALSO registered once, page-scoped, by
+// `wake_lock.rs` (correctly `.forget()`-leaked there — StagePage itself
+// never remounts), which is why the visibilitychange baseline is 1 instead
+// of 0. A leak shows these counts climbing by one every remount cycle
+// instead of returning to their post-first-mount baseline.
+// ─────────────────────────────────────────────────────────────────────────
+
+type TrackedEventName = "pause" | "ended" | "suspend" | "visibilitychange";
+type ListenerNetCounts = Record<TrackedEventName, number>;
+
+test("ndi_playback_guard removes its listeners on unmount — no leak across remount cycles (#637)", async ({
+  page,
+}) => {
+  const consoleMessages = collectConsoleNoise(page);
+
+  // Installed before ANY page script runs, so it also catches the very
+  // first NdiVideo mount's listener registrations.
+  await page.addInitScript(() => {
+    const proto = EventTarget.prototype;
+    const originalAdd = proto.addEventListener;
+    const originalRemove = proto.removeEventListener;
+    const tracked = new Set(["pause", "ended", "suspend", "visibilitychange"]);
+    const counts: Record<string, number> = {
+      pause: 0,
+      ended: 0,
+      suspend: 0,
+      visibilitychange: 0,
+    };
+    (window as unknown as { __e2eListenerNet: Record<string, number> }).__e2eListenerNet =
+      counts;
+    proto.addEventListener = function (
+      this: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions,
+    ) {
+      if (tracked.has(type)) counts[type] = (counts[type] ?? 0) + 1;
+      return originalAdd.call(this, type, listener, options);
+    };
+    proto.removeEventListener = function (
+      this: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | EventListenerOptions,
+    ) {
+      if (tracked.has(type)) counts[type] = (counts[type] ?? 0) - 1;
+      return originalRemove.call(this, type, listener, options);
+    };
+  });
+
+  const sourceId = await openStageWithNdiVideo(page, "ndi-fullscreen", "PlaybackGuardLeak");
+  const video = page.locator('[data-role="ndi-video"]');
+
+  const netCounts = (): Promise<ListenerNetCounts> =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __e2eListenerNet: ListenerNetCounts }).__e2eListenerNet,
+    );
+
+  try {
+    // After the FIRST mount: one guard listener set installed (+1 each for
+    // pause/ended/suspend), plus wake_lock's own page-level visibilitychange
+    // listener (+1, installed once, correctly never removed) + this guard
+    // mount's own visibilitychange (+1) = 2.
+    await expect.poll(async () => (await netCounts()).pause, { timeout: 10_000 }).toBe(1);
+    let counts = await netCounts();
+    expect(counts.ended, "ended listener not installed on first mount").toBe(1);
+    expect(counts.suspend, "suspend listener not installed on first mount").toBe(1);
+    expect(
+      counts.visibilitychange,
+      "visibilitychange net count after first mount should be wake_lock(1) + guard(1)",
+    ).toBe(2);
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      // Unmount: deactivate the source → ndi_active flips false → <Show>
+      // tears down <NdiVideo> → on_cleanup must remove the guard's listeners.
+      await page.request.post(
+        new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+        { failOnStatusCode: false },
+      );
+      await expect(video).toHaveCount(0, { timeout: 10_000 });
+
+      await expect
+        .poll(async () => (await netCounts()).pause, {
+          timeout: 10_000,
+          message: `cycle ${cycle}: pause listener not removed on unmount (leak)`,
+        })
+        .toBe(0);
+      counts = await netCounts();
+      expect(counts.ended, `cycle ${cycle}: ended listener not removed on unmount (leak)`).toBe(
+        0,
+      );
+      expect(
+        counts.suspend,
+        `cycle ${cycle}: suspend listener not removed on unmount (leak)`,
+      ).toBe(0);
+      // Only THIS guard's own visibilitychange listener must be gone —
+      // wake_lock's page-level one (installed once, at StagePage mount)
+      // correctly remains for the page's lifetime.
+      expect(
+        counts.visibilitychange,
+        `cycle ${cycle}: guard's own visibilitychange listener not removed on unmount (leak)`,
+      ).toBe(1);
+
+      // Remount: reactivate the same source.
+      await page.request.post(
+        new URL(`/integrations/video-sources/${sourceId}/activate`, baseURL).toString(),
+        { failOnStatusCode: false },
+      );
+      await expect(video).toBeVisible({ timeout: 15_000 });
+
+      await expect
+        .poll(async () => (await netCounts()).pause, {
+          timeout: 10_000,
+          message: `cycle ${cycle}: pause listener count grew across remount (leak)`,
+        })
+        .toBe(1);
+      counts = await netCounts();
+      expect(
+        counts.ended,
+        `cycle ${cycle}: ended listener count grew across remount (leak)`,
+      ).toBe(1);
+      expect(
+        counts.suspend,
+        `cycle ${cycle}: suspend listener count grew across remount (leak)`,
+      ).toBe(1);
+      expect(
+        counts.visibilitychange,
+        `cycle ${cycle}: visibilitychange listener count grew across remount (leak)`,
+      ).toBe(2);
+    }
+
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await deactivateAndDelete(page, sourceId);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// #637 — the `@video-codec` test above ("replays a stalled stream after
+// pause() under real Chrome autoplay-policy enforcement") sets
+// `video.muted = true` before BOTH the initial and the replay play(), and
+// `replay_if_within_budget` (ndi_playback_guard.rs) ALSO force-re-asserts
+// `muted = true` before every replay play() call — so no test anywhere in
+// this suite ever produces a play() call the autoplay policy would reject.
+// The Err(e) branch of `play_and_log` on a genuinely REJECTED promise
+// (ndi_playback_guard.rs, inside the `Ok(promise) => spawn_local(...
+// JsFuture::from(promise) ...)` arm) is therefore never exercised.
+//
+// This test mocks `HTMLMediaElement.prototype.play` — scoped to ONLY the
+// target video element, delegating to the real implementation for anything
+// else — so it deterministically returns a rejected promise regardless of
+// mute state, then triggers the guard's replay path via pause() and asserts
+// the resulting "play() rejected" WARN is actually observed in the console.
+// ─────────────────────────────────────────────────────────────────────────
+
+test("ndi_playback_guard logs a warning when the replay play() promise genuinely rejects (#637)", async ({
+  page,
+}) => {
+  const rejectionMessages: string[] = [];
+  const unexpectedMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() !== "error" && msg.type() !== "warning") return;
+    const text = msg.text();
+    if (/ndi_playback_guard:.*play\(\) rejected/i.test(text)) {
+      rejectionMessages.push(text);
+      return;
+    }
+    if (!ALLOWED_CONSOLE_NOISE.some((re) => re.test(text))) {
+      unexpectedMessages.push(`[${msg.type()}] ${text}`);
+    }
+  });
+  page.on("pageerror", (err) => unexpectedMessages.push(`[pageerror] ${err.message}`));
+
+  const sourceId = await openStageWithNdiVideo(
+    page,
+    "ndi-fullscreen",
+    "PlaybackGuardRejectedPromise",
+  );
+
+  try {
+    await page.evaluate((sel) => {
+      const video = document.querySelector(sel) as HTMLVideoElement;
+      const canvas = document.createElement("canvas");
+      canvas.width = 16;
+      canvas.height = 16;
+      const ctx = canvas.getContext("2d")!;
+      let toggle = false;
+      ctx.fillStyle = "red";
+      ctx.fillRect(0, 0, 16, 16);
+      const interval = setInterval(() => {
+        toggle = !toggle;
+        ctx.fillStyle = toggle ? "blue" : "red";
+        ctx.fillRect(0, 0, 16, 16);
+      }, 100);
+      (window as unknown as { __e2eGuardInterval?: number }).__e2eGuardInterval =
+        interval as unknown as number;
+      const stream = canvas.captureStream(10);
+      video.srcObject = stream;
+      video.muted = true;
+      return video.play();
+    }, '[data-role="ndi-video"]');
+
+    const isPaused = () =>
+      page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLVideoElement).paused,
+        '[data-role="ndi-video"]',
+      );
+
+    // Sanity: genuinely playing before we mock the rejection.
+    await expect.poll(isPaused, { timeout: 10_000 }).toBe(false);
+
+    // Mock play() for THIS element only — every other element (none exist
+    // on this bare /stage page, but kept for safety) still gets the real
+    // implementation.
+    await page.evaluate((sel) => {
+      const video = document.querySelector(sel) as HTMLVideoElement;
+      const proto = HTMLMediaElement.prototype as unknown as {
+        play: (this: HTMLMediaElement) => Promise<void>;
+      };
+      const originalPlay = proto.play;
+      proto.play = function (this: HTMLMediaElement) {
+        if (this === video) {
+          return Promise.reject(
+            new DOMException("mocked play() rejection (#637 test)", "NotAllowedError"),
+          );
+        }
+        return originalPlay.call(this);
+      };
+    }, '[data-role="ndi-video"]');
+
+    await page.evaluate(
+      (sel) => (document.querySelector(sel) as HTMLVideoElement).pause(),
+      '[data-role="ndi-video"]',
+    );
+
+    // The guard's replay play() now genuinely rejects — this proves the
+    // Err(e) branch in play_and_log actually runs and logs it, which the
+    // muted replay in the sibling tests above can never exercise (a muted
+    // play() never rejects under Chrome's autoplay policy).
+    await expect
+      .poll(() => rejectionMessages.length, {
+        timeout: 5_000,
+        message: "play_and_log never logged a play() rejected warning",
+      })
+      .toBeGreaterThan(0);
+
+    await page.evaluate(() => {
+      const w = window as unknown as { __e2eGuardInterval?: number };
+      if (w.__e2eGuardInterval) clearInterval(w.__e2eGuardInterval);
+    });
+
+    expect(unexpectedMessages).toEqual([]);
+  } finally {
+    await deactivateAndDelete(page, sourceId);
+  }
+});
