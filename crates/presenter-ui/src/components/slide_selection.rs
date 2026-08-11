@@ -102,8 +102,18 @@ pub(super) fn render_select_checkbox(
             data-slide-select-index=index
             prop:checked=move || checked.get()
             on:click=move |ev: web_sys::MouseEvent| {
-                ev.prevent_default();
+                // #602 defect 1: NO `ev.prevent_default()` here. Canceling
+                // the click's default action triggers the input's HTML
+                // "canceled activation steps", which revert the native
+                // `checked` IDL property AFTER this listener returns — i.e.
+                // AFTER Leptos's queued `prop:checked` effect (above)
+                // already wrote the new value. The revert wins, so native
+                // `.checked` desyncs from app state forever while the
+                // reactive UI (selection count, `--selected` card class)
+                // stays correct. `on:click` itself is kept — Shift+click
+                // needs `shift_key()`, which `on:change` cannot see.
                 let ids = current_slide_ids(&ctx);
+                let mut handled_as_range = false;
                 if ev.shift_key() {
                     if let Some(anchor_id) = op.selection_anchor_id.get_untracked() {
                         // #558 V9: resolve the anchor's CURRENT index by id —
@@ -116,19 +126,35 @@ pub(super) fn render_select_checkbox(
                             &op.selected_slide_ids.get_untracked(),
                         ) {
                             op.selected_slide_ids.set(next);
-                            return;
+                            handled_as_range = true;
                         }
                     }
                 }
-                // Plain click (or Shift with no anchor yet, or a vanished
-                // anchor): toggle this id.
-                let sid = slide_id.clone();
-                op.selected_slide_ids.update(|set| {
-                    if !set.remove(&sid) {
-                        set.insert(sid);
-                    }
-                });
-                op.selection_anchor_id.set(Some(slide_id.clone()));
+                if !handled_as_range {
+                    // Plain click (or Shift with no anchor yet, or a
+                    // vanished anchor): toggle this id.
+                    let sid = slide_id.clone();
+                    op.selected_slide_ids.update(|set| {
+                        if !set.remove(&sid) {
+                            set.insert(sid);
+                        }
+                    });
+                    op.selection_anchor_id.set(Some(slide_id.clone()));
+                }
+                // Without `prevent_default`, the browser's own native toggle
+                // already applied its OWN idea of `checked` before this
+                // listener even ran — which may not match the app state
+                // above (e.g. a Shift+click on an already-checked box that
+                // the range logic leaves checked, or one it un-checks).
+                // Force the clicked element's native `checked` to match the
+                // real post-update state; peers touched by a Shift range get
+                // theirs from the normal reactive `prop:checked` effect —
+                // only the element that received THIS click needs the
+                // explicit sync.
+                let now_selected = op.selected_slide_ids.get_untracked().contains(&slide_id);
+                if let Some(input) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                    input.set_checked(now_selected);
+                }
             }
         />
     }
@@ -203,6 +229,9 @@ fn set_clipboard(ctx: &AppContext, op: &OperatorState, mode: ClipboardMode) {
         mode,
         presentation_id: pres_id,
     }));
+    // #602 defect 3: entering the clipboard begins the "choosing a paste
+    // target" interaction — this is what turns the grid single-column.
+    op.choosing_paste_target.set(true);
 }
 
 /// Clear the clipboard, selection, anchor, and paste target (Escape / Clear /
@@ -212,6 +241,7 @@ pub(super) fn clear_selection_and_clipboard(op: &OperatorState) {
     op.selected_slide_ids.set(std::collections::HashSet::new());
     op.selection_anchor_id.set(None);
     op.paste_target_gap.set(None);
+    op.choosing_paste_target.set(false);
 }
 
 /// The slide id CURRENTLY at index `gap` — the anchor a paste inserted at
@@ -308,10 +338,21 @@ fn paste_copy(
         match api::presentations::paste_slides(&pres_id, ids, anchor_slide_id).await {
             Ok(slides) => {
                 apply_slides_guarded(&ctx, &op, pres_id, slides, my_seq).await;
-                // Copy clipboard is KEPT so the user can paste again.
+                // Copy clipboard is KEPT so the user can paste again — but
+                // the "choosing a paste target" interaction (#602 defect 3)
+                // is OVER: this completed paste, so the grid returns to its
+                // normal multi-column layout. A later re-paste (toolbar
+                // Paste button / Ctrl+V) re-arms the chooser instead of
+                // silently reusing this now-stale gap (#602 re-paste
+                // regression) — `paste_target_gap` must not survive a
+                // completed interaction either.
+                op.choosing_paste_target.set(false);
+                op.paste_target_gap.set(None);
             }
             Err(ApiError::Status(422, _)) => {
                 op.clipboard.set(None);
+                op.choosing_paste_target.set(false);
+                op.paste_target_gap.set(None);
                 ctx.show_toast("Those slides no longer exist", "error");
             }
             Err(ApiError::Status(409, _)) => {
@@ -371,6 +412,26 @@ fn paste_copy(
             }
         }
     });
+}
+
+/// Paste at the currently armed gap — or, if nothing is armed and the
+/// chooser isn't already active, RE-ARM it instead of silently pasting at a
+/// stale/default gap. A completed paste clears both `choosing_paste_target`
+/// and `paste_target_gap` (#602 defect 3), so a later Paste button / Ctrl+V
+/// with a retained clipboard must ask "where?" again — exactly like Copy/Cut
+/// starting a fresh interaction — rather than reuse the last-hovered gap or
+/// silently land at the end (#602 re-paste-into-several-gaps regression).
+fn paste_at_target_or_rearm(ctx: &AppContext, op: &OperatorState) {
+    if op.clipboard.get_untracked().is_none() {
+        return;
+    }
+    if op.paste_target_gap.get_untracked().is_none() && !op.choosing_paste_target.get_untracked() {
+        op.choosing_paste_target.set(true);
+        return;
+    }
+    let len = current_slide_ids(ctx).len();
+    let gap = op.paste_target_gap.get_untracked().unwrap_or(len).min(len);
+    paste_at_gap(ctx, op, gap);
 }
 
 fn paste_cut(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<String>, gap: usize) {
@@ -462,9 +523,7 @@ pub(super) fn setup_clipboard_keyboard(ctx: AppContext, op: OperatorState) {
                 ShortcutAction::Paste => {
                     if op.clipboard.get_untracked().is_some() {
                         ev.prevent_default();
-                        let len = current_slide_ids(&ctx).len();
-                        let gap = op.paste_target_gap.get_untracked().unwrap_or(len).min(len);
-                        paste_at_gap(&ctx, &op, gap);
+                        paste_at_target_or_rearm(&ctx, &op);
                     }
                 }
                 ShortcutAction::Clear => {
@@ -488,7 +547,10 @@ pub(super) fn setup_clipboard_keyboard(ctx: AppContext, op: OperatorState) {
 /// The sticky selection panel above the slide list (edit mode). Shows the count
 /// and Copy / Cut / Paste / Clear, plus a draggable block handle when the
 /// clipboard is non-empty. Visible only when something is selected OR the
-/// clipboard is non-empty.
+/// clipboard is non-empty. #602 defect 2: each action button carries its
+/// keyboard shortcut as VISIBLE text (not just a hover `title`) so the
+/// clipboard actions are discoverable without prior knowledge the moment a
+/// selection exists.
 #[component]
 pub fn SlideSelectionPanel() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
@@ -529,38 +591,58 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 class="operator__list-action"
                                 data-action="copy"
                                 data-role="slide-copy"
+                                title="Copy the selected slides (Ctrl+C)"
                                 on:click=move |_| copy_selection(&ctx_copy, &op_copy)
-                            >"Copy"</button>
+                            >
+                                "Copy "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Ctrl+C"</span>
+                            </button>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="cut"
                                 data-role="slide-cut"
+                                title="Cut the selected slides (Ctrl+X)"
                                 on:click=move |_| cut_selection(&ctx_cut, &op_cut)
-                            >"Cut"</button>
+                            >
+                                "Cut "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Ctrl+X"</span>
+                            </button>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="paste"
                                 data-role="slide-paste"
+                                title="Paste at the highlighted gap (Ctrl+V)"
                                 prop:disabled=move || clipboard.get().is_none()
-                                on:click=move |_| {
-                                    let len = current_slide_ids(&ctx_paste).len();
-                                    let gap = op_paste
-                                        .paste_target_gap
-                                        .get_untracked()
-                                        .unwrap_or(len)
-                                        .min(len);
-                                    paste_at_gap(&ctx_paste, &op_paste, gap);
-                                }
-                            >"Paste"</button>
+                                on:click=move |_| paste_at_target_or_rearm(&ctx_paste, &op_paste)
+                            >
+                                "Paste "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Ctrl+V"</span>
+                            </button>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="clear"
                                 data-role="slide-clear"
+                                title="Clear the selection and clipboard (Esc)"
                                 on:click=move |_| clear_selection_and_clipboard(&op_clear)
-                            >"Clear"</button>
+                            >
+                                "Clear "
+                                <span
+                                    class="operator__slide-selection-shortcut"
+                                    data-role="slide-selection-shortcut"
+                                >"Esc"</span>
+                            </button>
                             <Show when=move || clipboard.get().is_some() fallback=|| ()>
                                 {
                                     let dragging_clipboard = op_drag.dragging_clipboard;

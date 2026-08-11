@@ -1182,20 +1182,10 @@ body.operator {
   color: var(--operator-accent-dark);
 }
 
-.operator__slides {
-  flex: 1;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0.35rem;
-  /* #556 F5: no more manual `padding-top` reservation — the song bubble is
-     now an in-flow, sticky first grid row (see `.operator__slides-bubble`)
-     that reserves its own space at every scroll position, not just at
-     scrollTop=0. */
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.9rem;
-  min-height: 0;
-}
+/* #602 side finding: this used to duplicate `.operator__slides` with a
+   hardcoded `repeat(3, ...)`, dead because the later rule (search
+   `--operator-slide-columns`) always wins on specificity/source order.
+   Removed — the live rule is the one below with the CSS-var column count. */
 
 .operator__slide-card {
   background: var(--operator-panel);
@@ -3156,14 +3146,26 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
 
 /* #554 slide multi-select + clipboard */
 .operator__slide-select {
-  width: 1.05rem;
-  height: 1.05rem;
+  width: 1.15rem;
+  height: 1.15rem;
   cursor: pointer;
   accent-color: var(--operator-accent-dark);
+  border-radius: 3px;
+}
+/* #602 defect 1: the native `accent-color` tick alone was too subtle at grid
+   density for the checked state to register — a visible glow around the
+   checkbox itself, distinct from the unchecked state, so it reads at a
+   glance instead of requiring a hunt for a 17px tick. */
+.operator__slide-select:checked {
+  outline: 2px solid var(--operator-accent-dark);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(59, 124, 255, 0.3);
 }
 .operator__slide-card--selected {
-  border-color: rgba(59, 124, 255, 0.55);
-  box-shadow: 0 0 0 2px rgba(59, 124, 255, 0.22);
+  border-color: var(--operator-accent-dark);
+  box-shadow:
+    0 0 0 2px rgba(59, 124, 255, 0.45),
+    inset 0 0 0 9999px rgba(59, 124, 255, 0.12);
 }
 .operator__slide-card--cut {
   opacity: 0.55;
@@ -3196,6 +3198,13 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   font-size: 0.8rem;
   color: var(--operator-muted);
   margin-right: auto;
+}
+/* #602 defect 2: the shortcut hint printed inside each action button —
+   visible on screen the moment a selection exists, not just on hover. */
+.operator__slide-selection-shortcut {
+  font-size: 0.68rem;
+  opacity: 0.7;
+  font-weight: 400;
 }
 .operator__slide-selection-drag {
   cursor: grab;

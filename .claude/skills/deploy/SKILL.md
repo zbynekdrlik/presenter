@@ -1,8 +1,10 @@
 ---
 name: presenter-deploy
 description: >
-  Local build-deploy-iterate workflow and CLIProxyAPI login procedure for presenter on dev2.
-  Use when building locally, deploying to dev, or setting up the Claude AI login.
+  Push-to-CI iterate workflow (Tier-0: CI builds/tests/deploys, only cheap checks run
+  locally), the HOTFIX MODE local-build exception, and the CLIProxyAPI login procedure
+  for presenter on dev2. Use when pushing a change, deploying to dev, or setting up the
+  Claude AI login.
 triggers:
   - local build
   - deploy to dev
@@ -14,35 +16,42 @@ triggers:
 
 # Presenter Deploy Skill
 
-## Local Build-Deploy-Iterate (Tier-0 Machine)
+## Push-to-CI Iterate (Tier-0 Machine)
 
-CI takes ~38 min per push. Iterate locally; push only when the feature works end-to-end.
-This project is Tier-0 (#592): heavy builds run on GitHub runners, not locally. The
-`block-tier0-local-build.sh` hook blocks local `cargo build`/`cargo test`. Use CI for
-compilation; this machine only runs the self-hosted E2E + deploy steps.
+**#627: this section used to say "Tier-0" in its heading while its own numbered steps
+prescribed exactly the local build+deploy loop Tier-0 bans — `block-tier0-local-build.sh`
+fails step 2/3 immediately, by design.** This is the corrected, actually-runnable
+sequence.
 
-Build order matters (WASM embedded into server at compile time via `include_dir!`):
+This project is Tier-0 (#592): heavy compilation (`cargo build`, `cargo build
+--release`, `trunk build`, `wasm-pack build`, a test run that RUNS tests) happens ONLY
+on GitHub-hosted runners. Locally, only cheap checks are allowed/expected before every
+push (`.claude/skills/local-builds`):
 
-1. **Format + lint** (mandatory before every push):
-   `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings`
+```bash
+cargo fmt --all --check
+cargo check --workspace --tests
+cargo clippy --workspace --all-targets -- -D warnings   # Rust-only, no codegen/link
+```
 
-2. **WASM I/F first** (server embeds dist/ at compile time):
-   `bash scripts/build-ui.sh`  ← ALWAYS use this; it builds with **nightly +
-   `-Zbuild-std` + target-cpu=mvp** (Safari-12 MVP wasm). Do NOT run a plain
-   `trunk build` on stable — see the #465 note below.
-   Manual equivalent: `RUSTUP_TOOLCHAIN=nightly trunk build --release` from
-   `crates/presenter-ui` (the nightly + MVP `.cargo/config.toml` is what makes it work).
+`presenter-ui` is OUTSIDE the workspace (its own `Cargo.lock`, WASM target) — its cheap
+check is separate, see the "WASM build mechanics" note below.
 
-3. **Server** -- run from WORKSPACE ROOT, not a subcrate directory:
-   `cd /home/newlevel/devel/presenter/presenter-dev2`
-   Build the server binary (release mode, from workspace root).
+CI (`pipeline.yml`, push to `dev`, ~38 min) then does the FULL loop for you: WASM build
+(`scripts/build-ui.sh` under nightly + `-Zbuild-std`), the server release build, E2E, and
+the `presenter-dev` systemd swap on the self-hosted runner. There is no separate manual
+"build it yourself, then deploy it yourself" step for routine work — the ONLY sanctioned
+exception is an explicitly user-declared production emergency (**HOTFIX MODE**, below),
+which still lands its commit through these same CI gates retroactively.
 
-4. **Deploy to dev*.* local machine -- no SSH needed):
-   `sudo systemctl stop presenter-dev`
-   `cp target/release/presenter-server /opt/presenter-dev/presenter-server`
-   `sudo systemctl start presenter-dev`
-
-5. **Verify**: `curl http://10.77.8.134:8080/healthz`
+1. **Cheap checks** (above), then push to `dev`.
+2. **Monitor CI to a terminal state** (`ci-monitoring` global rule): `gh run list` /
+   `gh run view <id> --json status,conclusion`. On failure: `gh run view <id>
+   --log-failed` — fix the root cause and push again, never re-run a local build to
+   "see if it passes" (it can't; the hook blocks it).
+3. **Verify the CI-deployed result** — the same binary CI just swapped in, not one you
+   built by hand: `curl http://10.77.8.134:8080/healthz`, then open
+   `http://10.77.8.134:8080/ui/operator` for a functional check.
 
 ## Disk budget — incremental compilation disabled (#585)
 
@@ -94,33 +103,41 @@ per-profile `incremental = true` override slipping into either
 `.cargo/config.toml` before reaching for the purge — the setting, not the
 purge, is the actual fix; purging just reclaims space already spent.
 
-### Local WASM build — use `scripts/build-ui.sh`, NOT plain `trunk build` (#465 resolved)
+### WASM build mechanics — reference knowledge, NOT a local prescription (#465 resolved)
 
-The local WASM build **works** — via `scripts/build-ui.sh`. The #465 symptom
-(`failed to find the __wbindgen_externref_table_alloc function`) only happens
-when you run a **plain `trunk build` on the stable toolchain**: rustc 1.82+
-enables wasm `reference-types` by default, emitting an externref table the
-wasm-bindgen step can't resolve. The project's canonical build avoids this
-entirely: `scripts/build-ui.sh` runs `RUSTUP_TOOLCHAIN=nightly trunk build`
-with `crates/presenter-ui/.cargo/config.toml`'s `-Zbuild-std` +
-`-Ctarget-cpu=mvp`, which recompiles std for the MVP wasm target (reference-types
-OFF). So:
+**`scripts/build-ui.sh` is what CI's build job runs** (and, if ever needed, HOTFIX MODE
+below) — it is not a routine local step under Tier-0. This is WHY it exists and what it
+avoids, kept here so a CI build-job failure is legible:
 
-- **Build WASM locally with `bash scripts/build-ui.sh`** (verified working on dev2,
-  rustc 1.96, wasm-bindgen 0.2.122). Then `cargo build --release -p presenter-server`
-  embeds `dist/`, and Playwright E2E run locally. `RUSTFLAGS=-Ctarget-feature=-reference-types`
-  does NOT help — the fix is the nightly + build-std-mvp path, not RUSTFLAGS.
-- A plain `cd crates/presenter-ui && trunk build` on stable WILL fail by design —
-  that is expected, not a bug. Use the script.
-- Cheap Rust-only check (no wasm-bindgen): `cd crates/presenter-ui && cargo check
-  --target wasm32-unknown-unknown` (+ clippy). `presenter-ui` is OUTSIDE the
-  workspace (own `Cargo.lock`, version `0.1.x`): `cargo <cmd> -p presenter-ui` from
-  root fails — run from `crates/presenter-ui/`.
+The #465 symptom (`failed to find the __wbindgen_externref_table_alloc function`) happens
+when you run a **plain `trunk build` on the stable toolchain**: rustc 1.82+ enables wasm
+`reference-types` by default, emitting an externref table the wasm-bindgen step can't
+resolve. `scripts/build-ui.sh` avoids this entirely: it runs `RUSTUP_TOOLCHAIN=nightly
+trunk build` with `crates/presenter-ui/.cargo/config.toml`'s `-Zbuild-std` +
+`-Ctarget-cpu=mvp`, which recompiles std for the MVP wasm target (reference-types OFF).
+`RUSTFLAGS=-Ctarget-feature=-reference-types` does NOT help — the fix is the nightly +
+build-std-mvp path, not RUSTFLAGS.
 
-## Running Playwright E2E locally (#461)
+- A plain `cd crates/presenter-ui && trunk build` on stable WILL fail by design (and is
+  ALSO Tier-0 hook-blocked regardless of toolchain) — that is expected, not a bug.
+- **The one thing actually allowed locally:** a cheap Rust-only check, no wasm-bindgen, no
+  trunk: `cd crates/presenter-ui && cargo check --target wasm32-unknown-unknown` (+
+  `cargo clippy --target wasm32-unknown-unknown --all-targets -- -D warnings`).
+  `presenter-ui` is OUTSIDE the workspace (own `Cargo.lock`, version `0.1.x`): `cargo
+  <cmd> -p presenter-ui` from root fails — run from `crates/presenter-ui/`.
 
-To validate a stage/UI change with the real Playwright specs before pushing
-(saves a ~45-min CI cycle):
+## Playwright E2E — how CI runs them (#461, #627: no supported local loop under Tier-0)
+
+**There is no supported push-free local Playwright loop on this box.** `startTestServer`
+needs a FRESH `presenter-server`/`presenter-importer` binary built WITH the E2E feature
+flags — building one is exactly the `cargo build --release` the Tier-0 hook blocks, and a
+stale/old binary tests stale/old code, which defeats the point. Default flow: push to
+`dev`, let CI's `e2e` job build + run the specs on the self-hosted runner, read `gh run
+view <id> --log-failed` on a red run rather than trying to reproduce it with a hand-built
+binary.
+
+**If HOTFIX MODE is active** (explicit user declaration only — see below) and a genuine
+local E2E run is warranted, the mechanics CI itself uses are:
 
 1. **Rebuild the server after ANY WASM change.** The server embeds `dist/` at
    compile time, so `bash scripts/build-ui.sh` ALONE is not enough — the running
@@ -139,6 +156,10 @@ To validate a stage/UI change with the real Playwright specs before pushing
    is in-scope; restart right after). Run with `--workers=1` (specs serialize on
    the fixed ports).
    `npx playwright test <spec> -g "<title>" --reporter=line --workers=1`
+
+**Spec-writing knowledge (applies wherever the spec runs — CI, same as any sanctioned
+local run):**
+
 4. Stage specs seed via the HTTP API: `POST /stage/layout {code}`, `POST
    /playlists`, `PUT /playlists/{id}/entries`, `POST /stage/state {presentationId,
    currentSlideId, playlistId}` (returns 204) → the matching playlist entry goes
@@ -150,17 +171,25 @@ To validate a stage/UI change with the real Playwright specs before pushing
    `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
    verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
 
-### Proving RED→GREEN locally with a real rebuild, not just commit order (#568/#569)
+### Proving RED→GREEN — default is commit order + CI, not a local rebuild (#568/#569, #627)
 
-`regression-test-first` requires RED before GREEN in commit order — but you can go one step
-further and actually PROVE the RED failure locally before committing: `git stash push -- <the fix
-files, NOT the new test files>` (leaves the new spec(s) staged/committed, reverts only the
-production code), rebuild WASM+server (steps 2–3), run the new spec(s) and confirm they fail for
-the RIGHT reason, then `git stash pop`, rebuild again, and confirm green. Costs ~2 extra
-build-and-test cycles (~15 min combined on this box) but catches two real classes of mistakes
-cheaply: (1) a test that can't actually fail (a tautology, or testing the wrong thing) stays green
-even with the fix reverted; (2) a fix so complete you forgot to also verify the OLD behavior was
-real (confirms you're not just adding a passing assertion to already-working code).
+**Default (every normal PR, this Tier-0 box):** `regression-test-first` requires RED
+before GREEN in COMMIT ORDER — commit the new failing test(s) first (source still
+unfixed), commit the fix second, push once, and let CI prove both states: the test file
+alone (checked out at the RED commit) would fail against the not-yet-fixed source, and
+CI's actual run at the final (GREEN) commit passes. This needs no local build at all.
+
+**If HOTFIX MODE is active** and a genuine local rebuild is already underway (per the
+Playwright section above), you can go one step further and PROVE the RED failure
+locally before committing: `git stash push -- <the fix files, NOT the new test
+files>` (leaves the new spec(s) staged/committed, reverts only the production code),
+rebuild WASM+server, run the new spec(s) and confirm they fail for the RIGHT reason,
+then `git stash pop`, rebuild again, and confirm green. Catches two real classes of
+mistakes cheaply: (1) a test that can't actually fail (a tautology, or testing the wrong
+thing) stays green even with the fix reverted; (2) a fix so complete you forgot to also
+verify the OLD behavior was real (confirms you're not just adding a passing assertion to
+already-working code). This is a HOTFIX-mode bonus, not something to reach for on a
+normal Tier-0 PR — it needs the same local build the Playwright section above gates.
 
 ### GOTCHA — a stale/ambiguous `target/release/presenter-server` silently shadows your fresh fix (#558)
 

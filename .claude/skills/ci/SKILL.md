@@ -354,3 +354,17 @@ just re-uniting the two DAG branches at the merge commit), so it's always safe t
 immediately after ANY `--merge`-style PR merge, before starting the next commit on dev
 (version bump or otherwise). `git rev-list --count origin/dev..origin/main` should read
 `0` before you push anything else.
+
+## Pipeline run can appear MINUTES late after a push (GitHub delay)
+
+A `git push` to dev normally spawns the Pipeline run within seconds — but after GitHub
+infra hiccups the run can appear MINUTES later (observed 2026-08-07: push at 07:0x, run
+created ~07:20, then ran normally to success). A missing run right after push is NOT a
+lost event: query by exact SHA before re-triggering anything:
+
+```bash
+gh api "repos/zbynekdrlik/presenter/actions/runs?head_sha=$(git rev-parse HEAD)" \
+  --jq '.total_count, (.workflow_runs[] | "\(.id) \(.name) \(.status)")'
+```
+
+Only if it stays absent for ~15+ min consider `gh workflow run pipeline.yml --ref dev`.

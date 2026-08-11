@@ -150,6 +150,17 @@ pub struct OperatorState {
     pub paste_target_gap: RwSignal<Option<usize>>,
     /// True while the clipboard block is being dragged toward an insertion gap.
     pub dragging_clipboard: RwSignal<bool>,
+    /// True while the operator is actively CHOOSING a paste target (#602
+    /// defect 3): the single-column grid + "Paste here" bars are bound to
+    /// THIS interaction, never to "a clipboard exists". Set true the moment
+    /// a copy/cut populates the clipboard; set false the moment a paste
+    /// COMPLETES (Copy or Cut alike) — even though a completed Copy
+    /// deliberately KEEPS `clipboard` non-empty so the toolbar Paste button
+    /// / Ctrl+V can paste again without re-copying. Without this split, a
+    /// completed Copy-paste left the grid stuck in single-column forever
+    /// (only Clear/Escape/reload recovered it) because the class was keyed
+    /// on `clipboard.is_some()`, which Copy never clears.
+    pub choosing_paste_target: RwSignal<bool>,
 }
 
 impl OperatorState {
@@ -200,6 +211,7 @@ impl OperatorState {
             selection_anchor_id: RwSignal::new(None),
             paste_target_gap: RwSignal::new(None),
             dragging_clipboard: RwSignal::new(false),
+            choosing_paste_target: RwSignal::new(false),
         }
     }
 }

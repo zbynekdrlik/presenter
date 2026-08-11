@@ -162,14 +162,19 @@ pub fn SlideList() -> impl IntoView {
                     let op_dragover = op.clone();
                     let op_drop = op.clone();
                     let op_bubble = op.clone();
-                    let clipboard_for_class = op.clipboard;
+                    let choosing_paste_target_for_class = op.choosing_paste_target;
                     view! {
                         <div
-                            // #554: single column while the clipboard is active so
-                            // every inter-slide gap is one unambiguous full-width
-                            // "paste here" bar.
+                            // #554/#602: single column while ACTIVELY CHOOSING a
+                            // paste target so every inter-slide gap is one
+                            // unambiguous full-width "paste here" bar. Bound to
+                            // `choosing_paste_target`, NOT to "a clipboard
+                            // exists" (#602 defect 3) — a completed Copy-paste
+                            // deliberately keeps the clipboard non-empty for a
+                            // re-paste, which used to leave this grid stuck in
+                            // single-column forever.
                             class=move || {
-                                if clipboard_for_class.get().is_some() {
+                                if choosing_paste_target_for_class.get() {
                                     "operator__slides operator__slides--clipboard"
                                 } else {
                                     "operator__slides"
@@ -232,12 +237,15 @@ pub fn SlideList() -> impl IntoView {
                     let resolved: Vec<ResolvedSlide> = resolve_sequence(&raw_slides);
                     let is_live = mode == "live";
                     let is_edit = !is_live;
-                    // #554: the ONE tracked clipboard read in this render
-                    // closure — a non-empty clipboard re-renders the list with
-                    // "paste here" bars in every gap (deliberate, infrequent,
-                    // never racing in-flight typing: shortcuts are guarded and
-                    // the panel buttons blur+save first).
-                    let clipboard_active = op.clipboard.get().is_some();
+                    // #554/#602: the ONE tracked read in this render closure —
+                    // actively CHOOSING a paste target re-renders the list
+                    // with "paste here" bars in every gap (deliberate,
+                    // infrequent, never racing in-flight typing: shortcuts are
+                    // guarded and the panel buttons blur+save first). Bound to
+                    // `choosing_paste_target`, not `clipboard.is_some()`, so
+                    // the bars disappear the moment a paste completes even
+                    // when Copy deliberately keeps the clipboard alive.
+                    let clipboard_active = op.choosing_paste_target.get();
                     let slide_count = raw_slides.len();
 
                     let mut prev_effective: Option<String> = None;

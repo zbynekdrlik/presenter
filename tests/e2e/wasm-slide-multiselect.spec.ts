@@ -93,7 +93,7 @@ async function openPresentationInEditMode(
   await page.waitForFunction(
     () =>
       (document
-        .querySelector('[data-role="slides"]')
+        .querySelector('[data-view-panel="worship"] [data-role="slides"]')
         ?.querySelectorAll("[data-slide-id]").length ?? 0) > 0,
     { timeout: 15_000 },
   );
@@ -149,6 +149,18 @@ function checkboxFor(page: import("@playwright/test").Page, slideId: string) {
   return page.locator(
     `[data-slide-id="${slideId}"] [data-role="slide-select-checkbox"]`,
   );
+}
+
+/** Number of tracks the `[data-role="slides"]` grid currently renders — the
+ * browser expands `grid-template-columns` to one pixel value per track, so
+ * splitting the computed value on whitespace gives the column count (#602
+ * defect 3). `> 1` = normal multi-column grid, `1` = the single-column
+ * "choosing a paste target" layout. */
+async function gridColumnCount(page: import("@playwright/test").Page) {
+  return page.locator('[data-view-panel="worship"] [data-role="slides"]').evaluate((el) => {
+    const cols = window.getComputedStyle(el).gridTemplateColumns.trim();
+    return cols.length === 0 ? 0 : cols.split(/\s+/).length;
+  });
 }
 
 function insertBar(page: import("@playwright/test").Page, gap: number) {
@@ -248,13 +260,20 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
       .toEqual(["Slide 4", "Slide 1", "Slide 2", "Slide 3", "Slide 4"]);
 
-    // Paste again at a TRUE MIDDLE gap (gap 2 of the now-5-slide list).
+    // Paste again at a TRUE MIDDLE gap (gap 2 of the now-5-slide list). The
+    // first paste completed the interaction (#602 defect 3), so the "paste
+    // here" bars are gone — re-arm the chooser via the toolbar Paste button
+    // before picking the new gap (#602 defect: re-paste into a different gap).
+    await page.locator('[data-role="slide-paste"]').click();
+    await expect(insertBar(page, 2)).toBeVisible();
     await insertBar(page, 2).click();
     await expect
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
       .toEqual(["Slide 4", "Slide 1", "Slide 4", "Slide 2", "Slide 3", "Slide 4"]);
 
-    // Paste at the END (trailing bar = index len).
+    // Paste at the END (trailing bar = index len) — re-arm again first.
+    await page.locator('[data-role="slide-paste"]').click();
+    await expect(insertBar(page, 6)).toBeVisible();
     await insertBar(page, 6).click();
     await expect
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
@@ -814,5 +833,156 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     await page.waitForTimeout(500);
     expect(pasteFired).toBe(false);
     expect(await domSlideOrder(page)).toEqual(slideIds);
+  });
+
+  // ---------------------------------------------------------------------
+  // #602: checkbox visibility, copy discoverability, grid-stuck regression.
+  // ---------------------------------------------------------------------
+
+  test("selecting a slide gives the checkbox AND the card a visible checked appearance (#602 defect 1)", async ({
+    page,
+    request,
+  }) => {
+    const consoleIssues: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleIssues.push(`${msg.type()}: ${msg.text()}`);
+      }
+    });
+
+    const lib = `E2E Sel602 Checked ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 2, lib);
+    await openPresentationInEditMode(page, lib);
+
+    const checkbox = checkboxFor(page, slideIds[0]);
+    const otherCheckbox = checkboxFor(page, slideIds[1]);
+    await expect(checkbox).not.toBeChecked();
+    await expect(otherCheckbox).not.toBeChecked();
+
+    const card = page.locator(`[data-slide-id="${slideIds[0]}"]`);
+    const boxShadowBefore = await card.evaluate(
+      (el) => window.getComputedStyle(el).boxShadow,
+    );
+    const outlineBefore = await checkbox.evaluate(
+      (el) => window.getComputedStyle(el).outlineStyle,
+    );
+
+    await checkbox.click();
+
+    // The checked state must reach the DOM (regression test would have
+    // already caught a broken binding, but re-assert it here too)...
+    await expect(checkbox).toBeChecked();
+    await expect(otherCheckbox).not.toBeChecked();
+
+    // ...AND it must be VISUALLY distinguishable — a computed style change
+    // on the checkbox itself (defect 1's actual gap: no `:checked` rule
+    // existed at all) and on the card.
+    const outlineAfter = await checkbox.evaluate(
+      (el) => window.getComputedStyle(el).outlineStyle,
+    );
+    expect(outlineAfter).not.toBe(outlineBefore);
+
+    const boxShadowAfter = await card.evaluate(
+      (el) => window.getComputedStyle(el).boxShadow,
+    );
+    expect(boxShadowAfter).not.toBe(boxShadowBefore);
+
+    // The untouched sibling checkbox stays plain — the change is scoped to
+    // the checked one, not a global style shift.
+    const otherOutline = await otherCheckbox.evaluate(
+      (el) => window.getComputedStyle(el).outlineStyle,
+    );
+    expect(otherOutline).toBe(outlineBefore);
+
+    expect(consoleIssues, `console issues: ${consoleIssues.join(" | ")}`).toEqual([]);
+  });
+
+  test("clipboard action shortcuts are visible on screen the moment a selection exists (#602 defect 2)", async ({
+    page,
+    request,
+  }) => {
+    const consoleIssues: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleIssues.push(`${msg.type()}: ${msg.text()}`);
+      }
+    });
+
+    const lib = `E2E Sel602 Discover ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 2, lib);
+    await openPresentationInEditMode(page, lib);
+
+    // No selection, no clipboard yet — the panel (and its shortcut hints)
+    // is not shown at all.
+    await expect(page.locator('[data-role="slide-selection-panel"]')).toHaveCount(0);
+
+    await checkboxFor(page, slideIds[0]).click();
+
+    const panel = page.locator('[data-role="slide-selection-panel"]');
+    await expect(panel).toBeVisible();
+
+    // The available actions and their keyboard shortcuts must be visible
+    // ON SCREEN (not merely discoverable via a hover tooltip) the moment a
+    // selection exists — ticket acceptance criterion 2.
+    const shortcuts = panel.locator('[data-role="slide-selection-shortcut"]');
+    await expect(shortcuts).toHaveCount(4);
+    expect(await shortcuts.allTextContents()).toEqual([
+      "Ctrl+C",
+      "Ctrl+X",
+      "Ctrl+V",
+      "Esc",
+    ]);
+    for (const hint of await shortcuts.all()) {
+      await expect(hint).toBeVisible();
+    }
+
+    expect(consoleIssues, `console issues: ${consoleIssues.join(" | ")}`).toEqual([]);
+  });
+
+  test("grid returns to multi-column after a completed Copy-paste — never stuck single-column (#602 defect 3)", async ({
+    page,
+    request,
+  }) => {
+    const consoleIssues: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleIssues.push(`${msg.type()}: ${msg.text()}`);
+      }
+    });
+
+    const lib = `E2E Sel602 GridStuck ${Date.now()}`;
+    const { slideIds } = await createPresentationWithSlides(request, 4, lib);
+    await openPresentationInEditMode(page, lib);
+
+    // Normal grid before anything is selected/copied.
+    expect(await gridColumnCount(page)).toBeGreaterThan(1);
+
+    await checkboxFor(page, slideIds[0]).click();
+    await page.locator('[data-role="slide-copy"]').click();
+
+    // Actively CHOOSING a paste target: single column, "Paste here" bars.
+    await expect(insertBar(page, 0)).toBeVisible();
+    expect(await gridColumnCount(page)).toBe(1);
+
+    await insertBar(page, 0).click();
+    await expect
+      .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
+      .toEqual(["Slide 1", "Slide 1", "Slide 2", "Slide 3", "Slide 4"]);
+
+    // #602 defect 3 — the actual regression: a completed Copy-paste used to
+    // leave the clipboard (deliberately) non-empty forever, and the
+    // single-column class was keyed on "a clipboard exists", so the grid
+    // stayed stuck in one column until Clear/Escape/a page reload. The
+    // completed paste must restore the normal multi-column grid...
+    await expect
+      .poll(() => gridColumnCount(page), { timeout: 10_000 })
+      .toBeGreaterThan(1);
+    await expect(page.locator('[data-role="slide-insert-bar"]')).toHaveCount(0);
+
+    // ...WITHOUT discarding the retained Copy clipboard — the toolbar Paste
+    // button must still be enabled for a re-paste with no re-copy needed.
+    await expect(page.locator('[data-role="slide-paste"]')).toBeEnabled();
+
+    expect(consoleIssues, `console issues: ${consoleIssues.join(" | ")}`).toEqual([]);
   });
 });
