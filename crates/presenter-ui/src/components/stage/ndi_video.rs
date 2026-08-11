@@ -165,6 +165,19 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let escalation_holder: StoredValue<Option<std::rc::Rc<ReloadEscalation>>, LocalStorage> =
         StoredValue::new_local(Some(ReloadEscalation::new()));
 
+    // #637: the playback guard's disposer, installed fresh on every mount
+    // (see the Effect below) and disposed from `on_cleanup` — same
+    // effect-installs / on_cleanup-tears-down shape as `session_holder` and
+    // `escalation_holder` above. Without this the guard's document-level
+    // `visibilitychange` listener (plus the video-level `pause`/`ended`/
+    // `suspend` ones) leaked on every unmount, since `<NdiVideo>` remounts
+    // within one page load (`<Show>` in `ndi_fullscreen.rs`), not just once
+    // per page load.
+    let playback_guard_holder: StoredValue<
+        Option<super::ndi_playback_guard::PlaybackGuardHandle>,
+        LocalStorage,
+    > = StoredValue::new_local(None);
+
     let cancelled_for_effect = Arc::clone(&cancelled);
     let stage_signal_setters_for_effect = stage_signal_setters;
     Effect::new(move |_| {
@@ -174,7 +187,10 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         // every reconnect cycle below), independent of the WHEP session
         // state, so it also covers a stream reassigned onto this element by
         // any means. See ndi_playback_guard.rs for the bounded-retry rationale.
-        super::ndi_playback_guard::install(&video);
+        // #637: the returned handle is stored so `on_cleanup` can dispose it
+        // (remove the listeners) on unmount instead of leaking them.
+        let guard_handle = super::ndi_playback_guard::install(&video);
+        playback_guard_holder.set_value(Some(guard_handle));
         let source_id = source_id_for_effect.clone();
         let cancelled = Arc::clone(&cancelled_for_effect);
         let stage_signal_setters = stage_signal_setters_for_effect.clone();
@@ -342,6 +358,15 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         // suppress the #401 last-resort reload after the first reconnect).
         if let Some(escalation) = escalation_holder.try_get_value().flatten() {
             escalation.cancel();
+        }
+        // #637: dispose the playback guard's listeners — without this they
+        // leaked on every <NdiVideo> unmount (the guard is remounted-and-
+        // reinstalled fresh each time, not page-load-scoped).
+        if let Some(guard_handle) = playback_guard_holder
+            .try_update_value(|opt| opt.take())
+            .flatten()
+        {
+            guard_handle.dispose();
         }
         let active = session_holder.try_update_value(|opt| opt.take()).flatten();
         if let Some(active) = active {
