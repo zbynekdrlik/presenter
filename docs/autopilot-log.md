@@ -752,3 +752,39 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   `context_chain_downcast`) — that's WHY the pattern is robust and string-matching isn't; (3) the
   `unused_must_use` clippy gotcha above. Landed after #613 merged, so it rides its own version bump
   (0.4.216 → 0.4.217) and its own tiny PR to keep dev strictly ahead of main.
+
+---
+
+## 2026-08-11 — #641 E2E coverage for the remaining 4 #571 double-submit guards (worktree round, not yet merged)
+
+- **No version bump** — test-only change, dispatched as a per-issue worktree in a fleet round; supervisor integrates.
+- **Design comments posted BEFORE first code commit:**
+  - Validated + rescope: https://github.com/zbynekdrlik/presenter/issues/641#issuecomment-5254425956 —
+    confirmed the #571 guard is wired in exactly 5 places (library/playlist `on_save`, presentation
+    `on_create_blank`/`on_paste_confirm`/`on_import_confirm`); confirmed only ONE E2E exists
+    (`wasm-presentation-crud.spec.ts:431`, create-blank). Rescoped the issue's own guess: `on_delete`
+    is idempotent and was NEVER guarded by #571 (not one of the untested paths); rename/"save-edit"
+    shares `on_save` with create, so it rides along with the new create tests.
+  - Approach: https://github.com/zbynekdrlik/presenter/issues/641#issuecomment-5254431024 — mirror the
+    proven `#571`/`#570` dblclick pattern; paste/import tests use a freshly-created, never-favorited
+    library (API `POST /libraries` + the `#570` "Show all libraries" modal select) instead of the
+    sidebar's first favorite, because the import fixture's name is FIXED ("088 Alive with you",
+    baked into `tests/e2e/fixtures/test-import.pro`'s protobuf payload) and collides with an existing
+    seeded presentation in the "NEW LEVEL" dev library.
+- **Commit `3ba6fdf1`:** 4 new tests — `wasm-modals.spec.ts` (library create dblclick, playlist create
+  dblclick) + `wasm-presentation-crud.spec.ts` (create-from-paste dblclick, create-from-import
+  dblclick via `setInputFiles` on the fixture). Each asserts an exact count of 1 (DOM + server-side
+  `/libraries|/playlists|/libraries/summary`), falsifiable against a removed guard.
+- **Deep-review pass** (fresh-context `general-purpose` subagent, since the built-in review skill is
+  banned per #363): 0 🔴 0 🟡 2 🔵 — both fixed in the follow-up commit on this branch (use
+  `attachConsoleErrorCollector` from `support.ts` instead of hand-inlined console collectors; use the
+  existing `REPO_ROOT` constant instead of a fresh `process.cwd()` call for the fixture path).
+- **Incidental fix:** `docs/autopilot-log.md` itself carried unresolved `<<<<<<< Updated upstream` /
+  `=======` / `>>>>>>> Stashed changes` conflict markers from a stale, unrelated `git stash` ("leftover
+  autopilot-log from prev cycle") that this worktree's setup apparently tried to pop against current
+  `dev`. Resolved by keeping the real committed history and dropping the stray duplicate stash line
+  (a one-line re-statement of the already-recorded #364/#366 batch) — content-only fix, the shared
+  stash entry itself was left untouched to avoid racing other concurrent worktrees.
+- **Local verify:** `npx tsc --noEmit` clean (0 diagnostics). No Rust touched — `cargo fmt`/`cargo
+  check` not applicable. Playwright itself did NOT run locally (Tier-0, self-hosted-runner-only) —
+  CI proves the 4 new specs after the supervisor's round integration.

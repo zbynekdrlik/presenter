@@ -6,6 +6,7 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -242,6 +243,68 @@ test.describe("WASM Operator Modals", () => {
     }
   });
 
+  // #641: library create is NOT idempotent (#571 added the re-entry guard
+  // to the shared save handler, but only the presentation "create blank"
+  // path ever got an E2E covering it). A double-click on "Save changes"
+  // must be swallowed by the guard and create exactly ONE library — never
+  // two.
+  test("library create modal: double-click submits exactly once (#641)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+
+    await initPage(page);
+
+    const libraryName = `DblSubmitLib${Date.now()}`;
+
+    await page.locator('[data-role="library-create"]').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="library-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    await page.locator('[data-role="library-edit-name"]').fill(libraryName);
+
+    // The second click must be swallowed by the re-entry guard AND the
+    // disabled button — never create a second library.
+    await page.locator('[data-role="library-edit-save"]').dblclick();
+
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="library-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    await expect(page.locator('[data-role="toast"]')).toContainText(
+      /saved|success/i,
+      { timeout: 5_000 },
+    );
+
+    // A double-submit race (guard removed) would create TWO libraries —
+    // assert exactly one exists server-side, not just that the toast fired.
+    const response = await fetch(`${baseURL}/libraries`);
+    expect(response.ok).toBe(true);
+    const libraries = (await response.json()) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const created = libraries.filter((lib) => lib.name === libraryName);
+    expect(created).toHaveLength(1);
+
+    // Cleanup so later tests in this file see a stable library set.
+    for (const lib of created) {
+      await fetch(`${baseURL}/libraries/${lib.id}`, { method: "DELETE" });
+    }
+
+    expect(consoleMessages).toEqual([]);
+  });
+
   test("playlist modal opens and closes", async ({ page }) => {
     await initPage(page);
 
@@ -323,6 +386,67 @@ test.describe("WASM Operator Modals", () => {
     );
     await nameInput.fill(originalName);
     await page.locator('[data-role="playlist-edit-save"]').click();
+  });
+
+  // #641: playlist create is NOT idempotent (same shared save handler /
+  // #571 guard as the library modal above). A double-click on "Save
+  // changes" must be swallowed by the guard and create exactly ONE
+  // playlist — never two.
+  test("playlist create modal: double-click submits exactly once (#641)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+
+    await initPage(page);
+
+    const playlistName = `DblSubmitPlaylist${Date.now()}`;
+
+    await page.locator('[data-role="playlist-create"]').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    await page.locator('[data-role="playlist-edit-name"]').fill(playlistName);
+
+    // The second click must be swallowed by the re-entry guard AND the
+    // disabled button — never create a second playlist.
+    await page.locator('[data-role="playlist-edit-save"]').dblclick();
+
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    await expect(page.locator('[data-role="toast"]')).toContainText(
+      /saved|success/i,
+      { timeout: 5_000 },
+    );
+
+    // A double-submit race (guard removed) would create TWO playlists —
+    // assert exactly one exists server-side.
+    const response = await fetch(`${baseURL}/playlists`);
+    expect(response.ok).toBe(true);
+    const playlists = (await response.json()) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const created = playlists.filter((pl) => pl.name === playlistName);
+    expect(created).toHaveLength(1);
+
+    // Cleanup so later tests in this file see a stable playlist set.
+    for (const pl of created) {
+      await fetch(`${baseURL}/playlists/${pl.id}`, { method: "DELETE" });
+    }
+
+    expect(consoleMessages).toEqual([]);
   });
 
   test("presentation create modal: navigate steps", async ({ page }) => {

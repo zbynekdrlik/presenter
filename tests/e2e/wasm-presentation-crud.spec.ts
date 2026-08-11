@@ -4,10 +4,13 @@
  * Tests presentation creation, editing, and deletion in the WASM operator.
  */
 
+import path from "path";
 import { test, expect } from "@playwright/test";
 import {
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
+  REPO_ROOT,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -42,6 +45,49 @@ async function selectLibrary(page: import("@playwright/test").Page) {
     timeout: 15_000,
   });
 }
+
+// #641: the double-submit-guard tests below need a library GUARANTEED to
+// start empty (the sidebar's "first favorite" library can already contain a
+// same-named presentation from seeded dev data — the import fixture always
+// produces a fixed name, see below). Create one via the API and select it
+// through the "Show all libraries" modal — fresh libraries are never
+// favorited, so they never show in the sidebar (#570).
+type TestLibrary = { id: string; name: string };
+
+async function createLibrary(
+  request: import("@playwright/test").APIRequestContext,
+  name: string,
+): Promise<TestLibrary> {
+  const resp = await request.post(new URL("/libraries", baseURL).toString(), {
+    data: { name },
+  });
+  expect(resp.ok()).toBeTruthy();
+  return resp.json();
+}
+
+async function openLibrary(
+  page: import("@playwright/test").Page,
+  libraryId: string,
+) {
+  await initPage(page);
+  await page.locator('[data-role="library-more"]').click();
+  await page
+    .locator(
+      `[data-role="library-row"][data-library-id="${libraryId}"] .operator__list-button`,
+    )
+    .click();
+  await page.waitForSelector('[data-role="presentation-list"]', {
+    timeout: 15_000,
+  });
+}
+
+const IMPORT_FIXTURE = path.join(
+  REPO_ROOT,
+  "tests",
+  "e2e",
+  "fixtures",
+  "test-import.pro",
+);
 
 test.describe("WASM Operator Presentation CRUD", () => {
   test("create blank presentation", async ({ page }) => {
@@ -463,6 +509,163 @@ Multiple lines here`;
     await expect(
       page.locator('[data-role="presentation-item"]', { hasText: uniqueName }),
     ).toHaveCount(1, { timeout: 10_000 });
+  });
+
+  // #641: same #571 re-entry guard as "create blank" above, but on the
+  // create-from-PASTE path (`on_paste_confirm`) — never covered by an E2E.
+  // A double-click on "Create" must yield exactly ONE presentation.
+  test("double-click create-from-paste yields exactly one presentation (#641)", async ({
+    page,
+    request,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+
+    const lib = await createLibrary(request, `DblSubmitPasteLib${Date.now()}`);
+    await openLibrary(page, lib.id);
+
+    const uniqueName = `DblClickPaste${Date.now()}`;
+
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    await page.locator('[data-role="presentation-create-paste"]').click();
+    await expect(
+      page.locator('[data-role="presentation-create-paste-area"]'),
+    ).toBeVisible();
+
+    // create-from-paste derives the presentation name from the pasted
+    // text's "Title:" line, not the (hidden-on-this-step) name input.
+    await page
+      .locator('[data-role="presentation-create-paste-text"]')
+      .fill(`Title: ${uniqueName}\nVerse 1\nLine one\nLine two`);
+
+    // The second click must be swallowed by the re-entry guard AND the
+    // disabled button — never create a second presentation.
+    await page.locator('[data-role="presentation-create-paste-confirm"]').dblclick();
+
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    // DOM check: exactly one item in the currently-open library's list.
+    await expect(
+      page.locator('[data-role="presentation-item"]', { hasText: uniqueName }),
+    ).toHaveCount(1, { timeout: 10_000 });
+
+    // Server-side check: a double-submit race (guard removed) would have
+    // created TWO presentations in this library.
+    const summaryResp = await fetch(`${baseURL}/libraries/summary`);
+    expect(summaryResp.ok).toBe(true);
+    const summaries = (await summaryResp.json()) as Array<{
+      id: string;
+      presentations: Array<{ id: string; name: string }>;
+    }>;
+    const libSummary = summaries.find((s) => s.id === lib.id);
+    expect(libSummary, `library ${lib.id} missing from /libraries/summary`).toBeTruthy();
+    const created = (libSummary?.presentations ?? []).filter(
+      (p) => p.name === uniqueName,
+    );
+    expect(created).toHaveLength(1);
+
+    // Cleanup.
+    for (const pres of created) {
+      await fetch(`${baseURL}/presentations/${pres.id}`, { method: "DELETE" });
+    }
+    await fetch(`${baseURL}/libraries/${lib.id}`, { method: "DELETE" });
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  // #641: same #571 re-entry guard as "create blank" above, but on the
+  // create-from-IMPORT path (`on_import_confirm`) — never covered by an
+  // E2E. A double-click on "Import" must yield exactly ONE presentation.
+  test("double-click create-from-import yields exactly one presentation (#641)", async ({
+    page,
+    request,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+
+    const lib = await createLibrary(request, `DblSubmitImportLib${Date.now()}`);
+    await openLibrary(page, lib.id);
+
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    await page.locator('[data-role="presentation-create-import"]').click();
+    await expect(
+      page.locator('[data-role="presentation-create-import-area"]'),
+    ).toBeVisible();
+
+    // create-from-import reads the presentation name from the .pro file
+    // itself (there is no name field to fill).
+    await page
+      .locator('[data-role="presentation-create-import-file"]')
+      .setInputFiles(IMPORT_FIXTURE);
+
+    // The second click must be swallowed by the re-entry guard AND the
+    // disabled button — never create a second presentation. Both clicks
+    // re-read the SAME file input, so an unguarded double-click would
+    // import the fixture twice.
+    await page.locator('[data-role="presentation-create-import-confirm"]').dblclick();
+
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    // The fixture's internal name (from its protobuf `.pro` payload) is
+    // fixed — this is what a real double-submit would duplicate.
+    const importedName = "088 Alive with you";
+
+    await expect(
+      page.locator('[data-role="presentation-item"]', { hasText: importedName }),
+    ).toHaveCount(1, { timeout: 10_000 });
+
+    const summaryResp = await fetch(`${baseURL}/libraries/summary`);
+    expect(summaryResp.ok).toBe(true);
+    const summaries = (await summaryResp.json()) as Array<{
+      id: string;
+      presentations: Array<{ id: string; name: string }>;
+    }>;
+    const libSummary = summaries.find((s) => s.id === lib.id);
+    expect(libSummary, `library ${lib.id} missing from /libraries/summary`).toBeTruthy();
+    const created = (libSummary?.presentations ?? []).filter(
+      (p) => p.name === importedName,
+    );
+    expect(created).toHaveLength(1);
+
+    // Cleanup.
+    for (const pres of created) {
+      await fetch(`${baseURL}/presentations/${pres.id}`, { method: "DELETE" });
+    }
+    await fetch(`${baseURL}/libraries/${lib.id}`, { method: "DELETE" });
+
+    expect(consoleMessages).toEqual([]);
   });
 
   // Regression guard for issue #275 follow-up: full pipeline on a
