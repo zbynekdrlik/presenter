@@ -92,8 +92,16 @@ const ORIENTATION_FLIP_WATCHER_JS: &str = r#"
     function isSecondaryLandscape() {
         var so = window.screen && window.screen.orientation;
         if (!so) { return false; }
+        // Require the window to actually BE landscape-shaped too (review
+        // finding): a browser reporting an inconsistent
+        // type/angle-vs-actual-shape state must never win against the
+        // portrait CSS fallback above, which is MORE specific for the
+        // `transform` property but LESS specific overall — a mismatched
+        // combination would otherwise mix the 180deg flip transform with
+        // the portrait fallback's fixed/width/height rules.
+        var isLandscapeShaped = window.innerWidth > window.innerHeight;
         if (typeof so.type === "string") {
-            return so.type === "landscape-secondary";
+            return so.type === "landscape-secondary" && isLandscapeShaped;
         }
         // Best-effort fallback for engines exposing only `.angle` (no
         // `.type`): on a device whose NATURAL orientation is landscape
@@ -102,8 +110,7 @@ const ORIENTATION_FLIP_WATCHER_JS: &str = r#"
         // landscape holds are 90/270, not 180) — `.type` is broadly
         // supported (Chrome/Firefox/Edge, Safari 16.4+), so that narrower
         // gap is accepted rather than guessed at.
-        return typeof so.angle === "number" && so.angle === 180
-            && window.innerWidth > window.innerHeight;
+        return typeof so.angle === "number" && so.angle === 180 && isLandscapeShaped;
     }
     function apply() {
         if (!window.matchMedia || !window.matchMedia("(pointer: coarse)").matches) {

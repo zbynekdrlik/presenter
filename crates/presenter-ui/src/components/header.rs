@@ -219,7 +219,19 @@ pub fn Header() -> impl IntoView {
                     format!("v{} ({})", health.version, health.channel)
                 };
                 version_text.set(text);
-                known_version.set(health.version);
+                // #640 review: route through the SAME classifier as the
+                // periodic poll below — normally this is always
+                // `SeedBaseline` (baseline is empty at mount), but if the
+                // periodic poll's tick already seeded a DIFFERENT baseline
+                // before an unusually slow mount fetch finally resolves,
+                // this must classify the observation too, not blindly
+                // overwrite `known_version`.
+                let baseline = known_version.get_untracked();
+                match classify_version_poll(&health.version, &baseline) {
+                    VersionPollOutcome::SeedBaseline => known_version.set(health.version),
+                    VersionPollOutcome::Mismatch => new_version_available.set(true),
+                    VersionPollOutcome::Unchanged => {}
+                }
             }
         });
     }
@@ -231,14 +243,14 @@ pub fn Header() -> impl IntoView {
     // Mirrors the existing `__presenterLiveConnected`/`__presenterTabletReady`
     // test-helper pattern already used elsewhere in this crate.
     {
-        let getter =
-            wasm_bindgen::closure::Closure::wrap(Box::new(move || -> wasm_bindgen::JsValue {
-                wasm_bindgen::JsValue::from_bool(!known_version.get_untracked().is_empty())
-            })
-                as Box<dyn Fn() -> wasm_bindgen::JsValue>);
+        use wasm_bindgen::prelude::*;
+
+        let getter = Closure::wrap(Box::new(move || -> JsValue {
+            JsValue::from_bool(!known_version.get_untracked().is_empty())
+        }) as Box<dyn Fn() -> JsValue>);
         let _ = js_sys::Reflect::set(
             &crate::utils::window::window(),
-            &wasm_bindgen::JsValue::from_str("__presenterVersionBaselineKnown"),
+            &JsValue::from_str("__presenterVersionBaselineKnown"),
             getter.as_ref(),
         );
         getter.forget();
