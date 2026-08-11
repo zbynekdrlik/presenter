@@ -93,7 +93,7 @@ async function openPresentationInEditMode(
   await page.waitForFunction(
     () =>
       (document
-        .querySelector('[data-role="slides"]')
+        .querySelector('[data-view-panel="worship"] [data-role="slides"]')
         ?.querySelectorAll("[data-slide-id]").length ?? 0) > 0,
     { timeout: 15_000 },
   );
@@ -157,7 +157,7 @@ function checkboxFor(page: import("@playwright/test").Page, slideId: string) {
  * defect 3). `> 1` = normal multi-column grid, `1` = the single-column
  * "choosing a paste target" layout. */
 async function gridColumnCount(page: import("@playwright/test").Page) {
-  return page.locator('[data-role="slides"]').evaluate((el) => {
+  return page.locator('[data-view-panel="worship"] [data-role="slides"]').evaluate((el) => {
     const cols = window.getComputedStyle(el).gridTemplateColumns.trim();
     return cols.length === 0 ? 0 : cols.split(/\s+/).length;
   });
@@ -260,13 +260,20 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
       .toEqual(["Slide 4", "Slide 1", "Slide 2", "Slide 3", "Slide 4"]);
 
-    // Paste again at a TRUE MIDDLE gap (gap 2 of the now-5-slide list).
+    // Paste again at a TRUE MIDDLE gap (gap 2 of the now-5-slide list). The
+    // first paste completed the interaction (#602 defect 3), so the "paste
+    // here" bars are gone — re-arm the chooser via the toolbar Paste button
+    // before picking the new gap (#602 defect: re-paste into a different gap).
+    await page.locator('[data-role="slide-paste"]').click();
+    await expect(insertBar(page, 2)).toBeVisible();
     await insertBar(page, 2).click();
     await expect
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
       .toEqual(["Slide 4", "Slide 1", "Slide 4", "Slide 2", "Slide 3", "Slide 4"]);
 
-    // Paste at the END (trailing bar = index len).
+    // Paste at the END (trailing bar = index len) — re-arm again first.
+    await page.locator('[data-role="slide-paste"]').click();
+    await expect(insertBar(page, 6)).toBeVisible();
     await insertBar(page, 6).click();
     await expect
       .poll(() => mainTextsInOrder(page), { timeout: 10_000 })
