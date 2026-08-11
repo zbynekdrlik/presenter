@@ -788,3 +788,22 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
 - **Local verify:** `npx tsc --noEmit` clean (0 diagnostics). No Rust touched — `cargo fmt`/`cargo
   check` not applicable. Playwright itself did NOT run locally (Tier-0, self-hosted-runner-only) —
   CI proves the 4 new specs after the supervisor's round integration.
+
+## 2026-08-11 — round 1 (v0.4.237, PR #671, merge 0f71b860)
+
+Fleet dispatch: 3 parallel `isolation: "worktree"` workers, serial supervisor integration, one CI cycle.
+
+- **#637** NDI playback guard leaked its `pause`/`ended`/`suspend`/`visibilitychange` document listeners per `<NdiVideo>` unmount — `install()` now returns a disposer called from `on_cleanup`. Ticket title said `keydown`; corrected to `visibilitychange` (no keydown listener ever existed there). Two new E2E: listener-leak regression + the first-ever rejected-`play()` coverage of `play_and_log`'s `Err` branch.
+- **#638** tablet landscape-primary/secondary 180° flip — CSS `orientation` is 2-state and cannot express it; closed via lock/manifest specificity + a JS orientation watcher, with E2E driving `screen.orientation` directly.
+- **#640** operator version-drift: baseline now self-heals after a failed boot `/healthz` (one blip used to disable drift detection for the tab's whole life), banner no longer overlaps the sticky header, E2E gated on real app state instead of a 3s wall clock.
+- **#641** double-submit E2E for the 4 genuinely untested guarded paths (library create, playlist create, presentation paste-create, import-create). The ticket's own guessed list was wrong — rename shares create's handler, delete is idempotent and was never guarded.
+
+**CI caught a real regression, first try.** #637's own new leak test failed on run 31504075070: `dispose(self)` consumes by value, so Rust's drop glue ran `Drop::drop` immediately after, double-calling `remove_listeners()`. Harmless to the DOM, fatal to a net add/remove count, and contrary to the Drop impl's stated "safety net only" intent. Fixed with a `disposed: Cell<bool>` check-and-set (`3f74f32b`) — the test was never weakened.
+
+Integration notes: one merge conflict, both sides pure appends to `.claude/skills/ci/SKILL.md` — kept both. `.claude/worktrees/` was untracked and one `git add -A` away from being committed; now gitignored.
+
+Filed and left open: **#669** (cargo cannot fmt/check the workspace-excluded `presenter-ui` from inside a nested `.claude/worktrees/` path — cargo climbs past the worktree's own excluding root into the main checkout; `rustfmt`-direct is the fmt workaround, compile-checking has none) and **#670** (a separate `pagehide` listener leak in `ndi_video.rs`, same class as #637, different lifecycle). Both validated STILL_VALID.
+
+Decision recorded: **#667 closed** — slide multi-select keeps its current interaction; the Shift+click / drag-select / insertion-indicator redesign is deliberately not built.
+
+Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod SNV and dev both serving 0.4.237, operator/stage/tablet 200 on both.
