@@ -10,17 +10,40 @@ use crate::components::surface_nav::SurfaceNav;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
-// #640 [red]: `classify_version_poll` does not exist yet — this module
-// intentionally fails to COMPILE until the next (GREEN) commit defines it.
-// It captures the required self-healing behavior: before this fix,
-// `known_version` was set ONLY by the one-shot mount fetch, so a single
-// failed `/healthz` call (a transient blip) permanently disabled
-// version-drift detection for the tab's whole lifetime — the periodic poll
-// only ever COMPARED against the baseline, it never seeded it. Every poll
-// observation (mount AND periodic) must route through this pure decision
-// function so the baseline self-heals on the NEXT successful call, whenever
-// that happens — not just the very first one. Host-testable (no
-// `web_sys`/fetch/WASM) via `cd crates/presenter-ui && cargo test --lib`.
+/// #640: what a `/healthz` version-poll observation should do to this tab's
+/// captured baseline. Pure decision logic (no I/O — no `web_sys`/fetch), so
+/// it's testable on the HOST target without a real browser/WASM runtime (run
+/// via `cd crates/presenter-ui && cargo test --lib`).
+///
+/// Before this, `known_version` was set ONLY by the one-shot mount fetch — a
+/// single failed `/healthz` call (a transient blip) permanently disabled
+/// version-drift detection for the tab's whole lifetime, because the
+/// periodic poll only ever COMPARED against the baseline, it never seeded
+/// it. Routing every poll observation (mount AND periodic) through this
+/// function means the baseline self-heals on the NEXT successful call,
+/// whenever that happens — not just the very first one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VersionPollOutcome {
+    /// No baseline yet — seed it. Not a mismatch: this IS the first real
+    /// observation, there is nothing to compare it against.
+    SeedBaseline,
+    /// Baseline known and this observation differs — the server was
+    /// redeployed underneath this open tab.
+    Mismatch,
+    /// Baseline known and matches — nothing changed.
+    Unchanged,
+}
+
+fn classify_version_poll(observed: &str, baseline: &str) -> VersionPollOutcome {
+    if baseline.is_empty() {
+        VersionPollOutcome::SeedBaseline
+    } else if observed != baseline {
+        VersionPollOutcome::Mismatch
+    } else {
+        VersionPollOutcome::Unchanged
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,8 +224,30 @@ pub fn Header() -> impl IntoView {
         });
     }
 
-    // Poll periodically; a mismatch against the captured baseline means the
-    // server was redeployed underneath this open tab.
+    // #640: expose whether this tab has captured its version-poll baseline
+    // yet, so E2E can gate the "start simulating a new version" switch on
+    // the app's OWN state instead of a wall-clock guess — a slow WASM boot
+    // (up to 30s) could otherwise race a hardcoded few-second grace window.
+    // Mirrors the existing `__presenterLiveConnected`/`__presenterTabletReady`
+    // test-helper pattern already used elsewhere in this crate.
+    {
+        let getter =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move || -> wasm_bindgen::JsValue {
+                wasm_bindgen::JsValue::from_bool(!known_version.get_untracked().is_empty())
+            })
+                as Box<dyn Fn() -> wasm_bindgen::JsValue>);
+        let _ = js_sys::Reflect::set(
+            &crate::utils::window::window(),
+            &wasm_bindgen::JsValue::from_str("__presenterVersionBaselineKnown"),
+            getter.as_ref(),
+        );
+        getter.forget();
+    }
+
+    // Poll periodically. #640: every observation — including this one, not
+    // just the mount fetch above — routes through `classify_version_poll` so
+    // an empty baseline (the mount fetch failed, or hasn't resolved yet)
+    // self-heals here instead of silently skipping forever.
     {
         let interval = gloo_timers::callback::Interval::new(VERSION_POLL_INTERVAL_MS, move || {
             leptos::task::spawn_local(async move {
@@ -210,8 +255,10 @@ pub fn Header() -> impl IntoView {
                     crate::api::get_json::<crate::api::HealthzResponse>("/healthz").await
                 {
                     let baseline = known_version.get_untracked();
-                    if !baseline.is_empty() && health.version != baseline {
-                        new_version_available.set(true);
+                    match classify_version_poll(&health.version, &baseline) {
+                        VersionPollOutcome::SeedBaseline => known_version.set(health.version),
+                        VersionPollOutcome::Mismatch => new_version_available.set(true),
+                        VersionPollOutcome::Unchanged => {}
                     }
                 }
             });
