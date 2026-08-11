@@ -433,3 +433,20 @@ no nesting) — it only bites a worktree-isolated agent.
   (flat clone) as the authority for `presenter-ui` changes made from a worktree.
 - The rest of the workspace (`presenter-server`, `presenter-core`, etc.) is completely unaffected
   — `cargo check --workspace --tests` from the worktree root works normally.
+
+## A fresh worktree can inherit an OLD, unrelated `git stash` conflict (#641)
+
+Observed once in a fleet-dispatched `isolation: "worktree"` worker: `git status` showed
+`UU docs/autopilot-log.md` (unmerged) despite never running `git stash`/`git merge`
+myself. `git stash list` had a weeks-old entry (`"leftover autopilot-log from prev
+cycle"`) from a long-abandoned session; worktree setup apparently tried to pop it
+against current `dev`, and it conflicted because `dev` had moved on since that stash was
+made. The conflict markers land in the file's tail (`<<<<<<< Updated upstream` /
+`=======` / `>>>>>>> Stashed changes`) — check for them with `grep -n '^<<<<<<<\|^=======\|^>>>>>>>'`
+on any file `git status` reports as unmerged at the START of a worktree session, before
+assuming it's your own doing. Resolve by keeping the real committed ("Updated upstream")
+content and dropping the stray stash side if it's redundant (cross-check: the stash's
+info is usually ALREADY recorded properly elsewhere in the file, since these logs are
+append-only). Leave the shared stash entry itself alone (`stash list`/`stash drop`
+touches the WHOLE repo's shared `.git`, which other concurrent worktrees in the same
+fleet round may still reference) — fix the file content only.

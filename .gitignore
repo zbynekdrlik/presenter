@@ -43,3 +43,6 @@ NDI SDK for Linux/
 mutants.out/
 mutants.out.old/
 /pr.diff
+
+# Fleet-dispatched agent worktrees (isolation: "worktree") — never committed
+.claude/worktrees/

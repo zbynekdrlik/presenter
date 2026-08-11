@@ -203,3 +203,46 @@ branch with a clean console, fulfill with a MALFORMED 200 instead:
 `get_json()` in `crates/presenter-ui/src/api/mod.rs` funnels non-2xx (`ApiError::Status`)
 and parse failure (`ApiError::Deserialize`) into the same `Err` path, and gloo-net's
 `json()` parses in pure Rust (zero browser console noise).
+
+## `#571`'s re-entry (double-submit) guard is on CREATE handlers only, never on `on_delete` (#641)
+
+`op.submitting` guards `on_save` (library/playlist — covers BOTH create AND rename, same
+handler) and the 3 presentation create paths (`on_create_blank`/`on_paste_confirm`/
+`on_import_confirm`). **`on_delete` in `library_modal.rs`/`playlist_modal.rs` has NO
+guard and needs none** — delete is idempotent, so a double-click's second call is a
+harmless no-op/404, not a duplicate-creation bug. Don't assume "guarded path" ⇒ every
+mutating handler in the same file; check which ones are actually non-idempotent.
+
+## create-from-PASTE names the presentation from the pasted text's `Title:` line, not the name input (#641)
+
+`on_paste_confirm` (`presentation_modal.rs`) calls `song_parser::extract_title(&text)`
+on the PASTED text, falling back to `"Untitled"` — it never reads `create_name`/
+`presentation-create-name` (which is hidden via `style:display=none` on the paste
+sub-step anyway). To control the resulting presentation's name in a test, put
+`Title: <name>` as the pasted text's first line — `pad_title_number` only rewrites a
+purely-numeric prefix followed by whitespace (`"6 Foo"` → `"006 Foo"`), so a name with
+no leading digit+space passes through unchanged. `is_metadata_line` strips the `Title:`
+line itself out of the resulting slides.
+
+## The `.pro` import E2E fixture's name is FIXED and collides with real seeded dev data (#641)
+
+`tests/e2e/fixtures/test-import.pro` (checked in since the import modal was built,
+`ea0b3dcd`, but never actually used by any test before `#641`) decodes to a presentation
+named **"088 Alive with you"** — baked into the file's protobuf bytes, not something a
+test can override via the upload form (only the file itself is posted, no name field).
+The seeded dev library **"NEW LEVEL"** already contains a real presentation with that
+exact name (`data/libraries/NEW LEVEL/088 Alive with you.pro`). Any test that imports
+this fixture into `selectLibrary()`'s "first sidebar favorite" risks a same-name
+collision that makes an "exactly 1" count assertion meaningless depending on which
+library happens to be first. Create a **fresh, never-favorited library via the API**
+(`request.post` `/libraries`) and select it through the `#570` "Show all libraries"
+modal instead — guaranteed empty, no dependency on seed-data contents.
+
+## Reuse `attachConsoleErrorCollector` + `REPO_ROOT` from `support.ts` — don't hand-roll them (#641)
+
+`tests/e2e/support.ts` already exports `attachConsoleErrorCollector(page, errors)` (the
+`browser-console-zero-errors.md` collector, used by 6+ existing spec files) and
+`REPO_ROOT` (`= process.cwd()`, used for repo-relative fixture/data paths elsewhere,
+e.g. `stage-empty-db-console.spec.ts`). New tests should import and reuse both instead
+of re-inlining the same `page.on("console", ...)` block or a fresh `process.cwd()` call
+— a deep-review pass on `#641` flagged both as avoidable duplication.
