@@ -143,6 +143,30 @@ while `err.to_string()` only ever shows the OUTERMOST context message. This is w
 typed-error pattern robust and string-matching fragile — cite it when justifying the pattern instead
 of re-deriving it from scratch (confirmed against `anyhow-1.0.103/src/error.rs` on this box).
 
+## `anyhow::Error::context()` is INHERENT — `use anyhow::Context;` is only for `Result`, not `Error` (#633)
+
+Calling `.context(...)` directly on an already-constructed `anyhow::Error` (e.g.
+`anyhow::Error::from(RepositoryError::NotFound("x")).context("while renaming")`, as the #633 tests
+do to prove `downcast_ref` walks the context chain) resolves to `anyhow::Error`'s own INHERENT
+`context()` method — it does NOT need the `anyhow::Context` trait, which exists only to add
+`.context(...)` to a `Result<T, E: std::error::Error>`. Importing `use anyhow::Context;` in a test
+that only ever calls `.context()` on an `Error` value (never on a `Result`) triggers `cargo clippy -- -D
+warnings`'s `unused_imports` and fails CI. Only import the trait when you're chaining `.context(...)`
+off something that returns `Result`, not `Error`.
+
+## Verify a sweep is COMPLETE with `cargo check --workspace --tests`, not just `grep` + a careful read (#633)
+
+When deleting a duplicated helper and converting call sites across many files in one pass, a
+sufficiently careful read-through can still miss one — #633's own salvaged patch missed
+`router/integrations/resolume.rs`'s `test_resolume_host`, which still called the deleted
+`map_repository_not_found` after every OTHER call site in that file had been converted. This is
+the exact #608 failure class this ticket exists to close, recurring inside the fix itself. `grep -rn
+"map_repository_not_found\|map_repository_error"` catches leftover REFERENCES, but the
+authoritative check on a Tier-0 box (no local `cargo test`) is `cargo check --workspace --tests` —
+it fails loudly (`E0425: cannot find value ... in this scope`) on a dangling call to a function you
+just deleted, and it is allowed to run locally per this project's Tier-0 policy. Run it after any
+multi-file deletion/rename sweep, before considering the sweep done.
+
 ## clippy `unused_must_use` on a discarded handler-call in a test (#588)
 
 A router handler that returns `Result<Json<T>, AppError>` makes `Json<T>` `#[must_use]` through
