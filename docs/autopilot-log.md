@@ -1029,3 +1029,33 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
   `fn_length_check.py` scoped to every touched file: zero violations, zero warnings (post-follow-up).
   Playwright/`cargo test`/`cargo clippy` did NOT run locally (Tier-0) — CI is the first real test
   execution after the supervisor's round integration.
+
+---
+
+## Round integration — v0.4.239 (#669 + #672 + #644 + #647), 2026-08-12
+
+**Supervisor-side record.** Four workers were dispatched in parallel worktrees; three returned
+complete and are integrated here. The fourth (#660 + #661 + #674) is PARKED, not lost — see below.
+
+- **Serial integration:** `2f664c05` (#669 + #672), `ffc4268f` (#644), `d3ab4651` (#647). Three
+  conflicts, all in append-only docs (`docs/autopilot-log.md` twice, `.claude/rules/sync-lww.md`
+  once) — resolved keep-both. The `sync-lww.md` one was substantive rather than mechanical: #644
+  had added a cascaded-restore invariant as item 6 while #647 was rewriting item 5 from "known open
+  flaw" to "fixed"; both survive, renumbered.
+- **`e8f1cfa7`** closes the two cosmetic review findings the #672 worker deliberately left: its
+  dispatch prompt forbade touching the #670 E2E spec (any edit there was to be read as "the refactor
+  changed behavior"), which was over-strict for a stale comment. The supervisor fixed the reference
+  to `ndi_pagehide.rs` afterwards.
+- **Local verification after all three merges:** `cargo fmt --all --check` clean; `cargo fmt --check`
+  inside `crates/presenter-ui` clean; `cargo check --workspace --tests` clean; `cargo check --target
+  wasm32-unknown-unknown` for `presenter-ui` clean; `npx tsc --noEmit` clean. The two wasm-side
+  checks are themselves only possible because of #669 — this is the first round where the frontend
+  crate was type-checked as part of integration rather than trusted to CI.
+- **#660 + #661 + #674 parked on `worktree-agent-a057faccfdf0ac801`** (10 commits, based on
+  `2990a1af`): the worker hit an account weekly-limit reset (2026-08-18) and the review subagent it
+  dispatched died before producing a finding. Its last, uncommitted edit was a security fix it had
+  caught on itself — its own new audit wiring would have written the raw provider API key into
+  `settings_audit` — salvaged from the working tree and committed verbatim as `cd7c0f56`. The branch
+  was deliberately NOT merged into this round: it bumps a vendored binary 6.9.1 → 7.2.130 on every
+  deploy target and rewrites the prod deploy's SSH setup, which is not something to ship on CI-green
+  alone with zero review passes. Full pickup checklist posted on all three tickets.
