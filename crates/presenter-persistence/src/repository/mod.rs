@@ -6,6 +6,8 @@ mod library;
 mod library_sync;
 #[cfg(test)]
 mod library_sync_tests;
+#[cfg(test)]
+mod library_trash_tests;
 mod playlist;
 mod presentation;
 #[cfg(test)]

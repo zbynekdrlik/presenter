@@ -664,6 +664,8 @@ mod ai_tests;
 #[cfg(test)]
 mod app_error_from_anyhow_tests;
 #[cfg(test)]
+mod libraries_trash_tests;
+#[cfg(test)]
 mod presentations_copy_tests;
 #[cfg(test)]
 mod presentations_paste_tests;
