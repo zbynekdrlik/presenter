@@ -888,4 +888,68 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
   library list rendered; `/stage` plays live NDI video 1280x720, `readyState` 4, 8 ms
   server→display latency; zero console errors or warnings on both pages. #633's centralized mapping
   confirmed live: unknown presentation / playlist / stage-layout ids all return 404 (not 500).
+
+## Round: #660 + #661 + #674 (bundled — AI OAuth reliability + deploy hardening)
+
+Worktree worker, branch `worktree-agent-a057faccfdf0ac801` off v0.4.239. All three named issues
+edit the same three deploy workflows + the AI router/client files, bundled per the supervisor's
+dispatch. Local-only cycle (worktree mode): version bump inherited (2990a1af), no push/PR/merge —
+supervisor integrates.
+
+- **#674** (`1808701a`): the "Setup SSH for deployment" step's bare `ssh-keyscan ... 2>/dev/null`
+  aborted the WHOLE step via the step's own `-e` the instant keyscan itself failed transiently,
+  before its own diagnostic guard could ever print — exactly the prod outage logged in the round
+  above. Wrapped in an `if...;then` retry loop (5 attempts, `-T 5`, 3s backoff — a command tested by
+  `if` is exempt from `-e`'s abort) + `ssh-keygen -R $HOST` before the scan to bound the runner's
+  persistently-growing `known_hosts`. Same fix, all three workflows. Functionally verified locally
+  with a scripted fake `ssh-keyscan` (fails 2x then succeeds; fails all 5) — genuinely reproduced the
+  original bug's control-flow and proved the fix recovers/reaches the diagnostic. `[no-test:
+  ci-yaml conditional logic]` per the sanctioned bypass category.
+- **#660** (`1deb82d0`, `7df85064`): root cause traced two ways — presenter's OWN code has zero
+  OAuth refresh logic (confirmed: `refresh_token` only in a test fixture), and the vendored
+  CLIProxyAPI binary was stuck on a March-2026 build (v6.9.1) because the "Deploy CLIProxyAPI" step's
+  guard only ever downloaded ONCE (`if [ ! -f ... ]`), never on a version bump. Live research (`gh
+  api repos/router-for-me/CLIProxyAPI/releases/latest` + its issue tracker) found upstream DOES ship
+  a built-in Claude OAuth auto-refresh, with matching bugs filed+fixed in April 2026 — after our
+  vendored build. Chose the vendor-bump fork (7.2.130) over a self-driven refresh loop: verifiable
+  from this sandbox, matches the ticket filer's own stated step-1-then-step-2 sequencing, and avoids
+  writing against Anthropic's undocumented private OAuth flow against real credentials. Fixed the
+  download guard to compare a `.cliproxy-version` marker (re-downloads on ANY mismatch), converted
+  the step to a real remote heredoc (the old locally-double-quoted `ssh "..."` form would have
+  interpolated `$CURRENT_VERSION` on the RUNNER, not the remote host — functionally proven wrong
+  with 4 scripted scenarios, incl. the exact stale-marker case). Added
+  `crates/presenter-server/src/ai/refresh.rs` (new sibling module, proxy.rs untouched at 921 lines):
+  a 15-min background task WARNing before the token expires (2h window), surfaced via a new
+  `expiring-soon` state in the header `AiStatusChip` and sharper wording in `ai_login_banner.rs`.
+  Filed **#675** (follow-up, `Scope-gate: needs-user-decision`) for the self-driven-refresh fallback,
+  contingent on whether the vendor bump actually holds across a real multi-day token lifecycle —
+  something only observable post-deploy, not provable from this sandbox.
+- **#661** (`1adf4d66` RED, `5e7b38bd` GREEN): genuine RED→GREEN commit pair for the model-validity
+  bug — `compute_ai_connected`/`compute_ai_status_error` widened to 3-arg signatures in the RED
+  commit but their BODIES still ignored `model_valid` (reproducing the old bug under the new
+  signature, `TODO(#661 RED)` markers), so the new model-invalid tests genuinely failed against it;
+  GREEN commit flips both to the real 3-way AND + third error branch. `ai/client.rs` gained a typed
+  `ModelsResponse`/`list_models()` (feature-shaped, its own tests pass immediately, bundled in RED
+  since unrelated to the stub). `update_settings` (PUT /ai/settings) now records a `settings_audit`
+  row via `extract_actor` + `Repository::record_settings_audit` — best-effort (logged, not
+  propagated) since it's NOT in the same transaction as the generic `set_app_setting` upsert (no
+  transactional variant exists for it; adding one was out of this ticket's scope). Added an
+  `/ai/status` deploy-time gate to all three "Verify deployment" steps (fails on `connected:false`).
+  Tier-0 constraint: `cargo test` is hook-blocked here, so RED/GREEN was proven by inspection +
+  `cargo check --workspace --tests` compiling cleanly at each stage, not by literally watching the
+  suite run — CI is the first real execution.
+- **Local verification (Tier-0, this box):** `cargo fmt --all -- --check` clean (workspace);
+  `rustfmt --edition 2021 --config-path rustfmt.toml --check` clean for the two touched
+  `presenter-ui` files (workspace-excluded, can't be workspace-fmt-checked from a worktree — see
+  playbook); `cargo check --workspace --tests` clean at every stage; `npx tsc --noEmit` clean;
+  `count_prod_lines.sh`/`fn_length_check.py` — no NEW violations, `proxy.rs` untouched (921/686
+  prod), `router/ai.rs` 615/800, new `ai/refresh.rs` 93/800; YAML + `bash -n` clean on all extracted
+  script blocks across all three workflows; functional scratch-script proofs for both the
+  ssh-keyscan retry AND the CLIProxyAPI version-guard logic (4+2 scenarios).
+- **Design + validation comments** posted to #660/#661/#674 individually before any code commit
+  (STEP 0 + approach), per protocol. Review pass: one fresh-context `general-purpose` subagent
+  dispatch (never the built-in review skill) — see PR for its findings/verdict.
+- Playbook updated: `.claude/skills/ci/SKILL.md` (the ssh-keyscan retry pattern for any future
+  "Setup SSH" step) and `.claude/skills/deploy/SKILL.md` (the CLIProxyAPI version-guard fix + the
+  local-vs-remote ssh interpolation trap + confirmed upstream auto-refresh facts).
   Dev (10.77.8.134:8080) on v0.4.238 dev channel.
