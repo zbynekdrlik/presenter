@@ -1,9 +1,13 @@
 pub(crate) mod agent;
 pub(crate) mod bible_validator;
 pub(crate) mod client;
+pub(crate) mod context_budget;
 pub(crate) mod proxy;
 pub(crate) mod tool_defs;
 pub(crate) mod tools;
+
+#[cfg(test)]
+mod agent_budget_tests;
 
 use serde::{Deserialize, Serialize};
 
@@ -80,6 +84,27 @@ pub struct ToolCallFunction {
 pub struct ToolAction {
     pub tool: String,
     pub result_preview: String,
+}
+
+/// Agent-loop errors that need a specific, friendly translation at the HTTP
+/// boundary — unlike most agent failures (network errors, provider 5xx),
+/// which are simply forwarded via `anyhow`'s `Display` as before.
+///
+/// Currently one variant: the context-budget refusal (#665). Its whole
+/// point is to NEVER let the provider's raw "prompt is too long" text (or
+/// anything resembling it) reach the operator UI — `run_agent` returns this
+/// BEFORE ever calling the provider once eviction can no longer bring the
+/// conversation under budget, and `router/ai.rs`'s `chat()` handler
+/// downcasts on it (the same typed-error-then-map-in-handler pattern used
+/// throughout this codebase, see `.claude/rules/repository-error-pattern.md`)
+/// to show this message instead of the generic `.to_string()`.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AiAgentError {
+    #[error(
+        "The conversation grew too large to send, even after trimming older tool results. \
+         Click \"Clear\" to reset the AI conversation, then try again."
+    )]
+    ContextBudgetExceeded,
 }
 
 #[cfg(test)]

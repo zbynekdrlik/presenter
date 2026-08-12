@@ -18,21 +18,6 @@ use presenter_core::{
     BibleSlideOutput,
 };
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
-/// `map_repository_not_found`, #584). Any other error falls through to the
-/// default 500 mapping.
-///
-/// #608: extracted from an inline `map_err` closure to match the named-helper
-/// pattern the other six modules touched by #607 already use.
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(crate) async fn get_active_bible_broadcast(
     State(state): State<AppState>,
@@ -104,14 +89,15 @@ pub(crate) async fn trigger_bible_broadcast(
         main_reference_label: payload.main_reference_label,
         translation_reference_label: payload.translation_reference_label,
     };
+    // #633: `RepositoryError::NotFound` maps to 404 by default via the
+    // centralized `From<anyhow::Error> for AppError` — `AppError::from` here
+    // just performs that conversion explicitly since this is the function's
+    // tail expression, not a `?`-propagated call.
     state
         .trigger_bible_passage(&payload.translation, &reference, text_overrides)
         .await
         .map(Json)
-        // #587: typed refusal (#584 pattern) — downcast to `RepositoryError`
-        // instead of matching the `Display` string, which silently stops
-        // matching the moment a `.context(...)` is added upstream.
-        .map_err(map_repository_not_found)
+        .map_err(AppError::from)
 }
 
 /// Request body for the new single-source-of-truth trigger endpoint.

@@ -14,6 +14,17 @@ All environment variables and feature flags for Presenter.
 | `PRESENTER_LOCAL_PUBLIC_IP` | unset                       | Church's outbound public IP. When set, `/api/network-mode` classifies a tunnel request with matching `CF-Connecting-IP` as `local` (LAN). See `cloudflare-tunnel-setup.md`. |
 | `PRESENTER_SYNC_PEER_URL`   | unset                       | Base URL of the peer Presenter instance for two-way song sync (#555). Set per env in the deploy units over Tailscale: SNV → `http://100.101.72.101` (PP), PP → `http://100.122.204.47` (SNV). Unset → sync disabled (dev + E2E). |
 
+### AI Assistant
+
+| Variable                             | Default                        | Description                                                                                                                                          |
+| ------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRESENTER_AI_API_URL`                | `http://localhost:8787/v1`      | OpenAI-compatible chat completions endpoint (the on-device CLIProxyAPI by default). Overridden by a persisted `/ai/settings` value if one is saved. |
+| `PRESENTER_AI_API_KEY`                | unset                           | Bearer token for the AI provider, if required.                                                                                                      |
+| `PRESENTER_AI_MODEL`                  | `claude-opus-4-6`               | Model name sent on every chat completion request.                                                                                                   |
+| `PRESENTER_AI_CONTEXT_BUDGET_BYTES`   | `300000`                        | Conservative byte-size ceiling on the request-side conversation, enforced on every agent-loop iteration (#665). Invalid/zero falls back to default. |
+| `PRESENTER_AI_MAX_TOKENS`             | `8192`                          | Cap on the PROVIDER's own reply size, sent as `max_tokens` on every chat completion request (#665). Invalid/zero falls back to default.             |
+| `PRESENTER_AI_IDLE_CLEAR_MINUTES`     | `30`                            | Idle window after which the shared AI conversation is auto-cleared on the next `/ai/chat` call (#665). Invalid/zero falls back to default.          |
+
 ### Companion Integration
 
 | Variable                      | Default | Description                      |

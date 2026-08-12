@@ -95,25 +95,9 @@ pub(super) async fn get_presentation_detail(
     }
 }
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text (#584; mirrors `libraries.rs`'s
-/// `map_repository_not_found`). `NotFound` (the URL resource itself is
-/// missing) maps to 404; `TargetNotFound` (a body-referenced resource is
-/// missing) maps to 422; `Conflict` (the resource exists but its current
-/// state forbids the operation — e.g. #652 F5's reorder length mismatch)
-/// maps to 409, mirroring `PasteSlidesError::AnchorVanished` below. Any
-/// other error falls through to the default 500.
-fn map_repository_error(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
-            AppError::unprocessable(*msg)
-        }
-        Some(presenter_persistence::RepositoryError::Conflict(msg)) => AppError::conflict(*msg),
-        _ => err.into(),
-    }
-}
+// #633: `RepositoryError::NotFound`/`TargetNotFound`/`Conflict` map to
+// 404/422/409 by default via the centralized `From<anyhow::Error> for
+// AppError` in `router.rs` — no per-call-site helper needed.
 
 #[instrument(skip_all)]
 pub(super) async fn update_presentation(
@@ -128,8 +112,7 @@ pub(super) async fn update_presentation(
     let presentation_uuid = super::parse_uuid("presentationId", &id)?;
     state
         .rename_presentation(PresentationId::from_uuid(presentation_uuid), name)
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -141,8 +124,7 @@ pub(super) async fn delete_presentation(
     let presentation_uuid = super::parse_uuid("presentationId", &id)?;
     state
         .delete_presentation(PresentationId::from_uuid(presentation_uuid))
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -161,8 +143,7 @@ pub(super) async fn copy_presentation(
             PresentationId::from_uuid(presentation_uuid),
             LibraryId::from_uuid(library_uuid),
         )
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok((
         StatusCode::CREATED,
         Json(PresentationDetailDto {
@@ -185,8 +166,7 @@ pub(super) async fn insert_slide(
             PresentationId::from_uuid(presentation_uuid),
             payload.position,
         )
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(Json(slides))
 }
 
@@ -202,8 +182,7 @@ pub(super) async fn duplicate_slide(
             PresentationId::from_uuid(presentation_uuid),
             SlideId::from_uuid(slide_uuid),
         )
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(Json(slides))
 }
 
@@ -219,8 +198,7 @@ pub(super) async fn delete_slide(
             PresentationId::from_uuid(presentation_uuid),
             SlideId::from_uuid(slide_uuid),
         )
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(Json(slides))
 }
 
@@ -238,8 +216,7 @@ pub(super) async fn reorder_slides(
         .collect();
     let slides = state
         .reorder_slides(PresentationId::from_uuid(presentation_uuid), order)
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(Json(slides))
 }
 
@@ -271,9 +248,7 @@ pub(super) async fn paste_slides(
         Err(crate::state::slides::PasteSlidesError::AnchorVanished) => Err(AppError::conflict(
             "the paste position no longer exists — refresh and try again",
         )),
-        Err(crate::state::slides::PasteSlidesError::Internal(err)) => {
-            Err(map_repository_error(err))
-        }
+        Err(crate::state::slides::PasteSlidesError::Internal(err)) => Err(err.into()),
     }
 }
 
@@ -295,8 +270,7 @@ pub(super) async fn update_slide_content(
             payload.group,
             payload.metadata,
         )
-        .await
-        .map_err(map_repository_error)?;
+        .await?;
     Ok(Json(updated))
 }
 

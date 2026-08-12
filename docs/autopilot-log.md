@@ -788,3 +788,67 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
 - **Local verify:** `npx tsc --noEmit` clean (0 diagnostics). No Rust touched — `cargo fmt`/`cargo
   check` not applicable. Playwright itself did NOT run locally (Tier-0, self-hosted-runner-only) —
   CI proves the 4 new specs after the supervisor's round integration.
+
+## 2026-08-11 — round 1 (v0.4.237, PR #671, merge 0f71b860)
+
+Fleet dispatch: 3 parallel `isolation: "worktree"` workers, serial supervisor integration, one CI cycle.
+
+- **#637** NDI playback guard leaked its `pause`/`ended`/`suspend`/`visibilitychange` document listeners per `<NdiVideo>` unmount — `install()` now returns a disposer called from `on_cleanup`. Ticket title said `keydown`; corrected to `visibilitychange` (no keydown listener ever existed there). Two new E2E: listener-leak regression + the first-ever rejected-`play()` coverage of `play_and_log`'s `Err` branch.
+- **#638** tablet landscape-primary/secondary 180° flip — CSS `orientation` is 2-state and cannot express it; closed via lock/manifest specificity + a JS orientation watcher, with E2E driving `screen.orientation` directly.
+- **#640** operator version-drift: baseline now self-heals after a failed boot `/healthz` (one blip used to disable drift detection for the tab's whole life), banner no longer overlaps the sticky header, E2E gated on real app state instead of a 3s wall clock.
+- **#641** double-submit E2E for the 4 genuinely untested guarded paths (library create, playlist create, presentation paste-create, import-create). The ticket's own guessed list was wrong — rename shares create's handler, delete is idempotent and was never guarded.
+
+**CI caught a real regression, first try.** #637's own new leak test failed on run 31504075070: `dispose(self)` consumes by value, so Rust's drop glue ran `Drop::drop` immediately after, double-calling `remove_listeners()`. Harmless to the DOM, fatal to a net add/remove count, and contrary to the Drop impl's stated "safety net only" intent. Fixed with a `disposed: Cell<bool>` check-and-set (`3f74f32b`) — the test was never weakened.
+
+Integration notes: one merge conflict, both sides pure appends to `.claude/skills/ci/SKILL.md` — kept both. `.claude/worktrees/` was untracked and one `git add -A` away from being committed; now gitignored.
+
+Filed and left open: **#669** (cargo cannot fmt/check the workspace-excluded `presenter-ui` from inside a nested `.claude/worktrees/` path — cargo climbs past the worktree's own excluding root into the main checkout; `rustfmt`-direct is the fmt workaround, compile-checking has none) and **#670** (a separate `pagehide` listener leak in `ndi_video.rs`, same class as #637, different lifecycle). Both validated STILL_VALID.
+
+Decision recorded: **#667 closed** — slide multi-select keeps its current interaction; the Shift+click / drag-select / insertion-indicator redesign is deliberately not built.
+
+Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod SNV and dev both serving 0.4.237, operator/stage/tablet 200 on both.
+---
+
+## 2026-08-12 — #670 pagehide listener leak on every WHEP reconnect (worktree round, not yet merged)
+
+- **No version bump** — bug-fix-only change, dispatched as a per-issue worktree in a fleet round;
+  supervisor integrates.
+- **Design comments posted BEFORE first code commit:**
+  - Validated: https://github.com/zbynekdrlik/presenter/issues/670#issuecomment-5268075855 —
+    re-confirmed `install_pagehide_teardown()` still ends in an unconditional `cb.forget()`, is still
+    called on every `Ok(ConnectOutcome::Connected(_))` (mount AND every reconnect), and neither
+    teardown site (reconnect loop's old-session teardown, `on_cleanup`) ever removed it. Confirmed
+    #637 (merged, in the current `main`/`dev` base) never touched this code.
+  - Approach: https://github.com/zbynekdrlik/presenter/issues/670#issuecomment-5268072869 — chose to
+    mirror #637's `PlaybackGuardHandle` dispose-on-teardown shape exactly (a returned
+    `Option<PagehideHandle>` stored on `ActiveConnection`, disposed at both existing teardown sites,
+    same `disposed: Cell<bool>` double-dispose guard), over the alternative of a single page-scoped
+    listener with a mutable "current URL" cell (rejected: introduces a new shared-mutable-state
+    lifecycle with its own race risk, for no benefit over reusing the already-proven #637 shape). A
+    technical implementation choice, not a user-facing one — decided here per the worker's own call,
+    despite the original filing's `Scope-gate: needs-user-decision` (superseded by this dispatch's
+    explicit instruction that the choice is the worker's to make).
+- **Commit `f85e5421` [red]:** `tests/e2e/stage-ndi-pagehide-teardown.spec.ts` — since this CI runner
+  has no NDI SDK (`connect_whep()` never reaches `Ok(Connected(_))` for real), the test intercepts
+  the WHEP POST (`page.route`) and answers it with a genuine SDP answer generated by an ephemeral
+  in-page `RTCPeerConnection`, forces deterministic reconnects by patching
+  `RTCPeerConnection.prototype.oniceconnectionstatechange` to capture every client `pc` and firing a
+  synthetic "failed" ICE event on the latest one, and tracks the net `window` "pagehide"
+  add/remove-listener count (same instrumentation shape as the #637 test in
+  `stage-ndi-playback-guard.spec.ts`) across 3 forced reconnect cycles + unmount.
+- **Commit `92d80f23` [green]:** `install_pagehide_teardown()` now returns `Option<PagehideHandle>`
+  instead of `.forget()`-leaking; the handle is stored on `ActiveConnection` and disposed at both
+  teardown sites.
+- **Deep-review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per
+  #363): 0 🔴 0 🟡 2 🔵. Both actioned: (1) file-size suggestion (`ndi_video.rs` now 987/1000 lines)
+  filed as a cross-cutting follow-up rather than risked blind in a nested-worktree job with no local
+  compile-check for `presenter-ui` — #672; (2) the console-allow-list regex's assumption about
+  `RtcIceConnectionState::Failed`'s `{:?}` Debug format verified directly against web-sys 0.3.99 docs
+  (docs.rs) — confirmed correct, no change needed.
+- **#669 nested-worktree trap:** `crates/presenter-ui` cannot be `cargo check`ed from inside this
+  worktree (climbs into the main checkout's own excluding workspace). Verified the Rust change via
+  `rustfmt --edition 2021 --config-path rustfmt.toml --check` only (parses + formats clean, exit 0) —
+  no full type/borrow-check available locally; CI is the first real compile.
+- **Local verify:** `npm ci && npx tsc --noEmit` clean for the new spec file. `rustfmt --check` clean
+  for the Rust file. Playwright itself did NOT run locally (Tier-0 + #669 trap) — CI is the first
+  real execution of the new spec, after the supervisor's round integration.

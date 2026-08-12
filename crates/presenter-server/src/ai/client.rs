@@ -1,7 +1,39 @@
-use super::AiSettings;
+use super::{AiAgentError, AiSettings};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use tracing::error;
+
+/// Cap on how much of a provider's error BODY is written to the server log.
+/// The real outage this ticket fixes left zero trace in journalctl because
+/// nothing logged at all — but an UNBOUNDED body (a proxy returning a large
+/// HTML/JSON error page) would just trade that failure for flooding
+/// journald instead, so this stays generous but bounded.
+const LOGGED_BODY_MAX_CHARS: usize = 2000;
+
+/// Substrings that indicate the PROVIDER itself rejected the request for
+/// being too large — as opposed to any other 4xx (bad model name, invalid
+/// auth, malformed JSON, etc.). Matched case-insensitively against the raw
+/// error body. When one of these fires, the operator sees the SAME friendly
+/// "conversation grew too large" wording as the client-side budget refusal
+/// (`AiAgentError::ContextBudgetExceeded`) instead of the provider's raw
+/// text — belt-and-braces alongside the request-side budget, since the
+/// budget is a conservative BYTE estimate (excludes the system prompt and
+/// tool schemas) and could in principle still under-shoot the provider's
+/// own real token-based limit (#665 review finding).
+const CONTEXT_LENGTH_ERROR_MARKERS: &[&str] = &[
+    "prompt is too long",
+    "context_length",
+    "maximum context length",
+    "too many tokens",
+];
+
+fn looks_like_context_length_error(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    CONTEXT_LENGTH_ERROR_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
 
 /// Shared HTTP client for `/ai/status` connectivity probes ONLY (#622
 /// post-merge review finding 3a). `check_connectivity` is polled every 5s by
@@ -21,6 +53,32 @@ fn connectivity_client() -> &'static reqwest::Client {
     })
 }
 
+/// Conservative default response budget when `PRESENTER_AI_MAX_TOKENS` is
+/// unset. This bounds the PROVIDER's REPLY size — distinct from (and much
+/// smaller than) the request-side context budget in `ai::context_budget` —
+/// so a single runaway completion can't itself blow the context window on
+/// the next iteration, and a request that would otherwise have no ceiling
+/// at all always carries one (#665).
+pub(crate) const DEFAULT_MAX_TOKENS: u32 = 8192;
+
+/// Pure parser for the max-tokens env var — takes the raw value directly
+/// rather than reading `std::env` itself, so it is unit-testable without
+/// mutating process-global state (which would race against every OTHER
+/// test in this binary reading the same key; #665 review finding, same
+/// rationale as `context_budget::parse_context_budget_bytes`).
+fn parse_max_tokens(raw: Option<&str>) -> u32 {
+    raw.and_then(|v| v.parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_TOKENS)
+}
+
+/// Read the configured max-tokens response cap: env override, else the
+/// conservative default. Re-read on every call, same rationale as
+/// `context_budget::context_budget_bytes`.
+pub(crate) fn max_tokens() -> u32 {
+    parse_max_tokens(std::env::var("PRESENTER_AI_MAX_TOKENS").ok().as_deref())
+}
+
 /// OpenAI-compatible chat completion request.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +89,10 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<String>,
+    /// Always sent (never omitted) — an unbounded response is exactly the
+    /// kind of thing that can grow the conversation past the context
+    /// budget on the next iteration (#665).
+    pub max_tokens: u32,
 }
 
 /// OpenAI-compatible chat completion response.
@@ -85,6 +147,7 @@ pub async fn call_chat_completions(
         messages: messages.to_vec(),
         tools: tools.map(|t| t.to_vec()),
         tool_choice: tools.map(|_| "auto".to_string()),
+        max_tokens: max_tokens(),
     };
 
     let client = reqwest::Client::new();
@@ -96,11 +159,24 @@ pub async fn call_chat_completions(
         }
     }
 
-    let response = req
+    // Every provider-side failure below is logged server-side at WARN/ERROR
+    // BEFORE the error is returned. Before #665 nothing here logged at all —
+    // the raw error reached the SSE stream to the browser and journalctl had
+    // zero trace of it, which is why the 2026-08-09 outage was
+    // retroactively undiagnosable (a full-month journalctl grep on PP found
+    // zero matches for "prompt is too long" / "invalid_request_error" /
+    // "context_length" / any 4xx/5xx).
+    let response = match req
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
-        .context("failed to reach AI API")?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, url, "AI provider request failed to send (network/timeout)");
+            return Err(anyhow::Error::from(e).context("failed to reach AI API"));
+        }
+    };
 
     if !response.status().is_success() {
         let status = response.status();
@@ -108,6 +184,25 @@ pub async fn call_chat_completions(
             .text()
             .await
             .unwrap_or_else(|_| "no body".to_string());
+        // Log the FULL body server-side (this is what makes the next outage
+        // diagnosable from journalctl), but cap what actually reaches the
+        // log line so a large provider error page can't flood journald.
+        let logged_body: String = body.chars().take(LOGGED_BODY_MAX_CHARS).collect();
+        error!(
+            status = %status,
+            body = %logged_body,
+            url,
+            "AI provider chat completion request failed"
+        );
+        if looks_like_context_length_error(&body) {
+            // The provider ITSELF rejected the request as too large — the
+            // request-side budget (a conservative byte estimate that
+            // excludes the system prompt/tool schemas) can in principle
+            // still under-shoot the provider's real limit. Show the same
+            // friendly wording as the client-side refusal rather than the
+            // provider's raw text.
+            return Err(AiAgentError::ContextBudgetExceeded.into());
+        }
         anyhow::bail!("AI API returned {status}: {body}");
     }
 
@@ -138,4 +233,234 @@ pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- AC4: max_tokens is always present on the serialized request ---
+
+    #[test]
+    fn chat_completion_request_serializes_a_max_tokens_field() {
+        let request = ChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+            tools: None,
+            tool_choice: None,
+            max_tokens: 4321,
+        };
+        let value = serde_json::to_value(&request).expect("must serialize");
+        assert_eq!(
+            value.get("max_tokens"),
+            Some(&serde_json::json!(4321)),
+            "serialized request must carry a max_tokens field: {value}"
+        );
+    }
+
+    #[test]
+    fn max_tokens_env_override_and_default() {
+        // Pure-parser coverage, no env mutation (a mutated env var races
+        // against every other test in this binary that reads the same key —
+        // #665 review finding).
+        assert_eq!(parse_max_tokens(None), DEFAULT_MAX_TOKENS);
+        assert_eq!(parse_max_tokens(Some("2048")), 2048);
+        assert_eq!(parse_max_tokens(Some("0")), DEFAULT_MAX_TOKENS);
+        assert_eq!(parse_max_tokens(Some("not-a-number")), DEFAULT_MAX_TOKENS);
+    }
+
+    // --- AC7: a provider-side failure logs a server-side WARN/ERROR line
+    // carrying the provider's error text ---
+
+    /// A minimal `tracing::Subscriber` that captures the formatted fields of
+    /// every ERROR (or higher-severity) event, so a test can assert a log
+    /// line was actually emitted and what it said — without a real log
+    /// sink. Same shape as `resolume::backoff_tests::ErrorCounter`, extended
+    /// to capture message TEXT (not just a count) since AC7 requires
+    /// asserting the provider's error body reached the log line.
+    struct CapturedLogs {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct FieldVisitor(String);
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.push_str(&format!("{}={:?} ", field.name(), value));
+        }
+    }
+
+    impl tracing::Subscriber for CapturedLogs {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() <= tracing::Level::WARN
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() <= tracing::Level::WARN {
+                let mut visitor = FieldVisitor(String::new());
+                event.record(&mut visitor);
+                self.lines.lock().unwrap().push(visitor.0);
+            }
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn provider_error_response_is_logged_server_side_with_the_error_body() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let _guard = tracing::subscriber::set_default(CapturedLogs {
+            lines: lines.clone(),
+        });
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": "prompt is too long: 512000 tokens > 200000 maximum"}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = AiSettings {
+            api_url: mock_server.uri(),
+            api_key: None,
+            model: "test-model".to_string(),
+            system_prompt_extra: None,
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+
+        let result = call_chat_completions(&messages, None, &settings).await;
+        let err = result.expect_err("a 400 response must propagate as an error");
+        // A "prompt is too long"-shaped rejection is translated to the
+        // typed ContextBudgetExceeded error (see the belt-and-braces
+        // provider-side detection below) — the raw body must still reach
+        // the LOG line even though the returned error is now typed/friendly.
+        assert!(
+            matches!(
+                err.downcast_ref::<AiAgentError>(),
+                Some(AiAgentError::ContextBudgetExceeded)
+            ),
+            "a context-length-shaped provider rejection must be the typed \
+             ContextBudgetExceeded error, got: {err:?}"
+        );
+
+        let captured = lines.lock().unwrap();
+        let joined = captured.join("\n");
+        assert!(
+            !captured.is_empty(),
+            "a provider-side failure must emit at least one WARN/ERROR log line"
+        );
+        assert!(
+            joined.contains("prompt is too long"),
+            "the log line must carry the provider's actual error body, got: {joined}"
+        );
+    }
+
+    // --- #665 review finding: the provider can reject a request as too
+    // large on its OWN (the request-side byte budget is a conservative
+    // estimate and could in principle under-shoot the provider's real
+    // limit) — that rejection must ALSO show the friendly wording, not the
+    // provider's raw text, but an UNRELATED 4xx must not be swallowed into
+    // the same friendly message. ---
+
+    #[tokio::test]
+    async fn provider_context_length_rejection_is_translated_to_the_friendly_error() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": "maximum context length exceeded"}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = AiSettings {
+            api_url: mock_server.uri(),
+            api_key: None,
+            model: "test-model".to_string(),
+            system_prompt_extra: None,
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+
+        let result = call_chat_completions(&messages, None, &settings).await;
+        let err = result.expect_err("a context-length-shaped 4xx must be an error");
+        assert!(
+            matches!(
+                err.downcast_ref::<AiAgentError>(),
+                Some(AiAgentError::ContextBudgetExceeded)
+            ),
+            "must be translated to the typed ContextBudgetExceeded error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_non_context_length_4xx_stays_a_generic_error() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error": {"message": "invalid api key"}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = AiSettings {
+            api_url: mock_server.uri(),
+            api_key: None,
+            model: "test-model".to_string(),
+            system_prompt_extra: None,
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+
+        let result = call_chat_completions(&messages, None, &settings).await;
+        let err = result.expect_err("an auth failure must still be an error");
+        assert!(
+            err.downcast_ref::<AiAgentError>().is_none(),
+            "an unrelated 4xx must NOT be translated to ContextBudgetExceeded, got: {err:?}"
+        );
+        assert!(err.to_string().contains("invalid api key"));
+    }
+
+    #[tokio::test]
+    async fn network_failure_is_also_logged_server_side() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let _guard = tracing::subscriber::set_default(CapturedLogs {
+            lines: lines.clone(),
+        });
+
+        let settings = AiSettings {
+            // Reserved/unbound port — connection refused immediately, no
+            // real network access required.
+            api_url: "http://127.0.0.1:1".to_string(),
+            api_key: None,
+            model: "test-model".to_string(),
+            system_prompt_extra: None,
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+
+        let result = call_chat_completions(&messages, None, &settings).await;
+        let err = result.expect_err("an unreachable provider must be an error");
+        assert!(
+            err.downcast_ref::<AiAgentError>().is_none(),
+            "a network failure must not be mistaken for a context-length rejection, got: {err:?}"
+        );
+
+        let captured = lines.lock().unwrap();
+        let joined = captured.join("\n");
+        assert!(
+            !captured.is_empty(),
+            "a network-level failure to reach the AI provider must also be logged server-side"
+        );
+        assert!(
+            joined.contains("127.0.0.1:1") || joined.to_lowercase().contains("connect"),
+            "the log line must carry the underlying connect failure or target, got: {joined}"
+        );
+    }
 }

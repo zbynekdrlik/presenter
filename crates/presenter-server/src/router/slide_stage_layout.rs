@@ -51,23 +51,21 @@ pub(super) async fn set_slide_stage_layout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Maps a `assign_slide_stage_layout` error to its HTTP status via TWO typed
-/// error types — never a blanket `AppError::bad_request` (#615: that hid a
-/// genuine internal failure, e.g. a DB error, as a benign client-side 400).
-/// `StageLayoutRefusal` (bad/unknown layout code) maps to `bad_request_message`
-/// (400) — the SAME client-error status this route has ALWAYS returned for
-/// bad layout codes. `RepositoryError::NotFound` (a missing `presentation_id`
-/// or `slide_id` — both URL-path resources) maps to `not_found` (404, #629):
-/// before #629 these were bare `anyhow!`s that also fell through to 500. Any
-/// other error still falls through to the router's default 500 mapping.
+/// Maps a `assign_slide_stage_layout` error to its HTTP status — never a
+/// blanket `AppError::bad_request` (#615: that hid a genuine internal
+/// failure, e.g. a DB error, as a benign client-side 400).
+/// `StageLayoutRefusal` (bad/unknown layout code) is the ONE domain error
+/// this file owns — it maps to `bad_request_message` (400), the SAME
+/// client-error status this route has ALWAYS returned for bad layout codes.
+/// Everything else — including `RepositoryError::NotFound` (a missing
+/// `presentation_id` or `slide_id`, both URL-path resources, #629) — falls
+/// through to `err.into()`, which resolves it via the centralized
+/// `From<anyhow::Error> for AppError` mapping (#633): 404 for `NotFound`, 500
+/// for a genuine internal failure. No per-file `RepositoryError` downcast
+/// needed here anymore.
 fn map_slide_stage_layout_error(err: anyhow::Error) -> AppError {
     if let Some(refusal) = err.downcast_ref::<StageLayoutRefusal>() {
         return AppError::bad_request_message(refusal.to_string());
-    }
-    if let Some(presenter_persistence::RepositoryError::NotFound(msg)) =
-        err.downcast_ref::<presenter_persistence::RepositoryError>()
-    {
-        return AppError::not_found(*msg);
     }
     err.into()
 }

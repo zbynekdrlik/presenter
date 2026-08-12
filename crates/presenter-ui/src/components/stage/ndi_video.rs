@@ -137,11 +137,14 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         stage_health: stage_health_setter,
     };
 
-    // Holds the active connection: the WHEP session + the watchdog observing
-    // its health. Cleanup must close both — see on_cleanup below.
+    // Holds the active connection: the WHEP session, the watchdog observing
+    // its health, and the pagehide-teardown handle installed for THIS
+    // session (#670). Cleanup must dispose/close all three — see on_cleanup
+    // below and the reconnect loop's own old-session teardown.
     struct ActiveConnection {
         session: WhepSession,
         watchdog: Watchdog,
+        pagehide: Option<PagehideHandle>,
     }
     // Use new_local() instead of new() because Watchdog holds Rc<Cell<bool>>
     // which is !Send + !Sync. LocalStorage drops the Send+Sync requirement;
@@ -269,8 +272,12 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             move || flag.set(true),
                         );
 
-                        install_pagehide_teardown(&session);
-                        session_holder.set_value(Some(ActiveConnection { session, watchdog }));
+                        let pagehide = install_pagehide_teardown(&session);
+                        session_holder.set_value(Some(ActiveConnection {
+                            session,
+                            watchdog,
+                            pagehide,
+                        }));
 
                         // When this session was established — used to decide
                         // whether its later drop was a transient blip (reset
@@ -305,6 +312,13 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             session_holder.try_update_value(|v| v.take()).flatten()
                         {
                             active.watchdog.stop();
+                            // #670: dispose the OLD session's pagehide listener
+                            // before the next `connect_whep` installs a new
+                            // one — without this each reconnect left the prior
+                            // listener registered on `window` forever.
+                            if let Some(pagehide) = active.pagehide {
+                                pagehide.dispose();
+                            }
                             if let Some(url) = &active.session.resource_url {
                                 dispatch_delete(url);
                             }
@@ -371,6 +385,11 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         let active = session_holder.try_update_value(|opt| opt.take()).flatten();
         if let Some(active) = active {
             active.watchdog.stop();
+            // #670: dispose the pagehide listener on PAGE-level teardown too
+            // (mount unmounting entirely, not just a mid-mount reconnect).
+            if let Some(pagehide) = active.pagehide {
+                pagehide.dispose();
+            }
             if let Some(url) = &active.session.resource_url {
                 dispatch_delete(url);
             }
@@ -525,27 +544,80 @@ fn dispatch_delete(url: &str) {
 /// tear down the JS context before Leptos's `on_cleanup` runs; pagehide
 /// fires earlier in the unload sequence so the DELETE makes it out the door.
 ///
-/// The closure is intentionally `forget()`-leaked into JS. Storing the
-/// handle on `WhepSession` would require `Closure<dyn FnMut()>: Send +
-/// Sync` (Leptos `StoredValue` bound) which the wasm-bindgen type doesn't
-/// implement and can't safely be forced via SendWrapper without unsafe
-/// markers. The leak IS bounded: one closure per `WhepSession` lifetime,
-/// each capturing a short `url: String`. Per-page-load magnitude on the
-/// stage display use case is ≪1 KB total — the same as a single icon —
-/// and pagehide fires only at page unload, releasing the leaked state
-/// along with everything else.
-fn install_pagehide_teardown(session: &WhepSession) {
-    let Some(window) = leptos::web_sys::window() else {
-        return;
-    };
-    let Some(url) = session.resource_url.clone() else {
-        return;
-    };
+/// Returns a [`PagehideHandle`] the caller MUST dispose of whenever the
+/// `WhepSession` it was installed for is torn down (the reconnect loop's
+/// old-session teardown AND `on_cleanup` — see `ActiveConnection`).
+/// Symmetric with `ndi_playback_guard::install`'s handle (#637) — NOT
+/// `forget()`-leaked.
+///
+/// PRIOR versions `forget()`-leaked the closure, assuming this runs (at
+/// most) once per `<NdiVideo>` mount. False: it's called from the reconnect
+/// loop's `Ok(ConnectOutcome::Connected(_))` arm, i.e. on EVERY successful
+/// WHEP connect, including every reconnect a mount goes through — so a
+/// long-running stage display accumulated one more permanent `window`-level
+/// listener per reconnect, forever (#670).
+fn install_pagehide_teardown(session: &WhepSession) -> Option<PagehideHandle> {
+    let window = leptos::web_sys::window()?;
+    let url = session.resource_url.clone()?;
     let cb = Closure::<dyn FnMut()>::new(move || {
         dispatch_delete(&url);
     });
     let _ = window.add_event_listener_with_callback("pagehide", cb.as_ref().unchecked_ref());
-    cb.forget();
+    Some(PagehideHandle {
+        window,
+        cb,
+        disposed: std::cell::Cell::new(false),
+    })
+}
+
+/// Disposer returned by [`install_pagehide_teardown`]. Owns the `pagehide`
+/// `Closure` — NOT `forget()`-leaked — so [`dispose`](Self::dispose) can
+/// remove it before dropping it. Same shape as `PlaybackGuardHandle`
+/// (`ndi_playback_guard.rs`, #637): `dispose` is the PRIMARY teardown path;
+/// `Drop` below is only a defense-in-depth safety net.
+struct PagehideHandle {
+    window: leptos::web_sys::Window,
+    cb: Closure<dyn FnMut()>,
+    /// Guards `remove_listener` against running its `removeEventListener`
+    /// call twice: `dispose(self)` consumes `self` by value, and Rust's
+    /// drop glue then runs `Drop::drop` immediately after, on EVERY
+    /// ordinary teardown — not just a hypothetical forgotten-dispose case.
+    /// Harmless to the DOM (removing an already-removed listener is a
+    /// no-op) but would defeat a net add/remove-count E2E assertion, same
+    /// as `PlaybackGuardHandle::disposed` (#637) — that exact regression
+    /// cost that fix a full CI cycle.
+    disposed: std::cell::Cell<bool>,
+}
+
+impl PagehideHandle {
+    /// Remove the `pagehide` listener — only the FIRST time this runs for a
+    /// given handle. `dispose()` and `Drop` both call this.
+    fn remove_listener(&self) {
+        if self.disposed.replace(true) {
+            return;
+        }
+        let _ = self
+            .window
+            .remove_event_listener_with_callback("pagehide", self.cb.as_ref().unchecked_ref());
+    }
+
+    /// Remove the listener, then drop the closure. The PRIMARY teardown
+    /// path — call it explicitly wherever the owning `WhepSession` is torn
+    /// down.
+    fn dispose(self) {
+        self.remove_listener();
+    }
+}
+
+/// Safety net mirroring `PlaybackGuardHandle`'s `Drop` (#637): removes the
+/// listener even if a handle is ever dropped without an explicit
+/// `dispose()`, so a stale listener can never fire on a destroyed `Closure`
+/// (which would panic). Guarded by `disposed`, so a true no-op on the
+/// normal path where `dispose()` already ran.
+impl Drop for PagehideHandle {
+    fn drop(&mut self) {
+        self.remove_listener();
+    }
 }
 
 /// Shared holder for an event-listener `Closure` that a `Promise` constructor

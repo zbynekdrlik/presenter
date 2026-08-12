@@ -1,7 +1,10 @@
-use super::{AiSettings, ChatMessage, ToolAction, ToolCallFunction, ToolCallMessage};
+use super::context_budget::{
+    context_budget_bytes, enforce_context_budget, estimate_conversation_bytes,
+};
+use super::{AiAgentError, AiSettings, ChatMessage, ToolAction, ToolCallFunction, ToolCallMessage};
 use crate::state::AppState;
 use serde_json::{json, Value};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 const MAX_ITERATIONS: usize = 100;
 
@@ -485,6 +488,68 @@ async fn execute_tool_calls(
     }
 }
 
+/// Enforce the per-iteration context budget BEFORE building the outgoing
+/// request. Returns `Err(AiAgentError::ContextBudgetExceeded)` when eviction
+/// could not bring the conversation under budget — the current turn's own
+/// content, with nothing left to trim, is already too large. The caller
+/// (`run_agent`) must refuse to call the provider in that case rather than
+/// risk its raw, operator-hostile "prompt is too long" rejection with no
+/// diagnosis trail (#665). Extracted from `run_agent` to keep it under the
+/// 120-line function cap; logic unchanged.
+fn enforce_budget_or_refuse(
+    conversation: &mut Vec<ChatMessage>,
+    iteration: usize,
+) -> anyhow::Result<()> {
+    let budget = context_budget_bytes();
+    if enforce_context_budget(conversation, budget) {
+        info!(
+            iteration,
+            budget, "AI context budget enforcement evicted older conversation content"
+        );
+    }
+    let estimated = estimate_conversation_bytes(conversation);
+    if estimated > budget {
+        error!(
+            iteration,
+            budget,
+            estimated_bytes = estimated,
+            "AI conversation still exceeds the context budget after eviction — refusing to call the provider"
+        );
+        return Err(AiAgentError::ContextBudgetExceeded.into());
+    }
+    Ok(())
+}
+
+/// Convert a response's tool calls into conversation-message `tool_calls`
+/// and push the assistant "requesting tool calls" message. Extracted from
+/// `run_agent` to keep it under the 120-line cap; behavior unchanged.
+fn push_assistant_tool_call_message(
+    conversation: &mut Vec<ChatMessage>,
+    content: Option<String>,
+    tool_calls: &[super::client::ResponseToolCall],
+) {
+    let tc_messages: Vec<ToolCallMessage> = tool_calls
+        .iter()
+        .map(|tc| ToolCallMessage {
+            id: tc.id.clone(),
+            call_type: tc.call_type.clone(),
+            function: ToolCallFunction {
+                name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+            },
+        })
+        .collect();
+
+    conversation.push(ChatMessage {
+        role: "assistant".to_string(),
+        content,
+        tool_calls: Some(tc_messages),
+        tool_call_id: None,
+        name: None,
+        preview: None,
+    });
+}
+
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
@@ -515,6 +580,14 @@ pub async fn run_agent(
     let original_user_message = user_message.to_string();
 
     for iteration in 0..MAX_ITERATIONS {
+        // Size-budgeted context enforcement — run on EVERY iteration, not
+        // just once at the end of a turn. Without this, a single turn that
+        // makes many tool calls resends an ever-growing conversation on
+        // every one of those calls (quadratic growth within one turn),
+        // which is the root cause of the 2026-08-09 "prompt is too long"
+        // outage (#665).
+        enforce_budget_or_refuse(conversation, iteration)?;
+
         let messages = build_api_messages(&system_prompt, conversation)?;
 
         info!(iteration, "AI agent loop iteration");
@@ -532,27 +605,7 @@ pub async fn run_agent(
         // Check for tool calls
         if let Some(ref tool_calls) = msg.tool_calls {
             if !tool_calls.is_empty() {
-                // Add assistant message with tool calls to conversation
-                let tc_messages: Vec<ToolCallMessage> = tool_calls
-                    .iter()
-                    .map(|tc| ToolCallMessage {
-                        id: tc.id.clone(),
-                        call_type: tc.call_type.clone(),
-                        function: ToolCallFunction {
-                            name: tc.function.name.clone(),
-                            arguments: tc.function.arguments.clone(),
-                        },
-                    })
-                    .collect();
-
-                conversation.push(ChatMessage {
-                    role: "assistant".to_string(),
-                    content: msg.content.clone(),
-                    tool_calls: Some(tc_messages),
-                    tool_call_id: None,
-                    name: None,
-                    preview: None,
-                });
+                push_assistant_tool_call_message(conversation, msg.content.clone(), tool_calls);
 
                 execute_tool_calls(
                     tool_calls,
@@ -586,6 +639,13 @@ pub async fn run_agent(
 
         return Ok((response_text, actions));
     }
+
+    // MAX_ITERATIONS exhausted without a text response. This path used to
+    // return without trimming at all (#665) — the oversized conversation
+    // was then written back to global state as-is (router/ai.rs), poisoning
+    // the NEXT operator's turn with an already-huge starting baseline. Apply
+    // the same end-of-turn trim as the success path.
+    trim_conversation(conversation, 10);
 
     Ok((
         "I reached the maximum number of processing steps. Please try a simpler request."

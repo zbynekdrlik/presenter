@@ -1,20 +1,30 @@
 ---
 paths:
   - "crates/presenter-persistence/src/repository/**"
+  - "crates/presenter-server/src/router.rs"
   - "crates/presenter-server/src/router/**"
   - "crates/presenter-server/src/state/**"
   - "crates/presenter-ndi/src/manager/**"
   - "crates/presenter-ndi/src/pipeline/**"
 ---
 
-# Typed repository-refusal → HTTP-status pattern (#584, extended by #586/#587, #588, #589)
+# Typed repository-refusal → HTTP-status pattern (#584, extended by #586/#587, #588, #589, centralized by #633)
 
 When a repository/state method refuses because the URL's resource doesn't exist, it must return
 the router a **typed** error, never a bare `anyhow!("... not found")` string — a bare anyhow falls
 through the router's default `impl From<anyhow::Error> for AppError` to a 500, even though the
 correct response is 404 (or 422 for a body-referenced missing target).
 
-## The pattern
+**`paths:` gotcha (#633 review finding):** `"crates/presenter-server/src/router/**"` matches files
+INSIDE the `router/` subdirectory — it does NOT match the sibling file `crates/presenter-server/src/router.rs`
+itself, even though `router.rs` is the module root for everything under `router/`. Confirmed
+empirically against four independent glob matchers (Claude Code's own `ignore` npm package,
+`minimatch`, Python `fnmatch`, `pathlib`): matching is segment-by-segment split on `/`, and the
+literal segment `router` never equals the literal segment `router.rs`. This is why `router.rs` is
+listed as its own explicit `paths:` entry above — a `paths:` list for a `<name>/` + `<name>.rs`
+pair always needs BOTH entries, never just the directory glob.
+
+## The pattern (centralized since #633 — read this before adding a per-file helper)
 
 1. **Producer** (repository or state method): `RepositoryError::NotFound(&'static str)` (URL
    resource missing → 404), `RepositoryError::TargetNotFound(&'static str)` (a resource named in
@@ -26,29 +36,30 @@ correct response is 404 (or 422 for a body-referenced missing target).
    `crates/presenter-persistence/src/repository/util.rs`. Use `.ok_or(RepositoryError::NotFound("..."))?`
    or `return Err(RepositoryError::NotFound("...").into());` — see "clippy gotcha" below for why
    `ok_or`, not `ok_or_else`.
-2. **Consumer** (router handler): add a small **private, per-file** helper —
-   ```rust
-   fn map_repository_not_found(err: anyhow::Error) -> AppError {
-       match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-           Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-           _ => err.into(),
-       }
-   }
-   ```
-   and wire it with `.map_err(map_repository_not_found)?` on the specific call that can fail this
-   way. **Never match on `err.to_string()`** — that silently stops matching the moment a
-   `.context(...)` gets added anywhere upstream (the #578→#584 regression).
-3. This is a **per-file private helper**, duplicated across `router/libraries.rs`,
-   `router/presentations.rs`, `router/playlists.rs`, `router/sync.rs`,
-   `router/bible/presentations.rs`, `router/bible/broadcast.rs`,
-   `router/integrations/{resolume,android_stage,video_source}.rs` — 9 modules total (verify with
-   `grep -rln "fn map_repository_not_found\|fn map_repository_error" crates/presenter-server/src/router/`
-   if this list drifts again). NOT a shared/exported helper. Each PR that touches this pattern
-   should keep it that way: a shared helper is a bigger refactor than a scoped bug-fix batch needs,
-   and increases review surface for no behavior change.
-   **Naming exception:** every module above names the helper `map_repository_not_found` EXCEPT
-   `router/presentations.rs`, which names it `map_repository_error` — don't assume the name is
-   uniform when grepping for it.
+2. **Consumer (router handler): do nothing — a bare `?` is enough.** The blanket
+   `impl From<anyhow::Error> for AppError` in `crates/presenter-server/src/router.rs` (right after
+   `AppError`'s own `impl` block) downcasts to `presenter_persistence::RepositoryError` itself:
+   `NotFound` → 404, `TargetNotFound` → 422, `Conflict` → 409; every other `RepositoryError` variant
+   (a genuine internal/data-integrity fault, not a client-facing refusal) and every non-repository
+   error still fall through to the existing 500 branch. A plain `state.some_method(...).await?` in
+   ANY handler gets the correct status **by default** — there is no per-call-site opt-in left to
+   forget, which is the exact defect (#608, #610, #611, #615, #630, #636, #652 F4) this centralization
+   closes: a new call site that used to compile fine with a bare `?` and silently ship 500 now gets
+   the right status for free. `downcast_ref` walks the WHOLE `.context(...)` chain (not just the
+   outermost layer, see the anyhow-internals section below), so this stays correct no matter how much
+   context gets added between the repository and the router.
+3. **There is no per-file `map_repository_not_found`/`map_repository_error` helper anymore** — #633
+   deleted all 10 of them (`router/libraries.rs`, `router/presentations.rs`, `router/playlists.rs`,
+   `router/sync.rs`, `router/bible/presentations.rs`, `router/bible/broadcast.rs`,
+   `router/integrations/{resolume,android_stage,video_source}.rs`, `router/stage.rs`) and converted
+   every call site to a bare `?` (one non-`?` tail expression, `bible/broadcast.rs`'s
+   `trigger_bible_broadcast`, uses `.map_err(AppError::from)` instead, since it's the function's
+   return value rather than a `?`-propagated one — same centralized mapping, just invoked
+   explicitly). **Never reintroduce a per-file downcast-and-map helper for `RepositoryError`** — the
+   whole point of #633 was making the centralized mapping the only path, so a new call site can't
+   silently skip it again. A DOMAIN error that is NOT `RepositoryError` (see "Not every refusal is a
+   `RepositoryError`" below) still gets its own small per-file downcast — that part is unchanged;
+   only the `RepositoryError` case moved to the router's blanket `From` impl.
 
 ## Clippy gotcha: `ok_or`, not `ok_or_else`
 
@@ -64,8 +75,12 @@ A bare anyhow → 500 has a mirror: a router handler wrapping the WHOLE state ca
 `.map_err(AppError::bad_request)` maps a genuine internal fault to 400 (the client is blamed for a
 server bug — worse than a 500) AND flattens every refusal to one status. `POST /stage/state` did
 exactly this until #652 F4. When touching a handler, grep it for blanket `bad_request`/`map_err`
-wrappers — the fix is the same typed pattern: typed variants in the state method, per-file map
-helper, everything unmatched falls through to 500.
+wrappers — the fix (since #633) is simply to DELETE the wrapper: typed `RepositoryError` variants in
+the state method + a bare `?` in the handler now get the correct status from the router's
+centralized `From<anyhow::Error> for AppError` mapping, with everything unmatched still falling
+through to 500. A blanket `.map_err(...)` wrapper is exactly what defeats that centralization — it
+intercepts the error BEFORE it reaches the blanket `From` impl, same as a per-file downcast helper
+used to.
 
 ## Live-verifying refusal paths with curl: WRITE DTOs are camelCase (#652 verification gotcha)
 
@@ -97,16 +112,17 @@ CLI-only path (e.g. `bible/import.rs`'s `set_bible_source_digest`, reachable onl
 `ingest_bibles` / the `import-data.yml` workflow). Converting those adds scope with zero
 user-visible bug fixed — check every caller before including a site in the batch.
 
-## Grep the router file for an ALREADY-EXISTING unwired helper before assuming one is missing (#608)
+## Historical note — the per-file "forgot to wire it" failure class this centralization closed (#608)
 
-A "sweep" batch (#586/#587) converts several sites across many files in one pass, and it is easy to
-add the `map_repository_not_found` helper to a file for site A while a DIFFERENT call in that same
-file (site B) still has a bare `?` — the helper exists and compiles fine, it's just not wired
-everywhere it could be. Both #608 misses (`router/integrations/resolume.rs`'s `test_resolume_host`,
-`router/playlists.rs`'s `replace_playlist_entries`) were exactly this: the helper was already
-defined and used elsewhere in the SAME file. Before adding a new helper to a router file, `grep -n
-"map_repository_not_found" <file>` first — if it exists, the fix is a one-line `.map_err(...)` wire,
-not a new helper.
+Before #633, a "sweep" batch (#586/#587) converting several sites across many files in one pass made
+it easy to add a `map_repository_not_found` helper to a file for site A while a DIFFERENT call in
+that same file (site B) still had a bare `?` — the helper existed and compiled fine, it just wasn't
+wired everywhere it could be. Both #608 misses (`router/integrations/resolume.rs`'s
+`test_resolume_host`, `router/playlists.rs`'s `replace_playlist_entries`) were exactly this. #633
+removed the opt-in step entirely — a bare `?` now gets the correct status by construction, so this
+whole failure class (four more incidents after #608: #610, #611, #615, #630, #636) cannot recur for
+`RepositoryError`. Kept here as the reason the per-file-helper pattern was abandoned, not as
+guidance to follow.
 
 ## Not every refusal is a `RepositoryError` — a DOMAIN error gets its OWN small enum (#588, #589)
 
@@ -136,6 +152,30 @@ type `C` first and, if it doesn't match, RECURSES into the wrapped error's OWN v
 while `err.to_string()` only ever shows the OUTERMOST context message. This is what makes the
 typed-error pattern robust and string-matching fragile — cite it when justifying the pattern instead
 of re-deriving it from scratch (confirmed against `anyhow-1.0.103/src/error.rs` on this box).
+
+## `anyhow::Error::context()` is INHERENT — `use anyhow::Context;` is only for `Result`, not `Error` (#633)
+
+Calling `.context(...)` directly on an already-constructed `anyhow::Error` (e.g.
+`anyhow::Error::from(RepositoryError::NotFound("x")).context("while renaming")`, as the #633 tests
+do to prove `downcast_ref` walks the context chain) resolves to `anyhow::Error`'s own INHERENT
+`context()` method — it does NOT need the `anyhow::Context` trait, which exists only to add
+`.context(...)` to a `Result<T, E: std::error::Error>`. Importing `use anyhow::Context;` in a test
+that only ever calls `.context()` on an `Error` value (never on a `Result`) triggers `cargo clippy -- -D
+warnings`'s `unused_imports` and fails CI. Only import the trait when you're chaining `.context(...)`
+off something that returns `Result`, not `Error`.
+
+## Verify a sweep is COMPLETE with `cargo check --workspace --tests`, not just `grep` + a careful read (#633)
+
+When deleting a duplicated helper and converting call sites across many files in one pass, a
+sufficiently careful read-through can still miss one — #633's own salvaged patch missed
+`router/integrations/resolume.rs`'s `test_resolume_host`, which still called the deleted
+`map_repository_not_found` after every OTHER call site in that file had been converted. This is
+the exact #608 failure class this ticket exists to close, recurring inside the fix itself. `grep -rn
+"map_repository_not_found\|map_repository_error"` catches leftover REFERENCES, but the
+authoritative check on a Tier-0 box (no local `cargo test`) is `cargo check --workspace --tests` —
+it fails loudly (`E0425: cannot find value ... in this scope`) on a dangling call to a function you
+just deleted, and it is allowed to run locally per this project's Tier-0 policy. Run it after any
+multi-file deletion/rename sweep, before considering the sweep done.
 
 ## clippy `unused_must_use` on a discarded handler-call in a test (#588)
 

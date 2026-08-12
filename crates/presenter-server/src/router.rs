@@ -604,9 +604,33 @@ impl AppError {
     }
 }
 
+/// #633: a repository/state refusal carries a TYPED `RepositoryError`
+/// variant (`crates/presenter-persistence/src/repository/util.rs`), so this
+/// blanket conversion — the one every bare `?` in a handler already routes
+/// through — downcasts it itself instead of leaving that to a per-file
+/// helper a new call site can forget to wire. `NotFound` -> 404,
+/// `TargetNotFound` -> 422 (the URL resource is fine; a resource named in
+/// the request BODY is missing), `Conflict` -> 409 (resource exists, current
+/// state forbids the operation). Every other case — including OTHER
+/// `RepositoryError` variants, which are genuine internal/data-integrity
+/// faults, not refusals — falls through to the existing 500 mapping, same
+/// as before.
+///
+/// `downcast_ref` walks the WHOLE `.context(...)` chain (not just the
+/// outermost layer), so this stays correct no matter how much context gets
+/// added between the repository and the router — see
+/// `.claude/rules/repository-error-pattern.md` for the anyhow-internals
+/// citation.
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, err)
+        match err.downcast_ref::<presenter_persistence::RepositoryError>() {
+            Some(presenter_persistence::RepositoryError::NotFound(msg)) => Self::not_found(*msg),
+            Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
+                Self::unprocessable(*msg)
+            }
+            Some(presenter_persistence::RepositoryError::Conflict(msg)) => Self::conflict(*msg),
+            _ => Self::new(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
     }
 }
 
@@ -637,6 +661,8 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
 
 #[cfg(test)]
 mod ai_tests;
+#[cfg(test)]
+mod app_error_from_anyhow_tests;
 #[cfg(test)]
 mod presentations_copy_tests;
 #[cfg(test)]

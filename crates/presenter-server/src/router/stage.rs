@@ -112,24 +112,6 @@ pub(super) struct StageStateRequest {
     pub(super) entry_index: Option<u32>,
 }
 
-/// Maps an `update_stage_state` refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant — never the blanket `.map_err(AppError::bad_request)`
-/// this replaces (#652 F4, the #615 anti-pattern: a genuine internal fault
-/// used to answer 400, and an unknown/trashed `presentationId` answered 400
-/// instead of 404). `NotFound` (the triggered presentation no longer exists)
-/// maps to 404; `TargetNotFound` (the body's `currentSlideId`/`nextSlideId`
-/// doesn't belong to that presentation) maps to 422. Any other error falls
-/// through to the router's default 500 mapping.
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
-            AppError::unprocessable(*msg)
-        }
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(super) async fn update_stage_state(
     State(state): State<AppState>,
@@ -147,6 +129,9 @@ pub(super) async fn update_stage_state(
         Some(value) => Some(PlaylistId::from_uuid(parse_uuid("playlistId", &value)?)),
         None => None,
     };
+    // #633: `RepositoryError::NotFound`/`TargetNotFound` map to 404/422 by
+    // default via the centralized `From<anyhow::Error> for AppError` — never
+    // the blanket `.map_err(AppError::bad_request)` this replaced (#652 F4).
     state
         .update_stage_state(
             presentation_id,
@@ -155,8 +140,7 @@ pub(super) async fn update_stage_state(
             playlist_id,
             payload.entry_index,
         )
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
