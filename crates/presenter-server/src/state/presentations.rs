@@ -53,6 +53,27 @@ impl AppState {
         Ok(())
     }
 
+    /// #644: soft-deleted libraries, for the trash UI.
+    pub async fn list_trashed_libraries(
+        &self,
+    ) -> anyhow::Result<Vec<presenter_persistence::TrashedLibrary>> {
+        self.repository.list_trashed_libraries().await
+    }
+
+    /// #644: restore a trashed library (and, cascade-scoped, every
+    /// presentation ITS OWN deletion tombstoned along with it — see
+    /// `Repository::restore_library`'s doc comment for the exact rule).
+    /// Mirrors `restore_presentation` in `state/sync.rs`: a restore is a
+    /// local edit that must propagate, and can un-tombstone several
+    /// presentations at once, so it drops the WHOLE presentation cache
+    /// rather than a single entry.
+    pub async fn restore_library(&self, library_id: LibraryId) -> anyhow::Result<()> {
+        self.repository.restore_library(library_id).await?;
+        self.drop_presentation_caches().await;
+        self.nudge_sync().await;
+        Ok(())
+    }
+
     pub async fn create_presentation(
         &self,
         library_id: LibraryId,

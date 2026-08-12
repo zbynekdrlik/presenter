@@ -39,6 +39,11 @@ pub fn build_router(state: AppState) -> Router {
             "/libraries",
             get(libraries::list_libraries).post(libraries::create_library),
         )
+        // #644: the STATIC /libraries/trash route MUST be registered before
+        // the dynamic /libraries/{id} route so it is never swallowed by the
+        // {id} param (same lesson as /presentations/trash — router.rs's
+        // sync-route block below, and #555's own doc comment there).
+        .route("/libraries/trash", get(libraries::list_trashed_libraries))
         .route(
             "/libraries/{id}",
             patch(libraries::rename_library).delete(libraries::delete_library),
@@ -51,6 +56,7 @@ pub fn build_router(state: AppState) -> Router {
             "/libraries/{id}/favorite",
             post(libraries::set_library_favorite),
         )
+        .route("/libraries/{id}/restore", post(libraries::restore_library))
         .route(
             "/libraries/{id}/presentations",
             post(libraries::create_library_presentation),
@@ -663,6 +669,8 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
 mod ai_tests;
 #[cfg(test)]
 mod app_error_from_anyhow_tests;
+#[cfg(test)]
+mod libraries_trash_tests;
 #[cfg(test)]
 mod presentations_copy_tests;
 #[cfg(test)]

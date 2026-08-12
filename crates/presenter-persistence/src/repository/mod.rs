@@ -6,6 +6,8 @@ mod library;
 mod library_sync;
 #[cfg(test)]
 mod library_sync_tests;
+#[cfg(test)]
+mod library_trash_tests;
 mod playlist;
 mod presentation;
 #[cfg(test)]
@@ -36,6 +38,7 @@ mod tests;
 mod util;
 mod video_source;
 
+pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
 pub use sync_apply::{sync_should_apply, SyncApplyOutcome, PRUNE_HORIZON};

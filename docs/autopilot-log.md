@@ -942,3 +942,36 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
 - **Worktree-mode stop point:** committed on branch `worktree-agent-ad42662b6255f2dfc` at
   `240d7ece`; no push/PR/merge/deploy/run-card from this worker — round integration is the
   supervisor's job.
+
+---
+
+## #644 — Add library-restore capability (repository + API + UI)
+
+- **Design comment** posted before any code: root cause (`delete_library` soft-deletes but no mirror
+  `restore_library` was ever added — `fetch_libraries`/`list_library_summaries` correctly hide the
+  tombstoned library, so it was permanently unreachable), chosen approach (cascade-scoped restore —
+  only presentations `delete_library`'s own transaction tombstoned come back, matched by exact-instant
+  `deleted_at` equality compared in Rust, never a SQL round-trip; LWW clock bump per
+  `.claude/rules/sync-lww.md` invariant 2; a typed 409 guard against `idx_libraries_name_live_unique`),
+  rejected alternatives (auto-disambiguating the restored name like the sync-apply path does; restoring
+  every trashed presentation under the library_id regardless of instant).
+- **Commit `ab88c33a` [test/RED]:** `repository/library_trash_tests.rs`, `router/libraries_trash_tests.rs`,
+  `tests/e2e/library-trash.spec.ts` — reference not-yet-existing `Repository::restore_library`/
+  `list_trashed_libraries` (repository crate doesn't compile standalone at this commit — genuine RED).
+- **Commit `45780c8e` [green]:** `repository/library.rs` (`TrashedLibrary`, `list_trashed_libraries`,
+  `restore_library`, `classify_restore`, name-collision guard, cascade-scoped restore helper),
+  `state/presentations.rs` wrappers, `router/libraries.rs` + `router.rs` (`GET /libraries/trash`,
+  `POST /libraries/{id}/restore`, static route registered before `/libraries/{id}`), UI (`trash.rs`
+  extended with a "Zmazané knižnice" section in the same card, `api/sync.rs` client calls).
+- **Review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per #363):
+  0 🔴 1 🟡 0 🔵 pass 1 (banned `.expect()` in `restore_library`'s production path — fixed in
+  `47a82b33` by returning the destructured timestamp from `classify_restore` instead of re-deriving it
+  with `.expect()`); 0 🔴 0 🟡 1 🔵 pass 2 (TOCTOU race on the name-collision guard, accepted — matches
+  the already-shipped `resolve_conflict_free_name` pattern's same non-atomic shape in `library_sync.rs`).
+- **Local verify:** `cargo fmt --all --check` clean, `cargo check --workspace --tests` clean (both after
+  the review fix). `rustfmt --edition 2021 --config-path rustfmt.toml --check` clean for the two
+  `presenter-ui` files (workspace-excluded, no local compile-check possible — CI is the first real
+  compile of that crate). `npx tsc --noEmit` clean for the new E2E spec. `library.rs` now 831 production
+  lines (warning-only, well under the 1000 hard fail).
+- Version left untouched at `0.4.238` per the supervisor's correction (this worktree branched before the
+  round's 0.4.239 bump; the bump lands at integration).
