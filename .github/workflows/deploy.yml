@@ -578,11 +578,10 @@ jobs:
       # catalog AND the CONFIGURED model genuinely isn't in it — the one
       # AI-side failure mode a code/config change in this deploy could
       # actually cause (the exact #661 incident: an invalid model id sat
-      # green for 4 days). The step-level "run it, but don't let a failure
-      # stop the job" escape hatch is banned repo-wide (see this repo's CI
-      # policy on step failure handling) — "non-blocking" here means the
-      # step itself never fails on these signals in the first place, not
-      # that a failing step is ignored.
+      # green for 4 days). `continue-on-error: true` is banned in this repo
+      # (`ci/no-continue-on-error`, see this repo's CLAUDE.md) —
+      # "non-blocking" here means the step itself never fails on these
+      # signals in the first place, not that a failing step is ignored.
       - name: Verify AI status
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'

@@ -263,7 +263,6 @@ pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
     use std::sync::{Arc, Mutex, Once};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -382,14 +381,37 @@ mod tests {
         }
     }
 
-    thread_local! {
-        static CAPTURE_SINK: RefCell<Option<Arc<Mutex<Vec<String>>>>> = const { RefCell::new(None) };
-    }
+    /// Process-lifetime slot for whichever capture test currently holds
+    /// `CAPTURE_TEST_LOCK` below. A `Mutex`, not a `thread_local!` — this
+    /// used to be a `thread_local!`, which only worked because
+    /// `#[tokio::test]`'s default (`current_thread`) flavor happens to pin
+    /// an entire test body, including every `.await`, to one dedicated OS
+    /// thread. Nothing enforced that: switching either capture test below
+    /// to `flavor = "multi_thread"`, or introducing an `.await` whose
+    /// continuation resumes on a different worker thread, would have made
+    /// captured events silently vanish (the event fires on a thread whose
+    /// thread-local was never opted in) with no error — correct today,
+    /// silently wrong the moment someone touches test flavor. A process-
+    /// wide `Mutex` has no thread affinity: it is checked from whichever
+    /// OS thread the event happens to fire on. See `CAPTURE_TEST_LOCK` for
+    /// how the two capture tests below are kept from cross-contaminating
+    /// this one shared slot.
+    static CAPTURE_SINK: Mutex<Option<Arc<Mutex<Vec<String>>>>> = Mutex::new(None);
 
-    /// Captures every WARN/ERROR-level tracing event emitted on the CALLING
-    /// thread into that thread's opted-in `CAPTURE_SINK`, so a test can
-    /// assert a log line was actually produced and what it said — without a
-    /// real log sink.
+    /// Serializes the capture tests below against EACH OTHER: only one
+    /// `CaptureGuard` may be alive at a time, so only one test's events are
+    /// ever routed into `CAPTURE_SINK` at once. `cargo test` runs tests in
+    /// parallel OS threads within one process, and `CAPTURE_SINK` above is
+    /// now shared process-wide rather than thread-scoped — without this
+    /// lock, two concurrently-running capture tests would interleave their
+    /// events into the same buffer.
+    static CAPTURE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Captures every WARN/ERROR-level tracing event emitted anywhere in
+    /// the process into `CAPTURE_SINK`, whenever that slot holds a sink —
+    /// i.e. for as long as a `CaptureGuard` (below) is alive — so a test
+    /// can assert a log line was actually produced and what it said,
+    /// without a real log sink.
     ///
     /// Installed ONCE, GLOBALLY (`capture_logs_on_this_thread`, below) —
     /// deliberately NOT via the per-test scoped `subscriber::set_default`
@@ -405,11 +427,8 @@ mod tests {
     /// own capture depend on `cargo test`'s default parallel scheduling
     /// order across siblings — exactly the cross-test race that produced
     /// the CI failure this fixes. A SINGLE, process-lifetime subscriber
-    /// sidesteps it: the callsite is registered against this ONE subscriber
-    /// exactly once, for good, and each test only opts a THREAD-LOCAL
-    /// buffer in and out — safe because `#[tokio::test]`'s default
-    /// (current_thread) flavor pins an entire test body, including every
-    /// `.await`, to one dedicated OS thread no other test ever reuses.
+    /// sidesteps it: the callsite is registered against this ONE
+    /// subscriber exactly once, for good.
     struct GlobalCapture;
     impl tracing::Subscriber for GlobalCapture {
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
@@ -424,26 +443,39 @@ mod tests {
             if *event.metadata().level() > tracing::Level::WARN {
                 return;
             }
-            CAPTURE_SINK.with(|cell| {
-                if let Some(sink) = cell.borrow().as_ref() {
-                    let mut visitor = FieldVisitor(String::new());
-                    event.record(&mut visitor);
-                    sink.lock().unwrap().push(visitor.0);
-                }
-            });
+            let sink_slot = CAPTURE_SINK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(sink) = sink_slot.as_ref() {
+                let mut visitor = FieldVisitor(String::new());
+                event.record(&mut visitor);
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(visitor.0);
+            }
         }
         fn enter(&self, _span: &tracing::span::Id) {}
         fn exit(&self, _span: &tracing::span::Id) {}
     }
 
-    /// RAII opt-in: while alive, WARN/ERROR events on THIS thread are
-    /// captured into the returned buffer. Dropping clears the opt-in so a
-    /// later, unrelated test that happens to reuse this thread never
-    /// inherits it.
-    struct CaptureGuard;
+    /// RAII opt-in: while alive, holds `CAPTURE_TEST_LOCK` (so no other
+    /// capture test can become active concurrently) and keeps this test's
+    /// buffer installed in `CAPTURE_SINK`. Dropping releases BOTH — clears
+    /// the sink, then (via the field's own `Drop`) unlocks the test lock —
+    /// including when dropped during a panicking test's unwind, so one
+    /// panicking capture test can never wedge every later one, and a
+    /// later, unrelated test never inherits a stale sink. Both locks are
+    /// accessed poison-tolerantly throughout (`unwrap_or_else(|p|
+    /// p.into_inner())`) for the same reason: a panic while a lock is held
+    /// must not turn into every subsequent capture test failing too.
+    struct CaptureGuard {
+        _test_lock: std::sync::MutexGuard<'static, ()>,
+    }
     impl Drop for CaptureGuard {
         fn drop(&mut self) {
-            CAPTURE_SINK.with(|cell| *cell.borrow_mut() = None);
+            *CAPTURE_SINK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         }
     }
 
@@ -454,13 +486,41 @@ mod tests {
             // registration triggers tracing-core's own callsite-interest
             // rebuild exactly once, then stays alive — and therefore
             // correct — for the rest of the process. See the doc comment
-            // on `GlobalCapture` above.
+            // on `GlobalCapture` above. `.expect(...)`, not `let _ =`: if
+            // some OTHER global default ever gets installed first (a test
+            // ordering change, a new test file), silently discarding this
+            // `Err` would leave `GlobalCapture` never installed, and BOTH
+            // capture tests below would fail on their generic "a
+            // provider-side failure must emit at least one WARN/ERROR log
+            // line" assertion — a confusing symptom pointing nowhere near
+            // the real cause. Fail loudly here instead, naming the cause.
             let dispatch = tracing::dispatcher::Dispatch::new(GlobalCapture);
-            let _ = tracing::dispatcher::set_global_default(dispatch);
+            tracing::dispatcher::set_global_default(dispatch).expect(
+                "GlobalCapture must be the first global tracing dispatcher installed in \
+                 this test binary — set_global_default failing here means some other test \
+                 already installed a different one first, which would make the ai::client \
+                 WARN/ERROR log-capture tests silently see zero events instead of failing \
+                 with a clear cause",
+            );
         });
+
+        // Serialize against any other currently-active capture test BEFORE
+        // touching CAPTURE_SINK, so two capture tests never interleave
+        // their events into the same shared buffer.
+        let test_lock = CAPTURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let sink = Arc::new(Mutex::new(Vec::new()));
-        CAPTURE_SINK.with(|cell| *cell.borrow_mut() = Some(sink.clone()));
-        (CaptureGuard, sink)
+        *CAPTURE_SINK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink.clone());
+        (
+            CaptureGuard {
+                _test_lock: test_lock,
+            },
+            sink,
+        )
     }
 
     #[tokio::test]

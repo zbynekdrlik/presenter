@@ -96,7 +96,15 @@ if command -v rg >/dev/null 2>&1 && rg -n "\\.(only|skip)\\(" tests/e2e --glob '
 fi
 
 # 6) No continue-on-error in CI workflows (strict mode)
-if command -v rg >/dev/null 2>&1 && rg -n "continue-on-error" .github/workflows/*.yml >/dev/null 2>&1; then
+# Matches the YAML KEY only — "continue-on-error:" at the start of a line
+# (optionally after a leading "- " list marker), any indentation, any
+# value. Deliberately does NOT match the same substring inside a comment:
+# a comment line always has "#" as its first non-whitespace character,
+# which breaks the start-of-line anchor below before "continue-on-error:"
+# can match. A plain substring scan here previously flagged a COMMENT that
+# was merely explaining the ban (d4e2cb3d, #661), forcing that comment to
+# be worded around the very gate it was describing.
+if command -v rg >/dev/null 2>&1 && rg -n '^\s*(-\s+)?continue-on-error:' .github/workflows/*.yml >/dev/null 2>&1; then
   fail "Found continue-on-error in workflows - remove for strict CI"
 fi
 
