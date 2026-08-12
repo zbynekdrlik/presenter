@@ -3,6 +3,7 @@ pub(crate) mod bible_validator;
 pub(crate) mod client;
 pub(crate) mod context_budget;
 pub(crate) mod proxy;
+pub(crate) mod proxy_output_relay;
 pub(crate) mod refresh;
 pub(crate) mod tool_defs;
 pub(crate) mod tools;
