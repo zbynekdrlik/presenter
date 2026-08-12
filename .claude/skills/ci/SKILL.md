@@ -88,6 +88,23 @@ CI has TWO runs per push: "PR Automation" (fast, Label/Validate) and "Pipeline" 
 Test→Build→E2E→deploy). `gh run list --limit 1` often returns PR Automation — filter:
 `gh run list --branch dev --limit 5 | grep Pipeline`.
 
+## Every "Setup SSH" step needs a retry-wrapped `ssh-keyscan`, never a bare one (#674)
+
+All three "Setup SSH for deployment" steps (`deploy.yml`, `pipeline.yml`, `release.yml`) run under
+the step's default `bash -e`. A **bare** top-level `ssh-keyscan $HOST >> known_hosts 2>/dev/null`
+aborts the WHOLE step via `-e` the instant `ssh-keyscan` itself returns non-zero (a transient
+connect timeout) -- BEFORE reaching any `[ ! -s known_hosts ]` diagnostic written to explain
+exactly that failure. Hit live: run 31616035821 died in ~5s with a bare `exit code 1` and zero
+explanation, discarding a ~20-minute build.
+
+**The fix pattern, now applied to all three steps** -- wrap the scan in `if ...; then` (a command's
+exit status inside `if` is exempt from `-e`'s abort behavior) with a bounded retry (5 attempts,
+explicit `-T 5` timeout, 3s backoff), and run `ssh-keygen -R $HOST -f known_hosts` (best-effort)
+BEFORE the scan so a re-deploy never accumulates duplicate host-key entries (the runner's
+`known_hosts` is a PERSISTENT file across deploys, unlike an ephemeral GitHub-hosted runner's).
+Reuse this exact shape for any NEW ssh-based deploy step added to these workflows -- never a bare
+`ssh-keyscan ... 2>/dev/null` again.
+
 ## Dead `deb.nodesource.com` apt source breaks `--with-deps` browser install (#610)
 
 The `NDI WebRTC E2E` job's "Install Playwright (branded Chrome for H.264)" step runs
