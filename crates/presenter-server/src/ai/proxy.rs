@@ -5,6 +5,7 @@
 //! its lifecycle, and handles Claude OAuth login via CLIProxyAPI's
 //! native `-claude-login` flow with callback URL forwarding.
 
+use crate::ai::proxy_output_relay::{redact_proxy_output_line, spawn_proxy_output_relay};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::AsyncBufReadExt;
@@ -414,13 +415,30 @@ request-retry: 2
         let config = self.config.read().await;
         info!(binary = %binary.display(), port = config.port, "starting CLIProxyAPI");
 
-        let child = Command::new(&binary)
+        let mut child = Command::new(&binary)
             .arg("-config")
             .arg(self.config_path())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
+
+        // #675-adjacent observability gap: relay the child's own
+        // stdout/stderr into Presenter's tracing output (redacted — see
+        // `spawn_proxy_output_relay`'s doc comment) instead of discarding
+        // it, so a failed OAuth refresh leaves an actual WHY in the
+        // journal, not just Presenter's own periodic WHETHER
+        // (`scan_claude_auth`). Each stream is taken and handed to its own
+        // relay task; a `None` here (already-taken, or `Stdio::piped()`
+        // failed to give a handle) is simply skipped rather than treated
+        // as fatal — losing the diagnostic relay must never prevent the
+        // proxy itself from starting.
+        if let Some(stdout) = child.stdout.take() {
+            spawn_proxy_output_relay(stdout, "stdout");
+        }
+        if let Some(stderr) = child.stderr.take() {
+            spawn_proxy_output_relay(stderr, "stderr");
+        }
 
         {
             let mut guard = self.child.write().await;
@@ -556,7 +574,11 @@ request-retry: 2
                 Ok(Ok(0)) => break,
                 Ok(Ok(_)) => {
                     let line = line_buf.trim_end();
-                    info!(line = %line, "claude-login stdout");
+                    // Same credential-path caution as `start()`'s relay
+                    // (see `redact_proxy_output_line`'s doc comment) — the
+                    // URL-extraction below still reads the UNREDACTED
+                    // `line`, only the logged copy is filtered.
+                    info!(line = %redact_proxy_output_line(line), "claude-login stdout");
                     if let Some(url_start) = line.find("https://") {
                         let url = line[url_start..].split_whitespace().next().unwrap_or("");
                         if !url.is_empty() {

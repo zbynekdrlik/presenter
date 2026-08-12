@@ -80,12 +80,25 @@ const MAX_CAPTURED_LINE_LEN: usize = 4096;
 /// too-aggressive pattern that would blank legitimate diagnostic text gets
 /// caught the same way a too-narrow one would.
 pub(crate) fn redact_proxy_output_line(line: &str) -> String {
-    // RED (#675-adjacent observability gap, no dedicated ticket): no
-    // redaction implemented yet — this stub proves the "hides credential
-    // material" tests below genuinely fail before the fix, per this
-    // repo's regression-test-first discipline. See the GREEN commit for
-    // the real implementation.
-    line.to_string()
+    let mut out = line.to_string();
+    if let Some(re) = SECRET_PREFIX_RE.as_ref() {
+        if re.is_match(&out) {
+            out = re.replace_all(&out, REDACTED_MARKER).into_owned();
+        }
+    }
+    if let Some(re) = BEARER_TOKEN_RE.as_ref() {
+        if re.is_match(&out) {
+            let replacement = format!("${{1}}{REDACTED_MARKER}");
+            out = re.replace_all(&out, replacement.as_str()).into_owned();
+        }
+    }
+    if let Some(re) = SECRET_JSON_FIELD_RE.as_ref() {
+        if re.is_match(&out) {
+            let replacement = format!(r#""$1":"{REDACTED_MARKER}""#);
+            out = re.replace_all(&out, replacement.as_str()).into_owned();
+        }
+    }
+    out
 }
 
 /// Truncate an already-redacted line to `MAX_CAPTURED_LINE_LEN` at a safe
