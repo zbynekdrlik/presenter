@@ -315,6 +315,23 @@ mod tests {
         assert_eq!(ai_chip_state(Some(&s)), "ok");
     }
 
+    // #679 review finding 3: `missing-binary`/`proxy-down` are about the
+    // BUNDLED proxy PROCESS itself — unrelated to which apiUrl is
+    // currently configured — so they must stay unconditional even when
+    // `requires_claude_auth` is false.
+
+    #[test]
+    fn missing_binary_still_reported_when_claude_auth_is_not_required() {
+        let s = status_full(false, true, true, None, false);
+        assert_eq!(ai_chip_state(Some(&s)), "missing-binary");
+    }
+
+    #[test]
+    fn proxy_down_still_reported_when_claude_auth_is_not_required() {
+        let s = status_full(true, false, true, None, false);
+        assert_eq!(ai_chip_state(Some(&s)), "proxy-down");
+    }
+
     // #660: authenticated but the token is about to expire — a NEW state
     // between "logged-out" (already dead) and "ok" (healthy, plenty of time
     // left). This is the whole point of the ticket: the operator must see

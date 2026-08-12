@@ -94,7 +94,8 @@ pub(super) async fn chat(
         return Err(AppError::bad_request_message("message cannot be empty"));
     }
 
-    let (settings, _) = get_settings_internal(&state).await?;
+    // The agent loop needs the REACHABLE url (#679) — never the raw one.
+    let (settings, _) = resolve_effective_settings(&state).await?;
 
     // Idle auto-clear (#665): if the shared conversation hasn't been
     // touched in a while, clear it before appending the new message rather
@@ -530,7 +531,9 @@ pub(super) fn render_connectivity_error(e: &anyhow::Error) -> String {
 pub(super) async fn check_status(
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
-    let (settings, requires_claude_auth) = get_settings_internal(&state).await?;
+    // The connectivity/model check needs the REACHABLE url (#679) — never
+    // the raw one; `requires_claude_auth` still reflects the RAW value.
+    let (settings, requires_claude_auth) = resolve_effective_settings(&state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
     // #661: list_models (not the old bare check_connectivity) so the SAME
@@ -649,30 +652,53 @@ pub(super) async fn proxy_complete_login(
     Ok(Json(state.ai_proxy().status().await))
 }
 
-/// Resolve the effective AI settings, and — as the second tuple element —
-/// whether the STORED (pre-substitution) `api_url` was the bundled proxy's
-/// default (#679). The bool must be captured BEFORE the substitution below
-/// runs: once substituted, `api_url` becomes the live resolved proxy URL
-/// (`http://127.0.0.1:{port}/v1`), which no longer literally equals
-/// `AiSettings::default().api_url` (`http://localhost:8787/v1` —
-/// `localhost` != `127.0.0.1` as strings) even though this IS the bundled-
-/// proxy case. Checking post-substitution would misclassify the most
-/// common scenario (default config, proxy running) as a non-bundled/custom
-/// endpoint.
-async fn get_settings_internal(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
-    let mut settings = match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
+/// Read the RAW stored AI settings (or the default, if nothing is stored
+/// yet) — a PURE database read that never touches `state.ai_proxy()` and
+/// never mutates `api_url`. Returns the settings alongside `is_bundled_default`:
+/// whether this raw `api_url` equals the bundled proxy's default
+/// (`AiSettings::default().api_url`).
+///
+/// This is the function to use for anything that gets PERSISTED
+/// (`update_settings`) or DISPLAYED for editing (`get_settings`) — #679
+/// review finding 1: an earlier version of this function ALSO substituted
+/// the live resolved proxy URL (`http://127.0.0.1:{port}/v1`) into
+/// `api_url` whenever it was the bundled default and the proxy was
+/// running, and BOTH of those call sites read straight from it. That
+/// silently leaked the substituted URL into the settings form (echoed back
+/// on the very next ordinary "open Settings, click Save" — no edit
+/// needed) and, whenever a `PUT /ai/settings` omitted `apiUrl` entirely,
+/// straight into the row `update_settings` re-persists — either path
+/// permanently rewrites the stored `api_url` to the substituted value,
+/// which no longer equals `AiSettings::default().api_url` (`localhost` !=
+/// `127.0.0.1` as strings) — so `is_bundled_default`/`requires_claude_auth`
+/// silently and permanently flip to `false` for what is still,
+/// functionally, the bundled proxy. See `resolve_effective_settings` below
+/// for the ONLY call sites that legitimately need the substituted URL.
+pub(super) async fn get_settings_internal(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
+    let settings = match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
         Some(json) => serde_json::from_str(&json)?,
         None => AiSettings::default(),
     };
-
-    // If no custom API URL set and proxy is running, use proxy URL
     let is_bundled_default = settings.api_url == AiSettings::default().api_url;
+    Ok((settings, is_bundled_default))
+}
+
+/// Resolve the EFFECTIVE, reachable `api_url` for actually making an HTTP
+/// call to the AI provider (`chat`'s agent loop, `check_status`'s
+/// connectivity/model check) — substitutes the live resolved bundled-proxy
+/// URL in place of the raw stored default whenever `is_bundled_default` is
+/// true and the proxy is currently running.
+///
+/// NEVER use this for a settings value that will be PERSISTED or DISPLAYED
+/// for editing — see `get_settings_internal`'s own doc comment for why
+/// (#679 review finding 1).
+async fn resolve_effective_settings(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
+    let (mut settings, is_bundled_default) = get_settings_internal(state).await?;
     if is_bundled_default {
         let proxy_status = state.ai_proxy().status().await;
         if proxy_status.running {
             settings.api_url = proxy_status.api_url;
         }
     }
-
     Ok((settings, is_bundled_default))
 }

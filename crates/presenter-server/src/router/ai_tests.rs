@@ -6,7 +6,7 @@
 use crate::ai::AiAgentError;
 use crate::router::ai::{
     compute_ai_connected, compute_ai_status_error, friendly_ai_error_message,
-    parse_idle_clear_minutes, render_connectivity_error, should_idle_clear,
+    get_settings_internal, parse_idle_clear_minutes, render_connectivity_error, should_idle_clear,
     DEFAULT_IDLE_CLEAR_MINUTES,
 };
 use std::time::{Duration, SystemTime};
@@ -190,6 +190,37 @@ fn status_error_never_blames_claude_auth_when_not_required() {
     );
 }
 
+// #679 review finding 1: `get_settings_internal` used to ALSO substitute the
+// live-resolved bundled-proxy URL into `settings.api_url` whenever it was
+// the default and the proxy was running — and BOTH `update_settings`
+// (persistence) and `get_settings` (display, later echoed back on an
+// ordinary settings save) read straight from that mutated value. Once
+// persisted, the substituted URL no longer equals `AiSettings::default()`'s
+// literal string, so `is_bundled_default`/`requires_claude_auth` silently
+// and PERMANENTLY flip to `false` for what is still, functionally, the
+// bundled proxy — defeating this whole ticket's "byte-identical default
+// behavior" requirement on the very first ordinary settings save.
+// `get_settings_internal` is now a PURE database read (it never calls
+// `state.ai_proxy()` at all) — this test pins that invariant directly:
+// however this function is called, its returned `api_url` is EXACTLY the
+// raw stored/default value, never a substituted one.
+
+#[tokio::test]
+async fn get_settings_internal_never_substitutes_the_live_proxy_url() {
+    let state = crate::state::AppState::in_memory().await.unwrap();
+    let (settings, is_bundled_default) = get_settings_internal(&state).await.unwrap();
+    assert_eq!(
+        settings.api_url,
+        crate::ai::AiSettings::default().api_url,
+        "with nothing stored yet, api_url must be exactly the literal \
+         default — never a live-resolved proxy URL"
+    );
+    assert!(
+        is_bundled_default,
+        "the literal default api_url must be classified as bundled"
+    );
+}
+
 // #661 item 3: `PUT /ai/settings` used to write through the bare
 // `set_app_setting` upsert with zero audit hook — the ONE settings family
 // that could never produce a `settings_audit` row, which is why the
@@ -291,6 +322,64 @@ async fn put_ai_settings_falls_back_to_anonymous_actor_with_no_forwarding_header
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].actor, "anonymous");
+}
+
+// #679 review finding 1: an ORDINARY `PUT /ai/settings` that omits `apiUrl`
+// entirely (exactly the payload the two tests above already send) used to
+// re-persist whatever `get_settings_internal` had returned — which, before
+// this fix, could already be the SUBSTITUTED live-proxy URL. Drives the
+// REAL `PUT` then `GET` handlers through the full router (not just the
+// pure `get_settings_internal` unit test above) to prove the round-trip
+// itself preserves the literal default `apiUrl`.
+
+#[tokio::test]
+async fn put_ai_settings_with_no_api_url_never_mutates_the_stored_default() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+
+    let put_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"model": "claude-sonnet-4-6"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::NO_CONTENT);
+
+    let get_response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ai/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(get_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body.get("apiUrl").and_then(|v| v.as_str()),
+        Some(crate::ai::AiSettings::default().api_url.as_str()),
+        "a PUT that never mentioned apiUrl must leave the stored value at \
+         the literal default, not a substituted live-proxy URL: {body:?}"
+    );
 }
 
 // #675 review finding 3: `cd7c0f56` replaced `serde_json::to_value(&settings)`

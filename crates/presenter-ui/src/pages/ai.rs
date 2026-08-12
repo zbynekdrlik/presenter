@@ -252,8 +252,17 @@ pub fn AiPage() -> impl IntoView {
                 Ok(()) => {
                     toast_variant.set("success".to_string());
                     toast.set(Some("AI settings saved".to_string()));
+                    // #679 review finding 2: a saved apiUrl change (e.g.
+                    // switching to/from a non-bundled endpoint) must be
+                    // reflected immediately — not just `connected`, or the
+                    // login banner keeps showing whatever it said before
+                    // the save until the operator clicks the status dot or
+                    // reloads.
                     if let Ok(status) = ai_api::check_status().await {
                         connected.set(status.connected);
+                        proxy_authenticated.set(Some(status.proxy.claude_authenticated));
+                        token_expires_at.set(status.proxy.token_expires_at);
+                        requires_claude_auth.set(status.requires_claude_auth);
                     }
                 }
                 Err(e) => {
