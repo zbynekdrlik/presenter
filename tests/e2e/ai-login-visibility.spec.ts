@@ -44,13 +44,18 @@ async function mockAiStatus(
   proxy: {
     claudeAuthenticated: boolean;
     tokenExpiresAt?: string | null;
+    // #679: defaults to `true` (unset) so every EXISTING call site below
+    // keeps its original bundled-proxy meaning unchanged.
+    requiresClaudeAuth?: boolean;
   },
 ) {
+  const requiresClaudeAuth = proxy.requiresClaudeAuth ?? true;
+  const connected = requiresClaudeAuth ? proxy.claudeAuthenticated : true;
   await page.route("**/ai/status", async (route) => {
     await route.fulfill({
       json: {
-        connected: proxy.claudeAuthenticated,
-        error: proxy.claudeAuthenticated
+        connected,
+        error: connected
           ? null
           : "Claude not authenticated — run /ai/proxy/login to re-authorize",
         proxy: {
@@ -61,6 +66,8 @@ async function mockAiStatus(
           claudeAuthenticated: proxy.claudeAuthenticated,
           tokenExpiresAt: proxy.tokenExpiresAt ?? null,
         },
+        modelValid: true,
+        requiresClaudeAuth,
       },
     });
   });
@@ -137,6 +144,36 @@ test("logged in shows no login banner", async ({ page }) => {
   // never element count/visibility, per the toast-component discipline.
   await expect(banner).toHaveAttribute("data-visible", "false", { timeout: 30_000 });
   await expect(banner).toBeHidden();
+
+  expect(consoleMessages).toEqual([]);
+});
+
+// #679: a user pointing `apiUrl` at their own non-bundled OpenAI-compatible
+// endpoint (the #662 local-LLM scenario) never needs a Claude login — the
+// login banner must stay hidden AND the header chip must report "ok", even
+// though Claude itself is unauthenticated, as long as connectivity to the
+// configured endpoint is fine.
+test("#679: a non-bundled apiUrl needs no Claude login — banner hidden, chip ok, even with Claude unauthenticated", async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await mockAiStatus(page, {
+    claudeAuthenticated: false,
+    requiresClaudeAuth: false,
+  });
+
+  await gotoAiPanel(page);
+
+  const banner = page.locator('[data-role="ai-login-banner"]');
+  await expect(banner).toHaveAttribute("data-visible", "false", { timeout: 30_000 });
+  await expect(banner).toBeHidden();
+
+  // The header chip is mounted unconditionally alongside every operator
+  // view (including the AI panel), so both assertions live in one page load.
+  const chip = page.locator('[data-role="ai-status-chip"]');
+  await expect(chip).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
+  await expect(chip).toHaveText("AI: pripojené");
 
   expect(consoleMessages).toEqual([]);
 });
