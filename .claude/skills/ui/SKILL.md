@@ -263,3 +263,26 @@ See `ndi_playback_guard.rs`'s `PlaybackGuardHandle`.
 e.g. `stage-empty-db-console.spec.ts`). New tests should import and reuse both instead
 of re-inlining the same `page.on("console", ...)` block or a fresh `process.cwd()` call
 — a deep-review pass on `#641` flagged both as avoidable duplication.
+
+## A Chrome `VERBOSE` console entry is invisible to the zero-console gate — pin the fix with a DOM assertion instead (#677)
+
+`attachConsoleErrorCollector` (and this repo's zero-console-errors rule generally) only
+collects `console.error`/`console.warn`. Chrome's own DOM/accessibility hints — e.g.
+`[DOM] Password field is not contained in a form` for a `type="password"` input with no
+`<form>` ancestor — log at `VERBOSE`, a level neither `error` nor `warning`. A spec that
+only asserts `expect(consoleMessages).toEqual([])` will happily pass on a REGRESSION of
+this class of bug, because the collector never sees VERBOSE lines at all. To pin a fix
+for this class of smell, assert the actual DOM relationship the browser is complaining
+about, not the console:
+
+```ts
+const hasFormAncestor = await apiKey.evaluate((el) => el.closest("form") !== null);
+expect(hasFormAncestor).toBe(true);
+```
+
+When wrapping a field in a `<form>` to satisfy this, remember the button that already
+saves via `on:click` MUST stay `type="button"` (never `type="submit"`), and give the new
+`<form>` its own `on:submit=move |ev| ev.prevent_default()` — otherwise pressing Enter in
+any field newly implicitly-submits the form, which with no `action` GET-reloads the
+current URL and blows away all WASM app state. See `crates/presenter-ui/src/pages/ai.rs`'s
+`ai-settings-form` and `tests/e2e/wasm-ai-chat.spec.ts`'s Enter-key regression test.
