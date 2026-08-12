@@ -852,3 +852,40 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
 - **Local verify:** `npm ci && npx tsc --noEmit` clean for the new spec file. `rustfmt --check` clean
   for the Rust file. Playwright itself did NOT run locally (Tier-0 + #669 trap) — CI is the first
   real execution of the new spec, after the supervisor's round integration.
+
+---
+
+## Round integration — v0.4.238 (#665 + #633 + #670), 2026-08-12
+
+**Supervisor-side record of the round the three worker entries above belong to.**
+
+- **Recovery:** all three round-2 workers were killed mid-flight by a session limit. Their
+  uncommitted worktree edits were harvested (`git add -A && git diff --cached --binary > patch`)
+  before the stale worktrees were removed, and handed to fresh workers via `git apply --3way`.
+  #665's salvage (661 insertions) and #633's (147+/214-) both survived intact; #670 had no worktree
+  and restarted from zero with full grounding in its dispatch prompt. The #665 worker confirmed the
+  salvaged patch was a solid base but caught a real wiring gap in it: `friendly_ai_error_message`
+  had been written and unit-tested but never actually called from the SSE handler.
+- **Serial integration:** `db422020` (#633), `6ff70838` (#665), `b87b9367` (#670, after resolving
+  the round's only conflict — both sides had appended to this file; resolved keep-both).
+  `0ee7ea75` synced both `Cargo.lock` files to 0.4.238 (the prior day's bump touched only
+  `Cargo.toml`).
+- **`presenter-ui` compile-checked from the MAIN checkout** (`cargo check --target
+  wasm32-unknown-unknown`), closing the #669 verification hole the #670 worker could not close from
+  inside its worktree. Both `cargo fmt` scopes clean, `cargo check --workspace --tests` clean.
+- **First push failed CI on Clippy only** — `ai/context_budget.rs:503`, `unnecessary use of
+  to_string` in a test fixture (`-D clippy::unnecessary-to-owned`). Fixed in `1bc7a7b8`; every other
+  job in that run was green. Pipeline `31611199873` then went fully green, Deploy to Dev included.
+- **PR #673** (closes #665, #670, #633) merged as `a2fae3b7` with all 24 checks green.
+- **Prod deploy failed once on infrastructure, not code:** `Setup SSH for deployment` aborted after
+  5 s on `ssh-keyscan 10.77.9.205`. Probed from the runner host two minutes later: ping 0.3 ms,
+  keyscan instant, `/healthz` 200 — a momentary LAN blip. One rerun deployed cleanly. The step's
+  own `-e` shell swallows the keyscan exit before its diagnostic `if` can print, so the failure
+  surfaces as a bare exit 1; filed with the unbounded `known_hosts` growth found alongside it
+  as **#674**, to bundle with #660/#661 (same three workflow files).
+- **Post-deploy verification (prod 10.77.9.205, release channel):** `/healthz` v0.4.238,
+  NDI pipeline `streaming`; operator DOM reports `v0.4.238` with `data-wasm-ready="true"` and the
+  library list rendered; `/stage` plays live NDI video 1280x720, `readyState` 4, 8 ms
+  server→display latency; zero console errors or warnings on both pages. #633's centralized mapping
+  confirmed live: unknown presentation / playlist / stage-layout ids all return 404 (not 500).
+  Dev (10.77.8.134:8080) on v0.4.238 dev channel.
