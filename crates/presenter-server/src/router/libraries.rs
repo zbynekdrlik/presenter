@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use chrono::{DateTime, Utc};
 use presenter_core::{Library, LibraryId, LibrarySummary};
 use serde::Serialize;
 use tracing::instrument;
@@ -14,6 +15,46 @@ use uuid::Uuid;
 #[serde(rename_all = "camelCase")]
 pub(super) struct FavoriteLibraryIdsResponse {
     pub(super) ids: Vec<String>,
+}
+
+/// Trash row for the settings UI (#644, mirrors `TrashedPresentationDto` in
+/// `state/sync.rs`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TrashedLibraryDto {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) deleted_at: DateTime<Utc>,
+}
+
+impl From<presenter_persistence::TrashedLibrary> for TrashedLibraryDto {
+    fn from(t: presenter_persistence::TrashedLibrary) -> Self {
+        Self {
+            id: t.id,
+            name: t.name,
+            deleted_at: t.deleted_at,
+        }
+    }
+}
+
+#[instrument(skip_all)]
+pub(super) async fn list_trashed_libraries(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TrashedLibraryDto>>, AppError> {
+    let rows = state.list_trashed_libraries().await?;
+    Ok(Json(rows.into_iter().map(Into::into).collect()))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn restore_library(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    // #633: `RepositoryError::NotFound`/`Conflict` map to 404/409 by default
+    // via the centralized `From<anyhow::Error> for AppError` — no
+    // per-call-site helper needed.
+    state.restore_library(LibraryId::from_uuid(id)).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[instrument(skip_all)]
