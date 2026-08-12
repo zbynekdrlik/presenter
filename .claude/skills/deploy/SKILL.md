@@ -393,3 +393,35 @@ SSH too complex for remote users).
 8. Restart proxy to pick up new credentials
 
 The error page is expected -- the localhost redirect can't reach the server from the user's browser.
+
+## CLIProxyAPI deploy step: version-guard + the local-vs-remote interpolation trap (#660)
+
+The "Deploy CLIProxyAPI" step in all three workflows (`deploy.yml`, `pipeline.yml`, `release.yml`)
+downloads the vendored binary from `github.com/router-for-me/CLIProxyAPI/releases` and now
+(since #660) tracks the installed version in a `.cliproxy-version` marker file next to the binary,
+re-downloading whenever the pinned `CLIPROXY_VERSION` differs from that marker -- **not just when
+the binary is missing**. Before this fix, bumping the version string in the workflow source did
+NOTHING on an already-provisioned host: the old guard was `if [ ! -f cli-proxy-api ]`, so prod ran
+the same March-2026 build of v6.9.1 for months despite the workflow having been edited since.
+
+**The trap for anyone editing this step again:** `ssh deploy-target "..."` with a **double-quoted**
+string is interpolated by the LOCAL runner shell BEFORE being sent as the ssh command argument --
+`$SOME_VAR` inside it expands on the RUNNER, not the remote host, even though the whole string then
+executes remotely. This step now uses a real remote heredoc instead
+(`ssh deploy-target << 'REMOTE_SCRIPT' ... REMOTE_SCRIPT`, single-quoted delimiter) specifically so
+`$CURRENT_VERSION` (read from the remote host's own `.cliproxy-version` file) is evaluated on the
+REMOTE side -- a locally-interpolated double-quoted string can never do this since the remote file
+doesn't exist on the runner. `${{ env.DEPLOY_DIR }}`-style GH Actions expressions still substitute
+fine either way (GitHub's own templating runs before ANY shell sees the text, regardless of quoting).
+
+**Upstream facts worth not re-deriving** (confirmed live 2026-08-12 via `gh api
+repos/router-for-me/CLIProxyAPI/releases/latest` + its issue tracker): CLIProxyAPI DOES ship a
+built-in Claude OAuth auto-refresh subsystem (`core auth auto-refresh started (interval=15m0s)`).
+It had real, matching bugs -- "auto-refresh fails silently despite valid refresh_tokens" and
+"Claude OAuth refresh can stampede and replay 429s" -- both filed and CLOSED (fixed) in April 2026.
+Our March-2026 vendored build predated both fixes. Presenter's own code has NO refresh logic of its
+own (`ai/proxy.rs`'s `refresh_token` string appears only in a test fixture) -- it relies entirely on
+the vendored binary's own auto-refresh. If tokens are STILL found dying silently after a deploy
+running a version newer than these fixes, the next step is a self-driven refresh loop in
+`ai/proxy.rs`/a sibling module, not another vendor bump -- see #675 (follow-up, filed contingent on
+that observation).

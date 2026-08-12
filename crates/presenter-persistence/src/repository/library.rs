@@ -1,7 +1,7 @@
 use crate::entities::{
     library, library_favorite, presentation as presentation_entity, slide as slide_entity,
 };
-use chrono::Utc;
+use chrono::{DateTime, FixedOffset, Utc};
 use presenter_core::{
     search::fold_query, Library, LibraryId, LibrarySummary, Presentation, PresentationId,
     PresentationSummary,
@@ -18,6 +18,16 @@ use super::util::{
     build_slide_active_model, parse_uuid, sanitize_like_input, to_domain_slide, RepositoryError,
 };
 use super::Repository;
+
+/// A trashed library, for the trash UI (#644, mirrors `TrashedPresentation`
+/// in `repository/sync.rs`).
+#[derive(Debug, Clone)]
+pub struct TrashedLibrary {
+    pub id: String,
+    pub sync_id: String,
+    pub name: String,
+    pub deleted_at: DateTime<Utc>,
+}
 
 /// A trashed-or-live row's `(deleted_at, updated_at)` timestamps.
 type RowState = (
@@ -268,6 +278,94 @@ impl Repository {
         Ok(())
     }
 
+    /// Lists soft-deleted libraries, for the trash UI (#644, mirrors
+    /// `list_trashed_presentations`).
+    #[instrument(skip_all)]
+    pub async fn list_trashed_libraries(&self) -> anyhow::Result<Vec<TrashedLibrary>> {
+        let rows = library::Entity::find()
+            .filter(library::Column::DeletedAt.is_not_null())
+            .order_by_desc(library::Column::DeletedAt)
+            .all(&self.db)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for lib in rows {
+            if let Some(deleted) = lib.deleted_at {
+                out.push(TrashedLibrary {
+                    id: lib.id,
+                    sync_id: lib.sync_id,
+                    name: lib.name,
+                    deleted_at: deleted.into(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Restore a trashed library, and — cascade-scoped (#644 design) — every
+    /// presentation THIS library's own deletion tombstoned along with it. A
+    /// presentation trashed independently (by its own `delete_presentation`
+    /// call, at a DIFFERENT instant than the library's tombstone) stays
+    /// trashed; `delete_library` stamps the identical `now` on the library
+    /// row and every live presentation it cascades in ONE transaction (see
+    /// `delete_library` above), so "deleted_at equals the library's own
+    /// former tombstone timestamp" is the exact, unambiguous signal that a
+    /// presentation was part of THIS deletion's cascade.
+    ///
+    /// `updated_at` for BOTH the library and any presentations it
+    /// un-tombstones is bumped to a FRESH local `now()` (never the old
+    /// tombstone's clock) — per `.claude/rules/sync-lww.md` invariant 2: a
+    /// restore is a DELIBERATE local correction, not a defensive/derived
+    /// write, so it must win the strict-`>` LWW gate on the peer's next
+    /// pull. Writing back the OLD clock would tie with whatever the peer
+    /// already holds for this identity — the restore would never
+    /// propagate, and if the peer independently holds an equal-or-newer
+    /// tombstone for this identity, this restore loses that race and gets
+    /// silently re-trashed right back on the very next sync cycle.
+    #[instrument(skip_all)]
+    pub async fn restore_library(&self, library_id: LibraryId) -> anyhow::Result<()> {
+        let id = library_id.to_string();
+        let txn = self.db.begin().await?;
+
+        let existing = library::Entity::find_by_id(id.clone()).one(&txn).await?;
+        let (lib, tombstoned_at) = classify_restore(existing.as_ref())?;
+        let name = lib.name.clone();
+
+        // `idx_libraries_name_live_unique` only guards LIVE rows — a live
+        // library could legitimately claim this exact name WHILE the
+        // original sat trashed (a fresh `create_library`, or a peer's
+        // sync-apply adopting it). Without this check, restoring would hit
+        // that constraint as a raw SQLite error and fall through to a bare
+        // 500 instead of a typed refusal.
+        if library_name_taken_by_a_live_row(&txn, &name, &id).await? {
+            return Err(RepositoryError::Conflict(
+                "a live library already has this name — rename it before restoring",
+            )
+            .into());
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let lib_result = library::Entity::update_many()
+            .col_expr(
+                library::Column::DeletedAt,
+                Expr::value(Option::<String>::None),
+            )
+            .col_expr(library::Column::UpdatedAt, Expr::value(now.clone()))
+            .filter(library::Column::Id.eq(id.clone()))
+            .filter(library::Column::DeletedAt.is_not_null())
+            .exec(&txn)
+            .await?;
+        if lib_result.rows_affected == 0 {
+            // Raced with a concurrent restore/prune between the read above
+            // and this write.
+            return Err(RepositoryError::NotFound("no trashed library to restore").into());
+        }
+
+        restore_cascaded_presentations(&txn, &id, tombstoned_at, &now).await?;
+
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// Fetches all libraries with presentations and slides using batch queries.
     /// Optimized to use 3 queries total instead of 1 + n + (n*m) queries.
     #[instrument(skip_all)]
@@ -468,6 +566,101 @@ impl Repository {
     }
 }
 
+/// #644: classify what `restore_library` must do based on the current
+/// library row. `None` (the row is entirely missing) is `NotFound` (404); a
+/// row that exists but is NOT currently trashed is `Conflict` (409) — the
+/// SAME structural split `classify_restore_library` in `repository/sync.rs`
+/// (#646) already applies for presentations. A pure function so both
+/// branches are directly unit-testable.
+///
+/// Returns the row TOGETHER WITH its already-destructured tombstone
+/// timestamp (never a bare `&library::Model` the caller re-derives with an
+/// `.expect()`) — `deleted_at` is proven `Some` right here, at the only
+/// place that knows it, so the "is trashed" invariant is upheld by the type
+/// signature instead of by a panic-on-violation the caller must trust.
+fn classify_restore(
+    existing: Option<&library::Model>,
+) -> Result<(&library::Model, DateTime<FixedOffset>), RepositoryError> {
+    match existing {
+        None => Err(RepositoryError::NotFound("library not found")),
+        Some(lib) => match lib.deleted_at {
+            None => Err(RepositoryError::Conflict("library is not trashed")),
+            Some(tombstoned_at) => Ok((lib, tombstoned_at)),
+        },
+    }
+}
+
+/// Whether a LIVE library other than `exclude_id` already owns `name` —
+/// `idx_libraries_name_live_unique` (migration `m20260725_000001`) only
+/// guards live rows, so this is the one collision a restore must defend
+/// against that `delete_library`'s own tombstone-write never has to.
+async fn library_name_taken_by_a_live_row(
+    txn: &DatabaseTransaction,
+    name: &str,
+    exclude_id: &str,
+) -> anyhow::Result<bool> {
+    let taken = library::Entity::find()
+        .filter(library::Column::Name.eq(name.to_string()))
+        .filter(library::Column::DeletedAt.is_null())
+        .filter(library::Column::Id.ne(exclude_id.to_string()))
+        .one(txn)
+        .await?
+        .is_some();
+    Ok(taken)
+}
+
+/// Un-tombstone every presentation THIS library's own `delete_library`
+/// cascade tombstoned along with it (#644 design) — `deleted_at` equal to
+/// the library's own former tombstone timestamp is the exact signal, since
+/// `delete_library` stamps the identical `now` on the library row and every
+/// presentation it cascades, in ONE transaction. A presentation trashed
+/// independently (at any OTHER instant) stays trashed.
+///
+/// Compared in RUST, not via a SQL equality filter: both timestamps are
+/// decoded from the SAME stored TEXT column by the SAME driver, so an equal
+/// instant compares exactly equal in Rust regardless of how a re-serialized
+/// value would round-trip through a bound query parameter (the write path
+/// stores the raw `to_rfc3339()` string directly via `Expr::value`, not
+/// through sea_orm's own chrono value binding).
+async fn restore_cascaded_presentations(
+    txn: &DatabaseTransaction,
+    library_id: &str,
+    tombstoned_at: DateTime<FixedOffset>,
+    now: &str,
+) -> anyhow::Result<()> {
+    let trashed_rows: Vec<(String, Option<DateTime<FixedOffset>>)> =
+        presentation_entity::Entity::find()
+            .select_only()
+            .column(presentation_entity::Column::Id)
+            .column(presentation_entity::Column::DeletedAt)
+            .filter(presentation_entity::Column::LibraryId.eq(library_id.to_string()))
+            .filter(presentation_entity::Column::DeletedAt.is_not_null())
+            .into_tuple()
+            .all(txn)
+            .await?;
+    let restore_ids: Vec<String> = trashed_rows
+        .into_iter()
+        .filter(|(_, deleted_at)| *deleted_at == Some(tombstoned_at))
+        .map(|(pid, _)| pid)
+        .collect();
+    if restore_ids.is_empty() {
+        return Ok(());
+    }
+    presentation_entity::Entity::update_many()
+        .col_expr(
+            presentation_entity::Column::DeletedAt,
+            Expr::value(Option::<String>::None),
+        )
+        .col_expr(
+            presentation_entity::Column::UpdatedAt,
+            Expr::value(now.to_string()),
+        )
+        .filter(presentation_entity::Column::Id.is_in(restore_ids))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
 /// #558 S2 (round-3 Decision A): read the OLD library rows (about to be
 /// replaced) BEFORE they are deleted, keyed by `sync_id` ONLY, so the
 /// caller can carry over `deleted_at` / `updated_at` for any song that
@@ -634,4 +827,53 @@ async fn insert_presentation_with_slides(
         slide_entity::Entity::insert(slide_model).exec(txn).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_restore;
+    use crate::entities::library;
+    use crate::RepositoryError;
+    use chrono::Utc;
+
+    fn library_model(deleted: bool) -> library::Model {
+        let now = Utc::now();
+        library::Model {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Songs".to_string(),
+            search_name: "songs".to_string(),
+            created_at: now.into(),
+            updated_at: now.into(),
+            sync_id: uuid::Uuid::new_v4().to_string(),
+            deleted_at: deleted.then_some(now.into()),
+        }
+    }
+
+    #[test]
+    fn missing_library_row_is_not_found() {
+        assert!(matches!(
+            classify_restore(None),
+            Err(RepositoryError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn live_library_row_is_conflict() {
+        // #644: restoring a library that is NOT currently trashed is a
+        // state conflict (409), not a silent no-op.
+        let live = library_model(false);
+        assert!(matches!(
+            classify_restore(Some(&live)),
+            Err(RepositoryError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn trashed_library_row_is_ok() {
+        let trashed = library_model(true);
+        let (lib, tombstoned_at) =
+            classify_restore(Some(&trashed)).expect("a trashed row must classify as Ok");
+        assert_eq!(lib.id, trashed.id);
+        assert_eq!(Some(tombstoned_at), trashed.deleted_at);
+    }
 }

@@ -66,12 +66,22 @@ pub(crate) fn banner_subtext(expires_at: Option<&str>) -> String {
     }
 }
 
-/// The "still valid, renew soon" note text.
+/// The "still valid" note text — sharpens to an explicit renew-soon warning
+/// once inside the expiry window (#660: before this, the SAME flat line
+/// rendered whether 8 hours or 8 minutes remained), otherwise the plain
+/// "valid until" wording.
 pub(crate) fn validity_text(expires_at: &str) -> String {
-    format!(
-        "Prihlásenie ku Claude platí do {}.",
-        format_expiry(expires_at)
-    )
+    if crate::components::ai_status::is_expiring_soon(expires_at, chrono::Utc::now()) {
+        format!(
+            "Prihlásenie ku Claude čoskoro vyprší ({}) — odporúčame sa znova prihlásiť.",
+            format_expiry(expires_at)
+        )
+    } else {
+        format!(
+            "Prihlásenie ku Claude platí do {}.",
+            format_expiry(expires_at)
+        )
+    }
 }
 
 #[component]
@@ -194,7 +204,26 @@ mod tests {
 
     #[test]
     fn validity_text_names_the_expiry() {
-        let text = validity_text("2026-08-05T10:00:00Z");
+        // Computed relative to "now" (not a hardcoded past date) so this
+        // stays a genuine "plenty of time left" case regardless of when the
+        // suite runs.
+        let far_future = (chrono::Utc::now() + chrono::Duration::hours(8)).to_rfc3339();
+        let text = validity_text(&far_future);
         assert!(text.contains("platí do"), "got: {text}");
+        assert!(!text.contains("čoskoro"), "got: {text}");
+    }
+
+    // #660: the SAME flat "platí do" wording used to render whether 8 hours
+    // or 8 minutes remained — this must now sharpen to an explicit warning
+    // once inside the expiry window.
+    #[test]
+    fn validity_text_warns_explicitly_once_inside_the_expiry_window() {
+        let soon = (chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339();
+        let text = validity_text(&soon);
+        assert!(text.contains("čoskoro vyprší"), "got: {text}");
+        assert!(
+            text.contains("odporúčame sa znova prihlásiť"),
+            "got: {text}"
+        );
     }
 }

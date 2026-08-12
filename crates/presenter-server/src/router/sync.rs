@@ -25,6 +25,7 @@ pub(super) async fn get_sync_manifest(
             .map(|r| SyncManifestEntryDto {
                 sync_id: r.sync_id,
                 library_name: r.library_name,
+                library_sync_id: r.library_sync_id,
                 name: r.name,
                 updated_at: r.updated_at,
                 deleted_at: r.deleted_at,
@@ -59,6 +60,7 @@ pub(super) async fn get_sync_presentation(
         Some(p) => Ok(Json(SyncPresentationDto {
             sync_id: p.sync_id,
             library_name: p.library_name,
+            library_sync_id: p.library_sync_id,
             name: p.name,
             updated_at: p.updated_at,
             deleted_at: p.deleted_at,

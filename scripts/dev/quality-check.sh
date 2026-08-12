@@ -96,12 +96,22 @@ if command -v rg >/dev/null 2>&1 && rg -n "\\.(only|skip)\\(" tests/e2e --glob '
 fi
 
 # 6) No continue-on-error in CI workflows (strict mode)
-if command -v rg >/dev/null 2>&1 && rg -n "continue-on-error" .github/workflows/*.yml >/dev/null 2>&1; then
+# Matches the YAML KEY only — "continue-on-error:" at the start of a line
+# (optionally after a leading "- " list marker), any indentation, any
+# value. Deliberately does NOT match the same substring inside a comment:
+# a comment line always has "#" as its first non-whitespace character,
+# which breaks the start-of-line anchor below before "continue-on-error:"
+# can match. A plain substring scan here previously flagged a COMMENT that
+# was merely explaining the ban (d4e2cb3d, #661), forcing that comment to
+# be worded around the very gate it was describing.
+if command -v rg >/dev/null 2>&1 && rg -n '^\s*(-\s+)?continue-on-error:' .github/workflows/*.yml >/dev/null 2>&1; then
   fail "Found continue-on-error in workflows - remove for strict CI"
 fi
 
 # 6b) No shell-level soft-fail patterns in workflows
-# Catches the equivalent of continue-on-error but written in shell:
+# Catches the equivalent of continue-on-error but written in shell: an
+# `echo "::warning::..."` line immediately followed, on the very next
+# line, by `exit 0`, e.g.:
 #   ... || {
 #     echo "::warning::..."
 #     exit 0
@@ -109,8 +119,18 @@ fi
 # This pattern silently turns failures into green CI and is exactly what
 # allowed the dev DB drift regression on 2026-04-10 (prod SSH key never
 # installed → migration test silently skipped for weeks).
+#
+# Both matched lines are anchored to require "echo"/"exit 0" as the FIRST
+# real token of the line (`(?m)^\s*echo`/`(?m)^\s*exit 0`) — any
+# indentation, but NOT a YAML comment: a comment line always has "#" as
+# its first non-whitespace character, so "echo"/"exit 0" can never be the
+# first real token there and the anchor cannot match. Same comment-
+# immunity reasoning as check 6's continue-on-error scan above. A plain
+# substring/no-anchor scan here would ALSO trip on a COMMENT merely
+# documenting this shape (e.g. this very header comment, if it lived
+# inside a workflow file instead of this script).
 if command -v rg >/dev/null 2>&1 && \
-   rg -nU --multiline 'echo[^\n]*::warning::[^\n]*\n[^\n]*exit 0' .github/workflows/*.yml >/dev/null 2>&1; then
+   rg -nU --multiline '(?m)^\s*echo[^\n]*::warning::[^\n]*\n^\s*exit 0' .github/workflows/*.yml >/dev/null 2>&1; then
   fail "Found shell soft-fail pattern (echo ::warning:: followed by exit 0) in workflows. CI steps must fail loudly. If a step is genuinely optional, document why and exit non-zero on failure with a clear ::error::."
 fi
 

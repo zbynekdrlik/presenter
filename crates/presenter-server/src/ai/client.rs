@@ -36,12 +36,14 @@ fn looks_like_context_length_error(body: &str) -> bool {
 }
 
 /// Shared HTTP client for `/ai/status` connectivity probes ONLY (#622
-/// post-merge review finding 3a). `check_connectivity` is polled every 5s by
-/// the operator-header status chip (`ai_status.rs`) — building a fresh
-/// `reqwest::Client` (own connection pool + TLS setup) on every single poll
-/// was needless per-call cost. `call_chat_completions` keeps its OWN client:
-/// a chat call is a one-off with a much longer 120s timeout, so reuse would
-/// not meaningfully help there.
+/// post-merge review finding 3a). `list_models` (the successor to
+/// `check_connectivity`, removed #661 once this call also became the model-
+/// catalog check) is polled every 5s by the operator-header status chip
+/// (`ai_status.rs`) — building a fresh `reqwest::Client` (own connection
+/// pool + TLS setup) on every single poll was needless per-call cost.
+/// `call_chat_completions` keeps its OWN client: a chat call is a one-off
+/// with a much longer 120s timeout, so reuse would not meaningfully help
+/// there.
 static CONNECTIVITY_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn connectivity_client() -> &'static reqwest::Client {
@@ -131,6 +133,20 @@ pub struct ResponseFunction {
     pub arguments: String,
 }
 
+/// OpenAI-compatible `/models` list response (#661). Only the `id` field is
+/// used — the proxy's own catalog entries carry more (`object`, `created`,
+/// `owned_by`), but this is the ONLY thing `list_models` needs to answer
+/// "is the configured model actually served".
+#[derive(Debug, Deserialize)]
+pub struct ModelsResponse {
+    pub data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModelEntry {
+    pub id: String,
+}
+
 /// Call an OpenAI-compatible chat completions endpoint.
 pub async fn call_chat_completions(
     messages: &[serde_json::Value],
@@ -212,11 +228,16 @@ pub async fn call_chat_completions(
         .context("failed to parse AI API response")
 }
 
-/// Ping the AI API to verify connectivity. Uses the shared, lazily-built
-/// `connectivity_client()` (3s timeout) rather than a fresh client per call —
-/// this is polled every 5s by the status chip (#622 post-merge review
-/// finding 3a).
-pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
+/// List the model ids the proxy currently serves (#661). Used both to
+/// verify basic connectivity AND to validate the CONFIGURED model actually
+/// exists — before this, `/ai/status` only pinged this same endpoint and
+/// discarded the body, so an invalid `settings.model` string sat
+/// `connected: true` for four days until a real chat call 502'd.
+///
+/// Uses the shared, lazily-built `connectivity_client()` (3s timeout)
+/// rather than a fresh client per call — this is polled every 5s by the
+/// status chip (#622 post-merge review finding 3a).
+pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
     let url = format!("{}/models", settings.api_url.trim_end_matches('/'));
     let mut req = connectivity_client().get(&url);
 
@@ -232,15 +253,93 @@ pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
         anyhow::bail!("AI API returned status {}", response.status());
     }
 
-    Ok(())
+    let parsed: ModelsResponse = response
+        .json()
+        .await
+        .context("failed to parse AI /models response")?;
+    Ok(parsed.data.into_iter().map(|m| m.id).collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Once};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- #661: list_models() parses the proxy's real model catalog ---
+
+    fn test_settings(api_url: &str, model: &str) -> AiSettings {
+        AiSettings {
+            api_url: api_url.to_string(),
+            api_key: None,
+            model: model.to_string(),
+            system_prompt_extra: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_models_parses_ids_from_a_real_looking_models_response() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "object": "list",
+                "data": [
+                    {"id": "claude-opus-4-6", "object": "model", "owned_by": "anthropic"},
+                    {"id": "claude-sonnet-4-6", "object": "model", "owned_by": "anthropic"}
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        let models = list_models(&settings).await.expect("must succeed");
+        assert_eq!(
+            models,
+            vec![
+                "claude-opus-4-6".to_string(),
+                "claude-sonnet-4-6".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_models_fails_on_a_non_success_status() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        let err = list_models(&settings)
+            .await
+            .expect_err("a 401 must be an error");
+        assert!(err.to_string().contains("401"));
+    }
+
+    #[tokio::test]
+    async fn list_models_fails_on_a_malformed_body() {
+        // A 2xx with a body that doesn't match the expected shape must be
+        // an error, not silently treated as "connected" the way the old
+        // bare-GET check_connectivity (removed #661 -- superseded by
+        // list_models) would have: it discarded the body entirely, so a
+        // malformed/incompatible proxy response could never be
+        // distinguished from a healthy one.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        list_models(&settings)
+            .await
+            .expect_err("a malformed /models body must be an error");
+    }
 
     // --- AC4: max_tokens is always present on the serialized request ---
 
@@ -275,16 +374,6 @@ mod tests {
     // --- AC7: a provider-side failure logs a server-side WARN/ERROR line
     // carrying the provider's error text ---
 
-    /// A minimal `tracing::Subscriber` that captures the formatted fields of
-    /// every ERROR (or higher-severity) event, so a test can assert a log
-    /// line was actually emitted and what it said — without a real log
-    /// sink. Same shape as `resolume::backoff_tests::ErrorCounter`, extended
-    /// to capture message TEXT (not just a count) since AC7 requires
-    /// asserting the provider's error body reached the log line.
-    struct CapturedLogs {
-        lines: Arc<Mutex<Vec<String>>>,
-    }
-
     struct FieldVisitor(String);
     impl tracing::field::Visit for FieldVisitor {
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
@@ -292,7 +381,56 @@ mod tests {
         }
     }
 
-    impl tracing::Subscriber for CapturedLogs {
+    /// Process-lifetime slot for whichever capture test currently holds
+    /// `CAPTURE_TEST_LOCK` below. A `Mutex`, not a `thread_local!` — this
+    /// used to be a `thread_local!`, which only worked because
+    /// `#[tokio::test]`'s default (`current_thread`) flavor happens to pin
+    /// an entire test body, including every `.await`, to one dedicated OS
+    /// thread. Nothing enforced that: switching either capture test below
+    /// to `flavor = "multi_thread"`, or introducing an `.await` whose
+    /// continuation resumes on a different worker thread, would have made
+    /// captured events silently vanish (the event fires on a thread whose
+    /// thread-local was never opted in) with no error — correct today,
+    /// silently wrong the moment someone touches test flavor. A process-
+    /// wide `Mutex` has no thread affinity: it is checked from whichever
+    /// OS thread the event happens to fire on. See `CAPTURE_TEST_LOCK` for
+    /// how the two capture tests below are kept from cross-contaminating
+    /// this one shared slot.
+    static CAPTURE_SINK: Mutex<Option<Arc<Mutex<Vec<String>>>>> = Mutex::new(None);
+
+    /// Serializes the capture tests below against EACH OTHER: only one
+    /// `CaptureGuard` may be alive at a time, so only one test's events are
+    /// ever routed into `CAPTURE_SINK` at once. `cargo test` runs tests in
+    /// parallel OS threads within one process, and `CAPTURE_SINK` above is
+    /// now shared process-wide rather than thread-scoped — without this
+    /// lock, two concurrently-running capture tests would interleave their
+    /// events into the same buffer.
+    static CAPTURE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Captures every WARN/ERROR-level tracing event emitted anywhere in
+    /// the process into `CAPTURE_SINK`, whenever that slot holds a sink —
+    /// i.e. for as long as a `CaptureGuard` (below) is alive — so a test
+    /// can assert a log line was actually produced and what it said,
+    /// without a real log sink.
+    ///
+    /// Installed ONCE, GLOBALLY (`capture_logs_on_this_thread`, below) —
+    /// deliberately NOT via the per-test scoped `subscriber::set_default`
+    /// this used to use. Reason: the `error!(...)` call this test exercises
+    /// (in `call_chat_completions`'s non-success branch) is ALSO hit by
+    /// `provider_context_length_rejection_is_translated_to_the_friendly_error`
+    /// and `provider_non_context_length_4xx_stays_a_generic_error`, two
+    /// sibling tests that never install ANY capturing subscriber.
+    /// `tracing-core` caches each callsite's dispatch `Interest`
+    /// (never/sometimes/always) starting from whichever test's thread
+    /// reaches it FIRST, so repeatedly constructing a fresh, test-scoped
+    /// `Dispatch` (one per `subscriber::set_default` call) made this test's
+    /// own capture depend on `cargo test`'s default parallel scheduling
+    /// order across siblings — exactly the cross-test race that produced
+    /// the CI failure this fixes. A SINGLE, process-lifetime subscriber
+    /// sidesteps it: the callsite is registered against this ONE
+    /// subscriber exactly once, for good.
+    struct GlobalCapture;
+    impl tracing::Subscriber for GlobalCapture {
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
             *metadata.level() <= tracing::Level::WARN
         }
@@ -302,22 +440,92 @@ mod tests {
         fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
         fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
         fn event(&self, event: &tracing::Event<'_>) {
-            if *event.metadata().level() <= tracing::Level::WARN {
+            if *event.metadata().level() > tracing::Level::WARN {
+                return;
+            }
+            let sink_slot = CAPTURE_SINK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(sink) = sink_slot.as_ref() {
                 let mut visitor = FieldVisitor(String::new());
                 event.record(&mut visitor);
-                self.lines.lock().unwrap().push(visitor.0);
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(visitor.0);
             }
         }
         fn enter(&self, _span: &tracing::span::Id) {}
         fn exit(&self, _span: &tracing::span::Id) {}
     }
 
+    /// RAII opt-in: while alive, holds `CAPTURE_TEST_LOCK` (so no other
+    /// capture test can become active concurrently) and keeps this test's
+    /// buffer installed in `CAPTURE_SINK`. Dropping releases BOTH — clears
+    /// the sink, then (via the field's own `Drop`) unlocks the test lock —
+    /// including when dropped during a panicking test's unwind, so one
+    /// panicking capture test can never wedge every later one, and a
+    /// later, unrelated test never inherits a stale sink. Both locks are
+    /// accessed poison-tolerantly throughout (`unwrap_or_else(|p|
+    /// p.into_inner())`) for the same reason: a panic while a lock is held
+    /// must not turn into every subsequent capture test failing too.
+    struct CaptureGuard {
+        _test_lock: std::sync::MutexGuard<'static, ()>,
+    }
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            *CAPTURE_SINK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        }
+    }
+
+    fn capture_logs_on_this_thread() -> (CaptureGuard, Arc<Mutex<Vec<String>>>) {
+        static INSTALLED: Once = Once::new();
+        INSTALLED.call_once(|| {
+            // `Dispatch::new` (not a bare `set_default`) so this
+            // registration triggers tracing-core's own callsite-interest
+            // rebuild exactly once, then stays alive — and therefore
+            // correct — for the rest of the process. See the doc comment
+            // on `GlobalCapture` above. `.expect(...)`, not `let _ =`: if
+            // some OTHER global default ever gets installed first (a test
+            // ordering change, a new test file), silently discarding this
+            // `Err` would leave `GlobalCapture` never installed, and BOTH
+            // capture tests below would fail on their generic "a
+            // provider-side failure must emit at least one WARN/ERROR log
+            // line" assertion — a confusing symptom pointing nowhere near
+            // the real cause. Fail loudly here instead, naming the cause.
+            let dispatch = tracing::dispatcher::Dispatch::new(GlobalCapture);
+            tracing::dispatcher::set_global_default(dispatch).expect(
+                "GlobalCapture must be the first global tracing dispatcher installed in \
+                 this test binary — set_global_default failing here means some other test \
+                 already installed a different one first, which would make the ai::client \
+                 WARN/ERROR log-capture tests silently see zero events instead of failing \
+                 with a clear cause",
+            );
+        });
+
+        // Serialize against any other currently-active capture test BEFORE
+        // touching CAPTURE_SINK, so two capture tests never interleave
+        // their events into the same shared buffer.
+        let test_lock = CAPTURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        *CAPTURE_SINK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink.clone());
+        (
+            CaptureGuard {
+                _test_lock: test_lock,
+            },
+            sink,
+        )
+    }
+
     #[tokio::test]
     async fn provider_error_response_is_logged_server_side_with_the_error_body() {
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        let _guard = tracing::subscriber::set_default(CapturedLogs {
-            lines: lines.clone(),
-        });
+        let (_capture_guard, lines) = capture_logs_on_this_thread();
 
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -430,10 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn network_failure_is_also_logged_server_side() {
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        let _guard = tracing::subscriber::set_default(CapturedLogs {
-            lines: lines.clone(),
-        });
+        let (_capture_guard, lines) = capture_logs_on_this_thread();
 
         let settings = AiSettings {
             // Reserved/unbound port — connection refused immediately, no

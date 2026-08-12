@@ -852,3 +852,274 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
 - **Local verify:** `npm ci && npx tsc --noEmit` clean for the new spec file. `rustfmt --check` clean
   for the Rust file. Playwright itself did NOT run locally (Tier-0 + #669 trap) — CI is the first
   real execution of the new spec, after the supervisor's round integration.
+
+---
+
+## Round integration — v0.4.238 (#665 + #633 + #670), 2026-08-12
+
+**Supervisor-side record of the round the three worker entries above belong to.**
+
+- **Recovery:** all three round-2 workers were killed mid-flight by a session limit. Their
+  uncommitted worktree edits were harvested (`git add -A && git diff --cached --binary > patch`)
+  before the stale worktrees were removed, and handed to fresh workers via `git apply --3way`.
+  #665's salvage (661 insertions) and #633's (147+/214-) both survived intact; #670 had no worktree
+  and restarted from zero with full grounding in its dispatch prompt. The #665 worker confirmed the
+  salvaged patch was a solid base but caught a real wiring gap in it: `friendly_ai_error_message`
+  had been written and unit-tested but never actually called from the SSE handler.
+- **Serial integration:** `db422020` (#633), `6ff70838` (#665), `b87b9367` (#670, after resolving
+  the round's only conflict — both sides had appended to this file; resolved keep-both).
+  `0ee7ea75` synced both `Cargo.lock` files to 0.4.238 (the prior day's bump touched only
+  `Cargo.toml`).
+- **`presenter-ui` compile-checked from the MAIN checkout** (`cargo check --target
+  wasm32-unknown-unknown`), closing the #669 verification hole the #670 worker could not close from
+  inside its worktree. Both `cargo fmt` scopes clean, `cargo check --workspace --tests` clean.
+- **First push failed CI on Clippy only** — `ai/context_budget.rs:503`, `unnecessary use of
+  to_string` in a test fixture (`-D clippy::unnecessary-to-owned`). Fixed in `1bc7a7b8`; every other
+  job in that run was green. Pipeline `31611199873` then went fully green, Deploy to Dev included.
+- **PR #673** (closes #665, #670, #633) merged as `a2fae3b7` with all 24 checks green.
+- **Prod deploy failed once on infrastructure, not code:** `Setup SSH for deployment` aborted after
+  5 s on `ssh-keyscan 10.77.9.205`. Probed from the runner host two minutes later: ping 0.3 ms,
+  keyscan instant, `/healthz` 200 — a momentary LAN blip. One rerun deployed cleanly. The step's
+  own `-e` shell swallows the keyscan exit before its diagnostic `if` can print, so the failure
+  surfaces as a bare exit 1; filed with the unbounded `known_hosts` growth found alongside it
+  as **#674**, to bundle with #660/#661 (same three workflow files).
+- **Post-deploy verification (prod 10.77.9.205, release channel):** `/healthz` v0.4.238,
+  NDI pipeline `streaming`; operator DOM reports `v0.4.238` with `data-wasm-ready="true"` and the
+  library list rendered; `/stage` plays live NDI video 1280x720, `readyState` 4, 8 ms
+  server→display latency; zero console errors or warnings on both pages. #633's centralized mapping
+  confirmed live: unknown presentation / playlist / stage-layout ids all return 404 (not 500).
+
+## Round: #660 + #661 + #674 (bundled — AI OAuth reliability + deploy hardening)
+
+Worktree worker, branch `worktree-agent-a057faccfdf0ac801` off v0.4.239. All three named issues
+edit the same three deploy workflows + the AI router/client files, bundled per the supervisor's
+dispatch. Local-only cycle (worktree mode): version bump inherited (2990a1af), no push/PR/merge —
+supervisor integrates.
+
+- **#674** (`1808701a`): the "Setup SSH for deployment" step's bare `ssh-keyscan ... 2>/dev/null`
+  aborted the WHOLE step via the step's own `-e` the instant keyscan itself failed transiently,
+  before its own diagnostic guard could ever print — exactly the prod outage logged in the round
+  above. Wrapped in an `if...;then` retry loop (5 attempts, `-T 5`, 3s backoff — a command tested by
+  `if` is exempt from `-e`'s abort) + `ssh-keygen -R $HOST` before the scan to bound the runner's
+  persistently-growing `known_hosts`. Same fix, all three workflows. Functionally verified locally
+  with a scripted fake `ssh-keyscan` (fails 2x then succeeds; fails all 5) — genuinely reproduced the
+  original bug's control-flow and proved the fix recovers/reaches the diagnostic. `[no-test:
+  ci-yaml conditional logic]` per the sanctioned bypass category.
+- **#660** (`1deb82d0`, `7df85064`): root cause traced two ways — presenter's OWN code has zero
+  OAuth refresh logic (confirmed: `refresh_token` only in a test fixture), and the vendored
+  CLIProxyAPI binary was stuck on a March-2026 build (v6.9.1) because the "Deploy CLIProxyAPI" step's
+  guard only ever downloaded ONCE (`if [ ! -f ... ]`), never on a version bump. Live research (`gh
+  api repos/router-for-me/CLIProxyAPI/releases/latest` + its issue tracker) found upstream DOES ship
+  a built-in Claude OAuth auto-refresh, with matching bugs filed+fixed in April 2026 — after our
+  vendored build. Chose the vendor-bump fork (7.2.130) over a self-driven refresh loop: verifiable
+  from this sandbox, matches the ticket filer's own stated step-1-then-step-2 sequencing, and avoids
+  writing against Anthropic's undocumented private OAuth flow against real credentials. Fixed the
+  download guard to compare a `.cliproxy-version` marker (re-downloads on ANY mismatch), converted
+  the step to a real remote heredoc (the old locally-double-quoted `ssh "..."` form would have
+  interpolated `$CURRENT_VERSION` on the RUNNER, not the remote host — functionally proven wrong
+  with 4 scripted scenarios, incl. the exact stale-marker case). Added
+  `crates/presenter-server/src/ai/refresh.rs` (new sibling module, proxy.rs untouched at 921 lines):
+  a 15-min background task WARNing before the token expires (2h window), surfaced via a new
+  `expiring-soon` state in the header `AiStatusChip` and sharper wording in `ai_login_banner.rs`.
+  Filed **#675** (follow-up, `Scope-gate: needs-user-decision`) for the self-driven-refresh fallback,
+  contingent on whether the vendor bump actually holds across a real multi-day token lifecycle —
+  something only observable post-deploy, not provable from this sandbox.
+- **#661** (`1adf4d66` RED, `5e7b38bd` GREEN): genuine RED→GREEN commit pair for the model-validity
+  bug — `compute_ai_connected`/`compute_ai_status_error` widened to 3-arg signatures in the RED
+  commit but their BODIES still ignored `model_valid` (reproducing the old bug under the new
+  signature, `TODO(#661 RED)` markers), so the new model-invalid tests genuinely failed against it;
+  GREEN commit flips both to the real 3-way AND + third error branch. `ai/client.rs` gained a typed
+  `ModelsResponse`/`list_models()` (feature-shaped, its own tests pass immediately, bundled in RED
+  since unrelated to the stub). `update_settings` (PUT /ai/settings) now records a `settings_audit`
+  row via `extract_actor` + `Repository::record_settings_audit` — best-effort (logged, not
+  propagated) since it's NOT in the same transaction as the generic `set_app_setting` upsert (no
+  transactional variant exists for it; adding one was out of this ticket's scope). Added an
+  `/ai/status` deploy-time gate to all three "Verify deployment" steps (fails on `connected:false`).
+  Tier-0 constraint: `cargo test` is hook-blocked here, so RED/GREEN was proven by inspection +
+  `cargo check --workspace --tests` compiling cleanly at each stage, not by literally watching the
+  suite run — CI is the first real execution.
+- **Local verification (Tier-0, this box):** `cargo fmt --all -- --check` clean (workspace);
+  `rustfmt --edition 2021 --config-path rustfmt.toml --check` clean for the two touched
+  `presenter-ui` files (workspace-excluded, can't be workspace-fmt-checked from a worktree — see
+  playbook); `cargo check --workspace --tests` clean at every stage; `npx tsc --noEmit` clean;
+  `count_prod_lines.sh`/`fn_length_check.py` — no NEW violations, `proxy.rs` untouched (921/686
+  prod), `router/ai.rs` 615/800, new `ai/refresh.rs` 93/800; YAML + `bash -n` clean on all extracted
+  script blocks across all three workflows; functional scratch-script proofs for both the
+  ssh-keyscan retry AND the CLIProxyAPI version-guard logic (4+2 scenarios).
+- **Design + validation comments** posted to #660/#661/#674 individually before any code commit
+  (STEP 0 + approach), per protocol. Review pass: one fresh-context `general-purpose` subagent
+  dispatch (never the built-in review skill) — see PR for its findings/verdict.
+- Playbook updated: `.claude/skills/ci/SKILL.md` (the ssh-keyscan retry pattern for any future
+  "Setup SSH" step) and `.claude/skills/deploy/SKILL.md` (the CLIProxyAPI version-guard fix + the
+  local-vs-remote ssh interpolation trap + confirmed upstream auto-refresh facts).
+  Dev (10.77.8.134:8080) on v0.4.238 dev channel.
+
+---
+
+## Round 2026-08-12 — #669 + #672 (bundled batch, worktree `agent-ad42662b6255f2dfc`)
+
+- **#669 — nested-worktree cargo collision, fixed for real.** Root cause confirmed empirically
+  (twice: single-nest and double-nest) — cargo's ancestor-directory workspace-root discovery has
+  no worktree-boundary awareness and climbs past a nested worktree's own excluding `[workspace]`
+  into an outer checkout's, whose relative-path `exclude` never matches the nested path. Fix:
+  permanent `[workspace]` table on `crates/presenter-ui/Cargo.toml` (commit `aab1e48c`) — makes
+  cargo's first manifest check return `Root` immediately, so the ancestor walk never runs.
+  Verified value-neutral: `cargo metadata` from the repo root still lists the same 7 outer
+  members with `presenter-ui` absent; from inside `presenter-ui` its own `workspace_root` now
+  resolves to itself; `git diff -- Cargo.lock` empty (both lockfiles untouched).
+  - Design: https://github.com/zbynekdrlik/presenter/issues/669#issuecomment-5269625066
+  - Validated (live repro + post-fix confirmation): https://github.com/zbynekdrlik/presenter/issues/669#issuecomment-5269737633
+  - Review: https://github.com/zbynekdrlik/presenter/issues/669#issuecomment-5269914428
+  - Added `scripts/dev/check-presenter-ui-worktree-fmt.sh` — the regression proof CI structurally
+    cannot provide (its own Format job checks out non-nested). Creates a throwaway nested worktree
+    via `git worktree add --detach`, runs `cargo fmt --check` inside `crates/presenter-ui`, asserts
+    exit 0, `trap ... EXIT` cleanup unconditionally. Ran it 3x during this round (pre-fix repro,
+    post-fix pass, post-#672 re-pass) — `git worktree list` clean every time, no stray entries.
+  - `.claude/skills/ci/SKILL.md`'s existing nested-worktree trap section rewritten in place to
+    record the fix (kept for historical context, marked FIXED).
+- **#672 — extracted `install_pagehide_teardown`/`PagehideHandle` out of `ndi_video.rs`.** This is
+  what made #669's fix worth landing first: with #669 in place, this refactor was genuinely
+  compile-checked (`cargo check --target wasm32-unknown-unknown`, exit 0) from inside the worktree,
+  not just `rustfmt`-only like #670 had to settle for. Pure relocation into a new sibling
+  `ndi_pagehide.rs` (mirrors `ndi_playback_guard.rs`'s #637 shape exactly): `install`'s param
+  changed `&WhepSession` → `Option<&str>` (the resource URL), `dispatch_delete` widened to
+  `pub(super)`, `ActiveConnection.pagehide`'s field type re-pointed. `disposed: Cell<bool>`
+  double-dispose guard and both existing `dispose()` call sites unchanged.
+  `ndi_video.rs`: 987→912 raw lines, 884→809 production lines (`count_prod_lines.sh`) — clear of
+  both the 800 warning and 1000 hard-fail thresholds' *trend*, though still above 800 itself
+  (non-blocking per the CI gate's own warn-vs-fail split).
+  - Design: https://github.com/zbynekdrlik/presenter/issues/672#issuecomment-5269742783
+  - Validated: https://github.com/zbynekdrlik/presenter/issues/672#issuecomment-5269746513
+  - Review: https://github.com/zbynekdrlik/presenter/issues/672#issuecomment-5269914645
+  - Commit `240d7ece` (single commit, extraction + doc-comment updates in `wake_lock.rs` + `mod.rs`
+    wiring).
+- **Deep-review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per
+  #363): 0 🔴 0 🟡 3 🔵. Two flagged a stale `install_pagehide_teardown` name reference inside
+  `tests/e2e/stage-ndi-pagehide-teardown.spec.ts` (a comment + a test title string) —
+  **deliberately left unchanged**: the #672 dispatch instructions explicitly treat any edit to
+  that spec as a "stop and rethink, the refactor changed behavior" signal, so cosmetic-only text
+  in it was left alone rather than risk that read. Third was informational only (version unchanged
+  at `0.4.238` — explicitly not this worker's call per the dispatch's hard constraints).
+- **Local verify (Tier-0, no heavy builds):** `cargo fmt --check` + `cargo check --target
+  wasm32-unknown-unknown` both exit 0 for `crates/presenter-ui` from inside this nested worktree —
+  the first time either has been possible for a worktree-dispatched worker on this crate.
+- **Worktree-mode stop point:** committed on branch `worktree-agent-ad42662b6255f2dfc` at
+  `240d7ece`; no push/PR/merge/deploy/run-card from this worker — round integration is the
+  supervisor's job.
+
+---
+
+## #644 — Add library-restore capability (repository + API + UI)
+
+- **Design comment** posted before any code: root cause (`delete_library` soft-deletes but no mirror
+  `restore_library` was ever added — `fetch_libraries`/`list_library_summaries` correctly hide the
+  tombstoned library, so it was permanently unreachable), chosen approach (cascade-scoped restore —
+  only presentations `delete_library`'s own transaction tombstoned come back, matched by exact-instant
+  `deleted_at` equality compared in Rust, never a SQL round-trip; LWW clock bump per
+  `.claude/rules/sync-lww.md` invariant 2; a typed 409 guard against `idx_libraries_name_live_unique`),
+  rejected alternatives (auto-disambiguating the restored name like the sync-apply path does; restoring
+  every trashed presentation under the library_id regardless of instant).
+- **Commit `ab88c33a` [test/RED]:** `repository/library_trash_tests.rs`, `router/libraries_trash_tests.rs`,
+  `tests/e2e/library-trash.spec.ts` — reference not-yet-existing `Repository::restore_library`/
+  `list_trashed_libraries` (repository crate doesn't compile standalone at this commit — genuine RED).
+- **Commit `45780c8e` [green]:** `repository/library.rs` (`TrashedLibrary`, `list_trashed_libraries`,
+  `restore_library`, `classify_restore`, name-collision guard, cascade-scoped restore helper),
+  `state/presentations.rs` wrappers, `router/libraries.rs` + `router.rs` (`GET /libraries/trash`,
+  `POST /libraries/{id}/restore`, static route registered before `/libraries/{id}`), UI (`trash.rs`
+  extended with a "Zmazané knižnice" section in the same card, `api/sync.rs` client calls).
+- **Review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per #363):
+  0 🔴 1 🟡 0 🔵 pass 1 (banned `.expect()` in `restore_library`'s production path — fixed in
+  `47a82b33` by returning the destructured timestamp from `classify_restore` instead of re-deriving it
+  with `.expect()`); 0 🔴 0 🟡 1 🔵 pass 2 (TOCTOU race on the name-collision guard, accepted — matches
+  the already-shipped `resolve_conflict_free_name` pattern's same non-atomic shape in `library_sync.rs`).
+- **Local verify:** `cargo fmt --all --check` clean, `cargo check --workspace --tests` clean (both after
+  the review fix). `rustfmt --edition 2021 --config-path rustfmt.toml --check` clean for the two
+  `presenter-ui` files (workspace-excluded, no local compile-check possible — CI is the first real
+  compile of that crate). `npx tsc --noEmit` clean for the new E2E spec. `library.rs` now 831 production
+  lines (warning-only, well under the 1000 hard fail).
+- Version left untouched at `0.4.238` per the supervisor's correction (this worktree branched before the
+  round's 0.4.239 bump; the bump lands at integration).
+
+---
+
+## 2026-08-12 — #647 sync wire protocol: join presentations to libraries by identity, not name (worktree round, not yet merged)
+
+- **No version bump** — bug-fix-only change, dispatched as a per-issue worktree in a fleet round;
+  supervisor integrates (branch already carries the 0.4.239 bump from a sibling worktree at
+  integration time, per its own local `dev`).
+- **Design comments posted BEFORE first code commit:**
+  - Validated: https://github.com/zbynekdrlik/presenter/issues/647#issuecomment-5269675845 —
+    re-confirmed the wire DTOs still carry only `library_name`, every apply-path library join
+    (`sync_apply.rs:139/166/283/572/576`) is still name-only, `library_sync.rs`'s library-row
+    convergence (#578) is a genuinely different layer, and the file-size trap (989/1000 prod lines)
+    is current.
+  - Approach: https://github.com/zbynekdrlik/presenter/issues/647#issuecomment-5269672597 — additive
+    `library_sync_id: Option<String>` on the wire DTOs (`#[serde(default)]` for old-peer tolerance)
+    plus domain structs; every library-resolution call site tries identity FIRST (live or
+    tombstoned — library reconciliation runs earlier in the same cycle), degrading to the
+    byte-for-byte unchanged name-only path only when the identity hasn't converged locally. Rejected
+    an explicit peer-capability version-negotiation alternative as redundant — the wire format's own
+    tolerant deserialization + per-call-site "did it resolve?" check is already a complete compat
+    signal. File-size mitigation (extracting `sync_apply.rs`'s library helpers into a new sibling
+    `sync_apply_library.rs`, mirroring `library_sync.rs`'s existing split) planned BEFORE adding
+    behavior, not as an afterthought.
+- **Commit `b62441b5` [red]:** wire/domain plumbing (`library_sync_id` on `SyncManifestEntryDto`/
+  `SyncPresentationDto`/`SyncManifestRow`/`SyncPresentation`, threaded through
+  `list_sync_manifest`/`fetch_sync_presentation`/the two router handlers) + new integration tests in
+  `sync_apply_library_tests.rs` that reproduce the mis-filing bug directly against
+  `apply_sync_presentation`/`resolve_sync_apply_target` — 4 of 6 fail against this commit's
+  still-name-only apply logic (traced by code-path reasoning; Tier-0 has no local `cargo test`).
+  Every existing `SyncPresentation`/`SyncManifestRow` test literal gets `library_sync_id: None`,
+  preserving prior behavior unchanged.
+- **Commit `0682f641` [green]:** extracts `find_library_id`/`find_most_recent_tombstoned_library`/
+  `ensure_library`/`ensure_library_for_tombstone` into new `sync_apply_library.rs`, adds
+  `find_library_by_sync_id` (the identity lookup) + `revive_or_keep_tombstoned` (the shared
+  #580/#634/#646 LWW revive-or-stay-tombstoned decision), and makes every resolver try identity
+  first. `sync_apply.rs` threads `incoming.library_sync_id.as_deref()` through all 5 named call
+  sites. Makes the RED tests pass; adds 2 new unit tests + moves the 2 existing `#595`/`#626`
+  tombstone-agreement tests into the new file's own test module.
+  File size: `sync_apply.rs` 989 → 824 prod lines; new `sync_apply_library.rs` at 258.
+- **Deep-review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per
+  #363): 0 🔴 2 🟡 2 🔵. All four actioned in follow-up commit `4efe2b25`: new end-to-end
+  adopt-by-name-write test (`apply_sync_presentation_adopts_by_name_under_the_identity_resolved_library`),
+  rewrote the now-stale `.claude/rules/sync-lww.md` invariant 5 (#647 was listed as an open flaw),
+  implemented the `peer_song_with_library_sync_id` test helper a doc comment had pointed at but
+  never existed, and extracted `apply_sync_presentation`'s step-1 branch into
+  `apply_to_existing_by_sync_id` (89→101→ back under the 80-line warning band). Review comment:
+  https://github.com/zbynekdrlik/presenter/issues/647#issuecomment-5270083001
+- **Local verify:** `cargo check --workspace --tests` clean throughout (verified separately at the
+  RED commit, the GREEN commit, and after the review follow-up). `cargo fmt --all --check` clean.
+  `bash scripts/dev/quality-check.sh --against origin/main` exits 0, no new/worse warnings.
+  `fn_length_check.py` scoped to every touched file: zero violations, zero warnings (post-follow-up).
+  Playwright/`cargo test`/`cargo clippy` did NOT run locally (Tier-0) — CI is the first real test
+  execution after the supervisor's round integration.
+
+---
+
+## Round integration — v0.4.239 (#669 + #672 + #644 + #647), 2026-08-12
+
+**Supervisor-side record.** Four workers were dispatched in parallel worktrees; three returned
+complete and are integrated here. The fourth (#660 + #661 + #674) is PARKED, not lost — see below.
+
+- **Serial integration:** `2f664c05` (#669 + #672), `ffc4268f` (#644), `d3ab4651` (#647). Three
+  conflicts, all in append-only docs (`docs/autopilot-log.md` twice, `.claude/rules/sync-lww.md`
+  once) — resolved keep-both. The `sync-lww.md` one was substantive rather than mechanical: #644
+  had added a cascaded-restore invariant as item 6 while #647 was rewriting item 5 from "known open
+  flaw" to "fixed"; both survive, renumbered.
+- **`e8f1cfa7`** closes the two cosmetic review findings the #672 worker deliberately left: its
+  dispatch prompt forbade touching the #670 E2E spec (any edit there was to be read as "the refactor
+  changed behavior"), which was over-strict for a stale comment. The supervisor fixed the reference
+  to `ndi_pagehide.rs` afterwards.
+- **Local verification after all three merges:** `cargo fmt --all --check` clean; `cargo fmt --check`
+  inside `crates/presenter-ui` clean; `cargo check --workspace --tests` clean; `cargo check --target
+  wasm32-unknown-unknown` for `presenter-ui` clean; `npx tsc --noEmit` clean. The two wasm-side
+  checks are themselves only possible because of #669 — this is the first round where the frontend
+  crate was type-checked as part of integration rather than trusted to CI.
+- **#660 + #661 + #674 parked on `worktree-agent-a057faccfdf0ac801`** (10 commits, based on
+  `2990a1af`): the worker hit an account weekly-limit reset (2026-08-18) and the review subagent it
+  dispatched died before producing a finding. Its last, uncommitted edit was a security fix it had
+  caught on itself — its own new audit wiring would have written the raw provider API key into
+  `settings_audit` — salvaged from the working tree and committed verbatim as `cd7c0f56`. The branch
+  was deliberately NOT merged into this round: it bumps a vendored binary 6.9.1 → 7.2.130 on every
+  deploy target and rewrites the prod deploy's SSH setup, which is not something to ship on CI-green
+  alone with zero review passes. Full pickup checklist posted on all three tickets.

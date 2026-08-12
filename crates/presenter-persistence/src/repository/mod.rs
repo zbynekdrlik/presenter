@@ -6,6 +6,8 @@ mod library;
 mod library_sync;
 #[cfg(test)]
 mod library_sync_tests;
+#[cfg(test)]
+mod library_trash_tests;
 mod playlist;
 mod presentation;
 #[cfg(test)]
@@ -20,6 +22,9 @@ mod slide_stage_layout;
 mod stage_state;
 mod sync;
 mod sync_apply;
+mod sync_apply_library;
+#[cfg(test)]
+mod sync_apply_library_tests;
 #[cfg(test)]
 mod sync_apply_review_tests;
 mod sync_apply_tombstone_cleanup;
@@ -36,6 +41,7 @@ mod tests;
 mod util;
 mod video_source;
 
+pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
 pub use sync_apply::{sync_should_apply, SyncApplyOutcome, PRUNE_HORIZON};

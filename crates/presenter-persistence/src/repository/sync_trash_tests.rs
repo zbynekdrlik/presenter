@@ -26,6 +26,7 @@ async fn adopt_by_name_never_adopts_a_trashed_candidate() {
     let peer = crate::SyncPresentation {
         sync_id: "peer-identity-trashed-case".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Shared Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -76,6 +77,7 @@ async fn apply_never_adopts_a_tombstone_by_name_onto_a_live_same_name_song() {
     let peer_tombstone = crate::SyncPresentation {
         sync_id: "peer-tombstone-unknown".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Shared Song".to_string(),
         updated_at: tombstone_at,
         deleted_at: Some(tombstone_at),
@@ -131,6 +133,7 @@ async fn apply_skips_an_unknown_tombstone_older_than_the_prune_horizon() {
     let stale_tombstone = crate::SyncPresentation {
         sync_id: "ancient-tombstone".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Long Gone".to_string(),
         updated_at: stale_at,
         deleted_at: Some(stale_at),
@@ -166,6 +169,7 @@ async fn apply_skips_a_past_horizon_tombstone_for_an_unknown_library_without_cre
     let stale_tombstone = crate::SyncPresentation {
         sync_id: "ancient-unknown-library-tombstone".to_string(),
         library_name: "Never Heard Of It".to_string(),
+        library_sync_id: None,
         name: "Long Gone".to_string(),
         updated_at: stale_at,
         deleted_at: Some(stale_at),
@@ -241,6 +245,7 @@ async fn apply_sync_tombstone_clears_stage_layout_markers_instead_of_remapping_t
     let tombstone = crate::SyncPresentation {
         sync_id: local_sync_id,
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Marked Song".to_string(),
         updated_at: tombstone_at,
         deleted_at: Some(tombstone_at),
@@ -577,6 +582,7 @@ async fn ensure_library_picks_the_most_recent_tombstone_when_several_share_a_nam
     let peer = crate::SyncPresentation {
         sync_id: "peer-p2-multi-tombstone".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "P2".to_string(),
         updated_at: between,
         deleted_at: None,
@@ -661,6 +667,7 @@ async fn ensure_library_boundary_is_strict_greater_than_not_greater_or_equal() {
     let peer_tied = crate::SyncPresentation {
         sync_id: "peer-p2-tied-with-tombstone".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "P2".to_string(),
         updated_at: tombstoned_at,
         deleted_at: None,
@@ -753,6 +760,7 @@ async fn ensure_library_tie_breaks_identical_updated_at_tombstones_by_sync_id() 
     let peer = crate::SyncPresentation {
         sync_id: "peer-p2-tied-tombstones".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "P2".to_string(),
         updated_at: tied_at + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -796,6 +804,7 @@ async fn moving_an_existing_song_onto_a_tombstoned_library_tombstones_the_song_t
     let initial = crate::SyncPresentation {
         sync_id: "peer-move-test".to_string(),
         library_name: "Old".to_string(),
+        library_sync_id: None,
         name: "Moved Song".to_string(),
         updated_at: chrono::Utc::now() - chrono::Duration::minutes(10),
         deleted_at: None,
@@ -817,6 +826,7 @@ async fn moving_an_existing_song_onto_a_tombstoned_library_tombstones_the_song_t
     let moved = crate::SyncPresentation {
         sync_id: "peer-move-test".to_string(),
         library_name: "New".to_string(),
+        library_sync_id: None,
         name: "Moved Song".to_string(),
         updated_at: chrono::Utc::now() - chrono::Duration::minutes(5),
         deleted_at: None,

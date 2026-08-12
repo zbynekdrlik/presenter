@@ -43,8 +43,15 @@ and `cargo check` regardless of `--strict`; that flag only decides whether a fai
 not whether these run. A worker under a "no local Rust build/check/clippy" constraint must NOT run
 this script at all, in any mode; use the two underlying non-compiling checks directly instead:
 `bash scripts/dev/count_prod_lines.sh <one-file-per-call>` and
-`QC_TARGETS=<comma-separated-files> python3 scripts/dev/fn_length_check.py .` — both are pure
+`QC_TARGETS=<newline-separated-files> python3 scripts/dev/fn_length_check.py .` — both are pure
 bash/Python and cover the two hard-fail gates (file size, function length) without touching cargo.
+**`QC_TARGETS` is NEWLINE-separated, not comma-separated** (confirmed against the script's own
+docstring: "newline-separated RELATIVE file paths") — a comma- or space-joined value matches zero
+files and `fn_length_check.py` silently prints `{"violations": [], "warnings": []}`, which reads
+exactly like a clean pass. Build the value with `printf '%s\n' file1 file2 ... | ...` or a small
+wrapper script that reads a newline-delimited file into the env var, never a one-line
+`QC_TARGETS="a,b,c"` (#647 lesson: a worker's own space-joined attempt silently returned an
+empty-looking clean result before this was caught).
 
 ## RED-before-GREEN verification under Tier-0 — push RED alone, read `--log-failed` (#608)
 
@@ -87,6 +94,23 @@ sudo ./svc.sh install && sudo ./svc.sh start
 CI has TWO runs per push: "PR Automation" (fast, Label/Validate) and "Pipeline" (real
 Test→Build→E2E→deploy). `gh run list --limit 1` often returns PR Automation — filter:
 `gh run list --branch dev --limit 5 | grep Pipeline`.
+
+## Every "Setup SSH" step needs a retry-wrapped `ssh-keyscan`, never a bare one (#674)
+
+All three "Setup SSH for deployment" steps (`deploy.yml`, `pipeline.yml`, `release.yml`) run under
+the step's default `bash -e`. A **bare** top-level `ssh-keyscan $HOST >> known_hosts 2>/dev/null`
+aborts the WHOLE step via `-e` the instant `ssh-keyscan` itself returns non-zero (a transient
+connect timeout) -- BEFORE reaching any `[ ! -s known_hosts ]` diagnostic written to explain
+exactly that failure. Hit live: run 31616035821 died in ~5s with a bare `exit code 1` and zero
+explanation, discarding a ~20-minute build.
+
+**The fix pattern, now applied to all three steps** -- wrap the scan in `if ...; then` (a command's
+exit status inside `if` is exempt from `-e`'s abort behavior) with a bounded retry (5 attempts,
+explicit `-T 5` timeout, 3s backoff), and run `ssh-keygen -R $HOST -f known_hosts` (best-effort)
+BEFORE the scan so a re-deploy never accumulates duplicate host-key entries (the runner's
+`known_hosts` is a PERSISTENT file across deploys, unlike an ephemeral GitHub-hosted runner's).
+Reuse this exact shape for any NEW ssh-based deploy step added to these workflows -- never a bare
+`ssh-keyscan ... 2>/dev/null` again.
 
 ## Dead `deb.nodesource.com` apt source breaks `--with-deps` browser install (#610)
 
@@ -406,33 +430,34 @@ cargo fmt --all -- --check
 Same trap applies to `cargo check`/`clippy` on that crate (`cargo <cmd> -p presenter-ui` from
 the root fails — run it from `crates/presenter-ui/`, see the deploy skill).
 
-## `cargo fmt`/`cargo check` for presenter-ui CANNOT run from inside a nested `.claude/worktrees/` checkout (2026-08-11)
+## `cargo fmt`/`cargo check` for presenter-ui from inside a nested `.claude/worktrees/` checkout — FIXED (#669, 2026-08-12)
 
-`cd crates/presenter-ui && cargo fmt` (or `cargo check`/`cargo metadata`/`cargo locate-project`,
-any invocation) fails there with `current package believes it's in a workspace when it's not:
-current: .../crates/presenter-ui/Cargo.toml  workspace: /home/.../presenter-dev2/Cargo.toml` — it
-names the repo's **MAIN checkout** as the workspace, not the worktree's own root, even though the
-worktree root has its own valid `[workspace]` + `exclude = ["crates/presenter-ui"]`.
+**Historical trap (2026-08-11 → 2026-08-12), now fixed — kept for context.** `cd crates/presenter-ui
+&& cargo fmt` (or `cargo check`/`cargo metadata`/`cargo locate-project`) used to fail there with
+`current package believes it's in a workspace when it's not: current: .../crates/presenter-ui/
+Cargo.toml  workspace: /home/.../presenter-dev2/Cargo.toml` — it named the repo's **MAIN checkout**
+as the workspace, not the worktree's own root, even though the worktree root has its own valid
+`[workspace]` + `exclude = ["crates/presenter-ui"]`.
 
 Root cause: cargo's workspace-root search does NOT stop at the first ancestor `[workspace]` that
 EXCLUDES the current package — it treats "excluded here" as "keep climbing", not "standalone,
-done". Since `.claude/worktrees/<name>/` is filesystem-nested *under* the main checkout, cargo
-keeps climbing straight past the worktree root and finds the outer main-tree `Cargo.toml` next —
-which does NOT exclude the (now oddly-nested) path, so it errors as "not in workspace.members".
-This is invisible in the MAIN checkout (nothing to climb past) and invisible in CI (flat clone,
-no nesting) — it only bites a worktree-isolated agent.
+done". Since `.claude/worktrees/<name>/` is filesystem-nested *under* the main checkout, cargo kept
+climbing straight past the worktree root and found the outer main-tree `Cargo.toml` next — which
+did NOT exclude the (now oddly-nested) path, so it errored as "not in workspace.members". This was
+invisible in the MAIN checkout (nothing to climb past) and invisible in CI (flat clone, no nesting)
+— it only bit a worktree-isolated agent.
 
-**Workaround inside a worktree:**
-- Formatting: run `rustfmt` DIRECTLY on the touched files instead of `cargo fmt` — it discovers
-  `rustfmt.toml` via plain directory ancestry (no cargo workspace logic involved), so it's
-  unaffected: `rustfmt --edition 2021 --config-path rustfmt.toml <files...>` (add `--check` to
-  verify without writing).
-- Compile-checking: there is no local workaround found yet (`--manifest-path`, explicit paths,
-  and `cargo locate-project` all hit the identical error) — this crate cannot be `cargo check`ed
-  from inside a worktree. Rely on `rustfmt` + careful manual review + the supervisor's real CI
-  (flat clone) as the authority for `presenter-ui` changes made from a worktree.
-- The rest of the workspace (`presenter-server`, `presenter-core`, etc.) is completely unaffected
-  — `cargo check --workspace --tests` from the worktree root works normally.
+**The fix:** `crates/presenter-ui/Cargo.toml` now carries its own explicit `[workspace]` table
+(#669). That makes cargo's very first manifest check return `Root` for the crate immediately, so
+the ancestor walk that caused the collision never runs at all — immune to nesting depth, and it
+also fixes `rust-analyzer`/IDE tooling in a worktree. Both `cargo fmt --check` and
+`cargo check --target wasm32-unknown-unknown` now work normally from `crates/presenter-ui/` inside
+ANY nested worktree, same as from the main checkout. Regression proof (CI's own `Format` job
+checks out non-nested and can never catch a regression here):
+`scripts/dev/check-presenter-ui-worktree-fmt.sh` creates a throwaway nested worktree, runs
+`cargo fmt --check` inside it, asserts exit 0, and cleans up unconditionally.
+- The rest of the workspace (`presenter-server`, `presenter-core`, etc.) was never affected —
+  `cargo check --workspace --tests` from the worktree root has always worked normally.
 
 ## A fresh worktree can inherit an OLD, unrelated `git stash` conflict (#641)
 
