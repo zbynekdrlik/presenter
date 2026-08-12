@@ -61,3 +61,27 @@ pub(super) fn peer_song(
         slides: vec![slide(0, main)],
     }
 }
+
+/// Same shape as `peer_song`, but with an explicit (`Some`) `library_sync_id`
+/// — for a #647 test that needs the NEW identity-join behavior instead of
+/// `peer_song`'s always-`None` compat-fallback default. `deleted_at` is
+/// always `None` (a live entry); a test needing a tombstone constructs its
+/// own literal.
+pub(super) fn peer_song_with_library_sync_id(
+    sync_id: &str,
+    library_sync_id: &str,
+    library_name: &str,
+    name: &str,
+    main: &str,
+    minutes_ago: i64,
+) -> crate::SyncPresentation {
+    crate::SyncPresentation {
+        sync_id: sync_id.to_string(),
+        library_name: library_name.to_string(),
+        library_sync_id: Some(library_sync_id.to_string()),
+        name: name.to_string(),
+        updated_at: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+        deleted_at: None,
+        slides: vec![slide(0, main)],
+    }
+}

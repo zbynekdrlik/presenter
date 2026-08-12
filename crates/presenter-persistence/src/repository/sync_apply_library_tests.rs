@@ -8,7 +8,7 @@
 //! Kept in its own sibling test file (test files are exempt from the
 //! file-size gate, but the SPLIT itself mirrors `sync_apply_review_tests.rs`
 //! / `library_sync_tests.rs` — one file per cohesive regression story).
-use super::sync_test_support::{peer_song, repo, row, slide};
+use super::sync_test_support::{peer_song, peer_song_with_library_sync_id, repo, row, slide};
 use crate::entities::library;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::HashSet;
@@ -81,15 +81,14 @@ async fn presentation_update_joins_by_library_identity_never_a_stale_current_nam
     // A later update from the peer: the song content changed, `library_name`
     // is STALE ("Old Name" -- what the peer still remembers), but
     // `library_sync_id` correctly names `renamed`'s identity.
-    let stale_name_update = crate::SyncPresentation {
-        sync_id: "peer-rename-trap".to_string(),
-        library_name: "Old Name".to_string(),
-        library_sync_id: Some(renamed_sync_id),
-        name: "Rename Trap Song".to_string(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        slides: vec![slide(0, "verse two")],
-    };
+    let stale_name_update = peer_song_with_library_sync_id(
+        "peer-rename-trap",
+        &renamed_sync_id,
+        "Old Name",
+        "Rename Trap Song",
+        "verse two",
+        0,
+    );
     let (outcome, _) = repo
         .apply_sync_presentation(&stale_name_update, &HashSet::new())
         .await
@@ -128,15 +127,14 @@ async fn brand_new_presentation_is_created_under_the_correct_library_by_identity
 
     let libraries_before = library::Entity::find().all(&repo.db).await.unwrap().len();
 
-    let incoming = crate::SyncPresentation {
-        sync_id: "peer-brand-new".to_string(),
-        library_name: "Old Name".to_string(),
-        library_sync_id: Some(renamed_sync_id),
-        name: "Brand New Song".to_string(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        slides: vec![slide(0, "verse")],
-    };
+    let incoming = peer_song_with_library_sync_id(
+        "peer-brand-new",
+        &renamed_sync_id,
+        "Old Name",
+        "Brand New Song",
+        "verse",
+        0,
+    );
     let (outcome, id) = repo
         .apply_sync_presentation(&incoming, &HashSet::new())
         .await
@@ -310,15 +308,14 @@ async fn resolve_sync_apply_target_scopes_by_identity_not_a_stale_name() {
         .await
         .unwrap();
 
-    let incoming = crate::SyncPresentation {
-        sync_id: "peer-unknown-adopt".to_string(),
-        library_name: "Old Name".to_string(),
-        library_sync_id: Some(renamed_sync_id),
-        name: "Untagged Song".to_string(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        slides: vec![slide(0, "verse")],
-    };
+    let incoming = peer_song_with_library_sync_id(
+        "peer-unknown-adopt",
+        &renamed_sync_id,
+        "Old Name",
+        "Untagged Song",
+        "verse",
+        0,
+    );
     let target = repo
         .resolve_sync_apply_target(&incoming, &HashSet::new())
         .await
@@ -328,5 +325,85 @@ async fn resolve_sync_apply_target_scopes_by_identity_not_a_stale_name() {
         Some(existing.2.id),
         "must resolve the adopt-by-name candidate under the IDENTITY-resolved \
          library, never the unrelated same-named one"
+    );
+}
+
+/// #647 (review follow-up): `apply_sync_presentation`'s step-2 adopt-by-name
+/// WRITE path (`try_adopt_by_name`, via `sync_apply.rs`) must scope its
+/// candidate search to the IDENTITY-resolved library too — the probe test
+/// above (`resolve_sync_apply_target_scopes_by_identity_not_a_stale_name`)
+/// only proves the shared `find_library_id` helper resolves correctly; this
+/// proves the actual adoption WRITE lands on the right row end-to-end.
+#[tokio::test]
+async fn apply_sync_presentation_adopts_by_name_under_the_identity_resolved_library() {
+    let repo = repo().await;
+
+    let renamed = repo.create_library("Old Name").await.unwrap();
+    let renamed_sync_id = library_sync_id_of(&repo, renamed.id).await;
+    library::Entity::update_many()
+        .col_expr(
+            library::Column::Name,
+            sea_orm::sea_query::Expr::value("New Name"),
+        )
+        .filter(library::Column::Id.eq(renamed.id.to_string()))
+        .exec(&repo.db)
+        .await
+        .unwrap();
+    let unrelated = repo.create_library("Old Name").await.unwrap();
+
+    // The TRUE adopt-by-name candidate: a locally-created (untagged, random
+    // sync_id) live song under `renamed`.
+    let existing = repo
+        .create_presentation(renamed.id, "Untagged Song", None)
+        .await
+        .unwrap();
+    // A same-named DECOY under the unrelated library — if step 2 ever
+    // resolved by a stale name instead of identity, this is the WRONG row
+    // it would adopt onto instead.
+    let decoy = repo
+        .create_presentation(unrelated.id, "Untagged Song", None)
+        .await
+        .unwrap();
+
+    let incoming = peer_song_with_library_sync_id(
+        "peer-adopt-write",
+        &renamed_sync_id,
+        "Old Name",
+        "Untagged Song",
+        "adopted content",
+        0,
+    );
+    let (outcome, id) = repo
+        .apply_sync_presentation(&incoming, &HashSet::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        crate::SyncApplyOutcome::AdoptedByName,
+        "sanity: this is the adopt-by-name path, not a fresh create"
+    );
+    assert_eq!(
+        id,
+        Some(existing.2.id),
+        "must adopt the EXISTING row under the identity-resolved library, \
+         never create a new row or adopt the unrelated decoy"
+    );
+
+    let adopted_row = row(&repo, existing.2.id).await;
+    assert_eq!(
+        adopted_row.sync_id, "peer-adopt-write",
+        "adoption must write the PEER's sync_id onto the existing row in place"
+    );
+    assert_eq!(
+        adopted_row.library_id,
+        renamed.id.to_string(),
+        "the adopted row must stay under the TRUE (identity-resolved) library"
+    );
+
+    // The decoy under the unrelated library must be completely untouched.
+    let decoy_row = row(&repo, decoy.2.id).await;
+    assert_ne!(
+        decoy_row.sync_id, "peer-adopt-write",
+        "the unrelated same-named decoy must never be the one adopted onto"
     );
 }

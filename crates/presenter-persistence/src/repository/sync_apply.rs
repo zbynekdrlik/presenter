@@ -110,47 +110,9 @@ impl Repository {
             .await?;
 
         if let Some(existing) = by_sync {
-            let local_updated: DateTime<Utc> = existing.updated_at.into();
-            if !sync_should_apply(
-                incoming.updated_at,
-                incoming.deleted_at.is_some(),
-                Some(local_updated),
-            ) {
-                txn.commit().await?;
-                info!("sync skip (not newer)");
-                return Ok((SyncApplyOutcome::SkippedNotNewer, None));
-            }
-            // #578: a TOMBSTONE keeps the presentation under its EXISTING
-            // library — never ensure/create a live library for a row being
-            // trashed. When the peer deleted the whole library, the local
-            // library is being tombstoned in the SAME cycle (library recon
-            // runs first), so `ensure_library`'s live-only lookup would miss
-            // it and create a fresh EMPTY LIVE library shell to hold the
-            // tombstone. Only a LIVE apply (re)attaches to the peer's library.
-            //
-            // #634: `ensure_library`'s second return value is `Some(ts)` when
-            // the target library stayed tombstoned (LWW decided NOT to
-            // revive it) — in that case THIS presentation must be written as
-            // tombstoned too, never left live under a dead parent (see
-            // `write_synced_row`'s `forced_delete` param).
-            let (library_id, forced_delete) = if incoming.deleted_at.is_some() {
-                (existing.library_id.clone(), None)
-            } else {
-                Self::ensure_library(
-                    &txn,
-                    incoming.library_sync_id.as_deref(),
-                    &incoming.library_name,
-                    incoming.updated_at,
-                )
-                .await?
-            };
-            Self::write_synced_row(&txn, &existing.id, &library_id, incoming, forced_delete)
-                .await?;
+            let result = Self::apply_to_existing_by_sync_id(&txn, existing, incoming).await?;
             txn.commit().await?;
-            info!("sync updated");
-            let id =
-                presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&existing.id)?);
-            return Ok((SyncApplyOutcome::Updated, Some(id)));
+            return Ok(result);
         }
 
         // 2. Adopt-by-name: same name in the same-named library, unknown
@@ -193,6 +155,58 @@ impl Repository {
         let result = Self::apply_unknown_sync_id(&txn, incoming).await?;
         txn.commit().await?;
         Ok(result)
+    }
+
+    /// Step 1 of `apply_sync_presentation`: the peer's `sync_id` matched an
+    /// EXISTING local row. Applies the LWW gate, resolves the library
+    /// (identity-first, #647), and writes in place. Never commits the
+    /// transaction itself — the caller does, uniformly, exactly like
+    /// `try_adopt_by_name`/`apply_unknown_sync_id`. Extracted purely to keep
+    /// `apply_sync_presentation` itself under the function-length warning
+    /// band (review follow-up on #647).
+    ///
+    /// #578: a TOMBSTONE keeps the presentation under its EXISTING library —
+    /// never ensure/create a live library for a row being trashed. When the
+    /// peer deleted the whole library, the local library is being
+    /// tombstoned in the SAME cycle (library recon runs first), so
+    /// `ensure_library`'s live-only lookup would miss it and create a fresh
+    /// EMPTY LIVE library shell to hold the tombstone. Only a LIVE apply
+    /// (re)attaches to the peer's library.
+    ///
+    /// #634: `ensure_library`'s second return value is `Some(ts)` when the
+    /// target library stayed tombstoned (LWW decided NOT to revive it) — in
+    /// that case THIS presentation must be written as tombstoned too, never
+    /// left live under a dead parent (see `write_synced_row`'s
+    /// `forced_delete` param).
+    async fn apply_to_existing_by_sync_id(
+        txn: &sea_orm::DatabaseTransaction,
+        existing: presentation_entity::Model,
+        incoming: &SyncPresentation,
+    ) -> anyhow::Result<(SyncApplyOutcome, Option<presenter_core::PresentationId>)> {
+        let local_updated: DateTime<Utc> = existing.updated_at.into();
+        if !sync_should_apply(
+            incoming.updated_at,
+            incoming.deleted_at.is_some(),
+            Some(local_updated),
+        ) {
+            info!("sync skip (not newer)");
+            return Ok((SyncApplyOutcome::SkippedNotNewer, None));
+        }
+        let (library_id, forced_delete) = if incoming.deleted_at.is_some() {
+            (existing.library_id.clone(), None)
+        } else {
+            Self::ensure_library(
+                txn,
+                incoming.library_sync_id.as_deref(),
+                &incoming.library_name,
+                incoming.updated_at,
+            )
+            .await?
+        };
+        Self::write_synced_row(txn, &existing.id, &library_id, incoming, forced_delete).await?;
+        info!("sync updated");
+        let id = presenter_core::PresentationId::from_uuid(uuid::Uuid::parse_str(&existing.id)?);
+        Ok((SyncApplyOutcome::Updated, Some(id)))
     }
 
     /// The single LIVE (non-trashed) local presentation row matching
