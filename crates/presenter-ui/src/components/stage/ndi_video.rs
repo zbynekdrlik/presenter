@@ -144,7 +144,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     struct ActiveConnection {
         session: WhepSession,
         watchdog: Watchdog,
-        pagehide: Option<PagehideHandle>,
+        pagehide: Option<super::ndi_pagehide::PagehideHandle>,
     }
     // Use new_local() instead of new() because Watchdog holds Rc<Cell<bool>>
     // which is !Send + !Sync. LocalStorage drops the Send+Sync requirement;
@@ -272,7 +272,8 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             move || flag.set(true),
                         );
 
-                        let pagehide = install_pagehide_teardown(&session);
+                        let pagehide =
+                            super::ndi_pagehide::install(session.resource_url.as_deref());
                         session_holder.set_value(Some(ActiveConnection {
                             session,
                             watchdog,
@@ -520,7 +521,12 @@ async fn sleep_for_backoff(step: &BackoffStep) {
 /// response, so a double-DELETE produces no console noise.
 /// Both the `on_cleanup` path and the `pagehide` listener may dispatch the
 /// same URL when both fire on normal navigation; this is idempotent.
-fn dispatch_delete(url: &str) {
+///
+/// `pub(super)` (not private): `ndi_pagehide.rs`'s `pagehide` listener
+/// callback (#670/#672) also dispatches DELETE via
+/// `super::ndi_video::dispatch_delete`, so this must be visible to the
+/// shared `stage` parent module — never wider than that.
+pub(super) fn dispatch_delete(url: &str) {
     let init = leptos::web_sys::RequestInit::new();
     init.set_method("DELETE");
     let _ = js_sys::Reflect::set(&init, &"keepalive".into(), &JsValue::TRUE);
@@ -536,87 +542,6 @@ fn dispatch_delete(url: &str) {
         Err(e) => {
             leptos::logging::error!("dispatch_delete: failed to build Request for {url}: {e:?}");
         }
-    }
-}
-
-/// Install a `pagehide` window listener that fires DELETE if the page is
-/// being unloaded. Some browsers (and Playwright's page.goto navigation)
-/// tear down the JS context before Leptos's `on_cleanup` runs; pagehide
-/// fires earlier in the unload sequence so the DELETE makes it out the door.
-///
-/// Returns a [`PagehideHandle`] the caller MUST dispose of whenever the
-/// `WhepSession` it was installed for is torn down (the reconnect loop's
-/// old-session teardown AND `on_cleanup` — see `ActiveConnection`).
-/// Symmetric with `ndi_playback_guard::install`'s handle (#637) — NOT
-/// `forget()`-leaked.
-///
-/// PRIOR versions `forget()`-leaked the closure, assuming this runs (at
-/// most) once per `<NdiVideo>` mount. False: it's called from the reconnect
-/// loop's `Ok(ConnectOutcome::Connected(_))` arm, i.e. on EVERY successful
-/// WHEP connect, including every reconnect a mount goes through — so a
-/// long-running stage display accumulated one more permanent `window`-level
-/// listener per reconnect, forever (#670).
-fn install_pagehide_teardown(session: &WhepSession) -> Option<PagehideHandle> {
-    let window = leptos::web_sys::window()?;
-    let url = session.resource_url.clone()?;
-    let cb = Closure::<dyn FnMut()>::new(move || {
-        dispatch_delete(&url);
-    });
-    let _ = window.add_event_listener_with_callback("pagehide", cb.as_ref().unchecked_ref());
-    Some(PagehideHandle {
-        window,
-        cb,
-        disposed: std::cell::Cell::new(false),
-    })
-}
-
-/// Disposer returned by [`install_pagehide_teardown`]. Owns the `pagehide`
-/// `Closure` — NOT `forget()`-leaked — so [`dispose`](Self::dispose) can
-/// remove it before dropping it. Same shape as `PlaybackGuardHandle`
-/// (`ndi_playback_guard.rs`, #637): `dispose` is the PRIMARY teardown path;
-/// `Drop` below is only a defense-in-depth safety net.
-struct PagehideHandle {
-    window: leptos::web_sys::Window,
-    cb: Closure<dyn FnMut()>,
-    /// Guards `remove_listener` against running its `removeEventListener`
-    /// call twice: `dispose(self)` consumes `self` by value, and Rust's
-    /// drop glue then runs `Drop::drop` immediately after, on EVERY
-    /// ordinary teardown — not just a hypothetical forgotten-dispose case.
-    /// Harmless to the DOM (removing an already-removed listener is a
-    /// no-op) but would defeat a net add/remove-count E2E assertion, same
-    /// as `PlaybackGuardHandle::disposed` (#637) — that exact regression
-    /// cost that fix a full CI cycle.
-    disposed: std::cell::Cell<bool>,
-}
-
-impl PagehideHandle {
-    /// Remove the `pagehide` listener — only the FIRST time this runs for a
-    /// given handle. `dispose()` and `Drop` both call this.
-    fn remove_listener(&self) {
-        if self.disposed.replace(true) {
-            return;
-        }
-        let _ = self
-            .window
-            .remove_event_listener_with_callback("pagehide", self.cb.as_ref().unchecked_ref());
-    }
-
-    /// Remove the listener, then drop the closure. The PRIMARY teardown
-    /// path — call it explicitly wherever the owning `WhepSession` is torn
-    /// down.
-    fn dispose(self) {
-        self.remove_listener();
-    }
-}
-
-/// Safety net mirroring `PlaybackGuardHandle`'s `Drop` (#637): removes the
-/// listener even if a handle is ever dropped without an explicit
-/// `dispose()`, so a stale listener can never fire on a destroyed `Closure`
-/// (which would panic). Guarded by `disposed`, so a true no-op on the
-/// normal path where `dispose()` already ran.
-impl Drop for PagehideHandle {
-    fn drop(&mut self) {
-        self.remove_listener();
     }
 }
 
