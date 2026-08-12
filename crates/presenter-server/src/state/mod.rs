@@ -412,6 +412,10 @@ impl AppState {
         state.spawn_background_tasks();
         state.maybe_spawn_sync(config.sync.peer_url.clone());
         state.ai_proxy.auto_start().await;
+        // #660: proactively WARN before the Claude OAuth token expires, not
+        // only after — the 2026-07-26 and 2026-08-02 outages were both only
+        // discovered once a live event started.
+        crate::ai::refresh::spawn_expiry_warning(state.ai_proxy.clone());
         Ok(state)
     }
 

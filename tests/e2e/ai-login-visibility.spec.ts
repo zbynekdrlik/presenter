@@ -162,6 +162,29 @@ test("a known token expiry shows how long the login stays valid while authentica
   expect(consoleMessages).toEqual([]);
 });
 
+test("#660: a token expiring soon shows an explicit renew warning, not the flat valid-until text", async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  // Before #660, this note rendered the SAME flat "platí do" line whether 8
+  // hours or 8 minutes remained.
+  const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  await mockAiStatus(page, {
+    claudeAuthenticated: true,
+    tokenExpiresAt: soon,
+  });
+
+  await gotoAiPanel(page);
+
+  const validity = page.locator('[data-role="ai-token-validity"]');
+  await expect(validity).toHaveAttribute("data-visible", "true", { timeout: 30_000 });
+  await expect(validity).toHaveText(/[čc]oskoro vypr[šs]í/);
+  await expect(validity).toHaveText(/odpor[úu][čc]ame sa znova prihl[áa]si[ťt]/);
+
+  expect(consoleMessages).toEqual([]);
+});
+
 test("an expired token is named in the logged-out banner's subtext", async ({
   page,
 }) => {
