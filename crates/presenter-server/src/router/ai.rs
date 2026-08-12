@@ -312,6 +312,23 @@ pub(super) struct UpdateSettingsRequest {
 /// exist in the schema.
 const AI_SETTINGS_AUDIT_TABLE: &str = "app_settings";
 
+/// Audit-safe JSON snapshot of `AiSettings` (#661) — `api_key` is NEVER
+/// persisted verbatim into the `settings_audit` table. This project's
+/// standing "never log token contents" discipline (see `ai/proxy.rs`'s
+/// Claude OAuth handling) applies equally to the AI provider API key: the
+/// audit trail's whole point is a forensic "who changed what, when", not a
+/// second place a credential could leak from. Only WHETHER a key is set is
+/// preserved — the same signal `GET /ai/settings`'s `SettingsResponse`
+/// already exposes as `api_key_set`, never the raw value.
+fn redact_settings_for_audit(settings: &AiSettings) -> serde_json::Value {
+    serde_json::json!({
+        "apiUrl": settings.api_url,
+        "apiKeySet": settings.api_key.as_ref().is_some_and(|k| !k.is_empty()),
+        "model": settings.model,
+        "systemPromptExtra": settings.system_prompt_extra,
+    })
+}
+
 #[instrument(skip_all)]
 pub(super) async fn update_settings(
     State(state): State<AppState>,
@@ -319,7 +336,7 @@ pub(super) async fn update_settings(
     Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<StatusCode, AppError> {
     let mut settings = get_settings_internal(&state).await?;
-    let before_json = serde_json::to_value(&settings).map_err(|e| anyhow::anyhow!(e))?;
+    let before_json = redact_settings_for_audit(&settings);
 
     if let Some(url) = payload.api_url {
         settings.api_url = url;
@@ -356,7 +373,7 @@ pub(super) async fn update_settings(
     // a 500 to the caller here would misleadingly suggest their change was
     // rejected when it was not.
     let actor = extract_actor(&headers);
-    let after_json = serde_json::to_value(&settings).map_err(|e| anyhow::anyhow!(e))?;
+    let after_json = redact_settings_for_audit(&settings);
     if let Err(err) = state
         .repository()
         .record_settings_audit(
