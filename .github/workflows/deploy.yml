@@ -141,11 +141,31 @@ jobs:
       - name: Setup SSH for deployment
         run: |
           mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "::error::ssh-keyscan failed — known_hosts is empty. Cannot verify host."
+          # #674: drop any STALE key for this host first, so a re-deploy never
+          # accumulates duplicate entries for the same host (the dominant
+          # source of this file's unbounded growth on a persistent self-hosted
+          # runner). Best-effort — a first-ever run has nothing to remove.
+          ssh-keygen -R ${{ env.DEPLOY_HOST }} -f ~/.ssh/known_hosts >/dev/null 2>&1 || true
+          # #674: a bare `ssh-keyscan ... 2>/dev/null` here used to abort the
+          # WHOLE step via this step's `-e` shell the instant keyscan itself
+          # returned non-zero (a transient connect timeout) — BEFORE ever
+          # reaching the emptiness guard below that was written to diagnose
+          # exactly that failure. Wrapping the call in `if ...; then` exempts
+          # it from `-e`; the retry loop then also tolerates a genuine blip.
+          KEYSCAN_OK=0
+          for attempt in 1 2 3 4 5; do
+            if ssh-keyscan -T 5 ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              KEYSCAN_OK=1
+              break
+            fi
+            echo "ssh-keyscan attempt $attempt/5 failed, retrying in 3s..."
+            sleep 3
+          done
+          if [ "$KEYSCAN_OK" -ne 1 ] || [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan failed after 5 attempts — known_hosts is empty. Cannot verify host."
             exit 1
           fi
           cat > ~/.ssh/config <<EOF
