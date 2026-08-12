@@ -500,7 +500,7 @@ mod tests {
         // caller (enforce_budget_or_refuse) is responsible for refusing.
         let mut conv = vec![
             user_msg("build a large set list"),
-            assistant_tool_call_msg(&"call_0".to_string()),
+            assistant_tool_call_msg("call_0"),
             tool_result_msg("call_0", &"X".repeat(10_000)),
         ];
         let mutated = enforce_context_budget(&mut conv, 100);
