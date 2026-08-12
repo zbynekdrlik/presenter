@@ -179,8 +179,8 @@ test("#660: a token expiring soon shows an explicit renew warning, not the flat 
 
   const validity = page.locator('[data-role="ai-token-validity"]');
   await expect(validity).toHaveAttribute("data-visible", "true", { timeout: 30_000 });
-  await expect(validity).toHaveText(/[čc]oskoro vypr[šs]í/);
-  await expect(validity).toHaveText(/odpor[úu][čc]ame sa znova prihl[áa]si[ťt]/);
+  await expect(validity).toHaveText(/čoskoro vyprší/);
+  await expect(validity).toHaveText(/odporúčame sa znova prihlásiť/);
 
   expect(consoleMessages).toEqual([]);
 });
