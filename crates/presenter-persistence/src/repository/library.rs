@@ -327,11 +327,8 @@ impl Repository {
         let txn = self.db.begin().await?;
 
         let existing = library::Entity::find_by_id(id.clone()).one(&txn).await?;
-        let lib = classify_restore(existing.as_ref())?;
+        let (lib, tombstoned_at) = classify_restore(existing.as_ref())?;
         let name = lib.name.clone();
-        let tombstoned_at = lib
-            .deleted_at
-            .expect("classify_restore only returns Ok for a row with deleted_at set");
 
         // `idx_libraries_name_live_unique` only guards LIVE rows — a live
         // library could legitimately claim this exact name WHILE the
@@ -575,13 +572,21 @@ impl Repository {
 /// SAME structural split `classify_restore_library` in `repository/sync.rs`
 /// (#646) already applies for presentations. A pure function so both
 /// branches are directly unit-testable.
-fn classify_restore(existing: Option<&library::Model>) -> Result<&library::Model, RepositoryError> {
+///
+/// Returns the row TOGETHER WITH its already-destructured tombstone
+/// timestamp (never a bare `&library::Model` the caller re-derives with an
+/// `.expect()`) — `deleted_at` is proven `Some` right here, at the only
+/// place that knows it, so the "is trashed" invariant is upheld by the type
+/// signature instead of by a panic-on-violation the caller must trust.
+fn classify_restore(
+    existing: Option<&library::Model>,
+) -> Result<(&library::Model, DateTime<FixedOffset>), RepositoryError> {
     match existing {
         None => Err(RepositoryError::NotFound("library not found")),
-        Some(lib) if lib.deleted_at.is_none() => {
-            Err(RepositoryError::Conflict("library is not trashed"))
-        }
-        Some(lib) => Ok(lib),
+        Some(lib) => match lib.deleted_at {
+            None => Err(RepositoryError::Conflict("library is not trashed")),
+            Some(tombstoned_at) => Ok((lib, tombstoned_at)),
+        },
     }
 }
 
@@ -866,8 +871,9 @@ mod tests {
     #[test]
     fn trashed_library_row_is_ok() {
         let trashed = library_model(true);
-        let result = classify_restore(Some(&trashed));
-        assert!(result.is_ok());
-        assert!(result.unwrap().deleted_at.is_some());
+        let (lib, tombstoned_at) =
+            classify_restore(Some(&trashed)).expect("a trashed row must classify as Ok");
+        assert_eq!(lib.id, trashed.id);
+        assert_eq!(Some(tombstoned_at), trashed.deleted_at);
     }
 }
