@@ -180,6 +180,7 @@ async fn a_tombstone_older_than_the_prune_horizon_is_never_resurrected_for_a_row
     let ancient_tombstone = presenter_persistence::SyncPresentation {
         sync_id: "sid-ancient-tombstone".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Old Temp".to_string(),
         updated_at: ancient,
         deleted_at: Some(ancient),

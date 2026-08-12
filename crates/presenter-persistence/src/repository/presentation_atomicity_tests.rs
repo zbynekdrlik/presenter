@@ -71,6 +71,7 @@ async fn slide_edit_and_touch_are_atomic_against_a_concurrent_sync_apply() {
         let incoming = SyncPresentation {
             sync_id,
             library_name: "Songs".to_string(),
+            library_sync_id: None,
             name: "Racer".to_string(),
             updated_at: peer_updated_at,
             deleted_at: None,

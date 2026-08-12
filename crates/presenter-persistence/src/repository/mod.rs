@@ -21,6 +21,8 @@ mod stage_state;
 mod sync;
 mod sync_apply;
 #[cfg(test)]
+mod sync_apply_library_tests;
+#[cfg(test)]
 mod sync_apply_review_tests;
 mod sync_apply_tombstone_cleanup;
 #[cfg(test)]
