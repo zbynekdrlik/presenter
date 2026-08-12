@@ -975,3 +975,57 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
   lines (warning-only, well under the 1000 hard fail).
 - Version left untouched at `0.4.238` per the supervisor's correction (this worktree branched before the
   round's 0.4.239 bump; the bump lands at integration).
+
+---
+
+## 2026-08-12 — #647 sync wire protocol: join presentations to libraries by identity, not name (worktree round, not yet merged)
+
+- **No version bump** — bug-fix-only change, dispatched as a per-issue worktree in a fleet round;
+  supervisor integrates (branch already carries the 0.4.239 bump from a sibling worktree at
+  integration time, per its own local `dev`).
+- **Design comments posted BEFORE first code commit:**
+  - Validated: https://github.com/zbynekdrlik/presenter/issues/647#issuecomment-5269675845 —
+    re-confirmed the wire DTOs still carry only `library_name`, every apply-path library join
+    (`sync_apply.rs:139/166/283/572/576`) is still name-only, `library_sync.rs`'s library-row
+    convergence (#578) is a genuinely different layer, and the file-size trap (989/1000 prod lines)
+    is current.
+  - Approach: https://github.com/zbynekdrlik/presenter/issues/647#issuecomment-5269672597 — additive
+    `library_sync_id: Option<String>` on the wire DTOs (`#[serde(default)]` for old-peer tolerance)
+    plus domain structs; every library-resolution call site tries identity FIRST (live or
+    tombstoned — library reconciliation runs earlier in the same cycle), degrading to the
+    byte-for-byte unchanged name-only path only when the identity hasn't converged locally. Rejected
+    an explicit peer-capability version-negotiation alternative as redundant — the wire format's own
+    tolerant deserialization + per-call-site "did it resolve?" check is already a complete compat
+    signal. File-size mitigation (extracting `sync_apply.rs`'s library helpers into a new sibling
+    `sync_apply_library.rs`, mirroring `library_sync.rs`'s existing split) planned BEFORE adding
+    behavior, not as an afterthought.
+- **Commit `b62441b5` [red]:** wire/domain plumbing (`library_sync_id` on `SyncManifestEntryDto`/
+  `SyncPresentationDto`/`SyncManifestRow`/`SyncPresentation`, threaded through
+  `list_sync_manifest`/`fetch_sync_presentation`/the two router handlers) + new integration tests in
+  `sync_apply_library_tests.rs` that reproduce the mis-filing bug directly against
+  `apply_sync_presentation`/`resolve_sync_apply_target` — 4 of 6 fail against this commit's
+  still-name-only apply logic (traced by code-path reasoning; Tier-0 has no local `cargo test`).
+  Every existing `SyncPresentation`/`SyncManifestRow` test literal gets `library_sync_id: None`,
+  preserving prior behavior unchanged.
+- **Commit `0682f641` [green]:** extracts `find_library_id`/`find_most_recent_tombstoned_library`/
+  `ensure_library`/`ensure_library_for_tombstone` into new `sync_apply_library.rs`, adds
+  `find_library_by_sync_id` (the identity lookup) + `revive_or_keep_tombstoned` (the shared
+  #580/#634/#646 LWW revive-or-stay-tombstoned decision), and makes every resolver try identity
+  first. `sync_apply.rs` threads `incoming.library_sync_id.as_deref()` through all 5 named call
+  sites. Makes the RED tests pass; adds 2 new unit tests + moves the 2 existing `#595`/`#626`
+  tombstone-agreement tests into the new file's own test module.
+  File size: `sync_apply.rs` 989 → 824 prod lines; new `sync_apply_library.rs` at 258.
+- **Deep-review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per
+  #363): 0 🔴 2 🟡 2 🔵. All four actioned in follow-up commit `4efe2b25`: new end-to-end
+  adopt-by-name-write test (`apply_sync_presentation_adopts_by_name_under_the_identity_resolved_library`),
+  rewrote the now-stale `.claude/rules/sync-lww.md` invariant 5 (#647 was listed as an open flaw),
+  implemented the `peer_song_with_library_sync_id` test helper a doc comment had pointed at but
+  never existed, and extracted `apply_sync_presentation`'s step-1 branch into
+  `apply_to_existing_by_sync_id` (89→101→ back under the 80-line warning band). Review comment:
+  https://github.com/zbynekdrlik/presenter/issues/647#issuecomment-5270083001
+- **Local verify:** `cargo check --workspace --tests` clean throughout (verified separately at the
+  RED commit, the GREEN commit, and after the review follow-up). `cargo fmt --all --check` clean.
+  `bash scripts/dev/quality-check.sh --against origin/main` exits 0, no new/worse warnings.
+  `fn_length_check.py` scoped to every touched file: zero violations, zero warnings (post-follow-up).
+  Playwright/`cargo test`/`cargo clippy` did NOT run locally (Tier-0) — CI is the first real test
+  execution after the supervisor's round integration.

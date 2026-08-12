@@ -45,6 +45,7 @@ async fn forced_tombstone_pins_deleted_at_to_the_library_clock_and_updated_at_to
     let moved = crate::SyncPresentation {
         sync_id: "peer-pin-stamps".to_string(),
         library_name: "New".to_string(),
+        library_sync_id: None,
         name: "Pinned Song".to_string(),
         updated_at: moved_updated_at,
         deleted_at: None,
@@ -102,6 +103,7 @@ async fn forced_tombstone_is_lww_neutral_and_never_beats_a_peers_live_copy() {
     let moved = crate::SyncPresentation {
         sync_id: "peer-lww-neutral".to_string(),
         library_name: "New".to_string(),
+        library_sync_id: None,
         name: "Neutral Song".to_string(),
         updated_at: moved_updated_at,
         deleted_at: None,
@@ -129,6 +131,7 @@ async fn forced_tombstone_is_lww_neutral_and_never_beats_a_peers_live_copy() {
             &crate::SyncPresentation {
                 sync_id: "peer-lww-neutral".to_string(),
                 library_name: "New".to_string(),
+                library_sync_id: None,
                 name: "Neutral Song".to_string(),
                 updated_at: moved_updated_at,
                 deleted_at: None,
@@ -144,6 +147,7 @@ async fn forced_tombstone_is_lww_neutral_and_never_beats_a_peers_live_copy() {
     let our_forced = crate::SyncPresentation {
         sync_id: "peer-lww-neutral".to_string(),
         library_name: "New".to_string(),
+        library_sync_id: None,
         name: "Neutral Song".to_string(),
         updated_at: pres_row.updated_at.into(),
         deleted_at: pres_row.deleted_at.map(Into::into),
@@ -228,6 +232,7 @@ async fn forced_tombstone_cleans_playlist_entries_and_clears_stage_layout_marker
     let moved = crate::SyncPresentation {
         sync_id: "peer-cascade".to_string(),
         library_name: "New".to_string(),
+        library_sync_id: None,
         name: "Cascade Song".to_string(),
         updated_at: chrono::Utc::now() - chrono::Duration::minutes(5),
         deleted_at: None,
@@ -303,6 +308,7 @@ async fn genuine_incoming_tombstone_cleans_playlist_entries() {
     let tombstone = crate::SyncPresentation {
         sync_id: "peer-genuine-tombstone".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Genuine Song".to_string(),
         updated_at: chrono::Utc::now() - chrono::Duration::minutes(5),
         deleted_at: Some(chrono::Utc::now() - chrono::Duration::minutes(5)),

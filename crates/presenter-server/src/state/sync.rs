@@ -22,6 +22,19 @@ const NUDGE_DEBOUNCE: Duration = Duration::from_secs(2);
 pub struct SyncManifestEntryDto {
     pub sync_id: String,
     pub library_name: String,
+    /// #647: the library's own STABLE identity (its `sync_id`), carried
+    /// alongside `library_name` so the receiving apply path can join by
+    /// IDENTITY instead of the current name string — a rename in flight, or
+    /// a #636 disambiguated collision name, means the CURRENT local name is
+    /// no longer a reliable key and joining by it can mis-file the
+    /// presentation onto an unrelated library, or manufacture a phantom
+    /// one. `#[serde(default)]`: an OLD peer that has not upgraded never
+    /// sends this field, so it deserializes to `None` here — the apply path
+    /// then falls back to the pre-#647 name-only join, unchanged. Safe in
+    /// both wire directions since neither DTO has `deny_unknown_fields`
+    /// (see the comment below).
+    #[serde(default)]
+    pub library_sync_id: Option<String>,
     pub name: String,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -32,6 +45,9 @@ pub struct SyncManifestEntryDto {
 pub struct SyncPresentationDto {
     pub sync_id: String,
     pub library_name: String,
+    /// #647 — see `SyncManifestEntryDto::library_sync_id`'s doc comment.
+    #[serde(default)]
+    pub library_sync_id: Option<String>,
     pub name: String,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -43,6 +59,7 @@ impl From<SyncPresentationDto> for SyncPresentation {
         SyncPresentation {
             sync_id: d.sync_id,
             library_name: d.library_name,
+            library_sync_id: d.library_sync_id,
             name: d.name,
             updated_at: d.updated_at,
             deleted_at: d.deleted_at,

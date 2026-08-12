@@ -16,6 +16,11 @@ use tracing::instrument;
 pub struct SyncManifestRow {
     pub sync_id: String,
     pub library_name: String,
+    /// #647: the parent library's own `sync_id` — `None` only if the FK'd
+    /// library row is somehow missing (never expected in practice; the
+    /// schema enforces it). Lets the apply-side join by stable identity
+    /// instead of the current name string.
+    pub library_sync_id: Option<String>,
     pub name: String,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -26,6 +31,8 @@ pub struct SyncManifestRow {
 pub struct SyncPresentation {
     pub sync_id: String,
     pub library_name: String,
+    /// #647 — see `SyncManifestRow::library_sync_id`'s doc comment.
+    pub library_sync_id: Option<String>,
     pub name: String,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -51,9 +58,14 @@ impl Repository {
             .await?;
         let mut out = Vec::with_capacity(rows.len());
         for (p, lib) in rows {
+            let (library_name, library_sync_id) = match lib {
+                Some(l) => (l.name, Some(l.sync_id)),
+                None => (String::new(), None),
+            };
             out.push(SyncManifestRow {
                 sync_id: p.sync_id,
-                library_name: lib.map(|l| l.name).unwrap_or_default(),
+                library_name,
+                library_sync_id,
                 name: p.name,
                 updated_at: p.updated_at.into(),
                 deleted_at: p.deleted_at.map(Into::into),
@@ -96,11 +108,14 @@ impl Repository {
         else {
             return Ok(None);
         };
-        let library_name = library::Entity::find_by_id(p.library_id.clone())
-            .one(&self.db)
-            .await?
-            .map(|l| l.name)
-            .unwrap_or_default();
+        let (library_name, library_sync_id) =
+            match library::Entity::find_by_id(p.library_id.clone())
+                .one(&self.db)
+                .await?
+            {
+                Some(l) => (l.name, Some(l.sync_id)),
+                None => (String::new(), None),
+            };
         let slides = slide_entity::Entity::find()
             .filter(slide_entity::Column::PresentationId.eq(p.id.clone()))
             .order_by_asc(slide_entity::Column::Position)
@@ -112,6 +127,7 @@ impl Repository {
         Ok(Some(SyncPresentation {
             sync_id: p.sync_id,
             library_name,
+            library_sync_id,
             name: p.name,
             updated_at: p.updated_at.into(),
             deleted_at: p.deleted_at.map(Into::into),

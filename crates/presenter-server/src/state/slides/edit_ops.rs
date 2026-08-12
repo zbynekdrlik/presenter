@@ -801,6 +801,7 @@ mod tests {
         let incoming = presenter_persistence::SyncPresentation {
             sync_id: row.sync_id,
             library_name: "Test Library".to_string(),
+            library_sync_id: None,
             name: "Test Presentation".to_string(),
             updated_at: chrono::Utc::now(),
             deleted_at: None,

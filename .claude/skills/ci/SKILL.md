@@ -43,8 +43,15 @@ and `cargo check` regardless of `--strict`; that flag only decides whether a fai
 not whether these run. A worker under a "no local Rust build/check/clippy" constraint must NOT run
 this script at all, in any mode; use the two underlying non-compiling checks directly instead:
 `bash scripts/dev/count_prod_lines.sh <one-file-per-call>` and
-`QC_TARGETS=<comma-separated-files> python3 scripts/dev/fn_length_check.py .` — both are pure
+`QC_TARGETS=<newline-separated-files> python3 scripts/dev/fn_length_check.py .` — both are pure
 bash/Python and cover the two hard-fail gates (file size, function length) without touching cargo.
+**`QC_TARGETS` is NEWLINE-separated, not comma-separated** (confirmed against the script's own
+docstring: "newline-separated RELATIVE file paths") — a comma- or space-joined value matches zero
+files and `fn_length_check.py` silently prints `{"violations": [], "warnings": []}`, which reads
+exactly like a clean pass. Build the value with `printf '%s\n' file1 file2 ... | ...` or a small
+wrapper script that reads a newline-delimited file into the env var, never a one-line
+`QC_TARGETS="a,b,c"` (#647 lesson: a worker's own space-joined attempt silently returned an
+empty-looking clean result before this was caught).
 
 ## RED-before-GREEN verification under Tier-0 — push RED alone, read `--log-failed` (#608)
 

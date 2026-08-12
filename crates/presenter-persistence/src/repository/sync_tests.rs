@@ -124,6 +124,7 @@ async fn apply_adopts_by_name_preserving_the_local_row_id() {
     let peer = crate::SyncPresentation {
         sync_id: "peer-identity".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Shared Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -174,6 +175,7 @@ async fn adopt_by_name_never_guesses_among_multiple_live_candidates() {
     let peer = crate::SyncPresentation {
         sync_id: "peer-identity-ambiguous-case".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Shared Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -237,6 +239,7 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_position() {
     let incoming = crate::SyncPresentation {
         sync_id: local_sync_id,
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Marked Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -299,6 +302,7 @@ async fn apply_sync_presentation_remaps_stage_layout_markers_by_content_on_a_pur
     let incoming = crate::SyncPresentation {
         sync_id: local_sync_id,
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Reordered Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -389,6 +393,7 @@ async fn apply_sync_presentation_remaps_an_oversize_marker_by_content_across_a_r
     let incoming = crate::SyncPresentation {
         sync_id: local_sync_id,
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Oversize Reorder Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -445,6 +450,7 @@ async fn apply_sync_presentation_remaps_markers_without_a_position_fallback_coll
     let incoming = crate::SyncPresentation {
         sync_id: local_sync_id,
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Marked Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -510,6 +516,7 @@ async fn apply_sync_presentation_remaps_a_marker_on_an_oversize_legacy_stored_sl
     let incoming = crate::SyncPresentation {
         sync_id: local_sync_id,
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Legacy Song".to_string(),
         updated_at: chrono::Utc::now() + chrono::Duration::seconds(5),
         deleted_at: None,
@@ -545,6 +552,7 @@ async fn apply_sync_presentation_truncates_an_oversize_incoming_slide_instead_of
     let incoming = crate::SyncPresentation {
         sync_id: "sid-oversize".to_string(),
         library_name: "Songs".to_string(),
+        library_sync_id: None,
         name: "Legacy Song".to_string(),
         updated_at: chrono::Utc::now(),
         deleted_at: None,

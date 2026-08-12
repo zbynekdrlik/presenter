@@ -41,8 +41,20 @@ Two-site LWW sync (PP↔SNV), strict-`>` gate on `updated_at` (sync_id tie-break
    invariant 1) — `Repository::backfill_orphaned_playlist_entries` (same file) is the one-time
    startup sweep that backfills that pre-fix residue on deployed DBs (#658).
 
-5. Known open flaw: presentations join libraries by NAME on the wire (`SyncPresentation.library_name`)
-   → mis-filing/phantom libraries across rename races (#647, cross-cutting protocol change).
+5. **Presentations join libraries by IDENTITY, name only as a compat fallback (#647, fixed).**
+   `SyncPresentation`/`SyncManifestRow`/the wire DTOs now carry `library_sync_id: Option<String>`
+   alongside `library_name`. Every library-resolution call site
+   (`sync_apply_library.rs`'s `find_library_id`/`ensure_library`/`ensure_library_for_tombstone`,
+   used by `apply_sync_presentation`, `resolve_sync_apply_target`, and `apply_unknown_sync_id`)
+   tries the identity FIRST via `find_library_by_sync_id` (live or tombstoned — authoritative; a
+   tombstoned identity match is never allowed to fall through to a name lookup, which would
+   reintroduce mis-filing) and degrades to the pre-#647 name-only join, byte-for-byte unchanged,
+   only when the identity is `None` (an old, un-upgraded peer) or hasn't converged locally yet
+   (rare — a transient library-manifest fetch failure this cycle). `#[serde(default)]` on the new
+   field is what makes the wire compat safe in both directions (no `deny_unknown_fields` on either
+   DTO). This is why invariant 3 above still matters: library reconciliation is best-effort and
+   runs BEFORE presentations in the same cycle, but a fresh identity that hasn't converged yet
+   still correctly falls back to name — the fallback path is not a legacy-only concern.
 
 6. **A CASCADED restore bumps EVERY row's clock it un-tombstones, not just the parent's.** `restore_library`
    (#644, `repository/library.rs`) is invariant 2's worked example the other direction from a rename: it
