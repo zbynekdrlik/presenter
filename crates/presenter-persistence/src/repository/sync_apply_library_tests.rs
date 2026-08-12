@@ -64,8 +64,26 @@ async fn presentation_update_joins_by_library_identity_never_a_stale_current_nam
     repo.create_library("Old Name").await.unwrap();
 
     // First sync: creates the presentation under `renamed` (fresh identity,
-    // no adoption/ambiguity involved).
-    let initial = peer_song("peer-rename-trap", "Rename Trap Song", "verse", 30);
+    // no adoption/ambiguity involved) -- must carry `renamed`'s
+    // `library_sync_id` even at this first-ever sync, exactly like the
+    // sibling `brand_new_presentation_is_created_under_the_correct_library_by_identity`
+    // test: a brand-new SONG can still arrive with an already-converged
+    // library identity (the library itself synced in an earlier cycle).
+    // `peer_song` (library_name hardcoded "Songs", library_sync_id always
+    // `None`) matches NEITHER `renamed` NOR `unrelated` -- using it here was
+    // a fixture bug: it silently minted a brand-new third library named
+    // "Songs" and attached the presentation there, which is exactly why the
+    // very next sanity assertion failed (`library_id` was a fresh "Songs"
+    // library, not `renamed.id`) without exercising the identity-vs-stale-
+    // name behavior this test exists to prove at all.
+    let initial = peer_song_with_library_sync_id(
+        "peer-rename-trap",
+        &renamed_sync_id,
+        "Old Name",
+        "Rename Trap Song",
+        "verse",
+        30,
+    );
     let (outcome, id) = repo
         .apply_sync_presentation(&initial, &HashSet::new())
         .await
