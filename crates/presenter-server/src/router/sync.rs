@@ -15,24 +15,6 @@ use crate::state::sync::{
 use crate::state::AppState;
 use presenter_core::PresentationId;
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text (#587, mirrors `router/libraries.rs`'s
-/// `map_repository_not_found`, #584). Any other error falls through to the
-/// default 500 mapping.
-///
-/// #636: also maps `Conflict` — `restore_presentation` refusing a song whose
-/// parent library is still tombstoned — to 409, mirroring the existing
-/// `PasteSlidesError::AnchorVanished` -> `AppError::conflict` mapping
-/// (`router/presentations.rs`).
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        Some(presenter_persistence::RepositoryError::Conflict(msg)) => AppError::conflict(*msg),
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(super) async fn get_sync_manifest(
     State(state): State<AppState>,
@@ -109,9 +91,11 @@ pub(super) async fn restore_presentation(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let uuid = super::parse_uuid("presentationId", &id)?;
+    // #633: `RepositoryError::NotFound`/`Conflict` (the parent library still
+    // tombstoned, #636) map to 404/409 by default via the centralized
+    // `From<anyhow::Error> for AppError` — no per-call-site helper needed.
     state
         .restore_presentation(PresentationId::from_uuid(uuid))
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

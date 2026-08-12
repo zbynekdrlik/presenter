@@ -44,18 +44,6 @@ pub(crate) struct VideoSourceRequest {
     ndi_name: String,
 }
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
-/// `map_repository_not_found`, #584). Any other error falls through to the
-/// default 500 mapping.
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(crate) async fn list_video_sources(
     State(state): State<AppState>,
@@ -137,6 +125,8 @@ pub(crate) async fn update_video_source(
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
     let actor = extract_actor(&headers);
+    // #633: `RepositoryError::NotFound` maps to 404 by default via the
+    // centralized `From<anyhow::Error> for AppError`.
     let source = state
         .update_video_source(
             VideoSourceId::from_uuid(id),
@@ -144,8 +134,7 @@ pub(crate) async fn update_video_source(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
 }
 
@@ -162,8 +151,7 @@ pub(crate) async fn delete_video_source(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -180,8 +168,7 @@ pub(crate) async fn activate_video_source(
             SettingsAuditSource::HttpSetter,
             &actor,
         )
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
 }
 

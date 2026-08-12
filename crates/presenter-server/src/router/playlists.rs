@@ -53,23 +53,6 @@ pub(super) enum PlaylistEntryPayload {
     },
 }
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text (#586, mirrors `router/libraries.rs`'s
-/// `map_repository_not_found`, #584). `NotFound` (the URL's `playlist_id`
-/// itself is missing) maps to 404; `TargetNotFound` (a body-referenced
-/// `presentation_id` inside `entries` is missing, #632) maps to 422. Any
-/// other error falls through to the default 500 mapping.
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {
-            AppError::unprocessable(*msg)
-        }
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(super) async fn list_playlists(
     State(state): State<AppState>,
@@ -125,10 +108,9 @@ pub(super) async fn update_playlist(
     }
 
     if let Some(favorite) = payload.show_in_dashboard {
-        state
-            .set_playlist_favorite(playlist_id, favorite)
-            .await
-            .map_err(map_repository_not_found)?;
+        // #633: `RepositoryError::NotFound` maps to 404 by default via the
+        // centralized `From<anyhow::Error> for AppError`.
+        state.set_playlist_favorite(playlist_id, favorite).await?;
     }
 
     let updated = state
@@ -213,10 +195,11 @@ pub(super) async fn replace_playlist_entries(
         }
     }
 
+    // #633: `RepositoryError::NotFound`/`TargetNotFound` map to 404/422 by
+    // default via the centralized `From<anyhow::Error> for AppError`.
     let playlist = state
         .replace_playlist_entries(PlaylistId::from_uuid(id), entries)
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     let enriched = state.enrich_playlist_with_names(playlist).await?;
     Ok(Json(enriched))
 }
