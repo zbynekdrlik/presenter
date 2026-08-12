@@ -141,11 +141,31 @@ jobs:
       - name: Setup SSH for deployment
         run: |
           mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "::error::ssh-keyscan failed — known_hosts is empty. Cannot verify host."
+          # #674: drop any STALE key for this host first, so a re-deploy never
+          # accumulates duplicate entries for the same host (the dominant
+          # source of this file's unbounded growth on a persistent self-hosted
+          # runner). Best-effort — a first-ever run has nothing to remove.
+          ssh-keygen -R ${{ env.DEPLOY_HOST }} -f ~/.ssh/known_hosts >/dev/null 2>&1 || true
+          # #674: a bare `ssh-keyscan ... 2>/dev/null` here used to abort the
+          # WHOLE step via this step's `-e` shell the instant keyscan itself
+          # returned non-zero (a transient connect timeout) — BEFORE ever
+          # reaching the emptiness guard below that was written to diagnose
+          # exactly that failure. Wrapping the call in `if ...; then` exempts
+          # it from `-e`; the retry loop then also tolerates a genuine blip.
+          KEYSCAN_OK=0
+          for attempt in 1 2 3 4 5; do
+            if ssh-keyscan -T 5 ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              KEYSCAN_OK=1
+              break
+            fi
+            echo "ssh-keyscan attempt $attempt/5 failed, retrying in 3s..."
+            sleep 3
+          done
+          if [ "$KEYSCAN_OK" -ne 1 ] || [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan failed after 5 attempts — known_hosts is empty. Cannot verify host."
             exit 1
           fi
           cat > ~/.ssh/config <<EOF
@@ -260,18 +280,56 @@ jobs:
       # together with the binaries (the running service may be serving the
       # old file until then).
 
+      # #660: re-downloads whenever the PINNED version differs from what's on
+      # disk (tracked via a `.cliproxy-version` marker file), not only when
+      # the binary is entirely missing — before this fix, bumping
+      # CLIPROXY_VERSION above did nothing on an already-provisioned host
+      # (prod ran the 2026-03-23 build of v6.9.1 for months despite this
+      # workflow source having been edited since). Runs as a single remote
+      # heredoc (not a locally-interpolated double-quoted string) so
+      # $CURRENT_VERSION is read and compared ON THE REMOTE HOST.
+      #
+      # #675 review finding 1: THIS workflow uses the STAGED-PULL model — the
+      # OLD presenter-server (and its `cli-proxy-api` CHILD process,
+      # auto_start=true, `ai/proxy.rs`) keeps serving until the much-later
+      # "Swap staged binaries and restart service" step. Downloading straight
+      # into "${{ env.DEPLOY_DIR }}/cli-proxy-api" would `tar xz` OVER the
+      # same inode the live child has mapped (GNU tar rewrites the existing
+      # file in place, it does not unlink+recreate) — several minutes of DB
+      # backup / schema validation / bible+library sync run between this step
+      # and the restart, so a page fault into the half-written binary during
+      # that window can crash or corrupt the still-running proxy. Stage into
+      # a scratch dir on the SAME filesystem and `mv -f` into place instead —
+      # exactly the pattern the "Stage binaries on prod" step above already
+      # uses for presenter-server itself (`staging.new/` + the swap step's
+      # `mv -f`). A rename is atomic: the OLD inode stays valid for whatever
+      # still has it open, and the NEW binary is only what the NEXT process
+      # start picks up. DO NOT "fix" this by reordering the step to run after
+      # the restart instead — that only shrinks the live-overwrite window (a
+      # freshly-restarted auto_start child would still be running against
+      # this same file), it does not remove the hazard; the atomic rename
+      # removes it outright and needs no ordering assumption to stay correct.
       - name: Deploy CLIProxyAPI
         run: |
-          CLIPROXY_VERSION="6.9.1"
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          CLIPROXY_VERSION="7.2.130"
           CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_linux_amd64.tar.gz"
-          ssh deploy-target "if [ ! -f ${{ env.DEPLOY_DIR }}/cli-proxy-api ]; then
-            echo 'Downloading CLIProxyAPI v${CLIPROXY_VERSION}...'
-            curl -sL '${CLIPROXY_URL}' | tar xz -C ${{ env.DEPLOY_DIR }}/
-            chmod +x ${{ env.DEPLOY_DIR }}/cli-proxy-api
-            echo 'CLIProxyAPI deployed'
+          VERSION_FILE="${{ env.DEPLOY_DIR }}/.cliproxy-version"
+          CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "")
+          if [ ! -f "${{ env.DEPLOY_DIR }}/cli-proxy-api" ] || [ "$CURRENT_VERSION" != "$CLIPROXY_VERSION" ]; then
+            echo "Downloading CLIProxyAPI v${CLIPROXY_VERSION} (was: ${CURRENT_VERSION:-none})..."
+            TMP_DIR=$(mktemp -d "${{ env.DEPLOY_DIR }}/.cliproxy-download.XXXXXX")
+            curl -sL "$CLIPROXY_URL" | tar xz -C "$TMP_DIR/"
+            chmod +x "$TMP_DIR/cli-proxy-api"
+            mv -f "$TMP_DIR/cli-proxy-api" "${{ env.DEPLOY_DIR }}/cli-proxy-api"
+            rm -rf "$TMP_DIR"
+            echo "$CLIPROXY_VERSION" > "$VERSION_FILE"
+            echo "CLIProxyAPI deployed (atomic swap — the old binary's inode, if still mapped by a live child, is untouched)"
           else
-            echo 'CLIProxyAPI already present'
-          fi"
+            echo "CLIProxyAPI already at v${CURRENT_VERSION}"
+          fi
+          REMOTE_SCRIPT
 
       - name: Backup database
         run: |
@@ -500,6 +558,47 @@ jobs:
             exit 1
           fi
           echo "Operator UI: OK (HTTP 200)"
+          REMOTE_SCRIPT
+
+      # #661 added this AI-path check; #675 review finding 2 fixed two bugs
+      # in it. (1) It used to sit INSIDE "Verify deployment", BEFORE the core
+      # smoke test above — an AI-side failure aborted the job via `if:
+      # success()` and skipped the smoke test that proves the actual
+      # lyrics/stage feature still works, so an unrelated AI hiccup could
+      # mask a real regression. Now it runs AFTER the smoke test. (2) It used
+      # to hard-fail on the aggregate `connected` field, which ANDs
+      # connectivity + Claude-OAuth-auth + model-validity — but the Claude
+      # OAuth token is DOCUMENTED to die silently every ~8h (#660) for
+      # reasons that have nothing to do with what THIS deploy shipped, so
+      # failing a PRODUCTION deploy over a coincidentally-stale token is
+      # wrong. Only `modelValid` is asserted as a hard gate: `check_status`
+      # (`router/ai.rs`) defaults it PERMISSIVELY to `true` whenever the
+      # model catalog itself couldn't be fetched (dead token, proxy down,
+      # network blip), so it can only be `false` when the proxy answered its
+      # catalog AND the CONFIGURED model genuinely isn't in it — the one
+      # AI-side failure mode a code/config change in this deploy could
+      # actually cause (the exact #661 incident: an invalid model id sat
+      # green for 4 days). `continue-on-error: true` is banned in this repo
+      # (`no-continue-on-error.md`) — "non-blocking" here means the step
+      # itself never fails on these signals, not that a failing step is
+      # ignored.
+      - name: Verify AI status
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
+            echo "::warning::Post-deploy AI check — /ai/status did not respond (non-blocking; this alone does not fail a production deploy)"
+            exit 0
+          fi
+          if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
+            echo "::error::Post-deploy AI check FAILED — configured AI model is not in the proxy's model catalog: $AI_STATUS"
+            exit 1
+          fi
+          if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
+            echo "AI check passed: $AI_STATUS"
+          else
+            echo "::warning::AI is not fully connected post-deploy (stale Claude OAuth token or proxy unreachable — non-blocking, re-login via /ai panel when convenient): $AI_STATUS"
+          fi
           REMOTE_SCRIPT
 
       - name: Show deployment info

@@ -22,6 +22,25 @@ use crate::api::ai::{check_status, AiStatusResponse};
 
 const AI_STATUS_REFRESH_MS: u32 = 5_000;
 
+/// Pure predicate: is `expires_at` (an RFC3339 timestamp) within the
+/// warning window of `now`? An unparseable timestamp or an ALREADY-expired
+/// one is never "expiring soon" — an already-dead token is the existing
+/// `logged-out` state's job (`ai_chip_state` checks `claude_authenticated`
+/// first), and an unparseable one has nothing useful to warn about.
+///
+/// #660 / #675 review finding 4: the window itself and the actual
+/// inside-the-window arithmetic now live in `presenter_core::ai_auth`
+/// (shared with `ai::refresh::check_and_warn` in presenter-server) instead
+/// of being hand-duplicated here — this wrapper only handles the `&str`
+/// parsing this call site's callers happen to carry (`AiStatusResponse`
+/// deserializes `token_expires_at` as a raw RFC3339 string).
+pub(crate) fn is_expiring_soon(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Ok(parsed) = expires_at.parse::<chrono::DateTime<chrono::Utc>>() else {
+        return false;
+    };
+    presenter_core::is_expiring_soon(parsed, now, presenter_core::EXPIRY_WARNING_WINDOW)
+}
+
 /// How many CONSECUTIVE poll failures before the chip admits it does not
 /// know, rather than clinging to a possibly long-stale last-known state.
 /// Same threshold and reasoning as `pages/settings/video_sources.rs`'s
@@ -43,6 +62,17 @@ pub(crate) fn ai_chip_state(status: Option<&AiStatusResponse>) -> &'static str {
         Some(s) if !s.proxy.binary_found => "missing-binary",
         Some(s) if !s.proxy.running => "proxy-down",
         Some(s) if !s.proxy.claude_authenticated => "logged-out",
+        // #660: authenticated right now, but the token is about to die —
+        // warn BEFORE it happens, not only after (the `logged-out` branch
+        // above already covers "already dead").
+        Some(s)
+            if s.proxy
+                .token_expires_at
+                .as_deref()
+                .is_some_and(|ts| is_expiring_soon(ts, chrono::Utc::now())) =>
+        {
+            "expiring-soon"
+        }
         Some(_) => "ok",
     }
 }
@@ -51,6 +81,7 @@ pub(crate) fn ai_chip_state(status: Option<&AiStatusResponse>) -> &'static str {
 pub(crate) fn ai_chip_label(state: &str) -> &'static str {
     match state {
         "ok" => "AI: pripojené",
+        "expiring-soon" => "AI: čoskoro treba prihlásiť",
         "logged-out" => "AI: odhlásené",
         "proxy-down" => "AI: proxy nebeží",
         "missing-binary" => "AI: chýba binárka",
@@ -59,11 +90,12 @@ pub(crate) fn ai_chip_label(state: &str) -> &'static str {
 }
 
 /// Dot color: green only when everything checks out, yellow while genuinely
-/// unknown, red for any of the three confirmed problems.
+/// unknown OR still working-but-needs-attention-soon, red for a confirmed
+/// problem.
 pub(crate) fn ai_chip_dot(state: &str) -> &'static str {
     match state {
         "ok" => "green",
-        "checking" => "yellow",
+        "checking" | "expiring-soon" => "yellow",
         _ => "red",
     }
 }
@@ -73,6 +105,9 @@ pub(crate) fn ai_chip_dot(state: &str) -> &'static str {
 pub(crate) fn ai_chip_tooltip(state: &str) -> &'static str {
     match state {
         "ok" => "AI je pripojená a prihlásená. Kliknutím otvoríš AI panel.",
+        "expiring-soon" => {
+            "AI je pripojená, ale prihlásenie ku Claude čoskoro vyprší. Kliknutím otvoríš AI panel a znova sa prihlásiš."
+        }
         "logged-out" => {
             "AI proxy beží, ale nie je prihlásená ku Claude. Kliknutím otvoríš AI panel a prihlásiš sa."
         }
@@ -177,6 +212,15 @@ mod tests {
     use crate::api::ai::ProxyStatus;
 
     fn status(binary_found: bool, running: bool, claude_authenticated: bool) -> AiStatusResponse {
+        status_with_expiry(binary_found, running, claude_authenticated, None)
+    }
+
+    fn status_with_expiry(
+        binary_found: bool,
+        running: bool,
+        claude_authenticated: bool,
+        token_expires_at: Option<&str>,
+    ) -> AiStatusResponse {
         AiStatusResponse {
             connected: binary_found && running && claude_authenticated,
             error: None,
@@ -186,7 +230,7 @@ mod tests {
                 api_url: "http://127.0.0.1:18787/v1".to_string(),
                 binary_found,
                 claude_authenticated,
-                token_expires_at: None,
+                token_expires_at: token_expires_at.map(str::to_string),
             },
         }
     }
@@ -222,9 +266,80 @@ mod tests {
         assert_eq!(ai_chip_state(Some(&s)), "missing-binary");
     }
 
+    // #660: authenticated but the token is about to expire — a NEW state
+    // between "logged-out" (already dead) and "ok" (healthy, plenty of time
+    // left). This is the whole point of the ticket: the operator must see
+    // this BEFORE the token dies, not only after.
+
+    #[test]
+    fn expiring_soon_is_reported_when_token_dies_within_the_window() {
+        let now = chrono::Utc::now();
+        let soon = (now + chrono::Duration::minutes(30)).to_rfc3339();
+        let s = status_with_expiry(true, true, true, Some(&soon));
+        assert_eq!(ai_chip_state(Some(&s)), "expiring-soon");
+    }
+
+    #[test]
+    fn ok_when_token_has_plenty_of_time_left() {
+        let now = chrono::Utc::now();
+        let plenty = (now + chrono::Duration::hours(8)).to_rfc3339();
+        let s = status_with_expiry(true, true, true, Some(&plenty));
+        assert_eq!(ai_chip_state(Some(&s)), "ok");
+    }
+
+    #[test]
+    fn logged_out_wins_over_expiring_soon_when_already_dead() {
+        // claude_authenticated=false must report "logged-out" regardless of
+        // whatever stale expiry timestamp happens to still be present.
+        let now = chrono::Utc::now();
+        let past = (now - chrono::Duration::hours(1)).to_rfc3339();
+        let s = status_with_expiry(true, true, false, Some(&past));
+        assert_eq!(ai_chip_state(Some(&s)), "logged-out");
+    }
+
+    #[test]
+    fn ok_when_no_expiry_is_known_at_all() {
+        // API-key auth, or a token whose expiry couldn't be parsed
+        // server-side — `token_expires_at: None` must never be treated as
+        // "expiring soon".
+        let s = status_with_expiry(true, true, true, None);
+        assert_eq!(ai_chip_state(Some(&s)), "ok");
+    }
+
+    #[test]
+    fn is_expiring_soon_true_inside_the_window() {
+        let now = chrono::Utc::now();
+        let soon = (now + chrono::Duration::minutes(30)).to_rfc3339();
+        assert!(is_expiring_soon(&soon, now));
+    }
+
+    #[test]
+    fn is_expiring_soon_false_well_outside_the_window() {
+        let now = chrono::Utc::now();
+        let far = (now + chrono::Duration::hours(8)).to_rfc3339();
+        assert!(!is_expiring_soon(&far, now));
+    }
+
+    #[test]
+    fn is_expiring_soon_false_once_already_expired() {
+        let now = chrono::Utc::now();
+        let past = (now - chrono::Duration::minutes(5)).to_rfc3339();
+        assert!(!is_expiring_soon(&past, now));
+    }
+
+    #[test]
+    fn is_expiring_soon_false_for_an_unparseable_timestamp() {
+        let now = chrono::Utc::now();
+        assert!(!is_expiring_soon("not-a-date", now));
+    }
+
     #[test]
     fn labels_are_slovak_and_state_specific() {
         assert_eq!(ai_chip_label("ok"), "AI: pripojené");
+        assert_eq!(
+            ai_chip_label("expiring-soon"),
+            "AI: čoskoro treba prihlásiť"
+        );
         assert_eq!(ai_chip_label("logged-out"), "AI: odhlásené");
         assert_eq!(ai_chip_label("proxy-down"), "AI: proxy nebeží");
         assert_eq!(ai_chip_label("missing-binary"), "AI: chýba binárka");
@@ -232,9 +347,10 @@ mod tests {
     }
 
     #[test]
-    fn only_ok_is_green_only_checking_is_yellow_the_rest_are_red() {
+    fn ok_is_green_checking_and_expiring_soon_are_yellow_the_rest_are_red() {
         assert_eq!(ai_chip_dot("ok"), "green");
         assert_eq!(ai_chip_dot("checking"), "yellow");
+        assert_eq!(ai_chip_dot("expiring-soon"), "yellow");
         assert_eq!(ai_chip_dot("logged-out"), "red");
         assert_eq!(ai_chip_dot("proxy-down"), "red");
         assert_eq!(ai_chip_dot("missing-binary"), "red");
@@ -243,9 +359,16 @@ mod tests {
     #[test]
     fn tooltip_names_the_exact_problem_and_the_click_target() {
         assert!(ai_chip_tooltip("logged-out").contains("nie je prihlásená"));
+        assert!(ai_chip_tooltip("expiring-soon").contains("čoskoro vyprší"));
         assert!(ai_chip_tooltip("proxy-down").contains("nebeží"));
         assert!(ai_chip_tooltip("missing-binary").contains("chýba"));
-        for state in ["ok", "logged-out", "proxy-down", "missing-binary"] {
+        for state in [
+            "ok",
+            "expiring-soon",
+            "logged-out",
+            "proxy-down",
+            "missing-binary",
+        ] {
             assert!(ai_chip_tooltip(state).contains("AI panel"));
         }
     }

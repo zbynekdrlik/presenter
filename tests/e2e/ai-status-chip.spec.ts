@@ -39,7 +39,12 @@ test.afterAll(async () => {
 
 async function mockAiStatus(
   page: Page,
-  proxy: { running: boolean; binaryFound: boolean; claudeAuthenticated: boolean },
+  proxy: {
+    running: boolean;
+    binaryFound: boolean;
+    claudeAuthenticated: boolean;
+    tokenExpiresAt?: string | null;
+  },
 ) {
   await page.route("**/ai/status", async (route) => {
     await route.fulfill({
@@ -52,6 +57,7 @@ async function mockAiStatus(
           apiUrl: "http://127.0.0.1:18787/v1",
           binaryFound: proxy.binaryFound,
           claudeAuthenticated: proxy.claudeAuthenticated,
+          tokenExpiresAt: proxy.tokenExpiresAt ?? null,
         },
       },
     });
@@ -110,6 +116,57 @@ test("not authenticated is reported distinctly from a down proxy or a missing bi
   await expect(chip).toHaveAttribute("data-state", "logged-out", { timeout: 30_000 });
   await expect(chip).toHaveText("AI: odhlásené");
   await expect(chip).toHaveAttribute("title", /nie je prihlásená/);
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("#660: a token expiring soon shows a distinct warning state, not a false OK", async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  // Before #660, the chip only ever reported "ok" while authenticated —
+  // regardless of whether the token had 8 hours or 8 minutes left. Real
+  // incidents (2026-07-26, 2026-08-02) were only discovered once the token
+  // had already died mid-event.
+  const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  await mockAiStatus(page, {
+    running: true,
+    binaryFound: true,
+    claudeAuthenticated: true,
+    tokenExpiresAt: soon,
+  });
+
+  await page.goto(new URL("/ui/operator", baseURL).toString());
+  await page.waitForLoadState("networkidle");
+
+  const chip = page.locator('[data-role="ai-status-chip"]');
+  await expect(chip).toHaveAttribute("data-state", "expiring-soon", { timeout: 30_000 });
+  await expect(chip).toHaveText("AI: čoskoro treba prihlásiť");
+  await expect(chip).toHaveAttribute("title", /čoskoro vyprší/);
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("#660: a token with plenty of time left still shows the plain ok state", async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const plenty = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
+  await mockAiStatus(page, {
+    running: true,
+    binaryFound: true,
+    claudeAuthenticated: true,
+    tokenExpiresAt: plenty,
+  });
+
+  await page.goto(new URL("/ui/operator", baseURL).toString());
+  await page.waitForLoadState("networkidle");
+
+  const chip = page.locator('[data-role="ai-status-chip"]');
+  await expect(chip).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
+  await expect(chip).toHaveText("AI: pripojené");
 
   expect(consoleMessages).toEqual([]);
 });

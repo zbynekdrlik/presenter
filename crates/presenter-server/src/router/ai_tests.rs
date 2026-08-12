@@ -19,17 +19,17 @@ fn connected_is_false_when_claude_not_authenticated_even_if_connectivity_ok() {
     // `authentication_error`, so `connected` MUST be false — not the
     // misleading `true` it reported on prod SNV during the 2026-07 incident.
     assert!(
-        !compute_ai_connected(true, false),
+        !compute_ai_connected(true, false, true),
         "connected must be false when claudeAuthenticated is false, even if \
          the proxy port answers the connectivity ping"
     );
 }
 
 #[test]
-fn connected_is_true_only_when_both_connectivity_and_auth_are_ok() {
+fn connected_is_true_only_when_all_three_signals_are_ok() {
     assert!(
-        compute_ai_connected(true, true),
-        "connected is true only when the proxy is reachable AND Claude is authenticated"
+        compute_ai_connected(true, true, true),
+        "connected is true only when the proxy is reachable, Claude is authenticated, AND the configured model is valid"
     );
 }
 
@@ -38,7 +38,7 @@ fn connected_is_false_when_connectivity_fails_even_if_auth_appears_ok() {
     // Edge case: auth reports true (e.g. credential file exists) but the
     // proxy process is down/unreachable. `connected` must still be false.
     assert!(
-        !compute_ai_connected(false, true),
+        !compute_ai_connected(false, true, true),
         "connected must be false when the proxy port is unreachable, regardless of auth state"
     );
 }
@@ -46,8 +46,21 @@ fn connected_is_false_when_connectivity_fails_even_if_auth_appears_ok() {
 #[test]
 fn connected_is_false_when_both_signals_fail() {
     assert!(
-        !compute_ai_connected(false, false),
+        !compute_ai_connected(false, false, true),
         "connected must be false when neither connectivity nor auth is present"
+    );
+}
+
+// #661: the incident this fixes — an invalid `model` id sat `connected:
+// true` for 4 days because nothing checked it. `model_valid=false` must
+// flip `connected` to false even when connectivity AND auth are both fine.
+
+#[test]
+fn connected_is_false_when_the_configured_model_is_not_in_the_catalog() {
+    assert!(
+        !compute_ai_connected(true, true, false),
+        "connected must be false when connectivity and auth are fine but the \
+         configured model is not one the proxy actually serves"
     );
 }
 
@@ -59,7 +72,10 @@ fn connected_is_false_when_both_signals_fail() {
 
 #[test]
 fn status_error_is_none_when_connected() {
-    assert_eq!(compute_ai_status_error(true, true, None), None);
+    assert_eq!(
+        compute_ai_status_error(true, true, true, "claude-opus-4-6", None),
+        None
+    );
 }
 
 #[test]
@@ -67,7 +83,13 @@ fn status_error_reports_unauthenticated_regardless_of_connectivity_error() {
     // claude_authenticated=false takes priority even if a connectivity error
     // string happens to be present — the auth message is the more actionable one.
     assert_eq!(
-        compute_ai_status_error(false, false, Some("AI API returned status 500")),
+        compute_ai_status_error(
+            false,
+            false,
+            true,
+            "claude-opus-4-6",
+            Some("AI API returned status 500")
+        ),
         Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
     );
 }
@@ -76,7 +98,13 @@ fn status_error_reports_unauthenticated_regardless_of_connectivity_error() {
 fn status_error_surfaces_the_real_connectivity_failure_message() {
     // The regression this ticket fixes: a 401 from the proxy must be visible
     // to the caller, not silently replaced by a generic "unreachable" string.
-    let error = compute_ai_status_error(false, true, Some("AI API returned status 401"));
+    let error = compute_ai_status_error(
+        false,
+        true,
+        true,
+        "claude-opus-4-6",
+        Some("AI API returned status 401"),
+    );
     assert_eq!(
         error,
         Some("AI proxy unreachable: AI API returned status 401".to_string()),
@@ -89,8 +117,226 @@ fn status_error_falls_back_to_generic_message_when_no_error_string_available() {
     // Defensive branch: connectivity_ok=false with no captured error string
     // (shouldn't normally happen, but must not panic or fabricate text).
     assert_eq!(
-        compute_ai_status_error(false, true, None),
+        compute_ai_status_error(false, true, true, "claude-opus-4-6", None),
         Some("AI proxy unreachable".to_string())
+    );
+}
+
+// #661: the new third branch — connectivity and auth are both fine, but the
+// configured model isn't in the proxy's catalog. This is the exact
+// incident: a model id that would 502 on the first real chat call, sitting
+// `connected: true` because nothing ever checked it.
+
+#[test]
+fn status_error_names_the_invalid_model_when_connectivity_and_auth_are_fine() {
+    let error = compute_ai_status_error(false, true, false, "claude-opus-4-8", None);
+    assert_eq!(
+        error,
+        Some(
+            "Configured AI model 'claude-opus-4-8' is not available in the proxy's model catalog — check AI settings"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn status_error_prefers_the_auth_message_over_the_model_message_when_both_are_wrong() {
+    // If Claude isn't even authenticated, that is the more actionable
+    // problem to surface first — a model-validity check would be moot
+    // without a working login anyway.
+    let error = compute_ai_status_error(false, false, false, "claude-opus-4-8", None);
+    assert_eq!(
+        error,
+        Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
+    );
+}
+
+// #661 item 3: `PUT /ai/settings` used to write through the bare
+// `set_app_setting` upsert with zero audit hook — the ONE settings family
+// that could never produce a `settings_audit` row, which is why the
+// undiagnosed 2026-08-02 prod model-id edit left no forensic trail. Drives
+// the REAL HTTP handler through the full router (not just a pure
+// function), matching the `post_ai_chat_...` tests' own style below.
+
+#[tokio::test]
+async fn put_ai_settings_records_a_settings_audit_row_with_the_actor() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use presenter_persistence::SettingsAuditSource;
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-for", "10.1.2.3, 10.0.0.1")
+                .body(Body::from(
+                    serde_json::json!({"model": "claude-sonnet-4-6"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let rows = state
+        .repository()
+        .list_settings_audit(
+            Some("app_settings"),
+            Some(crate::ai::AI_SETTINGS_KEY),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "PUT /ai/settings must record exactly one audit row: {rows:?}"
+    );
+    assert_eq!(
+        rows[0].actor, "10.1.2.3",
+        "actor must be extracted from the FIRST X-Forwarded-For hop"
+    );
+    assert_eq!(rows[0].source, SettingsAuditSource::HttpSetter);
+    assert_eq!(
+        rows[0].after_json.get("model").and_then(|v| v.as_str()),
+        Some("claude-sonnet-4-6"),
+        "the audit row must carry the NEW model value: {:?}",
+        rows[0].after_json
+    );
+}
+
+#[tokio::test]
+async fn put_ai_settings_falls_back_to_anonymous_actor_with_no_forwarding_headers() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"model": "claude-sonnet-4-6"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let rows = state
+        .repository()
+        .list_settings_audit(
+            Some("app_settings"),
+            Some(crate::ai::AI_SETTINGS_KEY),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actor, "anonymous");
+}
+
+// #675 review finding 3: `cd7c0f56` replaced `serde_json::to_value(&settings)`
+// with `redact_settings_for_audit()` to stop the raw `api_key` from being
+// persisted into `settings_audit` (`AiSettings` derives `Serialize`, so the
+// naive snapshot would have written the literal key into the DB). But BOTH
+// existing PUT-handler tests above leave `api_key: None` the whole time, so
+// they pass identically with the fix reverted — this test actually sets a
+// real key and asserts the audit row never carries it.
+#[tokio::test]
+async fn put_ai_settings_with_a_real_api_key_never_writes_it_into_the_audit_row() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    const SECRET_KEY: &str = "sk-ant-super-secret-do-not-leak-4f8e2b91";
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"apiKey": SECRET_KEY}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let rows = state
+        .repository()
+        .list_settings_audit(
+            Some("app_settings"),
+            Some(crate::ai::AI_SETTINGS_KEY),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "PUT /ai/settings must record exactly one audit row: {rows:?}"
+    );
+
+    // The redacted-away signal: `apiKeySet` must be true (a key WAS set),
+    // and it must be the ONLY thing the audit row says about the key.
+    assert_eq!(
+        rows[0]
+            .after_json
+            .get("apiKeySet")
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "after_json must record that a key IS set: {:?}",
+        rows[0].after_json
+    );
+
+    // The regression: neither snapshot may contain the raw secret anywhere,
+    // and neither may carry a raw `apiKey` field at all — only the boolean
+    // `apiKeySet`. Stringifying the whole JSON value (rather than checking
+    // one named field) is deliberate: it also catches the raw key leaking
+    // in via any OTHER field name a future edit might introduce.
+    let before_str = rows[0]
+        .before_json
+        .as_ref()
+        .map(serde_json::Value::to_string)
+        .unwrap_or_default();
+    let after_str = rows[0].after_json.to_string();
+    assert!(
+        !before_str.contains(SECRET_KEY) && !after_str.contains(SECRET_KEY),
+        "the raw API key must never be persisted into the settings_audit row: \
+         before={before_str} after={after_str}"
+    );
+    assert!(
+        !after_str.contains("\"apiKey\""),
+        "the audit snapshot must never carry a raw `apiKey` field, only the \
+         redacted `apiKeySet` boolean: {after_str}"
     );
 }
 
