@@ -852,3 +852,54 @@ Verified: Pipeline 31511580645 all 22 jobs green; Deploy 31516528986 green; prod
 - **Local verify:** `npm ci && npx tsc --noEmit` clean for the new spec file. `rustfmt --check` clean
   for the Rust file. Playwright itself did NOT run locally (Tier-0 + #669 trap) — CI is the first
   real execution of the new spec, after the supervisor's round integration.
+
+## Round 2026-08-12 — #669 + #672 (bundled batch, worktree `agent-ad42662b6255f2dfc`)
+
+- **#669 — nested-worktree cargo collision, fixed for real.** Root cause confirmed empirically
+  (twice: single-nest and double-nest) — cargo's ancestor-directory workspace-root discovery has
+  no worktree-boundary awareness and climbs past a nested worktree's own excluding `[workspace]`
+  into an outer checkout's, whose relative-path `exclude` never matches the nested path. Fix:
+  permanent `[workspace]` table on `crates/presenter-ui/Cargo.toml` (commit `aab1e48c`) — makes
+  cargo's first manifest check return `Root` immediately, so the ancestor walk never runs.
+  Verified value-neutral: `cargo metadata` from the repo root still lists the same 7 outer
+  members with `presenter-ui` absent; from inside `presenter-ui` its own `workspace_root` now
+  resolves to itself; `git diff -- Cargo.lock` empty (both lockfiles untouched).
+  - Design: https://github.com/zbynekdrlik/presenter/issues/669#issuecomment-5269625066
+  - Validated (live repro + post-fix confirmation): https://github.com/zbynekdrlik/presenter/issues/669#issuecomment-5269737633
+  - Review: https://github.com/zbynekdrlik/presenter/issues/669#issuecomment-5269914428
+  - Added `scripts/dev/check-presenter-ui-worktree-fmt.sh` — the regression proof CI structurally
+    cannot provide (its own Format job checks out non-nested). Creates a throwaway nested worktree
+    via `git worktree add --detach`, runs `cargo fmt --check` inside `crates/presenter-ui`, asserts
+    exit 0, `trap ... EXIT` cleanup unconditionally. Ran it 3x during this round (pre-fix repro,
+    post-fix pass, post-#672 re-pass) — `git worktree list` clean every time, no stray entries.
+  - `.claude/skills/ci/SKILL.md`'s existing nested-worktree trap section rewritten in place to
+    record the fix (kept for historical context, marked FIXED).
+- **#672 — extracted `install_pagehide_teardown`/`PagehideHandle` out of `ndi_video.rs`.** This is
+  what made #669's fix worth landing first: with #669 in place, this refactor was genuinely
+  compile-checked (`cargo check --target wasm32-unknown-unknown`, exit 0) from inside the worktree,
+  not just `rustfmt`-only like #670 had to settle for. Pure relocation into a new sibling
+  `ndi_pagehide.rs` (mirrors `ndi_playback_guard.rs`'s #637 shape exactly): `install`'s param
+  changed `&WhepSession` → `Option<&str>` (the resource URL), `dispatch_delete` widened to
+  `pub(super)`, `ActiveConnection.pagehide`'s field type re-pointed. `disposed: Cell<bool>`
+  double-dispose guard and both existing `dispose()` call sites unchanged.
+  `ndi_video.rs`: 987→912 raw lines, 884→809 production lines (`count_prod_lines.sh`) — clear of
+  both the 800 warning and 1000 hard-fail thresholds' *trend*, though still above 800 itself
+  (non-blocking per the CI gate's own warn-vs-fail split).
+  - Design: https://github.com/zbynekdrlik/presenter/issues/672#issuecomment-5269742783
+  - Validated: https://github.com/zbynekdrlik/presenter/issues/672#issuecomment-5269746513
+  - Review: https://github.com/zbynekdrlik/presenter/issues/672#issuecomment-5269914645
+  - Commit `240d7ece` (single commit, extraction + doc-comment updates in `wake_lock.rs` + `mod.rs`
+    wiring).
+- **Deep-review pass** (fresh-context `general-purpose` subagent, built-in review skill banned per
+  #363): 0 🔴 0 🟡 3 🔵. Two flagged a stale `install_pagehide_teardown` name reference inside
+  `tests/e2e/stage-ndi-pagehide-teardown.spec.ts` (a comment + a test title string) —
+  **deliberately left unchanged**: the #672 dispatch instructions explicitly treat any edit to
+  that spec as a "stop and rethink, the refactor changed behavior" signal, so cosmetic-only text
+  in it was left alone rather than risk that read. Third was informational only (version unchanged
+  at `0.4.238` — explicitly not this worker's call per the dispatch's hard constraints).
+- **Local verify (Tier-0, no heavy builds):** `cargo fmt --check` + `cargo check --target
+  wasm32-unknown-unknown` both exit 0 for `crates/presenter-ui` from inside this nested worktree —
+  the first time either has been possible for a worktree-dispatched worker on this crate.
+- **Worktree-mode stop point:** committed on branch `worktree-agent-ad42662b6255f2dfc` at
+  `240d7ece`; no push/PR/merge/deploy/run-card from this worker — round integration is the
+  supervisor's job.
