@@ -9,7 +9,7 @@
 use super::util::build_slide_active_model;
 use super::Repository;
 use crate::entities::{
-    library, presentation as presentation_entity, slide as slide_entity, slide_stage_layout,
+    presentation as presentation_entity, slide as slide_entity, slide_stage_layout,
 };
 use crate::SyncPresentation;
 use chrono::{DateTime, Utc};
@@ -136,7 +136,13 @@ impl Repository {
             let (library_id, forced_delete) = if incoming.deleted_at.is_some() {
                 (existing.library_id.clone(), None)
             } else {
-                Self::ensure_library(&txn, &incoming.library_name, incoming.updated_at).await?
+                Self::ensure_library(
+                    &txn,
+                    incoming.library_sync_id.as_deref(),
+                    &incoming.library_name,
+                    incoming.updated_at,
+                )
+                .await?
             };
             Self::write_synced_row(&txn, &existing.id, &library_id, incoming, forced_delete)
                 .await?;
@@ -163,7 +169,13 @@ impl Repository {
         // hold any adoption candidate, so a missing library is simply "no
         // candidates", not a reason to create one speculatively.
         if incoming.deleted_at.is_none() {
-            if let Some(library_id) = Self::find_library_id(&txn, &incoming.library_name).await? {
+            if let Some(library_id) = Self::find_library_id(
+                &txn,
+                incoming.library_sync_id.as_deref(),
+                &incoming.library_name,
+            )
+            .await?
+            {
                 if let Some(result) =
                     Self::try_adopt_by_name(&txn, &library_id, incoming, peer_sync_ids).await?
                 {
@@ -181,29 +193,6 @@ impl Repository {
         let result = Self::apply_unknown_sync_id(&txn, incoming).await?;
         txn.commit().await?;
         Ok(result)
-    }
-
-    /// Look up an existing LIVE library by name — NEVER creates one (#558
-    /// round-4 U4). Used wherever "no library" can be treated as "nothing
-    /// to do" without paying for a write. Generic over the connection
-    /// (#558 W5/W8/W9) so the SAME implementation serves both the real
-    /// apply (inside its transaction) and `resolve_sync_apply_target` (a
-    /// plain pre-transaction probe, no transaction involved).
-    ///
-    /// #580: a same-named TOMBSTONED library is deliberately invisible here
-    /// — `ensure_library` (the only caller that may WRITE) decides that case
-    /// itself via LWW against the incoming presentation's `updated_at`,
-    /// rather than treating "no live match" as "nothing exists".
-    async fn find_library_id<C: sea_orm::ConnectionTrait>(
-        conn: &C,
-        library_name: &str,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(library::Entity::find()
-            .filter(library::Column::Name.eq(library_name.to_string()))
-            .filter(library::Column::DeletedAt.is_null())
-            .one(conn)
-            .await?
-            .map(|l| l.id))
     }
 
     /// The single LIVE (non-trashed) local presentation row matching
@@ -280,7 +269,12 @@ impl Repository {
         if incoming.deleted_at.is_some() {
             return Ok(None);
         }
-        let Some(library_id) = Self::find_library_id(&self.db, &incoming.library_name).await?
+        let Some(library_id) = Self::find_library_id(
+            &self.db,
+            incoming.library_sync_id.as_deref(),
+            &incoming.library_name,
+        )
+        .await?
         else {
             return Ok(None);
         };
@@ -295,176 +289,6 @@ impl Repository {
         Ok(Some(presenter_core::PresentationId::from_uuid(
             uuid::Uuid::parse_str(&candidate.id)?,
         )))
-    }
-
-    /// Look up an existing LIVE library by name, or REVIVE-or-attach-to a
-    /// same-named TOMBSTONED one, or create a brand-new live library if
-    /// neither exists (#558 round-4 U4; #580). Call this ONLY once the
-    /// caller is committed to writing a presentation row into it — never
-    /// speculatively, or a skipped/never-write apply leaves behind a
-    /// phantom, permanently-empty library row.
-    ///
-    /// #580: previously, the moment no LIVE same-named library existed, this
-    /// ALWAYS minted a fresh one — even when a TOMBSTONED library of that
-    /// name already existed. That let a peer's concurrent
-    /// library-delete-vs-presentation-create race diverge the two instances
-    /// forever (one side ends up with a resurrected library holding the new
-    /// presentation, the other still shows the library hidden with the
-    /// presentation orphaned underneath it). Fix (decision on #580, option
-    /// b): decide live-vs-tombstoned from the TOMBSTONED library's own
-    /// `updated_at` against the incoming presentation's `updated_at` — the
-    /// SAME LWW mechanism `apply_sync_library` already uses for library
-    /// manifest sync (#578's `updated_at`/`sync_id`/`deleted_at` columns).
-    /// `presentation_updated_at > library_updated` (strictly, mirroring
-    /// `sync_should_apply`'s tie-break) revives the library in place —
-    /// clearing `deleted_at` and bumping `updated_at` to the presentation's
-    /// own timestamp so the peer's next pull sees a strictly newer live
-    /// library row and revives its own copy too. Otherwise the library
-    /// stays tombstoned and the presentation simply attaches to it (hidden,
-    /// matching what the peer that did the deleting already shows). Either
-    /// way the EXISTING library row is reused — its identity (`sync_id`)
-    /// never changes, and reviving it never revives any presentation
-    /// tombstoned under it (those carry their own tombstones with their own
-    /// `updated_at` and settle by their own LWW).
-    ///
-    /// #634/#646: returns `(library_id, forced_tombstone_at)`.
-    /// `forced_tombstone_at` is `Some(library_updated)` — the LIBRARY's OWN
-    /// tombstone time, ONLY — when the resolved library stayed tombstoned
-    /// (the LWW check above did NOT revive it). The caller writes the
-    /// presentation attaching here as tombstoned too (`deleted_at` only —
-    /// `updated_at` stays the incoming row's own clock, untouched), instead
-    /// of leaving it LIVE under a dead parent (invisible to
-    /// `fetch_libraries`, doomed by the next `prune_deleted_libraries`
-    /// CASCADE with zero prior trace; real data loss, fixed here).
-    ///
-    /// #646: this used to be `presentation_updated_at.max(library_updated)`,
-    /// applied to BOTH `updated_at` and `deleted_at` — that let the forced
-    /// row's clock jump past its true incoming value, LWW-beating the
-    /// peer's own live copy of the same song and, past `PRUNE_HORIZON`,
-    /// risking a zero-trash-window hard-delete. Returning only the
-    /// library's own clock (paired with the incoming row's UNCHANGED
-    /// `updated_at` at the call site) keeps the forced tombstone
-    /// LWW-neutral: equal clocks + the strict `>` gate mean it never
-    /// propagates to the peer and never beats a live copy — deletion only
-    /// ever reaches the peer through the library-level channel.
-    ///
-    /// `None` in every other case (live library found, revived, or freshly
-    /// created) — the caller's normal `incoming.deleted_at`/`updated_at`
-    /// apply unchanged.
-    async fn ensure_library(
-        txn: &sea_orm::DatabaseTransaction,
-        library_name: &str,
-        presentation_updated_at: DateTime<Utc>,
-    ) -> anyhow::Result<(String, Option<DateTime<Utc>>)> {
-        if let Some(id) = Self::find_library_id(txn, library_name).await? {
-            return Ok((id, None));
-        }
-        // #626: resolved via the SHARED `find_most_recent_tombstoned_library`
-        // helper — see its doc comment for why this must be the ONE query
-        // both this function and `ensure_library_for_tombstone` use.
-        if let Some(tombstoned) =
-            Self::find_most_recent_tombstoned_library(txn, library_name).await?
-        {
-            let library_updated: DateTime<Utc> = tombstoned.updated_at.into();
-            if presentation_updated_at > library_updated {
-                library::Entity::update_many()
-                    .col_expr(
-                        library::Column::DeletedAt,
-                        Expr::value(Option::<String>::None),
-                    )
-                    .col_expr(
-                        library::Column::UpdatedAt,
-                        Expr::value(presentation_updated_at.to_rfc3339()),
-                    )
-                    .filter(library::Column::Id.eq(tombstoned.id.clone()))
-                    .filter(library::Column::DeletedAt.is_not_null())
-                    .exec(txn)
-                    .await?;
-                return Ok((tombstoned.id, None));
-            }
-            // #634/#646: the tombstone wins (not revived) -- the
-            // presentation attaching here must be written as tombstoned
-            // too, never live under a dead parent. `library_updated` alone
-            // (never max'd against `presentation_updated_at`) -- see the
-            // doc comment above for why maxing was the #646 data-loss bug.
-            return Ok((tombstoned.id, Some(library_updated)));
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        library::Entity::insert(library::ActiveModel {
-            id: Set(id.clone()),
-            name: Set(library_name.to_string()),
-            search_name: Set(fold_query(library_name)),
-            created_at: Set(Utc::now().into()),
-            // #578: a library implicitly created to hold a synced presentation
-            // is live with a fresh sync identity; the library manifest sync
-            // converges that identity with the peer via the name-match adopt.
-            updated_at: Set(Utc::now().into()),
-            sync_id: Set(uuid::Uuid::new_v4().to_string()),
-            deleted_at: Set(None),
-        })
-        .exec(txn)
-        .await?;
-        Ok((id, None))
-    }
-
-    /// The most recently updated TOMBSTONED library row named `library_name`,
-    /// or `None` if none exists. Ties break by `SyncId` DESC (peer-stable —
-    /// never the local-only `Id`, or two peers could break a tie in
-    /// DIFFERENT directions and diverge).
-    ///
-    /// Shared by `ensure_library` and `ensure_library_for_tombstone` so the
-    /// two can never independently order the same tombstones differently
-    /// (#626: the latter used to run its OWN `DeletedAt ASC`-primary query,
-    /// which only agreed with this one when every same-named tombstone
-    /// shared the exact same `deleted_at` — #595's own test covered only
-    /// that case. An ordinary delete/recreate cycle leaves DIFFERENT
-    /// `deleted_at` values per attempt, and the two independently-sorted
-    /// queries then picked DIFFERENT rows).
-    async fn find_most_recent_tombstoned_library(
-        txn: &sea_orm::DatabaseTransaction,
-        library_name: &str,
-    ) -> anyhow::Result<Option<library::Model>> {
-        Ok(library::Entity::find()
-            .filter(library::Column::Name.eq(library_name.to_string()))
-            .filter(library::Column::DeletedAt.is_not_null())
-            .order_by_desc(library::Column::UpdatedAt)
-            .order_by_desc(library::Column::SyncId)
-            .one(txn)
-            .await?)
-    }
-
-    /// #578: resolve a library id for a brand-new TOMBSTONED presentation
-    /// WITHOUT creating an empty LIVE library shell. Attach to any existing
-    /// same-named library (a LIVE one always wins via `find_library_id`;
-    /// otherwise the most recently updated TOMBSTONED one via the shared
-    /// `find_most_recent_tombstoned_library` helper — #626); if none exists,
-    /// create a TOMBSTONED library (its identity converges separately via the
-    /// peer's library manifest). Used only by `apply_unknown_sync_id` for a
-    /// tombstone — a live entry keeps using `ensure_library`.
-    async fn ensure_library_for_tombstone(
-        txn: &sea_orm::DatabaseTransaction,
-        library_name: &str,
-    ) -> anyhow::Result<String> {
-        if let Some(id) = Self::find_library_id(txn, library_name).await? {
-            return Ok(id);
-        }
-        if let Some(row) = Self::find_most_recent_tombstoned_library(txn, library_name).await? {
-            return Ok(row.id);
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = Utc::now();
-        library::Entity::insert(library::ActiveModel {
-            id: Set(id.clone()),
-            name: Set(library_name.to_string()),
-            search_name: Set(fold_query(library_name)),
-            created_at: Set(now.into()),
-            updated_at: Set(now.into()),
-            sync_id: Set(uuid::Uuid::new_v4().to_string()),
-            deleted_at: Set(Some(now.into())),
-        })
-        .exec(txn)
-        .await?;
-        Ok(id)
     }
 
     /// Step 2 of `apply_sync_presentation`: adopt-by-name among LIVE
@@ -569,11 +393,22 @@ impl Repository {
         // tombstoned too, never live under a dead parent.
         let (library_id, forced_delete) = if incoming.deleted_at.is_some() {
             (
-                Self::ensure_library_for_tombstone(txn, &incoming.library_name).await?,
+                Self::ensure_library_for_tombstone(
+                    txn,
+                    incoming.library_sync_id.as_deref(),
+                    &incoming.library_name,
+                )
+                .await?,
                 None,
             )
         } else {
-            Self::ensure_library(txn, &incoming.library_name, incoming.updated_at).await?
+            Self::ensure_library(
+                txn,
+                incoming.library_sync_id.as_deref(),
+                &incoming.library_name,
+                incoming.updated_at,
+            )
+            .await?
         };
         // #646: `updated_at` is ALWAYS the incoming row's own clock, never
         // overridden -- only `deleted_at` is forced. See `ensure_library`'s
@@ -992,147 +827,9 @@ mod tests {
     use super::{sync_should_apply, PRUNE_HORIZON};
     use chrono::{Duration, Utc};
 
-    #[tokio::test]
-    async fn tombstone_helpers_agree_on_same_named_tombstone() {
-        // #595 regression: ensure_library and ensure_library_for_tombstone
-        // must resolve to the SAME library row when multiple same-named
-        // tombstones exist. Before the fix, ensure_library_for_tombstone
-        // used only DeletedAt ASC — with equal deleted_at values, SQLite
-        // falls back to rowid (insertion) order and picks the OLDER row.
-        // ensure_library uses UpdatedAt DESC + SyncId DESC, picking the
-        // NEWER row → disagreement.
-        use crate::entities::library;
-        use sea_orm::{EntityTrait, Set, TransactionTrait};
-
-        let repo = super::Repository::connect_in_memory()
-            .await
-            .expect("in-memory db");
-        let base = Utc::now();
-        let delete_time = base - Duration::hours(1);
-
-        // Two tombstones: same name, same deleted_at, different updated_at/sync_id.
-        // Updated_at differs: older row = base-120min, newer row = base-0min.
-        // Both are older than the presentation time we'll pass to ensure_library,
-        // so no tombstone revival happens (pure resolution test).
-        for (id, updated_offset_min, sync_val) in [
-            ("lib-older", 120_i64, "sync-aaa"),
-            ("lib-newer", 0_i64, "sync-bbb"),
-        ] {
-            library::Entity::insert(library::ActiveModel {
-                id: Set(id.to_string()),
-                name: Set("Songs".to_string()),
-                search_name: Set("songs".to_string()),
-                created_at: Set((base - Duration::hours(2)).into()),
-                updated_at: Set((base - Duration::minutes(updated_offset_min)).into()),
-                sync_id: Set(sync_val.to_string()),
-                deleted_at: Set(Some(delete_time.into())),
-            })
-            .exec(&repo.db)
-            .await
-            .expect("insert tombstone");
-        }
-
-        // ensure_library_for_tombstone: among equal deleted_at, the secondary
-        // sort (after fix) must match ensure_library's UpdatedAt DESC.
-        let txn1 = repo.db.begin().await.expect("begin txn");
-        let id_from_tombstone_helper =
-            super::Repository::ensure_library_for_tombstone(&txn1, "Songs")
-                .await
-                .expect("resolve via tombstone helper");
-        txn1.rollback().await.expect("rollback");
-
-        // ensure_library: picks most recent tombstone by UpdatedAt DESC.
-        // presentation_updated_at is OLDER than both → no revival, pure read.
-        let txn2 = repo.db.begin().await.expect("begin txn");
-        let (id_from_live_helper, forced_delete) =
-            super::Repository::ensure_library(&txn2, "Songs", base - Duration::hours(3))
-                .await
-                .expect("resolve via live helper");
-        txn2.rollback().await.expect("rollback");
-        assert!(
-            forced_delete.is_some(),
-            "presentation_updated_at is older than the tombstone -- it stays \
-             tombstoned, so the caller must be told to force-tombstone too (#634)"
-        );
-
-        assert_eq!(
-            id_from_tombstone_helper, id_from_live_helper,
-            "both tombstone helpers must resolve to the same library row; \
-             tombstone helper picked {id_from_tombstone_helper}, \
-             live helper picked {id_from_live_helper}"
-        );
-    }
-
-    #[tokio::test]
-    async fn tombstone_helpers_agree_on_same_named_tombstone_with_different_deleted_at() {
-        // #626 regression: the #595 test above only proves agreement when
-        // BOTH same-named tombstones share the EXACT same `deleted_at` --
-        // in that case DeletedAt ASC can't discriminate between them and
-        // the query falls through to UpdatedAt DESC, which happens to
-        // agree with `ensure_library`. An ordinary delete/recreate/delete
-        // cycle leaves DIFFERENT `deleted_at` values per attempt: here the
-        // most-recently-UPDATED row is deliberately NOT the earliest-
-        // DELETED row, so the OLD `ensure_library_for_tombstone` (DeletedAt
-        // ASC primary sort) and `ensure_library` (UpdatedAt DESC) pick
-        // DIFFERENT rows.
-        use crate::entities::library;
-        use sea_orm::{EntityTrait, Set, TransactionTrait};
-
-        let repo = super::Repository::connect_in_memory()
-            .await
-            .expect("in-memory db");
-        let base = Utc::now();
-
-        // "lib-recent-update": most recently UPDATED, but NOT the earliest
-        // deleted (deleted only 10 min ago) -- ensure_library (UpdatedAt
-        // DESC) must pick this one.
-        // "lib-earliest-delete": updated 2h ago, but deleted earliest (5h
-        // ago) -- the OLD ensure_library_for_tombstone (DeletedAt ASC
-        // primary) wrongly picks this one instead.
-        for (id, updated_offset_min, deleted_offset_min, sync_val) in [
-            ("lib-recent-update", 0_i64, 10_i64, "sync-aaa"),
-            ("lib-earliest-delete", 120_i64, 300_i64, "sync-bbb"),
-        ] {
-            library::Entity::insert(library::ActiveModel {
-                id: Set(id.to_string()),
-                name: Set("Songs".to_string()),
-                search_name: Set("songs".to_string()),
-                created_at: Set((base - Duration::hours(6)).into()),
-                updated_at: Set((base - Duration::minutes(updated_offset_min)).into()),
-                sync_id: Set(sync_val.to_string()),
-                deleted_at: Set(Some((base - Duration::minutes(deleted_offset_min)).into())),
-            })
-            .exec(&repo.db)
-            .await
-            .expect("insert tombstone");
-        }
-
-        let txn1 = repo.db.begin().await.expect("begin txn");
-        let id_from_tombstone_helper =
-            super::Repository::ensure_library_for_tombstone(&txn1, "Songs")
-                .await
-                .expect("resolve via tombstone helper");
-        txn1.rollback().await.expect("rollback");
-
-        // presentation_updated_at older than every tombstone -> no revival.
-        let txn2 = repo.db.begin().await.expect("begin txn");
-        let (id_from_live_helper, forced_delete) =
-            super::Repository::ensure_library(&txn2, "Songs", base - Duration::hours(7))
-                .await
-                .expect("resolve via live helper");
-        txn2.rollback().await.expect("rollback");
-        assert!(
-            forced_delete.is_some(),
-            "presentation_updated_at is older than every tombstone -- stays tombstoned"
-        );
-
-        assert_eq!(
-            id_from_tombstone_helper, id_from_live_helper,
-            "both tombstone helpers must resolve to the same library row even when \
-             deleted_at values differ; tombstone helper picked {id_from_tombstone_helper}, \
-             live helper picked {id_from_live_helper}"
-        );
-    }
+    // The `ensure_library`/`ensure_library_for_tombstone` tombstone-agreement
+    // tests moved to `sync_apply_library.rs`'s own `#[cfg(test)]` module
+    // alongside those functions (#647 extraction).
 
     #[test]
     fn lww_matrix() {
