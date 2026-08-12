@@ -35,16 +35,26 @@ use leptos::prelude::*;
 /// CONFIRMED `Some(false)`. `None` (unknown: no answer yet, or the last fetch
 /// failed) must stay hidden — never accuse the operator of being logged out
 /// on a guess (#622 post-merge review finding 1).
-pub(crate) fn show_login_banner(authenticated: Option<bool>) -> bool {
-    authenticated == Some(false)
+///
+/// `requires_claude_auth` (#679): a user pointing `apiUrl` at their own
+/// non-bundled OpenAI-compatible endpoint (the #662 local-LLM scenario)
+/// never needs a Claude login — the banner must stay hidden regardless of
+/// `authenticated` in that case.
+pub(crate) fn show_login_banner(authenticated: Option<bool>, requires_claude_auth: bool) -> bool {
+    requires_claude_auth && authenticated == Some(false)
 }
 
 /// Whether the "still valid, renew soon" note should be shown — only while
 /// CONFIRMED authenticated (`Some(true)`) via a token whose expiry is
 /// actually known (never for API-key auth, which carries no expiry at all,
-/// and never while the auth state is merely unknown).
-pub(crate) fn show_validity_note(authenticated: Option<bool>, expires_at: Option<&str>) -> bool {
-    authenticated == Some(true) && expires_at.is_some()
+/// and never while the auth state is merely unknown), and only when Claude
+/// auth is actually required (#679 — same rationale as `show_login_banner`).
+pub(crate) fn show_validity_note(
+    authenticated: Option<bool>,
+    expires_at: Option<&str>,
+    requires_claude_auth: bool,
+) -> bool {
+    requires_claude_auth && authenticated == Some(true) && expires_at.is_some()
 }
 
 /// Format an RFC3339 timestamp as `dd.mm.yyyy HH:MM` local time. Thin
@@ -88,15 +98,26 @@ pub(crate) fn validity_text(expires_at: &str) -> String {
 pub fn AiLoginBanner<F>(
     authenticated: RwSignal<Option<bool>>,
     token_expires_at: RwSignal<Option<String>>,
+    // #679: `true` when the configured `apiUrl` is the bundled proxy
+    // (Claude auth required) — `false` for a user's own non-bundled
+    // endpoint, where this banner must never accuse them of being logged
+    // out of an account their setup doesn't even use.
+    requires_claude_auth: RwSignal<bool>,
     on_login: F,
 ) -> impl IntoView
 where
     F: Fn() + 'static,
 {
-    let visible = move || show_login_banner(authenticated.get()).to_string();
+    let visible =
+        move || show_login_banner(authenticated.get(), requires_claude_auth.get()).to_string();
     let subtext = move || banner_subtext(token_expires_at.get().as_deref());
     let validity_visible = move || {
-        show_validity_note(authenticated.get(), token_expires_at.get().as_deref()).to_string()
+        show_validity_note(
+            authenticated.get(),
+            token_expires_at.get().as_deref(),
+            requires_claude_auth.get(),
+        )
+        .to_string()
     };
     // #622 post-merge review finding 8: gate the validity-note TEXT NODE's
     // render on `show_validity_note` itself, not only on the wrapper's
@@ -105,7 +126,11 @@ where
     // banner above), but its text content is never computed while hidden.
     let validity_content = move || {
         let expires = token_expires_at.get();
-        if show_validity_note(authenticated.get(), expires.as_deref()) {
+        if show_validity_note(
+            authenticated.get(),
+            expires.as_deref(),
+            requires_claude_auth.get(),
+        ) {
             expires.map(|ts| validity_text(&ts))
         } else {
             None
@@ -147,8 +172,8 @@ mod tests {
 
     #[test]
     fn banner_shown_only_on_confirmed_not_authenticated() {
-        assert!(show_login_banner(Some(false)));
-        assert!(!show_login_banner(Some(true)));
+        assert!(show_login_banner(Some(false), true));
+        assert!(!show_login_banner(Some(true), true));
     }
 
     /// #622 post-merge review finding 1: `None` (no confirmed answer yet —
@@ -158,22 +183,49 @@ mod tests {
     /// accusation this test guards against.
     #[test]
     fn banner_hidden_while_auth_state_is_unknown() {
-        assert!(!show_login_banner(None));
+        assert!(!show_login_banner(None, true));
     }
 
     #[test]
     fn validity_note_needs_both_confirmed_authenticated_and_a_known_expiry() {
         assert!(!show_validity_note(
             Some(false),
-            Some("2026-08-05T10:00:00Z")
+            Some("2026-08-05T10:00:00Z"),
+            true
         ));
-        assert!(!show_validity_note(Some(true), None));
-        assert!(show_validity_note(Some(true), Some("2026-08-05T10:00:00Z")));
+        assert!(!show_validity_note(Some(true), None, true));
+        assert!(show_validity_note(
+            Some(true),
+            Some("2026-08-05T10:00:00Z"),
+            true
+        ));
     }
 
     #[test]
     fn validity_note_hidden_while_auth_state_is_unknown_even_with_a_known_expiry() {
-        assert!(!show_validity_note(None, Some("2026-08-05T10:00:00Z")));
+        assert!(!show_validity_note(
+            None,
+            Some("2026-08-05T10:00:00Z"),
+            true
+        ));
+    }
+
+    // #679: a non-bundled `apiUrl` (the #662 local-LLM scenario) never needs
+    // a Claude login — both the banner and the validity note must stay
+    // hidden regardless of the (irrelevant) `authenticated`/expiry state.
+
+    #[test]
+    fn banner_hidden_when_claude_auth_is_not_required_even_if_confirmed_not_authenticated() {
+        assert!(!show_login_banner(Some(false), false));
+    }
+
+    #[test]
+    fn validity_note_hidden_when_claude_auth_is_not_required_even_with_a_known_expiry() {
+        assert!(!show_validity_note(
+            Some(true),
+            Some("2026-08-05T10:00:00Z"),
+            false
+        ));
     }
 
     #[test]

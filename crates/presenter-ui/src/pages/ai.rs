@@ -63,6 +63,10 @@ pub fn AiPage() -> impl IntoView {
     // surfaced so the operator can renew BEFORE an event instead of only
     // discovering a dead login mid-service.
     let token_expires_at: RwSignal<Option<String>> = RwSignal::new(None);
+    // #679: whether the configured `apiUrl` actually needs a Claude login —
+    // `true` (matches all prior behavior) until the first status fetch says
+    // otherwise, so a non-bundled endpoint stops being nagged about Claude.
+    let requires_claude_auth: RwSignal<bool> = RwSignal::new(true);
     let proxy_loading: RwSignal<bool> = RwSignal::new(false);
     let login_url: RwSignal<Option<String>> = RwSignal::new(None);
     let callback_input: RwSignal<String> = RwSignal::new(String::new());
@@ -81,6 +85,7 @@ pub fn AiPage() -> impl IntoView {
                 proxy_binary_found.set(status.proxy.binary_found);
                 proxy_authenticated.set(Some(status.proxy.claude_authenticated));
                 token_expires_at.set(status.proxy.token_expires_at);
+                requires_claude_auth.set(status.requires_claude_auth);
             }
             // On `Err` `proxy_authenticated` stays at its initial `None` —
             // unknown, never a guessed "logged out" (finding 1).
@@ -133,6 +138,7 @@ pub fn AiPage() -> impl IntoView {
                 connected,
                 proxy_authenticated,
                 token_expires_at,
+                requires_claude_auth,
             )
             .await
             {
@@ -216,6 +222,7 @@ pub fn AiPage() -> impl IntoView {
                     proxy_binary_found.set(status.proxy.binary_found);
                     proxy_authenticated.set(Some(status.proxy.claude_authenticated));
                     token_expires_at.set(status.proxy.token_expires_at);
+                    requires_claude_auth.set(status.requires_claude_auth);
                 }
                 Err(_) => {
                     connected.set(false);
@@ -324,6 +331,7 @@ pub fn AiPage() -> impl IntoView {
             <AiLoginBanner
                 authenticated=proxy_authenticated
                 token_expires_at=token_expires_at
+                requires_claude_auth=requires_claude_auth
                 on_login=on_banner_login
             />
 
@@ -650,6 +658,7 @@ async fn send_message_sse(
     connected: RwSignal<bool>,
     proxy_authenticated: RwSignal<Option<bool>>,
     token_expires_at: RwSignal<Option<String>>,
+    requires_claude_auth: RwSignal<bool>,
 ) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
 
@@ -715,6 +724,7 @@ async fn send_message_sse(
                         connected,
                         proxy_authenticated,
                         token_expires_at,
+                        requires_claude_auth,
                     );
                 }
             }
@@ -731,6 +741,7 @@ async fn send_message_sse(
                     connected,
                     proxy_authenticated,
                     token_expires_at,
+                    requires_claude_auth,
                 );
             }
             break;
@@ -749,6 +760,7 @@ fn process_sse_event(
     connected: RwSignal<bool>,
     proxy_authenticated: RwSignal<Option<bool>>,
     token_expires_at: RwSignal<Option<String>>,
+    requires_claude_auth: RwSignal<bool>,
 ) {
     let mut event_type = "";
     let mut data = String::new();
@@ -827,12 +839,11 @@ fn process_sse_event(
                         connected.set(status.connected);
                         proxy_authenticated.set(Some(status.proxy.claude_authenticated));
                         token_expires_at.set(status.proxy.token_expires_at);
-                        // #622 post-merge review finding 6: the recheck used
-                        // to be silent — the operator saw "AI error: ..." with
-                        // no hint that the fix is the already-visible login
-                        // banner above. Once the recheck CONFIRMS the auth is
-                        // dead, say so in the same error line.
-                        if !status.proxy.claude_authenticated {
+                        requires_claude_auth.set(status.requires_claude_auth);
+                        // #622 finding 6: once the recheck CONFIRMS the auth
+                        // is dead, say so in the same error line — but only
+                        // when Claude auth is actually required (#679).
+                        if status.requires_claude_auth && !status.proxy.claude_authenticated {
                             error.update(|current| {
                                 if let Some(text) = current {
                                     text.push_str(

@@ -35,12 +35,30 @@ pub struct UpdateAiSettings {
     pub system_prompt_extra: Option<String>,
 }
 
+/// Permissive fallback for a `#[serde(default = "default_true")]` field —
+/// used by both `model_valid` and `requires_claude_auth` below so an OLDER
+/// server payload (before either field existed) still deserializes cleanly,
+/// same rationale as `ProxyStatus::token_expires_at`'s `#[serde(default)]`
+/// (the #600 lesson).
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiStatusResponse {
     pub connected: bool,
     pub error: Option<String>,
     pub proxy: ProxyStatus,
+    /// Whether the CONFIGURED model is present in the proxy's model catalog
+    /// (#661) — mirrors the server's `StatusResponse::model_valid`.
+    #[serde(default = "default_true")]
+    pub model_valid: bool,
+    /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
+    /// (requiring a Claude OAuth login) or a user's own non-bundled
+    /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679).
+    #[serde(default = "default_true")]
+    pub requires_claude_auth: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

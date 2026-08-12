@@ -94,7 +94,7 @@ pub(super) async fn chat(
         return Err(AppError::bad_request_message("message cannot be empty"));
     }
 
-    let settings = get_settings_internal(&state).await?;
+    let (settings, _) = get_settings_internal(&state).await?;
 
     // Idle auto-clear (#665): if the shared conversation hasn't been
     // touched in a while, clear it before appending the new message rather
@@ -287,7 +287,7 @@ pub(super) struct SettingsResponse {
 pub(super) async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<SettingsResponse>, AppError> {
-    let settings = get_settings_internal(&state).await?;
+    let (settings, _) = get_settings_internal(&state).await?;
     Ok(Json(SettingsResponse {
         api_url: settings.api_url,
         api_key_set: settings.api_key.as_ref().is_some_and(|k| !k.is_empty()),
@@ -335,7 +335,7 @@ pub(super) async fn update_settings(
     headers: HeaderMap,
     Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<StatusCode, AppError> {
-    let mut settings = get_settings_internal(&state).await?;
+    let (mut settings, _) = get_settings_internal(&state).await?;
     let before_json = redact_settings_for_audit(&settings);
 
     if let Some(url) = payload.api_url {
@@ -420,6 +420,15 @@ pub(super) struct StatusResponse {
     /// `check_status` below — so a caller gating on this field alone never
     /// mistakes "couldn't check" for "checked and invalid".
     pub model_valid: bool,
+    /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
+    /// (requiring a Claude OAuth login) or a user's own non-bundled
+    /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679,
+    /// the #662 local-LLM scenario). `true` exactly when the RAW stored
+    /// `api_url` equals `AiSettings::default().api_url` — computed in
+    /// `get_settings_internal` BEFORE that function's own substitution of
+    /// the live resolved proxy URL, so the most common case (default
+    /// config, proxy running) is never misclassified as non-bundled.
+    pub requires_claude_auth: bool,
 }
 
 /// Compute AI `connected` status by ANDing THREE signals: TCP-level
@@ -442,14 +451,20 @@ pub(super) struct StatusResponse {
 /// this function's result still reflects the CONNECTIVITY failure, not a
 /// misleading "model not found".
 ///
+/// `requires_claude_auth` (#679): when `false` (the configured `apiUrl` is a
+/// user's own non-bundled OpenAI-compatible endpoint, not the bundled
+/// CLIProxyAPI proxy), `claude_authenticated` is irrelevant and ignored —
+/// Claude auth was never needed to reach that endpoint in the first place.
+///
 /// Extracted as a pure function so the truth-table is unit-testable without
 /// constructing a live ProxyManager + network connectivity.
 pub(super) fn compute_ai_connected(
     connectivity_ok: bool,
     claude_authenticated: bool,
     model_valid: bool,
+    requires_claude_auth: bool,
 ) -> bool {
-    connectivity_ok && claude_authenticated && model_valid
+    connectivity_ok && (!requires_claude_auth || claude_authenticated) && model_valid
 }
 
 /// Build the `/ai/status` `error` message (#624, extended #661).
@@ -468,6 +483,11 @@ pub(super) fn compute_ai_connected(
 /// configured model isn't in the proxy's catalog — this is the case that
 /// used to sit silently `connected: true` for days.
 ///
+/// `requires_claude_auth` (#679): the "Claude not authenticated" message
+/// only applies when the configured `apiUrl` actually IS the bundled proxy
+/// — a non-bundled endpoint never needs a Claude login, so that branch is
+/// skipped entirely regardless of `claude_authenticated`.
+///
 /// Extracted as a pure function so the branch logic is unit-testable without
 /// constructing a live ProxyManager + network connectivity (same rationale
 /// as `compute_ai_connected` above).
@@ -477,10 +497,11 @@ pub(super) fn compute_ai_status_error(
     model_valid: bool,
     configured_model: &str,
     connectivity_error: Option<&str>,
+    requires_claude_auth: bool,
 ) -> Option<String> {
     if connected {
         None
-    } else if !claude_authenticated {
+    } else if requires_claude_auth && !claude_authenticated {
         Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
     } else if !model_valid {
         Some(format!(
@@ -509,7 +530,7 @@ pub(super) fn render_connectivity_error(e: &anyhow::Error) -> String {
 pub(super) async fn check_status(
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
-    let settings = get_settings_internal(&state).await?;
+    let (settings, requires_claude_auth) = get_settings_internal(&state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
     // #661: list_models (not the old bare check_connectivity) so the SAME
@@ -532,6 +553,7 @@ pub(super) async fn check_status(
         connectivity_ok,
         proxy_status.claude_authenticated,
         model_valid,
+        requires_claude_auth,
     );
 
     let error = compute_ai_status_error(
@@ -540,6 +562,7 @@ pub(super) async fn check_status(
         model_valid,
         &settings.model,
         connectivity_err_msg.as_deref(),
+        requires_claude_auth,
     );
 
     Ok(Json(StatusResponse {
@@ -547,6 +570,7 @@ pub(super) async fn check_status(
         error,
         proxy: proxy_status,
         model_valid,
+        requires_claude_auth,
     }))
 }
 
@@ -625,19 +649,30 @@ pub(super) async fn proxy_complete_login(
     Ok(Json(state.ai_proxy().status().await))
 }
 
-async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {
+/// Resolve the effective AI settings, and — as the second tuple element —
+/// whether the STORED (pre-substitution) `api_url` was the bundled proxy's
+/// default (#679). The bool must be captured BEFORE the substitution below
+/// runs: once substituted, `api_url` becomes the live resolved proxy URL
+/// (`http://127.0.0.1:{port}/v1`), which no longer literally equals
+/// `AiSettings::default().api_url` (`http://localhost:8787/v1` —
+/// `localhost` != `127.0.0.1` as strings) even though this IS the bundled-
+/// proxy case. Checking post-substitution would misclassify the most
+/// common scenario (default config, proxy running) as a non-bundled/custom
+/// endpoint.
+async fn get_settings_internal(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
     let mut settings = match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
         Some(json) => serde_json::from_str(&json)?,
         None => AiSettings::default(),
     };
 
     // If no custom API URL set and proxy is running, use proxy URL
-    if settings.api_url == AiSettings::default().api_url {
+    let is_bundled_default = settings.api_url == AiSettings::default().api_url;
+    if is_bundled_default {
         let proxy_status = state.ai_proxy().status().await;
         if proxy_status.running {
             settings.api_url = proxy_status.api_url;
         }
     }
 
-    Ok(settings)
+    Ok((settings, is_bundled_default))
 }

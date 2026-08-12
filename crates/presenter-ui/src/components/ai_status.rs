@@ -61,15 +61,23 @@ pub(crate) fn ai_chip_state(status: Option<&AiStatusResponse>) -> &'static str {
         None => "checking",
         Some(s) if !s.proxy.binary_found => "missing-binary",
         Some(s) if !s.proxy.running => "proxy-down",
-        Some(s) if !s.proxy.claude_authenticated => "logged-out",
+        // #679: a Claude-auth problem is only real when the configured
+        // apiUrl actually requires it — a non-bundled endpoint (the #662
+        // local-LLM scenario) never needs a Claude login, so these two
+        // branches are gated on `requires_claude_auth`. `missing-binary`/
+        // `proxy-down` above stay unconditional — the bundled proxy
+        // process's own liveness is unrelated to which endpoint is
+        // currently configured.
+        Some(s) if s.requires_claude_auth && !s.proxy.claude_authenticated => "logged-out",
         // #660: authenticated right now, but the token is about to die —
         // warn BEFORE it happens, not only after (the `logged-out` branch
         // above already covers "already dead").
         Some(s)
-            if s.proxy
-                .token_expires_at
-                .as_deref()
-                .is_some_and(|ts| is_expiring_soon(ts, chrono::Utc::now())) =>
+            if s.requires_claude_auth
+                && s.proxy
+                    .token_expires_at
+                    .as_deref()
+                    .is_some_and(|ts| is_expiring_soon(ts, chrono::Utc::now())) =>
         {
             "expiring-soon"
         }
@@ -221,8 +229,28 @@ mod tests {
         claude_authenticated: bool,
         token_expires_at: Option<&str>,
     ) -> AiStatusResponse {
+        status_full(
+            binary_found,
+            running,
+            claude_authenticated,
+            token_expires_at,
+            true,
+        )
+    }
+
+    /// Full constructor, including `requires_claude_auth` (#679) — the other
+    /// helpers above default it to `true` (the pre-#679 bundled-proxy
+    /// behavior) so every existing test keeps its original meaning
+    /// unchanged.
+    fn status_full(
+        binary_found: bool,
+        running: bool,
+        claude_authenticated: bool,
+        token_expires_at: Option<&str>,
+        requires_claude_auth: bool,
+    ) -> AiStatusResponse {
         AiStatusResponse {
-            connected: binary_found && running && claude_authenticated,
+            connected: binary_found && running && (!requires_claude_auth || claude_authenticated),
             error: None,
             proxy: ProxyStatus {
                 running,
@@ -232,6 +260,8 @@ mod tests {
                 claude_authenticated,
                 token_expires_at: token_expires_at.map(str::to_string),
             },
+            model_valid: true,
+            requires_claude_auth,
         }
     }
 
@@ -264,6 +294,25 @@ mod tests {
         // binary itself is missing, but prove the precedence anyway.
         let s = status(false, true, true);
         assert_eq!(ai_chip_state(Some(&s)), "missing-binary");
+    }
+
+    // #679: a non-bundled `apiUrl` (the #662 local-LLM scenario) never needs
+    // a Claude login — `logged-out`/`expiring-soon` must never fire when
+    // `requires_claude_auth` is false, even if `claude_authenticated` is
+    // false or a stale expiry timestamp happens to be present.
+
+    #[test]
+    fn not_authenticated_is_ok_when_claude_auth_is_not_required() {
+        let s = status_full(true, true, false, None, false);
+        assert_eq!(ai_chip_state(Some(&s)), "ok");
+    }
+
+    #[test]
+    fn expiring_soon_is_suppressed_when_claude_auth_is_not_required() {
+        let now = chrono::Utc::now();
+        let soon = (now + chrono::Duration::minutes(30)).to_rfc3339();
+        let s = status_full(true, true, true, Some(&soon), false);
+        assert_eq!(ai_chip_state(Some(&s)), "ok");
     }
 
     // #660: authenticated but the token is about to expire — a NEW state
