@@ -288,6 +288,27 @@ jobs:
       # workflow source having been edited since). Runs as a single remote
       # heredoc (not a locally-interpolated double-quoted string) so
       # $CURRENT_VERSION is read and compared ON THE REMOTE HOST.
+      #
+      # #675 review finding 1: THIS workflow uses the STAGED-PULL model — the
+      # OLD presenter-server (and its `cli-proxy-api` CHILD process,
+      # auto_start=true, `ai/proxy.rs`) keeps serving until the much-later
+      # "Swap staged binaries and restart service" step. Downloading straight
+      # into "${{ env.DEPLOY_DIR }}/cli-proxy-api" would `tar xz` OVER the
+      # same inode the live child has mapped (GNU tar rewrites the existing
+      # file in place, it does not unlink+recreate) — several minutes of DB
+      # backup / schema validation / bible+library sync run between this step
+      # and the restart, so a page fault into the half-written binary during
+      # that window can crash or corrupt the still-running proxy. Stage into
+      # a scratch dir on the SAME filesystem and `mv -f` into place instead —
+      # exactly the pattern the "Stage binaries on prod" step above already
+      # uses for presenter-server itself (`staging.new/` + the swap step's
+      # `mv -f`). A rename is atomic: the OLD inode stays valid for whatever
+      # still has it open, and the NEW binary is only what the NEXT process
+      # start picks up. DO NOT "fix" this by reordering the step to run after
+      # the restart instead — that only shrinks the live-overwrite window (a
+      # freshly-restarted auto_start child would still be running against
+      # this same file), it does not remove the hazard; the atomic rename
+      # removes it outright and needs no ordering assumption to stay correct.
       - name: Deploy CLIProxyAPI
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -298,10 +319,13 @@ jobs:
           CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "")
           if [ ! -f "${{ env.DEPLOY_DIR }}/cli-proxy-api" ] || [ "$CURRENT_VERSION" != "$CLIPROXY_VERSION" ]; then
             echo "Downloading CLIProxyAPI v${CLIPROXY_VERSION} (was: ${CURRENT_VERSION:-none})..."
-            curl -sL "$CLIPROXY_URL" | tar xz -C "${{ env.DEPLOY_DIR }}/"
-            chmod +x "${{ env.DEPLOY_DIR }}/cli-proxy-api"
+            TMP_DIR=$(mktemp -d "${{ env.DEPLOY_DIR }}/.cliproxy-download.XXXXXX")
+            curl -sL "$CLIPROXY_URL" | tar xz -C "$TMP_DIR/"
+            chmod +x "$TMP_DIR/cli-proxy-api"
+            mv -f "$TMP_DIR/cli-proxy-api" "${{ env.DEPLOY_DIR }}/cli-proxy-api"
+            rm -rf "$TMP_DIR"
             echo "$CLIPROXY_VERSION" > "$VERSION_FILE"
-            echo "CLIProxyAPI deployed"
+            echo "CLIProxyAPI deployed (atomic swap — the old binary's inode, if still mapped by a live child, is untouched)"
           else
             echo "CLIProxyAPI already at v${CURRENT_VERSION}"
           fi

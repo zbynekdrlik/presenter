@@ -1131,6 +1131,17 @@ jobs:
       # Runs as a single remote heredoc (not a locally-interpolated
       # double-quoted string) so $CURRENT_VERSION is read and compared ON
       # THE REMOTE HOST.
+      #
+      # #675 review finding 1: this job already stops the service BEFORE this
+      # step ("Stop service" above), so there is no live `cli-proxy-api` child
+      # with the binary mapped right now — but `deploy.yml` (prod) uses a
+      # STAGED-PULL model where the old service keeps running through this
+      # exact step, and `tar xz` there was found to overwrite the running
+      # child's inode in place. Downloading via the same atomic
+      # stage-then-`mv -f` swap HERE too (rather than only fixing prod) means
+      # a future reorder of this job's steps can't silently reintroduce that
+      # bug — the safety no longer depends on "the service happens to be
+      # stopped already" staying true forever.
       - name: Deploy CLIProxyAPI
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -1141,10 +1152,13 @@ jobs:
           CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "")
           if [ ! -f "${{ env.DEPLOY_DIR }}/cli-proxy-api" ] || [ "$CURRENT_VERSION" != "$CLIPROXY_VERSION" ]; then
             echo "Downloading CLIProxyAPI v${CLIPROXY_VERSION} (was: ${CURRENT_VERSION:-none})..."
-            curl -sL "$CLIPROXY_URL" | tar xz -C "${{ env.DEPLOY_DIR }}/"
-            chmod +x "${{ env.DEPLOY_DIR }}/cli-proxy-api"
+            TMP_DIR=$(mktemp -d "${{ env.DEPLOY_DIR }}/.cliproxy-download.XXXXXX")
+            curl -sL "$CLIPROXY_URL" | tar xz -C "$TMP_DIR/"
+            chmod +x "$TMP_DIR/cli-proxy-api"
+            mv -f "$TMP_DIR/cli-proxy-api" "${{ env.DEPLOY_DIR }}/cli-proxy-api"
+            rm -rf "$TMP_DIR"
             echo "$CLIPROXY_VERSION" > "$VERSION_FILE"
-            echo "CLIProxyAPI deployed"
+            echo "CLIProxyAPI deployed (atomic swap)"
           else
             echo "CLIProxyAPI already at v${CURRENT_VERSION}"
           fi
