@@ -410,6 +410,16 @@ pub(super) struct StatusResponse {
     pub connected: bool,
     pub error: Option<String>,
     pub proxy: ProxyStatus,
+    /// Whether the CONFIGURED `model` is present in the proxy's own catalog
+    /// (#661), surfaced as its OWN field (#675 review finding 2) — a caller
+    /// that ANDs it into `connected` (like the deploy workflows used to)
+    /// cannot tell "the model is misconfigured" apart from "the Claude OAuth
+    /// token is merely stale right now", even though only the former is a
+    /// regression a CODE/CONFIG change could have caused. Permissive
+    /// default `true` when the catalog itself couldn't be fetched — see
+    /// `check_status` below — so a caller gating on this field alone never
+    /// mistakes "couldn't check" for "checked and invalid".
+    pub model_valid: bool,
 }
 
 /// Compute AI `connected` status by ANDing THREE signals: TCP-level
@@ -536,6 +546,7 @@ pub(super) async fn check_status(
         connected,
         error,
         proxy: proxy_status,
+        model_valid,
     }))
 }
 

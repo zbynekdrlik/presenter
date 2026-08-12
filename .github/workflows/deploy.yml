@@ -536,22 +536,6 @@ jobs:
             exit 1
           fi
           echo "Data check passed: libraries endpoint returned data"
-
-          # #661: exercise the AI path end-to-end, not just liveness — an
-          # invalid configured model (or a dead Claude OAuth login) used to
-          # sit "connected:true" for days because nothing checked it post-
-          # deploy. `connected` already ANDs connectivity + auth + model
-          # validity server-side (compute_ai_connected); this just asserts
-          # the caller-visible field.
-          if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
-            echo "::error::Post-deploy AI check FAILED — /ai/status did not respond"
-            exit 1
-          fi
-          if ! printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
-            echo "::error::Post-deploy AI check FAILED — /ai/status reports connected:false: $AI_STATUS"
-            exit 1
-          fi
-          echo "AI check passed: $AI_STATUS"
           REMOTE_SCRIPT
 
       - name: Post-deploy smoke test
@@ -574,6 +558,47 @@ jobs:
             exit 1
           fi
           echo "Operator UI: OK (HTTP 200)"
+          REMOTE_SCRIPT
+
+      # #661 added this AI-path check; #675 review finding 2 fixed two bugs
+      # in it. (1) It used to sit INSIDE "Verify deployment", BEFORE the core
+      # smoke test above — an AI-side failure aborted the job via `if:
+      # success()` and skipped the smoke test that proves the actual
+      # lyrics/stage feature still works, so an unrelated AI hiccup could
+      # mask a real regression. Now it runs AFTER the smoke test. (2) It used
+      # to hard-fail on the aggregate `connected` field, which ANDs
+      # connectivity + Claude-OAuth-auth + model-validity — but the Claude
+      # OAuth token is DOCUMENTED to die silently every ~8h (#660) for
+      # reasons that have nothing to do with what THIS deploy shipped, so
+      # failing a PRODUCTION deploy over a coincidentally-stale token is
+      # wrong. Only `modelValid` is asserted as a hard gate: `check_status`
+      # (`router/ai.rs`) defaults it PERMISSIVELY to `true` whenever the
+      # model catalog itself couldn't be fetched (dead token, proxy down,
+      # network blip), so it can only be `false` when the proxy answered its
+      # catalog AND the CONFIGURED model genuinely isn't in it — the one
+      # AI-side failure mode a code/config change in this deploy could
+      # actually cause (the exact #661 incident: an invalid model id sat
+      # green for 4 days). `continue-on-error: true` is banned in this repo
+      # (`no-continue-on-error.md`) — "non-blocking" here means the step
+      # itself never fails on these signals, not that a failing step is
+      # ignored.
+      - name: Verify AI status
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
+            echo "::warning::Post-deploy AI check — /ai/status did not respond (non-blocking; this alone does not fail a production deploy)"
+            exit 0
+          fi
+          if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
+            echo "::error::Post-deploy AI check FAILED — configured AI model is not in the proxy's model catalog: $AI_STATUS"
+            exit 1
+          fi
+          if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
+            echo "AI check passed: $AI_STATUS"
+          else
+            echo "::warning::AI is not fully connected post-deploy (stale Claude OAuth token or proxy unreachable — non-blocking, re-login via /ai panel when convenient): $AI_STATUS"
+          fi
           REMOTE_SCRIPT
 
       - name: Show deployment info
