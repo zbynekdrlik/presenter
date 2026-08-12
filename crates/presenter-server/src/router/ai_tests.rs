@@ -3,7 +3,12 @@
 //! connectivity check is necessary but not sufficient — actual AI readiness
 //! requires a valid Claude OAuth session as well.
 
-use crate::router::ai::{compute_ai_connected, compute_ai_status_error, render_connectivity_error};
+use crate::ai::AiAgentError;
+use crate::router::ai::{
+    compute_ai_connected, compute_ai_status_error, friendly_ai_error_message, idle_clear_window,
+    render_connectivity_error, should_idle_clear, DEFAULT_IDLE_CLEAR_MINUTES,
+};
+use std::time::{Duration, SystemTime};
 
 #[test]
 fn connected_is_false_when_claude_not_authenticated_even_if_connectivity_ok() {
@@ -104,5 +109,192 @@ fn connectivity_error_renders_full_anyhow_chain() {
     assert!(
         rendered.contains("connection refused"),
         "rendered error must keep the underlying cause, not just the outer context: {rendered}"
+    );
+}
+
+// #665: the shared AI conversation is auto-cleared on the next `chat()` call
+// once it has sat idle past the configured window — `should_idle_clear` is
+// the pure decision function so this is testable without a real clock or a
+// live handler.
+
+#[test]
+fn idle_clear_is_false_for_a_fresh_conversation_never_touched() {
+    assert!(
+        !should_idle_clear(None, SystemTime::now(), Duration::from_secs(1800)),
+        "a conversation that has never been touched has nothing to clear"
+    );
+}
+
+#[test]
+fn idle_clear_is_false_while_still_within_the_idle_window() {
+    let now = SystemTime::now();
+    let last_activity = now - Duration::from_secs(300); // 5 minutes ago
+    assert!(
+        !should_idle_clear(Some(last_activity), now, Duration::from_secs(1800)),
+        "5 minutes of idle must not clear a 30-minute window"
+    );
+}
+
+#[test]
+fn idle_clear_is_true_once_the_idle_window_has_elapsed() {
+    let now = SystemTime::now();
+    let last_activity = now - Duration::from_secs(1801); // just over 30 minutes ago
+    assert!(
+        should_idle_clear(Some(last_activity), now, Duration::from_secs(1800)),
+        "a conversation idle longer than the window must be cleared"
+    );
+}
+
+#[test]
+fn idle_clear_is_false_exactly_at_the_boundary() {
+    // The comparison is a strict `>`, not `>=` — exactly at the boundary
+    // must NOT clear. Kills the off-by-one mutant that would flip this to
+    // `>=` and clear one tick too early.
+    let now = SystemTime::now();
+    let last_activity = now - Duration::from_secs(1800);
+    assert!(
+        !should_idle_clear(Some(last_activity), now, Duration::from_secs(1800)),
+        "exactly at the idle window boundary must not yet clear"
+    );
+}
+
+#[test]
+fn idle_clear_window_env_override_and_default() {
+    let key = "PRESENTER_AI_IDLE_CLEAR_MINUTES";
+    let original = std::env::var(key).ok();
+
+    std::env::remove_var(key);
+    assert_eq!(
+        idle_clear_window(),
+        Duration::from_secs(DEFAULT_IDLE_CLEAR_MINUTES * 60)
+    );
+
+    std::env::set_var(key, "5");
+    assert_eq!(idle_clear_window(), Duration::from_secs(5 * 60));
+
+    // Invalid / zero values fall back to the default rather than disabling
+    // the idle-clear entirely.
+    std::env::set_var(key, "0");
+    assert_eq!(
+        idle_clear_window(),
+        Duration::from_secs(DEFAULT_IDLE_CLEAR_MINUTES * 60)
+    );
+    std::env::set_var(key, "not-a-number");
+    assert_eq!(
+        idle_clear_window(),
+        Duration::from_secs(DEFAULT_IDLE_CLEAR_MINUTES * 60)
+    );
+
+    match original {
+        Some(v) => std::env::set_var(key, v),
+        None => std::env::remove_var(key),
+    }
+}
+
+// #665: `chat()`'s SSE error branch used to leak the provider's raw
+// "prompt is too long" text straight to the operator. `friendly_ai_error_message`
+// is the one place that must show `AiAgentError::ContextBudgetExceeded`'s
+// friendly wording instead — and must find it even under additional
+// `.context(...)` layers, which is what makes it meaningfully different from
+// a bare `.to_string()` (see `.claude/rules/repository-error-pattern.md`).
+
+#[test]
+fn friendly_ai_error_message_finds_context_budget_exceeded_even_under_added_context() {
+    let err = anyhow::Error::from(AiAgentError::ContextBudgetExceeded)
+        .context("while streaming the AI response");
+    let message = friendly_ai_error_message(&err);
+    assert!(
+        message.contains("Click \"Clear\""),
+        "must show the friendly Click-Clear wording even under added context, got: {message}"
+    );
+    assert_ne!(
+        message,
+        err.to_string(),
+        "must differ from the raw outer-context .to_string(), which would show only \
+         'while streaming the AI response' and hide the friendly wording"
+    );
+}
+
+#[test]
+fn friendly_ai_error_message_forwards_other_errors_via_display() {
+    let err = anyhow::anyhow!("connection refused");
+    assert_eq!(friendly_ai_error_message(&err), "connection refused");
+}
+
+// #665 AC5: `POST /ai/chat` must return the friendly operator-facing error —
+// never the provider's raw "prompt is too long" text — when the budget
+// cannot be met. Drives the REAL HTTP endpoint through the full router
+// (not just the pure `friendly_ai_error_message` function above).
+
+#[tokio::test]
+async fn post_ai_chat_never_leaks_prompt_is_too_long_when_the_budget_is_exceeded() {
+    use crate::ai::AI_SETTINGS_KEY;
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // A mock that WOULD return a raw provider "prompt is too long" rejection
+    // if it were ever called — the point of this test is that it must NOT
+    // be, because the oversized turn is refused before any provider call.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {"message": "prompt is too long: 512000 tokens > 200000 maximum"}
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let state = AppState::in_memory().await.unwrap();
+    let settings = crate::ai::AiSettings {
+        api_url: mock_server.uri(),
+        api_key: None,
+        model: "test-model".to_string(),
+        system_prompt_extra: None,
+    };
+    state
+        .repository()
+        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&settings).unwrap())
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let huge_message = "Z".repeat(400_000);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/ai/chat")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"message": huge_message}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8_lossy(&bytes);
+
+    assert!(
+        !body_text.contains("prompt is too long"),
+        "the raw provider rejection text must never reach the SSE stream, got: {body_text}"
+    );
+    assert!(
+        body_text.contains("conversation grew too large"),
+        "the friendly Click-Clear message must be shown instead, got: {body_text}"
+    );
+
+    let requests = mock_server.received_requests().await.unwrap();
+    assert!(
+        requests.is_empty(),
+        "the provider must never be called once the turn's own content exceeds the budget"
     );
 }
