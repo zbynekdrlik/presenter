@@ -333,44 +333,64 @@ pub fn AiPage() -> impl IntoView {
                 data-role="ai-settings-panel"
                 style=move || if settings_open.get() { "display: block" } else { "display: none" }
             >
-                <div class="ai-chat__settings-field">
-                    <label>"API URL"</label>
-                    <input
-                        type="text"
-                        data-role="ai-api-url"
-                        placeholder="http://localhost:8787/v1"
-                        prop:value=move || api_url.get()
-                        on:input=move |ev| api_url.set(event_target_value(&ev))
-                    />
-                </div>
-                <div class="ai-chat__settings-field">
-                    <label>"API Key"</label>
-                    <input
-                        type="password"
-                        data-role="ai-api-key"
-                        placeholder=move || if api_key_set.get() { "••••••••" } else { "optional" }
-                        prop:value=move || api_key.get()
-                        on:input=move |ev| api_key.set(event_target_value(&ev))
-                    />
-                </div>
-                <div class="ai-chat__settings-field">
-                    <label>"Model"</label>
-                    <input
-                        type="text"
-                        data-role="ai-model"
-                        placeholder="claude-opus-4-6"
-                        prop:value=move || model.get()
-                        on:input=move |ev| model.set(event_target_value(&ev))
-                    />
-                </div>
-                <button
-                    type="button"
-                    class="ai-chat__btn ai-chat__btn--save"
-                    data-role="ai-save-settings"
-                    on:click=on_save_settings
+                // #677: a real <form> ancestor is required so the API Key
+                // password field passes Chrome's form-containment heuristic
+                // (fixes the "Password field is not contained in a form"
+                // console hint + restores password-manager/screen-reader
+                // semantics). Settings are still saved exclusively via the
+                // "Save Settings" button's on:click (type="button", never
+                // type="submit") — `on:submit` here only cancels the ONE new
+                // native path a bare <form> would introduce (Enter key ->
+                // implicit submit -> full-page GET reload of the SPA), so
+                // behavior is unchanged from before this <form> existed.
+                <form
+                    class="ai-chat__settings-form"
+                    data-role="ai-settings-form"
+                    autocomplete="off"
+                    on:submit=move |ev| ev.prevent_default()
                 >
-                    "Save Settings"
-                </button>
+                    <div class="ai-chat__settings-field">
+                        <label>"API URL"</label>
+                        <input
+                            type="text"
+                            data-role="ai-api-url"
+                            autocomplete="off"
+                            placeholder="http://localhost:8787/v1"
+                            prop:value=move || api_url.get()
+                            on:input=move |ev| api_url.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="ai-chat__settings-field">
+                        <label>"API Key"</label>
+                        <input
+                            type="password"
+                            data-role="ai-api-key"
+                            autocomplete="off"
+                            placeholder=move || if api_key_set.get() { "••••••••" } else { "optional" }
+                            prop:value=move || api_key.get()
+                            on:input=move |ev| api_key.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="ai-chat__settings-field">
+                        <label>"Model"</label>
+                        <input
+                            type="text"
+                            data-role="ai-model"
+                            autocomplete="off"
+                            placeholder="claude-opus-4-6"
+                            prop:value=move || model.get()
+                            on:input=move |ev| model.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <button
+                        type="button"
+                        class="ai-chat__btn ai-chat__btn--save"
+                        data-role="ai-save-settings"
+                        on:click=on_save_settings
+                    >
+                        "Save Settings"
+                    </button>
+                </form>
 
                 // Proxy controls
                 <div class="ai-chat__proxy-section">
