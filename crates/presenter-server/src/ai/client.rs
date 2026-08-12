@@ -263,7 +263,8 @@ pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex, Once};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -374,16 +375,6 @@ mod tests {
     // --- AC7: a provider-side failure logs a server-side WARN/ERROR line
     // carrying the provider's error text ---
 
-    /// A minimal `tracing::Subscriber` that captures the formatted fields of
-    /// every ERROR (or higher-severity) event, so a test can assert a log
-    /// line was actually emitted and what it said — without a real log
-    /// sink. Same shape as `resolume::backoff_tests::ErrorCounter`, extended
-    /// to capture message TEXT (not just a count) since AC7 requires
-    /// asserting the provider's error body reached the log line.
-    struct CapturedLogs {
-        lines: Arc<Mutex<Vec<String>>>,
-    }
-
     struct FieldVisitor(String);
     impl tracing::field::Visit for FieldVisitor {
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
@@ -391,7 +382,36 @@ mod tests {
         }
     }
 
-    impl tracing::Subscriber for CapturedLogs {
+    thread_local! {
+        static CAPTURE_SINK: RefCell<Option<Arc<Mutex<Vec<String>>>>> = const { RefCell::new(None) };
+    }
+
+    /// Captures every WARN/ERROR-level tracing event emitted on the CALLING
+    /// thread into that thread's opted-in `CAPTURE_SINK`, so a test can
+    /// assert a log line was actually produced and what it said — without a
+    /// real log sink.
+    ///
+    /// Installed ONCE, GLOBALLY (`capture_logs_on_this_thread`, below) —
+    /// deliberately NOT via the per-test scoped `subscriber::set_default`
+    /// this used to use. Reason: the `error!(...)` call this test exercises
+    /// (in `call_chat_completions`'s non-success branch) is ALSO hit by
+    /// `provider_context_length_rejection_is_translated_to_the_friendly_error`
+    /// and `provider_non_context_length_4xx_stays_a_generic_error`, two
+    /// sibling tests that never install ANY capturing subscriber.
+    /// `tracing-core` caches each callsite's dispatch `Interest`
+    /// (never/sometimes/always) starting from whichever test's thread
+    /// reaches it FIRST, so repeatedly constructing a fresh, test-scoped
+    /// `Dispatch` (one per `subscriber::set_default` call) made this test's
+    /// own capture depend on `cargo test`'s default parallel scheduling
+    /// order across siblings — exactly the cross-test race that produced
+    /// the CI failure this fixes. A SINGLE, process-lifetime subscriber
+    /// sidesteps it: the callsite is registered against this ONE subscriber
+    /// exactly once, for good, and each test only opts a THREAD-LOCAL
+    /// buffer in and out — safe because `#[tokio::test]`'s default
+    /// (current_thread) flavor pins an entire test body, including every
+    /// `.await`, to one dedicated OS thread no other test ever reuses.
+    struct GlobalCapture;
+    impl tracing::Subscriber for GlobalCapture {
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
             *metadata.level() <= tracing::Level::WARN
         }
@@ -401,22 +421,51 @@ mod tests {
         fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
         fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
         fn event(&self, event: &tracing::Event<'_>) {
-            if *event.metadata().level() <= tracing::Level::WARN {
-                let mut visitor = FieldVisitor(String::new());
-                event.record(&mut visitor);
-                self.lines.lock().unwrap().push(visitor.0);
+            if *event.metadata().level() > tracing::Level::WARN {
+                return;
             }
+            CAPTURE_SINK.with(|cell| {
+                if let Some(sink) = cell.borrow().as_ref() {
+                    let mut visitor = FieldVisitor(String::new());
+                    event.record(&mut visitor);
+                    sink.lock().unwrap().push(visitor.0);
+                }
+            });
         }
         fn enter(&self, _span: &tracing::span::Id) {}
         fn exit(&self, _span: &tracing::span::Id) {}
     }
 
+    /// RAII opt-in: while alive, WARN/ERROR events on THIS thread are
+    /// captured into the returned buffer. Dropping clears the opt-in so a
+    /// later, unrelated test that happens to reuse this thread never
+    /// inherits it.
+    struct CaptureGuard;
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            CAPTURE_SINK.with(|cell| *cell.borrow_mut() = None);
+        }
+    }
+
+    fn capture_logs_on_this_thread() -> (CaptureGuard, Arc<Mutex<Vec<String>>>) {
+        static INSTALLED: Once = Once::new();
+        INSTALLED.call_once(|| {
+            // `Dispatch::new` (not a bare `set_default`) so this
+            // registration triggers tracing-core's own callsite-interest
+            // rebuild exactly once, then stays alive — and therefore
+            // correct — for the rest of the process. See the doc comment
+            // on `GlobalCapture` above.
+            let dispatch = tracing::dispatcher::Dispatch::new(GlobalCapture);
+            let _ = tracing::dispatcher::set_global_default(dispatch);
+        });
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        CAPTURE_SINK.with(|cell| *cell.borrow_mut() = Some(sink.clone()));
+        (CaptureGuard, sink)
+    }
+
     #[tokio::test]
     async fn provider_error_response_is_logged_server_side_with_the_error_body() {
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        let _guard = tracing::subscriber::set_default(CapturedLogs {
-            lines: lines.clone(),
-        });
+        let (_capture_guard, lines) = capture_logs_on_this_thread();
 
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -529,10 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn network_failure_is_also_logged_server_side() {
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        let _guard = tracing::subscriber::set_default(CapturedLogs {
-            lines: lines.clone(),
-        });
+        let (_capture_guard, lines) = capture_logs_on_this_thread();
 
         let settings = AiSettings {
             // Reserved/unbound port — connection refused immediately, no

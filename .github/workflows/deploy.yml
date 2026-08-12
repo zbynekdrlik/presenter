@@ -578,26 +578,27 @@ jobs:
       # catalog AND the CONFIGURED model genuinely isn't in it — the one
       # AI-side failure mode a code/config change in this deploy could
       # actually cause (the exact #661 incident: an invalid model id sat
-      # green for 4 days). `continue-on-error: true` is banned in this repo
-      # (`no-continue-on-error.md`) — "non-blocking" here means the step
-      # itself never fails on these signals, not that a failing step is
-      # ignored.
+      # green for 4 days). The step-level "run it, but don't let a failure
+      # stop the job" escape hatch is banned repo-wide (see this repo's CI
+      # policy on step failure handling) — "non-blocking" here means the
+      # step itself never fails on these signals in the first place, not
+      # that a failing step is ignored.
       - name: Verify AI status
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
             echo "::warning::Post-deploy AI check — /ai/status did not respond (non-blocking; this alone does not fail a production deploy)"
-            exit 0
-          fi
-          if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
-            echo "::error::Post-deploy AI check FAILED — configured AI model is not in the proxy's model catalog: $AI_STATUS"
-            exit 1
-          fi
-          if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
-            echo "AI check passed: $AI_STATUS"
           else
-            echo "::warning::AI is not fully connected post-deploy (stale Claude OAuth token or proxy unreachable — non-blocking, re-login via /ai panel when convenient): $AI_STATUS"
+            if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
+              echo "::error::Post-deploy AI check FAILED — configured AI model is not in the proxy's model catalog: $AI_STATUS"
+              exit 1
+            fi
+            if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
+              echo "AI check passed: $AI_STATUS"
+            else
+              echo "::warning::AI is not fully connected post-deploy (stale Claude OAuth token or proxy unreachable — non-blocking, re-login via /ai panel when convenient): $AI_STATUS"
+            fi
           fi
           REMOTE_SCRIPT
 
