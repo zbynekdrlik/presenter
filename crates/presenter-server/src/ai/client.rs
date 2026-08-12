@@ -36,12 +36,14 @@ fn looks_like_context_length_error(body: &str) -> bool {
 }
 
 /// Shared HTTP client for `/ai/status` connectivity probes ONLY (#622
-/// post-merge review finding 3a). `check_connectivity` is polled every 5s by
-/// the operator-header status chip (`ai_status.rs`) — building a fresh
-/// `reqwest::Client` (own connection pool + TLS setup) on every single poll
-/// was needless per-call cost. `call_chat_completions` keeps its OWN client:
-/// a chat call is a one-off with a much longer 120s timeout, so reuse would
-/// not meaningfully help there.
+/// post-merge review finding 3a). `list_models` (the successor to
+/// `check_connectivity`, removed #661 once this call also became the model-
+/// catalog check) is polled every 5s by the operator-header status chip
+/// (`ai_status.rs`) — building a fresh `reqwest::Client` (own connection
+/// pool + TLS setup) on every single poll was needless per-call cost.
+/// `call_chat_completions` keeps its OWN client: a chat call is a one-off
+/// with a much longer 120s timeout, so reuse would not meaningfully help
+/// there.
 static CONNECTIVITY_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn connectivity_client() -> &'static reqwest::Client {
