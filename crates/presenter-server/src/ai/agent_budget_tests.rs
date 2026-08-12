@@ -201,13 +201,14 @@ impl Respond for ToolThenText {
 
 #[tokio::test]
 async fn run_agent_evicts_oversized_tool_results_mid_turn_not_only_at_the_end() {
-    // Two tool-call rounds, each round's assistant tool_calls + tool result
-    // together are roughly a third of DEFAULT_CONTEXT_BUDGET_BYTES — the
-    // raw, un-evicted total after round 2 exceeds the budget, so eviction
-    // MUST fire before the 3rd request is sent. Proven by finding
-    // TRUNCATED_STUB in that 3rd request's body, sent by the REAL run_agent
-    // loop to its mocked provider — not just a unit test of
-    // enforce_context_budget in isolation.
+    // Two tool-call rounds; each round's library NAME is a third of
+    // DEFAULT_CONTEXT_BUDGET_BYTES, so each round's assistant tool_calls +
+    // tool result TOGETHER are roughly TWO-THIRDS of the budget — the raw,
+    // un-evicted total after round 2 exceeds it, so eviction MUST fire
+    // before the 3rd request is sent. Proven by finding TRUNCATED_STUB in
+    // that 3rd request's body, sent by the REAL run_agent loop to its
+    // mocked provider — not just a unit test of enforce_context_budget in
+    // isolation.
     let mock_server = MockServer::start().await;
     let big_name = "N".repeat(DEFAULT_CONTEXT_BUDGET_BYTES / 3);
     Mock::given(method("POST"))
@@ -259,17 +260,23 @@ async fn run_agent_evicts_oversized_tool_results_mid_turn_not_only_at_the_end() 
 }
 
 // --- AC2: many tool calls in one turn — every request stays bounded, and
-// growth is not monotonic (eviction actually shrinks later requests) ---
+// the GROWTH RATE collapses once eviction engages (proof it is actually
+// running every iteration, not just once at the end) ---
 
 #[tokio::test]
 async fn run_agent_keeps_every_request_bounded_across_many_tool_call_iterations() {
     // 30 tool-call rounds, each contributing ~40KB raw (assistant tool_calls
     // + tool result echoing a 20_000-char library name). The raw, un-evicted
     // sum after 30 rounds would be ~1.2MB — nothing like the ~300KB budget.
-    // If per-iteration eviction genuinely runs on every one of the 30
-    // rounds (not just once at the end), every captured request stays
-    // bounded AND at least one later request must be SMALLER than an
-    // earlier one (proof growth is not simply monotonic/unbounded).
+    //
+    // Once the budget is first exceeded (around round 7), the algorithm
+    // evicts JUST ENOUGH of the oldest round to fit — and since each round
+    // is roughly the same size as what gets freed by evicting one, the
+    // sequence does not visibly SHRINK request-to-request; it PLATEAUS
+    // (near-zero net growth per round from then on), rather than
+    // continuing to climb at the original ~40KB/round rate. That collapse
+    // in growth RATE — not a literal decrease — is what proves eviction is
+    // firing on every iteration and not just once at the end.
     let mock_server = MockServer::start().await;
     let big_name = "N".repeat(20_000);
     Mock::given(method("POST"))
@@ -314,12 +321,19 @@ async fn run_agent_keeps_every_request_bounded_across_many_tool_call_iterations(
          un-evicted ~1.2MB conversation; got a peak request size of {peak} bytes, sizes: {sizes:?}"
     );
 
-    let ever_shrinks = sizes.windows(2).any(|w| w[1] < w[0]);
+    // Early growth: rounds 1-7, all still under budget (raw, un-evicted) —
+    // roughly 40KB/round. Late growth: rounds 15-30, well past where
+    // eviction first engaged (~round 7) — should be a small fraction of
+    // that, proving eviction is actively bounding EVERY iteration from then
+    // on, not just occasionally or only at the very end.
+    let early_growth = sizes[7].saturating_sub(sizes[1]);
+    let late_growth = sizes[30].saturating_sub(sizes[15]);
     assert!(
-        ever_shrinks,
-        "eviction must make at least one later request SMALLER than an earlier \
-         one — a purely monotonic size sequence means nothing is ever being \
-         evicted mid-turn; got sizes: {sizes:?}"
+        late_growth.saturating_mul(3) < early_growth,
+        "growth per round must collapse once eviction engages — early growth \
+         (rounds 1-7) was {early_growth} bytes, late growth (rounds 15-30) was \
+         {late_growth} bytes; expected late growth to be well under a third of \
+         early growth, got sizes: {sizes:?}"
     );
 }
 
@@ -409,10 +423,17 @@ async fn run_agent_trims_stale_prior_turns_when_max_iterations_is_exhausted() {
         "only the current turn's own user message should remain"
     );
     assert_eq!(user_messages[0].content.as_deref(), Some(new_message));
-    assert!(
-        conversation.len() < 231,
-        "the conversation must actually shrink from the untrimmed 231 messages \
-         (15 old turns + the 201-message new turn), got {}",
+    // Pinned exact value (not just "< 231"): all 9 of the 15 pre-seeded
+    // turns that survive the initial 10-turn trim get purged one-by-one by
+    // the HARD_CEILING=200 loop, but that loop can never partially trim the
+    // current (mega) turn itself — so the final state is exactly that one
+    // 201-message turn (1 user + 100 iterations x 2 messages), still over
+    // HARD_CEILING because trim_conversation refuses to split a turn.
+    assert_eq!(
+        conversation.len(),
+        201,
+        "the conversation must shrink from the untrimmed 231 messages (15 old \
+         turns + the 201-message new turn) down to exactly the new turn, got {}",
         conversation.len()
     );
 }

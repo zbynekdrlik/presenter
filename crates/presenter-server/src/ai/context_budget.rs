@@ -15,10 +15,10 @@ use super::ChatMessage;
 /// `PRESENTER_AI_CONTEXT_BUDGET_BYTES` is unset.
 ///
 /// No tokenizer dependency, per the design: a plain UTF-8 byte count is
-/// itself a conservative OVER-estimate of token count for the mixed
-/// Slovak/English text this app sends (a token is rarely more than ~1 byte
-/// on average even with diacritics), so this stays safely conservative
-/// without needing a `len()/4` fudge factor that could under-count.
+/// itself a conservative OVER-estimate of token count (a token is on
+/// average several bytes, so counting raw bytes never UNDER-counts), so
+/// this stays safely conservative without needing a `len()/4` fudge factor
+/// that could under-count.
 pub(crate) const DEFAULT_CONTEXT_BUDGET_BYTES: usize = 300_000;
 
 /// Marker content used to replace an evicted tool result. The message
@@ -29,23 +29,54 @@ pub(crate) const DEFAULT_CONTEXT_BUDGET_BYTES: usize = 300_000;
 /// `role:"tool"` reply with a matching `tool_call_id`).
 pub(crate) const TRUNCATED_STUB: &str = "[result truncated — call the tool again if needed]";
 
-/// Read the configured context budget: env override, else the conservative
-/// default. Re-read on every call (cheap, and lets ops/tests override
-/// without a restart-sensitive cache).
-pub(crate) fn context_budget_bytes() -> usize {
-    std::env::var("PRESENTER_AI_CONTEXT_BUDGET_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
+/// Marker used to replace the `arguments` of an already-answered assistant
+/// `tool_calls` entry when ITS payload (not just the tool's reply) is what
+/// makes an OLD round oversized — e.g. a tool called with a large argument
+/// (#665 review finding: the original design only shrank `role:"tool"`
+/// messages, so a turn whose SIZE came from the model's own tool-call
+/// arguments — rather than from tool results — could never be brought
+/// under budget and would hard-refuse instead of completing, failing the
+/// ticket's own AC2 ["the turn completes"]). Only the `arguments` string is
+/// replaced; `id`/`type`/`name` are untouched, so the pairing with the
+/// (already-received) tool result is unaffected — the model already has
+/// that answer and does not need the original request payload to keep
+/// reasoning about the rest of the turn.
+pub(crate) const TRUNCATED_ARGUMENTS: &str = "[arguments truncated]";
+
+/// Pure parser for the context-budget env var — takes the raw value
+/// directly (rather than reading `std::env` itself) so it is unit-testable
+/// without mutating process-global state, which would race against every
+/// OTHER test in this binary that reads the SAME env var concurrently
+/// (Rust runs `#[test]`s in parallel by default; #665 review finding).
+fn parse_context_budget_bytes(raw: Option<&str>) -> usize {
+    raw.and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(DEFAULT_CONTEXT_BUDGET_BYTES)
+}
+
+/// Read the configured context budget: env override, else the conservative
+/// default. Re-read on every call (cheap, and lets ops override without a
+/// restart-sensitive cache). Thin env-reading wrapper around the pure,
+/// directly-testable [`parse_context_budget_bytes`].
+pub(crate) fn context_budget_bytes() -> usize {
+    parse_context_budget_bytes(
+        std::env::var("PRESENTER_AI_CONTEXT_BUDGET_BYTES")
+            .ok()
+            .as_deref(),
+    )
 }
 
 /// Cheap size estimate for one message: its `content` string plus its
 /// serialized `tool_calls` (if any). This mirrors exactly what
 /// `build_api_messages` puts on the wire for that message — the system
 /// prompt and the per-request tool schema are deliberately NOT included
-/// here, since they're small and roughly fixed-size, unlike the
-/// conversation, which is what actually grows unbounded.
+/// here, since it is the CONVERSATION that grows unbounded across a turn,
+/// not those two. They are NOT literally fixed-size (the system prompt
+/// lists every worship library, and the tool schema is tens of KB), but
+/// they stay well inside the default budget's margin — `DEFAULT_CONTEXT_BUDGET_BYTES`
+/// is a conservative byte count (see its own doc), not a token-exact
+/// ceiling, and `client.rs` maps a provider rejection through the same
+/// belt-and-braces path if the estimate ever under-shoots in practice.
 fn estimate_message_bytes(msg: &ChatMessage) -> usize {
     let content_len = msg.content.as_deref().map(str::len).unwrap_or(0);
     let tool_calls_len = msg
@@ -62,42 +93,113 @@ pub(crate) fn estimate_conversation_bytes(conversation: &[ChatMessage]) -> usize
     conversation.iter().map(estimate_message_bytes).sum()
 }
 
+/// Index of the START of the "current round" — the most recently appended
+/// assistant `tool_calls` message, and everything from it to the end of the
+/// conversation (that message's own tool results, appended right after it).
+/// Returns `conversation.len()` (protects nothing) when no `tool_calls`
+/// message exists yet, e.g. the very first iteration of a turn.
+///
+/// This round is NEVER evicted by [`enforce_context_budget`] — it is what
+/// the model just asked for or just received THIS iteration. Evicting it
+/// would show the model a "truncated" stub for the very call it just made,
+/// which makes it re-call the same tool and livelock toward
+/// `MAX_ITERATIONS` instead of making progress (#665 review finding).
+fn current_round_start(conversation: &[ChatMessage]) -> usize {
+    conversation
+        .iter()
+        .rposition(|m| m.role == "assistant" && m.tool_calls.is_some())
+        .unwrap_or(conversation.len())
+}
+
+/// Try to shrink ONE message in place (a `role:"tool"` result's content, or
+/// an assistant `tool_calls` entry's `arguments`). Returns `true` if it
+/// changed. Extracted so [`enforce_context_budget`]'s phase-1 loop stays
+/// readable; used for both eviction targets it covers.
+fn shrink_message(msg: &mut ChatMessage) -> bool {
+    match msg.role.as_str() {
+        "tool" => {
+            let already_small = msg
+                .content
+                .as_deref()
+                .is_some_and(|c| c.len() <= TRUNCATED_STUB.len());
+            // `already_small` alone is the whole guard: a message whose
+            // content already equals TRUNCATED_STUB always satisfies
+            // `c.len() <= TRUNCATED_STUB.len()` too, so a separate
+            // `content != Some(TRUNCATED_STUB)` check would be redundant.
+            if already_small {
+                false
+            } else {
+                msg.content = Some(TRUNCATED_STUB.to_string());
+                true
+            }
+        }
+        "assistant" => {
+            let Some(tool_calls) = msg.tool_calls.as_mut() else {
+                return false;
+            };
+            let mut changed = false;
+            for tc in tool_calls.iter_mut() {
+                // Same already-small guard as the "tool" branch above: a
+                // call with genuinely small arguments (the common case —
+                // most tool calls carry an id or a short field, not a huge
+                // literal) must be left alone. Without this, replacing
+                // already-tiny arguments (e.g. `"{}"`, 2 bytes) with the
+                // 22-byte TRUNCATED_ARGUMENTS marker would GROW the
+                // message instead of shrinking it.
+                let already_small = tc.function.arguments.len() <= TRUNCATED_ARGUMENTS.len();
+                if !already_small {
+                    tc.function.arguments = TRUNCATED_ARGUMENTS.to_string();
+                    changed = true;
+                }
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
 /// Enforce `budget_bytes` on `conversation` IN PLACE. Returns `true` if
 /// anything was modified.
 ///
 /// Eviction order:
-/// 1. Stub the CONTENT of the OLDEST `role:"tool"` messages first (oldest to
-///    newest) — the message, its `tool_call_id`, and its `name` are always
-///    kept, only the payload is replaced — until the estimate fits or every
-///    tool result has already been stubbed.
+/// 1. Oldest-first, BEFORE the current round ([`current_round_start`]):
+///    shrink whichever of the two possible payloads is oversized — the
+///    CONTENT of `role:"tool"` messages, or the `arguments` of an
+///    already-answered assistant `tool_calls` entry. The message itself
+///    (role, `tool_call_id`/`id`, `name`) is never removed, so no
+///    `tool_call`/`tool_result` pair is ever orphaned. The current round is
+///    never touched (see [`current_round_start`]).
 /// 2. If still over budget, drop whole oldest user TURNS (never a partial
 ///    turn — the same turn-boundary rule `trim_conversation` uses: a "turn"
-///    is a user message plus everything up to the next user message), so a
-///    tool result is never orphaned from its originating tool call. Stops
-///    once only the current turn remains — that turn's own tool results
-///    were already exhausted in step 1, so there is nothing left to safely
-///    evict without losing the request currently in flight.
+///    is a user message plus everything up to the next user message).
+///    Stops once only the current turn remains.
 ///
-/// If the conversation is still over budget when this returns, the caller
-/// (`run_agent`) refuses to send the request at all rather than risk the
-/// provider's own hard rejection.
+/// If the conversation is still over budget when this returns — either
+/// because the current round alone doesn't fit, or nothing was left to
+/// evict — the caller (`run_agent`) refuses to send the request at all
+/// rather than risk the provider's own hard rejection.
 pub(crate) fn enforce_context_budget(
     conversation: &mut Vec<ChatMessage>,
     budget_bytes: usize,
 ) -> bool {
     let mut mutated = false;
 
-    // Phase 1: stub oldest-first tool results until the estimate fits, or
-    // there is nothing left to stub.
+    // Phase 1. A running total (rather than re-summing the whole
+    // conversation on every step) keeps this O(n) instead of O(n²) — this
+    // loop runs once per message and each step used to re-serialize every
+    // `tool_calls` message in the conversation again (#665 review finding),
+    // which matters because it runs on every one of up to 100 iterations,
+    // exactly during the over-budget case this code exists to handle.
+    let protect_from = current_round_start(conversation);
+    let mut sizes: Vec<usize> = conversation.iter().map(estimate_message_bytes).collect();
+    let mut total: usize = sizes.iter().sum();
+
     let mut idx = 0;
-    while estimate_conversation_bytes(conversation) > budget_bytes && idx < conversation.len() {
-        let msg = &mut conversation[idx];
-        let already_small = msg
-            .content
-            .as_deref()
-            .is_some_and(|c| c.len() <= TRUNCATED_STUB.len());
-        if msg.role == "tool" && msg.content.as_deref() != Some(TRUNCATED_STUB) && !already_small {
-            msg.content = Some(TRUNCATED_STUB.to_string());
+    while total > budget_bytes && idx < protect_from {
+        if shrink_message(&mut conversation[idx]) {
+            let new_size = estimate_message_bytes(&conversation[idx]);
+            total = total - sizes[idx] + new_size;
+            sizes[idx] = new_size;
             mutated = true;
         }
         idx += 1;
@@ -141,7 +243,7 @@ mod tests {
         }
     }
 
-    fn assistant_tool_call_msg(id: &str) -> ChatMessage {
+    fn assistant_tool_call_msg_with_args(id: &str, arguments: &str) -> ChatMessage {
         ChatMessage {
             role: "assistant".to_string(),
             content: None,
@@ -150,13 +252,17 @@ mod tests {
                 call_type: "function".to_string(),
                 function: ToolCallFunction {
                     name: "get_presentation".to_string(),
-                    arguments: "{}".to_string(),
+                    arguments: arguments.to_string(),
                 },
             }]),
             tool_call_id: None,
             name: None,
             preview: None,
         }
+    }
+
+    fn assistant_tool_call_msg(id: &str) -> ChatMessage {
+        assistant_tool_call_msg_with_args(id, "{}")
     }
 
     fn tool_result_msg(id: &str, content: &str) -> ChatMessage {
@@ -171,8 +277,12 @@ mod tests {
     }
 
     /// Every `tool_call_id` in the conversation must be paired with an
-    /// earlier `tool_calls` entry carrying the same id — the invariant that
-    /// eviction (stubbing OR turn-dropping) must never break.
+    /// earlier `tool_calls` entry carrying the same id, AND every
+    /// `tool_calls` entry on an assistant message has a matching LATER
+    /// `role:"tool"` reply — the invariant, in BOTH directions, that
+    /// eviction (stubbing OR turn-dropping) must never break. Checking only
+    /// one direction would miss the OpenAI-compatible API contract's other
+    /// half: an assistant `tool_calls` entry with no reply is rejected too.
     fn assert_no_orphans(conv: &[ChatMessage]) {
         for (idx, msg) in conv.iter().enumerate() {
             if let Some(ref tcid) = msg.tool_call_id {
@@ -187,6 +297,18 @@ mod tests {
                     "tool result {tcid:?} has no matching tool_call earlier in the conversation"
                 );
             }
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    let has_reply = conv[idx + 1..]
+                        .iter()
+                        .any(|m| m.tool_call_id.as_deref() == Some(tc.id.as_str()));
+                    assert!(
+                        has_reply,
+                        "assistant tool_calls entry {:?} has no matching tool reply later in the conversation",
+                        tc.id
+                    );
+                }
+            }
         }
     }
 
@@ -200,9 +322,9 @@ mod tests {
             conv.push(assistant_tool_call_msg(&format!("call_{i}")));
             conv.push(tool_result_msg(&format!("call_{i}"), &big));
         }
-        // Budget room for roughly the newest 2 results + the small
-        // surrounding messages — deliberately smaller than the un-evicted
-        // total (~50_000 bytes), so eviction MUST engage.
+        // Deliberately smaller than the un-evicted total (~51_000 bytes):
+        // only the current (protected) round survives intact, so every
+        // OLDER tool result (9 of the 10) must be stubbed to fit.
         let budget = big.len() * 2 + 1000;
 
         let mutated = enforce_context_budget(&mut conv, budget);
@@ -219,7 +341,8 @@ mod tests {
         // Newest user message is untouched.
         assert_eq!(conv[0].content.as_deref(), Some("build me a set list"));
 
-        // Newest tool result (call_9) must be intact, not stubbed.
+        // Newest tool result (call_9) must be intact, not stubbed — it
+        // belongs to the current (protected) round.
         let newest_tool = conv.iter().rev().find(|m| m.role == "tool").unwrap();
         assert_eq!(
             newest_tool.tool_call_id.as_deref(),
@@ -251,6 +374,22 @@ mod tests {
         assert!(!mutated);
         assert_eq!(conv.len(), before.len());
         assert_eq!(conv[1].content, before[1].content);
+    }
+
+    #[test]
+    fn shrink_message_leaves_an_already_small_tool_result_untouched() {
+        // A tool result that is already at or below TRUNCATED_STUB's own
+        // length must be left EXACTLY as-is, not replaced by the (longer)
+        // stub text — replacing it would grow the conversation instead of
+        // shrinking it. Proves the `already_small` guard actually matters,
+        // not just that SOME message got left alone by coincidence.
+        let mut msg = tool_result_msg("call_0", "ok");
+        let changed = shrink_message(&mut msg);
+        assert!(
+            !changed,
+            "an already-tiny tool result must not be rewritten to the longer stub"
+        );
+        assert_eq!(msg.content.as_deref(), Some("ok"));
     }
 
     #[test]
@@ -295,27 +434,109 @@ mod tests {
         assert_eq!(conv.len(), 1);
     }
 
+    // --- #665 review findings: eviction must also reach oversized
+    // ASSISTANT tool_calls arguments (not just tool results), and must
+    // NEVER touch the current (most recently appended) round ---
+
     #[test]
-    fn context_budget_bytes_env_override_and_default() {
-        let key = "PRESENTER_AI_CONTEXT_BUDGET_BYTES";
-        let original = std::env::var(key).ok();
+    fn enforce_budget_shrinks_oversized_assistant_tool_call_arguments_when_that_is_what_is_big() {
+        // The model itself can send a large `arguments` payload (e.g. a
+        // tool called with a big literal value) — this is what made a
+        // "60 tool calls in one turn" AC2 scenario hard-refuse instead of
+        // completing on the original design, which only ever shrank
+        // role:"tool" results. Each OLD round here is big because of its
+        // tool_calls arguments, not its (tiny) tool result.
+        let big_args = format!("{{\"name\":\"{}\"}}", "N".repeat(20_000));
+        let mut conv = vec![user_msg("build a large set list")];
+        for i in 0..10 {
+            conv.push(assistant_tool_call_msg_with_args(
+                &format!("call_{i}"),
+                &big_args,
+            ));
+            conv.push(tool_result_msg(&format!("call_{i}"), "ok"));
+        }
+        // Budget room for roughly the current round + a handful of shrunk
+        // older ones — far below the ~200_000-byte un-evicted total.
+        let budget = 25_000;
 
-        std::env::remove_var(key);
-        assert_eq!(context_budget_bytes(), DEFAULT_CONTEXT_BUDGET_BYTES);
+        let mutated = enforce_context_budget(&mut conv, budget);
 
-        std::env::set_var(key, "12345");
-        assert_eq!(context_budget_bytes(), 12345);
+        assert!(mutated, "eviction must have shrunk the oversized arguments");
+        assert!(
+            estimate_conversation_bytes(&conv) <= budget,
+            "conversation must fit the budget after enforcement"
+        );
+        assert_no_orphans(&conv);
 
+        // The oldest round's arguments were shrunk...
+        let oldest_tc = conv
+            .iter()
+            .find(|m| m.role == "assistant" && m.tool_calls.is_some())
+            .unwrap();
+        assert_eq!(
+            oldest_tc.tool_calls.as_ref().unwrap()[0].function.arguments,
+            TRUNCATED_ARGUMENTS,
+            "the oldest assistant tool_calls arguments must be shrunk"
+        );
+
+        // ...but the NEWEST round's arguments are untouched (protected).
+        let newest_tc = conv
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant" && m.tool_calls.is_some())
+            .unwrap();
+        assert_eq!(
+            newest_tc.tool_calls.as_ref().unwrap()[0].function.arguments,
+            big_args,
+            "the current round's own arguments must never be evicted"
+        );
+    }
+
+    #[test]
+    fn enforce_budget_never_touches_the_current_round_even_if_it_alone_exceeds_budget() {
+        // A single (protected) round whose own content already exceeds the
+        // budget, with nothing older to evict. Must be left over budget
+        // rather than stubbing the very call that was just made — the
+        // caller (enforce_budget_or_refuse) is responsible for refusing.
+        let mut conv = vec![
+            user_msg("build a large set list"),
+            assistant_tool_call_msg(&"call_0".to_string()),
+            tool_result_msg("call_0", &"X".repeat(10_000)),
+        ];
+        let mutated = enforce_context_budget(&mut conv, 100);
+
+        assert!(
+            !mutated,
+            "the current round must never be evicted, even under extreme pressure"
+        );
+        assert_eq!(
+            conv[2].content.as_deref(),
+            Some("X".repeat(10_000).as_str()),
+            "the current round's tool result must remain intact"
+        );
+        assert!(estimate_conversation_bytes(&conv) > 100);
+    }
+
+    // --- context_budget_bytes: pure-parser coverage, no env mutation (a
+    // mutated env var races against every other test in this binary that
+    // reads the same key — #665 review finding) ---
+
+    #[test]
+    fn parse_context_budget_bytes_env_override_and_default() {
+        assert_eq!(
+            parse_context_budget_bytes(None),
+            DEFAULT_CONTEXT_BUDGET_BYTES
+        );
+        assert_eq!(parse_context_budget_bytes(Some("12345")), 12345);
         // Invalid / zero values fall back to the default rather than
         // disabling the budget entirely.
-        std::env::set_var(key, "not-a-number");
-        assert_eq!(context_budget_bytes(), DEFAULT_CONTEXT_BUDGET_BYTES);
-        std::env::set_var(key, "0");
-        assert_eq!(context_budget_bytes(), DEFAULT_CONTEXT_BUDGET_BYTES);
-
-        match original {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
+        assert_eq!(
+            parse_context_budget_bytes(Some("not-a-number")),
+            DEFAULT_CONTEXT_BUDGET_BYTES
+        );
+        assert_eq!(
+            parse_context_budget_bytes(Some("0")),
+            DEFAULT_CONTEXT_BUDGET_BYTES
+        );
     }
 }

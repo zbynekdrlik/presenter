@@ -27,15 +27,28 @@ pub(super) struct ChatRequest {
 /// (#665).
 pub(super) const DEFAULT_IDLE_CLEAR_MINUTES: u64 = 30;
 
-/// Read the configured idle-clear window: env override, else the
-/// conservative default.
-pub(super) fn idle_clear_window() -> Duration {
-    let minutes = std::env::var("PRESENTER_AI_IDLE_CLEAR_MINUTES")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
+/// Pure parser for the idle-clear-window env var — takes the raw value
+/// directly rather than reading `std::env` itself, so it is unit-testable
+/// without mutating process-global state (which would race against every
+/// OTHER test in this binary reading the same key; #665 review finding,
+/// same rationale as `context_budget::parse_context_budget_bytes`).
+pub(super) fn parse_idle_clear_minutes(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.parse::<u64>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_IDLE_CLEAR_MINUTES);
-    Duration::from_secs(minutes * 60)
+        .unwrap_or(DEFAULT_IDLE_CLEAR_MINUTES)
+}
+
+/// Read the configured idle-clear window: env override, else the
+/// conservative default. `saturating_mul` avoids an overflow panic (debug)
+/// or silent wraparound (release) if an operator sets an absurdly large
+/// minute count.
+pub(super) fn idle_clear_window() -> Duration {
+    let minutes = parse_idle_clear_minutes(
+        std::env::var("PRESENTER_AI_IDLE_CLEAR_MINUTES")
+            .ok()
+            .as_deref(),
+    );
+    Duration::from_secs(minutes.saturating_mul(60))
 }
 
 /// Pure decision function: given when the AI conversation was last touched
@@ -119,6 +132,13 @@ pub(super) async fn chat(
             let mut guard = state_clone.ai_conversation().write().await;
             *guard = conversation;
         }
+        // Re-stamp activity now that the turn actually finished — a long
+        // turn (many tool-call iterations) followed by a pause must not be
+        // treated as idle from the moment it STARTED; otherwise a turn that
+        // took, say, 20 minutes followed by a 15-minute pause would trigger
+        // an idle-clear on the very next message despite the conversation
+        // having just been used (#665 review finding).
+        *state_clone.ai_last_activity().write().await = Some(SystemTime::now());
 
         result
     });

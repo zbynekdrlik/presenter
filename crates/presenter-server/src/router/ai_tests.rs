@@ -5,8 +5,9 @@
 
 use crate::ai::AiAgentError;
 use crate::router::ai::{
-    compute_ai_connected, compute_ai_status_error, friendly_ai_error_message, idle_clear_window,
-    render_connectivity_error, should_idle_clear, DEFAULT_IDLE_CLEAR_MINUTES,
+    compute_ai_connected, compute_ai_status_error, friendly_ai_error_message,
+    parse_idle_clear_minutes, render_connectivity_error, should_idle_clear,
+    DEFAULT_IDLE_CLEAR_MINUTES,
 };
 use std::time::{Duration, SystemTime};
 
@@ -159,36 +160,22 @@ fn idle_clear_is_false_exactly_at_the_boundary() {
 }
 
 #[test]
-fn idle_clear_window_env_override_and_default() {
-    let key = "PRESENTER_AI_IDLE_CLEAR_MINUTES";
-    let original = std::env::var(key).ok();
-
-    std::env::remove_var(key);
-    assert_eq!(
-        idle_clear_window(),
-        Duration::from_secs(DEFAULT_IDLE_CLEAR_MINUTES * 60)
-    );
-
-    std::env::set_var(key, "5");
-    assert_eq!(idle_clear_window(), Duration::from_secs(5 * 60));
-
+fn idle_clear_minutes_env_override_and_default() {
+    // Pure-parser coverage, no env mutation (a mutated env var races
+    // against every other test in this binary that reads the same key —
+    // #665 review finding).
+    assert_eq!(parse_idle_clear_minutes(None), DEFAULT_IDLE_CLEAR_MINUTES);
+    assert_eq!(parse_idle_clear_minutes(Some("5")), 5);
     // Invalid / zero values fall back to the default rather than disabling
     // the idle-clear entirely.
-    std::env::set_var(key, "0");
     assert_eq!(
-        idle_clear_window(),
-        Duration::from_secs(DEFAULT_IDLE_CLEAR_MINUTES * 60)
+        parse_idle_clear_minutes(Some("0")),
+        DEFAULT_IDLE_CLEAR_MINUTES
     );
-    std::env::set_var(key, "not-a-number");
     assert_eq!(
-        idle_clear_window(),
-        Duration::from_secs(DEFAULT_IDLE_CLEAR_MINUTES * 60)
+        parse_idle_clear_minutes(Some("not-a-number")),
+        DEFAULT_IDLE_CLEAR_MINUTES
     );
-
-    match original {
-        Some(v) => std::env::set_var(key, v),
-        None => std::env::remove_var(key),
-    }
 }
 
 // #665: `chat()`'s SSE error branch used to leak the provider's raw
@@ -296,5 +283,134 @@ async fn post_ai_chat_never_leaks_prompt_is_too_long_when_the_budget_is_exceeded
     assert!(
         requests.is_empty(),
         "the provider must never be called once the turn's own content exceeds the budget"
+    );
+}
+
+// #665 review finding: `should_idle_clear` is well covered as a pure
+// function, but nothing drove `chat()`'s ACTUAL idle-clear branch —
+// deleting the clear-on-idle call, deleting the activity re-stamp (which
+// would disable idle-clear forever), or inverting the condition would all
+// silently pass the rest of the suite. These drive the REAL handler
+// through the full router.
+
+fn text_response_body(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": text, "tool_calls": null},
+            "finish_reason": "stop"
+        }]
+    })
+}
+
+/// Build a router whose `/ai/chat` provider always replies with `reply`,
+/// seed `ai_conversation` with one message carrying `stale_content`, seed
+/// `ai_last_activity` to `age_ago` in the past, then POST a fresh message
+/// and drain the SSE response fully (so the spawned write-back task has
+/// genuinely finished) before returning the shared `AppState` for
+/// inspection.
+async fn drive_idle_clear_scenario(
+    stale_content: &str,
+    age_ago: std::time::Duration,
+    reply: &str,
+) -> crate::state::AppState {
+    use crate::ai::{ChatMessage, AI_SETTINGS_KEY};
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(text_response_body(reply)))
+        .mount(&mock_server)
+        .await;
+
+    let state = AppState::in_memory().await.unwrap();
+    let settings = crate::ai::AiSettings {
+        api_url: mock_server.uri(),
+        api_key: None,
+        model: "test-model".to_string(),
+        system_prompt_extra: None,
+    };
+    state
+        .repository()
+        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&settings).unwrap())
+        .await
+        .unwrap();
+
+    state.ai_conversation().write().await.push(ChatMessage {
+        role: "user".to_string(),
+        content: Some(stale_content.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        preview: None,
+    });
+    *state.ai_last_activity().write().await = Some(SystemTime::now() - age_ago);
+
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/ai/chat")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"message": "new question"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    state
+}
+
+#[tokio::test]
+async fn post_ai_chat_clears_a_conversation_that_has_gone_idle_past_the_window() {
+    let state = drive_idle_clear_scenario(
+        "STALE MESSAGE FROM AN HOUR AGO",
+        Duration::from_secs(3600), // well past the 30-minute default window
+        "sure, done",
+    )
+    .await;
+
+    let conversation = state.ai_conversation().read().await;
+    assert!(
+        conversation
+            .iter()
+            .all(|m| m.content.as_deref() != Some("STALE MESSAGE FROM AN HOUR AGO")),
+        "the stale prior message must be cleared once the conversation has gone idle: {conversation:?}"
+    );
+    assert!(
+        conversation
+            .iter()
+            .any(|m| m.role == "user" && m.content.as_deref() == Some("new question")),
+        "the new message must still be appended after the clear: {conversation:?}"
+    );
+}
+
+#[tokio::test]
+async fn post_ai_chat_does_not_clear_a_conversation_that_is_still_fresh() {
+    let state = drive_idle_clear_scenario(
+        "RECENT MESSAGE FROM JUST NOW",
+        Duration::from_secs(60), // well within the 30-minute default window
+        "sure, done",
+    )
+    .await;
+
+    let conversation = state.ai_conversation().read().await;
+    assert!(
+        conversation
+            .iter()
+            .any(|m| m.content.as_deref() == Some("RECENT MESSAGE FROM JUST NOW")),
+        "a conversation that is still within the idle window must NOT be cleared: {conversation:?}"
     );
 }
