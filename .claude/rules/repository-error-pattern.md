@@ -1,6 +1,7 @@
 ---
 paths:
   - "crates/presenter-persistence/src/repository/**"
+  - "crates/presenter-server/src/router.rs"
   - "crates/presenter-server/src/router/**"
   - "crates/presenter-server/src/state/**"
   - "crates/presenter-ndi/src/manager/**"
@@ -13,6 +14,15 @@ When a repository/state method refuses because the URL's resource doesn't exist,
 the router a **typed** error, never a bare `anyhow!("... not found")` string — a bare anyhow falls
 through the router's default `impl From<anyhow::Error> for AppError` to a 500, even though the
 correct response is 404 (or 422 for a body-referenced missing target).
+
+**`paths:` gotcha (#633 review finding):** `"crates/presenter-server/src/router/**"` matches files
+INSIDE the `router/` subdirectory — it does NOT match the sibling file `crates/presenter-server/src/router.rs`
+itself, even though `router.rs` is the module root for everything under `router/`. Confirmed
+empirically against four independent glob matchers (Claude Code's own `ignore` npm package,
+`minimatch`, Python `fnmatch`, `pathlib`): matching is segment-by-segment split on `/`, and the
+literal segment `router` never equals the literal segment `router.rs`. This is why `router.rs` is
+listed as its own explicit `paths:` entry above — a `paths:` list for a `<name>/` + `<name>.rs`
+pair always needs BOTH entries, never just the directory glob.
 
 ## The pattern (centralized since #633 — read this before adding a per-file helper)
 

@@ -3,9 +3,9 @@
 //! Before #611, `state/slides/edit_ops.rs` raised bare `anyhow::anyhow!("...
 //! not found")` at five sites — `lock_and_read_presentation_for_edit` (shared
 //! by every slide-edit op) and four slide-lookups. Those fell through the
-//! router's blanket `impl From<anyhow::Error> for AppError` (`router.rs:599`)
-//! as an opaque **500**, even though the correct response is 404 (URL
-//! resource missing) or 422 (a body-referenced slide missing). These tests
+//! `impl From<anyhow::Error> for AppError` in `router.rs` as an opaque
+//! **500**, even though the correct response is 404 (URL resource missing)
+//! or 422 (a body-referenced slide missing). These tests
 //! drive the REAL registered routes through `build_router` + `tower::oneshot`
 //! — the non-vacuous pattern from `presentations_copy_tests.rs` — so a wrong
 //! URI cannot make axum itself return 404 and the assertion pass vacuously.
