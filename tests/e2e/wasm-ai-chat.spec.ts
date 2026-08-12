@@ -11,6 +11,7 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -240,6 +241,49 @@ test.describe("AI Settings Panel", () => {
 
     const saveBtn = page.locator('[data-role="ai-save-settings"]');
     await expect(saveBtn).toBeVisible();
+  });
+
+  // #677: Chrome logs a VERBOSE `[DOM] Password field is not contained in a
+  // form` console hint for the API Key field, which has no <form> ancestor.
+  // VERBOSE is neither `error` nor `warning`, so the standard zero-console
+  // collector below can NOT catch a regression here — the DOM-relationship
+  // assertion is what actually pins the fix. The Enter-key check pins the
+  // "no native submit / no page reload" behavior-preservation constraint:
+  // a bare <form> with no explicit submit handling would GET-reload the
+  // whole SPA (losing all WASM state) the first time a user pressed Enter
+  // in one of these fields.
+  test("API Key field has a form ancestor, and Enter does not reload the page", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+
+    await navigateToAi(page);
+
+    const settingsToggle = page.locator('[data-role="ai-settings-toggle"]');
+    await settingsToggle.click();
+
+    const apiKey = page.locator('[data-role="ai-api-key"]');
+    await expect(apiKey).toBeVisible();
+
+    const hasFormAncestor = await apiKey.evaluate(
+      (el) => el.closest("form") !== null,
+    );
+    expect(hasFormAncestor).toBe(true);
+
+    const urlBefore = page.url();
+    await apiKey.click();
+    await apiKey.press("Enter");
+
+    // A native submit with no handler would GET-reload the current URL —
+    // assert it never does: same URL, and the settings panel (which a
+    // reload would reset to its default-closed state) is still open.
+    expect(page.url()).toBe(urlBefore);
+    await expect(
+      page.locator('[data-role="ai-settings-panel"]'),
+    ).toBeVisible();
+
+    expect(consoleMessages).toEqual([]);
   });
 
   test("settings fields are pre-populated from server", async ({ page }) => {

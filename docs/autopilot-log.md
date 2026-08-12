@@ -1123,3 +1123,56 @@ complete and are integrated here. The fourth (#660 + #661 + #674) is PARKED, not
   was deliberately NOT merged into this round: it bumps a vendored binary 6.9.1 → 7.2.130 on every
   deploy target and rewrites the prod deploy's SSH setup, which is not something to ship on CI-green
   alone with zero review passes. Full pickup checklist posted on all three tickets.
+
+---
+
+## Round integration — v0.4.239 SHIPPED (#669 + #672 + #644 + #647 + #660 + #661 + #674), 2026-08-12
+
+**Supervisor-side record.** The parked branch from the entry above was picked up, reviewed, fixed
+and merged, so this round shipped all seven tickets in one PR (#676, merge `6e3b5fe7`).
+
+- **Parking was the right call.** The review that branch was waiting for found two 🔴
+  production-availability bugs, neither visible from CI-green:
+  1. `deploy.yml` overwrote the CLIProxyAPI binary **in place while the old process was still
+     running** — `ProxyManager::start` runs it as a child of presenter-server with `auto_start`,
+     and the overwrite landed ~175 lines before the service is stopped, with the DB backup, schema
+     validation and library sync all inside that window. Now downloaded to a `mktemp -d` on the
+     same filesystem and `mv -f`'d into place, fixed in all three deploy workflows — `pipeline.yml`
+     and `release.yml` were safe only by accident (they stop the service first).
+  2. The new `/ai/status` deploy gate would have failed **production** deploys on a Claude OAuth
+     credential that expires roughly every 8h — and because later steps default to `if: success()`,
+     that failure would also have skipped the core post-deploy smoke test (`/stage`,
+     `/stage/snapshot`, `/ui/operator`). The gate now hard-fails only on `modelValid:false` and
+     warns on everything else, and runs AFTER the smoke test.
+  Plus 🟡: the salvaged `cd7c0f56` redaction fix shipped with no test that could fail — both PUT
+  tests left `api_key: None` and passed identically with the fix reverted. Regression test added
+  as `20ad9b9b`. An independent fresh-context re-review of the fixes returned 0/0/0.
+
+- **First CI run of the combined round failed two jobs — both from the merge, neither a product bug:**
+  - **Test:** a cross-test race. `provider_error_response_is_logged_server_side_with_the_error_body`
+    installed its log-capturing subscriber via a test-scoped `set_default()`, while two sibling
+    tests hit the same `error!()` callsite with no capturing subscriber. `tracing-core` caches each
+    callsite's `Interest` from whichever thread reaches it first, so capture depended on `cargo
+    test`'s scheduling order. Replaced with one process-lifetime global subscriber; the sink is now
+    process-global (no thread affinity, so a future `flavor = "multi_thread"` cannot silently break
+    it) and serialized by a poison-tolerant lock so two capture tests cannot interleave.
+  - **Quality Checks:** two false positives from blunt substring scanning in `quality-check.sh`.
+    Check 6 matched a **comment explaining the `continue-on-error` ban**, forcing that comment to be
+    worded around the very gate it described; check 6b matched the deliberately non-blocking AI
+    step. Both detectors are now anchored to real syntax (`^\s*(-\s+)?continue-on-error:` and
+    `(?m)^\s*echo[^\n]*::warning::[^\n]*\n^\s*exit 0`), each proven against a fixture holding real
+    usages at several indentations plus comment mentions of the same text. Strict tightening only —
+    every real usage still fails the gate. `(?m)` is explicit rather than relying on rg's default,
+    and PCRE2 was deliberately avoided: a runner without it would make `rg -P` error out, and since
+    the check is `if rg ...; then fail`, that would turn the gate into a permanent silent no-op.
+
+- **Lesson for the next round.** The gate-evasion question here was real and worth asking: the fix
+  kept the step's behavior and changed its shape so the detector stopped matching. It was cleared
+  as an honest fix only because the non-blocking design predates the commit, came from review, and
+  the step still hard-fails on the one regression a deploy can actually cause. A shape-change that
+  silences a detector needs that kind of evidence every time — "CI is green now" is not it.
+
+- **Verified on prod SNV after deploy:** `/healthz` v0.4.239 release channel with NDI `streaming`;
+  `/ai/status` `connected:true`, `modelValid:true`, proxy running with `claudeAuthenticated:true`;
+  `cli-proxy-api --version` reports **7.2.130** on the box; operator DOM shows `v0.4.239` with
+  `data-wasm-ready="true"` and zero console errors or warnings. Dev also on v0.4.239.

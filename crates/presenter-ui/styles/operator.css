@@ -2581,6 +2581,14 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   flex-shrink: 0;
 }
 
+.ai-chat__settings-form {
+  /* #677: explicit reset so wrapping the fields in a real <form> (needed
+     for the password-field DOM-containment fix) introduces zero visual
+     change — matches this file's existing habit of not relying on
+     browser UA-stylesheet defaults for spacing. */
+  margin: 0;
+}
+
 .ai-chat__settings-field {
   margin-bottom: 0.5rem;
 }
