@@ -258,16 +258,6 @@ pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
     Ok(parsed.data.into_iter().map(|m| m.id).collect())
 }
 
-/// Ping the AI API to verify connectivity — a thin wrapper over
-/// `list_models` that discards the model list, kept for call sites that
-/// only care whether the proxy answers at all. Delegating (rather than a
-/// separate bare GET) keeps this to ONE HTTP round trip per `/ai/status`
-/// poll even though `check_status` now needs both signals.
-pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
-    list_models(settings).await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,9 +322,10 @@ mod tests {
     async fn list_models_fails_on_a_malformed_body() {
         // A 2xx with a body that doesn't match the expected shape must be
         // an error, not silently treated as "connected" the way the old
-        // bare-GET check_connectivity would have (#661: it discarded the
-        // body entirely, so a malformed/incompatible proxy response could
-        // never be distinguished from a healthy one).
+        // bare-GET check_connectivity (removed #661 -- superseded by
+        // list_models) would have: it discarded the body entirely, so a
+        // malformed/incompatible proxy response could never be
+        // distinguished from a healthy one.
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/models"))
@@ -346,23 +337,6 @@ mod tests {
         list_models(&settings)
             .await
             .expect_err("a malformed /models body must be an error");
-    }
-
-    #[tokio::test]
-    async fn check_connectivity_succeeds_via_the_same_models_endpoint() {
-        let mock_server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "claude-opus-4-6"}]
-            })))
-            .mount(&mock_server)
-            .await;
-
-        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
-        check_connectivity(&settings)
-            .await
-            .expect("must succeed when list_models succeeds");
     }
 
     // --- AC4: max_tokens is always present on the serialized request ---

@@ -399,7 +399,7 @@ pub(super) struct StatusResponse {
 /// connectivity, Claude OAuth validity (#597), and whether the CONFIGURED
 /// `model` is actually present in the proxy's own model catalog (#661).
 ///
-/// The connectivity check (`check_connectivity`/`list_models`) pings the
+/// The connectivity check (`list_models`) pings the
 /// proxy's `/models` endpoint — it succeeds whenever the CLIProxyAPI
 /// process is running and answering on its port, regardless of whether the
 /// underlying Claude OAuth token is still valid OR whether the configured
@@ -428,11 +428,11 @@ pub(super) fn compute_ai_connected(
 /// Build the `/ai/status` `error` message (#624, extended #661).
 ///
 /// `check_status` used to discard the real underlying error from
-/// `check_connectivity` via `.is_ok()`, replacing it with a constant
-/// "AI proxy unreachable" string — which is misleading when the actual
-/// failure is an HTTP-level error such as 401 (bad/expired API key) or 500
-/// (proxy-side crash). `connectivity_error` carries that real message
-/// (`check_connectivity`'s `anyhow::Error` rendered via
+/// `check_connectivity` (removed #661 -- superseded by `list_models`) via
+/// `.is_ok()`, replacing it with a constant "AI proxy unreachable" string —
+/// which is misleading when the actual failure is an HTTP-level error such
+/// as 401 (bad/expired API key) or 500 (proxy-side crash). `connectivity_error`
+/// carries that real message (`list_models`'s `anyhow::Error` rendered via
 /// `render_connectivity_error`, see below) so the caller can see WHY the
 /// proxy is unreachable, not just that it is.
 ///
@@ -467,9 +467,9 @@ pub(super) fn compute_ai_status_error(
     }
 }
 
-/// Render a `check_connectivity` failure for the `/ai/status` `error` field (#624).
+/// Render a `list_models` connectivity failure for the `/ai/status` `error` field (#624).
 ///
-/// `check_connectivity` wraps the underlying transport failure (DNS, TLS,
+/// `list_models` wraps the underlying transport failure (DNS, TLS,
 /// timeout, connection refused) in an outer `.context("failed to reach AI
 /// API")`. Rendering it with `.to_string()` shows only that outermost
 /// context and silently drops the real cause — this uses anyhow's
