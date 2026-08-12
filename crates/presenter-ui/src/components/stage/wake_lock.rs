@@ -82,7 +82,7 @@ mod wasm_impl {
     /// lives for the page's lifetime (the stage page is a single long-lived
     /// view); when the page unloads the OS releases the lock anyway. This is a
     /// single bounded closure per page load — the same pattern as
-    /// `install_pagehide_teardown` in `ndi_video.rs`.
+    /// `ndi_pagehide::install` (extracted out of `ndi_video.rs`, #672).
     pub fn start_wake_lock_guard() {
         if !wake_lock_supported() {
             // Expected on insecure contexts (plain http) and older browsers —

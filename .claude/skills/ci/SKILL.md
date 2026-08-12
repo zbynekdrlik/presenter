@@ -406,33 +406,34 @@ cargo fmt --all -- --check
 Same trap applies to `cargo check`/`clippy` on that crate (`cargo <cmd> -p presenter-ui` from
 the root fails — run it from `crates/presenter-ui/`, see the deploy skill).
 
-## `cargo fmt`/`cargo check` for presenter-ui CANNOT run from inside a nested `.claude/worktrees/` checkout (2026-08-11)
+## `cargo fmt`/`cargo check` for presenter-ui from inside a nested `.claude/worktrees/` checkout — FIXED (#669, 2026-08-12)
 
-`cd crates/presenter-ui && cargo fmt` (or `cargo check`/`cargo metadata`/`cargo locate-project`,
-any invocation) fails there with `current package believes it's in a workspace when it's not:
-current: .../crates/presenter-ui/Cargo.toml  workspace: /home/.../presenter-dev2/Cargo.toml` — it
-names the repo's **MAIN checkout** as the workspace, not the worktree's own root, even though the
-worktree root has its own valid `[workspace]` + `exclude = ["crates/presenter-ui"]`.
+**Historical trap (2026-08-11 → 2026-08-12), now fixed — kept for context.** `cd crates/presenter-ui
+&& cargo fmt` (or `cargo check`/`cargo metadata`/`cargo locate-project`) used to fail there with
+`current package believes it's in a workspace when it's not: current: .../crates/presenter-ui/
+Cargo.toml  workspace: /home/.../presenter-dev2/Cargo.toml` — it named the repo's **MAIN checkout**
+as the workspace, not the worktree's own root, even though the worktree root has its own valid
+`[workspace]` + `exclude = ["crates/presenter-ui"]`.
 
 Root cause: cargo's workspace-root search does NOT stop at the first ancestor `[workspace]` that
 EXCLUDES the current package — it treats "excluded here" as "keep climbing", not "standalone,
-done". Since `.claude/worktrees/<name>/` is filesystem-nested *under* the main checkout, cargo
-keeps climbing straight past the worktree root and finds the outer main-tree `Cargo.toml` next —
-which does NOT exclude the (now oddly-nested) path, so it errors as "not in workspace.members".
-This is invisible in the MAIN checkout (nothing to climb past) and invisible in CI (flat clone,
-no nesting) — it only bites a worktree-isolated agent.
+done". Since `.claude/worktrees/<name>/` is filesystem-nested *under* the main checkout, cargo kept
+climbing straight past the worktree root and found the outer main-tree `Cargo.toml` next — which
+did NOT exclude the (now oddly-nested) path, so it errored as "not in workspace.members". This was
+invisible in the MAIN checkout (nothing to climb past) and invisible in CI (flat clone, no nesting)
+— it only bit a worktree-isolated agent.
 
-**Workaround inside a worktree:**
-- Formatting: run `rustfmt` DIRECTLY on the touched files instead of `cargo fmt` — it discovers
-  `rustfmt.toml` via plain directory ancestry (no cargo workspace logic involved), so it's
-  unaffected: `rustfmt --edition 2021 --config-path rustfmt.toml <files...>` (add `--check` to
-  verify without writing).
-- Compile-checking: there is no local workaround found yet (`--manifest-path`, explicit paths,
-  and `cargo locate-project` all hit the identical error) — this crate cannot be `cargo check`ed
-  from inside a worktree. Rely on `rustfmt` + careful manual review + the supervisor's real CI
-  (flat clone) as the authority for `presenter-ui` changes made from a worktree.
-- The rest of the workspace (`presenter-server`, `presenter-core`, etc.) is completely unaffected
-  — `cargo check --workspace --tests` from the worktree root works normally.
+**The fix:** `crates/presenter-ui/Cargo.toml` now carries its own explicit `[workspace]` table
+(#669). That makes cargo's very first manifest check return `Root` for the crate immediately, so
+the ancestor walk that caused the collision never runs at all — immune to nesting depth, and it
+also fixes `rust-analyzer`/IDE tooling in a worktree. Both `cargo fmt --check` and
+`cargo check --target wasm32-unknown-unknown` now work normally from `crates/presenter-ui/` inside
+ANY nested worktree, same as from the main checkout. Regression proof (CI's own `Format` job
+checks out non-nested and can never catch a regression here):
+`scripts/dev/check-presenter-ui-worktree-fmt.sh` creates a throwaway nested worktree, runs
+`cargo fmt --check` inside it, asserts exit 0, and cleans up unconditionally.
+- The rest of the workspace (`presenter-server`, `presenter-core`, etc.) was never affected —
+  `cargo check --workspace --tests` from the worktree root has always worked normally.
 
 ## A fresh worktree can inherit an OLD, unrelated `git stash` conflict (#641)
 
