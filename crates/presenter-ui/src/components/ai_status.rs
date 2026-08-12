@@ -22,26 +22,23 @@ use crate::api::ai::{check_status, AiStatusResponse};
 
 const AI_STATUS_REFRESH_MS: u32 = 5_000;
 
-/// #660: how far ahead of a token's expiry the header chip starts warning.
-/// Must match `ai::refresh::EXPIRY_WARNING_WINDOW` in presenter-server —
-/// duplicated rather than shared, since presenter-ui and presenter-server
-/// share no domain crate carrying this value (the server's own feeds a
-/// background journalctl WARN; this one feeds the operator-visible chip).
-/// Keep both in sync by hand if this threshold ever changes.
-const EXPIRY_WARNING_WINDOW_SECS: i64 = 2 * 60 * 60;
-
 /// Pure predicate: is `expires_at` (an RFC3339 timestamp) within the
 /// warning window of `now`? An unparseable timestamp or an ALREADY-expired
 /// one is never "expiring soon" — an already-dead token is the existing
 /// `logged-out` state's job (`ai_chip_state` checks `claude_authenticated`
 /// first), and an unparseable one has nothing useful to warn about.
+///
+/// #660 / #675 review finding 4: the window itself and the actual
+/// inside-the-window arithmetic now live in `presenter_core::ai_auth`
+/// (shared with `ai::refresh::check_and_warn` in presenter-server) instead
+/// of being hand-duplicated here — this wrapper only handles the `&str`
+/// parsing this call site's callers happen to carry (`AiStatusResponse`
+/// deserializes `token_expires_at` as a raw RFC3339 string).
 pub(crate) fn is_expiring_soon(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     let Ok(parsed) = expires_at.parse::<chrono::DateTime<chrono::Utc>>() else {
         return false;
     };
-    let remaining = parsed - now;
-    remaining > chrono::Duration::zero()
-        && remaining <= chrono::Duration::seconds(EXPIRY_WARNING_WINDOW_SECS)
+    presenter_core::is_expiring_soon(parsed, now, presenter_core::EXPIRY_WARNING_WINDOW)
 }
 
 /// How many CONSECUTIVE poll failures before the chip admits it does not
