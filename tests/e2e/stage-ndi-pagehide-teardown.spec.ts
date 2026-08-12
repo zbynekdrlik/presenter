@@ -9,7 +9,8 @@ import {
 } from "./support";
 
 // ─────────────────────────────────────────────────────────────────────────
-// #670 — `install_pagehide_teardown()` (ndi_video.rs) is called on EVERY
+// #670 — `install_pagehide_teardown()` (ndi_pagehide.rs since #672, formerly
+// inline in ndi_video.rs) is called on EVERY
 // successful WHEP connect inside the reconnect loop's
 // `Ok(ConnectOutcome::Connected(_))` arm — not just the FIRST connect a
 // <NdiVideo> mount ever makes. It used to `.forget()`-leak its `window`
