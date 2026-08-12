@@ -97,18 +97,6 @@ fn bible_presentation_to_detail(presentation: &BiblePresentation) -> BiblePresen
     }
 }
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text (#587, mirrors `router/libraries.rs`'s
-/// `map_repository_not_found`, #584). Any other error falls through to the
-/// default 500 mapping.
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(crate) async fn list_bible_presentations(
     State(state): State<AppState>,
@@ -160,10 +148,11 @@ pub(crate) async fn rename_bible_presentation_handler(
     if name.is_empty() {
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
+    // #633: `RepositoryError::NotFound` maps to 404 by default via the
+    // centralized `From<anyhow::Error> for AppError`.
     state
         .rename_bible_presentation(BiblePresentationId::from_uuid(id), name)
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -174,8 +163,7 @@ pub(crate) async fn delete_bible_presentation_handler(
 ) -> Result<StatusCode, AppError> {
     state
         .delete_bible_presentation(BiblePresentationId::from_uuid(id))
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -233,8 +221,7 @@ pub(crate) async fn update_bible_slide(
             payload.bible_translation_reference,
             existing_metadata,
         )
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
 
     Ok(Json(bible_slide_to_dto(&updated)))
 }
@@ -254,8 +241,7 @@ pub(crate) async fn append_bible_presentation_handler(
     }
     let presentation = state
         .append_bible_presentation_slides(BiblePresentationId::from_uuid(id), slides)
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 
@@ -280,8 +266,7 @@ pub(crate) async fn delete_bible_presentation_slide(
             BiblePresentationId::from_uuid(pres_uuid),
             BibleSlideId::from_uuid(slide_uuid),
         )
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 
@@ -311,7 +296,6 @@ pub(crate) async fn reorder_bible_presentation_slides(
 
     let presentation = state
         .reorder_bible_slides(BiblePresentationId::from_uuid(id), slide_ids)
-        .await
-        .map_err(map_repository_not_found)?;
+        .await?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }

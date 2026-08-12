@@ -79,19 +79,6 @@ pub(super) async fn create_library(
     Ok(Json(library))
 }
 
-/// Maps a repository refusal to its HTTP status via the TYPED
-/// `RepositoryError` variant returned by the persistence layer — never a
-/// string match on the `Display` text, which silently stops matching the
-/// moment a `.context(...)` is added anywhere between here and the
-/// repository (#578 review gap, fixed by #584). Any other error falls
-/// through to the default 500 mapping.
-fn map_repository_not_found(err: anyhow::Error) -> AppError {
-    match err.downcast_ref::<presenter_persistence::RepositoryError>() {
-        Some(presenter_persistence::RepositoryError::NotFound(msg)) => AppError::not_found(*msg),
-        _ => err.into(),
-    }
-}
-
 #[instrument(skip_all)]
 pub(super) async fn rename_library(
     State(state): State<AppState>,
@@ -102,10 +89,10 @@ pub(super) async fn rename_library(
     if name.is_empty() {
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
-    state
-        .rename_library(LibraryId::from_uuid(id), name)
-        .await
-        .map_err(map_repository_not_found)?;
+    // #633: `RepositoryError::NotFound` maps to 404 by default via the
+    // centralized `From<anyhow::Error> for AppError` — no per-call-site
+    // helper needed.
+    state.rename_library(LibraryId::from_uuid(id), name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -114,10 +101,7 @@ pub(super) async fn delete_library(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    state
-        .delete_library(LibraryId::from_uuid(id))
-        .await
-        .map_err(map_repository_not_found)?;
+    state.delete_library(LibraryId::from_uuid(id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
