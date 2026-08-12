@@ -69,6 +69,39 @@ then activate. Audit table is `video_source` (singular).
 
 ## WebRTC Testing / Debugging
 
+### Exercising a REAL Ok(Connected(_)) WHEP Session With No NDI Hardware (#670)
+
+The default GitHub-hosted `e2e` lane has no NDI SDK, so `/ndi/whep/<id>` always answers 503/204
+and `connect_whep()` (`ndi_video.rs`) never reaches `Ok(ConnectOutcome::Connected(_))` for real —
+most NDI tests on this lane either stay at the "not-producing placeholder" level or `test.skip()`
+themselves (`ndi-webrtc-recovery.spec.ts`). To test logic that only runs on a genuine Connected
+session (e.g. per-reconnect state, teardown/dispose paths) WITHOUT needing the `@synthetic-ndi`
+self-hosted GPU lane, mock the WHEP handshake at the network layer with `page.route()` instead of
+faking data at the DOM layer:
+
+1. Intercept the WHEP POST and, INSIDE `page.evaluate`, create an ephemeral `RTCPeerConnection` in
+   the page, `setRemoteDescription` it with the real offer SDP the client posted, `createAnswer()` +
+   `setLocalDescription()`, and hand that REAL Chrome-negotiated answer back as the fulfilled
+   201 body (+ a fake `Location` header). Because this "fake server" pc runs in the SAME browser as
+   the client, it always speaks a codec/payload-type set the client can actually parse —
+   hand-crafting SDP text by hand is unnecessary and fragile by comparison. `setRemoteDescription`
+   on the client then genuinely succeeds and `Ok(Connected(_))` fires for real, with ZERO actual
+   media flow (no track ever attached server-side) — fine for testing session lifecycle, useless
+   for testing decode/frames.
+2. To force a DETERMINISTIC reconnect (never wait on real ICE-failure timing — unbounded and
+   flaky), patch `RTCPeerConnection.prototype.oniceconnectionstatechange`'s setter (via
+   `page.addInitScript`, walking the prototype chain for the descriptor defensively) to capture
+   every `pc` Rust assigns a handler to, into a global array. Then, on demand,
+   `Object.defineProperty(pc, "iceConnectionState", { get: () => "failed" })` on the target instance
+   and `pc.dispatchEvent(new Event("iceconnectionstatechange"))` — this invokes the SAME real
+   listener `install_ice_failure_listener` (`ndi_watchdog.rs`) registered, exactly as a genuine ICE
+   failure would, on your own schedule.
+3. No `@video-codec`/`@synthetic-ndi` tag needed — since no real media/H264 decode ever happens,
+   this runs fine on the default `chromium` project/lane.
+
+Full worked example (net add/remove-listener-count regression test, reused the #637
+`EventTarget.prototype` instrumentation shape): `tests/e2e/stage-ndi-pagehide-teardown.spec.ts`.
+
 ### Codec: Use Real Chrome, Not Playwright Chromium
 
 Playwright's bundled Chromium has NO H264 (proprietary). Always use real Chrome:
