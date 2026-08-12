@@ -188,3 +188,34 @@ bare statement. Bind it: `let _ = handler(...).await.unwrap();`.
 ## Test-only imports must live inside `#[cfg(test)]`, not at module level (#616)
 
 When you extract a pure function for testability (the `map_post_whep_error` / `translate_add_consumer_error` / `map_delete_whep_error` pattern) and the test uses a CONSTANT from the parent module's imports (e.g. `MAX_CONSUMERS_PER_SOURCE` from `crate::pipeline`), that constant MUST be imported INSIDE the `#[cfg(test)] mod tests` block — NOT at the module level alongside the function's own imports. CI runs `cargo clippy -- -D warnings`, which rejects a module-level import used only in tests as `unused import` in the non-test build. The fix: move the offending item from the top-level `use crate::pipeline::{..., MAX_CONSUMERS_PER_SOURCE}` into the test module's own `use crate::pipeline::MAX_CONSUMERS_PER_SOURCE;` line.
+
+## `classify_restore`-shape helper: return the destructured invariant-proven value, never `Option<&Model>` + `.expect()` (#644)
+
+`classify_restore_library` (`repository/sync.rs`, #646) established the "missing → NotFound (404),
+wrong-state → Conflict (409), otherwise Ok" split for a restore-style refusal. `#644`'s
+`restore_library` (`repository/library.rs`) extended the SAME shape one step further: the first cut
+returned a bare `&library::Model` from the classifier, forcing the caller to re-derive the
+already-proven-`Some` field with `lib.deleted_at.expect("classify_restore only returns Ok for a row
+with deleted_at set")` — a review finding (`47a82b33`) caught this as a banned `.expect()` in
+production code (`presenter-persistence` has no test/WASM exemption). Fix: have the classifier return
+the DESTRUCTURED value alongside the row — `Result<(&library::Model, DateTime<FixedOffset>),
+RepositoryError>` — so the "the trashed branch always has a tombstone timestamp" invariant is upheld
+by the FUNCTION SIGNATURE at the one place that already pattern-matched it, never by a caller trusting
+an `.expect()` that "can never actually fire". Reach for this shape whenever a classify/validate helper
+proves a field is `Some`/non-empty/in-range and the caller would otherwise re-extract it with `.expect()`
+or `.unwrap()`.
+
+## Cascade-scoped restore: compare timestamps in RUST, never via a SQL equality filter (#644)
+
+When a soft-delete cascades a timestamp onto several rows in ONE transaction (`delete_library` stamping
+the identical `now` on the library row and every presentation it cascades — see `sync-lww.md`'s own
+"cascade-scoped restore" entry for the LWW-specific half of this), and a later RESTORE must bring back
+only the rows that were part of THAT cascade (not a row trashed independently, at a different instant):
+fetch both sides (the parent's own tombstone timestamp, and the candidate rows' `deleted_at`) and
+compare the already-decoded `DateTime<FixedOffset>` values in RUST — `*deleted_at == Some(tombstoned_at)`
+— never build a SQL `.eq(fetched_datetime_value)` filter for this. The write path stores the raw
+`to_rfc3339()` STRING directly via `Expr::value(now: String)`, not through sea_orm's own chrono value
+binding, so there is no guarantee a re-serialized bound parameter would byte-match that raw string on
+the SQL side. Two Rust values decoded from byte-identical stored TEXT via the SAME driver parse path are
+guaranteed `==` regardless of that risk — comparing in Rust sidesteps the question entirely instead of
+having to reason about it.

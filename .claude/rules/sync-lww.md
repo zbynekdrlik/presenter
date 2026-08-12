@@ -2,6 +2,7 @@
 paths:
   - "crates/presenter-persistence/src/repository/sync*.rs"
   - "crates/presenter-persistence/src/repository/library_sync*.rs"
+  - "crates/presenter-persistence/src/repository/library.rs"
   - "crates/presenter-server/src/state/sync.rs"
 ---
 
@@ -42,3 +43,15 @@ Two-site LWW sync (PP↔SNV), strict-`>` gate on `updated_at` (sync_id tie-break
 
 5. Known open flaw: presentations join libraries by NAME on the wire (`SyncPresentation.library_name`)
    → mis-filing/phantom libraries across rename races (#647, cross-cutting protocol change).
+
+6. **A CASCADED restore bumps EVERY row's clock it un-tombstones, not just the parent's.** `restore_library`
+   (#644, `repository/library.rs`) is invariant 2's worked example the other direction from a rename: it
+   is a deliberate local correction (a user clicking "Obnoviť"), so BOTH the library row AND every
+   presentation `delete_library`'s own cascade tombstoned alongside it get a fresh local `now()` on
+   restore — never the old tombstone's clock. Missing this on even ONE of the cascaded rows reopens
+   invariant 2's failure mode for just that row: it ties with whatever the peer holds and never
+   propagates, or — worse — loses to a peer that independently re-tombstoned the same identity and gets
+   silently re-trashed on the very next pull. (Which cascaded rows to restore at all — matched by
+   exact-instant `deleted_at` equality, compared in Rust — and the `idx_libraries_name_live_unique`
+   collision guard a restore-to-live must additionally pass, are documented in
+   `.claude/rules/repository-error-pattern.md`, not repeated here.)
