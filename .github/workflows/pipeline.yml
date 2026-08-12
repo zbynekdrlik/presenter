@@ -505,6 +505,24 @@ jobs:
           key: trunk-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: trunk-${{ runner.os }}-
 
+      # Trunk downloads wasm-bindgen straight from GitHub's release CDN at
+      # BUILD time (not via cargo/crates.io) — a transient CDN blip there
+      # fails the whole Build job even though nothing in our own pipeline
+      # changed (two runs in a row hit "error sending request" then a 503
+      # fetching wasm-bindgen 0.2.122's release tarball). Caching trunk's own
+      # tool-download dir means the tarball is fetched once and reused across
+      # runs. A cache MISS still falls through to a live download — this is a
+      # resilience+speed layer, never a new dependency. Keyed on
+      # presenter-ui's OWN Cargo.lock: presenter-ui is excluded from the root
+      # workspace (see root Cargo.toml) and has its own separate lockfile
+      # that pins the exact wasm-bindgen version trunk needs.
+      - name: Cache trunk-downloaded tools (wasm-bindgen)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trunk
+          key: trunk-tools-${{ runner.os }}-${{ hashFiles('crates/presenter-ui/Cargo.lock') }}
+          restore-keys: trunk-tools-${{ runner.os }}-
+
       - name: Install trunk
         run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
 
