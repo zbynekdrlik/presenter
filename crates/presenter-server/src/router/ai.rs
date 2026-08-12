@@ -420,10 +420,9 @@ pub(super) struct StatusResponse {
 pub(super) fn compute_ai_connected(
     connectivity_ok: bool,
     claude_authenticated: bool,
-    _model_valid: bool,
+    model_valid: bool,
 ) -> bool {
-    // TODO(#661 RED): still ignores model_valid -- GREEN commit wires it in.
-    connectivity_ok && claude_authenticated
+    connectivity_ok && claude_authenticated && model_valid
 }
 
 /// Build the `/ai/status` `error` message (#624, extended #661).
@@ -448,15 +447,18 @@ pub(super) fn compute_ai_connected(
 pub(super) fn compute_ai_status_error(
     connected: bool,
     claude_authenticated: bool,
-    _model_valid: bool,
-    _configured_model: &str,
+    model_valid: bool,
+    configured_model: &str,
     connectivity_error: Option<&str>,
 ) -> Option<String> {
-    // TODO(#661 RED): no model-invalid branch yet -- GREEN commit adds it.
     if connected {
         None
     } else if !claude_authenticated {
         Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
+    } else if !model_valid {
+        Some(format!(
+            "Configured AI model '{configured_model}' is not available in the proxy's model catalog — check AI settings"
+        ))
     } else {
         Some(match connectivity_error {
             Some(err) => format!("AI proxy unreachable: {err}"),

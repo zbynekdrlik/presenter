@@ -464,6 +464,22 @@ jobs:
             exit 1
           fi
           echo "Data check passed: libraries endpoint returned data"
+
+          # #661: exercise the AI path end-to-end, not just liveness — an
+          # invalid configured model (or a dead Claude OAuth login) used to
+          # sit "connected:true" for days because nothing checked it post-
+          # deploy. `connected` already ANDs connectivity + auth + model
+          # validity server-side (compute_ai_connected); this just asserts
+          # the caller-visible field.
+          if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
+            echo "::error::Post-deploy AI check FAILED — /ai/status did not respond"
+            exit 1
+          fi
+          if ! printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
+            echo "::error::Post-deploy AI check FAILED — /ai/status reports connected:false: $AI_STATUS"
+            exit 1
+          fi
+          echo "AI check passed: $AI_STATUS"
           REMOTE_SCRIPT
 
       - name: Post-deploy smoke test
