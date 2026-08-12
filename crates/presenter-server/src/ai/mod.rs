@@ -5,6 +5,9 @@ pub(crate) mod proxy;
 pub(crate) mod tool_defs;
 pub(crate) mod tools;
 
+#[cfg(test)]
+mod agent_budget_tests;
+
 use serde::{Deserialize, Serialize};
 
 pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
