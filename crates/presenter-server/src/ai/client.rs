@@ -131,6 +131,20 @@ pub struct ResponseFunction {
     pub arguments: String,
 }
 
+/// OpenAI-compatible `/models` list response (#661). Only the `id` field is
+/// used — the proxy's own catalog entries carry more (`object`, `created`,
+/// `owned_by`), but this is the ONLY thing `list_models` needs to answer
+/// "is the configured model actually served".
+#[derive(Debug, Deserialize)]
+pub struct ModelsResponse {
+    pub data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModelEntry {
+    pub id: String,
+}
+
 /// Call an OpenAI-compatible chat completions endpoint.
 pub async fn call_chat_completions(
     messages: &[serde_json::Value],
@@ -212,11 +226,16 @@ pub async fn call_chat_completions(
         .context("failed to parse AI API response")
 }
 
-/// Ping the AI API to verify connectivity. Uses the shared, lazily-built
-/// `connectivity_client()` (3s timeout) rather than a fresh client per call —
-/// this is polled every 5s by the status chip (#622 post-merge review
-/// finding 3a).
-pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
+/// List the model ids the proxy currently serves (#661). Used both to
+/// verify basic connectivity AND to validate the CONFIGURED model actually
+/// exists — before this, `/ai/status` only pinged this same endpoint and
+/// discarded the body, so an invalid `settings.model` string sat
+/// `connected: true` for four days until a real chat call 502'd.
+///
+/// Uses the shared, lazily-built `connectivity_client()` (3s timeout)
+/// rather than a fresh client per call — this is polled every 5s by the
+/// status chip (#622 post-merge review finding 3a).
+pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
     let url = format!("{}/models", settings.api_url.trim_end_matches('/'));
     let mut req = connectivity_client().get(&url);
 
@@ -232,6 +251,20 @@ pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
         anyhow::bail!("AI API returned status {}", response.status());
     }
 
+    let parsed: ModelsResponse = response
+        .json()
+        .await
+        .context("failed to parse AI /models response")?;
+    Ok(parsed.data.into_iter().map(|m| m.id).collect())
+}
+
+/// Ping the AI API to verify connectivity — a thin wrapper over
+/// `list_models` that discards the model list, kept for call sites that
+/// only care whether the proxy answers at all. Delegating (rather than a
+/// separate bare GET) keeps this to ONE HTTP round trip per `/ai/status`
+/// poll even though `check_status` now needs both signals.
+pub async fn check_connectivity(settings: &AiSettings) -> anyhow::Result<()> {
+    list_models(settings).await?;
     Ok(())
 }
 
@@ -241,6 +274,96 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- #661: list_models() parses the proxy's real model catalog ---
+
+    fn test_settings(api_url: &str, model: &str) -> AiSettings {
+        AiSettings {
+            api_url: api_url.to_string(),
+            api_key: None,
+            model: model.to_string(),
+            system_prompt_extra: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_models_parses_ids_from_a_real_looking_models_response() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "object": "list",
+                "data": [
+                    {"id": "claude-opus-4-6", "object": "model", "owned_by": "anthropic"},
+                    {"id": "claude-sonnet-4-6", "object": "model", "owned_by": "anthropic"}
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        let models = list_models(&settings).await.expect("must succeed");
+        assert_eq!(
+            models,
+            vec![
+                "claude-opus-4-6".to_string(),
+                "claude-sonnet-4-6".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_models_fails_on_a_non_success_status() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        let err = list_models(&settings)
+            .await
+            .expect_err("a 401 must be an error");
+        assert!(err.to_string().contains("401"));
+    }
+
+    #[tokio::test]
+    async fn list_models_fails_on_a_malformed_body() {
+        // A 2xx with a body that doesn't match the expected shape must be
+        // an error, not silently treated as "connected" the way the old
+        // bare-GET check_connectivity would have (#661: it discarded the
+        // body entirely, so a malformed/incompatible proxy response could
+        // never be distinguished from a healthy one).
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        list_models(&settings)
+            .await
+            .expect_err("a malformed /models body must be an error");
+    }
+
+    #[tokio::test]
+    async fn check_connectivity_succeeds_via_the_same_models_endpoint() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "claude-opus-4-6"}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "claude-opus-4-6");
+        check_connectivity(&settings)
+            .await
+            .expect("must succeed when list_models succeeds");
+    }
 
     // --- AC4: max_tokens is always present on the serialized request ---
 

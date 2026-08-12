@@ -1,17 +1,19 @@
+use super::integrations::extract_actor;
 use super::AppError;
 use crate::ai::agent::ProgressEvent;
 use crate::ai::proxy::ProxyStatus;
 use crate::ai::{AiAgentError, AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
+use presenter_persistence::SettingsAuditSource;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::{Duration, SystemTime};
-use tracing::{error, instrument};
+use tracing::{error, instrument, warn};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,12 +305,21 @@ pub(super) struct UpdateSettingsRequest {
     pub system_prompt_extra: Option<String>,
 }
 
+/// The generic `app_settings` table's actual name — used as the audit
+/// trail's `setting_table` label (#661). ai-settings has no dedicated table
+/// of its own (unlike ableset/osc/resolume/android/video-source), so this
+/// names the REAL underlying table rather than a domain name that doesn't
+/// exist in the schema.
+const AI_SETTINGS_AUDIT_TABLE: &str = "app_settings";
+
 #[instrument(skip_all)]
 pub(super) async fn update_settings(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<StatusCode, AppError> {
     let mut settings = get_settings_internal(&state).await?;
+    let before_json = serde_json::to_value(&settings).map_err(|e| anyhow::anyhow!(e))?;
 
     if let Some(url) = payload.api_url {
         settings.api_url = url;
@@ -328,6 +339,41 @@ pub(super) async fn update_settings(
         .repository()
         .set_app_setting(AI_SETTINGS_KEY, &json)
         .await?;
+
+    // #661: bring ai-settings under the same append-only audit trail every
+    // OTHER settings family already has — before this, ai-settings was the
+    // ONE family that could never produce a settings_audit row, which is
+    // why the undiagnosed 2026-08-02 prod model-id edit left no forensic
+    // trail of who/what made it.
+    //
+    // Deliberately NOT wrapped in the same transaction as the
+    // `set_app_setting` write above (unlike the `*_on` variants
+    // ableset/osc use) — `set_app_setting` is a generic single-statement
+    // upsert with no transactional variant, and adding one purely for this
+    // call is out of this ticket's scope (see the design comment). A best-
+    // effort audit failure is therefore logged, not propagated: the
+    // setting write itself already succeeded by this point, and returning
+    // a 500 to the caller here would misleadingly suggest their change was
+    // rejected when it was not.
+    let actor = extract_actor(&headers);
+    let after_json = serde_json::to_value(&settings).map_err(|e| anyhow::anyhow!(e))?;
+    if let Err(err) = state
+        .repository()
+        .record_settings_audit(
+            AI_SETTINGS_AUDIT_TABLE,
+            AI_SETTINGS_KEY,
+            SettingsAuditSource::HttpSetter,
+            &actor,
+            Some(before_json),
+            after_json,
+        )
+        .await
+    {
+        warn!(
+            ?err,
+            "failed to record ai-settings audit row (the settings write itself already succeeded)"
+        );
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -349,24 +395,38 @@ pub(super) struct StatusResponse {
     pub proxy: ProxyStatus,
 }
 
-/// Compute AI `connected` status by ANDing TCP-level connectivity with Claude
-/// OAuth validity (#597).
+/// Compute AI `connected` status by ANDing THREE signals: TCP-level
+/// connectivity, Claude OAuth validity (#597), and whether the CONFIGURED
+/// `model` is actually present in the proxy's own model catalog (#661).
 ///
-/// The connectivity check (`check_connectivity`) pings the proxy's `/models`
-/// endpoint — it succeeds whenever the CLIProxyAPI process is running and
-/// answering on its port, regardless of whether the underlying Claude OAuth
-/// token is still valid. When the token expires, every real AI request fails
-/// with `authentication_error`, but `connected` used to report `true` because
-/// only the TCP ping was considered. This function ensures `connected` is
-/// `true` ONLY when both signals are healthy.
+/// The connectivity check (`check_connectivity`/`list_models`) pings the
+/// proxy's `/models` endpoint — it succeeds whenever the CLIProxyAPI
+/// process is running and answering on its port, regardless of whether the
+/// underlying Claude OAuth token is still valid OR whether the configured
+/// model id is one the proxy actually serves. A real incident
+/// (2026-08-02 → 2026-08-06) had `connected: true` for four days with an
+/// invalid model id, discovered only when a real chat call 502'd. This
+/// function ensures `connected` is `true` ONLY when all three signals are
+/// healthy.
+///
+/// `model_valid` is the caller's job to compute FROM the same `/models`
+/// response `connectivity_ok` came from — when connectivity itself failed
+/// (no model list to check against), the caller should pass `true` here so
+/// this function's result still reflects the CONNECTIVITY failure, not a
+/// misleading "model not found".
 ///
 /// Extracted as a pure function so the truth-table is unit-testable without
 /// constructing a live ProxyManager + network connectivity.
-pub(super) fn compute_ai_connected(connectivity_ok: bool, claude_authenticated: bool) -> bool {
+pub(super) fn compute_ai_connected(
+    connectivity_ok: bool,
+    claude_authenticated: bool,
+    _model_valid: bool,
+) -> bool {
+    // TODO(#661 RED): still ignores model_valid -- GREEN commit wires it in.
     connectivity_ok && claude_authenticated
 }
 
-/// Build the `/ai/status` `error` message (#624).
+/// Build the `/ai/status` `error` message (#624, extended #661).
 ///
 /// `check_status` used to discard the real underlying error from
 /// `check_connectivity` via `.is_ok()`, replacing it with a constant
@@ -377,14 +437,22 @@ pub(super) fn compute_ai_connected(connectivity_ok: bool, claude_authenticated: 
 /// `render_connectivity_error`, see below) so the caller can see WHY the
 /// proxy is unreachable, not just that it is.
 ///
+/// `model_valid`/`configured_model` (#661): a THIRD branch names the exact
+/// invalid model id when connectivity and auth are both fine but the
+/// configured model isn't in the proxy's catalog — this is the case that
+/// used to sit silently `connected: true` for days.
+///
 /// Extracted as a pure function so the branch logic is unit-testable without
 /// constructing a live ProxyManager + network connectivity (same rationale
 /// as `compute_ai_connected` above).
 pub(super) fn compute_ai_status_error(
     connected: bool,
     claude_authenticated: bool,
+    _model_valid: bool,
+    _configured_model: &str,
     connectivity_error: Option<&str>,
 ) -> Option<String> {
+    // TODO(#661 RED): no model-invalid branch yet -- GREEN commit adds it.
     if connected {
         None
     } else if !claude_authenticated {
@@ -415,17 +483,33 @@ pub(super) async fn check_status(
     let settings = get_settings_internal(&state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
-    let connectivity_result = crate::ai::client::check_connectivity(&settings).await;
-    let connectivity_ok = connectivity_result.is_ok();
-    let connectivity_err_msg = connectivity_result
-        .err()
-        .map(|e| render_connectivity_error(&e));
+    // #661: list_models (not the old bare check_connectivity) so the SAME
+    // HTTP round trip that proves the proxy is reachable also gives us the
+    // catalog to validate the configured model against — one call, two
+    // signals, keeping the 5s-polled status chip's cost unchanged.
+    let models_result = crate::ai::client::list_models(&settings).await;
+    let connectivity_ok = models_result.is_ok();
+    let connectivity_err_msg = models_result.as_ref().err().map(render_connectivity_error);
+    // Permissive default (`true`) when the model list itself couldn't be
+    // fetched — the CONNECTIVITY branch already covers that case, and a
+    // defaulted-false model_valid here would produce a misleading "model
+    // not found" message instead of the real connectivity failure.
+    let model_valid = models_result
+        .as_ref()
+        .map(|models| models.iter().any(|id| id == &settings.model))
+        .unwrap_or(true);
 
-    let connected = compute_ai_connected(connectivity_ok, proxy_status.claude_authenticated);
+    let connected = compute_ai_connected(
+        connectivity_ok,
+        proxy_status.claude_authenticated,
+        model_valid,
+    );
 
     let error = compute_ai_status_error(
         connected,
         proxy_status.claude_authenticated,
+        model_valid,
+        &settings.model,
         connectivity_err_msg.as_deref(),
     );
 
