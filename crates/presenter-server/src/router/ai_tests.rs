@@ -254,6 +254,92 @@ async fn put_ai_settings_falls_back_to_anonymous_actor_with_no_forwarding_header
     assert_eq!(rows[0].actor, "anonymous");
 }
 
+// #675 review finding 3: `cd7c0f56` replaced `serde_json::to_value(&settings)`
+// with `redact_settings_for_audit()` to stop the raw `api_key` from being
+// persisted into `settings_audit` (`AiSettings` derives `Serialize`, so the
+// naive snapshot would have written the literal key into the DB). But BOTH
+// existing PUT-handler tests above leave `api_key: None` the whole time, so
+// they pass identically with the fix reverted — this test actually sets a
+// real key and asserts the audit row never carries it.
+#[tokio::test]
+async fn put_ai_settings_with_a_real_api_key_never_writes_it_into_the_audit_row() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    const SECRET_KEY: &str = "sk-ant-super-secret-do-not-leak-4f8e2b91";
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"apiKey": SECRET_KEY}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let rows = state
+        .repository()
+        .list_settings_audit(
+            Some("app_settings"),
+            Some(crate::ai::AI_SETTINGS_KEY),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "PUT /ai/settings must record exactly one audit row: {rows:?}"
+    );
+
+    // The redacted-away signal: `apiKeySet` must be true (a key WAS set),
+    // and it must be the ONLY thing the audit row says about the key.
+    assert_eq!(
+        rows[0]
+            .after_json
+            .get("apiKeySet")
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "after_json must record that a key IS set: {:?}",
+        rows[0].after_json
+    );
+
+    // The regression: neither snapshot may contain the raw secret anywhere,
+    // and neither may carry a raw `apiKey` field at all — only the boolean
+    // `apiKeySet`. Stringifying the whole JSON value (rather than checking
+    // one named field) is deliberate: it also catches the raw key leaking
+    // in via any OTHER field name a future edit might introduce.
+    let before_str = rows[0]
+        .before_json
+        .as_ref()
+        .map(serde_json::Value::to_string)
+        .unwrap_or_default();
+    let after_str = rows[0].after_json.to_string();
+    assert!(
+        !before_str.contains(SECRET_KEY) && !after_str.contains(SECRET_KEY),
+        "the raw API key must never be persisted into the settings_audit row: \
+         before={before_str} after={after_str}"
+    );
+    assert!(
+        !after_str.contains("\"apiKey\""),
+        "the audit snapshot must never carry a raw `apiKey` field, only the \
+         redacted `apiKeySet` boolean: {after_str}"
+    );
+}
+
 // #624 follow-up: `.to_string()` on an anyhow error only renders the
 // OUTERMOST `.context(...)` layer — `check_connectivity`'s real transport
 // failure (DNS/TLS/timeout/connection-refused) gets silently dropped behind
