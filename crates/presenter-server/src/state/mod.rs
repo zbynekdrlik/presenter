@@ -77,6 +77,7 @@ use presenter_core::{
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+use std::time::SystemTime;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
@@ -136,6 +137,10 @@ pub struct AppState {
     ableset_bridge: AbleSetBridge,
     broadcast_live: Arc<AtomicBool>,
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
+    /// Last time the shared AI conversation was touched by a `chat()` call
+    /// (#665) — drives idle auto-clear so it doesn't grow unbounded between
+    /// services. `None` until the first call.
+    ai_last_activity: Arc<RwLock<Option<SystemTime>>>,
     ai_proxy: Arc<ProxyManager>,
     ndi_manager: Option<ndi_control::NdiManagerHandle>,
     api_stage: Arc<RwLock<ApiStageState>>,
@@ -293,6 +298,7 @@ impl AppState {
             ableset_bridge,
             broadcast_live: Arc::new(AtomicBool::new(false)),
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
+            ai_last_activity: Arc::new(RwLock::new(None)),
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             ndi_manager,
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
@@ -616,6 +622,11 @@ impl AppState {
 
     pub fn ai_conversation(&self) -> &Arc<RwLock<Vec<ChatMessage>>> {
         &self.ai_conversation
+    }
+
+    /// Last-touched timestamp for idle auto-clear — see the field doc.
+    pub fn ai_last_activity(&self) -> &Arc<RwLock<Option<SystemTime>>> {
+        &self.ai_last_activity
     }
 
     pub fn ai_proxy(&self) -> &Arc<ProxyManager> {

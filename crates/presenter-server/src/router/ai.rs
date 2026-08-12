@@ -1,7 +1,7 @@
 use super::AppError;
 use crate::ai::agent::ProgressEvent;
 use crate::ai::proxy::ProxyStatus;
-use crate::ai::{AiSettings, ToolAction, AI_SETTINGS_KEY};
+use crate::ai::{AiAgentError, AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -10,12 +10,75 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use tracing::instrument;
+use std::time::{Duration, SystemTime};
+use tracing::{error, instrument};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ChatRequest {
     pub message: String,
+}
+
+/// Idle window after which the shared AI conversation is auto-cleared on the
+/// next `chat()` call, when `PRESENTER_AI_IDLE_CLEAR_MINUTES` is unset. A
+/// global conversation (one process, every operator/tab/session — see
+/// `AppState::ai_conversation`) left untouched between services shouldn't
+/// silently keep growing toward the next operator's very first question
+/// (#665).
+pub(super) const DEFAULT_IDLE_CLEAR_MINUTES: u64 = 30;
+
+/// Pure parser for the idle-clear-window env var — takes the raw value
+/// directly rather than reading `std::env` itself, so it is unit-testable
+/// without mutating process-global state (which would race against every
+/// OTHER test in this binary reading the same key; #665 review finding,
+/// same rationale as `context_budget::parse_context_budget_bytes`).
+pub(super) fn parse_idle_clear_minutes(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_IDLE_CLEAR_MINUTES)
+}
+
+/// Read the configured idle-clear window: env override, else the
+/// conservative default. `saturating_mul` avoids an overflow panic (debug)
+/// or silent wraparound (release) if an operator sets an absurdly large
+/// minute count.
+pub(super) fn idle_clear_window() -> Duration {
+    let minutes = parse_idle_clear_minutes(
+        std::env::var("PRESENTER_AI_IDLE_CLEAR_MINUTES")
+            .ok()
+            .as_deref(),
+    );
+    Duration::from_secs(minutes.saturating_mul(60))
+}
+
+/// Pure decision function: given when the AI conversation was last touched
+/// and "now", should it be cleared before appending the new message?
+/// Extracted so a test can inject both timestamps directly (#665 AC6)
+/// without needing a real clock or a live handler.
+pub(super) fn should_idle_clear(
+    last_activity: Option<SystemTime>,
+    now: SystemTime,
+    idle_window: Duration,
+) -> bool {
+    match last_activity {
+        // Never used yet (fresh conversation) — nothing to clear.
+        None => false,
+        Some(last) => now.duration_since(last).unwrap_or(Duration::ZERO) > idle_window,
+    }
+}
+
+/// Translate a `run_agent` failure into the message shown to the operator.
+/// `AiAgentError::ContextBudgetExceeded` already carries a friendly message
+/// (see its `#[error(...)]`); every other failure is forwarded via its
+/// normal `Display` as before. This is the ONE place that used to leak the
+/// provider's raw "prompt is too long" text straight to the browser — the
+/// typed-error downcast (same pattern as `.claude/rules/repository-error-pattern.md`)
+/// ensures that specific case now shows the friendly wording instead (#665).
+pub(super) fn friendly_ai_error_message(e: &anyhow::Error) -> String {
+    match e.downcast_ref::<AiAgentError>() {
+        Some(agent_err) => agent_err.to_string(),
+        None => e.to_string(),
+    }
 }
 
 /// SSE streaming chat endpoint. Sends progress events as tools execute,
@@ -30,6 +93,19 @@ pub(super) async fn chat(
     }
 
     let settings = get_settings_internal(&state).await?;
+
+    // Idle auto-clear (#665): if the shared conversation hasn't been
+    // touched in a while, clear it before appending the new message rather
+    // than let it silently keep growing toward the next operator's very
+    // first question.
+    let now = SystemTime::now();
+    {
+        let mut last_activity = state.ai_last_activity().write().await;
+        if should_idle_clear(*last_activity, now, idle_clear_window()) {
+            state.ai_conversation().write().await.clear();
+        }
+        *last_activity = Some(now);
+    }
 
     let mut conversation = {
         let guard = state.ai_conversation().read().await;
@@ -56,6 +132,13 @@ pub(super) async fn chat(
             let mut guard = state_clone.ai_conversation().write().await;
             *guard = conversation;
         }
+        // Re-stamp activity now that the turn actually finished — a long
+        // turn (many tool-call iterations) followed by a pause must not be
+        // treated as idle from the moment it STARTED; otherwise a turn that
+        // took, say, 20 minutes followed by a 15-minute pause would trigger
+        // an idle-clear on the very next message despite the conversation
+        // having just been used (#665 review finding).
+        *state_clone.ai_last_activity().write().await = Some(SystemTime::now());
 
         result
     });
@@ -79,10 +162,19 @@ pub(super) async fn chat(
                 yield Ok(Event::default().event("done").data(done.to_string()));
             }
             Ok(Err(e)) => {
-                let err = serde_json::json!({"type": "error", "message": e.to_string()});
+                // #665: translate through friendly_ai_error_message so a
+                // context-budget refusal shows its friendly wording instead
+                // of a raw provider/internal error string, and log the real
+                // error server-side — before this fix an AI failure reached
+                // only the browser's SSE stream with nothing in journalctl,
+                // which is why the 2026-08-09 outage was undiagnosable.
+                error!(error = %e, "AI chat request failed");
+                let message = friendly_ai_error_message(&e);
+                let err = serde_json::json!({"type": "error", "message": message});
                 yield Ok(Event::default().event("error").data(err.to_string()));
             }
             Err(e) => {
+                error!(error = %e, "AI chat request task panicked or was cancelled");
                 let err = serde_json::json!({"type": "error", "message": e.to_string()});
                 yield Ok(Event::default().event("error").data(err.to_string()));
             }
