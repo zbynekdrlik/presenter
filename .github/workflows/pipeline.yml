@@ -86,7 +86,13 @@ jobs:
           cache-on-failure: false
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::all
+        # --all-features matches the `test` job (which builds+tests --all-features),
+        # so clippy lints the same feature-gated code the compiler already sees:
+        # the `ai-eval` bin (src/bin/ai_eval/**), `mock-integrations`, and
+        # `test-helpers`. Without it those non-default features stay off and their
+        # code is compiled/tested but never linted (#690). presenter-ui is a
+        # workspace `exclude`, so --workspace never drags in the wasm crate.
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 
   # ============================================
   # Companion (Node.js) Tests
