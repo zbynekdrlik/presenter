@@ -119,7 +119,16 @@ gh run view "$run_id" --json status,conclusion
 gh run download "$run_id" -n "ai-eval-$(git rev-parse --short=12 origin/dev)" -D /tmp/ai-eval-bin
 chmod +x /tmp/ai-eval-bin/ai_eval
 
-# 4. Run it against a candidate endpoint (bundled proxy baseline, or a local llama.cpp server)
+# 4. Run it against a candidate endpoint (bundled proxy baseline, or a local llama.cpp server) —
+#    --corpus-dir/--traces-dir/--report are REQUIRED (no built-in default, #662 defect 3) since
+#    this binary runs from /tmp/ai-eval-bin/, nowhere near the repo checkout it was compiled from.
+#    bible-authoring/adversarial cases ALSO need the 5 env vars below set FIRST.
+export PRESENTER_BIBLE_KJV=$(pwd)/data/bibles/kjv.usfm.zip
+export PRESENTER_BIBLE_SEB=$(pwd)/data/bibles/seb.bbl.mybible.zip
+export PRESENTER_BIBLE_ROHACEK=$(pwd)/data/bibles/rohacek.bbl.mybible.zip
+export PRESENTER_BIBLE_SEVP=$(pwd)/data/bibles/sevp.obohu.mybible.zip
+export PRESENTER_BIBLE_MILOST=$(pwd)/data/bibles/milost.bbl.mybible.zip
+
 /tmp/ai-eval-bin/ai_eval drive --candidate-url http://127.0.0.1:8787/v1 --model claude-opus-4-6 \
   --corpus-dir scripts/dev/ai-eval/corpus --traces-dir scripts/dev/ai-eval/traces
 /tmp/ai-eval-bin/ai_eval score-l1 --corpus-dir scripts/dev/ai-eval/corpus \
@@ -132,3 +141,26 @@ system packages as `pipeline.yml`'s `build` job: `ai_eval` links against `presen
 `lib.rs`, which pulls in `presenter-ndi` (gstreamer bindings) as a normal path dependency
 regardless of which bin target is selected — it does NOT need the wasm32 target, the nightly
 toolchain, or the trunk-tools cache, since it never touches the WASM `presenter-ui` crate.
+
+## Smoke-run defect fixes (#662, first live run 2026-08-13 — issuecomment-5279674449)
+
+The first live smoke-run against a real candidate (Qwen3-8B via llama.cpp) found 4 harness
+defects, all fixed (this doc section is the corrected recipe):
+
+- **The 5 bible env vars above are MANDATORY for bible-authoring/adversarial slices, and
+  `drive` now enforces this loudly.** `PRESENTER_BIBLE_KJV/SEB/ROHACEK/SEVP/MILOST` must each
+  point at the matching zip under `data/bibles/` — `AppState::refresh_default_bible_translations`
+  reads these LOCAL files (never the network — the "needs network access" wording in an earlier
+  version of this harness was simply wrong). **Unset a var and `drive` now exits NON-ZERO**,
+  printing exactly which case(s) could not be seeded and why, and marks each such trace
+  `seedFailed: true` — `score-l1` reports it as "seed failed — harness/environment issue, NOT a
+  model result", never folded into the model's pass rate. Before this fix, an unset var silently
+  produced a healthy-looking "Wrote 30 trace(s)" exit-0, and the loss only surfaced as a
+  suspiciously bad Layer-1 score.
+- **`--corpus-dir`/`--traces-dir` are required for every mode; `--report` is required for
+  score-l1/all.** There is no built-in default any more — the binary always runs as a standalone
+  artifact copied out of the repo (step 3/4 above), where a path baked in at compile time would
+  silently point at the wrong machine.
+- Traces now carry `durationMs` (wall-clock per case) and a `usage` field (always `null` today —
+  see #687 for wiring real token counts through `run_agent`). `score-l1`'s printed summary shows
+  total/avg drive time and, when nonzero, a distinct seed-failed count.
