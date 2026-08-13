@@ -75,6 +75,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         conversation,
         final_response,
         error,
+        seed_failed: false,
         captured_at: now_rfc3339(),
     }
 }
@@ -101,6 +102,73 @@ fn failed_trace(
         conversation,
         final_response: None,
         error: Some(error),
+        // TODO(#662 defect 1, RED): every caller of this helper today is a
+        // pre-model (seeding) failure, so this should be `true` — left
+        // `false` here on purpose as the RED commit; the GREEN commit turns
+        // this into `true` and the test below goes green.
+        seed_failed: false,
         captured_at: now_rfc3339(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::corpus::Expected;
+    use std::path::PathBuf;
+
+    /// A bible-authoring case with no `setup` at all — `build_state_for_case`
+    /// still triggers `refresh_default_bible_translations` purely from
+    /// `case.slice`, so nothing in `setup` needs to exist for seeding to be
+    /// exercised.
+    fn bible_authoring_case_with_no_setup() -> Case {
+        Case {
+            id: "red-defect1-seed-failure".to_string(),
+            slice: "bible-authoring".to_string(),
+            user_message: "test message".to_string(),
+            setup: None,
+            expected: Expected::default(),
+            source_path: PathBuf::new(),
+        }
+    }
+
+    /// #662 defect 1 (RED): a bible-authoring/adversarial case whose
+    /// seeding fails (here: the 5 `PRESENTER_BIBLE_*` env vars unset, so
+    /// `AppState::refresh_default_bible_translations` fails on the very
+    /// first spec — deterministic, no filesystem/network involved) must be
+    /// marked `seedFailed: true` in its trace, distinct from a genuine
+    /// candidate/model error. Never dials `candidate_url` — seeding fails
+    /// before `run_agent` is ever reached, so no network dependency exists
+    /// either way. Against today's code this is RED: `failed_trace` always
+    /// writes `seed_failed: false`.
+    #[tokio::test]
+    async fn seeding_failure_is_marked_seed_failed_not_a_candidate_error() {
+        for var in [
+            "PRESENTER_BIBLE_KJV",
+            "PRESENTER_BIBLE_SEB",
+            "PRESENTER_BIBLE_ROHACEK",
+            "PRESENTER_BIBLE_SEVP",
+            "PRESENTER_BIBLE_MILOST",
+        ] {
+            std::env::remove_var(var);
+        }
+
+        let case = bible_authoring_case_with_no_setup();
+        let trace = drive_case(&case, "http://candidate.invalid", "unused-model").await;
+
+        assert!(
+            trace.error.is_some(),
+            "seeding must fail with the bible env vars unset"
+        );
+        assert!(
+            trace.seed_failed,
+            "a seeding failure must be marked seedFailed:true, distinct from a \
+             candidate/model error — got error: {:?}",
+            trace.error
+        );
+        assert!(
+            trace.final_response.is_none(),
+            "run_agent must never have been reached — seeding failed first"
+        );
     }
 }

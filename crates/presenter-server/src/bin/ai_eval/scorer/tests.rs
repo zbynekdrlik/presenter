@@ -34,6 +34,7 @@ fn trace(case_id: &str, slice: &str, char_limit: u32, conversation: Vec<ChatMess
         conversation,
         final_response: Some("Hotovo.".to_string()),
         error: None,
+        seed_failed: false,
         captured_at: "2026-01-01T00:00:00Z".to_string(),
     }
 }
