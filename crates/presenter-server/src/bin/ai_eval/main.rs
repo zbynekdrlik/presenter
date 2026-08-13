@@ -69,7 +69,7 @@ async fn run_drive(args: &Args) -> anyhow::Result<()> {
         candidate_model
     );
 
-    let mut error_count = 0usize;
+    let mut traces = Vec::with_capacity(cases.len());
     for case in &cases {
         println!("  {} ({})...", case.id, case.slice);
         if let Some(desc) = case
@@ -81,11 +81,16 @@ async fn run_drive(args: &Args) -> anyhow::Result<()> {
             println!("    {desc}");
         }
         let trace = drive::drive_case(case, candidate_url, candidate_model).await;
-        if let Some(err) = &trace.error {
+        if trace.seed_failed {
+            eprintln!(
+                "    SEED FAILED: {}",
+                trace.error.as_deref().unwrap_or("(no reason recorded)")
+            );
+        } else if let Some(err) = &trace.error {
             eprintln!("    WARNING: {err}");
-            error_count += 1;
         }
         trace.write_to(&args.traces_dir)?;
+        traces.push(trace);
     }
 
     println!(
@@ -94,13 +99,27 @@ async fn run_drive(args: &Args) -> anyhow::Result<()> {
         args.traces_dir.display()
     );
 
-    // Every single case erroring out is almost certainly an operational
+    // #662 defect 1: ANY case that could not even be seeded is a harness/
+    // environment problem, not model-evaluation data — this must stop the
+    // run loudly, unconditionally (never just when EVERY case failed to
+    // seed), or a partial seed failure silently degrades into a "model
+    // scored X%" result at score-l1 with no visible signal at drive time.
+    if let Some(report) = drive::seed_failure_report(&traces) {
+        anyhow::bail!(report);
+    }
+
+    // Every single case erroring out (as a genuine candidate/model error,
+    // seeding already ruled out above) is almost certainly an operational
     // problem (candidate endpoint unreachable, bad --model), not 100%
     // genuine model-quality failures — surface that distinctly instead of
     // silently reporting a "0% pass" that would masquerade as eval data.
-    if error_count == cases.len() {
+    let run_error_count = traces
+        .iter()
+        .filter(|t| t.error.is_some() && !t.seed_failed)
+        .count();
+    if run_error_count == cases.len() {
         anyhow::bail!(
-            "all {error_count} case(s) errored before producing a response — check \
+            "all {run_error_count} case(s) errored before producing a response — check \
              --candidate-url ({candidate_url}) is reachable and --model ({candidate_model}) is valid"
         );
     }
@@ -138,10 +157,16 @@ fn run_score_l1(args: &Args) -> anyhow::Result<()> {
         results.push((case, score));
     }
 
+    // Validated present by cli::parse_args for ScoreL1/All.
+    let report_path = args
+        .report_path
+        .as_deref()
+        .expect("cli::parse_args guarantees --report for score-l1/all");
+
     let report = report::build_report(&results);
     report::print_summary(&report);
-    report::write_report(&report, &args.report_path)?;
-    println!("\nWrote report to {}", args.report_path.display());
+    report::write_report(&report, report_path)?;
+    println!("\nWrote report to {}", report_path.display());
 
     // score-l1 REPORTS the Layer-1 pass/fail summary; it does not apply
     // report §6.5's bar or decide overall gate success — that is the

@@ -12,7 +12,7 @@ hardware constraints, and the serving-stack recommendation live in the research 
 | Piece | Status |
 |---|---|
 | Corpus schema + starter fixtures (this README's "Corpus" section) | ✅ Done |
-| `crates/presenter-server/src/bin/ai_eval/` (the driver + Layer-1 scorer, feature `ai-eval`) | ✅ Built — #680. `drive` runs the real `run_agent` against a `--candidate-url`, `score-l1` replays every `create_bible_presentation` call through the real `parse_bible_items`/`compose_bible_items_into_slides`/`validate_bible_slide` chain. Layer-1 scorer has a full unit-test suite (`cargo test --bin ai_eval --features ai-eval`, Tier-0 so not runnable on this box — verified via CI once pushed). **The live smoke-run against a real candidate endpoint has NOT happened yet** (needs network access this environment didn't have at build time) — see "What's still unverified" below. |
+| `crates/presenter-server/src/bin/ai_eval/` (the driver + Layer-1 scorer, feature `ai-eval`) | ✅ Built — #680, first live smoke-run done 2026-08-13 (see #662's smoke-run comment). `drive` runs the real `run_agent` against a `--candidate-url`, `score-l1` replays every `create_bible_presentation` call through the real `parse_bible_items`/`compose_bible_items_into_slides`/`validate_bible_slide` chain. Layer-1 scorer has a full unit-test suite (`cargo test --bin ai_eval --features ai-eval`, Tier-0 so not runnable on this box — verified via CI once pushed). Needs the `--candidate-url` endpoint reachable over the network; bible-authoring/adversarial cases ALSO need the 5 `PRESENTER_BIBLE_*` env vars pointing at LOCAL `data/bibles/*.zip` archives (no network involved in that part — #662 defect 2), and `drive` now exits non-zero and names every case that could not even be seeded, rather than silently degrading into a "model failed" result. |
 | `run.sh` stage wiring (drive → score-l1 → judge → gate) | `drive`/`score-l1` now shell out to `cargo run --bin ai_eval --features ai-eval -- ...` for real (#680). `judge`/`gate` still fail loudly with a "not yet implemented" error — report §8 steps 10-11, separate tickets. |
 | `judge/promptfooconfig.yaml` + rubrics + trace provider | Structurally complete, **never run end-to-end** (no traces exist yet — needs step 9 first) |
 | Golden `claude-opus-4-6` trace capture | ❌ Not run — report §8 step 9, needs a fresh CLIProxyAPI login + a live network run of `drive` |
@@ -64,11 +64,14 @@ loudly with "not yet implemented" (report §8 steps 10-11):
 
 `drive`/`score-l1` can also be run directly against the built binary (what `run.sh` shells out
 to), which additionally supports scoring already-committed traces (e.g. `golden/`) with no model
-call at all:
+call at all. `--corpus-dir`/`--traces-dir`/`--report` have no built-in default (#662 defect 3) —
+always pass them explicitly:
 
 ```bash
-cargo run --bin ai_eval --features ai-eval -- drive --candidate-url <url> --model <name>
-cargo run --bin ai_eval --features ai-eval -- score-l1 --traces-dir scripts/dev/ai-eval/golden
+cargo run --bin ai_eval --features ai-eval -- drive --candidate-url <url> --model <name> \
+  --corpus-dir scripts/dev/ai-eval/corpus --traces-dir scripts/dev/ai-eval/traces
+cargo run --bin ai_eval --features ai-eval -- score-l1 --corpus-dir scripts/dev/ai-eval/corpus \
+  --traces-dir scripts/dev/ai-eval/golden --report scripts/dev/ai-eval/report/results.json
 ```
 
 ## Directory layout

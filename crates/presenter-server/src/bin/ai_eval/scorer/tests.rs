@@ -494,8 +494,37 @@ fn trace_level_error_fails_regardless_of_conversation_content() {
     t.error = Some("connection refused".to_string());
     let score = score_trace(&c, &t);
     assert!(!score.passed);
+    assert!(
+        !score.seed_failed,
+        "a genuine run_agent error is NOT a seed failure"
+    );
     assert!(score
         .failures
         .iter()
         .any(|f| f.contains("run_agent returned an error")));
+}
+
+// --- seed failure (#662 defect 1) ---
+
+#[test]
+fn seed_failed_trace_is_classified_separately_from_a_candidate_error() {
+    let c = case("ba-x", "bible-authoring", Expected::default());
+    let mut t = trace("ba-x", "bible-authoring", 320, Vec::new());
+    t.error = Some("seeding failed: environment variable PRESENTER_BIBLE_KJV must be set".into());
+    t.seed_failed = true;
+
+    let score = score_trace(&c, &t);
+    assert!(!score.passed);
+    assert!(
+        score.seed_failed,
+        "score_trace must propagate Trace::seed_failed onto CaseScore"
+    );
+    assert!(
+        score
+            .failures
+            .iter()
+            .any(|f| f.contains("NOT a model result")),
+        "the failure message must explicitly disclaim being a model result: {:?}",
+        score.failures
+    );
 }
