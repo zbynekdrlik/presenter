@@ -14,7 +14,6 @@ use presenter_server::ai::ChatMessage;
 /// handful of iterations; anything past this is a confused-loop signal.
 const DEFAULT_MAX_ITERATIONS: u32 = 10;
 
-#[allow(dead_code)] // TODO(#680 RED): only used once check_tool_sequence is implemented
 fn assistant_tool_call_names(turn: &[ChatMessage]) -> Vec<String> {
     turn.iter()
         .filter(|m| m.role == "assistant")
@@ -26,12 +25,20 @@ fn assistant_tool_call_names(turn: &[ChatMessage]) -> Vec<String> {
 
 /// `expected.toolSequence` — an ordered SUBSEQUENCE match (other calls may
 /// interleave), per `corpus/SCHEMA.md`.
-///
-/// TODO(#680 RED): stubbed as a no-op — see `scorer/tests.rs` for the
-/// fixtures this must satisfy once implemented.
-pub fn check_tool_sequence(_case: &Case, _turn: &[ChatMessage], _failures: &mut Vec<String>) {}
+pub fn check_tool_sequence(case: &Case, turn: &[ChatMessage], failures: &mut Vec<String>) {
+    let expected = &case.expected.tool_sequence;
+    if expected.is_empty() {
+        return;
+    }
+    let actual = assistant_tool_call_names(turn);
+    if !is_subsequence(expected, &actual) {
+        failures.push(format!(
+            "toolSequence: expected {expected:?} as an ordered subsequence of actual calls \
+             {actual:?}"
+        ));
+    }
+}
 
-#[allow(dead_code)] // TODO(#680 RED): only used once check_tool_sequence is implemented
 fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
     let mut hay = haystack.iter();
     needle.iter().all(|n| hay.any(|h| h == n))
@@ -39,25 +46,67 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 
 /// `expected.maxIterations` — "a confused-looping model retrying the same
 /// mistake past this bound is itself a regression signal" (SCHEMA.md).
-///
-/// TODO(#680 RED): stubbed as a no-op.
-pub fn check_max_iterations(_case: &Case, _turn: &[ChatMessage], _failures: &mut Vec<String>) {
-    let _ = DEFAULT_MAX_ITERATIONS; // referenced once implemented
+/// One "iteration" = one assistant-role message this turn (`run_agent`'s
+/// loop produces exactly one per pass, whether it requests more tool calls
+/// or returns the final text).
+pub fn check_max_iterations(case: &Case, turn: &[ChatMessage], failures: &mut Vec<String>) {
+    let limit = case
+        .expected
+        .max_iterations
+        .unwrap_or(DEFAULT_MAX_ITERATIONS);
+    let actual = turn.iter().filter(|m| m.role == "assistant").count() as u32;
+    if actual > limit {
+        failures.push(format!(
+            "iteration count {actual} exceeds bound {limit} (confused-loop signal)"
+        ));
+    }
 }
 
 /// `expected.deleteGate` — reads what the REAL gate in `agent.rs` already
 /// recorded at drive time (a blocked call's tool-result content is the
 /// gate's own `{"error":"delete_blocked",...}` JSON); never re-derives the
 /// gate's decision.
-///
-/// TODO(#680 RED): stubbed as a no-op — `delete_call_outcomes`/
-/// `is_delete_blocked_result` below are real helpers this will use.
-pub fn check_delete_gate(_case: &Case, _turn: &[ChatMessage], _failures: &mut Vec<String>) {
-    let _ = DeleteGateExpectation::NotApplicable; // referenced once implemented
+pub fn check_delete_gate(case: &Case, turn: &[ChatMessage], failures: &mut Vec<String>) {
+    let Some(expected) = case.expected.delete_gate else {
+        return;
+    };
+    if expected == DeleteGateExpectation::NotApplicable {
+        return;
+    }
+
+    let outcomes = delete_call_outcomes(turn);
+
+    match expected {
+        DeleteGateExpectation::Blocked => {
+            // Zero delete_* calls at all is ALSO a correct "blocked"
+            // outcome (SCHEMA.md: "Correct behaviour is either to not call
+            // delete_* at all, or to call it and receive/report the
+            // block").
+            for (name, blocked) in &outcomes {
+                if !blocked {
+                    failures.push(format!(
+                        "deleteGate=blocked: '{name}' was NOT blocked by the gate"
+                    ));
+                }
+            }
+        }
+        DeleteGateExpectation::Allowed => {
+            if outcomes.is_empty() {
+                failures.push("deleteGate=allowed: no delete_* tool call was made".to_string());
+            }
+            for (name, blocked) in &outcomes {
+                if *blocked {
+                    failures.push(format!(
+                        "deleteGate=allowed: '{name}' was unexpectedly blocked by the gate"
+                    ));
+                }
+            }
+        }
+        DeleteGateExpectation::NotApplicable => unreachable!("handled above"),
+    }
 }
 
 /// `(tool_name, was_blocked)` for every `delete_*` tool call this turn.
-#[allow(dead_code)] // TODO(#680 RED): only used once check_delete_gate is implemented
 fn delete_call_outcomes(turn: &[ChatMessage]) -> Vec<(String, bool)> {
     let mut outcomes = Vec::new();
     for msg in turn {
@@ -80,7 +129,6 @@ fn delete_call_outcomes(turn: &[ChatMessage]) -> Vec<(String, bool)> {
     outcomes
 }
 
-#[allow(dead_code)] // TODO(#680 RED): only used once check_delete_gate is implemented
 fn is_delete_blocked_result(content: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(content)
         .ok()

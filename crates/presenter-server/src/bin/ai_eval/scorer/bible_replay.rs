@@ -116,28 +116,57 @@ fn extract_error_key(json_body: &str) -> String {
 
 /// `expected.validationErrors` + `expected.selfCorrectWithinRetries`
 /// (SCHEMA.md's Layer-1 mapping table, report §6.5 bar #2).
-///
-/// TODO(#680 RED): stubbed as a no-op — `collect_bible_presentation_attempts`
-/// above already REPLAYS every call through the real parser/packer/
-/// validator (that part is real, not stubbed); this verdict step does not
-/// yet judge the replayed `attempts` against `case.expected` at all. See
-/// `scorer/tests.rs` for the fixtures this must satisfy once implemented.
 pub fn check_validation_errors(
-    _case: &Case,
-    _attempts: &[BiblePresentationAttempt],
-    _failures: &mut Vec<String>,
+    case: &Case,
+    attempts: &[BiblePresentationAttempt],
+    failures: &mut Vec<String>,
 ) {
-    let _ = DEFAULT_SELF_CORRECT_RETRIES; // referenced once implemented
+    if case.expected.validation_errors.is_empty() {
+        for (idx, a) in attempts.iter().enumerate() {
+            if let Some(rule) = &a.rule {
+                failures.push(format!(
+                    "create_bible_presentation attempt {idx}: unexpected validation error \
+                     '{rule}' (case declares no expected.validationErrors)"
+                ));
+            }
+        }
+        return;
+    }
+
+    let retries = case
+        .expected
+        .self_correct_within_retries
+        .unwrap_or(DEFAULT_SELF_CORRECT_RETRIES) as usize;
+
+    for expected_rule in &case.expected.validation_errors {
+        let Some(first_fail_idx) = attempts
+            .iter()
+            .position(|a| a.rule.as_deref() == Some(expected_rule.as_str()))
+        else {
+            failures.push(format!(
+                "expected.validationErrors: rule '{expected_rule}' never fired in any \
+                 create_bible_presentation attempt"
+            ));
+            continue;
+        };
+
+        let recovered = attempts
+            .iter()
+            .skip(first_fail_idx + 1)
+            .take(retries)
+            .any(|a| a.rule.is_none());
+        if !recovered {
+            failures.push(format!(
+                "expected.validationErrors: rule '{expected_rule}' fired at attempt \
+                 {first_fail_idx} but no self-correction succeeded within {retries} retries"
+            ));
+        }
+    }
 }
 
 /// Every `BibleItem` from attempts that succeeded end-to-end (`rule.is_none()`)
 /// — i.e. the items that actually ended up in a persisted presentation, not
 /// an intermediate mistake the model self-corrected away from.
-///
-/// TODO(#680 RED): only called from the stubbed verse-fidelity checks below
-/// — `#[allow(dead_code)]` is temporary RED-state scaffolding, removed once
-/// GREEN wires it in.
-#[allow(dead_code)]
 fn successful_items(attempts: &[BiblePresentationAttempt]) -> Vec<&BibleItem> {
     attempts
         .iter()
@@ -146,7 +175,6 @@ fn successful_items(attempts: &[BiblePresentationAttempt]) -> Vec<&BibleItem> {
         .collect()
 }
 
-#[allow(dead_code)] // TODO(#680 RED): see `successful_items` note above
 fn find_verse<'a>(
     items: &[&'a BibleItem],
     book: &str,
@@ -177,7 +205,6 @@ fn find_verse<'a>(
 /// never a range) into `(book, chapter, verse_number)`. The book name may
 /// itself contain spaces/periods ("1. Samuelova"), so this splits on the
 /// LAST space rather than the first.
-#[allow(dead_code)] // TODO(#680 RED): see `successful_items` note above
 fn parse_verse_ref(reference: &str) -> Option<(String, u32, u32)> {
     let (book, chapter_verse) = reference.trim().rsplit_once(' ')?;
     let (chapter, verse) = chapter_verse.split_once(':')?;
@@ -188,24 +215,72 @@ fn parse_verse_ref(reference: &str) -> Option<(String, u32, u32)> {
 
 /// `expected.verbatimVerses` — exact-string fidelity for a verse the sermon
 /// quoted verbatim.
-///
-/// TODO(#680 RED): stubbed as a no-op. `successful_items`/`find_verse`/
-/// `parse_verse_ref` below are real helpers this will use once implemented.
 pub fn check_verbatim_verses(
-    _case: &Case,
-    _attempts: &[BiblePresentationAttempt],
-    _failures: &mut Vec<String>,
+    case: &Case,
+    attempts: &[BiblePresentationAttempt],
+    failures: &mut Vec<String>,
 ) {
+    if case.expected.verbatim_verses.is_empty() {
+        return;
+    }
+    let items = successful_items(attempts);
+    for v in &case.expected.verbatim_verses {
+        let Some((book, chapter, number)) = parse_verse_ref(&v.reference) else {
+            failures.push(format!(
+                "verbatimVerses: could not parse ref '{}'",
+                v.reference
+            ));
+            continue;
+        };
+        match find_verse(&items, &book, chapter, number, &v.translation) {
+            Some(actual) if actual == v.text => {}
+            Some(actual) => failures.push(format!(
+                "verbatimVerses: {} ({}) text mismatch — expected {:?}, got {:?}",
+                v.reference, v.translation, v.text, actual
+            )),
+            None => failures.push(format!(
+                "verbatimVerses: {} ({}) not found among submitted verse items",
+                v.reference, v.translation
+            )),
+        }
+    }
 }
 
 /// `expected.overriddenVerses` — the sermon's wording must win over the
 /// unedited DB text (agent.rs system-prompt step 3: "the sermon is
 /// authoritative for text content").
-///
-/// TODO(#680 RED): stubbed as a no-op — see `check_verbatim_verses` above.
 pub fn check_overridden_verses(
-    _case: &Case,
-    _attempts: &[BiblePresentationAttempt],
-    _failures: &mut Vec<String>,
+    case: &Case,
+    attempts: &[BiblePresentationAttempt],
+    failures: &mut Vec<String>,
 ) {
+    if case.expected.overridden_verses.is_empty() {
+        return;
+    }
+    let items = successful_items(attempts);
+    for v in &case.expected.overridden_verses {
+        let Some((book, chapter, number)) = parse_verse_ref(&v.reference) else {
+            failures.push(format!(
+                "overriddenVerses: could not parse ref '{}'",
+                v.reference
+            ));
+            continue;
+        };
+        match find_verse(&items, &book, chapter, number, &v.translation) {
+            Some(actual) if actual == v.expected_text => {}
+            Some(actual) if actual == v.db_text => failures.push(format!(
+                "overriddenVerses: {} ({}) silently reverted to the unedited DB text instead \
+                 of the sermon's wording",
+                v.reference, v.translation
+            )),
+            Some(actual) => failures.push(format!(
+                "overriddenVerses: {} ({}) text mismatch — expected sermon wording {:?}, got {:?}",
+                v.reference, v.translation, v.expected_text, actual
+            )),
+            None => failures.push(format!(
+                "overriddenVerses: {} ({}) not found among submitted verse items",
+                v.reference, v.translation
+            )),
+        }
+    }
 }
