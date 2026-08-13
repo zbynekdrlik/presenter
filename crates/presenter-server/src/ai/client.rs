@@ -470,6 +470,42 @@ mod tests {
         );
     }
 
+    /// A `usage` OBJECT present but reporting only SOME of the three counts
+    /// (review finding) — the omitted fields must deserialize to `None`
+    /// individually, never `Some(0)`, while the reported field still comes
+    /// through. Distinct from the "whole object absent" case above.
+    #[tokio::test]
+    async fn call_chat_completions_usage_with_only_some_fields_leaves_the_rest_none() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 10}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "test-model");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let response = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("must succeed");
+
+        let usage = response
+            .usage
+            .expect("the usage object itself was present, just partial");
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(
+            usage.completion_tokens, None,
+            "an omitted field must deserialize to None, never a fabricated 0"
+        );
+        assert_eq!(usage.total_tokens, None);
+    }
+
     // --- AC7: a provider-side failure logs a server-side WARN/ERROR line
     // carrying the provider's error text ---
 
