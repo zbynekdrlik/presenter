@@ -480,6 +480,17 @@ request-retry: 2
         Ok(())
     }
 
+    /// The bundled proxy's CONFIGURED port — always available (static
+    /// config, defaulting to [`DEFAULT_PROXY_PORT`]) regardless of whether
+    /// the process is currently running. Deliberately cheap (one `RwLock`
+    /// read, no `is_running()`/`binary_path()` filesystem work): used by
+    /// `router::ai::is_bundled_proxy_address` to classify a stored `api_url`
+    /// as the bundled proxy's own address WITHOUT paying for a full
+    /// [`status()`](Self::status) call just to read one field (#683).
+    pub async fn configured_port(&self) -> u16 {
+        self.config.read().await.port
+    }
+
     /// Get current status.
     pub async fn status(&self) -> ProxyStatus {
         let config = self.config.read().await;

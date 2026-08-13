@@ -352,6 +352,17 @@ pub(super) async fn update_settings(
         settings.system_prompt_extra = payload.system_prompt_extra;
     }
 
+    // #683 belt-and-suspenders (`is_bundled_proxy_address`'s own doc
+    // comment covers the WHY — not required for correctness, the matcher
+    // alone already classifies a poisoned row right on every READ):
+    // normalize a poisoned api_url back to the canonical default on EVERY
+    // save, not only one that touches apiUrl, so this write path and
+    // check_status's read path can never disagree.
+    let proxy_port = state.ai_proxy().configured_port().await;
+    if is_bundled_proxy_address(&settings.api_url, proxy_port) {
+        settings.api_url = AiSettings::default().api_url;
+    }
+
     let json = serde_json::to_string(&settings).map_err(|e| anyhow::anyhow!(e))?;
     state
         .repository()
@@ -424,11 +435,16 @@ pub(super) struct StatusResponse {
     /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
     /// (requiring a Claude OAuth login) or a user's own non-bundled
     /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679,
-    /// the #662 local-LLM scenario). `true` exactly when the RAW stored
-    /// `api_url` equals `AiSettings::default().api_url` — computed in
-    /// `get_settings_internal` BEFORE that function's own substitution of
-    /// the live resolved proxy URL, so the most common case (default
-    /// config, proxy running) is never misclassified as non-bundled.
+    /// the #662 local-LLM scenario). `true` when the RAW stored `api_url`
+    /// either equals `AiSettings::default().api_url` (the literal
+    /// placeholder) OR structurally identifies the bundled proxy's own
+    /// live-resolved address (`is_bundled_proxy_address`, #683 — this is
+    /// what every DB that ever saved AI settings under a pre-#679 build
+    /// actually has stored) — computed in `get_settings_internal` BEFORE
+    /// that function's own substitution of the live resolved proxy URL, so
+    /// the most common case (default config, proxy running) is never
+    /// misclassified as non-bundled, and neither is a historically-poisoned
+    /// row from before #679.
     pub requires_claude_auth: bool,
 }
 
@@ -652,11 +668,66 @@ pub(super) async fn proxy_complete_login(
     Ok(Json(state.ai_proxy().status().await))
 }
 
+/// Host strings this codebase has EVER written into a stored `api_url` for
+/// the bundled CLIProxyAPI proxy: `ProxyManager::status()` always builds the
+/// `127.0.0.1` form (see `ai/proxy.rs`), and `AiSettings::default()`'s
+/// literal placeholder uses `localhost`. Kept as two explicit entries — not
+/// a loopback-range/DNS check — so [`is_bundled_proxy_address`] stays
+/// exactly as broad as the addresses this process has actually ever
+/// produced, never broader (#683).
+const BUNDLED_PROXY_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
+
+/// Whether `raw_api_url` structurally identifies the bundled CLIProxyAPI
+/// proxy's OWN address at `proxy_port` — i.e. `http://{127.0.0.1|localhost}
+/// :{proxy_port}/v1`, compared by URL PARTS (scheme, host, port, path)
+/// rather than raw string equality, so a trailing slash or different
+/// host/scheme casing can't defeat it (`reqwest::Url` — an `url` crate
+/// re-export already used the same way in `android_stage.rs` — lowercases
+/// scheme/host on parse). Deliberately narrow: only `http`, only the two
+/// literal hosts above, only an exact `/v1` path (trailing slash trimmed),
+/// only the given `proxy_port` — no DNS resolution, no loopback-range/CIDR
+/// check. A malformed/unparseable `raw_api_url` is never bundled.
+///
+/// `proxy_port` is the bundled proxy's CONFIGURED port
+/// (`ProxyManager::configured_port`), used REGARDLESS of whether the proxy
+/// process is currently running (#683 design decision): the port is static
+/// config (default 18787), never something the OS assigns only while the
+/// process is up, so there is no "unknown port" case for a stopped proxy.
+/// A stored address that structurally matches the bundled proxy's
+/// configured host/port/path IS that proxy's address whether or not it
+/// happens to be running right now — gating on `running` instead would make
+/// `requires_claude_auth` flicker true/false for the SAME stored value
+/// purely because the process was started or stopped, which is worse than
+/// the bug this fixes. This also matches the existing precedent in
+/// `compute_ai_status_error`, which already prioritizes the "Claude not
+/// authenticated" message over a connectivity failure whenever
+/// `requires_claude_auth` is true, regardless of whether the proxy is
+/// currently reachable.
+pub(super) fn is_bundled_proxy_address(raw_api_url: &str, proxy_port: u16) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw_api_url) else {
+        return false;
+    };
+    url.scheme() == "http"
+        && url.port() == Some(proxy_port)
+        && url.path().trim_end_matches('/') == "/v1"
+        && url
+            .host_str()
+            .is_some_and(|host| BUNDLED_PROXY_HOSTS.contains(&host))
+}
+
 /// Read the RAW stored AI settings (or the default, if nothing is stored
-/// yet) — a PURE database read that never touches `state.ai_proxy()` and
-/// never mutates `api_url`. Returns the settings alongside `is_bundled_default`:
-/// whether this raw `api_url` equals the bundled proxy's default
-/// (`AiSettings::default().api_url`).
+/// yet) — never mutates `api_url`. Returns the settings alongside
+/// `is_bundled_default`: whether this raw `api_url` identifies the bundled
+/// proxy, either as the literal default placeholder
+/// (`AiSettings::default().api_url`) OR — #683 — as the bundled proxy's own
+/// live-resolved address (`is_bundled_proxy_address`), which is what every
+/// DB that ever saved AI settings under a pre-#679 build actually has
+/// stored (the substitute-then-persist bug #679 fixed going forward, but
+/// never migrated). Reads the proxy's CONFIGURED port via
+/// `state.ai_proxy().configured_port()` to do so — a single cheap read-only
+/// `RwLock` read, never `is_running()`/`binary_path()` filesystem work, and
+/// it never touches or mutates the RETURNED `api_url` — the invariant #679
+/// review finding 1 actually cared about (see below) is unchanged.
 ///
 /// This is the function to use for anything that gets PERSISTED
 /// (`update_settings`) or DISPLAYED for editing (`get_settings`) — #679
@@ -679,7 +750,9 @@ pub(super) async fn get_settings_internal(state: &AppState) -> anyhow::Result<(A
         Some(json) => serde_json::from_str(&json)?,
         None => AiSettings::default(),
     };
-    let is_bundled_default = settings.api_url == AiSettings::default().api_url;
+    let proxy_port = state.ai_proxy().configured_port().await;
+    let is_bundled_default = settings.api_url == AiSettings::default().api_url
+        || is_bundled_proxy_address(&settings.api_url, proxy_port);
     Ok((settings, is_bundled_default))
 }
 
