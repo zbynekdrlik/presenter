@@ -21,7 +21,9 @@
 //! yet: CSS's `orientation` media feature is inherently 2-state
 //! (portrait/landscape) and structurally cannot see a landscape-primary ↔
 //! landscape-secondary flip (both keep `width > height`), so this needs the
-//! Screen Orientation API's `type`/`angle`, which only JS can read.
+//! Screen Orientation API's `type`, which only JS can read (#694 dropped the
+//! `.angle` fallback — it is natural-orientation-dependent and mis-maps on a
+//! phone; see `install_orientation_flip_watcher` below).
 
 /// Install a ONE-SHOT `pointerdown` listener: on the first tap, if the page is
 /// currently portrait AND on a touch device, request fullscreen then lock the
@@ -73,59 +75,90 @@ const ORIENTATION_LOCK_GESTURE_JS: &str = r#"
 })();
 "#;
 
-/// #638: continuously mirrors `screen.orientation.type` onto
-/// `body[data-tablet-flip]` so `tablet.css` can counter-rotate a device that
-/// is physically landscape-secondary (turned 180° from landscape-primary).
+/// #638/#694: mirrors a STABLE landscape-secondary orientation onto
+/// `body[data-tablet-flip]` so `tablet.css` can counter-rotate a device that is
+/// genuinely displayed landscape-secondary (turned 180° from landscape-primary
+/// — #638's original scenario).
 ///
-/// Runs once at mount (covers a device that LOADS the page already
-/// landscape-secondary, before any lock ever resolves) and again on every
-/// `screen.orientation` `change` event plus every `resize` (defensive
-/// fallback for engines that never fire the former), scoped to
-/// `(pointer: coarse)` like the rest of this feature so a desktop browser
-/// window is never affected.
+/// #694 hardened this against a rotation-LOCKED phone. Per the W3C Screen
+/// Orientation spec, `screen.orientation` tracks the device's PHYSICAL
+/// orientation and fires `change` on physical tilt, while an OS rotation lock
+/// keeps only the DISPLAYED viewport fixed — so lifting / laying a locked phone
+/// flat transiently reports `landscape-secondary` with the viewport never
+/// actually rotating, and the old instantaneous-read watcher applied the very
+/// 180° flip it was built to suppress. The distinguisher between that false
+/// trigger and a genuine turn is STABILITY (a real turn settles at secondary
+/// and stays; a lift/put-down flap reverts), so:
+///   * it trusts ONLY `screen.orientation.type === "landscape-secondary"` — the
+///     `.angle` fallback was dropped, because angle 180 is portrait-secondary
+///     (NOT landscape-secondary = 270°) on a natural-portrait phone, i.e. it
+///     mis-fired for exactly the reported device class;
+///   * it never re-evaluates on `resize` — a 180° landscape↔landscape turn
+///     never resizes, and mobile browser-chrome show/hide on lift only added
+///     false triggers (the 90° portrait fallback is pure CSS, no JS needed);
+///   * it never SETS the flip from an instantaneous read — a candidate flip is
+///     applied only after the reading stays stable past a short settle window,
+///     filtering the transient sensor flaps a locked phone emits on lift /
+///     put-down. CLEARING is immediate (a stuck upside-down UI is worse).
+///
+/// Runs once at mount and on every `screen.orientation` `change`, scoped to
+/// `(pointer: coarse)` so a desktop browser window is never affected.
 pub(crate) fn install_orientation_flip_watcher() {
     let _ = js_sys::eval(ORIENTATION_FLIP_WATCHER_JS);
 }
 
 const ORIENTATION_FLIP_WATCHER_JS: &str = r#"
 (function () {
-    function isSecondaryLandscape() {
+    // Sensor settle window. HEURISTIC, not measured — no real phone is
+    // reachable from the dev box (#694). Rationale: a genuine 180deg turn is
+    // held far longer than this, a lift/put-down sensor flap is far shorter, so
+    // 300ms cleanly separates them. Revisit (only) if a real rotation-locked
+    // device is observed still flipping.
+    var STABILITY_MS = 300;
+    var pending = null;
+    function isTouch() {
+        return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    }
+    function isStableSecondaryLandscape() {
+        // Trust ONLY screen.orientation.type — the single API that
+        // distinguishes landscape-primary from landscape-secondary. The
+        // .angle fallback was dropped (#694): angle 180 is portrait-secondary,
+        // not landscape-secondary (= 270deg), on a natural-portrait phone, so
+        // it mis-mapped there. .type is broadly supported (Chrome/Firefox/Edge,
+        // Safari 16.4+); ancient engines without it simply never flip, which is
+        // the safe default. Also require the window to actually BE
+        // landscape-shaped, so a mismatched type/shape state can never mix the
+        // 180deg flip with the portrait CSS fallback (review finding, #638).
         var so = window.screen && window.screen.orientation;
-        if (!so) { return false; }
-        // Require the window to actually BE landscape-shaped too (review
-        // finding): a browser reporting an inconsistent
-        // type/angle-vs-actual-shape state must never win against the
-        // portrait CSS fallback above, which is MORE specific for the
-        // `transform` property but LESS specific overall — a mismatched
-        // combination would otherwise mix the 180deg flip transform with
-        // the portrait fallback's fixed/width/height rules.
-        var isLandscapeShaped = window.innerWidth > window.innerHeight;
-        if (typeof so.type === "string") {
-            return so.type === "landscape-secondary" && isLandscapeShaped;
-        }
-        // Best-effort fallback for engines exposing only `.angle` (no
-        // `.type`): on a device whose NATURAL orientation is landscape
-        // (most tablets), angle 180 is the secondary landscape hold. This
-        // does not cover a natural-portrait phone lacking `.type` (its
-        // landscape holds are 90/270, not 180) — `.type` is broadly
-        // supported (Chrome/Firefox/Edge, Safari 16.4+), so that narrower
-        // gap is accepted rather than guessed at.
-        return typeof so.angle === "number" && so.angle === 180 && isLandscapeShaped;
+        if (!so || typeof so.type !== "string") { return false; }
+        return so.type === "landscape-secondary" && window.innerWidth > window.innerHeight;
     }
-    function apply() {
-        if (!window.matchMedia || !window.matchMedia("(pointer: coarse)").matches) {
-            return; // not a touch device — never touch a desktop browser window
+    function evaluate() {
+        if (pending !== null) { window.clearTimeout(pending); pending = null; }
+        if (!isTouch()) {
+            document.body.removeAttribute("data-tablet-flip"); // never touch a desktop window
+            return;
         }
-        if (isSecondaryLandscape()) {
-            document.body.setAttribute("data-tablet-flip", "true");
-        } else {
+        if (!isStableSecondaryLandscape()) {
+            // Not secondary (or not landscape-shaped): CLEAR immediately. A
+            // stuck upside-down UI is worse than a slightly-delayed flip, so
+            // clearing is never debounced.
             document.body.removeAttribute("data-tablet-flip");
+            return;
         }
+        // Candidate flip — do NOT apply from this instantaneous read. Wait for
+        // the reading to stay stable, filtering the transient sensor flaps a
+        // rotation-locked phone emits when lifted / laid flat (#694).
+        pending = window.setTimeout(function () {
+            pending = null;
+            if (isTouch() && isStableSecondaryLandscape()) {
+                document.body.setAttribute("data-tablet-flip", "true");
+            }
+        }, STABILITY_MS);
     }
-    apply();
+    evaluate();
     if (window.screen && window.screen.orientation && window.screen.orientation.addEventListener) {
-        window.screen.orientation.addEventListener("change", apply);
+        window.screen.orientation.addEventListener("change", evaluate);
     }
-    window.addEventListener("resize", apply);
 })();
 "#;

@@ -313,3 +313,39 @@ completely untouched. Gate empty/no-selection states with nested `<Show>` (not a
 the marked one (isolates scroll-preservation from layout reflow), assert `scrollTop` and the
 marked card's `boundingBox().y` are unchanged (±2px). Assert `scrollBefore > 50` so the test
 can't false-pass on non-scrolling content.
+
+## `screen.orientation` tracks PHYSICAL orientation, not the DISPLAYED viewport — never counter-rotate from an instantaneous read (#694)
+
+`tablet_orientation.rs`'s `install_orientation_flip_watcher` counter-rotates the tablet UI
+180° when the device is landscape-secondary (`body[data-tablet-flip]` → CSS `rotate(180deg)`).
+Two spec facts (W3C Screen Orientation, verified — never guess this API) make an
+instantaneous read of `screen.orientation` a BUG source on a rotation-locked phone:
+
+1. **`screen.orientation.type`/`.angle` reflect the device's PHYSICAL orientation and
+   `change` fires on physical tilt** — an OS rotation lock keeps only the DISPLAYED
+   viewport fixed. So lifting / laying a locked phone flat makes the sensor transiently
+   report `landscape-secondary` while the viewport never rotates. A watcher that sets the
+   flip from that read MANUFACTURES the very 180° flip it was built to suppress (the #694
+   live-event report: "keď ho dvihnem a položím sa vyhodnotí že som dal telefón hore
+   nohami"). The distinguisher between this false trigger and a genuine turn is
+   **STABILITY**: a real turn settles at secondary and stays; a lift/put-down flap reverts.
+   Fix pattern: apply the flip only after the reading stays stable past a short settle
+   window (debounce SET ~300ms); CLEAR immediately (a stuck upside-down UI is worse).
+2. **The angle→type mapping is NATURAL-ORIENTATION-DEPENDENT.** Natural-portrait phone:
+   `0°=portrait-primary, 90°=landscape-primary, 180°=portrait-secondary, 270°=landscape-secondary`.
+   Natural-landscape tablet: `0°=landscape-primary, 180°=landscape-secondary`. So a
+   `.angle === 180` check means portrait-secondary on a PHONE, landscape-secondary on a
+   TABLET — a `.angle` fallback mis-fires across device classes. Trust ONLY
+   `screen.orientation.type` (broadly supported: Chrome/Firefox/Edge, Safari 16.4+); an
+   engine without `.type` simply never flips, which is the safe default.
+
+Also: the 90° portrait fallback (`@media (orientation: portrait)` in `tablet.css`) is PURE
+CSS and re-evaluates itself — the JS watcher needs NO `resize` listener for it, and a
+`resize`-triggered flip re-read is a false-trigger source (mobile browser-chrome show/hide
+on lift fires `resize`; a 180° landscape↔landscape turn never resizes).
+
+**E2E note:** the static `mockScreenOrientationType` fake can't exercise SEQUENCES. Use the
+mutable `installDynamicOrientation` + `window.__setOrientation(type, angle, fireChange)`
+helper (`tablet-orientation-lock.spec.ts`) to drive a transient flap (RED) vs a settled
+turn (AC3 guard). `test.use({ hasTouch: true })` is required for the `(pointer: coarse)`
+gate to match (see the `(pointer: coarse)` note above).
