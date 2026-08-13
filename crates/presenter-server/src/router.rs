@@ -666,6 +666,8 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
 }
 
 #[cfg(test)]
+mod ai_status_tests;
+#[cfg(test)]
 mod ai_tests;
 #[cfg(test)]
 mod app_error_from_anyhow_tests;
