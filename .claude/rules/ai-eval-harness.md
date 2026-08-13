@@ -235,3 +235,31 @@ A second smoke-run (same corpus, Qwen3-8B reasoning ENABLED) found 2 more defect
   of) the generic "run_agent returned an error" classification, and the report surfaces a
   distinct `stalledRetryLoopTotal` count. Before this fix, that crash scored identically to a
   genuine infra/network failure.
+
+## CI clippy now lints the `ai_eval` bin (#690) — and it does NOT inherit `lib.rs`'s allow list
+
+Before #690, `pipeline.yml`'s `clippy` job ran `--workspace --all-targets` **without**
+`--all-features`, so the `ai-eval` bin (its `[[bin]]` is `required-features = ["ai-eval"]`),
+`mock_integrations` (`#![cfg(feature = "mock-integrations")]`), and every `#[cfg(feature =
+"test-helpers")]` block were compiled+tested by the `test` job (which uses `--all-features`) but
+**never linted**. #690 added `--all-features` to the clippy job so its feature set matches the
+`test` job — this code is now linted on every PR.
+
+Two consequences when you touch `bin/ai_eval/**` (or add any `src/bin/*` target, or feature-gated
+code):
+
+- **The `ai_eval` bin is a SEPARATE crate root — it does NOT inherit `lib.rs`'s crate-level
+  `#![allow(clippy::...)]`.** So a lint `lib.rs` deliberately allows (e.g. `too_many_arguments`,
+  `needless_borrow`, `redundant_closure`, `question_mark`, `derivable_impls`) WILL still fire in the
+  bin under `-D warnings`. Write the bin clippy-clean against the full `clippy::all` group. (Most of
+  `lib.rs`'s allows are `pedantic`, which `-W clippy::all` does not enable, so the practical bin
+  exposure is the `clippy::all` subset — but do not rely on a lib-level allow covering the bin.)
+- **Feature-gated code in the lib crate IS covered by `lib.rs`'s allow list** — that is how
+  `mock_integrations` was clean under `--all-features` except `clippy::new_without_default` (which
+  `lib.rs` does NOT allow): `RequestLog` needed an explicit `impl Default` (delegating to `new()`,
+  not `#[derive]` — `VecDeque::with_capacity` ≠ derived default). If you add a feature-gated `pub fn
+  new() -> Self` with no `Default`, add the `Default` impl in the same change.
+
+Local check for feature-gated compile-cleanliness (Tier-0 — clippy itself is hook-blocked locally):
+`cargo check --workspace --all-features --tests` (matches the feature set clippy now uses; the round
+CI is the only place clippy actually runs).
