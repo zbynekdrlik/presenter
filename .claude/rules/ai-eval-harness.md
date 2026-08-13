@@ -64,3 +64,38 @@ envelope), `seed.rs` (AppState seeding), `drive.rs` (the real `run_agent` loop),
 reads trace-recorded content directly, `tests.rs` the fixture suite), `report.rs`. Behind the
 `ai-eval` Cargo feature (non-default, zero new dependency). `scripts/dev/ai-eval/{corpus,golden,
 traces,report}/` unchanged from #662's original layout.
+
+## Running the harness on dev2 — CI builds it, dev2 only runs it (Tier-0)
+
+dev2 is Tier-0 (CI-only builds, see project `CLAUDE.md`), but it's where the harness must RUN —
+against a local llama.cpp endpoint or the bundled CLIProxyAPI baseline. `ai_eval` is never built
+locally there. `.github/workflows/ai-eval-build.yml` (workflow_dispatch only — never wired into
+the push-triggered `dev`/`main` pipelines, since the whole point of the `ai-eval` feature gate is
+that normal CI never pays for it) compiles the release binary on a GitHub-hosted runner and
+publishes it as an artifact:
+
+```bash
+# 1. Kick off the build (any ref — usually dev)
+gh workflow run ai-eval-build.yml --ref dev
+
+# 2. Find the run + wait for it (bounded poll, per ci-monitoring.md — never gh run watch)
+run_id=$(gh run list --workflow=ai-eval-build.yml --limit 1 --json databaseId -q '.[0].databaseId')
+gh run view "$run_id" --json status,conclusion
+
+# 3. Download the artifact (name is ai-eval-<short-sha>, 12-char SHA)
+gh run download "$run_id" -n "ai-eval-$(git rev-parse --short=12 origin/dev)" -D /tmp/ai-eval-bin
+chmod +x /tmp/ai-eval-bin/ai_eval
+
+# 4. Run it against a candidate endpoint (bundled proxy baseline, or a local llama.cpp server)
+/tmp/ai-eval-bin/ai_eval drive --candidate-url http://127.0.0.1:8787/v1 --model claude-opus-4-6 \
+  --corpus-dir scripts/dev/ai-eval/corpus --traces-dir scripts/dev/ai-eval/traces
+/tmp/ai-eval-bin/ai_eval score-l1 --corpus-dir scripts/dev/ai-eval/corpus \
+  --traces-dir scripts/dev/ai-eval/traces --report scripts/dev/ai-eval/report/results.json
+```
+
+Artifact retention is 14 days — re-run the workflow for a fresh binary after a source change
+instead of trusting a stale download. The workflow needs the same gstreamer/protobuf/cmake/nasm
+system packages as `pipeline.yml`'s `build` job: `ai_eval` links against `presenter-server`'s
+`lib.rs`, which pulls in `presenter-ndi` (gstreamer bindings) as a normal path dependency
+regardless of which bin target is selected — it does NOT need the wasm32 target, the nightly
+toolchain, or the trunk-tools cache, since it never touches the WASM `presenter-ui` crate.

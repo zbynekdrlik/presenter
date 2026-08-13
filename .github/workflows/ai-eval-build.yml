@@ -1,0 +1,84 @@
+name: AI-Eval Harness Build
+
+# Builds the feature-gated `ai_eval` binary (#662/#680, crates/presenter-server/
+# src/bin/ai_eval/) on a GitHub-hosted runner and publishes it as a downloadable
+# artifact — so dev2 (Tier-0: CI-only builds, see CLAUDE.md "Local Build Policy")
+# can RUN the harness against a local candidate endpoint (llama.cpp / the bundled
+# CLIProxyAPI baseline) without ever compiling Rust locally. This extends the
+# same runner split the rest of the project already uses: "the local runner does
+# NOT compile Rust — it only runs pre-built artifacts downloaded from
+# GitHub-hosted build jobs" (CLAUDE.md).
+#
+# `ai_eval` is intentionally NOT part of the default `dev`/`main` pipelines: it
+# is a non-default Cargo feature (`ai-eval`, crates/presenter-server/Cargo.toml)
+# that only the #662 research track needs, and the whole point of gating it
+# behind a feature is that the normal push-triggered CI never has to pay for it.
+# So this workflow is DELIBERATELY workflow_dispatch ONLY — never push/PR — same
+# pattern as mutation-full.yml / ndi-latency.yml (both on-demand, user-fired).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ai-eval-build
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ai_eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `ai_eval` links against presenter-server's lib.rs (see
+      # .claude/rules/ai-eval-harness.md), which pulls in presenter-ndi as a
+      # normal path dependency regardless of which bin target is selected — so
+      # the gstreamer dev headers are needed here too, same package list as
+      # pipeline.yml's own Build job. protobuf-compiler/cmake/nasm are
+      # transitive build-script requirements of that same dependency graph.
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
+
+      # No wasm32 target / nightly toolchain / trunk here, unlike pipeline.yml's
+      # Build job: `ai_eval` is a server-side CLI binary only — it does not
+      # touch presenter-ui (the WASM crate) at all, so there is nothing to
+      # cross-compile and no trunk-tools cache to seed.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Own shared-key (not "ci" / "build"): this job compiles a different
+          # feature set (ai-eval) than the pipeline's test/build jobs, so
+          # sharing their cache slot would just thrash it on every run without
+          # buying a hit.
+          shared-key: ai-eval-build
+          cache-on-failure: false
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Feature/bin path verified against crates/presenter-server/Cargo.toml
+      # (#680): `[[bin]] name = "ai_eval"`, `required-features = ["ai-eval"]`,
+      # `[features] ai-eval = []`. The `presenter-server/ai-eval` form is the
+      # fully-qualified workspace-root package/feature syntax — unambiguous
+      # regardless of which package cargo would otherwise infer from `--bin`.
+      - name: Build ai_eval (release, ai-eval feature)
+        run: cargo build --release --bin ai_eval --features presenter-server/ai-eval
+
+      - name: Upload ai_eval artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-eval-${{ steps.sha.outputs.short }}
+          retention-days: 14
+          path: target/release/ai_eval
+          if-no-files-found: error
