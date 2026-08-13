@@ -109,6 +109,11 @@ pub(crate) fn install_orientation_flip_watcher() {
 
 const ORIENTATION_FLIP_WATCHER_JS: &str = r#"
 (function () {
+    // Sensor settle window. HEURISTIC, not measured — no real phone is
+    // reachable from the dev box (#694). Rationale: a genuine 180deg turn is
+    // held far longer than this, a lift/put-down sensor flap is far shorter, so
+    // 300ms cleanly separates them. Revisit (only) if a real rotation-locked
+    // device is observed still flipping.
     var STABILITY_MS = 300;
     var pending = null;
     function isTouch() {

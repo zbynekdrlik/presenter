@@ -373,13 +373,14 @@ test.describe("touch device (pointer: coarse) — rotation-locked phone must not
 
     // Lift/put-down: a `change` fires reporting landscape-secondary, then the
     // device settles right back to landscape-primary before the watcher's
-    // stability window elapses. The viewport dimensions never change.
-    await page.evaluate(() =>
-      window.__setOrientation!("landscape-secondary", 270, true),
-    );
-    await page.evaluate(() =>
-      window.__setOrientation!("landscape-primary", 90, false),
-    );
+    // stability window elapses. The viewport dimensions never change. Both
+    // steps run inside ONE page.evaluate so the flap is ATOMIC — two separate
+    // evaluate round-trips could straddle the 300ms settle window on a loaded
+    // runner and false-fail (review finding, #694).
+    await page.evaluate(() => {
+      window.__setOrientation!("landscape-secondary", 270, true);
+      window.__setOrientation!("landscape-primary", 90, false);
+    });
 
     // Wait past the stability window and assert the flip was never applied. A
     // fixed wait is correct here: we are proving a DEBOUNCED action does NOT
