@@ -286,7 +286,21 @@ impl AppState {
         if ndi_manager.is_some() {
             tracing::info!("NDI SDK loaded successfully");
         } else {
-            tracing::warn!("NDI SDK not found — NDI features disabled");
+            // Custom target (#688), not the implicit `presenter_server::state`
+            // module path: this line fires on EVERY `AppState::in_memory()`
+            // boot (30x in a 30-case ai_eval run — no NDI SDK on a headless
+            // eval box, always expected there). Giving it its own narrow
+            // target lets ai_eval's own log filter (`bin/ai_eval/logging.rs`)
+            // demote exactly this one line without risking a module-wide
+            // directive silently swallowing some OTHER, unrelated warning
+            // added later anywhere else in this large, shared `state` module.
+            // Purely additive metadata — level, message and default behavior
+            // for every other consumer (production, existing tests) are
+            // unchanged; nothing today filters on this target explicitly.
+            tracing::warn!(
+                target: "presenter_server::state::ndi_probe",
+                "NDI SDK not found — NDI features disabled"
+            );
         }
         let state = Self {
             repository,
