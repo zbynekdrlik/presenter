@@ -94,9 +94,38 @@ arg parsing, zero new deps), `corpus.rs` (fixture structs mirroring `corpus/SCHE
 field-for-field), `trace.rs` (trace = the production `Vec<ai::ChatMessage>` + a metadata
 envelope), `seed.rs` (AppState seeding), `drive.rs` (the real `run_agent` loop), `scorer/`
 (pure Layer-1 scorer — `bible_replay.rs` replays the real packer/validator, `turn_analysis.rs`
-reads trace-recorded content directly, `tests.rs` the fixture suite), `report.rs`. Behind the
-`ai-eval` Cargo feature (non-default, zero new dependency). `scripts/dev/ai-eval/{corpus,golden,
-traces,report}/` unchanged from #662's original layout.
+reads trace-recorded content directly, `tests.rs` the fixture suite), `report.rs`, `logging.rs`
+(#688 — ai_eval's own `tracing_subscriber::EnvFilter`, demoting the per-case AppState-boot/
+bible-ingest noise sources documented below, never touching presenter-server's own production log
+levels). Behind the `ai-eval` Cargo feature (non-default, zero new dependency). `scripts/dev/
+ai-eval/{corpus,golden,traces,report}/` unchanged from #662's original layout.
+
+## Per-case boot/ingest WARN noise — demoted for ai_eval only, never for production (#688)
+
+A 30-case corpus run built 30 fresh `AppState::in_memory()` instances and, for the 23/30
+bible-authoring/adversarial cases, re-ingested the full 5-file default bible translation set from
+scratch on EVERY case — firing the SAME three non-buggy `tracing::warn!` sources over and over
+(~880 WARN lines in the #662 smoke-run, even at `RUST_LOG=warn`): `presenter_bible::parsers`'s
+content-parsing quirks (dominant contributor — once per skipped/malformed row, times 5
+translations, times 23 cases), `presenter_server::android_stage`'s "launcher URL unset" line (once
+per boot — `PRESENTER_ANDROID_STAGE_URL` is never set for `ai_eval`), and `state/mod.rs`'s "NDI SDK
+not found" line (once per boot — no NDI SDK on a headless eval box). None of these are bugs; they
+are genuine WARN-level signals in a REAL deploy, just structurally noisy under this harness's
+re-ingest-per-case design.
+
+`bin/ai_eval/logging.rs`'s `build_eval_log_filter` demotes exactly these three to `error`, on top
+of the caller's own base `RUST_LOG` level — verified NOT to hide a genuine per-case failure (seed/
+ingest errors already surface structurally via `Trace.seed_failed`/`error` and `main.rs`'s
+`eprintln!`, both independent of tracing level, per #662 defect 1) and NOT to swallow any OTHER
+warning reachable during an actual corpus-case run (grep-verified: no `ai/tools/*` path ever
+touches `AndroidStageRegistry`; `presenter_bible::parsers` has no purpose besides bible-content
+parsing). The `state/mod.rs` NDI line specifically got a single `target: "presenter_server::state::
+ndi_probe"` rename (not a module-wide directive) — `state` is this app's biggest catch-all module,
+and a module-wide directive would risk silently swallowing an unrelated warn! added there later for
+a totally different feature. **If you add a new `tracing::warn!` anywhere under `presenter_bible::
+parsers` or `presenter_server::android_stage`, know that it will NOT show up during an `ai_eval`
+run** (module-wide demotion) — everywhere else in the codebase, including the rest of `state/*.rs`,
+is unaffected.
 
 ## Running the harness on dev2 — CI builds it, dev2 only runs it (Tier-0)
 
