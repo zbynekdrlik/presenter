@@ -154,7 +154,7 @@ fn run_score_l1(args: &Args) -> anyhow::Result<()> {
             continue;
         };
         let score = scorer::score_trace(case, t);
-        results.push((case, score));
+        results.push((case, t, score));
     }
 
     // Validated present by cli::parse_args for ScoreL1/All.

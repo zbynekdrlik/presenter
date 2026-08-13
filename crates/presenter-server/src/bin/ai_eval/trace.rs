@@ -60,8 +60,48 @@ pub struct Trace {
     /// (captured before this field existed) still loads.
     #[serde(default)]
     pub seed_failed: bool,
+    /// Wall-clock milliseconds spent driving this ONE case, covering the
+    /// whole of `drive::drive_case` — seeding AND the model call, since
+    /// "how long did this case take" is the natural reading a report
+    /// consumer wants, and splitting seed-time from model-time would need
+    /// a second timestamp nobody asked for (#662 defect 4). `0` for a trace
+    /// captured before this field existed (`#[serde(default)]`).
+    #[serde(default)]
+    pub duration_ms: u64,
+    /// Aggregate candidate token usage for this case, when the endpoint
+    /// returned one — see [`TraceUsage`]'s own doc comment for why this is
+    /// always `None` today (#687, filed alongside this fix). The field
+    /// exists NOW so the schema and `score-l1`'s report never need a
+    /// second migration once real usage capture lands.
+    #[serde(default)]
+    pub usage: Option<TraceUsage>,
     /// RFC 3339 timestamp of when this trace was captured.
     pub captured_at: String,
+}
+
+/// OpenAI-compatible per-turn token usage, when the candidate endpoint's
+/// response included a `usage` object. Every field is individually
+/// `Option` — a provider may omit the object entirely, or return only some
+/// of the three counts. **Always `None` on every trace `ai_eval` writes
+/// today**: production `run_agent`/`client::call_chat_completions`
+/// (`crates/presenter-server/src/ai/`) parse the candidate's response via
+/// `ChatCompletionResponse`, which does not capture `usage` at all, and
+/// `run_agent`'s own loop can call the candidate MULTIPLE times per turn
+/// with no channel back to report per-call/per-turn totals. Wiring real
+/// usage through means changing `run_agent`'s public return signature — a
+/// production hot path shared with `router/ai.rs`'s live operator chat, not
+/// something to sneak into a harness bugfix. Filed as #687:
+/// "ai_eval: thread real per-call token usage through run_agent/client.rs
+/// into trace.usage" (`Scope-gate: api-break`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceUsage {
+    #[serde(default)]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default)]
+    pub completion_tokens: Option<u32>,
+    #[serde(default)]
+    pub total_tokens: Option<u32>,
 }
 
 impl Trace {
@@ -135,13 +175,9 @@ mod tests {
         })
     }
 
-    /// #662 defect 4 (RED): the trace schema must carry per-case
-    /// `durationMs` and (when the candidate returned it) token `usage` —
-    /// round-tripped through Trace's own (de)serialization, not asserted
-    /// via a hand-built struct literal, since the fields don't exist on
-    /// `Trace` yet at RED time. Against today's schema this is RED: neither
-    /// key survives a deserialize→serialize round trip (serde silently
-    /// drops unknown JSON fields), so `out.get("durationMs")` is `None`.
+    /// #662 defect 4: the trace schema must carry per-case `durationMs` and
+    /// (when the candidate returned it) token `usage` — round-tripped
+    /// through Trace's own (de)serialization.
     #[test]
     fn trace_schema_round_trips_duration_and_usage() {
         let json = sample_trace_json();
@@ -176,5 +212,21 @@ mod tests {
             Some(120),
             "usage.totalTokens must round-trip: {usage:?}"
         );
+    }
+
+    /// A trace with no `usage` key and no `durationMs` key at all (every
+    /// trace captured before this fix, or a hand-written `golden/` fixture)
+    /// must still deserialize cleanly — `usage: None`, `duration_ms: 0` —
+    /// rather than failing to parse an older/partial trace file.
+    #[test]
+    fn trace_without_usage_or_duration_still_deserializes() {
+        let mut json = sample_trace_json();
+        let obj = json.as_object_mut().expect("object");
+        obj.remove("durationMs");
+        obj.remove("usage");
+
+        let trace: Trace = serde_json::from_value(json).expect("must still deserialize");
+        assert_eq!(trace.duration_ms, 0);
+        assert!(trace.usage.is_none());
     }
 }

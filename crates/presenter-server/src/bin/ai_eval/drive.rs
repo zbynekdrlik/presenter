@@ -7,6 +7,7 @@ use crate::seed::{build_state_for_case, prior_turns_to_messages};
 use crate::trace::{now_rfc3339, Trace};
 use presenter_server::ai::agent::run_agent;
 use presenter_server::ai::{AiSettings, ChatMessage};
+use std::time::Instant;
 
 /// Drive one case through the real agent loop and capture its trace. Never
 /// panics and never propagates an error up to the caller — a seeding
@@ -14,6 +15,7 @@ use presenter_server::ai::{AiSettings, ChatMessage};
 /// field so one bad case can never abort the whole corpus run (the caller
 /// loops over many cases and must keep going).
 pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str) -> Trace {
+    let started = Instant::now();
     let mut conversation = prior_turns_to_messages(case.setup.as_ref());
     let prior_turn_count = conversation.len();
 
@@ -27,6 +29,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
                 prior_turn_count,
                 conversation,
                 format!("seeding failed: {e:#}"),
+                started,
             )
         }
     };
@@ -41,6 +44,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
                 prior_turn_count,
                 conversation,
                 format!("reading bible preferences failed: {e:#}"),
+                started,
             )
         }
     };
@@ -76,8 +80,19 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         final_response,
         error,
         seed_failed: false,
+        duration_ms: elapsed_ms(started),
+        // Always None today — see TraceUsage's doc comment + #687.
+        usage: None,
         captured_at: now_rfc3339(),
     }
+}
+
+/// Milliseconds elapsed since `started`, saturating into `u64` — a per-case
+/// eval run is seconds, never anywhere near `u64::MAX` ms, but a bare
+/// `as u64` on a `u128` is a silent-truncation footgun clippy flags, so
+/// this makes the (harmless, never-hit) saturation explicit instead.
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Build a trace recording a failure that happened BEFORE (or instead of)
@@ -95,6 +110,7 @@ fn failed_trace(
     prior_turn_count: usize,
     conversation: Vec<ChatMessage>,
     error: String,
+    started: Instant,
 ) -> Trace {
     Trace {
         case_id: case.id.clone(),
@@ -107,6 +123,8 @@ fn failed_trace(
         final_response: None,
         error: Some(error),
         seed_failed: true,
+        duration_ms: elapsed_ms(started),
+        usage: None,
         captured_at: now_rfc3339(),
     }
 }
@@ -214,6 +232,8 @@ mod tests {
             final_response: None,
             error: error.map(str::to_string),
             seed_failed,
+            duration_ms: 0,
+            usage: None,
             captured_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }

@@ -9,7 +9,7 @@
 
 use crate::corpus::Case;
 use crate::scorer::CaseScore;
-use crate::trace::now_rfc3339;
+use crate::trace::{now_rfc3339, Trace};
 use anyhow::Context;
 use serde::Serialize;
 use std::path::Path;
@@ -35,6 +35,13 @@ pub struct CaseResult {
     pub case_id: String,
     pub slice: String,
     pub passed: bool,
+    /// Mirrors `CaseScore::seed_failed` — see its own doc comment. Lets a
+    /// `results.json` reader filter seed-failed cases out of a pass-rate
+    /// calculation instead of counting them as model failures.
+    pub seed_failed: bool,
+    /// From `Trace::duration_ms` (#662 defect 4) — how long THIS case took
+    /// to drive, independent of whether it passed.
+    pub duration_ms: u64,
     pub failures: Vec<String>,
     /// `expected.notes` from the corpus fixture — SCHEMA.md: "which
     /// hard-case category this probes ... plus any rationale a future
@@ -50,26 +57,43 @@ pub struct Report {
     pub generated_at: String,
     pub total: usize,
     pub passed: usize,
+    /// Count of `cases[].seedFailed == true` — a harness/environment
+    /// problem, never a model-quality result (#662 defect 1). Surfaced
+    /// separately here so a report reader never mistakes it for part of
+    /// the model's pass rate.
+    pub seed_failed_total: usize,
+    /// Sum of every case's `Trace::duration_ms` (#662 defect 4) — the
+    /// smoke-run's own complaint was having to derive this by hand from
+    /// consecutive `capturedAt` timestamps.
+    pub total_duration_ms: u64,
     pub slices: Vec<SliceSummary>,
     pub cases: Vec<CaseResult>,
 }
 
-/// `results`: one `(case, CaseScore)` per scored case.
-pub fn build_report(results: &[(&Case, CaseScore)]) -> Report {
+/// `results`: one `(case, trace, CaseScore)` per scored case — the `Trace`
+/// is already in scope at the one call site (`main.rs::run_score_l1`), so
+/// duration/seed-failed totals are aggregated here without a second pass
+/// over the trace files.
+pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
     let total = results.len();
-    let passed = results.iter().filter(|(_, s)| s.passed).count();
+    let passed = results.iter().filter(|(_, _, s)| s.passed).count();
+    let seed_failed_total = results.iter().filter(|(_, _, s)| s.seed_failed).count();
+    let total_duration_ms: u64 = results.iter().map(|(_, t, _)| t.duration_ms).sum();
 
-    let mut slice_names: Vec<String> = results.iter().map(|(c, _)| c.slice.clone()).collect();
+    let mut slice_names: Vec<String> = results.iter().map(|(c, _, _)| c.slice.clone()).collect();
     slice_names.sort();
     slice_names.dedup();
 
     let slices = slice_names
         .into_iter()
         .map(|slice| {
-            let in_slice: Vec<_> = results.iter().filter(|(c, _)| c.slice == slice).collect();
+            let in_slice: Vec<_> = results
+                .iter()
+                .filter(|(c, _, _)| c.slice == slice)
+                .collect();
             SliceSummary {
                 total: in_slice.len(),
-                passed: in_slice.iter().filter(|(_, sc)| sc.passed).count(),
+                passed: in_slice.iter().filter(|(_, _, sc)| sc.passed).count(),
                 slice,
             }
         })
@@ -77,10 +101,12 @@ pub fn build_report(results: &[(&Case, CaseScore)]) -> Report {
 
     let cases = results
         .iter()
-        .map(|(case, score)| CaseResult {
+        .map(|(case, trace, score)| CaseResult {
             case_id: score.case_id.clone(),
             slice: case.slice.clone(),
             passed: score.passed,
+            seed_failed: score.seed_failed,
+            duration_ms: trace.duration_ms,
             failures: score.failures.clone(),
             notes: case.expected.notes.clone(),
         })
@@ -90,6 +116,8 @@ pub fn build_report(results: &[(&Case, CaseScore)]) -> Report {
         generated_at: now_rfc3339(),
         total,
         passed,
+        seed_failed_total,
+        total_duration_ms,
         slices,
         cases,
     }
@@ -109,6 +137,22 @@ pub fn print_summary(report: &Report) {
     println!(
         "\nLayer-1 summary: {}/{} passed",
         report.passed, report.total
+    );
+    if report.seed_failed_total > 0 {
+        println!(
+            "  {} case(s) seed-failed (harness/environment issue — excluded from \
+             model-quality assessment, not counted as a model result)",
+            report.seed_failed_total
+        );
+    }
+    let avg_ms = if report.total > 0 {
+        report.total_duration_ms / report.total as u64
+    } else {
+        0
+    };
+    println!(
+        "  total drive time: {} ms across {} case(s) (avg {} ms/case)",
+        report.total_duration_ms, report.total, avg_ms
     );
     for s in &report.slices {
         println!("  {:<16} {}/{}", s.slice, s.passed, s.total);
