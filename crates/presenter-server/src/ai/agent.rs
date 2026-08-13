@@ -3,10 +3,37 @@ use super::context_budget::{
 };
 use super::{AiAgentError, AiSettings, ChatMessage, ToolAction, ToolCallFunction, ToolCallMessage};
 use crate::state::AppState;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{error, info, warn};
 
 const MAX_ITERATIONS: usize = 100;
+
+/// Per-LLM-call diagnostic metadata, captured once per `run_agent` loop
+/// iteration regardless of whether that iteration produced a tool call or
+/// the final text response. Exists so a context/length-truncated response
+/// — otherwise silently indistinguishable from a deliberately short/empty
+/// one anywhere downstream — is diagnosable from `run_agent`'s own return
+/// value instead of requiring the candidate server's private logs (#662
+/// defect 6, found by the ai_eval reasoning-on rerun: 2 truncated
+/// responses were only diagnosable by cross-referencing llama-server's own
+/// log against trace timestamps). `Serialize`/`Deserialize` so `ai_eval`
+/// can carry this directly in its `Trace` schema — same "never a parallel
+/// schema" discipline `ChatMessage` already follows there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnMetadata {
+    /// The OpenAI-compatible `finish_reason` this call's first choice
+    /// reported (`"stop"`, `"length"`, `"tool_calls"`, ...) — `None` when
+    /// the provider omitted it.
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+    /// Length of the provider's `reasoning_content`, when present (a
+    /// "thinking"-mode candidate) — never the full text, see
+    /// `client::ResponseMessage::reasoning_content`'s own doc comment.
+    #[serde(default)]
+    pub reasoning_content_len: Option<usize>,
+}
 
 /// Affirmative replies recognised by the cross-turn gate. Used when the
 /// user types a short confirmation after the AI proposed a delete in the
@@ -553,17 +580,22 @@ fn push_assistant_tool_call_message(
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
+///
+/// Returns `(final_response_text, actions, turn_metadata)` — `turn_metadata` has one
+/// [`TurnMetadata`] entry per LLM call this turn made (#662 defect 6). Existing callers
+/// that don't need it simply discard the third element.
 pub async fn run_agent(
     user_message: &str,
     conversation: &mut Vec<ChatMessage>,
     state: &AppState,
     settings: &AiSettings,
     progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
-) -> anyhow::Result<(String, Vec<ToolAction>)> {
+) -> anyhow::Result<(String, Vec<ToolAction>, Vec<TurnMetadata>)> {
     let (system_prompt, char_limit) =
         build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
     let tools = super::tools::tool_definitions();
     let mut actions = Vec::new();
+    let mut turn_metadata = Vec::new();
 
     // Add user message to conversation
     conversation.push(ChatMessage {
@@ -600,7 +632,13 @@ pub async fn run_agent(
             .next()
             .ok_or_else(|| anyhow::anyhow!("no choices in AI response"))?;
 
+        let finish_reason = choice.finish_reason.clone();
         let msg = choice.message;
+        let reasoning_content_len = msg.reasoning_content.as_ref().map(|s| s.chars().count());
+        turn_metadata.push(TurnMetadata {
+            finish_reason,
+            reasoning_content_len,
+        });
 
         // Check for tool calls
         if let Some(ref tool_calls) = msg.tool_calls {
@@ -637,7 +675,7 @@ pub async fn run_agent(
         // pairs. A "turn" is user msg + subsequent assistant/tool messages.
         trim_conversation(conversation, 10);
 
-        return Ok((response_text, actions));
+        return Ok((response_text, actions, turn_metadata));
     }
 
     // MAX_ITERATIONS exhausted without a text response. This path used to
@@ -651,6 +689,7 @@ pub async fn run_agent(
         "I reached the maximum number of processing steps. Please try a simpler request."
             .to_string(),
         actions,
+        turn_metadata,
     ))
 }
 

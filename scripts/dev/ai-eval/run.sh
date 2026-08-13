@@ -9,9 +9,13 @@ set -euo pipefail
 #   drive    — run the candidate model through every corpus case via the real run_agent loop,
 #              write one trace JSON per case under traces/. Shells out to
 #              `cargo run --bin ai_eval --features ai-eval -- drive ...`
-#              (crates/presenter-server/src/bin/ai_eval/, report §8 step 8 — #680). Needs
-#              network access (the candidate model endpoint, and — for bible-authoring/
-#              adversarial cases — the real bible-translation ingestion).
+#              (crates/presenter-server/src/bin/ai_eval/, report §8 step 8 — #680). Needs the
+#              candidate model endpoint (--candidate-url) reachable over the network. For
+#              bible-authoring/adversarial cases it ALSO needs the PRESENTER_BIBLE_KJV/SEB/
+#              ROHACEK/SEVP/MILOST env vars pointing at the local data/bibles/*.zip archives —
+#              this ingestion reads local files, never the network (#662 defect 2). A case that
+#              cannot even be seeded (e.g. one of those env vars unset) makes `drive` exit
+#              non-zero and print which case + why — see `.claude/rules/ai-eval-harness.md`.
 #   score-l1 — deterministic structural scoring of the traces just driven (real tool structs,
 #              real create_bible_presentation packer, real bible_validator, verse-text diff,
 #              delete-gate check, sequencing sanity — report §6.4 Layer-1). Shells out to
