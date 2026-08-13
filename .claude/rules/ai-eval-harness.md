@@ -164,3 +164,26 @@ defects, all fixed (this doc section is the corrected recipe):
 - Traces now carry `durationMs` (wall-clock per case) and a `usage` field (always `null` today —
   see #687 for wiring real token counts through `run_agent`). `score-l1`'s printed summary shows
   total/avg drive time and, when nonzero, a distinct seed-failed count.
+
+## Reasoning-on rerun defect fixes (#662, issuecomment-5280071954)
+
+A second smoke-run (same corpus, Qwen3-8B reasoning ENABLED) found 2 more defects, both fixed:
+
+- **Traces now carry `turns[]`** — one entry per LLM call `run_agent` made this turn
+  (`finishReason` + `reasoningContentLen`, never the full reasoning text). `run_agent`'s Ok
+  return type widened to `(String, Vec<ToolAction>, Vec<TurnMetadata>)`
+  (`presenter_server::ai::agent::TurnMetadata`) — `router/ai.rs`'s live SSE chat endpoint
+  discards the 3rd element (byte-identical JSON sent to the browser; this never touches the
+  `ProgressEvent` SSE channel or the WASM frontend at all). `score-l1`'s report surfaces a
+  `finishReasonLength` count — how many LLM calls hit the provider's context/token ceiling
+  (`finishReason == "length"`), previously diagnosable only by cross-referencing the candidate
+  server's own private log against trace timestamps.
+- **A stalled, unproductive retry loop is now detected and classified distinctly.** When the
+  candidate retries an identical failing tool call (same tool, same argument key set, same
+  error/rule class) 3+ times in a row — `adv-10`'s real case did this 8 times before the
+  accumulated context crashed the request with a malformed-JSON HTTP 500 — `drive::
+  detect_stalled_retry_loop` marks the trace `stalledRetryLoop: "<description>"`. `score-l1`
+  reports it as "candidate stalled in an unproductive retry loop", checked BEFORE (and instead
+  of) the generic "run_agent returned an error" classification, and the report surfaces a
+  distinct `stalledRetryLoopTotal` count. Before this fix, that crash scored identically to a
+  genuine infra/network failure.
