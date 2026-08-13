@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -39,12 +40,8 @@ test("tablet keeps scroll position and marked slide in place across an operator 
   page,
   request,
 }) => {
-  const consoleMessages: string[] = [];
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warning") {
-      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-    }
-  });
+  const consoleErrors: string[] = [];
+  attachConsoleErrorCollector(page, consoleErrors);
 
   // Wait for server readiness
   await expect(async () => {
@@ -221,5 +218,5 @@ test("tablet keeps scroll position and marked slide in place across an operator 
   // The marked slide must still be marked after the live edit.
   await expect(targetCard).toHaveClass(/is-active/);
 
-  expect(consoleMessages).toEqual([]);
+  expect(consoleErrors).toEqual([]);
 });
