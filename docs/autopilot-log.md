@@ -1282,3 +1282,40 @@ gained a thin lib.rs so the bin reuses real code paths.
 
 **Backlog:** #662 (umbrella, open by design), #681 (dead second-account auth file — question
 asked, awaiting the user's decision).
+
+---
+
+## Rounds v0.4.244 + v0.4.245 SHIPPED (#662 campaign: local endpoint, eval runs, harness fixes), 2026-08-13
+
+**User decisions this arc:** delete the dead marek auth file on prod (done — moved to backups,
+invalid_grant loop verified silent after 8 min, #681 closed with evidence) and #662 option 2 —
+full local-model path on dev2 now.
+
+**v0.4.244 (PR #686, `a06a1376`):** `ai-eval-build.yml` (workflow_dispatch-only CI build of the
+feature-gated binary — dev2 runs prebuilt artifacts, never compiles; the workflow only became
+dispatchable after landing on main, GitHub registers workflow_dispatch from the default branch)
++ the dev2 install record: CUDA 13.2 toolkit (driver untouched), llama.cpp sm_120, Qwen3-8B
+Q4_K_M, flock GPU wrapper with live-verified refusal paths (5-sample util check — bakerion's
+idle resident bursts sub-second every ~13 s and false-refuses single-sample checks).
+
+**Eval results (#662, two live runs):** Qwen3-8B reasoning OFF 2/30; reasoning ON 7/30 —
+real 3.5× (finally calls `load_bible_verses`, resolve-then-act chains) but adversarial
+self-correction 0/12 unchanged and failures became context-burning retry loops. Verdict on the
+ticket: the gap to the ≥98/≥90 bars is STRUCTURAL for this model class at 8 GB. Thinking blocks
+verified separated (`reasoning_content`), never in scored content.
+
+**v0.4.245 (PR #689, `f922a5ce`):** the 7 harness defects the two runs exposed, fixed — loud
+non-zero seed failures (23/30 cases had vanished behind an exit-0), honest local-file error text,
+no compiled-in CI paths, `durationMs`, per-call `finishReason`+reasoning-length capture, stalled
+identical-retry-loop detection (review caught an error-classifier precedence bug that would have
+false-flagged cross-rule self-correction). Narrow production touch: `run_agent` Ok type widened
+for per-turn metadata, SSE JSON byte-identical. Spun out: #687 (real token usage), #688 (boot
+noise). Third scratch-collision casualty avoided by per-agent-id scratch paths in dispatch
+prompts (airuleset#432).
+
+**Supervisor lesson:** a mid-merge doc conflict where one side documents OLD behavior and the
+other the FIXED behavior is not keep-both — the stale commentary loses, and the fixed side's
+cross-reference ("see defect fixes below") carries the history.
+
+**Backlog:** #662 (umbrella — next decision point: bigger model won't fit 8 GB; candidates are a
+different small model, API-hosted eval, or park), #687, #688.
