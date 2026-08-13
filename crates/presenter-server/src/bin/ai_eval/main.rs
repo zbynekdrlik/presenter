@@ -3,13 +3,14 @@
 //! for the harness design and `corpus/SCHEMA.md` for the fixture schema.
 //!
 //! Thin dispatch only — every real behavior lives in a library module
-//! (`corpus`, `trace`, `seed`, `drive`, `scorer`, `report`, `cli`), per this
-//! project's file/function size caps and the #680 design comment's own
-//! "thin main + library modules" plan.
+//! (`corpus`, `trace`, `seed`, `drive`, `scorer`, `report`, `cli`, `logging`),
+//! per this project's file/function size caps and the #680 design comment's
+//! own "thin main + library modules" plan.
 
 mod cli;
 mod corpus;
 mod drive;
+mod logging;
 mod report;
 mod scorer;
 mod seed;
@@ -31,7 +32,21 @@ async fn main() -> anyhow::Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "info");
     }
-    tracing_subscriber::fmt::init();
+    // #688: build our OWN filter (base level + the known-benign per-case
+    // boot/ingest noise directives) instead of the plain `fmt::init()` this
+    // used to be — see `logging.rs` for exactly which lines are demoted and
+    // why each is safe to demote. Falls back to the plain base level (no
+    // demotion) if RUST_LOG somehow contains something the filter parser
+    // rejects, rather than failing the whole harness over a logging nicety.
+    let base_rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let filter = match logging::build_eval_log_filter(&base_rust_log) {
+        Ok(filter) => filter,
+        Err(err) => {
+            eprintln!("WARNING: {err:#} — falling back to the base RUST_LOG with no demotion");
+            tracing_subscriber::EnvFilter::new(base_rust_log)
+        }
+    };
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     match args.mode {
         Mode::Drive => run_drive(&args).await,

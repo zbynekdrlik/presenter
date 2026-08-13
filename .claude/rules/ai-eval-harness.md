@@ -94,9 +94,38 @@ arg parsing, zero new deps), `corpus.rs` (fixture structs mirroring `corpus/SCHE
 field-for-field), `trace.rs` (trace = the production `Vec<ai::ChatMessage>` + a metadata
 envelope), `seed.rs` (AppState seeding), `drive.rs` (the real `run_agent` loop), `scorer/`
 (pure Layer-1 scorer — `bible_replay.rs` replays the real packer/validator, `turn_analysis.rs`
-reads trace-recorded content directly, `tests.rs` the fixture suite), `report.rs`. Behind the
-`ai-eval` Cargo feature (non-default, zero new dependency). `scripts/dev/ai-eval/{corpus,golden,
-traces,report}/` unchanged from #662's original layout.
+reads trace-recorded content directly, `tests.rs` the fixture suite), `report.rs`, `logging.rs`
+(#688 — ai_eval's own `tracing_subscriber::EnvFilter`, demoting the per-case AppState-boot/
+bible-ingest noise sources documented below, never touching presenter-server's own production log
+levels). Behind the `ai-eval` Cargo feature (non-default, zero new dependency). `scripts/dev/
+ai-eval/{corpus,golden,traces,report}/` unchanged from #662's original layout.
+
+## Per-case boot/ingest WARN noise — demoted for ai_eval only, never for production (#688)
+
+A 30-case corpus run built 30 fresh `AppState::in_memory()` instances and, for the 23/30
+bible-authoring/adversarial cases, re-ingested the full 5-file default bible translation set from
+scratch on EVERY case — firing the SAME three non-buggy `tracing::warn!` sources over and over
+(~880 WARN lines in the #662 smoke-run, even at `RUST_LOG=warn`): `presenter_bible::parsers`'s
+content-parsing quirks (dominant contributor — once per skipped/malformed row, times 5
+translations, times 23 cases), `presenter_server::android_stage`'s "launcher URL unset" line (once
+per boot — `PRESENTER_ANDROID_STAGE_URL` is never set for `ai_eval`), and `state/mod.rs`'s "NDI SDK
+not found" line (once per boot — no NDI SDK on a headless eval box). None of these are bugs; they
+are genuine WARN-level signals in a REAL deploy, just structurally noisy under this harness's
+re-ingest-per-case design.
+
+`bin/ai_eval/logging.rs`'s `build_eval_log_filter` demotes exactly these three to `error`, on top
+of the caller's own base `RUST_LOG` level — verified NOT to hide a genuine per-case failure (seed/
+ingest errors already surface structurally via `Trace.seed_failed`/`error` and `main.rs`'s
+`eprintln!`, both independent of tracing level, per #662 defect 1) and NOT to swallow any OTHER
+warning reachable during an actual corpus-case run (grep-verified: no `ai/tools/*` path ever
+touches `AndroidStageRegistry`; `presenter_bible::parsers` has no purpose besides bible-content
+parsing). The `state/mod.rs` NDI line specifically got a single `target: "presenter_server::state::
+ndi_probe"` rename (not a module-wide directive) — `state` is this app's biggest catch-all module,
+and a module-wide directive would risk silently swallowing an unrelated warn! added there later for
+a totally different feature. **If you add a new `tracing::warn!` anywhere under `presenter_bible::
+parsers` or `presenter_server::android_stage`, know that it will NOT show up during an `ai_eval`
+run** (module-wide demotion) — everywhere else in the codebase, including the rest of `state/*.rs`,
+is unaffected.
 
 ## Running the harness on dev2 — CI builds it, dev2 only runs it (Tier-0)
 
@@ -163,9 +192,26 @@ defects, all fixed (this doc section is the corrected recipe):
   score-l1/all.** There is no built-in default any more — the binary always runs as a standalone
   artifact copied out of the repo (step 3/4 above), where a path baked in at compile time would
   silently point at the wrong machine.
-- Traces now carry `durationMs` (wall-clock per case) and a `usage` field (always `null` today —
-  see #687 for wiring real token counts through `run_agent`). `score-l1`'s printed summary shows
-  total/avg drive time and, when nonzero, a distinct seed-failed count.
+- Traces now carry `durationMs` (wall-clock per case) and a `usage` field (was always `null` at
+  the time of this smoke-run — real token counts landed in #687, see the section below).
+  `score-l1`'s printed summary shows total/avg drive time and, when nonzero, a distinct
+  seed-failed count.
+
+## Real token-usage capture (#687)
+
+`client::ChatCompletionResponse.usage: Option<client::Usage>` parses the OpenAI-compatible
+`usage` object per call (`prompt_tokens`/`completion_tokens`/`total_tokens`, each independently
+`Option<u32>` — a provider may omit the whole object, or just one field, and a missing count is
+never read as `0`). `agent::run_agent` SUMS it across every `call_chat_completions` call the turn
+makes (a turn can call the candidate more than once via the tool-call loop) into
+`agent::TokenUsage` — its OWN type, deliberately reused directly by `ai_eval` (`trace.rs` imports
+`presenter_server::ai::agent::TokenUsage` for `Trace::usage`, exactly like it already does for
+`TurnMetadata` — never a parallel schema). `run_agent`'s return tuple widened to 4 elements again
+(`(String, Vec<ToolAction>, Vec<TurnMetadata>, Option<TokenUsage>)`, same tuple-widening pattern
+the #662 `turn_metadata` addition established) — `router/ai.rs`'s live SSE endpoint discards the
+4th element same as the 3rd, browser-facing JSON unaffected. `report::build_report` folds every
+case's `Trace::usage` into `Report::total_usage` via `TokenUsage::accumulate` (same missing-field
+discipline), surfaced in `score-l1`'s printed summary when nonzero.
 
 ## Reasoning-on rerun defect fixes (#662, issuecomment-5280071954)
 
