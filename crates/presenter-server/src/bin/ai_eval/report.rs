@@ -14,7 +14,15 @@ use anyhow::Context;
 use serde::Serialize;
 use std::path::Path;
 
+// `rename_all = "camelCase"` on all three: this project's serde convention
+// (scripts/dev/quality-check.sh's "Serde convention" check) requires it on
+// every Serialize struct with a multi-word field. `SliceSummary` has none
+// today (adding it is a no-op on its current JSON output) but it nests
+// inside `Report` alongside `CaseResult` in the SAME results.json document
+// — keeping all three consistent avoids a future multi-word field on
+// `SliceSummary` silently re-triggering the gate.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SliceSummary {
     pub slice: String,
     pub total: usize,
@@ -22,6 +30,7 @@ pub struct SliceSummary {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CaseResult {
     pub case_id: String,
     pub slice: String,
@@ -36,6 +45,7 @@ pub struct CaseResult {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Report {
     pub generated_at: String,
     pub total: usize,
