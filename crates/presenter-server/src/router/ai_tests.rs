@@ -221,6 +221,107 @@ async fn get_settings_internal_never_substitutes_the_live_proxy_url() {
     );
 }
 
+// #683: #679 fixed the SUBSTITUTE-then-persist bug going forward (see the
+// comment above), but never migrated rows a PRE-#679 build had already
+// poisoned — every DB that ever saved AI settings before that fix stored
+// the SUBSTITUTED live-proxy address (`http://127.0.0.1:{port}/v1`), not
+// the literal default placeholder. `get_settings_internal`'s literal-only
+// equality check misclassifies that address as non-bundled FOREVER,
+// because `127.0.0.1:18787` never equals `localhost:8787` as a string —
+// even though it is, functionally, still the exact address the bundled
+// proxy listens on. Verified live on prod: `apiUrl` stored as
+// `http://127.0.0.1:18787/v1`, `/ai/status` reporting
+// `requiresClaudeAuth: false` on a box running the bundled proxy.
+//
+// `18787` is hardcoded here rather than read from a live `ProxyManager`
+// getter (added by the fix, not present yet when this test was written) —
+// safe because `AppState::in_memory()`'s `ProxyManager` is always
+// constructed via `ProxyConfig::default()`, and nothing in this codebase
+// ever changes its port (no setter exists), so every future run of this
+// test sees the same port.
+
+#[tokio::test]
+async fn get_settings_internal_treats_a_historically_substituted_bundled_url_as_bundled() {
+    use crate::ai::AI_SETTINGS_KEY;
+
+    let state = crate::state::AppState::in_memory().await.unwrap();
+    let poisoned = crate::ai::AiSettings {
+        api_url: "http://127.0.0.1:18787/v1".to_string(),
+        api_key: None,
+        model: "claude-opus-4-6".to_string(),
+        system_prompt_extra: None,
+    };
+    state
+        .repository()
+        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&poisoned).unwrap())
+        .await
+        .unwrap();
+
+    let (settings, is_bundled_default) = get_settings_internal(&state).await.unwrap();
+    assert_eq!(settings.api_url, "http://127.0.0.1:18787/v1");
+    assert!(
+        is_bundled_default,
+        "a stored api_url that structurally matches the bundled proxy's own \
+         address must be classified as bundled, even though it is not the \
+         literal default placeholder string"
+    );
+}
+
+// #683: the SAME regression, proven end-to-end through the REAL
+// `/ai/status` handler this time (not just the pure `get_settings_internal`
+// unit test above) — driving the full router the way the `put_ai_settings_...`
+// tests below do. `AppState::in_memory()`'s `ProxyManager` is never started
+// (no child process spawned in-test), so this ALSO pins the proxy-STOPPED
+// semantics decided in the design comment on this issue: a stored address
+// that structurally matches the bundled proxy's own CONFIGURED port must
+// still report `requiresClaudeAuth: true` — the port is static config, not
+// something that exists only while the process happens to be running.
+
+#[tokio::test]
+async fn ai_status_reports_requires_claude_auth_for_a_historically_substituted_bundled_url() {
+    use crate::ai::AI_SETTINGS_KEY;
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let poisoned = crate::ai::AiSettings {
+        api_url: "http://127.0.0.1:18787/v1".to_string(),
+        api_key: None,
+        model: "claude-opus-4-6".to_string(),
+        system_prompt_extra: None,
+    };
+    state
+        .repository()
+        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&poisoned).unwrap())
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ai/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body.get("requiresClaudeAuth").and_then(|v| v.as_bool()),
+        Some(true),
+        "a historically-substituted bundled api_url must still require \
+         Claude auth, even with the proxy process not running in this test: {body:?}"
+    );
+}
+
 // #661 item 3: `PUT /ai/settings` used to write through the bare
 // `set_app_setting` upsert with zero audit hook — the ONE settings family
 // that could never produce a `settings_audit` row, which is why the
@@ -379,6 +480,76 @@ async fn put_ai_settings_with_no_api_url_never_mutates_the_stored_default() {
         Some(crate::ai::AiSettings::default().api_url.as_str()),
         "a PUT that never mentioned apiUrl must leave the stored value at \
          the literal default, not a substituted live-proxy URL: {body:?}"
+    );
+}
+
+// #683 (optional hardening): a legitimate PUT /ai/settings save must
+// self-heal a historically-poisoned row — even one where the payload never
+// mentions `apiUrl` at all — back to the canonical literal default string,
+// so `update_settings`'s persisted value and `check_status`'s live
+// classification can never end up disagreeing about what "bundled" means.
+
+#[tokio::test]
+async fn put_ai_settings_normalizes_a_historically_substituted_bundled_url_to_the_canonical_default(
+) {
+    use crate::ai::AI_SETTINGS_KEY;
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let poisoned = crate::ai::AiSettings {
+        api_url: "http://127.0.0.1:18787/v1".to_string(),
+        api_key: None,
+        model: "claude-opus-4-6".to_string(),
+        system_prompt_extra: None,
+    };
+    state
+        .repository()
+        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&poisoned).unwrap())
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+
+    // An ORDINARY settings save that never mentions apiUrl at all.
+    let put_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"model": "claude-sonnet-4-6"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::NO_CONTENT);
+
+    let get_response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ai/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(get_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body.get("apiUrl").and_then(|v| v.as_str()),
+        Some(crate::ai::AiSettings::default().api_url.as_str()),
+        "a historically-poisoned api_url must self-heal to the canonical \
+         default string on the next ordinary settings save: {body:?}"
     );
 }
 
