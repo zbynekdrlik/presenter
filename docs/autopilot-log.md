@@ -1319,3 +1319,28 @@ cross-reference ("see defect fixes below") carries the history.
 
 **Backlog:** #662 (umbrella — next decision point: bigger model won't fit 8 GB; candidates are a
 different small model, API-hosted eval, or park), #687, #688.
+
+**v0.4.246 (PR #691, `a741e260`):** #687 — real per-call token usage in ai_eval traces: the
+OpenAI-compatible `usage` object flows client → `run_agent` (new `TokenUsage` fold on the same
+widened return tuple as the #689 metadata) → traces + `score-l1` report totals; absent provider
+usage stays `None`, never a fabricated 0; SSE JSON byte-identical. #688 — the ~880 per-case boot
+WARN lines silenced for the eval tool ONLY via ai_eval's own `EnvFilter` (`bin/ai_eval/logging.rs`);
+production logging untouched; per-source decision table on the ticket (module demotions for the
+bible parser + android-stage launcher line, a narrow `target:` for the NDI probe so state/'s
+catch-all module never swallows unrelated warnings). Review found the worker had also corrected
+the ticket's own file list by call-graph trace.
+
+**v0.4.247 (PR #692, `a1c8bcd4`):** #690 — clippy job never linted feature-gated code: it ran
+default features while the `test` job builds `--all-features`, so the whole ai_eval bin,
+mock-integrations and test-helpers were compiled+tested but never linted. Clippy now runs
+`--all-features` (matching test's feature set exactly); the one certain pre-existing finding
+(`new_without_default` on mock `RequestLog`) fixed in the same PR — explicit `Default`
+delegating to `new()` (not derivable: `VecDeque::with_capacity(1024)`). The round's own green
+clippy job doubled as the Tier-0-unverifiable-locally proof the reviewer's single 🔵 asked for.
+
+**Live-event feedback (2026-08-13):** two tablet bugs filed from the user's report — #693 (view
+jumps / loses the user's scroll position when the operator live-edits verse text mid-sermon) and
+#694 (phone with OS rotation lock still 180°-flips on lift/put-down DESPITE the deployed #638 fix
+— primary suspect: the #638 counter-rotate watcher itself misfiring from sensor flaps on a locked
+viewport). Workers dispatched same turn; #662 measurement round (option-1 evidence slice, second
+small model vs the Qwen3-8B baseline) also running.

@@ -286,3 +286,66 @@ saves via `on:click` MUST stay `type="button"` (never `type="submit"`), and give
 any field newly implicitly-submits the form, which with no `action` GET-reloads the
 current URL and blows away all WASM app state. See `crates/presenter-ui/src/pages/ai.rs`'s
 `ai-settings-form` and `tests/e2e/wasm-ai-chat.spec.ts`'s Enter-key regression test.
+
+## An unkeyed `collect_view()` in a reactive closure resets SCROLL on every live update (#693)
+
+Rendering a list as `{move || items.get().into_iter().map(...).collect_view()}` (no keyed
+`<For>`) means EVERY `items.set(...)` re-runs the closure and tears down + rebuilds the whole
+subtree. If that subtree lives inside a scroll container (e.g. tablet `.tablet-main`,
+`overflow-y:auto`), the teardown collapses `scrollHeight`, the browser clamps `scrollTop` to 0,
+and the user's scroll position (and the on-screen position of any selected/active row) jumps —
+on EVERY update. The tablet got a `BibleSlidesChanged` WS event on every operator content edit
+and did exactly this. Symptom: "the view jumps up/down whenever the operator edits a verse."
+
+Fix (see `pages/tablet.rs` `SlideList`/`TabletSlideCard`): render with a keyed `<For>` keyed by
+a UNIQUE, STABLE id. A Bible slide's `id` is preserved across a content edit
+(`state/slides/edit_ops.rs::update_slide_content` re-`with_id`s it; the `update_bible_slide`
+handler only changes text/refs), so matching keys reconcile IN PLACE — DOM nodes, scroll offset
+and active-row position all survive. Then, per the keyed-`<For>` gotcha above (#496), read every
+mutable value (text, reference, active state, and positional striping via a
+`Memo<Vec<...>>`) REACTIVELY BY ID inside `children` — a keyed `<For>` does NOT re-run `children`
+for an unchanged key, so a captured-once value would leave the edit invisible on screen. Wrap the
+striping/positional bits in their own `Memo` (derive `PartialEq`) so a pure text edit (same ids,
+same striping) produces an equal `Vec` and the `Memo` never notifies — the `<For>` then stays
+completely untouched. Gate empty/no-selection states with nested `<Show>` (not an outer
+`{move || ...}` that would rebuild the `<For>` when its `when` re-evaluates). E2E proof
+(`tests/e2e/tablet-live-edit-scroll.spec.ts`): scroll a short viewport, PATCH-edit a slide BELOW
+the marked one (isolates scroll-preservation from layout reflow), assert `scrollTop` and the
+marked card's `boundingBox().y` are unchanged (±2px). Assert `scrollBefore > 50` so the test
+can't false-pass on non-scrolling content.
+
+## `screen.orientation` tracks PHYSICAL orientation, not the DISPLAYED viewport — never counter-rotate from an instantaneous read (#694)
+
+`tablet_orientation.rs`'s `install_orientation_flip_watcher` counter-rotates the tablet UI
+180° when the device is landscape-secondary (`body[data-tablet-flip]` → CSS `rotate(180deg)`).
+Two spec facts (W3C Screen Orientation, verified — never guess this API) make an
+instantaneous read of `screen.orientation` a BUG source on a rotation-locked phone:
+
+1. **`screen.orientation.type`/`.angle` reflect the device's PHYSICAL orientation and
+   `change` fires on physical tilt** — an OS rotation lock keeps only the DISPLAYED
+   viewport fixed. So lifting / laying a locked phone flat makes the sensor transiently
+   report `landscape-secondary` while the viewport never rotates. A watcher that sets the
+   flip from that read MANUFACTURES the very 180° flip it was built to suppress (the #694
+   live-event report: "keď ho dvihnem a položím sa vyhodnotí že som dal telefón hore
+   nohami"). The distinguisher between this false trigger and a genuine turn is
+   **STABILITY**: a real turn settles at secondary and stays; a lift/put-down flap reverts.
+   Fix pattern: apply the flip only after the reading stays stable past a short settle
+   window (debounce SET ~300ms); CLEAR immediately (a stuck upside-down UI is worse).
+2. **The angle→type mapping is NATURAL-ORIENTATION-DEPENDENT.** Natural-portrait phone:
+   `0°=portrait-primary, 90°=landscape-primary, 180°=portrait-secondary, 270°=landscape-secondary`.
+   Natural-landscape tablet: `0°=landscape-primary, 180°=landscape-secondary`. So a
+   `.angle === 180` check means portrait-secondary on a PHONE, landscape-secondary on a
+   TABLET — a `.angle` fallback mis-fires across device classes. Trust ONLY
+   `screen.orientation.type` (broadly supported: Chrome/Firefox/Edge, Safari 16.4+); an
+   engine without `.type` simply never flips, which is the safe default.
+
+Also: the 90° portrait fallback (`@media (orientation: portrait)` in `tablet.css`) is PURE
+CSS and re-evaluates itself — the JS watcher needs NO `resize` listener for it, and a
+`resize`-triggered flip re-read is a false-trigger source (mobile browser-chrome show/hide
+on lift fires `resize`; a 180° landscape↔landscape turn never resizes).
+
+**E2E note:** the static `mockScreenOrientationType` fake can't exercise SEQUENCES. Use the
+mutable `installDynamicOrientation` + `window.__setOrientation(type, angle, fireChange)`
+helper (`tablet-orientation-lock.spec.ts`) to drive a transient flap (RED) vs a settled
+turn (AC3 guard). `test.use({ hasTouch: true })` is required for the `(pointer: coarse)`
+gate to match (see the `(pointer: coarse)` note above).

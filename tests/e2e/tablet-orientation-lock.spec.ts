@@ -7,6 +7,22 @@ import {
   type ServerHandle,
 } from "./support";
 
+declare global {
+  interface Window {
+    // Test-only hook installed by `installDynamicOrientation` (#694): mutate the
+    // faked `screen.orientation` at runtime and optionally fire a `change`
+    // event, to exercise the flip watcher's response to orientation SEQUENCES
+    // (a transient sensor flap on a rotation-locked phone vs a genuine settled
+    // turn) — impossible to simulate with the static `mockScreenOrientationType`
+    // fake below.
+    __setOrientation?: (
+      type: string | null,
+      angle: number | null,
+      fireChange: boolean,
+    ) => void;
+  }
+}
+
 /**
  * Override `window.screen.orientation` to report a fixed `type` (and a
  * matching `angle`) BEFORE any page script runs — including this crate's own
@@ -31,6 +47,63 @@ async function mockScreenOrientationType(
       get: () => fake,
     });
   }, orientationType);
+}
+
+/**
+ * Install a MUTABLE fake `window.screen.orientation` (a real EventTarget-like
+ * object) and expose `window.__setOrientation(type, angle, fireChange)` so a
+ * test can drive orientation SEQUENCES at runtime — a genuine settled turn, or
+ * the transient sensor flap a rotation-locked phone emits when lifted / laid
+ * flat. The initial `type` may be `null` to emulate an engine that exposes only
+ * `.angle` (no `.type`). Installed BEFORE any page script runs, so the crate's
+ * own `install_orientation_flip_watcher()` binds to this fake at mount (#694).
+ */
+async function installDynamicOrientation(
+  page: Page,
+  initialType: string | null,
+  initialAngle: number | null,
+): Promise<void> {
+  await page.addInitScript((init) => {
+    let currentType = init.type;
+    let currentAngle = init.angle;
+    const changeListeners: Array<(ev: Event) => void> = [];
+    const fake = {
+      get type() {
+        return currentType;
+      },
+      get angle() {
+        return currentAngle;
+      },
+      addEventListener(name: string, cb: (ev: Event) => void) {
+        if (name === "change" && typeof cb === "function") {
+          changeListeners.push(cb);
+        }
+      },
+      removeEventListener(name: string, cb: (ev: Event) => void) {
+        if (name !== "change") {
+          return;
+        }
+        const idx = changeListeners.indexOf(cb);
+        if (idx >= 0) {
+          changeListeners.splice(idx, 1);
+        }
+      },
+    };
+    window.__setOrientation = (type, angle, fireChange) => {
+      currentType = type;
+      currentAngle = angle;
+      if (fireChange) {
+        const ev = new Event("change");
+        for (const cb of changeListeners.slice()) {
+          cb.call(fake, ev);
+        }
+      }
+    };
+    Object.defineProperty(window.screen, "orientation", {
+      configurable: true,
+      get: () => fake,
+    });
+  }, { type: initialType, angle: initialAngle });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -255,4 +328,141 @@ test("desktop (fine pointer) reporting landscape-secondary is NOT rotated (#638)
     (el) => window.getComputedStyle(el).transform,
   );
   expect(transform).toBe("none");
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// #694 — a rotation-LOCKED phone still flipped 180° when lifted / laid flat,
+// because #638's watcher counter-rotated from a single INSTANTANEOUS read of
+// `screen.orientation`. Per the W3C Screen Orientation spec, `screen.orientation`
+// tracks the device's PHYSICAL orientation and fires `change` on physical tilt,
+// while an OS rotation lock keeps only the DISPLAYED viewport fixed — so lifting
+// / laying the phone flat makes the sensor transiently report landscape-secondary
+// (or, on engines exposing only `.angle`, angle 180 = portrait-secondary on a
+// natural-portrait phone, which the old `.angle === 180` fallback mis-mapped to a
+// 180° flip) with the viewport never actually rotating. The distinguisher between
+// this false trigger and a genuine turn (#638, AC3) is STABILITY: a real turn
+// settles at secondary and stays; a lift/put-down flap reverts. The fix trusts
+// only a debounced, settled `.type === "landscape-secondary"` and drops the
+// resize trigger + the `.angle` fallback.
+// ─────────────────────────────────────────────────────────────────────────
+test.describe("touch device (pointer: coarse) — rotation-locked phone must not false-flip (#694)", () => {
+  test.use({ hasTouch: true });
+
+  // RED (#694): a transient landscape-secondary flap that reverts before the
+  // watcher's stability window — the exact lift/put-down signal on a
+  // rotation-locked phone (viewport never resizes; OS rotation is locked).
+  test("a transient screen.orientation flap to landscape-secondary that reverts does NOT flip", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await installDynamicOrientation(page, "landscape-primary", 90);
+    await page.setViewportSize({ width: 900, height: 500 });
+    await page.goto(new URL("/ui/tablet", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+
+    const body = page.locator("body.tablet");
+    await expect(body).toBeAttached();
+
+    // Lift/put-down: a `change` fires reporting landscape-secondary, then the
+    // device settles right back to landscape-primary before the watcher's
+    // stability window elapses. The viewport dimensions never change. Both
+    // steps run inside ONE page.evaluate so the flap is ATOMIC — two separate
+    // evaluate round-trips could straddle the 300ms settle window on a loaded
+    // runner and false-fail (review finding, #694).
+    await page.evaluate(() => {
+      window.__setOrientation!("landscape-secondary", 270, true);
+      window.__setOrientation!("landscape-primary", 90, false);
+    });
+
+    // Wait past the stability window and assert the flip was never applied. A
+    // fixed wait is correct here: we are proving a DEBOUNCED action does NOT
+    // occur within its own settle boundary.
+    await page.waitForTimeout(700);
+    await expect(body).not.toHaveAttribute("data-tablet-flip", "true");
+    expect(
+      await body.evaluate((el) => window.getComputedStyle(el).transform),
+    ).toBe("none");
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  // RED (#694): an engine exposing only `screen.orientation.angle` (no `.type`)
+  // reporting angle 180 at a landscape viewport. On a natural-portrait phone
+  // angle 180 is portrait-secondary, NOT landscape-secondary (= 270°), so the
+  // old `.angle === 180` fallback mis-mapped it to a 180° counter-rotate.
+  test("an engine exposing only .angle (angle 180) at a landscape viewport does NOT flip", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await installDynamicOrientation(page, null, 180);
+    await page.setViewportSize({ width: 900, height: 500 });
+    await page.goto(new URL("/ui/tablet", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+
+    const body = page.locator("body.tablet");
+    await expect(body).toBeAttached();
+
+    await page.waitForTimeout(700); // past the stability window
+    await expect(body).not.toHaveAttribute("data-tablet-flip", "true");
+    expect(
+      await body.evaluate((el) => window.getComputedStyle(el).transform),
+    ).toBe("none");
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  // Regression guard (#638, AC3): a genuine, SETTLED physical 180° turn of an
+  // UNLOCKED tablet (screen.orientation fires `change` and stays at
+  // landscape-secondary) must still counter-rotate — the fix must not regress
+  // #638 in the opposite direction.
+  test("a genuine settled 180° turn to landscape-secondary still counter-rotates", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await installDynamicOrientation(page, "landscape-primary", 90);
+    await page.setViewportSize({ width: 900, height: 500 });
+    await page.goto(new URL("/ui/tablet", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+
+    const body = page.locator("body.tablet");
+    await expect(body).not.toHaveAttribute("data-tablet-flip", "true");
+
+    // Genuine turn: settles at landscape-secondary and STAYS there.
+    await page.evaluate(() =>
+      window.__setOrientation!("landscape-secondary", 270, true),
+    );
+
+    // The watcher applies the counter-rotate once the reading is stable
+    // (toHaveAttribute polls, covering the debounce window).
+    await expect(body).toHaveAttribute("data-tablet-flip", "true");
+    expect(
+      await body.evaluate((el) => window.getComputedStyle(el).transform),
+    ).not.toBe("none");
+
+    expect(consoleMessages).toEqual([]);
+  });
 });
