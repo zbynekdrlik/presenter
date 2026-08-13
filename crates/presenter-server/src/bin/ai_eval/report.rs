@@ -11,6 +11,7 @@ use crate::corpus::Case;
 use crate::scorer::CaseScore;
 use crate::trace::{now_rfc3339, Trace};
 use anyhow::Context;
+use presenter_server::ai::agent::TokenUsage;
 use serde::Serialize;
 use std::path::Path;
 
@@ -79,6 +80,13 @@ pub struct Report {
     /// candidate failure MODE (unproductive retry, usually ending in a
     /// context-ceiling crash), surfaced distinctly from a generic error.
     pub stalled_retry_loop_total: usize,
+    /// Sum of every case's `Trace::usage` (#687), via `TokenUsage::accumulate`
+    /// — `None` when NOT ONE case's trace carried a `usage` object at all
+    /// (the candidate endpoint never returned one for the whole run). A
+    /// case whose usage reports some fields and omits others still
+    /// contributes the fields it did report, same rule as `TokenUsage`
+    /// itself.
+    pub total_usage: Option<TokenUsage>,
     pub slices: Vec<SliceSummary>,
     pub cases: Vec<CaseResult>,
 }
@@ -101,6 +109,11 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
         .iter()
         .filter(|(_, _, s)| s.stalled_retry_loop)
         .count();
+    // #687: NOT YET aggregated on this commit (RED — see the sibling GREEN
+    // commit that wires the actual fold below); the new
+    // `total_usage_sums_across_every_case_and_ignores_a_case_with_no_usage`
+    // test fails against this stub until the GREEN commit lands.
+    let total_usage: Option<TokenUsage> = None;
 
     let mut slice_names: Vec<String> = results.iter().map(|(c, _, _)| c.slice.clone()).collect();
     slice_names.sort();
@@ -143,6 +156,7 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
         total_duration_ms,
         finish_reason_length,
         stalled_retry_loop_total,
+        total_usage,
         slices,
         cases,
     }
@@ -192,6 +206,16 @@ pub fn print_summary(report: &Report) {
             report.stalled_retry_loop_total
         );
     }
+    if let Some(usage) = &report.total_usage {
+        let fmt = |v: Option<u32>| v.map_or_else(|| "?".to_string(), |n| n.to_string());
+        println!(
+            "  token usage: {} prompt / {} completion / {} total (summed across {} case(s))",
+            fmt(usage.prompt_tokens),
+            fmt(usage.completion_tokens),
+            fmt(usage.total_tokens),
+            report.total
+        );
+    }
     for s in &report.slices {
         println!("  {:<16} {}/{}", s.slice, s.passed, s.total);
     }
@@ -212,7 +236,7 @@ pub fn print_summary(report: &Report) {
 mod tests {
     use super::*;
     use crate::corpus::Expected;
-    use presenter_server::ai::agent::TurnMetadata;
+    use presenter_server::ai::agent::{TokenUsage, TurnMetadata};
     use std::path::PathBuf;
 
     fn case(id: &str, slice: &str) -> Case {
@@ -241,6 +265,31 @@ mod tests {
             duration_ms,
             usage: None,
             turns,
+            stalled_retry_loop: None,
+            captured_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    /// Same shape as `trace_with_turns`, but parametrized on `usage`
+    /// instead of `turns`/`duration_ms` — kept as its own helper rather
+    /// than widening `trace_with_turns`'s signature, since every existing
+    /// caller of that helper would need updating for a field it doesn't
+    /// care about.
+    fn trace_with_usage(case_id: &str, usage: Option<TokenUsage>) -> Trace {
+        Trace {
+            case_id: case_id.to_string(),
+            slice: "worship-crud".to_string(),
+            candidate_url: "http://test.invalid".to_string(),
+            candidate_model: "test-model".to_string(),
+            char_limit: 0,
+            prior_turn_count: 0,
+            conversation: Vec::new(),
+            final_response: None,
+            error: None,
+            seed_failed: false,
+            duration_ms: 0,
+            usage,
+            turns: Vec::new(),
             stalled_retry_loop: None,
             captured_at: "2026-01-01T00:00:00Z".to_string(),
         }
@@ -337,5 +386,67 @@ mod tests {
         assert_eq!(report.stalled_retry_loop_total, 1);
         assert!(report.cases[0].stalled_retry_loop);
         assert!(!report.cases[1].stalled_retry_loop);
+    }
+
+    /// #687: `totalUsage` in the report summary SUMS `Trace::usage` across
+    /// every case — a case with no usage at all (case "b") must not RESET
+    /// the running total, only fail to contribute to it, matching
+    /// `TokenUsage::accumulate`'s own per-field folding rules.
+    #[test]
+    fn total_usage_sums_across_every_case_and_ignores_a_case_with_no_usage() {
+        let c1 = case("a", "worship-crud");
+        let t1 = trace_with_usage(
+            "a",
+            Some(TokenUsage {
+                prompt_tokens: Some(100),
+                completion_tokens: Some(20),
+                total_tokens: Some(120),
+            }),
+        );
+        let s1 = score("a", true);
+
+        let c2 = case("b", "worship-crud");
+        let t2 = trace_with_usage("b", None);
+        let s2 = score("b", true);
+
+        let c3 = case("c", "worship-crud");
+        let t3 = trace_with_usage(
+            "c",
+            Some(TokenUsage {
+                prompt_tokens: Some(50),
+                completion_tokens: Some(30),
+                total_tokens: Some(80),
+            }),
+        );
+        let s3 = score("c", true);
+
+        let results = vec![(&c1, &t1, s1), (&c2, &t2, s2), (&c3, &t3, s3)];
+        let report = build_report(&results);
+
+        assert_eq!(
+            report.total_usage,
+            Some(TokenUsage {
+                prompt_tokens: Some(150),
+                completion_tokens: Some(50),
+                total_tokens: Some(200),
+            }),
+            "case b's missing usage must not reset the running total, got {:?}",
+            report.total_usage
+        );
+    }
+
+    #[test]
+    fn total_usage_is_none_when_no_case_reported_any_usage() {
+        let c1 = case("a", "worship-crud");
+        let t1 = trace_with_usage("a", None);
+        let s1 = score("a", true);
+
+        let results = vec![(&c1, &t1, s1)];
+        let report = build_report(&results);
+        assert!(
+            report.total_usage.is_none(),
+            "no case reported usage — total must be None, not a fabricated 0: {:?}",
+            report.total_usage
+        );
     }
 }

@@ -101,6 +101,33 @@ pub struct ChatCompletionRequest {
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionResponse {
     pub choices: Vec<Choice>,
+    /// Per-call token usage, when the provider included it (#687). Every
+    /// OpenAI-compatible candidate this project has actually run against
+    /// (llama.cpp, CLIProxyAPI) returns this object on every response, but
+    /// the spec permits a provider to omit it entirely — `agent::run_agent`
+    /// treats a missing object as "this call didn't say", never as "this
+    /// call used zero tokens".
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+/// Raw per-call token counts as the provider reported them (#687). Every
+/// field is independently `Option<u32>` — a provider may report only some
+/// of the three counts even when it does include the `usage` object, and a
+/// missing count must never be read as `0` (that would misreport "this
+/// call used no tokens" as opposed to "the provider didn't say").
+/// `agent::run_agent` sums these across every call it makes in one turn
+/// into `agent::TokenUsage` — see that type's own doc comment for why the
+/// aggregate lives there rather than here (this struct mirrors the wire
+/// format exactly and is never itself serialized).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default)]
+    pub completion_tokens: Option<u32>,
+    #[serde(default)]
+    pub total_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +410,64 @@ mod tests {
         assert_eq!(parse_max_tokens(Some("2048")), 2048);
         assert_eq!(parse_max_tokens(Some("0")), DEFAULT_MAX_TOKENS);
         assert_eq!(parse_max_tokens(Some("not-a-number")), DEFAULT_MAX_TOKENS);
+    }
+
+    // --- #687: the response's `usage` object is captured when the provider
+    // returns one, and stays `None` (never a fabricated 0) when it doesn't ---
+
+    #[tokio::test]
+    async fn call_chat_completions_captures_usage_when_the_provider_returns_it() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "test-model");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let response = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("must succeed");
+
+        let usage = response
+            .usage
+            .expect("usage must be captured when the provider returns it");
+        assert_eq!(usage.prompt_tokens, Some(12));
+        assert_eq!(usage.completion_tokens, Some(3));
+        assert_eq!(usage.total_tokens, Some(15));
+    }
+
+    #[tokio::test]
+    async fn call_chat_completions_usage_is_none_when_the_provider_omits_it() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "test-model");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let response = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("must succeed");
+
+        assert!(
+            response.usage.is_none(),
+            "a response with no usage object at all must deserialize to None, not error"
+        );
     }
 
     // --- AC7: a provider-side failure logs a server-side WARN/ERROR line

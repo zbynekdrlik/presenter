@@ -35,6 +35,62 @@ pub struct TurnMetadata {
     pub reasoning_content_len: Option<usize>,
 }
 
+/// Aggregate candidate token usage across every LLM call this `run_agent`
+/// turn made (#687) — the natural "how much did this turn cost" figure.
+/// `run_agent` can call `call_chat_completions` more than once per turn
+/// (one call per loop iteration whenever the model makes tool calls before
+/// its final text response), so each of the three OpenAI-compatible
+/// `usage` counts is SUMMED across every call. `None` only when NOT ONE
+/// call in the whole turn returned a `usage` object at all; a call that
+/// reports some counts and omits others just doesn't contribute to the
+/// omitted field's sum for that call (never a fabricated `0` standing in
+/// for "the provider didn't say" — same discipline as `client::Usage`,
+/// the per-call type this is folded from). Same three-field shape as
+/// `client::Usage` deliberately, but `Serialize`/`Deserialize` (camelCase)
+/// so `ai_eval` can carry this directly as `Trace::usage` — same "never a
+/// parallel schema" discipline `TurnMetadata` already follows there
+/// (`bin/ai_eval/trace.rs` imports this type directly).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsage {
+    #[serde(default)]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default)]
+    pub completion_tokens: Option<u32>,
+    #[serde(default)]
+    pub total_tokens: Option<u32>,
+}
+
+impl TokenUsage {
+    /// Fold `other`'s counts into `self`, field by field — a field `other`
+    /// doesn't report is simply left untouched in `self` (see the struct's
+    /// own doc comment for why a missing count is never treated as `0`).
+    /// Used both to accumulate one turn's per-call usage in `run_agent`,
+    /// and by `ai_eval::report::build_report` to sum usage across every
+    /// case in a corpus run.
+    pub fn accumulate(&mut self, other: &TokenUsage) {
+        if let Some(p) = other.prompt_tokens {
+            self.prompt_tokens = Some(self.prompt_tokens.unwrap_or(0) + p);
+        }
+        if let Some(c) = other.completion_tokens {
+            self.completion_tokens = Some(self.completion_tokens.unwrap_or(0) + c);
+        }
+        if let Some(t) = other.total_tokens {
+            self.total_tokens = Some(self.total_tokens.unwrap_or(0) + t);
+        }
+    }
+}
+
+impl From<&super::client::Usage> for TokenUsage {
+    fn from(u: &super::client::Usage) -> Self {
+        TokenUsage {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens,
+        }
+    }
+}
+
 /// Affirmative replies recognised by the cross-turn gate. Used when the
 /// user types a short confirmation after the AI proposed a delete in the
 /// preceding text response.
@@ -581,21 +637,34 @@ fn push_assistant_tool_call_message(
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
 ///
-/// Returns `(final_response_text, actions, turn_metadata)` — `turn_metadata` has one
-/// [`TurnMetadata`] entry per LLM call this turn made (#662 defect 6). Existing callers
-/// that don't need it simply discard the third element.
+/// Returns `(final_response_text, actions, turn_metadata, usage)` — `turn_metadata` has
+/// one [`TurnMetadata`] entry per LLM call this turn made (#662 defect 6), and `usage`
+/// is the SUMMED [`TokenUsage`] across every one of those calls (#687) — `None` when the
+/// candidate never reported usage on any of them. Existing callers that don't need the
+/// 3rd/4th element simply discard them.
 pub async fn run_agent(
     user_message: &str,
     conversation: &mut Vec<ChatMessage>,
     state: &AppState,
     settings: &AiSettings,
     progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
-) -> anyhow::Result<(String, Vec<ToolAction>, Vec<TurnMetadata>)> {
+) -> anyhow::Result<(
+    String,
+    Vec<ToolAction>,
+    Vec<TurnMetadata>,
+    Option<TokenUsage>,
+)> {
     let (system_prompt, char_limit) =
         build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
     let tools = super::tools::tool_definitions();
     let mut actions = Vec::new();
     let mut turn_metadata = Vec::new();
+    // #687: NOT YET accumulated on this commit (RED — see the sibling GREEN
+    // commit that wires the actual per-iteration fold below); every call
+    // site is already threaded through so this compiles and always reports
+    // "no usage", which is what the new tests in `agent_usage_tests.rs`
+    // fail against until the GREEN commit lands.
+    let usage_total: Option<TokenUsage> = None;
 
     // Add user message to conversation
     conversation.push(ChatMessage {
@@ -675,7 +744,7 @@ pub async fn run_agent(
         // pairs. A "turn" is user msg + subsequent assistant/tool messages.
         trim_conversation(conversation, 10);
 
-        return Ok((response_text, actions, turn_metadata));
+        return Ok((response_text, actions, turn_metadata, usage_total));
     }
 
     // MAX_ITERATIONS exhausted without a text response. This path used to
@@ -690,6 +759,7 @@ pub async fn run_agent(
             .to_string(),
         actions,
         turn_metadata,
+        usage_total,
     ))
 }
 

@@ -15,6 +15,8 @@ pub mod tools;
 
 #[cfg(test)]
 mod agent_budget_tests;
+#[cfg(test)]
+mod agent_usage_tests;
 
 use serde::{Deserialize, Serialize};
 
