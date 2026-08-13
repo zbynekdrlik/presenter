@@ -156,7 +156,11 @@ pub(super) async fn chat(
 
         // Agent is done — get the final result
         match agent_handle.await {
-            Ok(Ok((response, actions))) => {
+            // `_turn_metadata` (#662 defect 6): per-LLM-call diagnostic
+            // metadata (finish_reason, reasoning_content_len) — not needed
+            // by the live SSE chat endpoint today; `ai_eval`'s driver is
+            // the current consumer (crates/presenter-server/src/bin/ai_eval/drive.rs).
+            Ok(Ok((response, actions, _turn_metadata))) => {
                 let done = serde_json::json!({
                     "type": "response",
                     "response": response,

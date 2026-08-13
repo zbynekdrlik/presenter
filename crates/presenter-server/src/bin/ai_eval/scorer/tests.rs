@@ -34,6 +34,11 @@ fn trace(case_id: &str, slice: &str, char_limit: u32, conversation: Vec<ChatMess
         conversation,
         final_response: Some("Hotovo.".to_string()),
         error: None,
+        seed_failed: false,
+        duration_ms: 0,
+        usage: None,
+        turns: Vec::new(),
+        stalled_retry_loop: None,
         captured_at: "2026-01-01T00:00:00Z".to_string(),
     }
 }
@@ -493,8 +498,81 @@ fn trace_level_error_fails_regardless_of_conversation_content() {
     t.error = Some("connection refused".to_string());
     let score = score_trace(&c, &t);
     assert!(!score.passed);
+    assert!(
+        !score.seed_failed,
+        "a genuine run_agent error is NOT a seed failure"
+    );
     assert!(score
         .failures
         .iter()
         .any(|f| f.contains("run_agent returned an error")));
+}
+
+// --- seed failure (#662 defect 1) ---
+
+#[test]
+fn seed_failed_trace_is_classified_separately_from_a_candidate_error() {
+    let c = case("ba-x", "bible-authoring", Expected::default());
+    let mut t = trace("ba-x", "bible-authoring", 320, Vec::new());
+    t.error = Some("seeding failed: environment variable PRESENTER_BIBLE_KJV must be set".into());
+    t.seed_failed = true;
+
+    let score = score_trace(&c, &t);
+    assert!(!score.passed);
+    assert!(
+        score.seed_failed,
+        "score_trace must propagate Trace::seed_failed onto CaseScore"
+    );
+    assert!(
+        score
+            .failures
+            .iter()
+            .any(|f| f.contains("NOT a model result")),
+        "the failure message must explicitly disclaim being a model result: {:?}",
+        score.failures
+    );
+}
+
+// --- stalled retry loop (#662 defect 7) ---
+
+#[test]
+fn stalled_retry_loop_trace_is_classified_separately_from_a_generic_candidate_error() {
+    let c = case("adv-10", "adversarial", Expected::default());
+    let mut t = trace("adv-10", "adversarial", 320, Vec::new());
+    // A stalled loop like adv-10's real one ends in a generic run_agent
+    // error too (the eventual context-ceiling crash) — the stalled-loop
+    // classification must win over the generic one.
+    t.error = Some("AI API error: Failed to parse tool call arguments as JSON".into());
+    t.stalled_retry_loop = Some(
+        "stalled retry loop: tool 'create_bible_presentation' failed identically \
+         (error 'invalid_verse_item') 8 times in a row"
+            .into(),
+    );
+
+    let score = score_trace(&c, &t);
+    assert!(!score.passed);
+    assert!(
+        score.stalled_retry_loop,
+        "score_trace must propagate Trace::stalled_retry_loop onto CaseScore"
+    );
+    assert!(
+        !score.seed_failed,
+        "a stalled retry loop is a candidate result, not a seed failure"
+    );
+    assert!(
+        score
+            .failures
+            .iter()
+            .any(|f| f.contains("stalled") && f.contains("invalid_verse_item")),
+        "the failure message must name the stall, not just relay the generic error: {:?}",
+        score.failures
+    );
+    assert!(
+        !score
+            .failures
+            .iter()
+            .any(|f| f.contains("run_agent returned an error")),
+        "the stalled-loop classification must WIN over the generic error branch: {:?}",
+        score.failures
+    );
 }
