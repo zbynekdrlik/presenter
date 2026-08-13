@@ -8,6 +8,9 @@ use crate::components::version_label::VersionLabel;
 use crate::state::tablet::TabletContext;
 use crate::ws::{self, WsState};
 
+mod slide_list;
+use slide_list::SlideList;
+
 /// Tablet page — touch-optimized Bible viewer with slide triggering.
 #[component]
 pub fn TabletPage() -> impl IntoView {
@@ -454,123 +457,6 @@ fn TabletMain() -> impl IntoView {
 }
 
 #[component]
-fn SlideList() -> impl IntoView {
-    let ctx = use_ctx!(TabletContext);
-
-    view! {
-        {move || {
-            let slide_list = ctx.slides.get();
-
-            if ctx.current_presentation_id.get().is_none() {
-                return view! {
-                    <p class="tablet-slides__empty">"Select a presentation to view slides."</p>
-                }.into_any();
-            }
-            if slide_list.is_empty() {
-                return view! {
-                    <p class="tablet-slides__empty">"No slides in this presentation."</p>
-                }.into_any();
-            }
-
-            let mut last_reference: Option<String> = None;
-            let mut group_index: usize = 0;
-
-            slide_list.into_iter().map(|slide| {
-                let effective_ref = if slide.bible_main_reference.is_empty() {
-                    None
-                } else {
-                    Some(slide.bible_main_reference.clone())
-                };
-                let is_new_group = effective_ref.as_deref() != last_reference.as_deref();
-                if is_new_group && last_reference.is_some() {
-                    group_index += 1;
-                }
-                last_reference = effective_ref;
-
-                let is_light = group_index % 2 == 0;
-                let is_group_start = is_new_group && group_index > 0;
-
-                view! { <TabletSlideCard slide=slide is_light=is_light is_group_start=is_group_start /> }
-            }).collect_view().into_any()
-        }}
-    }
-}
-
-#[component]
-fn TabletSlideCard(slide: BibleSlideDto, is_light: bool, is_group_start: bool) -> impl IntoView {
-    let ctx = use_ctx!(TabletContext);
-    let slide_id = slide.id.clone();
-    let main_ref = slide.bible_main_reference.clone();
-    let main_text = slide.bible_main.clone();
-    let translation_text = slide.bible_translation.clone();
-    let is_loading = RwSignal::new(false);
-
-    let is_active = {
-        let slide_for_active = slide.clone();
-        let slide_id_for_active = slide_id.clone();
-        let active_broadcast = ctx.active_broadcast;
-        let active_slide_id = ctx.active_slide_id;
-        move || {
-            is_slide_active(&slide_for_active, &active_broadcast.get())
-                || active_slide_id.get().as_deref() == Some(slide_id_for_active.as_str())
-        }
-    };
-
-    let on_click = {
-        let slide = slide.clone();
-        let ctx = ctx.clone();
-        move |_| {
-            let slide = slide.clone();
-            let ctx = ctx.clone();
-            let loading = is_loading;
-            loading.set(true);
-            leptos::task::spawn_local(async move {
-                trigger_slide(&ctx, &slide).await;
-                loading.set(false);
-            });
-        }
-    };
-
-    view! {
-        <article
-            class="tablet-slide"
-            class:tablet-slide--light=is_light
-            class:tablet-slide--dark=!is_light
-            class:tablet-slide--group-start=is_group_start
-            class:is-active=is_active
-            class:is-loading=move || is_loading.get()
-            data-role="tablet-slide"
-            data-slide-id=slide_id
-            on:click=on_click
-        >
-            {if !main_ref.is_empty() {
-                Some(view! {
-                    <header class="tablet-slide__ref">{main_ref}</header>
-                })
-            } else {
-                None
-            }}
-            <section class="tablet-slide__body">
-                {if !main_text.is_empty() {
-                    Some(view! {
-                        <p class="tablet-slide__main" inner_html=html_escape_multiline(&main_text) />
-                    })
-                } else {
-                    None
-                }}
-                {if !translation_text.is_empty() {
-                    Some(view! {
-                        <p class="tablet-slide__translation" inner_html=html_escape_multiline(&translation_text) />
-                    })
-                } else {
-                    None
-                }}
-            </section>
-        </article>
-    }
-}
-
-#[component]
 fn TabletToast() -> impl IntoView {
     let ctx = use_ctx!(TabletContext);
 
@@ -590,7 +476,7 @@ fn TabletToast() -> impl IntoView {
 // Helper functions
 // ---------------------------------------------------------------------------
 
-fn html_escape_multiline(text: &str) -> String {
+pub(super) fn html_escape_multiline(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -608,7 +494,7 @@ fn apply_scale(percent: u32) {
     }
 }
 
-fn is_slide_active(
+pub(super) fn is_slide_active(
     slide: &BibleSlideDto,
     broadcast: &Option<presenter_core::BibleBroadcast>,
 ) -> bool {
@@ -677,7 +563,7 @@ async fn load_presentation_slides(ctx: &TabletContext, presentation_id: &str) {
     }
 }
 
-async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
+pub(super) async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
     let Some(pres_id) = ctx.current_presentation_id.get_untracked() else {
         ctx.show_toast("No presentation selected", "error");
         return;
