@@ -7,7 +7,8 @@ use crate::ai::AiAgentError;
 use crate::router::ai::{
     compute_ai_connected, compute_ai_status_error, friendly_ai_error_message,
     get_settings_internal, is_bundled_proxy_address, parse_idle_clear_minutes,
-    render_connectivity_error, should_idle_clear, DEFAULT_IDLE_CLEAR_MINUTES,
+    render_connectivity_error, should_idle_clear, should_self_heal_to_canonical,
+    DEFAULT_IDLE_CLEAR_MINUTES,
 };
 use std::time::{Duration, SystemTime};
 
@@ -412,6 +413,76 @@ fn is_bundled_proxy_address_rejects_when_no_port_is_present() {
     // non-default HTTP port, so a URL with none explicitly stated can never
     // be its address.
     assert!(!is_bundled_proxy_address("http://localhost/v1", 18787));
+}
+
+// #683 review: the doc comment on `is_bundled_proxy_address` claims a
+// trailing slash or different host/SCHEME casing can't defeat the match —
+// only host casing had a test. Pin the scheme half too.
+
+#[test]
+fn is_bundled_proxy_address_tolerates_scheme_case_differences() {
+    assert!(is_bundled_proxy_address("HTTP://127.0.0.1:18787/v1", 18787));
+}
+
+// #683 review: `Url::path()` excludes the query string and `host_str()`
+// ignores userinfo, so a matched URL carrying either still classifies as
+// bundled — pinning this explicitly, since it's also why
+// `update_settings`'s self-heal would silently DROP userinfo/query on
+// rewrite (mitigated by the BUNDLED_PROXY_PLACEHOLDER guard added in the
+// same review round, which now only rewrites when there is no
+// PRESENTER_AI_API_URL override in effect).
+
+#[test]
+fn is_bundled_proxy_address_ignores_userinfo_and_query() {
+    assert!(is_bundled_proxy_address(
+        "http://u:p@127.0.0.1:18787/v1",
+        18787
+    ));
+    assert!(is_bundled_proxy_address(
+        "http://127.0.0.1:18787/v1?x=1",
+        18787
+    ));
+}
+
+// #683 review: `should_self_heal_to_canonical`'s own truth table — proves
+// the env-override guard directly (no env mutation needed, since it's
+// parameterized on `canonical` rather than reading `AiSettings::default()`
+// itself). This is the exact bug the reviewer found: without the
+// `canonical == BUNDLED_PROXY_PLACEHOLDER` guard, a box running
+// `PRESENTER_AI_API_URL` pointed at a foreign endpoint would have
+// `update_settings` silently rewrite a matched bundled row to that foreign
+// value on the very next ordinary save.
+
+#[test]
+fn should_self_heal_to_canonical_fires_when_canonical_is_the_literal_placeholder() {
+    assert!(should_self_heal_to_canonical(
+        "http://127.0.0.1:18787/v1",
+        18787,
+        "http://localhost:8787/v1"
+    ));
+}
+
+#[test]
+fn should_self_heal_to_canonical_never_fires_under_a_presenter_ai_api_url_override() {
+    // `canonical` here is whatever AiSettings::default() resolves to under
+    // a PRESENTER_AI_API_URL override — a genuinely foreign string, never
+    // the literal placeholder. The self-heal must stay a no-op, even
+    // though the stored value still structurally matches the bundled
+    // proxy's own address.
+    assert!(!should_self_heal_to_canonical(
+        "http://127.0.0.1:18787/v1",
+        18787,
+        "http://10.0.0.5:9000/v1"
+    ));
+}
+
+#[test]
+fn should_self_heal_to_canonical_never_fires_for_a_genuinely_foreign_stored_url() {
+    assert!(!should_self_heal_to_canonical(
+        "http://192.168.1.50:11434/v1",
+        18787,
+        "http://localhost:8787/v1"
+    ));
 }
 
 // #661 item 3: `PUT /ai/settings` used to write through the bare

@@ -352,15 +352,17 @@ pub(super) async fn update_settings(
         settings.system_prompt_extra = payload.system_prompt_extra;
     }
 
-    // #683 belt-and-suspenders (`is_bundled_proxy_address`'s own doc
-    // comment covers the WHY — not required for correctness, the matcher
-    // alone already classifies a poisoned row right on every READ):
-    // normalize a poisoned api_url back to the canonical default on EVERY
-    // save, not only one that touches apiUrl, so this write path and
-    // check_status's read path can never disagree.
+    // #683 belt-and-suspenders (`should_self_heal_to_canonical`'s own doc
+    // comment covers the WHY, incl. the env-override guard a review finding
+    // required — not required for correctness, the matcher alone already
+    // classifies a poisoned row right on every READ): normalize a poisoned
+    // api_url back to the canonical default on EVERY save, not only one
+    // that touches apiUrl, so this write path and check_status's read path
+    // can never disagree.
     let proxy_port = state.ai_proxy().configured_port().await;
-    if is_bundled_proxy_address(&settings.api_url, proxy_port) {
-        settings.api_url = AiSettings::default().api_url;
+    let canonical = AiSettings::default().api_url;
+    if should_self_heal_to_canonical(&settings.api_url, proxy_port, &canonical) {
+        settings.api_url = canonical;
     }
 
     let json = serde_json::to_string(&settings).map_err(|e| anyhow::anyhow!(e))?;
@@ -677,6 +679,18 @@ pub(super) async fn proxy_complete_login(
 /// produced, never broader (#683).
 const BUNDLED_PROXY_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
 
+/// The bundled proxy's literal placeholder string — `AiSettings::default()`'s
+/// OWN fallback when `PRESENTER_AI_API_URL` is unset. Named as its own
+/// constant (rather than comparing against a freshly-computed
+/// `AiSettings::default().api_url` inline) because that computed value is
+/// NOT always this literal string: `PRESENTER_AI_API_URL` can override it to
+/// a genuinely foreign endpoint (`docs/configuration.md`), and
+/// `update_settings`'s self-heal (below) must never write THAT value in
+/// place of a matched bundled URL — doing so would silently repoint a
+/// historically-poisoned row at whatever foreign endpoint the operator
+/// happens to have configured via the env var (review finding, #683).
+const BUNDLED_PROXY_PLACEHOLDER: &str = "http://localhost:8787/v1";
+
 /// Whether `raw_api_url` structurally identifies the bundled CLIProxyAPI
 /// proxy's OWN address at `proxy_port` — i.e. `http://{127.0.0.1|localhost}
 /// :{proxy_port}/v1`, compared by URL PARTS (scheme, host, port, path)
@@ -713,6 +727,32 @@ pub(super) fn is_bundled_proxy_address(raw_api_url: &str, proxy_port: u16) -> bo
         && url
             .host_str()
             .is_some_and(|host| BUNDLED_PROXY_HOSTS.contains(&host))
+}
+
+/// Whether `update_settings` should self-heal `raw_api_url` back to
+/// `canonical` — true only when `raw_api_url` structurally matches the
+/// bundled proxy's own address AND `canonical` genuinely IS the literal
+/// placeholder (i.e. no `PRESENTER_AI_API_URL` override is in effect).
+///
+/// `AiSettings::default().api_url` is NOT always the literal placeholder —
+/// `PRESENTER_AI_API_URL` overrides it to whatever foreign endpoint an
+/// operator configured (`docs/configuration.md`). Without this guard, a
+/// box running that override would have `update_settings`'s self-heal
+/// silently REWRITE a matched (still functionally bundled) row to the
+/// override's foreign value on the very next ordinary save — a data-loss
+/// bug, not a heal (#683 review finding).
+///
+/// Extracted as a pure function, parameterized on `canonical` rather than
+/// reading `AiSettings::default()`/env itself, so the "override present"
+/// branch is unit-testable without mutating process-global env state —
+/// same rationale as `parse_idle_clear_minutes` above (a mutated env var
+/// would race against every OTHER test in this binary reading the same key).
+pub(super) fn should_self_heal_to_canonical(
+    raw_api_url: &str,
+    proxy_port: u16,
+    canonical: &str,
+) -> bool {
+    is_bundled_proxy_address(raw_api_url, proxy_port) && canonical == BUNDLED_PROXY_PLACEHOLDER
 }
 
 /// Read the RAW stored AI settings (or the default, if nothing is stored
