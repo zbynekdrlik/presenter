@@ -1253,3 +1253,32 @@ honestly `connected: false` with the re-login message — the #661 nudge restore
 
 **Backlog after these rounds:** #662 (umbrella, open by design), #680 (eval driver, workable),
 #681 (dead second-account auth file retried every 5 min — needs the user's decision).
+
+---
+
+## Round v0.4.243 SHIPPED (#680 — ai_eval driver + Layer-1 scorer), 2026-08-13
+
+**PR #685 (merge `9c77b27f`).** The #662 eval harness's driver is real: `bin/ai_eval/` behind a
+non-default `ai-eval` feature (normal build + CI untouched — proven with feature-off AND
+feature-on checks), driving the real `run_agent` and scoring traces through the PRODUCTION
+structs (execute_tool arg types, real packer/validator replay, verse exact-diff, delete-gate,
+sequencing). Scorer unit-tested per violation class, RED before GREEN. Enabler: presenter-server
+gained a thin lib.rs so the bin reuses real code paths.
+
+- **Second scratch-collision casualty:** `fb8792f5` carries a wrong subject (names #637) — the
+  shared-scratchpad clobber (airuleset#432) hit the same round twice. Content verified twice
+  (worker + independent review) before merging; the merge commit documents it. Until airuleset#432
+  lands, dispatch prompts now instruct workers to keep scratch files under paths containing their
+  OWN agent id.
+- **Post-merge Quality Checks catch:** three new Serialize structs lacked
+  `#[serde(rename_all = "camelCase")]`; fixed uniformly INCLUDING a fourth struct the detector
+  missed, detector re-run verbatim locally → 0. Fixtures needed nothing (Rust literals, not JSON).
+- **Worktree-isolation lesson:** a resumed worktree worker CANNOT commit in the main checkout
+  (harness refuses git ops outside its own worktree) — it delivered the fix as a branch off
+  origin/dev's tip and the supervisor fast-forwarded it. Valid pattern for post-merge fixups.
+- **UNVERIFIED, deliberately:** the live smoke-run of the harness (cargo run + network to a
+  candidate endpoint) — that is the first step of USING the harness, tracked by #662, not part of
+  shipping it.
+
+**Backlog:** #662 (umbrella, open by design), #681 (dead second-account auth file — question
+asked, awaiting the user's decision).
