@@ -6,7 +6,7 @@
 use crate::ai::AiAgentError;
 use crate::router::ai::{
     compute_ai_connected, compute_ai_status_error, friendly_ai_error_message,
-    parse_idle_clear_minutes, render_connectivity_error, should_idle_clear,
+    get_settings_internal, parse_idle_clear_minutes, render_connectivity_error, should_idle_clear,
     DEFAULT_IDLE_CLEAR_MINUTES,
 };
 use std::time::{Duration, SystemTime};
@@ -19,7 +19,7 @@ fn connected_is_false_when_claude_not_authenticated_even_if_connectivity_ok() {
     // `authentication_error`, so `connected` MUST be false — not the
     // misleading `true` it reported on prod SNV during the 2026-07 incident.
     assert!(
-        !compute_ai_connected(true, false, true),
+        !compute_ai_connected(true, false, true, true),
         "connected must be false when claudeAuthenticated is false, even if \
          the proxy port answers the connectivity ping"
     );
@@ -28,7 +28,7 @@ fn connected_is_false_when_claude_not_authenticated_even_if_connectivity_ok() {
 #[test]
 fn connected_is_true_only_when_all_three_signals_are_ok() {
     assert!(
-        compute_ai_connected(true, true, true),
+        compute_ai_connected(true, true, true, true),
         "connected is true only when the proxy is reachable, Claude is authenticated, AND the configured model is valid"
     );
 }
@@ -38,7 +38,7 @@ fn connected_is_false_when_connectivity_fails_even_if_auth_appears_ok() {
     // Edge case: auth reports true (e.g. credential file exists) but the
     // proxy process is down/unreachable. `connected` must still be false.
     assert!(
-        !compute_ai_connected(false, true, true),
+        !compute_ai_connected(false, true, true, true),
         "connected must be false when the proxy port is unreachable, regardless of auth state"
     );
 }
@@ -46,7 +46,7 @@ fn connected_is_false_when_connectivity_fails_even_if_auth_appears_ok() {
 #[test]
 fn connected_is_false_when_both_signals_fail() {
     assert!(
-        !compute_ai_connected(false, false, true),
+        !compute_ai_connected(false, false, true, true),
         "connected must be false when neither connectivity nor auth is present"
     );
 }
@@ -58,9 +58,23 @@ fn connected_is_false_when_both_signals_fail() {
 #[test]
 fn connected_is_false_when_the_configured_model_is_not_in_the_catalog() {
     assert!(
-        !compute_ai_connected(true, true, false),
+        !compute_ai_connected(true, true, false, true),
         "connected must be false when connectivity and auth are fine but the \
          configured model is not one the proxy actually serves"
+    );
+}
+
+// #679: a user pointing `apiUrl` at their own non-bundled OpenAI-compatible
+// endpoint (the #662 local-LLM scenario) never needs a Claude login at all —
+// `claude_authenticated` must be ignored when `requires_claude_auth` is
+// false.
+
+#[test]
+fn connected_ignores_claude_auth_when_not_required() {
+    assert!(
+        compute_ai_connected(true, false, true, false),
+        "connected must be true when connectivity and the model are both fine \
+         and Claude auth isn't required, even though claude_authenticated is false"
     );
 }
 
@@ -73,7 +87,7 @@ fn connected_is_false_when_the_configured_model_is_not_in_the_catalog() {
 #[test]
 fn status_error_is_none_when_connected() {
     assert_eq!(
-        compute_ai_status_error(true, true, true, "claude-opus-4-6", None),
+        compute_ai_status_error(true, true, true, "claude-opus-4-6", None, true),
         None
     );
 }
@@ -88,7 +102,8 @@ fn status_error_reports_unauthenticated_regardless_of_connectivity_error() {
             false,
             true,
             "claude-opus-4-6",
-            Some("AI API returned status 500")
+            Some("AI API returned status 500"),
+            true
         ),
         Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
     );
@@ -104,6 +119,7 @@ fn status_error_surfaces_the_real_connectivity_failure_message() {
         true,
         "claude-opus-4-6",
         Some("AI API returned status 401"),
+        true,
     );
     assert_eq!(
         error,
@@ -117,7 +133,7 @@ fn status_error_falls_back_to_generic_message_when_no_error_string_available() {
     // Defensive branch: connectivity_ok=false with no captured error string
     // (shouldn't normally happen, but must not panic or fabricate text).
     assert_eq!(
-        compute_ai_status_error(false, true, true, "claude-opus-4-6", None),
+        compute_ai_status_error(false, true, true, "claude-opus-4-6", None, true),
         Some("AI proxy unreachable".to_string())
     );
 }
@@ -129,7 +145,7 @@ fn status_error_falls_back_to_generic_message_when_no_error_string_available() {
 
 #[test]
 fn status_error_names_the_invalid_model_when_connectivity_and_auth_are_fine() {
-    let error = compute_ai_status_error(false, true, false, "claude-opus-4-8", None);
+    let error = compute_ai_status_error(false, true, false, "claude-opus-4-8", None, true);
     assert_eq!(
         error,
         Some(
@@ -144,10 +160,64 @@ fn status_error_prefers_the_auth_message_over_the_model_message_when_both_are_wr
     // If Claude isn't even authenticated, that is the more actionable
     // problem to surface first — a model-validity check would be moot
     // without a working login anyway.
-    let error = compute_ai_status_error(false, false, false, "claude-opus-4-8", None);
+    let error = compute_ai_status_error(false, false, false, "claude-opus-4-8", None, true);
     assert_eq!(
         error,
         Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
+    );
+}
+
+// #679: when Claude auth isn't required (a non-bundled `apiUrl`), the
+// "Claude not authenticated" message must never appear — even when
+// `connected` is false for a genuinely different reason (here: connectivity
+// itself failed) and `claude_authenticated` also happens to be false.
+
+#[test]
+fn status_error_never_blames_claude_auth_when_not_required() {
+    let error = compute_ai_status_error(
+        false,
+        false,
+        true,
+        "some-model",
+        Some("connection refused"),
+        false,
+    );
+    assert_eq!(
+        error,
+        Some("AI proxy unreachable: connection refused".to_string()),
+        "must never emit the 'Claude not authenticated' message when Claude \
+         auth isn't required, got: {error:?}"
+    );
+}
+
+// #679 review finding 1: `get_settings_internal` used to ALSO substitute the
+// live-resolved bundled-proxy URL into `settings.api_url` whenever it was
+// the default and the proxy was running — and BOTH `update_settings`
+// (persistence) and `get_settings` (display, later echoed back on an
+// ordinary settings save) read straight from that mutated value. Once
+// persisted, the substituted URL no longer equals `AiSettings::default()`'s
+// literal string, so `is_bundled_default`/`requires_claude_auth` silently
+// and PERMANENTLY flip to `false` for what is still, functionally, the
+// bundled proxy — defeating this whole ticket's "byte-identical default
+// behavior" requirement on the very first ordinary settings save.
+// `get_settings_internal` is now a PURE database read (it never calls
+// `state.ai_proxy()` at all) — this test pins that invariant directly:
+// however this function is called, its returned `api_url` is EXACTLY the
+// raw stored/default value, never a substituted one.
+
+#[tokio::test]
+async fn get_settings_internal_never_substitutes_the_live_proxy_url() {
+    let state = crate::state::AppState::in_memory().await.unwrap();
+    let (settings, is_bundled_default) = get_settings_internal(&state).await.unwrap();
+    assert_eq!(
+        settings.api_url,
+        crate::ai::AiSettings::default().api_url,
+        "with nothing stored yet, api_url must be exactly the literal \
+         default — never a live-resolved proxy URL"
+    );
+    assert!(
+        is_bundled_default,
+        "the literal default api_url must be classified as bundled"
     );
 }
 
@@ -252,6 +322,64 @@ async fn put_ai_settings_falls_back_to_anonymous_actor_with_no_forwarding_header
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].actor, "anonymous");
+}
+
+// #679 review finding 1: an ORDINARY `PUT /ai/settings` that omits `apiUrl`
+// entirely (exactly the payload the two tests above already send) used to
+// re-persist whatever `get_settings_internal` had returned — which, before
+// this fix, could already be the SUBSTITUTED live-proxy URL. Drives the
+// REAL `PUT` then `GET` handlers through the full router (not just the
+// pure `get_settings_internal` unit test above) to prove the round-trip
+// itself preserves the literal default `apiUrl`.
+
+#[tokio::test]
+async fn put_ai_settings_with_no_api_url_never_mutates_the_stored_default() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+
+    let put_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/ai/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"model": "claude-sonnet-4-6"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_response.status(), StatusCode::NO_CONTENT);
+
+    let get_response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ai/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(get_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body.get("apiUrl").and_then(|v| v.as_str()),
+        Some(crate::ai::AiSettings::default().api_url.as_str()),
+        "a PUT that never mentioned apiUrl must leave the stored value at \
+         the literal default, not a substituted live-proxy URL: {body:?}"
+    );
 }
 
 // #675 review finding 3: `cd7c0f56` replaced `serde_json::to_value(&settings)`

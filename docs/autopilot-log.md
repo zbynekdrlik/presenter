@@ -1176,3 +1176,37 @@ and merged, so this round shipped all seven tickets in one PR (#676, merge `6e3b
   `/ai/status` `connected:true`, `modelValid:true`, proxy running with `claudeAuthenticated:true`;
   `cli-proxy-api --version` reports **7.2.130** on the box; operator DOM shows `v0.4.239` with
   `data-wasm-ready="true"` and zero console errors or warnings. Dev also on v0.4.239.
+
+---
+
+## Round integration — v0.4.240 SHIPPED (#677 + proxy output capture + CI tool cache), 2026-08-13
+
+**Supervisor-side record.** Two worktree workers + one direct CI repair, one CI cycle, PR #678
+(merge `5bc6816d`).
+
+- **#677** — the AI settings API-key `<input type="password">` had no `<form>` ancestor. Real form
+  wrapper with submit cancelled (Enter cannot reload the SPA — pinned by its own E2E assertion),
+  `autocomplete` set. Key testing lesson recorded in the ui skill: the Chrome hint is VERBOSE-level,
+  invisible to the zero-console gate, so the E2E test pins the DOM relationship
+  (`closest('form') !== null`), never the console line. Whole-crate sweep: no other password field.
+- **Proxy child output captured + redacted** (evidence path for #675, which stays open). Until now
+  `ProxyManager::start` discarded the vendored proxy's stdout/stderr entirely — an OAuth refresh
+  failure would have been an outcome with no cause. The worker first ran v7.2.130 in a scratch dir
+  with a deliberately invalid token to establish empirically what the binary prints on a failed
+  refresh (no credential material in that path, cross-checked against the upstream Go source), then
+  shipped the relay through a structural redaction filter (`proxy_output_relay.rs`) as
+  defense-in-depth. Verified live on prod right after deploy: journal now carries
+  `cli_proxy_api: cli-proxy-api output line source=stdout ...` lines. Deployed 00:46, ahead of the
+  05:23 token-expiry observation #675 hinges on.
+- **CI: trunk's wasm-bindgen download cached** in all three WASM-building workflows
+  (`~/.cache/trunk`, keyed on `crates/presenter-ui/Cargo.lock`). Two consecutive Build failures came
+  from a GitHub release-CDN blip (no incident on githubstatus; second failure a plain 503) — the
+  job re-downloaded the tool on every run with zero cache. After TWO failures of the same download
+  the rerun loop stopped and the root fix landed instead; the next push was green first try.
+  Resilience layer only: cache miss falls through to a live download, no `continue-on-error`.
+- **Transient explained, no action:** the interim bump-commit push (`bbed7786`) failed Branch Sync
+  because it raced PR #676's merge commit landing on main; the next push already contained it.
+- **#675 state:** BLOCKED ON OBSERVATION until the prod token crosses 2026-08-13T05:23:01+02:00
+  under proxy 7.2.130. Exact pass/fail check recorded on the ticket. Upstream-claim correction
+  posted on #660: of the two upstream issues, the stampede fix (#2567) is real, but #2556 — the
+  closer match to our symptom — was closed `not_planned`, i.e. abandoned, not fixed.
