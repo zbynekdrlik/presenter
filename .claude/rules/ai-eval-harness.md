@@ -120,6 +120,19 @@ gh run download "$run_id" -n "ai-eval-$(git rev-parse --short=12 origin/dev)" -D
 chmod +x /tmp/ai-eval-bin/ai_eval
 
 # 4. Run it against a candidate endpoint (bundled proxy baseline, or a local llama.cpp server)
+# REQUIRED for the bible-authoring + adversarial slices (23 of 30 cases): per-case seeding
+# ingests the real bible translations via presenter-bible's LocalFile sources, which read
+# these FIVE env vars (crates/presenter-bible/src/lib.rs default_translation_specs). Without
+# them every such case fails seeding with "environment variable PRESENTER_BIBLE_KJV must be
+# set..." — and the drive stage still EXITS 0 (per-case WARNING only; it exits non-zero only
+# when ALL cases error), so the loss is silent until score-l1. The error's "(needs network
+# access)" wording is misleading — the sources are these local files, no network involved.
+# (First live smoke-run, 2026-08-13, #662.)
+export PRESENTER_BIBLE_KJV="$PWD/data/bibles/kjv.usfm.zip"
+export PRESENTER_BIBLE_SEB="$PWD/data/bibles/seb.bbl.mybible.zip"
+export PRESENTER_BIBLE_ROHACEK="$PWD/data/bibles/rohacek.bbl.mybible.zip"
+export PRESENTER_BIBLE_SEVP="$PWD/data/bibles/sevp.obohu.mybible.zip"
+export PRESENTER_BIBLE_MILOST="$PWD/data/bibles/milost.bbl.mybible.zip"
 /tmp/ai-eval-bin/ai_eval drive --candidate-url http://127.0.0.1:8787/v1 --model claude-opus-4-6 \
   --corpus-dir scripts/dev/ai-eval/corpus --traces-dir scripts/dev/ai-eval/traces
 /tmp/ai-eval-bin/ai_eval score-l1 --corpus-dir scripts/dev/ai-eval/corpus \
