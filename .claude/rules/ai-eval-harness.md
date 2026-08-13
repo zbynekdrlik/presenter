@@ -54,6 +54,39 @@ gates must move together or the non-test/ai-eval-only build fails on a missing i
 `ai_eval` build a fresh isolated `AppState` per corpus case the exact same way the existing test
 suite already proves works — never add a SECOND constructor; widen the cfg on the existing one.
 
+## Local eval endpoint on dev2 (report §8 steps 1–3 — installed 2026-08-13)
+
+CUDA Toolkit **13.2** (`cuda-toolkit-13-2` from NVIDIA's ubuntu2404 apt repo; matches the
+595.71.05 driver's max supported CUDA, toolkit only — driver untouched) + **llama.cpp** built
+from source with `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120` (Blackwell `sm_120`).
+
+- llama.cpp checkout + build: `/home/newlevel/tools/llama.cpp` (commit `8efbf65dbd55`,
+  2026-08-13; binary `build/bin/llama-server`)
+- Model: `/home/newlevel/models/Qwen3-8B-Q4_K_M.gguf` (unsloth/Qwen3-8B-GGUF, 4.7 GiB — the
+  report §3 top pick)
+- **Launcher — ALWAYS via the wrapper, never `llama-server` directly:**
+  `/home/newlevel/tools/llama.cpp/run-eval-server.sh` (env-tunable: `MODEL`, `HOST`/`PORT`
+  default `127.0.0.1:18790`, `CTX`, `NPREDICT`). It takes an exclusive `flock` on
+  `/var/lock/dev2-gpu-eval.lock` for the server's lifetime and REFUSES to start (clear
+  message, exit 1) when: the lock is held; a presenter CI job is live (`Runner.Worker` —
+  covers the e2e-ndi GPU lane); GPU util is high on ≥2 of 5 one-second samples (bakerion's
+  idle resident fires a sub-second burst every ~13 s, so single-sample checks false-refuse);
+  any unexpected/fat GPU compute process exists; or free VRAM < 6200 MiB. All refusal paths
+  plus lock release were verified live.
+- **Never concurrent with bakerion active inference or the e2e-ndi CI lane** — two CUDA
+  compute loads have wedged this GPU before (Xid 109; `recover-hung-gpu` skill). Bakerion's
+  `backend-inference` ~0.8–1.1 GiB idle residency is the accepted baseline and does NOT block
+  an eval run. NEVER set `nvidia-smi -c EXCLUSIVE_PROCESS` (breaks NVDEC → NDI decode).
+- **Measured** (2026-08-13, `-c 8192`, q8_0 KV, `-ngl 99`): llama-server 5,276 MiB VRAM at
+  load, 6,352 MiB total used during inference (~1.4 GiB free); prefill 1,229 tok/s, decode
+  55.6 tok/s; Slovak completion clean, no `<think>` leakage (`--reasoning off` — the report
+  D4 `enable_thinking` chat-template kwarg is deprecated in current llama.cpp).
+- **Deviation from report §8 step 2:** default context is `-c 8192`, not 16384 — with
+  bakerion resident only ~6.9 GiB VRAM is actually free, and the 16k peak (~7 GiB) would
+  leave no margin; VRAM OOM is the documented wedge trigger. Raise `CTX` only after measuring.
+  The systemd unit + `--sleep-idle-seconds 300` (report step 2) is NOT set up yet — the
+  wrapper is the eval-run path; nothing GPU-resident is left running between eval runs.
+
 ## Layout
 
 `crates/presenter-server/src/bin/ai_eval/` — `main.rs` (thin dispatch), `cli.rs` (hand-rolled
