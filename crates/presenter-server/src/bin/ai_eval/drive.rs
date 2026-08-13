@@ -167,11 +167,139 @@ pub fn seed_failure_report(traces: &[Trace]) -> Option<String> {
     Some(msg)
 }
 
+/// Consecutive-identical-failure threshold past which a retry loop is a
+/// STALLED one rather than legitimate self-correction (#662 defect 7 —
+/// the reasoning-on rerun's `adv-10`: 8 near-identical
+/// `create_bible_presentation` retries, all failing the same way, until
+/// the accumulated context crashed the request with a malformed-JSON HTTP
+/// 500 — a harness-visible CRASH for what was really a candidate failure
+/// mode). TODO(#662 defect 7, RED): not wired up yet — see the paired
+/// GREEN commit right after this one.
+pub fn detect_stalled_retry_loop(_conversation: &[ChatMessage]) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::corpus::Expected;
+    use presenter_server::ai::{ToolCallFunction, ToolCallMessage};
     use std::path::PathBuf;
+
+    fn assistant_tool_call(id: &str, name: &str, args: serde_json::Value) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![ToolCallMessage {
+                id: id.to_string(),
+                call_type: "function".to_string(),
+                function: ToolCallFunction {
+                    name: name.to_string(),
+                    arguments: args.to_string(),
+                },
+            }]),
+            tool_call_id: None,
+            name: None,
+            preview: None,
+        }
+    }
+
+    fn tool_result(id: &str, name: &str, content: serde_json::Value) -> ChatMessage {
+        ChatMessage {
+            role: "tool".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: Some(id.to_string()),
+            name: Some(name.to_string()),
+            preview: None,
+        }
+    }
+
+    /// #662 defect 7: a stalled retry loop — 3 CONSECUTIVE
+    /// `create_bible_presentation` calls, identical argument key set, all
+    /// failing with the identical `invalid_verse_item` error — must be
+    /// detected (mirrors the reasoning-on rerun's `adv-10`, which did this
+    /// 8 times before the accumulated context crashed the request).
+    #[test]
+    fn stalled_retry_loop_of_identical_failures_is_detected() {
+        let args = serde_json::json!({"name": "x", "items": []});
+        let conv = vec![
+            assistant_tool_call("t1", "create_bible_presentation", args.clone()),
+            tool_result(
+                "t1",
+                "create_bible_presentation",
+                serde_json::json!({"error": "invalid_verse_item"}),
+            ),
+            assistant_tool_call("t2", "create_bible_presentation", args.clone()),
+            tool_result(
+                "t2",
+                "create_bible_presentation",
+                serde_json::json!({"error": "invalid_verse_item"}),
+            ),
+            assistant_tool_call("t3", "create_bible_presentation", args),
+            tool_result(
+                "t3",
+                "create_bible_presentation",
+                serde_json::json!({"error": "invalid_verse_item"}),
+            ),
+        ];
+
+        let result = detect_stalled_retry_loop(&conv);
+        assert!(
+            result.is_some(),
+            "3 consecutive identical create_bible_presentation failures must be \
+             detected as a stalled retry loop"
+        );
+        let msg = result.unwrap();
+        assert!(
+            msg.contains("create_bible_presentation"),
+            "message must name the offending tool: {msg}"
+        );
+    }
+
+    /// A genuine self-correction — 2 attempts with DIFFERENT arg shapes and
+    /// different error classes, then success — must NOT be flagged. Proves
+    /// the detector isn't just "N failed tool calls total".
+    #[test]
+    fn different_shaped_failures_do_not_count_as_a_stalled_loop() {
+        let conv = vec![
+            assistant_tool_call(
+                "t1",
+                "create_bible_presentation",
+                serde_json::json!({"name": "x"}),
+            ),
+            tool_result(
+                "t1",
+                "create_bible_presentation",
+                serde_json::json!({"error": "missing_items"}),
+            ),
+            assistant_tool_call(
+                "t2",
+                "create_bible_presentation",
+                serde_json::json!({"name": "x", "items": []}),
+            ),
+            tool_result(
+                "t2",
+                "create_bible_presentation",
+                serde_json::json!({"error": "invalid_verse_item"}),
+            ),
+            assistant_tool_call(
+                "t3",
+                "create_bible_presentation",
+                serde_json::json!({"name": "x", "items": [{"kind": "verse"}]}),
+            ),
+            tool_result(
+                "t3",
+                "create_bible_presentation",
+                serde_json::json!({"id": "ok"}),
+            ),
+        ];
+        assert!(
+            detect_stalled_retry_loop(&conv).is_none(),
+            "3 DIFFERENTLY-shaped attempts (different arg keys, different \
+             errors, then success) must not be flagged"
+        );
+    }
 
     /// A bible-authoring case with no `setup` at all — `build_state_for_case`
     /// still triggers `refresh_default_bible_translations` purely from
