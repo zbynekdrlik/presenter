@@ -64,6 +64,12 @@ impl RequestLog {
     }
 }
 
+impl Default for RequestLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Axum handler: `GET /__mock/log` returns the current ring buffer as
 /// JSON. Mounted by both mocks so either can serve it.
 pub async fn log_handler(State(log): State<std::sync::Arc<RequestLog>>) -> Json<Vec<LogEntry>> {
