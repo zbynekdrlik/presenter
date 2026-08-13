@@ -659,12 +659,10 @@ pub async fn run_agent(
     let tools = super::tools::tool_definitions();
     let mut actions = Vec::new();
     let mut turn_metadata = Vec::new();
-    // #687: NOT YET accumulated on this commit (RED — see the sibling GREEN
-    // commit that wires the actual per-iteration fold below); every call
-    // site is already threaded through so this compiles and always reports
-    // "no usage", which is what the new tests in `agent_usage_tests.rs`
-    // fail against until the GREEN commit lands.
-    let usage_total: Option<TokenUsage> = None;
+    // #687: summed across every LLM call this turn makes (folded below,
+    // once per iteration) — the running "how much has this turn cost so
+    // far" total.
+    let mut usage_total: Option<TokenUsage> = None;
 
     // Add user message to conversation
     conversation.push(ChatMessage {
@@ -694,6 +692,16 @@ pub async fn run_agent(
         info!(iteration, "AI agent loop iteration");
         let response =
             super::client::call_chat_completions(&messages, Some(&tools), settings).await?;
+
+        // #687: fold this call's usage into the running turn total BEFORE
+        // `response.choices` is moved out below — a call that omitted
+        // `usage` entirely (`None`) leaves the running total untouched
+        // rather than resetting it (`TokenUsage::accumulate`'s own rule).
+        if let Some(call_usage) = response.usage.as_ref() {
+            usage_total
+                .get_or_insert_with(TokenUsage::default)
+                .accumulate(&TokenUsage::from(call_usage));
+        }
 
         let choice = response
             .choices

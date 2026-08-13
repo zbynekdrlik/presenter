@@ -109,11 +109,17 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
         .iter()
         .filter(|(_, _, s)| s.stalled_retry_loop)
         .count();
-    // #687: NOT YET aggregated on this commit (RED — see the sibling GREEN
-    // commit that wires the actual fold below); the new
-    // `total_usage_sums_across_every_case_and_ignores_a_case_with_no_usage`
-    // test fails against this stub until the GREEN commit lands.
-    let total_usage: Option<TokenUsage> = None;
+    // #687: sum every case's Trace::usage — a case with no usage at all
+    // just doesn't contribute (TokenUsage::accumulate's own rule), never
+    // resetting what earlier cases already contributed.
+    let mut total_usage: Option<TokenUsage> = None;
+    for (_, t, _) in results {
+        if let Some(u) = &t.usage {
+            total_usage
+                .get_or_insert_with(TokenUsage::default)
+                .accumulate(u);
+        }
+    }
 
     let mut slice_names: Vec<String> = results.iter().map(|(c, _, _)| c.slice.clone()).collect();
     slice_names.sort();
