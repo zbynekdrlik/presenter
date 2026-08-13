@@ -318,7 +318,7 @@ fn build_reference_label(
     }
 }
 
-pub fn compose_bible_slides(
+pub(crate) fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
     main_passages: &[BiblePassage],
