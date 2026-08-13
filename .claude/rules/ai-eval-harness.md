@@ -163,9 +163,26 @@ defects, all fixed (this doc section is the corrected recipe):
   score-l1/all.** There is no built-in default any more — the binary always runs as a standalone
   artifact copied out of the repo (step 3/4 above), where a path baked in at compile time would
   silently point at the wrong machine.
-- Traces now carry `durationMs` (wall-clock per case) and a `usage` field (always `null` today —
-  see #687 for wiring real token counts through `run_agent`). `score-l1`'s printed summary shows
-  total/avg drive time and, when nonzero, a distinct seed-failed count.
+- Traces now carry `durationMs` (wall-clock per case) and a `usage` field (was always `null` at
+  the time of this smoke-run — real token counts landed in #687, see the section below).
+  `score-l1`'s printed summary shows total/avg drive time and, when nonzero, a distinct
+  seed-failed count.
+
+## Real token-usage capture (#687)
+
+`client::ChatCompletionResponse.usage: Option<client::Usage>` parses the OpenAI-compatible
+`usage` object per call (`prompt_tokens`/`completion_tokens`/`total_tokens`, each independently
+`Option<u32>` — a provider may omit the whole object, or just one field, and a missing count is
+never read as `0`). `agent::run_agent` SUMS it across every `call_chat_completions` call the turn
+makes (a turn can call the candidate more than once via the tool-call loop) into
+`agent::TokenUsage` — its OWN type, deliberately reused directly by `ai_eval` (`trace.rs` imports
+`presenter_server::ai::agent::TokenUsage` for `Trace::usage`, exactly like it already does for
+`TurnMetadata` — never a parallel schema). `run_agent`'s return tuple widened to 4 elements again
+(`(String, Vec<ToolAction>, Vec<TurnMetadata>, Option<TokenUsage>)`, same tuple-widening pattern
+the #662 `turn_metadata` addition established) — `router/ai.rs`'s live SSE endpoint discards the
+4th element same as the 3rd, browser-facing JSON unaffected. `report::build_report` folds every
+case's `Trace::usage` into `Report::total_usage` via `TokenUsage::accumulate` (same missing-field
+discipline), surfaced in `score-l1`'s printed summary when nonzero.
 
 ## Reasoning-on rerun defect fixes (#662, issuecomment-5280071954)
 

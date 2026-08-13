@@ -56,7 +56,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         system_prompt_extra: None,
     };
 
-    let (final_response, error, turns) = match run_agent(
+    let (final_response, error, turns, usage) = match run_agent(
         &case.user_message,
         &mut conversation,
         &state,
@@ -65,8 +65,10 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
     )
     .await
     {
-        Ok((response, _actions, turn_metadata)) => (Some(response), None, turn_metadata),
-        Err(e) => (None, Some(format!("{e:#}")), Vec::new()),
+        Ok((response, _actions, turn_metadata, usage)) => {
+            (Some(response), None, turn_metadata, usage)
+        }
+        Err(e) => (None, Some(format!("{e:#}")), Vec::new(), None),
     };
 
     // #662 defect 7: scan only THIS turn's own activity (never any seeded
@@ -87,8 +89,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         error,
         seed_failed: false,
         duration_ms: elapsed_ms(started),
-        // Always None today — see TraceUsage's doc comment + #687.
-        usage: None,
+        usage,
         turns,
         stalled_retry_loop,
         captured_at: now_rfc3339(),
