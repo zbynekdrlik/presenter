@@ -106,7 +106,12 @@ pub struct ChatCompletionResponse {
 #[derive(Debug, Deserialize)]
 pub struct Choice {
     pub message: ResponseMessage,
-    #[allow(dead_code)]
+    /// The provider's stop reason (`"stop"`, `"length"`, `"tool_calls"`,
+    /// ...). Read by `agent::run_agent` into `TurnMetadata::finish_reason`
+    /// on every iteration (#662 defect 6) — a `"length"` value means the
+    /// response was cut off by the provider's own context/token ceiling,
+    /// which used to be silently indistinguishable from a deliberately
+    /// short/empty response anywhere downstream.
     pub finish_reason: Option<String>,
 }
 
@@ -117,6 +122,15 @@ pub struct ResponseMessage {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ResponseToolCall>>,
+    /// A "thinking"-mode candidate's reasoning trace, when the provider
+    /// separates it from `content` (llama.cpp's `--reasoning-format auto`,
+    /// confirmed via a direct probe to correctly keep this OUT of
+    /// `content` — see #662's reasoning-on rerun comment). Only the LENGTH
+    /// is surfaced into the trace (`agent::TurnMetadata::reasoning_content_len`)
+    /// — never the full text, which would bloat eval traces for no
+    /// diagnostic gain beyond "was there a long reasoning block here".
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

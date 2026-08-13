@@ -56,7 +56,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         system_prompt_extra: None,
     };
 
-    let (final_response, error) = match run_agent(
+    let (final_response, error, turns) = match run_agent(
         &case.user_message,
         &mut conversation,
         &state,
@@ -65,8 +65,8 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
     )
     .await
     {
-        Ok((response, _actions)) => (Some(response), None),
-        Err(e) => (None, Some(format!("{e:#}"))),
+        Ok((response, _actions, turn_metadata)) => (Some(response), None, turn_metadata),
+        Err(e) => (None, Some(format!("{e:#}")), Vec::new()),
     };
 
     Trace {
@@ -83,6 +83,11 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         duration_ms: elapsed_ms(started),
         // Always None today — see TraceUsage's doc comment + #687.
         usage: None,
+        turns,
+        // Not yet wired to a real detector — see #662 defect 7's own RED
+        // commit for `detect_stalled_retry_loop`, wired in the paired
+        // GREEN commit right after it.
+        stalled_retry_loop: None,
         captured_at: now_rfc3339(),
     }
 }
@@ -125,6 +130,8 @@ fn failed_trace(
         seed_failed: true,
         duration_ms: elapsed_ms(started),
         usage: None,
+        turns: Vec::new(),
+        stalled_retry_loop: None,
         captured_at: now_rfc3339(),
     }
 }
@@ -191,6 +198,15 @@ mod tests {
     /// either way.
     #[tokio::test]
     async fn seeding_failure_is_marked_seed_failed_not_a_candidate_error() {
+        // Mutates process-global env state — matches the existing precedent
+        // in presenter-importer/src/bible.rs's own bible-env-var tests. Safe
+        // here specifically because no OTHER test in this binary (ai_eval,
+        // built only under the ai-eval feature) reads or sets these 5 vars,
+        // so there is nothing to race against within this test binary's
+        // process. If a future test in THIS file (or a sibling module of
+        // ai_eval) ever needs one of these vars set, this test would need
+        // its own isolation (e.g. a mutex, or moving env mutation out of
+        // #[tokio::test]'s multi-threaded runtime).
         for var in [
             "PRESENTER_BIBLE_KJV",
             "PRESENTER_BIBLE_SEB",
@@ -234,6 +250,8 @@ mod tests {
             seed_failed,
             duration_ms: 0,
             usage: None,
+            turns: Vec::new(),
+            stalled_retry_loop: None,
             captured_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }

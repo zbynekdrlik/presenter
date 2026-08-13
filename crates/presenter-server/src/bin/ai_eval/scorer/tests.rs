@@ -37,6 +37,8 @@ fn trace(case_id: &str, slice: &str, char_limit: u32, conversation: Vec<ChatMess
         seed_failed: false,
         duration_ms: 0,
         usage: None,
+        turns: Vec::new(),
+        stalled_retry_loop: None,
         captured_at: "2026-01-01T00:00:00Z".to_string(),
     }
 }

@@ -11,6 +11,7 @@
 //! `golden/`.
 
 use anyhow::Context;
+use presenter_server::ai::agent::TurnMetadata;
 use presenter_server::ai::ChatMessage;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -75,6 +76,27 @@ pub struct Trace {
     /// second migration once real usage capture lands.
     #[serde(default)]
     pub usage: Option<TraceUsage>,
+    /// One [`TurnMetadata`] per LLM call `run_agent` made this turn
+    /// (`finishReason` + `reasoningContentLen`, #662 defect 6 — the
+    /// reasoning-on rerun found 2 context/length-truncated responses that
+    /// were otherwise invisible anywhere in the harness's own output,
+    /// diagnosable only by cross-referencing the candidate server's
+    /// private log against trace timestamps). Empty for a case that never
+    /// reached `run_agent` (a seed failure).
+    #[serde(default)]
+    pub turns: Vec<TurnMetadata>,
+    /// Set when `drive::detect_stalled_retry_loop` finds `N` (see its own
+    /// doc comment) CONSECUTIVE tool calls with the identical failure
+    /// shape — a model stuck retrying a mistake it never diagnoses (#662
+    /// defect 7, the reasoning-on rerun's `adv-10`: 8 near-identical
+    /// `create_bible_presentation` retries, all failing the same way,
+    /// until the accumulated context crashed the request with a
+    /// malformed-JSON HTTP 500 — a harness-visible CRASH for what was
+    /// really a candidate failure mode). `score-l1` classifies this
+    /// distinctly (`CaseScore::stalled_retry_loop`) rather than folding it
+    /// into a generic `run_agent returned an error`.
+    #[serde(default)]
+    pub stalled_retry_loop: Option<String>,
     /// RFC 3339 timestamp of when this trace was captured.
     pub captured_at: String,
 }
@@ -228,5 +250,61 @@ mod tests {
         let trace: Trace = serde_json::from_value(json).expect("must still deserialize");
         assert_eq!(trace.duration_ms, 0);
         assert!(trace.usage.is_none());
+    }
+
+    /// #662 defects 6+7: the trace schema must carry per-turn diagnostic
+    /// metadata (`turns[].finishReason`/`reasoningContentLen`) and a
+    /// distinct stalled-retry-loop status, round-tripped through Trace's
+    /// own (de)serialization.
+    #[test]
+    fn trace_schema_round_trips_turns_and_stalled_retry_loop() {
+        let mut json = sample_trace_json();
+        json.as_object_mut().unwrap().insert(
+            "turns".to_string(),
+            serde_json::json!([
+                {"finishReason": "tool_calls", "reasoningContentLen": null},
+                {"finishReason": "length", "reasoningContentLen": 812}
+            ]),
+        );
+        json.as_object_mut().unwrap().insert(
+            "stalledRetryLoop".to_string(),
+            serde_json::Value::String(
+                "stalled retry loop: tool 'x' failed identically 3 times in a row".to_string(),
+            ),
+        );
+
+        let trace: Trace = serde_json::from_value(json).expect("Trace must deserialize");
+        assert_eq!(trace.turns.len(), 2);
+        assert_eq!(trace.turns[0].finish_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(trace.turns[1].finish_reason.as_deref(), Some("length"));
+        assert_eq!(trace.turns[1].reasoning_content_len, Some(812));
+        assert!(trace.stalled_retry_loop.is_some());
+
+        let out = serde_json::to_value(&trace).expect("Trace must serialize");
+        assert_eq!(
+            out.get("turns")
+                .and_then(|v| v.get(1))
+                .and_then(|v| v.get("finishReason"))
+                .and_then(serde_json::Value::as_str),
+            Some("length"),
+            "turns[1].finishReason must round-trip: {out:?}"
+        );
+        assert_eq!(
+            out.get("stalledRetryLoop")
+                .and_then(serde_json::Value::as_str),
+            Some("stalled retry loop: tool 'x' failed identically 3 times in a row"),
+            "stalledRetryLoop must round-trip: {out:?}"
+        );
+    }
+
+    /// A trace with no `turns` key and no `stalledRetryLoop` key at all
+    /// (every trace captured before this fix) must still deserialize
+    /// cleanly — `turns: vec![]`, `stalled_retry_loop: None`.
+    #[test]
+    fn trace_without_turns_or_stalled_retry_loop_still_deserializes() {
+        let json = sample_trace_json();
+        let trace: Trace = serde_json::from_value(json).expect("must still deserialize");
+        assert!(trace.turns.is_empty());
+        assert!(trace.stalled_retry_loop.is_none());
     }
 }

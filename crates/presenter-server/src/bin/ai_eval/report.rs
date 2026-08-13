@@ -66,6 +66,12 @@ pub struct Report {
     /// smoke-run's own complaint was having to derive this by hand from
     /// consecutive `capturedAt` timestamps.
     pub total_duration_ms: u64,
+    /// Count of `Trace::turns[].finishReason == "length"` across every
+    /// case (#662 defect 6) — a length-truncated response used to be
+    /// silently indistinguishable anywhere in the harness's own output;
+    /// this is the report-level answer to "how many of my LLM calls got
+    /// cut off by the context/token ceiling".
+    pub finish_reason_length: usize,
     pub slices: Vec<SliceSummary>,
     pub cases: Vec<CaseResult>,
 }
@@ -79,6 +85,11 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
     let passed = results.iter().filter(|(_, _, s)| s.passed).count();
     let seed_failed_total = results.iter().filter(|(_, _, s)| s.seed_failed).count();
     let total_duration_ms: u64 = results.iter().map(|(_, t, _)| t.duration_ms).sum();
+    let finish_reason_length = results
+        .iter()
+        .flat_map(|(_, t, _)| t.turns.iter())
+        .filter(|turn| turn.finish_reason.as_deref() == Some("length"))
+        .count();
 
     let mut slice_names: Vec<String> = results.iter().map(|(c, _, _)| c.slice.clone()).collect();
     slice_names.sort();
@@ -118,6 +129,7 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
         passed,
         seed_failed_total,
         total_duration_ms,
+        finish_reason_length,
         slices,
         cases,
     }
@@ -154,6 +166,12 @@ pub fn print_summary(report: &Report) {
         "  total drive time: {} ms across {} case(s) (avg {} ms/case)",
         report.total_duration_ms, report.total, avg_ms
     );
+    if report.finish_reason_length > 0 {
+        println!(
+            "  {} LLM call(s) hit finishReason=\"length\" (context/token ceiling truncation)",
+            report.finish_reason_length
+        );
+    }
     for s in &report.slices {
         println!("  {:<16} {}/{}", s.slice, s.passed, s.total);
     }
@@ -167,5 +185,114 @@ pub fn print_summary(report: &Report) {
                 println!("       - {f}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::corpus::Expected;
+    use presenter_server::ai::agent::TurnMetadata;
+    use std::path::PathBuf;
+
+    fn case(id: &str, slice: &str) -> Case {
+        Case {
+            id: id.to_string(),
+            slice: slice.to_string(),
+            user_message: "test".to_string(),
+            setup: None,
+            expected: Expected::default(),
+            source_path: PathBuf::new(),
+        }
+    }
+
+    fn trace_with_turns(case_id: &str, duration_ms: u64, turns: Vec<TurnMetadata>) -> Trace {
+        Trace {
+            case_id: case_id.to_string(),
+            slice: "worship-crud".to_string(),
+            candidate_url: "http://test.invalid".to_string(),
+            candidate_model: "test-model".to_string(),
+            char_limit: 0,
+            prior_turn_count: 0,
+            conversation: Vec::new(),
+            final_response: None,
+            error: None,
+            seed_failed: false,
+            duration_ms,
+            usage: None,
+            turns,
+            stalled_retry_loop: None,
+            captured_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn score(case_id: &str, passed: bool) -> CaseScore {
+        CaseScore {
+            case_id: case_id.to_string(),
+            passed,
+            seed_failed: false,
+            failures: Vec::new(),
+        }
+    }
+
+    /// #662 defect 6: `finishReasonLength` in the report summary counts
+    /// every `turns[].finishReason == "length"` across ALL cases, not just
+    /// the first one it finds.
+    #[test]
+    fn finish_reason_length_counts_across_every_case() {
+        let c1 = case("a", "worship-crud");
+        let t1 = trace_with_turns(
+            "a",
+            100,
+            vec![
+                TurnMetadata {
+                    finish_reason: Some("stop".into()),
+                    reasoning_content_len: None,
+                },
+                TurnMetadata {
+                    finish_reason: Some("length".into()),
+                    reasoning_content_len: Some(50),
+                },
+            ],
+        );
+        let s1 = score("a", false);
+
+        let c2 = case("b", "worship-crud");
+        let t2 = trace_with_turns(
+            "b",
+            50,
+            vec![TurnMetadata {
+                finish_reason: Some("length".into()),
+                reasoning_content_len: None,
+            }],
+        );
+        let s2 = score("b", true);
+
+        let results = vec![(&c1, &t1, s1), (&c2, &t2, s2)];
+        let report = build_report(&results);
+
+        assert_eq!(
+            report.finish_reason_length, 2,
+            "one 'length' turn in case a, one 'length' turn in case b"
+        );
+        assert_eq!(report.total_duration_ms, 150);
+    }
+
+    #[test]
+    fn finish_reason_length_is_zero_when_nothing_was_truncated() {
+        let c1 = case("a", "worship-crud");
+        let t1 = trace_with_turns(
+            "a",
+            10,
+            vec![TurnMetadata {
+                finish_reason: Some("stop".into()),
+                reasoning_content_len: None,
+            }],
+        );
+        let s1 = score("a", true);
+
+        let results = vec![(&c1, &t1, s1)];
+        let report = build_report(&results);
+        assert_eq!(report.finish_reason_length, 0);
     }
 }
