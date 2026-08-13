@@ -41,6 +41,29 @@ async-trait.workspace = true
 default = []
 mock-integrations = []
 test-helpers = ["presenter-ndi/test-helpers"]
+# #680: the ai_eval harness driver (src/bin/ai_eval/). Non-default — a plain
+# `cargo build`/`cargo check`/`cargo test` never compiles it. Zero new
+# dependencies: the CLI args are hand-parsed (matching run.sh's own style),
+# and everything else (AppState, run_agent, the real packer/validator) is
+# already a normal dependency of this package.
+ai-eval = []
+
+# `ai_eval` is `required-features`-gated so it is invisible to a default
+# build/check/test (report §6.2 / #680 acceptance: "cargo check --workspace
+# --tests must stay unaffected when the feature is off"). This entry is
+# NOT optional plumbing: Cargo's `src/bin/*` autodiscovery picks up
+# `src/bin/ai_eval/main.rs` the moment the file exists on disk REGARDLESS of
+# whether this `[[bin]]` block is present — confirmed empirically (a default
+# `cargo check` failed to compile the bin unconditionally without this
+# `required-features` gate) — so the file and this entry must always land
+# together. Directory form (`src/bin/ai_eval/main.rs`, not a single
+# `ai_eval.rs`) because the driver + Layer-1 scorer + their unit tests do
+# not fit one file under this project's 800/1000-line file-size cap — same
+# binary name, same invocation either way.
+[[bin]]
+name = "ai_eval"
+path = "src/bin/ai_eval/main.rs"
+required-features = ["ai-eval"]
 
 [dev-dependencies]
 axum.workspace = true

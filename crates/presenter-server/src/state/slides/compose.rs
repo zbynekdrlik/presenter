@@ -16,8 +16,14 @@ fn translation_short_code(code: &str) -> String {
 /// produced by the LLM after it edits DB verses against the sermon text,
 /// and the server composes slides out of the stream respecting the
 /// character limit — same splitting rules as live mode.
+// `pub` (not `pub(crate)`): re-exported `pub` from `state::slides` so the
+// #680 `ai_eval` Layer-1 scorer (a separate crate root) can replay a
+// captured tool call's items through the REAL composer — see
+// `state/slides.rs`'s re-export comment. `pub(crate) use`/`pub use` alone
+// cannot widen an item past its OWN declared visibility, hence bumping it
+// here too.
 #[derive(Debug, Clone)]
-pub(crate) enum BibleItem {
+pub enum BibleItem {
     Verse {
         number: u32,
         text: String,
@@ -33,7 +39,7 @@ pub(crate) enum BibleItem {
 /// A slide produced by `compose_bible_items_into_slides`. Plain data —
 /// the tool handler wraps it into `BiblePresentationSlide` for persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ComposedBibleSlide {
+pub struct ComposedBibleSlide {
     pub main: String,
     pub main_reference: String,
 }
@@ -74,7 +80,7 @@ fn format_verse_range(verses: &BTreeSet<u32>) -> String {
 /// verse longer than `character_limit` is kept WHOLE on its own slide — the
 /// validator accepts such a lone oversized verse (autofit shrinks it for
 /// display) rather than rejecting it.
-pub(crate) fn compose_bible_items_into_slides(
+pub fn compose_bible_items_into_slides(
     items: &[BibleItem],
     character_limit: u32,
 ) -> Vec<ComposedBibleSlide> {
@@ -312,7 +318,7 @@ fn build_reference_label(
     }
 }
 
-pub(crate) fn compose_bible_slides(
+pub fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
     main_passages: &[BiblePassage],

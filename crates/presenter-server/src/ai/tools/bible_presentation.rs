@@ -66,7 +66,13 @@ pub(super) async fn get_bible_presentation(
 /// Parse a JSON `items` array into typed `BibleItem` values, failing fast on
 /// any malformed item. Returns `Ok(Ok(items))` on success, or `Ok(Err(response))`
 /// carrying the `(json_body, preview)` error response to return to the LLM.
-fn parse_bible_items(
+///
+/// `pub` (not private): the #680 `ai_eval` Layer-1 scorer replays a captured
+/// tool call's raw `items` JSON through this SAME function (never a
+/// hand-rolled re-parse) so a schema drift here is caught by the scorer
+/// exactly the way the ticket requires — see `ai::tools::bible_presentation`
+/// module visibility note in `ai/tools/mod.rs`.
+pub fn parse_bible_items(
     items_arr: &[Value],
 ) -> anyhow::Result<Result<Vec<BibleItem>, (String, String)>> {
     let mut items: Vec<BibleItem> = Vec::with_capacity(items_arr.len());
