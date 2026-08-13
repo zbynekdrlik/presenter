@@ -91,6 +91,23 @@ impl From<&super::client::Usage> for TokenUsage {
     }
 }
 
+/// Fold ONE `call_chat_completions` response's usage into `run_agent`'s
+/// running turn total (#687) — extracted out of the loop body to keep
+/// `run_agent` under the function-length cap. Called BEFORE
+/// `response.choices` is moved out; a call that omitted `usage` leaves
+/// `usage_total` untouched rather than resetting it.
+fn accumulate_call_usage(
+    usage_total: &mut Option<TokenUsage>,
+    call_usage: Option<&super::client::Usage>,
+) {
+    let Some(call_usage) = call_usage else {
+        return;
+    };
+    usage_total
+        .get_or_insert_with(TokenUsage::default)
+        .accumulate(&TokenUsage::from(call_usage));
+}
+
 /// Affirmative replies recognised by the cross-turn gate. Used when the
 /// user types a short confirmation after the AI proposed a delete in the
 /// preceding text response.
@@ -633,35 +650,38 @@ fn push_assistant_tool_call_message(
     });
 }
 
+/// `run_agent`'s success value: `(final_response_text, actions, turn_metadata, usage)`.
+/// `turn_metadata` has one [`TurnMetadata`] entry per LLM call the turn made (#662
+/// defect 6); `usage` is the SUMMED [`TokenUsage`] across every one of those calls
+/// (#687) — `None` when the candidate never reported usage on any of them. Existing
+/// callers that don't need the 3rd/4th element simply discard them. A named alias
+/// (rather than the tuple written out inline at the `run_agent` signature) keeps
+/// that signature's own line count down, since `run_agent`'s body already sits
+/// close to the project's 120-line function-length cap.
+pub type RunAgentResult = anyhow::Result<(
+    String,
+    Vec<ToolAction>,
+    Vec<TurnMetadata>,
+    Option<TokenUsage>,
+)>;
+
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
-///
-/// Returns `(final_response_text, actions, turn_metadata, usage)` — `turn_metadata` has
-/// one [`TurnMetadata`] entry per LLM call this turn made (#662 defect 6), and `usage`
-/// is the SUMMED [`TokenUsage`] across every one of those calls (#687) — `None` when the
-/// candidate never reported usage on any of them. Existing callers that don't need the
-/// 3rd/4th element simply discard them.
+/// See [`RunAgentResult`] for what the success value carries.
 pub async fn run_agent(
     user_message: &str,
     conversation: &mut Vec<ChatMessage>,
     state: &AppState,
     settings: &AiSettings,
     progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
-) -> anyhow::Result<(
-    String,
-    Vec<ToolAction>,
-    Vec<TurnMetadata>,
-    Option<TokenUsage>,
-)> {
+) -> RunAgentResult {
     let (system_prompt, char_limit) =
         build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
     let tools = super::tools::tool_definitions();
     let mut actions = Vec::new();
     let mut turn_metadata = Vec::new();
-    // #687: summed across every LLM call this turn makes (folded below,
-    // once per iteration) — the running "how much has this turn cost so
-    // far" total.
+    // #687: running per-turn total, folded once per iteration below.
     let mut usage_total: Option<TokenUsage> = None;
 
     // Add user message to conversation
@@ -693,15 +713,8 @@ pub async fn run_agent(
         let response =
             super::client::call_chat_completions(&messages, Some(&tools), settings).await?;
 
-        // #687: fold this call's usage into the running turn total BEFORE
-        // `response.choices` is moved out below — a call that omitted
-        // `usage` entirely (`None`) leaves the running total untouched
-        // rather than resetting it (`TokenUsage::accumulate`'s own rule).
-        if let Some(call_usage) = response.usage.as_ref() {
-            usage_total
-                .get_or_insert_with(TokenUsage::default)
-                .accumulate(&TokenUsage::from(call_usage));
-        }
+        // #687: see `accumulate_call_usage`'s own doc comment.
+        accumulate_call_usage(&mut usage_total, response.usage.as_ref());
 
         let choice = response
             .choices
