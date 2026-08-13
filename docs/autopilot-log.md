@@ -1344,3 +1344,16 @@ jumps / loses the user's scroll position when the operator live-edits verse text
 — primary suspect: the #638 counter-rotate watcher itself misfiring from sensor flaps on a locked
 viewport). Workers dispatched same turn; #662 measurement round (option-1 evidence slice, second
 small model vs the Qwen3-8B baseline) also running.
+
+**v0.4.248 (PR #695, `b96fa814`):** the two live-event tablet bugs, parallel worktree workers,
+one CI cycle (Pipeline 31748512844). #693 — the tablet slide list was an unkeyed `collect_view()`
+inside a reactive closure, so every `slides.set()` from an operator live edit tore down the whole
+scroll subtree and reset `scrollTop`; fix = `SlideList` extracted (`tablet/slide_list.rs`, tablet.rs
+down to 792 prod lines) with a keyed `<For>` on stable `slide.id`, reactive-by-id text/mark reads,
+`Memo` striping — E2E asserts scrollTop AND marked-card geometry hold ±2px across a live PATCH.
+#694 — `screen.orientation` tracks the PHYSICAL sensor even under an OS rotation lock (the lock
+only pins the viewport), so lift/put-down flapped through portrait-secondary and flipped the UI;
+fix = debounced settled-orientation watcher (~300 ms settle before SET, immediate CLEAR, `.angle`
+fallback + resize trigger dropped) — a genuine settled 180° turn (#638) still flips, E2E covers
+both sides. #662 rode along as a docs-only playbook slice (drop-in tool-calling is not universal
+across model families); the ticket itself stays open on the user's direction decision.
