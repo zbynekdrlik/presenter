@@ -1210,3 +1210,46 @@ and merged, so this round shipped all seven tickets in one PR (#676, merge `6e3b
   under proxy 7.2.130. Exact pass/fail check recorded on the ticket. Upstream-claim correction
   posted on #660: of the two upstream issues, the stampede fix (#2567) is real, but #2556 — the
   closer match to our symptom — was closed `not_planned`, i.e. abandoned, not fixed.
+
+---
+
+## Rounds v0.4.241 + v0.4.242 SHIPPED (#679, then its same-day regression #683), 2026-08-13
+
+**v0.4.241 (PR #682, merge `83ad5fc8`) — #679:** `/ai/status`, the WASM chip, and the login
+banner/toast no longer require Claude OAuth when `apiUrl` is a non-bundled endpoint. The worker's
+fresh-context review caught that `get_settings_internal` substituted the live proxy URL into the
+PERSISTED value — an ordinary Settings→Save would have permanently poisoned the bundled/non-bundled
+distinction; split into a pure DB read + `resolve_effective_settings`.
+
+**The regression (#683):** the supervisor's own post-deploy verification — reading live
+`/ai/status` and then the prod DB minutes after v0.4.241 landed — found `requiresClaudeAuth: false`
+on the bundled proxy. Root cause: deployed DBs ALREADY hold the substituted URL from years of saves
+under the old code (prod: `http://127.0.0.1:18787/v1`); #679's literal-default match classified
+them all non-bundled. Observable damage on dev: dead-since-June token + `connected: true` + banner
+suppressed.
+
+**v0.4.242 (PR #684, merge `cf8138b1`) — #683:** structural matcher `is_bundled_proxy_address`
+(scheme/host/port/path vs the proxy's CONFIGURED port, running or not, so classification cannot
+flicker) OR'd into the default-placeholder check — heals every poisoned row on read, no migration.
+Review again caught a real bug: the normalize-on-save wrote the env-overridable default
+unconditionally; a box with `PRESENTER_AI_API_URL` set would have had a bundled row silently
+repointed to a foreign endpoint. Guarded (`should_self_heal_to_canonical`) + tested.
+
+**Verified live after v0.4.242:** prod `requiresClaudeAuth: true`, connected, v0.4.242; dev
+honestly `connected: false` with the re-login message — the #661 nudge restored.
+
+**Supervisor lessons (mine, not the workers'):**
+- `gh run list -b dev -L 1` handed me the PR-Automation run and I reported the #683 round "all
+  green" while the REAL Pipeline for that head had FAILED Quality Checks (ai_tests.rs 1196 > 1000
+  cap). The playbook warns about exactly this; filter by workflow name AND head SHA. The
+  "same commit passed push-run, failed PR-run" mystery I then invented did not survive
+  investigation — one commit, one Quality Checks evaluation, correctly red.
+- The cap fix: `ai_tests.rs` split mechanically into `ai_tests.rs` (733) + `ai_status_tests.rs`
+  (495), bodies verified byte-identical before/after.
+- Token lifecycle under proxy 7.2.130 now confirmed TWICE: self-refresh at exactly expiry−4h
+  (01:23 → 09:23, then 05:23 → 13:23). #675 closed on the first; the second makes it a pattern.
+- Fleet workers sharing scratchpad paths clobbered a sibling's commit message — filed upstream as
+  airuleset#432 (by the worker, through the proper foreign-repo channel).
+
+**Backlog after these rounds:** #662 (umbrella, open by design), #680 (eval driver, workable),
+#681 (dead second-account auth file retried every 5 min — needs the user's decision).
