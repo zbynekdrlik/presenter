@@ -235,3 +235,41 @@ A second smoke-run (same corpus, Qwen3-8B reasoning ENABLED) found 2 more defect
   of) the generic "run_agent returned an error" classification, and the report surfaces a
   distinct `stalledRetryLoopTotal` count. Before this fix, that crash scored identically to a
   genuine infra/network failure.
+
+## Evaluating ADDITIONAL model families — drop-in tool-calling is NOT universal (#662, 2026-08-13)
+
+Second measurement round tried two non-Qwen families on the same harness
+(`EuroLLM-9B-Instruct-Q4_K_M` 5.58 GB from `bartowski`, `gemma-3-4b-it-qat-Q4_0` 2.53 GB from
+`ggml-org`, both ungated). Results comment: issuecomment-5286666743. The load-bearing finding,
+verified with `tool_choice` auto AND `required` probes plus Qwen3-8B as a positive control on the
+identical wrapper:
+
+- **Only Qwen3 tool-calls out of the box in the drop-in llama.cpp config.** EuroLLM-9B and
+  Gemma-3-4B produced **zero** tool calls across all 30 cases — and `tool_choice:"required"` did NOT
+  force a call either (they returned prose). A correctly tool-wired llama.cpp honors `required` via a
+  constrained grammar, so this means llama.cpp's `--jinja` path is **not injecting tools into these
+  families' embedded GGUF chat templates at all** — a serving/template-integration gap, NOT proof the
+  model is intrinsically incapable. Qwen3's GGUF template + llama.cpp's Qwen tool-parser wire tools
+  correctly; Gemma-3 / EuroLLM default templates do not.
+- **Consequence for scoring:** such a model can't be scored on task quality — it never drives the
+  loop. Its only Layer-1 "pass" is `wc-04-delete-gate-blocked-sk`, where the correct behavior is to
+  NOT act, so "made no tool call" satisfies it trivially. Do not read a 1/30 here as "1 real
+  success" — read the traces' `actual calls []` first.
+- **Before writing off any non-Qwen model, run the two-mode probe FIRST** (auto + required, with a
+  Qwen positive control) to separate "template not wired" from "model can't". A definitive
+  model-capability answer needs a hand-built tool-aware `--chat-template`, which the mandated GPU
+  wrapper does not expose — that is per-model integration work, out of scope for a drop-in swap.
+
+**Model-selection VRAM ceiling on this box (bakerion holds ~0.8 GB resident → ~7.3 GB free).** The
+wrapper hardcodes `-ngl 99` (full offload) with no partial-offload knob, so a model whose weights
+alone approach ~7 GB (e.g. Gemma-3-12B-QAT Q4_0 = **6.91 GB**) risks a VRAM-OOM wedge (the #445
+trigger that blocks ALL CI) and must NOT be run as-is. Budget weights ≲5.5 GB to keep KV headroom.
+
+**Re-run recipe for another model:** build a current artifact with
+`gh workflow run ai-eval-build.yml --ref main` (artifact `ai-eval-<12charSHA-of-main>`), download the
+GGUF into `/home/newlevel/models/`, then drive via the wrapper with a `MODEL=` env override:
+`MODEL=/home/newlevel/models/<file>.gguf PORT=18790 /home/newlevel/tools/llama.cpp/run-eval-server.sh`
+(canonical wrapper is `--reasoning off`; a harmless no-op for models with no thinking mode like
+EuroLLM / Gemma). Point `ai_eval drive --candidate-url http://127.0.0.1:18790/v1 --model <name>` at
+it. Check `report.json`'s `seedFailedTotal == 0` before trusting a low score (nonzero = a harness/env
+problem, e.g. an unset `PRESENTER_BIBLE_*` var, not a model result).
