@@ -212,9 +212,19 @@ fn arg_keys(arguments_json: &str) -> Vec<String> {
 /// successful call (no such key) or unparseable content.
 fn tool_result_error_class(content: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(content).ok()?;
-    v.get("error")
+    // `rule` FIRST, not `error`: the bible validator's `ValidationError::to_json`
+    // (ai/bible_validator.rs) emits BOTH keys on every slide-validation
+    // failure — a CONSTANT `"error": "slide_validation"` plus the actual
+    // specific `"rule": "<rule>"`. Checking `error` first would collapse
+    // every distinct validation rule to the same "slide_validation" shape,
+    // false-flagging a model that is genuinely self-correcting across
+    // DIFFERENT rules each attempt as a stalled identical-failure loop
+    // (review finding). `error` alone (no `rule` key) still falls through
+    // to the second check — e.g. `bible_presentation.rs::parse_bible_items`'s
+    // `missing_items`/`invalid_item_kind`/... shapes, which carry only `error`.
+    v.get("rule")
         .and_then(serde_json::Value::as_str)
-        .or_else(|| v.get("rule").and_then(serde_json::Value::as_str))
+        .or_else(|| v.get("error").and_then(serde_json::Value::as_str))
         .map(str::to_string)
 }
 
@@ -402,6 +412,76 @@ mod tests {
             detect_stalled_retry_loop(&conv).is_none(),
             "3 DIFFERENTLY-shaped attempts (different arg keys, different \
              errors, then success) must not be flagged"
+        );
+    }
+
+    /// #662 review finding: `ai::bible_validator::ValidationError::to_json`
+    /// emits BOTH a constant `"error": "slide_validation"` AND the actual
+    /// specific `"rule"` on every slide-validation failure — a model
+    /// genuinely self-correcting across 3 DIFFERENT validation rules (same
+    /// tool, same arg-key set each attempt) must NOT be flagged as a
+    /// stalled loop just because `"error"` is the same constant every
+    /// time; the specific `rule` is what must differ for this to count as
+    /// real self-correction.
+    #[test]
+    fn slide_validation_failures_with_different_rules_are_not_a_stalled_loop() {
+        let args = serde_json::json!({"name": "x", "items": []});
+        let conv = vec![
+            assistant_tool_call("t1", "create_bible_presentation", args.clone()),
+            tool_result(
+                "t1",
+                "create_bible_presentation",
+                serde_json::json!({"error": "slide_validation", "rule": "main_exceeds_character_limit"}),
+            ),
+            assistant_tool_call("t2", "create_bible_presentation", args.clone()),
+            tool_result(
+                "t2",
+                "create_bible_presentation",
+                serde_json::json!({"error": "slide_validation", "rule": "reference_format_requires_parens"}),
+            ),
+            assistant_tool_call("t3", "create_bible_presentation", args),
+            tool_result(
+                "t3",
+                "create_bible_presentation",
+                serde_json::json!({"error": "slide_validation", "rule": "unprocessed_bold_markers"}),
+            ),
+        ];
+        assert!(
+            detect_stalled_retry_loop(&conv).is_none(),
+            "3 attempts sharing the constant \"error\":\"slide_validation\" but each hitting a \
+             DIFFERENT specific rule must not be flagged as an identical stalled failure"
+        );
+    }
+
+    /// The mirror case: 3 IDENTICAL `rule` values (the real adv-10
+    /// scenario, expressed with the real two-key slide_validation shape)
+    /// still must be detected.
+    #[test]
+    fn slide_validation_failures_with_the_same_rule_are_a_stalled_loop() {
+        let args = serde_json::json!({"name": "x", "items": []});
+        let conv = vec![
+            assistant_tool_call("t1", "create_bible_presentation", args.clone()),
+            tool_result(
+                "t1",
+                "create_bible_presentation",
+                serde_json::json!({"error": "slide_validation", "rule": "main_exceeds_character_limit"}),
+            ),
+            assistant_tool_call("t2", "create_bible_presentation", args.clone()),
+            tool_result(
+                "t2",
+                "create_bible_presentation",
+                serde_json::json!({"error": "slide_validation", "rule": "main_exceeds_character_limit"}),
+            ),
+            assistant_tool_call("t3", "create_bible_presentation", args),
+            tool_result(
+                "t3",
+                "create_bible_presentation",
+                serde_json::json!({"error": "slide_validation", "rule": "main_exceeds_character_limit"}),
+            ),
+        ];
+        assert!(
+            detect_stalled_retry_loop(&conv).is_some(),
+            "3 consecutive attempts hitting the IDENTICAL rule must still be flagged"
         );
     }
 
