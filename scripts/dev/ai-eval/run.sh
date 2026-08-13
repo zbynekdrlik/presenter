@@ -4,30 +4,32 @@ set -euo pipefail
 # scripts/dev/ai-eval/run.sh
 #
 # Entry point for the presenter AI-eval verification harness (#662, report §6.2/§6.6).
-# STATUS: skeleton. Every stage below either does real, safe, read-only work (argument
-# parsing, corpus validation) or fails LOUDLY with an explicit "not yet implemented" error —
-# it NEVER silently skips a stage or reports success for work it did not do. See
-# scripts/dev/ai-eval/README.md "Status" for exactly what exists today vs. what report §8's
-# remaining tickets (steps 8-11) still need to build.
 #
 # Stages: drive -> score-l1 -> judge -> gate (report §6.2's directory layout / §6.6 CI wiring).
 #   drive    — run the candidate model through every corpus case via the real run_agent loop,
-#              write one trace JSON per case under traces/. Needs crates/presenter-server/
-#              src/bin/ai_eval.rs (feature "ai-eval"), which does not exist yet (report §8 step 8).
+#              write one trace JSON per case under traces/. Shells out to
+#              `cargo run --bin ai_eval --features ai-eval -- drive ...`
+#              (crates/presenter-server/src/bin/ai_eval/, report §8 step 8 — #680). Needs
+#              network access (the candidate model endpoint, and — for bible-authoring/
+#              adversarial cases — the real bible-translation ingestion).
 #   score-l1 — deterministic structural scoring of the traces just driven (real tool structs,
 #              real create_bible_presentation packer, real bible_validator, verse-text diff,
-#              delete-gate check, sequencing sanity — report §6.4 Layer-1). Also lives in
-#              ai_eval.rs; not yet built.
+#              delete-gate check, sequencing sanity — report §6.4 Layer-1). Shells out to
+#              `cargo run --bin ai_eval --features ai-eval -- score-l1 ...`. Pure — no model,
+#              no network; can score already-committed golden/ traces just as well as
+#              freshly-driven ones.
 #   judge    — Layer-2 LLM-as-judge pass over the SAME traces via judge/promptfooconfig.yaml.
-#              The config exists (this PR) but has never been run end-to-end against real
-#              traces, because no traces exist yet.
+#              The config exists (skeleton PR) but has never been run end-to-end against real
+#              traces — report §8 step 10, still a later ticket.
 #   gate     — apply the §6.5 pass/fail bar to report/results.json and exit non-zero on any
-#              failing tier. Nothing to gate until score-l1 and judge both produce real output.
+#              failing tier — report §8 step 11, still a later ticket. score-l1 above already
+#              writes report/results.json with real per-case/per-slice data; gate just needs
+#              to apply the bar to it.
 #
-# This script deliberately does NOT invoke cargo, npm, or any network call — see the "no local
-# builds / no network installs" constraint noted in the completion report for this PR. Once
-# ai_eval.rs exists, `drive`/`score-l1` will shell out to `cargo run --bin ai_eval --features
-# ai-eval -- ...` themselves; that is future work, not something to work around here.
+# `ai_eval` is behind the non-default `ai-eval` Cargo feature (crates/presenter-server/
+# Cargo.toml) — a default `cargo build`/`cargo check`/`cargo test` never compiles it. This
+# script's own drive/score-l1 stages are the intended CI/local entrypoint that DOES pass
+# --features ai-eval, same as the acceptance-criterion invocation in #680.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORPUS_DIR="$SCRIPT_DIR/corpus"
@@ -122,22 +124,36 @@ stage_drive() {
   n="$(count_cases "$SLICE")"
   [[ "$n" -gt 0 ]] || fail "no corpus cases found for slice '$SLICE' under $CORPUS_DIR"
 
-  fail "drive stage not yet implemented — needs crates/presenter-server/src/bin/ai_eval.rs" \
-"(feature \"ai-eval\", non-default; report §6.2 / §8 step 8). Would drive $n case(s) from" \
-"slice '$SLICE' against $CANDIDATE_URL (model: $CANDIDATE_MODEL) once built. Intended" \
-"invocation once it exists: cargo run --bin ai_eval --features ai-eval -- --candidate-url" \
-"\"$CANDIDATE_URL\" --model \"$CANDIDATE_MODEL\" --slice \"$SLICE\" --out \"$TRACES_DIR\""
+  echo "drive: $n case(s), slice '$SLICE', candidate $CANDIDATE_URL (model: $CANDIDATE_MODEL)"
+  local slice_args=()
+  [[ "$SLICE" == "all" ]] || slice_args=(--slice "$SLICE")
+  (
+    cd "$SCRIPT_DIR/../../.." && \
+    cargo run --bin ai_eval --features ai-eval -- drive \
+      --candidate-url "$CANDIDATE_URL" \
+      --model "$CANDIDATE_MODEL" \
+      --corpus-dir "$CORPUS_DIR" \
+      --traces-dir "$TRACES_DIR" \
+      "${slice_args[@]}"
+  ) || fail "drive stage failed — see cargo output above"
 }
 
 stage_score_l1() {
   if [[ ! -d "$TRACES_DIR" ]] || [[ -z "$(find "$TRACES_DIR" -name '*.json' -print -quit 2>/dev/null)" ]]; then
-    fail "no traces under $TRACES_DIR — run the drive stage first (not yet implemented; see" \
-"README.md \"Status\")"
+    fail "no traces under $TRACES_DIR — run the drive stage first"
   fi
-  fail "Layer-1 structural scoring not yet implemented — the scorer (real tool-argument" \
-"structs, the real create_bible_presentation packer, the real bible_validator rules," \
-"verbatim/overridden-verse diffing, delete-gate check, toolSequence sequencing sanity —" \
-"report §6.4 Layer-1) lives in ai_eval.rs (report §8 step 8), not yet built."
+
+  echo "score-l1: scoring traces under $TRACES_DIR (slice '$SLICE') — pure, no model/network"
+  local slice_args=()
+  [[ "$SLICE" == "all" ]] || slice_args=(--slice "$SLICE")
+  (
+    cd "$SCRIPT_DIR/../../.." && \
+    cargo run --bin ai_eval --features ai-eval -- score-l1 \
+      --corpus-dir "$CORPUS_DIR" \
+      --traces-dir "$TRACES_DIR" \
+      --report "$REPORT_DIR/results.json" \
+      "${slice_args[@]}"
+  ) || fail "score-l1 stage failed — see cargo output above"
 }
 
 stage_judge() {

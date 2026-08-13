@@ -1,12 +1,17 @@
-pub(crate) mod agent;
-pub(crate) mod bible_validator;
+// `agent`, `bible_validator` and `tools` are `pub` (not `pub(crate)`) so the
+// #680 `ai_eval` binary (a separate crate root — see `lib.rs`'s doc comment)
+// can reuse the REAL `run_agent`/`execute_tool`/packer/validator instead of
+// re-implementing them. Everything else here stays crate-private; nothing
+// else is needed outside this crate.
+pub mod agent;
+pub mod bible_validator;
 pub(crate) mod client;
 pub(crate) mod context_budget;
 pub(crate) mod proxy;
 pub(crate) mod proxy_output_relay;
 pub(crate) mod refresh;
 pub(crate) mod tool_defs;
-pub(crate) mod tools;
+pub mod tools;
 
 #[cfg(test)]
 mod agent_budget_tests;

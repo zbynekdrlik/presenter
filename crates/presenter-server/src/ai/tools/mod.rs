@@ -15,7 +15,9 @@ use uuid::Uuid;
 pub use super::tool_defs::tool_definitions;
 
 mod bible;
-mod bible_presentation;
+// `pub` (not private) so the #680 `ai_eval` Layer-1 scorer can call the REAL
+// `parse_bible_items` — see that function's own doc comment.
+pub mod bible_presentation;
 mod library;
 mod misc;
 mod slides;
