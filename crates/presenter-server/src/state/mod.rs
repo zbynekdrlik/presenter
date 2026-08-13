@@ -42,7 +42,11 @@ mod presentation_lock;
 mod presentations;
 mod seed;
 mod slide_stage_layout;
-pub(crate) mod slides;
+// `pub` (not `pub(crate)`): the #680 `ai_eval` Layer-1 scorer reuses the REAL
+// `compose_bible_items_into_slides`/`BibleItem`/`ComposedBibleSlide` (all
+// pure, no `AppState`/DB) from a separate crate root — see `slides.rs`'s own
+// re-export comment.
+pub mod slides;
 pub(crate) mod stage;
 pub(crate) mod stage_display;
 mod stage_state;
@@ -58,7 +62,9 @@ mod tests;
 mod timers;
 pub(crate) mod video_source_status;
 
-#[cfg(test)]
+// Same cfg as `AppState::in_memory` below (the only user of `OscConfig`
+// here) — widened for #680's `ai-eval` feature the same way.
+#[cfg(any(test, feature = "ai-eval"))]
 use crate::config::OscConfig;
 use crate::{
     ableset::AbleSetBridge,
@@ -581,7 +587,15 @@ impl AppState {
         Ok(())
     }
 
-    #[cfg(test)]
+    // `cfg(any(test, feature = "ai-eval"))`, not bare `cfg(test)`: the #680
+    // `ai_eval` binary (feature `ai-eval`, non-default — see Cargo.toml)
+    // builds a fresh isolated `AppState` per corpus case the exact same way
+    // the existing test suite already proves works, rather than duplicating
+    // this constructor. A default (`cargo build`/`cargo check`, no
+    // `--features ai-eval`) build is unaffected — this widens the SAME cfg
+    // gate the test build already uses, adding one more condition that is
+    // false by default.
+    #[cfg(any(test, feature = "ai-eval"))]
     #[instrument(skip_all)]
     pub async fn in_memory() -> anyhow::Result<Self> {
         let repo = Repository::connect_in_memory().await?;

@@ -33,6 +33,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
 | Repository refusal → HTTP 404/409/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |
 | Sync/LWW invariants (synthetic tombstones, clock bumps, best-effort recon) | `.claude/rules/sync-lww.md` (auto-loads on `repository/sync*`, `library_sync*`, `state/sync.rs`) |
+| AI-eval harness (lib.rs split, Cargo autobins gotcha, minimal pub widening) | `.claude/rules/ai-eval-harness.md` (auto-loads on `bin/ai_eval/**`, `lib.rs`, `scripts/dev/ai-eval/**`) |
 
 ## Always-Rules
 

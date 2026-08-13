@@ -9,27 +9,26 @@ hardware constraints, and the serving-stack recommendation live in the research 
 
 ## Status (read this first)
 
-This PR builds the **skeleton and starter corpus only** — fixtures, schema, entrypoint scaffold,
-and the judge config/rubrics. It deliberately does **not** implement the pieces that require
-compiling Rust, calling a live model, or installing anything, per the constraints this PR shipped
-under (a live event was running the night this was authored — no `cargo build`, no network
-installs, no ssh). Concretely:
-
 | Piece | Status |
 |---|---|
-| Corpus schema + starter fixtures (this README's "Corpus" section) | ✅ Done, this PR |
-| `run.sh` stage scaffold (drive → score-l1 → judge → gate) | ✅ Done, this PR — every stage either does safe read-only work or fails loudly with a "not yet implemented" error citing the exact report step that builds it |
-| `judge/promptfooconfig.yaml` + rubrics + trace provider | ✅ Done, this PR — structurally complete, **never run end-to-end** (no traces exist yet) |
-| `crates/presenter-server/src/bin/ai_eval.rs` (the driver + Layer-1 scorer) | ❌ Not built — report §8 step 8, a separate PR |
-| Golden `claude-opus-4-6` trace capture | ❌ Not run — report §8 step 9, needs step 8 first + a fresh CLIProxyAPI login |
+| Corpus schema + starter fixtures (this README's "Corpus" section) | ✅ Done |
+| `crates/presenter-server/src/bin/ai_eval/` (the driver + Layer-1 scorer, feature `ai-eval`) | ✅ Built — #680. `drive` runs the real `run_agent` against a `--candidate-url`, `score-l1` replays every `create_bible_presentation` call through the real `parse_bible_items`/`compose_bible_items_into_slides`/`validate_bible_slide` chain. Layer-1 scorer has a full unit-test suite (`cargo test --bin ai_eval --features ai-eval`, Tier-0 so not runnable on this box — verified via CI once pushed). **The live smoke-run against a real candidate endpoint has NOT happened yet** (needs network access this environment didn't have at build time) — see "What's still unverified" below. |
+| `run.sh` stage wiring (drive → score-l1 → judge → gate) | `drive`/`score-l1` now shell out to `cargo run --bin ai_eval --features ai-eval -- ...` for real (#680). `judge`/`gate` still fail loudly with a "not yet implemented" error — report §8 steps 10-11, separate tickets. |
+| `judge/promptfooconfig.yaml` + rubrics + trace provider | Structurally complete, **never run end-to-end** (no traces exist yet — needs step 9 first) |
+| Golden `claude-opus-4-6` trace capture | ❌ Not run — report §8 step 9, needs a fresh CLIProxyAPI login + a live network run of `drive` |
 | The remaining ~70/~90 bulk corpus cases (corpus generator + more hand-written fixtures) | ❌ Not built — report §8 steps 6-7 |
 | CI wiring (`ai-eval.yml`, per-PR Layer-1-only lane) | ❌ Not built — report §8 step 11 |
 
-Running bare `./run.sh` today fails loudly immediately, on the `drive` stage's missing
-`--candidate-url`/`--model` arguments — it never gets far enough to count the corpus. Passing
-both (`./run.sh --candidate-url <url> --model <name>`) gets past that check and THEN counts the
-corpus (currently 30 cases) before failing loudly at whichever stage needs the not-yet-built
-driver — that is the intended, honest behavior of a skeleton, not a bug.
+### What's still unverified (#680)
+
+`ai_eval` is compiling-and-correct-by-construction, verified via `cargo check --workspace --tests
+--features ai-eval` and the Layer-1 scorer's own unit-test suite (RED-before-GREEN, real
+production functions replayed — see `scorer/tests.rs`). It has **not** been run end-to-end against
+a live candidate endpoint (`./run.sh --candidate-url <url> --model <name>`) — that needs network
+access to both the candidate model and the real bible-translation ingestion
+(`AppState::refresh_default_bible_translations`), which this environment did not have. This is the
+next concrete step: run `./run.sh --candidate-url <bundled-proxy-url> --model claude-opus-4-6`
+against the 30 starter fixtures and confirm `traces/*.json` + `report/results.json` come out sane.
 
 ## What this evaluates, and how
 
@@ -54,12 +53,22 @@ Two layers, deliberately kept separate (report §6.4):
 
 `run.sh` orchestrates four stages — `drive` (call the candidate, capture traces) → `score-l1`
 (deterministic Rust scoring) → `judge` (promptfoo Layer-2 pass) → `gate` (apply the pass/fail bar
-below and exit non-zero on failure). Once `ai_eval.rs` exists:
+below and exit non-zero on failure). `drive`/`score-l1` are real (#680); `judge`/`gate` still fail
+loudly with "not yet implemented" (report §8 steps 10-11):
 
 ```bash
 ./run.sh --candidate-url http://10.77.8.134:8787/v1 --model qwen3-8b
 ./run.sh --candidate-url http://10.77.8.134:8787/v1 --model qwen3-8b --slice bible-authoring
-./run.sh --stage judge     # re-judge already-driven traces without re-driving the model
+./run.sh --stage score-l1  # re-score already-driven traces without re-driving the model
+```
+
+`drive`/`score-l1` can also be run directly against the built binary (what `run.sh` shells out
+to), which additionally supports scoring already-committed traces (e.g. `golden/`) with no model
+call at all:
+
+```bash
+cargo run --bin ai_eval --features ai-eval -- drive --candidate-url <url> --model <name>
+cargo run --bin ai_eval --features ai-eval -- score-l1 --traces-dir scripts/dev/ai-eval/golden
 ```
 
 ## Directory layout
