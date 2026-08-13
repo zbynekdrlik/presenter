@@ -69,6 +69,12 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         Err(e) => (None, Some(format!("{e:#}")), Vec::new()),
     };
 
+    // #662 defect 7: scan only THIS turn's own activity (never any seeded
+    // prior-turn history) — same slicing convention `scorer::score_trace`
+    // already uses for `prior_turn_count`.
+    let turn_start = prior_turn_count.min(conversation.len());
+    let stalled_retry_loop = detect_stalled_retry_loop(&conversation[turn_start..]);
+
     Trace {
         case_id: case.id.clone(),
         slice: case.slice.clone(),
@@ -84,10 +90,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         // Always None today — see TraceUsage's doc comment + #687.
         usage: None,
         turns,
-        // Not yet wired to a real detector — see #662 defect 7's own RED
-        // commit for `detect_stalled_retry_loop`, wired in the paired
-        // GREEN commit right after it.
-        stalled_retry_loop: None,
+        stalled_retry_loop,
         captured_at: now_rfc3339(),
     }
 }
@@ -173,9 +176,110 @@ pub fn seed_failure_report(traces: &[Trace]) -> Option<String> {
 /// `create_bible_presentation` retries, all failing the same way, until
 /// the accumulated context crashed the request with a malformed-JSON HTTP
 /// 500 — a harness-visible CRASH for what was really a candidate failure
-/// mode). TODO(#662 defect 7, RED): not wired up yet — see the paired
-/// GREEN commit right after this one.
-pub fn detect_stalled_retry_loop(_conversation: &[ChatMessage]) -> Option<String> {
+/// mode).
+const STALLED_RETRY_THRESHOLD: usize = 3;
+
+/// One failed tool call's "shape" for stall detection — coarse ON
+/// PURPOSE: the tool name, the SET of argument top-level keys (not their
+/// values — a model retrying with different wording in the same fields is
+/// still the same unproductive pattern, per the ticket's "same tool, same
+/// args shape, same error class"), and the error/rule key the tool result
+/// reported. Two failures with the same shape are "the same mistake,
+/// retried".
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FailedCallShape {
+    tool: String,
+    arg_keys: Vec<String>,
+    error_class: String,
+}
+
+/// Sorted top-level JSON object keys of a tool call's raw `arguments`
+/// string — empty when the arguments aren't a JSON object (malformed or
+/// unparseable arguments are their own distinct, degenerate "shape" of
+/// empty keys, which is fine: a genuinely different malformed-arguments
+/// attempt naturally won't repeat with the SAME error_class either).
+fn arg_keys(arguments_json: &str) -> Vec<String> {
+    let mut keys: Vec<String> = serde_json::from_str::<serde_json::Value>(arguments_json)
+        .ok()
+        .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// The `error` (or, for the bible validator's rule-keyed failures,
+/// `rule`) field of a tool RESULT's JSON content — `None` for a
+/// successful call (no such key) or unparseable content.
+fn tool_result_error_class(content: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(content).ok()?;
+    v.get("error")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| v.get("rule").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+}
+
+/// Every tool call in `conversation`, in order, as `Some(shape)` when it
+/// FAILED (its paired tool result carried an `error`/`rule` key) or `None`
+/// when it succeeded (or its result couldn't be matched/parsed) — a `None`
+/// entry breaks any in-progress streak of identical failures.
+fn failed_call_shapes(conversation: &[ChatMessage]) -> Vec<Option<FailedCallShape>> {
+    let mut shapes = Vec::new();
+    for msg in conversation {
+        let Some(tool_calls) = &msg.tool_calls else {
+            continue;
+        };
+        for tc in tool_calls {
+            let result_content = conversation
+                .iter()
+                .find(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some(tc.id.as_str()))
+                .and_then(|m| m.content.as_deref());
+            let shape = result_content
+                .and_then(tool_result_error_class)
+                .map(|error_class| FailedCallShape {
+                    tool: tc.function.name.clone(),
+                    arg_keys: arg_keys(&tc.function.arguments),
+                    error_class,
+                });
+            shapes.push(shape);
+        }
+    }
+    shapes
+}
+
+/// Scan `conversation` for `STALLED_RETRY_THRESHOLD` (or more) CONSECUTIVE
+/// tool calls with the identical failure "shape" (same tool, same
+/// argument key set, same error class) — a model stuck retrying a mistake
+/// it never diagnoses, not legitimate self-correction (#662 defect 7).
+/// Pure, trace-only (no `AppState`/network) — same discipline as every
+/// other Layer-1-style check in this harness (`scorer::turn_analysis`).
+/// Returns a human-readable description naming the offending tool + error
+/// + repeat count when found, `None` otherwise.
+pub fn detect_stalled_retry_loop(conversation: &[ChatMessage]) -> Option<String> {
+    let shapes = failed_call_shapes(conversation);
+    let mut run_shape: Option<FailedCallShape> = None;
+    let mut run_len = 0usize;
+
+    for shape in shapes {
+        if shape == run_shape {
+            if shape.is_some() {
+                run_len += 1;
+            }
+        } else {
+            run_len = usize::from(shape.is_some());
+            run_shape = shape;
+        }
+
+        if run_len >= STALLED_RETRY_THRESHOLD {
+            let s = run_shape
+                .as_ref()
+                .expect("run_len >= 1 implies run_shape is Some");
+            return Some(format!(
+                "stalled retry loop: tool '{}' failed identically (error '{}') {} times in a row",
+                s.tool, s.error_class, run_len
+            ));
+        }
+    }
+
     None
 }
 

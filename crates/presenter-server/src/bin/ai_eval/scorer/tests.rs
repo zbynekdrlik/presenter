@@ -532,3 +532,47 @@ fn seed_failed_trace_is_classified_separately_from_a_candidate_error() {
         score.failures
     );
 }
+
+// --- stalled retry loop (#662 defect 7) ---
+
+#[test]
+fn stalled_retry_loop_trace_is_classified_separately_from_a_generic_candidate_error() {
+    let c = case("adv-10", "adversarial", Expected::default());
+    let mut t = trace("adv-10", "adversarial", 320, Vec::new());
+    // A stalled loop like adv-10's real one ends in a generic run_agent
+    // error too (the eventual context-ceiling crash) — the stalled-loop
+    // classification must win over the generic one.
+    t.error = Some("AI API error: Failed to parse tool call arguments as JSON".into());
+    t.stalled_retry_loop = Some(
+        "stalled retry loop: tool 'create_bible_presentation' failed identically \
+         (error 'invalid_verse_item') 8 times in a row"
+            .into(),
+    );
+
+    let score = score_trace(&c, &t);
+    assert!(!score.passed);
+    assert!(
+        score.stalled_retry_loop,
+        "score_trace must propagate Trace::stalled_retry_loop onto CaseScore"
+    );
+    assert!(
+        !score.seed_failed,
+        "a stalled retry loop is a candidate result, not a seed failure"
+    );
+    assert!(
+        score
+            .failures
+            .iter()
+            .any(|f| f.contains("stalled") && f.contains("invalid_verse_item")),
+        "the failure message must name the stall, not just relay the generic error: {:?}",
+        score.failures
+    );
+    assert!(
+        !score
+            .failures
+            .iter()
+            .any(|f| f.contains("run_agent returned an error")),
+        "the stalled-loop classification must WIN over the generic error branch: {:?}",
+        score.failures
+    );
+}

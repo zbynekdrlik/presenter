@@ -39,6 +39,9 @@ pub struct CaseResult {
     /// `results.json` reader filter seed-failed cases out of a pass-rate
     /// calculation instead of counting them as model failures.
     pub seed_failed: bool,
+    /// Mirrors `CaseScore::stalled_retry_loop` (#662 defect 7) — see its
+    /// own doc comment.
+    pub stalled_retry_loop: bool,
     /// From `Trace::duration_ms` (#662 defect 4) — how long THIS case took
     /// to drive, independent of whether it passed.
     pub duration_ms: u64,
@@ -72,6 +75,10 @@ pub struct Report {
     /// this is the report-level answer to "how many of my LLM calls got
     /// cut off by the context/token ceiling".
     pub finish_reason_length: usize,
+    /// Count of `cases[].stalledRetryLoop == true` (#662 defect 7) — a
+    /// candidate failure MODE (unproductive retry, usually ending in a
+    /// context-ceiling crash), surfaced distinctly from a generic error.
+    pub stalled_retry_loop_total: usize,
     pub slices: Vec<SliceSummary>,
     pub cases: Vec<CaseResult>,
 }
@@ -89,6 +96,10 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
         .iter()
         .flat_map(|(_, t, _)| t.turns.iter())
         .filter(|turn| turn.finish_reason.as_deref() == Some("length"))
+        .count();
+    let stalled_retry_loop_total = results
+        .iter()
+        .filter(|(_, _, s)| s.stalled_retry_loop)
         .count();
 
     let mut slice_names: Vec<String> = results.iter().map(|(c, _, _)| c.slice.clone()).collect();
@@ -117,6 +128,7 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
             slice: case.slice.clone(),
             passed: score.passed,
             seed_failed: score.seed_failed,
+            stalled_retry_loop: score.stalled_retry_loop,
             duration_ms: trace.duration_ms,
             failures: score.failures.clone(),
             notes: case.expected.notes.clone(),
@@ -130,6 +142,7 @@ pub fn build_report(results: &[(&Case, &Trace, CaseScore)]) -> Report {
         seed_failed_total,
         total_duration_ms,
         finish_reason_length,
+        stalled_retry_loop_total,
         slices,
         cases,
     }
@@ -170,6 +183,13 @@ pub fn print_summary(report: &Report) {
         println!(
             "  {} LLM call(s) hit finishReason=\"length\" (context/token ceiling truncation)",
             report.finish_reason_length
+        );
+    }
+    if report.stalled_retry_loop_total > 0 {
+        println!(
+            "  {} case(s) stalled in an unproductive retry loop (candidate failure mode, \
+             not a harness crash)",
+            report.stalled_retry_loop_total
         );
     }
     for s in &report.slices {
@@ -231,6 +251,7 @@ mod tests {
             case_id: case_id.to_string(),
             passed,
             seed_failed: false,
+            stalled_retry_loop: false,
             failures: Vec::new(),
         }
     }
@@ -294,5 +315,27 @@ mod tests {
         let results = vec![(&c1, &t1, s1)];
         let report = build_report(&results);
         assert_eq!(report.finish_reason_length, 0);
+    }
+
+    /// #662 defect 7: `stalledRetryLoopTotal` counts `CaseScore.stalled_retry_loop`
+    /// across every case, and `CaseResult.stalledRetryLoop` carries it
+    /// per-case into `results.json`.
+    #[test]
+    fn stalled_retry_loop_total_counts_across_every_case() {
+        let c1 = case("adv-10", "adversarial");
+        let t1 = trace_with_turns("adv-10", 5000, Vec::new());
+        let mut s1 = score("adv-10", false);
+        s1.stalled_retry_loop = true;
+
+        let c2 = case("wc-01", "worship-crud");
+        let t2 = trace_with_turns("wc-01", 10, Vec::new());
+        let s2 = score("wc-01", true);
+
+        let results = vec![(&c1, &t1, s1), (&c2, &t2, s2)];
+        let report = build_report(&results);
+
+        assert_eq!(report.stalled_retry_loop_total, 1);
+        assert!(report.cases[0].stalled_retry_loop);
+        assert!(!report.cases[1].stalled_retry_loop);
     }
 }
