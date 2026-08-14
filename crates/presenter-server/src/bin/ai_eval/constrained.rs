@@ -11,13 +11,43 @@
 use serde_json::{json, Value};
 
 /// The response_format schema, mirroring `create_bible_presentation`'s args
-/// (`ai::tool_defs`): `{name, items:[{kind∈{verse,emphasis}, text, number, book,
-/// chapter, translation}]}`. NO regex `pattern` fields — llama.cpp's
-/// schema→grammar converter rejects them (#22314). `additionalProperties` is
-/// left permissive (unset) so a model adding a stray field is not hard-rejected
-/// at the sampler; the harness's own [`validate_constrained_json`] + the real
-/// packer/validator do the meaningful checking.
+/// (`ai::tool_defs`) — but with the field requirements the REAL validator
+/// (`parse_bible_items`) actually enforces, NOT the tool schema's loose
+/// `required: [kind, text]`. A `oneOf` splits the two item kinds:
+///
+/// - **verse** items require `number, text, book, chapter, translation` (all of
+///   them — `parse_bible_items` rejects `number==0`/empty-book/`chapter==0`/
+///   empty-translation as `invalid_verse_item`);
+/// - **emphasis** items require only `text`.
+///
+/// The tool schema's loose `required` was a real trap when mirrored verbatim: the
+/// grammar let the model DROP `book`/`chapter` on verse items, producing
+/// schema-valid-but-validator-INVALID output that scored 0/30 (a live finding on
+/// the first constrained sweep; the `oneOf` fix was verified against llama.cpp to
+/// make the model emit all verse fields). NO regex `pattern` fields — llama.cpp's
+/// schema→grammar converter rejects them (#22314); `additionalProperties` left
+/// permissive.
 pub fn bible_presentation_schema() -> Value {
+    let verse_item = json!({
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["verse"]},
+            "number": {"type": "integer"},
+            "text": {"type": "string"},
+            "book": {"type": "string"},
+            "chapter": {"type": "integer"},
+            "translation": {"type": "string"}
+        },
+        "required": ["kind", "number", "text", "book", "chapter", "translation"]
+    });
+    let emphasis_item = json!({
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["emphasis"]},
+            "text": {"type": "string"}
+        },
+        "required": ["kind", "text"]
+    });
     json!({
         "type": "json_schema",
         "json_schema": {
@@ -28,18 +58,7 @@ pub fn bible_presentation_schema() -> Value {
                     "name": {"type": "string"},
                     "items": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "kind": {"type": "string", "enum": ["verse", "emphasis"]},
-                                "number": {"type": "integer"},
-                                "text": {"type": "string"},
-                                "book": {"type": "string"},
-                                "chapter": {"type": "integer"},
-                                "translation": {"type": "string"}
-                            },
-                            "required": ["kind", "text"]
-                        }
+                        "items": {"oneOf": [verse_item, emphasis_item]}
                     }
                 },
                 "required": ["name", "items"]
@@ -57,7 +76,8 @@ Respond with ONLY a single JSON object (no prose, no markdown code fences) match
 shape: {\"name\": <presentation name string>, \"items\": [ {\"kind\": \"verse\" or \"emphasis\", \
 \"text\": <string>, \"number\": <int, verse items only>, \"book\": <string, verse items only>, \
 \"chapter\": <int, verse items only>, \"translation\": <short code e.g. SEB, verse items only>} ]}. \
-Every item MUST have kind and text; verse items also carry number, book, chapter and translation. \
+Every VERSE item MUST include number, text, book, chapter AND translation (all five) — a verse item \
+missing any of these is rejected. Every EMPHASIS item needs only kind and text. \
 Apply any ##uppercase## transformations to the item text itself.";
 
 /// Strict fail-open guard (#662 step 3, llama.cpp #19051): parse + shape-check
@@ -127,8 +147,31 @@ mod tests {
             .map(|v| v.as_str().unwrap())
             .collect();
         assert!(required.contains(&"name") && required.contains(&"items"));
-        let kind_enum = &schema["properties"]["items"]["items"]["properties"]["kind"]["enum"];
-        assert_eq!(kind_enum, &json!(["verse", "emphasis"]));
+
+        // items are a oneOf of a verse variant and an emphasis variant.
+        let variants = schema["properties"]["items"]["items"]["oneOf"]
+            .as_array()
+            .expect("items must be a oneOf");
+        assert_eq!(variants.len(), 2);
+
+        // The verse variant requires ALL the fields parse_bible_items enforces
+        // (the whole point of the fix — a loose `required` scored 0/30).
+        let verse = &variants[0];
+        assert_eq!(verse["properties"]["kind"]["enum"], json!(["verse"]));
+        let verse_req: Vec<&str> = verse["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        for f in ["kind", "number", "text", "book", "chapter", "translation"] {
+            assert!(verse_req.contains(&f), "verse variant must require {f}");
+        }
+
+        // The emphasis variant requires only kind + text.
+        let emph = &variants[1];
+        assert_eq!(emph["properties"]["kind"]["enum"], json!(["emphasis"]));
+        assert_eq!(emph["required"], json!(["kind", "text"]));
     }
 
     #[test]
