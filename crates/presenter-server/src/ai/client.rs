@@ -95,6 +95,20 @@ pub struct ChatCompletionRequest {
     /// kind of thing that can grow the conversation past the context
     /// budget on the next iteration (#665).
     pub max_tokens: u32,
+    /// OpenAI-compatible structured-output constraint (`{"type":"json_schema",
+    /// "json_schema":{...}}`). Only ever set by the `ai_eval` harness's
+    /// constrained-output mode (#662 step 2) via
+    /// [`call_chat_completions_with_options`]; production `run_agent` always
+    /// leaves it `None`, so `skip_serializing_if` keeps live requests
+    /// byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
+    /// Extra jinja chat-template kwargs (e.g. `{"enable_thinking": false}` for
+    /// Qwen3 — grammar decoding is silently inactive while thinking is on,
+    /// llama.cpp #20345). Same discipline as `response_format`: harness-only,
+    /// `None` in production, omitted from the wire when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_template_kwargs: Option<serde_json::Value>,
 }
 
 /// OpenAI-compatible chat completion response.
@@ -188,11 +202,30 @@ pub struct ModelEntry {
     pub id: String,
 }
 
-/// Call an OpenAI-compatible chat completions endpoint.
+/// Call an OpenAI-compatible chat completions endpoint. Thin wrapper over
+/// [`call_chat_completions_with_options`] with no structured-output
+/// constraint — the ONLY path production `run_agent` uses, kept at its exact
+/// original signature so live requests are byte-identical.
 pub async fn call_chat_completions(
     messages: &[serde_json::Value],
     tools: Option<&[serde_json::Value]>,
     settings: &AiSettings,
+) -> anyhow::Result<ChatCompletionResponse> {
+    call_chat_completions_with_options(messages, tools, settings, None, None).await
+}
+
+/// Call an OpenAI-compatible chat completions endpoint, optionally carrying a
+/// `response_format` (constrained/structured decoding) and extra
+/// `chat_template_kwargs`. Used by the `ai_eval` harness's constrained-output
+/// mode (#662 step 2); `call_chat_completions` delegates here with `None,
+/// None`. When both are `None` the serialized request is identical to the
+/// pre-#662 body (the two fields `skip_serializing_if` away).
+pub async fn call_chat_completions_with_options(
+    messages: &[serde_json::Value],
+    tools: Option<&[serde_json::Value]>,
+    settings: &AiSettings,
+    response_format: Option<serde_json::Value>,
+    chat_template_kwargs: Option<serde_json::Value>,
 ) -> anyhow::Result<ChatCompletionResponse> {
     let url = format!(
         "{}/chat/completions",
@@ -205,6 +238,8 @@ pub async fn call_chat_completions(
         tools: tools.map(|t| t.to_vec()),
         tool_choice: tools.map(|_| "auto".to_string()),
         max_tokens: max_tokens(),
+        response_format,
+        chat_template_kwargs,
     };
 
     let client = reqwest::Client::new();
@@ -392,12 +427,19 @@ mod tests {
             tools: None,
             tool_choice: None,
             max_tokens: 4321,
+            response_format: None,
+            chat_template_kwargs: None,
         };
         let value = serde_json::to_value(&request).expect("must serialize");
         assert_eq!(
             value.get("max_tokens"),
             Some(&serde_json::json!(4321)),
             "serialized request must carry a max_tokens field: {value}"
+        );
+        assert!(
+            value.get("response_format").is_none()
+                && value.get("chat_template_kwargs").is_none(),
+            "both optional fields must be omitted when None: {value}"
         );
     }
 
@@ -467,6 +509,92 @@ mod tests {
         assert!(
             response.usage.is_none(),
             "a response with no usage object at all must deserialize to None, not error"
+        );
+    }
+
+    /// #662 step 2: `call_chat_completions_with_options` must put
+    /// `response_format` and `chat_template_kwargs` on the WIRE exactly as
+    /// passed — the constrained-output path the harness relies on.
+    #[tokio::test]
+    async fn call_chat_completions_with_options_sends_response_format_and_kwargs() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "{}"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "test-model");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let schema = serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {"name": "x", "schema": {"type": "object"}}
+        });
+        let _ = call_chat_completions_with_options(
+            &messages,
+            None,
+            &settings,
+            Some(schema.clone()),
+            Some(serde_json::json!({"enable_thinking": false})),
+        )
+        .await
+        .expect("must succeed");
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        let body: serde_json::Value =
+            serde_json::from_slice(&reqs[0].body).expect("request body must be JSON");
+        assert_eq!(
+            body.get("response_format"),
+            Some(&schema),
+            "response_format must be sent verbatim: {body}"
+        );
+        assert_eq!(
+            body.get("chat_template_kwargs")
+                .and_then(|k| k.get("enable_thinking"))
+                .and_then(serde_json::Value::as_bool),
+            Some(false),
+            "chat_template_kwargs.enable_thinking must be sent: {body}"
+        );
+    }
+
+    /// The plain `call_chat_completions` (production `run_agent`'s path) must
+    /// send a body with NEITHER new key — the `skip_serializing_if` guard
+    /// keeps live requests byte-identical to pre-#662.
+    #[tokio::test]
+    async fn call_chat_completions_omits_response_format_and_kwargs_when_none() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "test-model");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let _ = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("must succeed");
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        let body: serde_json::Value =
+            serde_json::from_slice(&reqs[0].body).expect("request body must be JSON");
+        assert!(
+            body.get("response_format").is_none(),
+            "response_format must be OMITTED from a plain request: {body}"
+        );
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "chat_template_kwargs must be OMITTED from a plain request: {body}"
         );
     }
 

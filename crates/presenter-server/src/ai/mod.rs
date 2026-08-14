@@ -13,6 +13,13 @@ pub(crate) mod refresh;
 pub(crate) mod tool_defs;
 pub mod tools;
 
+// Minimal widening for the #680 `ai_eval` binary's constrained-output mode
+// (#662 step 2): expose ONLY the options-carrying chat call it needs, keeping
+// the rest of `client` crate-private. The returned `ChatCompletionResponse`'s
+// fields are all `pub`, so the harness reads them by field access (via type
+// inference) without ever naming the type.
+pub use client::call_chat_completions_with_options;
+
 #[cfg(test)]
 mod agent_budget_tests;
 #[cfg(test)]

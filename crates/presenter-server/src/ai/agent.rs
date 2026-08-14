@@ -258,7 +258,7 @@ pub enum ProgressEvent {
 /// Detailed formatting rules are NOT included here — the model can call
 /// the `get_style_guide` tool if it needs them. See
 /// `crates/presenter-server/src/ai/style_guide.md`.
-async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, u32) {
+pub async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, u32) {
     // Worship libraries (bible has its own separate storage after #231)
     let libraries = state.libraries().await.unwrap_or_default();
     let library_list: Vec<String> = libraries
