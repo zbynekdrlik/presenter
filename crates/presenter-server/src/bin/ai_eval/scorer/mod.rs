@@ -104,7 +104,16 @@ pub fn score_trace(case: &Case, trace: &Trace) -> CaseScore {
 
     let attempts = bible_replay::collect_bible_presentation_attempts(turn, trace.char_limit);
 
-    turn_analysis::check_tool_sequence(case, turn, &mut failures);
+    // A single-shot CONSTRAINED-mode trace (#662 step 2) has NO lookup tool
+    // call by design — the candidate emitted the create_bible_presentation JSON
+    // directly under response_format json_schema. The `expected.toolSequence`
+    // (e.g. ["load_bible_verses", "create_bible_presentation"]) is therefore
+    // inapplicable and would spuriously fail every constrained case; skip it.
+    // The content checks below (validation errors, verse fidelity) still run —
+    // that is what constrained mode is measuring.
+    if !trace.constrained {
+        turn_analysis::check_tool_sequence(case, turn, &mut failures);
+    }
     turn_analysis::check_max_iterations(case, turn, &mut failures);
     turn_analysis::check_delete_gate(case, turn, &mut failures);
     bible_replay::check_validation_errors(case, &attempts, &mut failures);

@@ -39,6 +39,7 @@ fn trace(case_id: &str, slice: &str, char_limit: u32, conversation: Vec<ChatMess
         usage: None,
         turns: Vec::new(),
         stalled_retry_loop: None,
+        constrained: false,
         captured_at: "2026-01-01T00:00:00Z".to_string(),
     }
 }
@@ -574,5 +575,63 @@ fn stalled_retry_loop_trace_is_classified_separately_from_a_generic_candidate_er
             .any(|f| f.contains("run_agent returned an error")),
         "the stalled-loop classification must WIN over the generic error branch: {:?}",
         score.failures
+    );
+}
+
+// --- #662 step 2: constrained mode skips the toolSequence check ---
+
+#[test]
+fn constrained_trace_skips_tool_sequence_but_keeps_content_checks() {
+    // A single-shot constrained output: ONE create_bible_presentation attempt,
+    // NO load_bible_verses call, correct verse text.
+    let items = json!({
+        "name": "Sermon",
+        "items": [
+            {"kind": "verse", "number": 16, "text": "Veď Boh tak miloval svet.",
+             "book": "Ján", "chapter": 3, "translation": "SEB"}
+        ]
+    });
+    let conv = vec![assistant_tool_call(
+        "c0",
+        "create_bible_presentation",
+        items,
+    )];
+    let c = case(
+        "ba-01",
+        "bible-authoring",
+        Expected {
+            tool_sequence: vec![
+                "load_bible_verses".into(),
+                "create_bible_presentation".into(),
+            ],
+            verbatim_verses: vec![VerbatimVerse {
+                reference: "Ján 3:16".into(),
+                translation: "SEB".into(),
+                text: "Veď Boh tak miloval svet.".into(),
+            }],
+            ..Default::default()
+        },
+    );
+
+    // constrained:false (tool mode) → the missing load_bible_verses trips toolSequence.
+    let tool_mode = trace("ba-01", "bible-authoring", 320, conv.clone());
+    let s = score_trace(&c, &tool_mode);
+    assert!(
+        !s.passed && s.failures.iter().any(|f| f.contains("toolSequence")),
+        "a tool-mode trace missing load_bible_verses must fail toolSequence: {:?}",
+        s.failures
+    );
+
+    // constrained:true → toolSequence skipped by design; content checks still pass.
+    let constrained = Trace {
+        constrained: true,
+        ..trace("ba-01", "bible-authoring", 320, conv)
+    };
+    let s = score_trace(&c, &constrained);
+    assert!(
+        s.passed,
+        "a constrained single-shot trace with correct content must PASS \
+         (toolSequence skipped): {:?}",
+        s.failures
     );
 }
