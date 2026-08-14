@@ -272,6 +272,7 @@ mod tests {
             usage: None,
             turns,
             stalled_retry_loop: None,
+            constrained: false,
             captured_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }
@@ -297,6 +298,7 @@ mod tests {
             usage,
             turns: Vec::new(),
             stalled_retry_loop: None,
+            constrained: false,
             captured_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }

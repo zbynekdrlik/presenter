@@ -46,6 +46,12 @@ pub struct Args {
     /// that omitted the flag; `parse_args` guarantees `Some` whenever
     /// `score-l1` will run.
     pub report_path: Option<PathBuf>,
+    /// `--constrained` (#662 step 2): drive each case through the single-shot
+    /// constrained-output path (`response_format` json_schema, no tool loop)
+    /// instead of the real `run_agent` tool loop. Only meaningful for the bible
+    /// slices; the resulting traces carry `constrained: true` so `score-l1`
+    /// skips the (inapplicable) toolSequence check.
+    pub constrained: bool,
 }
 
 pub fn usage() -> String {
@@ -66,6 +72,9 @@ pub fn usage() -> String {
      \x20 --traces-dir PATH     (alias --out) REQUIRED — where to write/read trace JSON files\n\
      \x20 --report PATH         REQUIRED for score-l1/all (not needed for a pure drive run) —\n\
      \x20                       where to write the score-l1 report JSON\n\
+     \x20 --constrained         drive via single-shot constrained output (response_format\n\
+     \x20                       json_schema, no tool loop) instead of the run_agent tool loop.\n\
+     \x20                       #662 step 2 — bible slices only; traces carry constrained:true.\n\
      \x20 -h, --help            show this help\n"
         .to_string()
 }
@@ -98,6 +107,7 @@ struct RawFlags {
     corpus_dir: Option<PathBuf>,
     traces_dir: Option<PathBuf>,
     report_path: Option<PathBuf>,
+    constrained: bool,
 }
 
 fn parse_flags(raw: &[String], mut i: usize) -> anyhow::Result<RawFlags> {
@@ -113,6 +123,13 @@ fn parse_flags(raw: &[String], mut i: usize) -> anyhow::Result<RawFlags> {
                 flags.traces_dir = Some(PathBuf::from(take_value(raw, i, &flag)?));
             }
             "--report" => flags.report_path = Some(PathBuf::from(take_value(raw, i, &flag)?)),
+            // Boolean flag — takes NO value, so advance by ONE (not the 2 the
+            // value-carrying flags below the loop assume) and re-enter.
+            "--constrained" => {
+                flags.constrained = true;
+                i += 1;
+                continue;
+            }
             "-h" | "--help" => {
                 println!("{}", usage());
                 std::process::exit(0);
@@ -166,6 +183,7 @@ pub fn parse_args(raw: &[String]) -> anyhow::Result<Args> {
         corpus_dir,
         traces_dir,
         report_path: flags.report_path,
+        constrained: flags.constrained,
     })
 }
 
@@ -240,5 +258,28 @@ mod tests {
         assert_eq!(a.corpus_dir, PathBuf::from("c"));
         assert_eq!(a.traces_dir, PathBuf::from("t"));
         assert_eq!(a.report_path, Some(PathBuf::from("r")));
+        assert!(!a.constrained, "constrained defaults to false");
+    }
+
+    #[test]
+    fn constrained_is_a_valueless_flag_that_does_not_swallow_the_next_flag() {
+        // #662 step 2: --constrained takes NO value; the flag AFTER it must
+        // still parse (the parser must advance by 1, not 2, past it).
+        let a = args(&[
+            "drive",
+            "--constrained",
+            "--candidate-url",
+            "http://x.invalid",
+            "--model",
+            "m",
+            "--corpus-dir",
+            "c",
+            "--traces-dir",
+            "t",
+        ])
+        .expect("constrained + following flags must parse");
+        assert!(a.constrained);
+        assert_eq!(a.candidate_url.as_deref(), Some("http://x.invalid"));
+        assert_eq!(a.candidate_model.as_deref(), Some("m"));
     }
 }

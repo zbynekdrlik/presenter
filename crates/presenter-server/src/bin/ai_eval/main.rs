@@ -8,6 +8,7 @@
 //! own "thin main + library modules" plan.
 
 mod cli;
+mod constrained;
 mod corpus;
 mod drive;
 mod logging;
@@ -78,10 +79,15 @@ async fn run_drive(args: &Args) -> anyhow::Result<()> {
         .expect("cli::parse_args guarantees --model for drive/all");
 
     println!(
-        "Driving {} case(s) against {} (model: {})",
+        "Driving {} case(s) against {} (model: {}){}",
         cases.len(),
         candidate_url,
-        candidate_model
+        candidate_model,
+        if args.constrained {
+            " [CONSTRAINED single-shot mode]"
+        } else {
+            ""
+        }
     );
 
     let mut traces = Vec::with_capacity(cases.len());
@@ -95,7 +101,14 @@ async fn run_drive(args: &Args) -> anyhow::Result<()> {
         {
             println!("    {desc}");
         }
-        let trace = drive::drive_case(case, candidate_url, candidate_model).await;
+        // #662 step 2: --constrained drives the single-shot constrained-output
+        // path (response_format json_schema, no tool loop); default is the real
+        // run_agent tool loop.
+        let trace = if args.constrained {
+            drive::drive_case_constrained(case, candidate_url, candidate_model).await
+        } else {
+            drive::drive_case(case, candidate_url, candidate_model).await
+        };
         if trace.seed_failed {
             eprintln!(
                 "    SEED FAILED: {}",

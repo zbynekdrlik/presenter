@@ -2,11 +2,14 @@
 //! candidate model endpoint, once per corpus case, writing one trace JSON
 //! per case. Never re-implements the agent loop — just wires it up.
 
+use crate::constrained;
 use crate::corpus::Case;
 use crate::seed::{build_state_for_case, prior_turns_to_messages};
 use crate::trace::{now_rfc3339, Trace};
-use presenter_server::ai::agent::run_agent;
-use presenter_server::ai::{AiSettings, ChatMessage};
+use presenter_server::ai::agent::{build_system_prompt, run_agent};
+use presenter_server::ai::{
+    call_chat_completions_with_options, AiSettings, ChatMessage, ToolCallFunction, ToolCallMessage,
+};
 use std::time::Instant;
 
 /// Drive one case through the real agent loop and capture its trace. Never
@@ -92,6 +95,7 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
         usage,
         turns,
         stalled_retry_loop,
+        constrained: false,
         captured_at: now_rfc3339(),
     }
 }
@@ -136,6 +140,193 @@ fn failed_trace(
         usage: None,
         turns: Vec::new(),
         stalled_retry_loop: None,
+        constrained: false,
+        captured_at: now_rfc3339(),
+    }
+}
+
+/// Immutable per-run context for the constrained-drive helpers — carried by
+/// reference so the trace-building helpers stay well under the arg-count cap
+/// while still recording candidate metadata + the real prior-turn offset.
+struct ConstrainedCtx<'a> {
+    case: &'a Case,
+    candidate_url: &'a str,
+    candidate_model: &'a str,
+    prior_turn_count: usize,
+    char_limit: u32,
+    started: Instant,
+}
+
+/// Drive one case through a SINGLE-SHOT CONSTRAINED-OUTPUT call (#662 step 2):
+/// NO tool loop, `response_format` json_schema mirroring `create_bible_presentation`,
+/// `enable_thinking:false`. The candidate emits the presentation JSON directly;
+/// the harness strict-validates it (step 3 fail-open guard) and synthesizes a
+/// `create_bible_presentation` attempt so the SAME pure scorer replays it. Only
+/// meaningful for the bible slices (worship-crud is inherently multi-step
+/// tool-calling). Never panics — every failure is captured inside the trace.
+pub async fn drive_case_constrained(
+    case: &Case,
+    candidate_url: &str,
+    candidate_model: &str,
+) -> Trace {
+    let started = Instant::now();
+    let conversation = prior_turns_to_messages(case.setup.as_ref());
+    let prior_turn_count = conversation.len();
+
+    let state = match build_state_for_case(case).await {
+        Ok(s) => s,
+        Err(e) => {
+            return failed_trace(
+                case,
+                candidate_url,
+                candidate_model,
+                prior_turn_count,
+                conversation,
+                format!("seeding failed: {e:#}"),
+                started,
+            )
+        }
+    };
+
+    let (system_prompt, char_limit) =
+        build_system_prompt(&state, Some(constrained::CONSTRAINED_ADDENDUM)).await;
+    let messages = build_constrained_messages(&system_prompt, &conversation, &case.user_message);
+    let ctx = ConstrainedCtx {
+        case,
+        candidate_url,
+        candidate_model,
+        prior_turn_count,
+        char_limit,
+        started,
+    };
+    let settings = AiSettings {
+        api_url: candidate_url.to_string(),
+        api_key: None,
+        model: candidate_model.to_string(),
+        system_prompt_extra: None,
+    };
+
+    let resp = match call_chat_completions_with_options(
+        &messages,
+        None,
+        &settings,
+        Some(constrained::bible_presentation_schema()),
+        Some(serde_json::json!({ "enable_thinking": false })),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return constrained_trace(&ctx, conversation, None, Some(format!("{e:#}"))),
+    };
+
+    let content = resp
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|c| c.message.content)
+        .filter(|c| !c.trim().is_empty());
+    let Some(content) = content else {
+        return constrained_trace(
+            &ctx,
+            conversation,
+            None,
+            Some("candidate returned no content".to_string()),
+        );
+    };
+
+    finalize_constrained(&ctx, conversation, content)
+}
+
+/// Validate the candidate's constrained output (fail-open guard) and build the
+/// final trace: on valid JSON, synthesize the `create_bible_presentation`
+/// attempt the scorer replays; on invalid, record the failure so the case fails
+/// rather than silently passing an unconstrained fall-back (#19051).
+fn finalize_constrained(
+    ctx: &ConstrainedCtx,
+    mut conversation: Vec<ChatMessage>,
+    content: String,
+) -> Trace {
+    match constrained::validate_constrained_json(&content) {
+        Ok(raw) => {
+            conversation.push(constrained_attempt_message(raw));
+            constrained_trace(ctx, conversation, Some(content), None)
+        }
+        Err(why) => constrained_trace(
+            ctx,
+            conversation,
+            Some(content),
+            Some(format!(
+                "constrained output invalid (fail-open guard): {why}"
+            )),
+        ),
+    }
+}
+
+/// Build the constrained-mode request messages: the production system prompt
+/// (+ constrained addendum), any seeded prior turns (role+content — bible cases
+/// have none), then the case's user message.
+fn build_constrained_messages(
+    system_prompt: &str,
+    prior: &[ChatMessage],
+    user_message: &str,
+) -> Vec<serde_json::Value> {
+    let mut messages = vec![serde_json::json!({ "role": "system", "content": system_prompt })];
+    for m in prior {
+        messages.push(serde_json::json!({
+            "role": m.role,
+            "content": m.content.clone().unwrap_or_default(),
+        }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": user_message }));
+    messages
+}
+
+/// Synthesize the assistant `create_bible_presentation` tool-call message the
+/// pure scorer (`bible_replay`) replays — the constrained JSON becomes the
+/// tool-call arguments verbatim, so a single-shot constrained output scores
+/// through the exact same production packer/validator path as a tool-mode call.
+fn constrained_attempt_message(arguments_json: String) -> ChatMessage {
+    ChatMessage {
+        role: "assistant".to_string(),
+        content: None,
+        tool_calls: Some(vec![ToolCallMessage {
+            id: "constrained-0".to_string(),
+            call_type: "function".to_string(),
+            function: ToolCallFunction {
+                name: "create_bible_presentation".to_string(),
+                arguments: arguments_json,
+            },
+        }]),
+        tool_call_id: None,
+        name: None,
+        preview: None,
+    }
+}
+
+/// Build a constrained-mode Trace (`constrained: true`). `usage`/`turns` are
+/// empty for the single-shot path (not scored); `error.is_some()` fails the case.
+fn constrained_trace(
+    ctx: &ConstrainedCtx,
+    conversation: Vec<ChatMessage>,
+    final_response: Option<String>,
+    error: Option<String>,
+) -> Trace {
+    Trace {
+        case_id: ctx.case.id.clone(),
+        slice: ctx.case.slice.clone(),
+        candidate_url: ctx.candidate_url.to_string(),
+        candidate_model: ctx.candidate_model.to_string(),
+        char_limit: ctx.char_limit,
+        prior_turn_count: ctx.prior_turn_count,
+        conversation,
+        final_response,
+        error,
+        seed_failed: false,
+        duration_ms: elapsed_ms(ctx.started),
+        usage: None,
+        turns: Vec::new(),
+        stalled_retry_loop: None,
+        constrained: true,
         captured_at: now_rfc3339(),
     }
 }
@@ -565,6 +756,7 @@ mod tests {
             usage: None,
             turns: Vec::new(),
             stalled_retry_loop: None,
+            constrained: false,
             captured_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }
