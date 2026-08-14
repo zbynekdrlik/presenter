@@ -301,3 +301,25 @@ GGUF into `/home/newlevel/models/`, then drive via the wrapper with a `MODEL=` e
 EuroLLM / Gemma). Point `ai_eval drive --candidate-url http://127.0.0.1:18790/v1 --model <name>` at
 it. Check `report.json`'s `seedFailedTotal == 0` before trusting a low score (nonzero = a harness/env
 problem, e.g. an unset `PRESENTER_BIBLE_*` var, not a model result).
+
+## Constrained mode (`--constrained`, json_schema) — gotchas from the #662 sweep (2026-08-14)
+
+- **Grammar mirrors the SCHEMA, not the validator.** The first constrained sweep scored 0/30 as a
+  pure schema artifact: mirroring the tool schema's loose `required:[kind,text]` let the grammar
+  drop `book`/`chapter` on verse items — schema-valid output that `parse_bible_items` rejects.
+  The schema MUST encode exactly what the validator enforces (oneOf: verse variant requires
+  `number/text/book/chapter/translation`; emphasis only `kind/text`). Any schema/validator drift
+  reappears as a fake 0/30.
+- **Qwen3 needs `chat_template_kwargs: {"enable_thinking": false}`** — grammar is silently inactive
+  while thinking is on (llama.cpp #20345). No regex `pattern` fields in the schema (#22314).
+- **llama-server fails OPEN when grammar conversion fails** (#19051): response comes back
+  unconstrained with no error. The harness validates every response strictly client-side
+  (parse + schema check = fail on mismatch) — EuroLLM tripped this live (5 fail-open cases caught).
+- **Single-shot constrained scoring is partly VACUOUS:** `toolSequence` is skipped by design, so
+  worship-crud 4/7 and the toolSequence-only adversarial guards pass without proving content.
+  The only content-checked constrained signal is bible-authoring (0–1/11 for every model tested).
+  Never quote a raw constrained score without this caveat.
+- **Verdict shape from the full 5-config sweep:** constrained mode UNLOCKS non-tool-calling models
+  (EuroLLM/Gemma emit valid JSON on ~all cases vs 0 tool calls) — but content, not format, is the
+  wall: bible content stayed 0–1/11 in BOTH modes across Qwen3-8B/EuroLLM-9B/Gemma-3-4B/Qwen3-4B-2507.
+  Full tables: #662 comments (autopsy 5290001713, probe 5290070384, table 5292480819).

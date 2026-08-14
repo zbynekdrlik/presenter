@@ -98,6 +98,17 @@ pub struct Trace {
     /// into a generic `run_agent returned an error`.
     #[serde(default)]
     pub stalled_retry_loop: Option<String>,
+    /// `true` for a single-shot CONSTRAINED-mode trace (#662 step 2): the
+    /// candidate emitted the `create_bible_presentation` JSON directly under
+    /// `response_format` json_schema, with NO lookup tool call. The scorer
+    /// SKIPS its `toolSequence` check for such a trace — single-shot mode has
+    /// no tool sequence by design (there is no `load_bible_verses` step) — while
+    /// still running every content check (validation errors, verbatim/overridden
+    /// verse fidelity) via the same synthesized `create_bible_presentation`
+    /// attempt. Defaults `false` so every existing/tool-mode trace loads and
+    /// scores exactly as before.
+    #[serde(default)]
+    pub constrained: bool,
     /// RFC 3339 timestamp of when this trace was captured.
     pub captured_at: String,
 }
@@ -282,5 +293,32 @@ mod tests {
         let trace: Trace = serde_json::from_value(json).expect("must still deserialize");
         assert!(trace.turns.is_empty());
         assert!(trace.stalled_retry_loop.is_none());
+    }
+
+    /// #662 step 2: `constrained` round-trips when set, and defaults `false`
+    /// for every trace captured before this field existed.
+    #[test]
+    fn trace_constrained_flag_round_trips_and_defaults_false() {
+        let base = sample_trace_json();
+        let plain: Trace = serde_json::from_value(base.clone()).expect("must deserialize");
+        assert!(
+            !plain.constrained,
+            "a trace with no `constrained` key must default to false"
+        );
+
+        let mut constrained_json = base;
+        constrained_json
+            .as_object_mut()
+            .unwrap()
+            .insert("constrained".to_string(), serde_json::Value::Bool(true));
+        let trace: Trace = serde_json::from_value(constrained_json).expect("must deserialize");
+        assert!(trace.constrained);
+
+        let out = serde_json::to_value(&trace).expect("must serialize");
+        assert_eq!(
+            out.get("constrained").and_then(serde_json::Value::as_bool),
+            Some(true),
+            "constrained must round-trip: {out:?}"
+        );
     }
 }
