@@ -437,8 +437,7 @@ mod tests {
             "serialized request must carry a max_tokens field: {value}"
         );
         assert!(
-            value.get("response_format").is_none()
-                && value.get("chat_template_kwargs").is_none(),
+            value.get("response_format").is_none() && value.get("chat_template_kwargs").is_none(),
             "both optional fields must be omitted when None: {value}"
         );
     }

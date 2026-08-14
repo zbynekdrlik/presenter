@@ -170,7 +170,7 @@ pub async fn drive_case_constrained(
     candidate_model: &str,
 ) -> Trace {
     let started = Instant::now();
-    let conversation = prior_turns_to_messages(case.setup.as_ref());
+    let mut conversation = prior_turns_to_messages(case.setup.as_ref());
     let prior_turn_count = conversation.len();
 
     let state = match build_state_for_case(case).await {
@@ -191,6 +191,19 @@ pub async fn drive_case_constrained(
     let (system_prompt, char_limit) =
         build_system_prompt(&state, Some(constrained::CONSTRAINED_ADDENDUM)).await;
     let messages = build_constrained_messages(&system_prompt, &conversation, &case.user_message);
+    // Record the user turn in the trace's own conversation too (build_messages
+    // above already appended it to the WIRE messages) so a captured constrained
+    // trace reads as [<prior>, user, assistant(create_bible_presentation)] —
+    // faithful to a tool-mode trace. prior_turn_count was taken BEFORE this push,
+    // so the scorer's `turn` slice still starts at the user turn.
+    conversation.push(ChatMessage {
+        role: "user".to_string(),
+        content: Some(case.user_message.clone()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        preview: None,
+    });
     let ctx = ConstrainedCtx {
         case,
         candidate_url,
