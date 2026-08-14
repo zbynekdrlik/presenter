@@ -1357,3 +1357,11 @@ fix = debounced settled-orientation watcher (~300 ms settle before SET, immediat
 fallback + resize trigger dropped) — a genuine settled 180° turn (#638) still flips, E2E covers
 both sides. #662 rode along as a docs-only playbook slice (drop-in tool-calling is not universal
 across model families); the ticket itself stays open on the user's direction decision.
+
+**v0.4.249 (PR #696, 41807ece):**
+- #662 evidence phase (ticket stays OPEN): `ai_eval --constrained` single-shot json_schema mode +
+  fail-open hardening (strict client-side validation — llama-server #19051 fails open, caught live
+  on EuroLLM). Live-found schema bug fixed (loose `required` dropped verse fields → fake 0/30;
+  oneOf now mirrors the validator). Full 5-config tools-vs-constrained sweep on #662: constrained
+  unlocks non-tool-calling models (EuroLLM/Gemma template artifact confirmed), but content is the
+  wall — bible-authoring 0–1/11 in both modes across all four models. Direction decision → user.
