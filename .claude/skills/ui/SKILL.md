@@ -39,6 +39,18 @@ inlining it *inside* the macro. Closures over only `Copy` signals (and the
 `StageContext`/`AppContext`, which are `Copy`) can be copied into several `move`
 closures, so re-using `items` in multiple derived closures is fine.
 
+**Scope of the named-closure rule — verified empirically (#714).** The requirement
+is really only for **`<For each=…>`** (and no mainline code inlines it). An inline
+`move ||` DOES compile as an **HTML element attribute / `prop:` / `on:` value** and
+as **`<Show when=…>`** — confirmed against COMPILED mainline code:
+`pages/settings/ableton.rs` (`prop:checked=move || enabled.get()`,
+`on:change=move |ev| …`) and `components/header.rs`
+(`<Show when=move || new_version_available.get() …>`). So do NOT hoist every
+`data-x=move || …` / `prop:value=move || …` / `<Show when=move || …>` to a `let` —
+that is unnecessary churn; hoist only the `<For each>` closure. (When two derived
+readers must share a closure, a `let` is still handy because a `Copy` closure can be
+moved into several attributes — but that's a convenience, not a parse requirement.)
+
 ## Keyed `<For>`: key by a UNIQUE id, read changing values REACTIVELY (#496)
 
 `key=|e| e.name.clone()` collides when two rows share a name (e.g. a worship set
