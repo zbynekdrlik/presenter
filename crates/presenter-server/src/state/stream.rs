@@ -78,6 +78,13 @@ impl StreamManager {
             .insert(slug.to_string(), state.clone());
         Ok(state)
     }
+
+    /// Drop an output's cached snapshot — called when the output is deleted so
+    /// a later read hydrate-misses (and surfaces the repository's NotFound)
+    /// instead of returning a stale entry.
+    async fn evict(&self, slug: &str) {
+        self.cache.write().await.remove(slug);
+    }
 }
 
 impl AppState {
@@ -149,6 +156,13 @@ impl AppState {
     pub(crate) async fn stream_show_state(&self, slug: &str) -> anyhow::Result<StreamShowState> {
         self.stream.show_state(&self.repository, slug).await
     }
+
+    /// Evict an output's cached show-state — called by the delete-output
+    /// handler after the repository row is gone, so the cache never serves a
+    /// stale snapshot for a deleted output.
+    pub(crate) async fn stream_evict_output(&self, slug: &str) {
+        self.stream.evict(slug).await;
+    }
 }
 
 #[cfg(test)]
@@ -156,17 +170,30 @@ mod tests {
     use super::*;
     use presenter_core::SceneKind;
 
-    /// Seed a base + an overlay scene on the migration-seeded `stream` output.
+    /// Create a fresh, uniquely-slugged output. The process-shared in-memory
+    /// DB (`Repository::connect_in_memory` = `sqlite::memory:?cache=shared`,
+    /// `.claude/rules/stream-graphics.md`) means every test must own its slug
+    /// rather than share the seeded `stream` output, or activations race.
+    async fn seed_output(state: &AppState, slug: &str) {
+        state
+            .repository()
+            .create_stream_output(slug, "Test")
+            .await
+            .expect("create output");
+    }
+
+    /// Create a fresh output plus a base + an overlay scene on it.
     /// Returns `(base_id, overlay_id)`.
-    async fn seed_scenes(state: &AppState) -> (i64, i64) {
+    async fn seed_scenes(state: &AppState, slug: &str) -> (i64, i64) {
+        seed_output(state, slug).await;
         let base = state
             .repository()
-            .create_stream_scene("stream", "Base", SceneKind::Base)
+            .create_stream_scene(slug, "Base", SceneKind::Base)
             .await
             .expect("create base scene");
         let overlay = state
             .repository()
-            .create_stream_scene("stream", "Overlay", SceneKind::Overlay)
+            .create_stream_scene(slug, "Overlay", SceneKind::Overlay)
             .await
             .expect("create overlay scene");
         (base.id, overlay.id)
@@ -175,32 +202,33 @@ mod tests {
     #[tokio::test]
     async fn activate_base_is_exclusive() {
         let state = AppState::in_memory().await.unwrap();
+        seed_output(&state, "s706-exclusive").await;
         let base_a = state
             .repository()
-            .create_stream_scene("stream", "Base A", SceneKind::Base)
+            .create_stream_scene("s706-exclusive", "Base A", SceneKind::Base)
             .await
             .unwrap();
         let base_b = state
             .repository()
-            .create_stream_scene("stream", "Base B", SceneKind::Base)
+            .create_stream_scene("s706-exclusive", "Base B", SceneKind::Base)
             .await
             .unwrap();
 
         let after_a = state
-            .stream_activate_scene("stream", Some(base_a.id))
+            .stream_activate_scene("s706-exclusive", Some(base_a.id))
             .await
             .unwrap();
         assert_eq!(after_a.active_scene_id, Some(base_a.id));
 
         // Activating a second base REPLACES the first (exclusive).
         let after_b = state
-            .stream_activate_scene("stream", Some(base_b.id))
+            .stream_activate_scene("s706-exclusive", Some(base_b.id))
             .await
             .unwrap();
         assert_eq!(after_b.active_scene_id, Some(base_b.id));
         assert_eq!(
             state
-                .stream_show_state("stream")
+                .stream_show_state("s706-exclusive")
                 .await
                 .unwrap()
                 .active_scene_id,
@@ -211,14 +239,14 @@ mod tests {
     #[tokio::test]
     async fn overlays_are_independent_of_base() {
         let state = AppState::in_memory().await.unwrap();
-        let (base, overlay) = seed_scenes(&state).await;
+        let (base, overlay) = seed_scenes(&state, "s706-overlays").await;
 
         state
-            .stream_activate_scene("stream", Some(base))
+            .stream_activate_scene("s706-overlays", Some(base))
             .await
             .unwrap();
         let with_overlay = state
-            .stream_set_overlay("stream", overlay, true)
+            .stream_set_overlay("s706-overlays", overlay, true)
             .await
             .unwrap();
         assert_eq!(with_overlay.active_scene_id, Some(base));
@@ -226,7 +254,7 @@ mod tests {
 
         // Turning the overlay off leaves the base untouched.
         let without = state
-            .stream_set_overlay("stream", overlay, false)
+            .stream_set_overlay("s706-overlays", overlay, false)
             .await
             .unwrap();
         assert_eq!(without.active_scene_id, Some(base));
@@ -236,17 +264,17 @@ mod tests {
     #[tokio::test]
     async fn clear_resets_base_and_overlays() {
         let state = AppState::in_memory().await.unwrap();
-        let (base, overlay) = seed_scenes(&state).await;
+        let (base, overlay) = seed_scenes(&state, "s706-clear").await;
         state
-            .stream_activate_scene("stream", Some(base))
+            .stream_activate_scene("s706-clear", Some(base))
             .await
             .unwrap();
         state
-            .stream_set_overlay("stream", overlay, true)
+            .stream_set_overlay("s706-clear", overlay, true)
             .await
             .unwrap();
 
-        let cleared = state.stream_clear("stream").await.unwrap();
+        let cleared = state.stream_clear("s706-clear").await.unwrap();
         assert_eq!(cleared.active_scene_id, None);
         assert!(cleared.active_overlay_ids.is_empty());
     }
@@ -254,13 +282,13 @@ mod tests {
     #[tokio::test]
     async fn state_survives_a_simulated_restart() {
         let state = AppState::in_memory().await.unwrap();
-        let (base, overlay) = seed_scenes(&state).await;
+        let (base, overlay) = seed_scenes(&state, "s706-restart").await;
         state
-            .stream_activate_scene("stream", Some(base))
+            .stream_activate_scene("s706-restart", Some(base))
             .await
             .unwrap();
         state
-            .stream_set_overlay("stream", overlay, true)
+            .stream_set_overlay("s706-restart", overlay, true)
             .await
             .unwrap();
 
@@ -268,7 +296,7 @@ mod tests {
         // persisted show-state — the cold-OBS-load / restart guarantee.
         let fresh = StreamManager::new();
         let restored = fresh
-            .show_state(state.repository(), "stream")
+            .show_state(state.repository(), "s706-restart")
             .await
             .unwrap();
         assert_eq!(restored.active_scene_id, Some(base));
@@ -278,18 +306,18 @@ mod tests {
     #[tokio::test]
     async fn activation_publishes_exactly_one_stream_state_event() {
         let state = AppState::in_memory().await.unwrap();
-        let (base, _overlay) = seed_scenes(&state).await;
+        let (base, _overlay) = seed_scenes(&state, "s706-oneevent").await;
         // Snapshot the revision AFTER the scene creates (which each bumped it);
         // activation must leave it unchanged.
         let before = state
-            .stream_show_state("stream")
+            .stream_show_state("s706-oneevent")
             .await
             .unwrap()
             .config_revision;
         let mut rx = state.live_hub().subscribe();
 
         state
-            .stream_activate_scene("stream", Some(base))
+            .stream_activate_scene("s706-oneevent", Some(base))
             .await
             .unwrap();
 
@@ -300,7 +328,7 @@ mod tests {
                 config_revision,
                 ..
             } => {
-                assert_eq!(output, "stream");
+                assert_eq!(output, "s706-oneevent");
                 assert_eq!(active_scene_id, Some(base));
                 // Activation must NOT bump config_revision (stream-graphics rule).
                 assert_eq!(config_revision, before);
@@ -317,23 +345,24 @@ mod tests {
     #[tokio::test]
     async fn config_write_notify_publishes_config_changed() {
         let state = AppState::in_memory().await.unwrap();
+        seed_output(&state, "s706-cfg").await;
         let mut rx = state.live_hub().subscribe();
 
         // A scene create bumps config_revision (repository side); the notify
         // publishes StreamConfigChanged carrying the new revision.
         state
             .repository()
-            .create_stream_scene("stream", "Base", SceneKind::Base)
+            .create_stream_scene("s706-cfg", "Base", SceneKind::Base)
             .await
             .unwrap();
-        state.stream_config_write_notify("stream").await.unwrap();
+        state.stream_config_write_notify("s706-cfg").await.unwrap();
 
         match rx.try_recv().expect("one event") {
             LiveEvent::StreamConfigChanged {
                 output,
                 config_revision,
             } => {
-                assert_eq!(output, "stream");
+                assert_eq!(output, "s706-cfg");
                 assert!(
                     config_revision >= 1,
                     "a config write must have bumped the revision"
@@ -346,11 +375,11 @@ mod tests {
     #[tokio::test]
     async fn wrong_kind_activation_surfaces_typed_error_without_panic() {
         let state = AppState::in_memory().await.unwrap();
-        let (_base, overlay) = seed_scenes(&state).await;
+        let (_base, overlay) = seed_scenes(&state, "s706-wrongkind").await;
 
         // Activating an OVERLAY scene as the base is a 422 Invalid, not a panic.
         let err = state
-            .stream_activate_scene("stream", Some(overlay))
+            .stream_activate_scene("s706-wrongkind", Some(overlay))
             .await
             .expect_err("activating an overlay as base must be refused");
         let repo_err = err
@@ -359,6 +388,35 @@ mod tests {
         assert!(
             matches!(repo_err, presenter_persistence::RepositoryError::Invalid(_)),
             "wrong-kind activation must be RepositoryError::Invalid, got {repo_err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn evict_drops_cached_show_state() {
+        let state = AppState::in_memory().await.unwrap();
+        let (base, _overlay) = seed_scenes(&state, "s706-evict").await;
+        // Cache the output's show-state via an activation.
+        state
+            .stream_activate_scene("s706-evict", Some(base))
+            .await
+            .unwrap();
+        // Delete the output and evict the cache (the delete_output handler path).
+        state
+            .repository()
+            .delete_stream_output("s706-evict")
+            .await
+            .unwrap();
+        state.stream_evict_output("s706-evict").await;
+        // A read now hydrate-misses and surfaces the repository's NotFound —
+        // never a stale cached snapshot.
+        let err = state
+            .stream_show_state("s706-evict")
+            .await
+            .expect_err("a deleted output must not read from a stale cache");
+        assert!(
+            err.downcast_ref::<presenter_persistence::RepositoryError>()
+                .is_some(),
+            "stale-cache read must surface the repository's typed NotFound"
         );
     }
 

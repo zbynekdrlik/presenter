@@ -191,6 +191,8 @@ pub(super) async fn delete_output(
     Path(slug): Path<String>,
 ) -> Result<StatusCode, AppError> {
     state.repository().delete_stream_output(&slug).await?;
+    // Drop any cached show-state so a later read can't serve a stale snapshot.
+    state.stream_evict_output(&slug).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
