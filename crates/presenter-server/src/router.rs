@@ -11,6 +11,7 @@ mod search;
 mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
+mod stream;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -395,6 +396,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/proxy/login", post(ai::proxy_login))
         .route("/ai/proxy/complete-login", post(ai::proxy_complete_login))
         .route("/api/network-mode", get(network_mode::get_network_mode))
+        // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
+        .merge(stream::router())
         .with_state(state)
 }
 
@@ -688,6 +691,8 @@ mod presentations_copy_tests;
 mod presentations_paste_tests;
 #[cfg(test)]
 mod presentations_slide_edit_tests;
+#[cfg(test)]
+mod stream_tests;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
