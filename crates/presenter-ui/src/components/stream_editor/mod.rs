@@ -12,7 +12,9 @@
 //! request DTOs below are the write-side payloads (camelCase, matching the
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 
+pub mod editor_assets;
 pub mod editor_panel;
+pub mod editor_preview;
 pub mod editor_scenes;
 pub mod element_form;
 pub mod props_access;

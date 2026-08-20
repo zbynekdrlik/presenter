@@ -13,6 +13,7 @@ use leptos::prelude::*;
 use presenter_core::{LiveEvent, StreamShowState};
 
 use crate::components::stream_editor::editor_panel::EditorPanel;
+use crate::components::stream_editor::editor_preview::EditorPreview;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
 use crate::components::stream_editor::{StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
 use crate::components::version_label::VersionLabel;
@@ -102,6 +103,7 @@ pub fn StreamEditorPage() -> impl IntoView {
                 <Show when=move || ctx.selected_scene.get().is_some()>
                     <section class="stream-editor__workspace" data-role="stream-workspace">
                         <EditorPanel ctx=ctx />
+                        <EditorPreview ctx=ctx />
                     </section>
                 </Show>
             </main>

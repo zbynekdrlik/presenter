@@ -49,7 +49,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
             <FrameFields draft=draft />
 
             <Show when=move || kind() == "image">
-                <ImageFields draft=draft />
+                <ImageFields draft=draft ctx=ctx />
             </Show>
             <Show when=move || kind() == "countdown">
                 <div class="stream-editor__kind-fields" data-role="stream-countdown-fields">
@@ -221,7 +221,7 @@ fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
 /// Image-kind fields: asset_id (numeric v1 + picker button wired in #715), fit,
 /// opacity.
 #[component]
-fn ImageFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
+fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> impl IntoView {
     let asset_id = move || match draft.get() {
         StreamElementProps::Image { asset_id, .. } => asset_id.to_string(),
         _ => String::new(),
@@ -251,7 +251,7 @@ fn ImageFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
                             });
                         }
                     } />
-                // #715: asset picker button lands here (AssetPickerButton).
+                <super::editor_assets::AssetPickerButton draft=draft ctx=ctx />
             </label>
             <label class="stream-editor__field">
                 <span>"Prispôsobenie"</span>
