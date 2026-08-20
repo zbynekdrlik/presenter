@@ -7,4 +7,5 @@ pub mod camera;
 pub mod operator;
 pub mod settings;
 pub mod stage;
+pub mod stream_editor;
 pub mod tablet;

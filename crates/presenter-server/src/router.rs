@@ -160,6 +160,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/camera", get(wasm_ui::wasm_ui_shell))
         // Settings is now a WASM page (#347 — migrated from settings_script.js)
         .route("/ui/settings", get(wasm_ui::wasm_ui_shell))
+        // Stream-graphics operator editor (#713, epic #718) — WASM page.
+        .route("/ui/stream", get(wasm_ui::wasm_ui_shell))
         .route("/ui/tablet/manifest.json", get(tablet_pwa::tablet_manifest))
         .route("/ui/tablet/icon-192.png", get(tablet_pwa::icon_192))
         .route("/ui/tablet/icon-512.png", get(tablet_pwa::icon_512))
