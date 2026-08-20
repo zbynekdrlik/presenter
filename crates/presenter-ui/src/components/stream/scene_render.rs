@@ -36,8 +36,14 @@ pub fn SceneRender(
     #[prop(into)]
     leaving: Signal<bool>,
     /// Crossfade duration in ms (`scene.transition_ms ?? default_transition_ms`),
-    /// mirrored to the inline `transition-duration`.
-    duration_ms: u32,
+    /// mirrored to the inline `transition-duration`. REACTIVE (a keyed `<For>`
+    /// does not re-run the child), so `mark_leaving` re-pointing an outgoing base
+    /// to the incoming scene's duration actually reaches the DOM — the fade-out
+    /// and its removal timeout then agree (the "incoming governs both fades"
+    /// invariant; a plain `u32` was a dead write that popped on differing
+    /// per-scene durations).
+    #[prop(into)]
+    duration_ms: Signal<u32>,
 ) -> impl IntoView {
     let scene_id = scene.id;
     let kind: SceneKind = scene.kind;
@@ -118,7 +124,7 @@ pub fn SceneRender(
         })
         .collect_view();
 
-    let style = format!("transition-duration:{duration_ms}ms;");
+    let style = move || format!("transition-duration:{}ms;", duration_ms.get());
 
     view! {
         <div

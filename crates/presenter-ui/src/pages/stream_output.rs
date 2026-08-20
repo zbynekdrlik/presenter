@@ -356,6 +356,12 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 return;
             }
 
+            // Track whether a new base was pushed — only then does the vec need a
+            // re-sort (a new base is pushed at the END, after existing overlays,
+            // so it must be moved back before them; overlays pushed at the end are
+            // already in the correct base-then-overlay order).
+            let mut added_base = false;
+
             // Base: fade the old out + the new in when the active base changes.
             // The INCOMING scene's `transition_ms ?? default` governs both fades;
             // a clear (no incoming) uses the OUTGOING scene's own duration.
@@ -377,6 +383,7 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                     let dur = bs.transition_ms.unwrap_or(default_dur);
                     let layer = make_layer(next_seq, bs, dur);
                     layers.update(|ls| ls.push(layer));
+                    added_base = true;
                 }
             }
 
@@ -401,7 +408,9 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 }
             }
 
-            sort_layers_base_first(layers);
+            if added_base {
+                sort_layers_base_first(layers);
+            }
         });
     }
 
@@ -420,18 +429,25 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 key=|l| l.seq
                 children=move |l: SceneLayer| {
                     let seq = l.seq;
-                    // #496/#693: read `leaving` REACTIVELY by seq — a keyed
-                    // `<For>` does not re-run children when only the flag flips.
+                    // #496/#693: read `leaving` AND `duration_ms` REACTIVELY by
+                    // seq — a keyed `<For>` does not re-run children when only a
+                    // field flips, so `mark_leaving` re-pointing the outgoing
+                    // base to the incoming scene's duration must be read live.
                     let leaving = Signal::derive(move || {
                         layers.with(|ls| {
                             ls.iter().find(|x| x.seq == seq).map(|x| x.leaving).unwrap_or(true)
+                        })
+                    });
+                    let duration = Signal::derive(move || {
+                        layers.with(|ls| {
+                            ls.iter().find(|x| x.seq == seq).map(|x| x.duration_ms).unwrap_or(0)
                         })
                     });
                     view! {
                         <SceneRender
                             scene=l.scene
                             leaving=leaving
-                            duration_ms=l.duration_ms
+                            duration_ms=duration
                         />
                     }
                 }
