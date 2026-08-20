@@ -82,7 +82,7 @@ pub fn ElementLyrics(
             data-element-id=id.to_string()
             style=container
         >
-            <Show when=show_main_line fallback=|| ()>
+            <Show when=show_main_line>
                 <div
                     class="stream-lyrics__line stream-lyrics__main"
                     data-role="stream-lyrics-main"
@@ -91,7 +91,7 @@ pub fn ElementLyrics(
                     {main_text}
                 </div>
             </Show>
-            <Show when=show_translation_line fallback=|| ()>
+            <Show when=show_translation_line>
                 <div
                     class="stream-lyrics__line stream-lyrics__translation"
                     data-role="stream-lyrics-translation"

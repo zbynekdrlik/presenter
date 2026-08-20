@@ -98,12 +98,12 @@ pub fn ElementVerse(
             data-element-id=id.to_string()
             style=container
         >
-            <Show when=show_main_text fallback=|| ()>
+            <Show when=show_main_text>
                 <div class="stream-verse__text" data-role="stream-verse-text" style=text_css.clone()>
                     {main_text}
                 </div>
             </Show>
-            <Show when=show_main_reference fallback=|| ()>
+            <Show when=show_main_reference>
                 <div
                     class="stream-verse__reference"
                     data-role="stream-verse-reference"
@@ -112,7 +112,7 @@ pub fn ElementVerse(
                     {main_reference}
                 </div>
             </Show>
-            <Show when=show_secondary_text fallback=|| ()>
+            <Show when=show_secondary_text>
                 <div
                     class="stream-verse__text stream-verse__secondary"
                     data-role="stream-verse-secondary-text"
@@ -121,7 +121,7 @@ pub fn ElementVerse(
                     {secondary_text}
                 </div>
             </Show>
-            <Show when=show_secondary_reference fallback=|| ()>
+            <Show when=show_secondary_reference>
                 <div
                     class="stream-verse__reference stream-verse__secondary-reference"
                     data-role="stream-verse-secondary-reference"

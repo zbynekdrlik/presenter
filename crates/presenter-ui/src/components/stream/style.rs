@@ -13,13 +13,15 @@ use presenter_core::{Frame, TextAlign, TextStyle};
 /// CSS font stack for a whitelisted family. The three OFL families (Inter,
 /// Bebas Neue, Oswald) gracefully fall back until their `@font-face` woff2
 /// assets are bundled (see the #709 hand-back) — no `@font-face` pointing at a
-/// missing file, so no 404 breaks the zero-console E2E gate.
-pub(super) fn css_font_family(family: &str) -> String {
+/// missing file, so no 404 breaks the zero-console E2E gate. Used only by
+/// `text_style_css` below, so private.
+fn css_font_family(family: &str) -> String {
     format!("\"{family}\", system-ui, sans-serif")
 }
 
-/// CSS `text-align` value for a [`TextAlign`].
-pub(super) fn css_align(align: TextAlign) -> &'static str {
+/// CSS `text-align` value for a [`TextAlign`]. Used only by `text_style_css`, so
+/// private (`css_justify` below is the cross-module one).
+fn css_align(align: TextAlign) -> &'static str {
     match align {
         TextAlign::Left => "left",
         TextAlign::Center => "center",
