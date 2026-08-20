@@ -67,7 +67,11 @@ impl Repository {
     }
 
     pub async fn get_stream_asset(&self, id: i64) -> anyhow::Result<StreamAsset> {
-        let model = stream_asset::Entity::find_by_id(id as i32)
+        // Refuse an out-of-i32-range id rather than wrap-truncate into a wrong
+        // row (review WARNING).
+        let id =
+            i32::try_from(id).map_err(|_| RepositoryError::NotFound("stream asset not found"))?;
+        let model = stream_asset::Entity::find_by_id(id)
             .one(&self.db)
             .await?
             .ok_or(RepositoryError::NotFound("stream asset not found"))?;
@@ -87,8 +91,10 @@ impl Repository {
     /// names) while any `image` element's props still references it.
     #[instrument(skip_all)]
     pub async fn delete_stream_asset(&self, id: i64) -> anyhow::Result<()> {
+        let id =
+            i32::try_from(id).map_err(|_| RepositoryError::NotFound("stream asset not found"))?;
         let txn = self.db.begin().await?;
-        let asset = stream_asset::Entity::find_by_id(id as i32)
+        let asset = stream_asset::Entity::find_by_id(id)
             .one(&txn)
             .await?
             .ok_or(RepositoryError::NotFound("stream asset not found"))?;

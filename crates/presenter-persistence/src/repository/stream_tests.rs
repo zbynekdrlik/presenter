@@ -229,12 +229,15 @@ async fn activation_wrong_kind_unprocessable() {
         .await
         .unwrap_err();
     assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
-    // A missing body-referenced scene is 422, not 404.
+    // A missing body-referenced scene is 422 (TargetNotFound), not 404.
     let err = repo
         .set_active_scene("stream", Some(9999))
         .await
         .unwrap_err();
-    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+    assert!(matches!(
+        as_repo_error(&err),
+        RepositoryError::TargetNotFound(_)
+    ));
 }
 
 #[tokio::test]
@@ -450,4 +453,103 @@ async fn not_found_for_missing_resources() {
     assert!(matches!(as_repo_error(&e3), RepositoryError::NotFound(_)));
     let e4 = repo.get_stream_asset(9999).await.unwrap_err();
     assert!(matches!(as_repo_error(&e4), RepositoryError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn transition_bounds_enforced() {
+    let repo = repo().await;
+    let err = repo
+        .set_stream_output_transition("stream", 20_000)
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+    let scene = repo
+        .create_stream_scene("stream", "Base", SceneKind::Base)
+        .await
+        .unwrap();
+    let err = repo
+        .set_stream_scene_transition(scene.id, Some(20_000))
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+    // A valid transition is accepted and persisted.
+    let updated = repo
+        .set_stream_scene_transition(scene.id, Some(500))
+        .await
+        .unwrap();
+    assert_eq!(updated.transition_ms, Some(500));
+}
+
+#[tokio::test]
+async fn rename_scene_clash_against_sibling_conflicts() {
+    let repo = repo().await;
+    repo.create_stream_scene("stream", "Alpha", SceneKind::Base)
+        .await
+        .unwrap();
+    let beta = repo
+        .create_stream_scene("stream", "Beta", SceneKind::Base)
+        .await
+        .unwrap();
+    // Renaming Beta to a DIFFERENT existing scene's name clashes (409).
+    let err = repo
+        .rename_stream_scene(beta.id, "alpha")
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Conflict(_)));
+    // Renaming Beta to its own name (excluded from the check) is fine.
+    let renamed = repo.rename_stream_scene(beta.id, "Beta").await.unwrap();
+    assert_eq!(renamed.name, "Beta");
+}
+
+#[tokio::test]
+async fn reorder_bumps_config_revision() {
+    let repo = repo().await;
+    let a = repo
+        .create_stream_scene("stream", "A", SceneKind::Base)
+        .await
+        .unwrap();
+    let b = repo
+        .create_stream_scene("stream", "B", SceneKind::Base)
+        .await
+        .unwrap();
+    let before = repo
+        .get_stream_output("stream")
+        .await
+        .unwrap()
+        .config_revision;
+    repo.set_scene_order("stream", vec![b.id, a.id])
+        .await
+        .unwrap();
+    let after = repo
+        .get_stream_output("stream")
+        .await
+        .unwrap()
+        .config_revision;
+    assert_eq!(after, before + 1);
+}
+
+#[tokio::test]
+async fn delete_output_cascades_scenes_and_elements() {
+    let repo = repo().await;
+    repo.create_stream_output("event", "Event").await.unwrap();
+    let scene = repo
+        .create_stream_scene("event", "Base", SceneKind::Base)
+        .await
+        .unwrap();
+    let el = repo
+        .create_stream_element(scene.id, image(1))
+        .await
+        .unwrap();
+    repo.delete_stream_output("event").await.unwrap();
+    // FK CASCADE removed the scene + element rows, not just the output.
+    let scene_err = repo.rename_stream_scene(scene.id, "X").await.unwrap_err();
+    assert!(matches!(
+        as_repo_error(&scene_err),
+        RepositoryError::NotFound(_)
+    ));
+    let el_err = repo.delete_stream_element(el.id).await.unwrap_err();
+    assert!(matches!(
+        as_repo_error(&el_err),
+        RepositoryError::NotFound(_)
+    ));
 }

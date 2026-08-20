@@ -501,7 +501,11 @@ impl Repository {
         conn: &C,
         scene_id: i64,
     ) -> anyhow::Result<stream_scene::Model> {
-        let model = stream_scene::Entity::find_by_id(scene_id as i32)
+        // An out-of-i32-range id can never be a real row — refuse rather than
+        // wrap-truncate into a wrong id (review WARNING).
+        let id = i32::try_from(scene_id)
+            .map_err(|_| RepositoryError::NotFound("stream scene not found"))?;
+        let model = stream_scene::Entity::find_by_id(id)
             .one(conn)
             .await?
             .ok_or(RepositoryError::NotFound("stream scene not found"))?;
@@ -509,17 +513,20 @@ impl Repository {
     }
 
     /// Fetch a scene that MUST belong to `output_id` — used by the activation
-    /// paths, where a missing or wrong-output scene named in the body is a
-    /// 422 (`Invalid`), not a 404.
+    /// paths. A missing body-referenced scene is `TargetNotFound` (422, the
+    /// documented taxonomy for a missing body target); a wrong-output scene is
+    /// `Invalid` (422, the target exists but is not valid for this request).
     async fn scene_in_output<C: ConnectionTrait>(
         conn: &C,
         output_id: i32,
         scene_id: i64,
     ) -> anyhow::Result<stream_scene::Model> {
-        let scene = stream_scene::Entity::find_by_id(scene_id as i32)
+        let id = i32::try_from(scene_id)
+            .map_err(|_| RepositoryError::TargetNotFound("scene not found"))?;
+        let scene = stream_scene::Entity::find_by_id(id)
             .one(conn)
             .await?
-            .ok_or_else(|| RepositoryError::Invalid("scene not found".to_string()))?;
+            .ok_or(RepositoryError::TargetNotFound("scene not found"))?;
         if scene.output_id != output_id {
             return Err(RepositoryError::Invalid(
                 "scene does not belong to this output".to_string(),
@@ -533,7 +540,9 @@ impl Repository {
         conn: &C,
         element_id: i64,
     ) -> anyhow::Result<stream_element::Model> {
-        let model = stream_element::Entity::find_by_id(element_id as i32)
+        let id = i32::try_from(element_id)
+            .map_err(|_| RepositoryError::NotFound("stream element not found"))?;
+        let model = stream_element::Entity::find_by_id(id)
             .one(conn)
             .await?
             .ok_or(RepositoryError::NotFound("stream element not found"))?;
