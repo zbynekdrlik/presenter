@@ -13,7 +13,10 @@
 //! lane swaps scenes without animation.
 
 use leptos::prelude::*;
-use presenter_core::{SceneKind, StreamOutputDef, StreamSceneDef, StreamShowState};
+use presenter_core::{
+    BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamOutputDef, StreamSceneDef,
+    StreamShowState,
+};
 
 use crate::api;
 use crate::components::stream::scene_render::SceneRender;
@@ -61,10 +64,13 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
     let def = RwSignal::new(None::<StreamOutputDef>);
     let show_state = RwSignal::new(None::<StreamShowState>);
 
-    // Shared reactive context for the countdown element (timers + a ticking now).
+    // Shared reactive context for the text elements: countdown (timers + a
+    // ticking now), lyrics (worship `stage` snapshot) and verse (`bible` slide).
     let ctx = StreamContext {
         timers: RwSignal::new(None::<TimersReceipt>),
         now_ms: RwSignal::new(js_sys::Date::now()),
+        stage: RwSignal::new(None::<StageDisplaySnapshot>),
+        bible: RwSignal::new(None::<BibleSlideOutput>),
     };
     provide_context(ctx);
 
@@ -93,6 +99,11 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             if connected.get() {
                 spawn_refetch_def(slug_c.clone(), def, show_state);
                 spawn_refetch_timers(ctx.timers);
+                // Content cold-load (#710): recover the lyrics/verse currently on
+                // stage so a (re)connecting OBS source shows the live look at
+                // once, not only after the next trigger — parity with timers.
+                spawn_refetch_stage(ctx.stage);
+                spawn_refetch_bible(ctx.bible);
             }
         });
     }
@@ -166,6 +177,32 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             if let Some(receipt) = ws_timers.get() {
                 ctx_timers.set(Some(receipt));
             }
+        });
+    }
+
+    // Feed WS worship `Stage` snapshots into the lyrics context. A snapshot is
+    // always `Some` (a broom/clear arrives as a snapshot with `current == None`,
+    // which the lyrics element already renders as nothing), so only-Some mirrors
+    // the timers wiring above.
+    {
+        let ws_stage = ws.stage;
+        let ctx_stage = ctx.stage;
+        Effect::new(move |_| {
+            if let Some(snapshot) = ws_stage.get() {
+                ctx_stage.set(Some(snapshot));
+            }
+        });
+    }
+
+    // Feed WS `BibleSlide`/`BibleCleared` into the verse context. Unlike stage,
+    // `None` is MEANINGFUL here (a `BibleCleared` clears the verse), so this
+    // propagates both `Some` and `None`. It runs once on mount setting `None`
+    // (harmless) before the async cold-load seeds the current slide.
+    {
+        let ws_bible = ws.bible;
+        let ctx_bible = ctx.bible;
+        Effect::new(move |_| {
+            ctx_bible.set(ws_bible.get());
         });
     }
 
@@ -288,6 +325,28 @@ fn spawn_refetch_timers(timers: RwSignal<Option<TimersReceipt>>) {
                 overview,
                 received_at_ms: js_sys::Date::now(),
             }));
+        }
+    });
+}
+
+/// Cold-load the current worship stage snapshot (drives the lyrics element on a
+/// fresh connect / reconnect). `current` is layout-independent, so the selected
+/// snapshot reflects the live worship content for the worship layouts a lyrics
+/// scene is used with.
+fn spawn_refetch_stage(stage: RwSignal<Option<StageDisplaySnapshot>>) {
+    leptos::task::spawn_local(async move {
+        if let Ok(snapshot) = api::stage::get_snapshot().await {
+            stage.set(Some(snapshot));
+        }
+    });
+}
+
+/// Cold-load the current Bible slide output (drives the verse element). `None`
+/// (no active slide) is the cleared/transparent state.
+fn spawn_refetch_bible(bible: RwSignal<Option<BibleSlideOutput>>) {
+    leptos::task::spawn_local(async move {
+        if let Ok(output) = api::bible::get_active_slide_output().await {
+            bible.set(output);
         }
     });
 }
