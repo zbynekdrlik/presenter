@@ -36,6 +36,9 @@ include_dir = "0.7"
 async-stream = "0.3"
 regex = "1"
 async-trait.workspace = true
+# #708: sha256 content-addressing of uploaded stream-graphics image assets
+# (same version presenter-importer already uses for its Bible digest).
+sha2 = "0.10"
 
 [features]
 default = []
