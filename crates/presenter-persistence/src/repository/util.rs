@@ -66,6 +66,22 @@ pub enum RepositoryError {
     /// `PasteSlidesError::AnchorVanished` -> 409 mapping.
     #[error("{0}")]
     Conflict(&'static str),
+    /// Like [`RepositoryError::Conflict`] but carrying an OWNED, dynamic
+    /// message — e.g. the names of the scenes still referencing an asset the
+    /// caller tried to delete (#705). The router maps this to 409, same as
+    /// `Conflict`; the only difference is `String` vs `&'static str` so the
+    /// refusal body can name the specific blockers.
+    #[error("{0}")]
+    ConflictDetail(String),
+    /// A repository operation was refused because the request body is
+    /// well-formed but SEMANTICALLY invalid — e.g. activating a scene that is
+    /// not a base scene, toggling an overlay on a base scene, element props
+    /// whose `kind` tag disagrees with the element's kind, or props that fail
+    /// `presenter_core::stream::validate_props` (#705). The router maps this to
+    /// 422 (`AppError::unprocessable`); carries an owned message for the detail
+    /// (`&'static str` cannot carry a core validation error's text).
+    #[error("{0}")]
+    Invalid(String),
 }
 
 pub(super) fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {
