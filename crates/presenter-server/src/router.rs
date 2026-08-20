@@ -635,6 +635,15 @@ impl From<anyhow::Error> for AppError {
                 Self::unprocessable(*msg)
             }
             Some(presenter_persistence::RepositoryError::Conflict(msg)) => Self::conflict(*msg),
+            // #705: owned-message variants — same status as their static-str
+            // siblings, mapped here so a new stream repository refusal gets the
+            // right status by construction (never a silent 500 in the router PR).
+            Some(presenter_persistence::RepositoryError::ConflictDetail(msg)) => {
+                Self::conflict(msg.clone())
+            }
+            Some(presenter_persistence::RepositoryError::Invalid(msg)) => {
+                Self::unprocessable(msg.clone())
+            }
             _ => Self::new(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
     }
