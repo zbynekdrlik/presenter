@@ -209,17 +209,19 @@ fn SceneControls(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
             type="button"
             class="stream-editor__btn stream-editor__btn--ghost"
             data-role="stream-scene-up"
+            title="Posunúť skôr"
             on:click=move |_| ctx.move_scene(id, true)
         >
-            "↑"
+            "←"
         </button>
         <button
             type="button"
             class="stream-editor__btn stream-editor__btn--ghost"
             data-role="stream-scene-down"
+            title="Posunúť neskôr"
             on:click=move |_| ctx.move_scene(id, false)
         >
-            "↓"
+            "→"
         </button>
         <button
             type="button"
