@@ -365,3 +365,45 @@ mutable `installDynamicOrientation` + `window.__setOrientation(type, angle, fire
 helper (`tablet-orientation-lock.spec.ts`) to drive a transient flap (RED) vs a settled
 turn (AC3 guard). `test.use({ hasTouch: true })` is required for the `(pointer: coarse)`
 gate to match (see the `(pointer: coarse)` note above).
+
+## `verse_end = None` means DIFFERENT things per Bible endpoint — never assume single-verse (#702)
+
+The two Bible request paths disagree on what an absent `verse_end` means, and it is a real trap:
+
+- **RESOLVE** (`router/bible/resolve.rs`, used by the operator Bible page's `load_passage` →
+  `resolve_slides`): `verse_end = None` is expanded to the **chapter's LAST verse** (whole chapter
+  from `verse_start`). `Some(N)` → exactly `N.max(verse_start)`.
+- **BROADCAST / BROWSE** (`router/bible/{broadcast,browse}.rs`): `verse_end = None` →
+  `unwrap_or(verse_start)`, i.e. a **single verse**.
+
+So to trigger a SINGLE verse through the resolve path you must send `verse_end = Some(verse_start)` —
+sending `None` loads the whole chapter. This is why the #702 verse-end autofill mirrors
+`verse_end = Some(start)` (not `None`) and why `load_passage`'s history label collapses
+`end <= start` to the single-verse form (`Book 3:5`) while the request still carries `Some(start)`.
+
+## Per-browser client prefs: `session::{get,set}_persistent` (localStorage), NOT server prefs (#701)
+
+`crate::state::session` has TWO stores: `get`/`set` = **sessionStorage** (per-tab), and
+`get_persistent`/`set_persistent` = **localStorage** (per-browser, survives refresh; `presenter:`
+prefix). Bible translation prefs (`get/update_preferences` → server) are a **single GLOBAL**
+`bible-preferences` row in `app_settings` — shared by ALL browsers, so relying on them for "remember
+my selection" lets concurrent operators clobber each other. For per-browser state, layer localStorage
+ON TOP: read it on mount AFTER the server-pref default (so it wins) and BEFORE any "default to first"
+fallback; write it in the same auto-save effect (guarded by the `translations_loaded` flag so
+hydration sets don't fire it). Distinguish **explicitly-cleared** (store `""` sentinel → `None`) from
+**never-chosen** (absent key → keep server/default) — a plain "restore last value" would re-default a
+deliberately-emptied field. Keep the server-pref write too: it still seeds a brand-new browser and
+drives non-live composition paths (companion / prepared).
+
+## Header preview is split by view: stage iframe = worship-only, verse preview = bible (#700, reverts part of #460)
+
+`components/stage_preview.rs` renders BOTH header previews now. The live `/stage?preview=1` mirror
+iframe (`data-role="stage-preview-frame"`) is wrapped in `<Show when=is_worship>` — **worship-only**,
+and UNMOUNTED (not `display:none`) off-worship because it is an expensive live stage WS client that
+can carry NDI video. The Bible tab instead shows the text verse preview (`data-role="bible-preview"`,
+reading `ctx.active_bible_broadcast` — updated live by the operator WS `LiveEvent::Bible`), toggled by
+`style=display:none` (cheap text). #460 had made the iframe render on EVERY view and deleted the
+verse preview; the pre-#460 verse-preview markup + `operator__bible-preview*` CSS were recovered from
+`git show c2e76c44^`. Consequence for tests: `operator-view-isolation.spec.ts` and the
+`wasm-bible.spec.ts` header-preview test asserted the #460 "iframe in every view" contract and had to
+be flipped (iframe present on worship / ABSENT on bible+timers+ai+settings; verse preview on bible).

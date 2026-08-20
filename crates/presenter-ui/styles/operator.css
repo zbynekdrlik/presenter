@@ -1045,6 +1045,39 @@ body.operator {
   pointer-events: none;
 }
 
+/* #700: bible-tab verse preview (restored from pre-#460). Shown only on the
+   bible tab in place of the worship-only stage-mirror iframe. */
+.operator__bible-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 280px;
+  max-width: 400px;
+  padding: 0.5rem 0.75rem;
+}
+
+.operator__bible-preview-text {
+  font-size: 0.92rem;
+  line-height: 1.4;
+  color: #f8fafc;
+  max-height: 4.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.operator__bible-preview-ref {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: #93c5fd;
+  font-style: italic;
+}
+
+.operator__bible-preview-empty {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-style: italic;
+}
 
 .operator__stage-monitor {
   position: absolute;
