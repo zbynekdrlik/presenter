@@ -63,12 +63,11 @@ test.afterAll(async () => {
 
 async function postJson(
   request: APIRequestContext,
-  path: string,
+  apiPath: string,
   body: unknown,
-): Promise<Response> {
-  const resp = await request.post(`${baseURL}${path}`, { data: body });
-  expect(resp.ok(), `${path} -> ${resp.status()}`).toBeTruthy();
-  return resp as unknown as Response;
+): Promise<void> {
+  const resp = await request.post(`${baseURL}${apiPath}`, { data: body });
+  expect(resp.ok(), `${apiPath} -> ${resp.status()}`).toBeTruthy();
 }
 
 /** Upload the 1x1 PNG as an asset; returns its id. (#708 `POST /stream/assets`) */

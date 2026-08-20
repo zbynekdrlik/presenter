@@ -95,10 +95,18 @@ pub fn ElementCountdown(
         if snap.state == TimerState::Idle {
             return String::new();
         }
-        let elapsed = ((ctx.now_ms.get() - received_at_ms) / 1000.0).floor();
-        let elapsed = if elapsed < 0.0 { 0 } else { elapsed as i64 };
+        // Interpolate the local tick only while RUNNING — a Paused/Completed
+        // countdown holds the server's value (interpolating a paused timer would
+        // drift it downward between server pushes).
+        let remaining = if snap.state == TimerState::Running {
+            let elapsed = ((ctx.now_ms.get() - received_at_ms) / 1000.0).floor();
+            let elapsed = if elapsed < 0.0 { 0 } else { elapsed as i64 };
+            snap.seconds_remaining - elapsed
+        } else {
+            snap.seconds_remaining
+        };
         // `format_countdown` yields "" beyond 10 s past zero (cleared).
-        format_countdown(snap.seconds_remaining - elapsed)
+        format_countdown(remaining)
     };
 
     view! {

@@ -244,8 +244,9 @@ fn handle_text(text: &str, setters: StreamWsSetters, last_hb: &Rc<RefCell<f64>>)
             }
         }
         Some("timers") => {
-            // Parse through the real LiveEvent type (exists today).
-            if let Ok(LiveEvent::Timers { overview }) = serde_json::from_str::<LiveEvent>(text) {
+            // Parse through the real LiveEvent type (exists today), reusing the
+            // already-parsed `value` rather than re-parsing `text`.
+            if let Ok(LiveEvent::Timers { overview }) = serde_json::from_value::<LiveEvent>(value) {
                 *last_hb.borrow_mut() = now;
                 setters.timers.set(Some(TimersReceipt {
                     overview,

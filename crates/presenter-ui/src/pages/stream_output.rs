@@ -79,15 +79,12 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
 
     let ws = stream::use_stream_websocket();
 
-    // Cold load: fetch the def + the current timers immediately (before the WS
-    // even connects) so the output paints as fast as possible.
-    spawn_refetch_def(slug.clone(), def, show_state);
-    spawn_refetch_timers(ctx.timers);
-
-    // Resync on every WS (re)connect: the live hub does not replay events, so a
-    // config/activation change made while this socket was down/zombie would be
-    // lost. A `Memo` on the Connected state dedups per-heartbeat re-sets, so the
-    // refetch fires only on real transitions (first connect + each reconnect).
+    // Fetch (cold load AND resync) on every WS transition INTO Connected: the
+    // live hub does not replay events, so a config/activation change made while
+    // this socket was down/zombie would be lost. A `Memo` on the Connected state
+    // dedups per-heartbeat re-sets, so the fetch fires only on real transitions —
+    // the FIRST connect (the cold load) and each reconnect — exactly once each,
+    // never a redundant pre-connect + first-connect double fetch.
     {
         let slug_c = slug.clone();
         let ws_state = ws.state;
@@ -115,13 +112,25 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             }
             let local = def.get_untracked();
             let local_rev = local.as_ref().map(|d| d.config_revision).unwrap_or(0);
-            let known = match msg.active_scene_id {
-                None => true,
-                Some(id) => local
-                    .as_ref()
-                    .map(|d| d.scenes.iter().any(|s| s.id == id))
-                    .unwrap_or(false),
-            };
+            // The def is "known" only when every scene the event references
+            // resolves in our local def — the base id AND every active overlay
+            // id (each to an Overlay scene). A missing id means our def predates
+            // the scene, so refetch. No def yet ⇒ not known ⇒ refetch.
+            let known = local
+                .as_ref()
+                .map(|d| {
+                    let base_ok = match msg.active_scene_id {
+                        None => true,
+                        Some(id) => d.scenes.iter().any(|s| s.id == id),
+                    };
+                    let overlays_ok = msg.active_overlay_ids.iter().all(|oid| {
+                        d.scenes
+                            .iter()
+                            .any(|s| s.id == *oid && s.kind == SceneKind::Overlay)
+                    });
+                    base_ok && overlays_ok
+                })
+                .unwrap_or(false);
             if msg.config_revision > local_rev || !known {
                 spawn_refetch_def(slug_c.clone(), def, show_state);
             } else {

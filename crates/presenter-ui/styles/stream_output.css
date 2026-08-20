@@ -32,12 +32,18 @@ body.stream {
 
 /* Each rendered scene fills the canvas; its elements are absolutely positioned
  * within it by their Frame (inline styles). Base scene renders first, overlays
- * stack on top in activation order. */
+ * stack on top in activation (DOM) order.
+ *
+ * `isolation: isolate` gives each scene its OWN stacking context, so a per-
+ * element `z-index` orders elements WITHIN a scene only — it can never let a
+ * high-z base-scene element paint over an overlay-scene element. Cross-scene
+ * layering is then purely DOM order (base rendered before overlays). */
 .stream-scene {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
+    isolation: isolate;
 }
 
 /* Elements carry their own left/top/width/height/z-index via inline style
