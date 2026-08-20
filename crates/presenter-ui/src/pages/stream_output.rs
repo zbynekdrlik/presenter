@@ -9,9 +9,16 @@
 //! scene map -> render active base + overlays. `StreamState` is applied directly
 //! (an unknown scene id OR a higher `config_revision` ⇒ refetch the def);
 //! `StreamConfigChanged` ⇒ refetch; `Timers` ⇒ drive the countdown; the def is
-//! refetched on every WS reconnect. Content-change crossfades are #716 — this
-//! lane swaps scenes without animation.
+//! refetched on every WS reconnect.
+//!
+//! Transitions (#716): a base-scene switch CROSSFADES — the outgoing scene stays
+//! mounted (fading out) while the incoming fades in; overlays fade in/out on
+//! toggle; `duration = scene.transition_ms ?? output.default_transition_ms`. The
+//! scene layers are tracked in a keyed list (`SceneLayer`) with scheduled removal
+//! after each fade (no node leaks). Per-element content changes (lyric line /
+//! verse / countdown text) fade or cut via `transition::CrossfadeText`.
 
+use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::{
     BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamOutputDef, StreamSceneDef,
@@ -27,6 +34,65 @@ use crate::ws::stream::{self, StreamWsState, TimersReceipt};
 /// pushes). 250 ms is well under one second so the displayed value never lags a
 /// visible tick.
 const TICK_INTERVAL_MS: u32 = 250;
+
+/// A leaving scene layer is removed this many ms AFTER its fade duration, so the
+/// opacity transition finishes before the node leaves the DOM (#716).
+const SCENE_FADE_REMOVE_BUFFER_MS: u32 = 80;
+
+/// One mounted scene copy on the canvas — the active base and/or overlays, plus
+/// (transiently, during a switch) an outgoing scene still fading out. Keyed on
+/// `seq` (a monotonic instance id — NOT the scene id) so a scene re-entering
+/// while its previous copy is still leaving (A→B→A) never key-collides (#716).
+#[derive(Clone)]
+struct SceneLayer {
+    seq: u64,
+    scene: StreamSceneDef,
+    kind: SceneKind,
+    leaving: bool,
+    duration_ms: u32,
+}
+
+/// Build a fresh (non-leaving) scene layer, bumping the instance counter.
+fn make_layer(next_seq: StoredValue<u64>, scene: StreamSceneDef, duration_ms: u32) -> SceneLayer {
+    let seq = next_seq.get_value();
+    next_seq.set_value(seq + 1);
+    let kind = scene.kind;
+    SceneLayer {
+        seq,
+        scene,
+        kind,
+        leaving: false,
+        duration_ms,
+    }
+}
+
+/// Mark a layer as fading out and schedule its removal once the fade completes.
+/// `try_update` makes the removal a safe no-op if the page disposed first (the
+/// crate cannot use `on_cleanup` for a `!Send` gloo timer — ui skill).
+fn mark_leaving(layers: RwSignal<Vec<SceneLayer>>, seq: u64, duration_ms: u32) {
+    layers.update(|ls| {
+        if let Some(l) = ls.iter_mut().find(|l| l.seq == seq) {
+            l.leaving = true;
+            l.duration_ms = duration_ms;
+        }
+    });
+    Timeout::new(duration_ms + SCENE_FADE_REMOVE_BUFFER_MS, move || {
+        let _ = layers.try_update(|ls| ls.retain(|l| l.seq != seq));
+    })
+    .forget();
+}
+
+/// Keep base layers before overlay layers (stable) so cross-scene stacking is
+/// correct: with each scene an `isolation:isolate` context, layering is DOM
+/// order, so base must render before overlays.
+fn sort_layers_base_first(layers: RwSignal<Vec<SceneLayer>>) {
+    layers.update(|ls| {
+        ls.sort_by_key(|l| match l.kind {
+            SceneKind::Base => 0u8,
+            SceneKind::Overlay => 1u8,
+        })
+    });
+}
 
 #[component]
 pub fn StreamOutputPage(slug: String) -> impl IntoView {
@@ -221,56 +287,125 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
     };
     let slug_attr = slug.clone();
 
-    // Render the effective base scene + overlays. In preview mode the forced
-    // query values override the live show-state (the editor drives which scene to
-    // show); otherwise the live show-state selects them.
-    let render_scenes = move || {
-        let Some(d) = def.get() else {
-            return ().into_any();
-        };
-        let ss = show_state.get();
-        let live_base = ss.as_ref().and_then(|s| s.active_scene_id);
-        let live_overlays = ss
-            .as_ref()
-            .map(|s| s.active_overlay_ids.clone())
-            .unwrap_or_default();
-        let base_id = if preview {
-            forced_scene.or(live_base)
-        } else {
-            live_base
-        };
-        let overlay_ids = if preview {
-            forced_overlays.clone().unwrap_or(live_overlays)
-        } else {
-            live_overlays
-        };
+    // Scene-switch crossfade (#716): a stateful list of mounted scene layers with
+    // enter/leave, replacing the old instant swap. `next_seq` gives each mount a
+    // unique key; `last_rev` distinguishes an ACTIVATION (crossfade reconcile)
+    // from a CONFIG edit (rebuild). Both live for the page's lifetime.
+    let layers = RwSignal::new(Vec::<SceneLayer>::new());
+    let next_seq = StoredValue::new(0u64);
+    let last_rev = StoredValue::new(None::<u64>);
 
-        let mut scenes: Vec<StreamSceneDef> = Vec::new();
-        if let Some(bid) = base_id {
-            if let Some(scene) = d
-                .scenes
-                .iter()
-                .find(|s| s.id == bid && s.kind == SceneKind::Base)
-            {
-                scenes.push(scene.clone());
-            }
-        }
-        for oid in &overlay_ids {
-            if let Some(scene) = d
-                .scenes
-                .iter()
-                .find(|s| s.id == *oid && s.kind == SceneKind::Overlay)
-            {
-                scenes.push(scene.clone());
-            }
-        }
+    // Reconcile the layer list against the effective (preview-aware) show-state.
+    {
+        let forced_overlays = forced_overlays.clone();
+        Effect::new(move |_| {
+            let Some(d) = def.get() else {
+                layers.set(Vec::new());
+                last_rev.set_value(None);
+                return;
+            };
+            let ss = show_state.get();
+            let live_base = ss.as_ref().and_then(|s| s.active_scene_id);
+            let live_overlays = ss
+                .as_ref()
+                .map(|s| s.active_overlay_ids.clone())
+                .unwrap_or_default();
+            let base_id = if preview {
+                forced_scene.or(live_base)
+            } else {
+                live_base
+            };
+            let overlay_ids = if preview {
+                forced_overlays.clone().unwrap_or(live_overlays)
+            } else {
+                live_overlays
+            };
 
-        scenes
-            .into_iter()
-            .map(|scene| view! { <SceneRender scene=scene /> }.into_any())
-            .collect_view()
-            .into_any()
-    };
+            let default_dur = d.default_transition_ms;
+            let base_scene = base_id.and_then(|id| {
+                d.scenes
+                    .iter()
+                    .find(|s| s.id == id && s.kind == SceneKind::Base)
+                    .cloned()
+            });
+            let overlay_scenes: Vec<StreamSceneDef> = overlay_ids
+                .iter()
+                .filter_map(|oid| {
+                    d.scenes
+                        .iter()
+                        .find(|s| s.id == *oid && s.kind == SceneKind::Overlay)
+                        .cloned()
+                })
+                .collect();
+
+            // A CONFIG change (revision bump) rebuilds fresh — config edits are
+            // not the smooth broadcast path; the new nodes still fade IN via
+            // `@starting-style`. An ACTIVATION (same revision) crossfades below.
+            if last_rev.get_value() != Some(d.config_revision) {
+                last_rev.set_value(Some(d.config_revision));
+                let mut fresh = Vec::new();
+                if let Some(bs) = base_scene.clone() {
+                    let dur = bs.transition_ms.unwrap_or(default_dur);
+                    fresh.push(make_layer(next_seq, bs, dur));
+                }
+                for os in &overlay_scenes {
+                    let dur = os.transition_ms.unwrap_or(default_dur);
+                    fresh.push(make_layer(next_seq, os.clone(), dur));
+                }
+                layers.set(fresh);
+                return;
+            }
+
+            // Base: fade the old out + the new in when the active base changes.
+            // The INCOMING scene's `transition_ms ?? default` governs both fades;
+            // a clear (no incoming) uses the OUTGOING scene's own duration.
+            let cur_base = layers.with_untracked(|ls| {
+                ls.iter()
+                    .find(|l| !l.leaving && l.kind == SceneKind::Base)
+                    .map(|l| (l.seq, l.scene.id, l.scene.transition_ms))
+            });
+            let want_base_id = base_scene.as_ref().map(|s| s.id);
+            if cur_base.map(|(_, id, _)| id) != want_base_id {
+                let switch_dur = match &base_scene {
+                    Some(bs) => bs.transition_ms.unwrap_or(default_dur),
+                    None => cur_base.and_then(|(_, _, t)| t).unwrap_or(default_dur),
+                };
+                if let Some((seq, _, _)) = cur_base {
+                    mark_leaving(layers, seq, switch_dur);
+                }
+                if let Some(bs) = base_scene.clone() {
+                    let dur = bs.transition_ms.unwrap_or(default_dur);
+                    let layer = make_layer(next_seq, bs, dur);
+                    layers.update(|ls| ls.push(layer));
+                }
+            }
+
+            // Overlays: fade each one in/out individually on toggle.
+            let cur_overlays: Vec<(u64, i64, Option<u32>)> = layers.with_untracked(|ls| {
+                ls.iter()
+                    .filter(|l| !l.leaving && l.kind == SceneKind::Overlay)
+                    .map(|l| (l.seq, l.scene.id, l.scene.transition_ms))
+                    .collect()
+            });
+            let want_overlay_ids: Vec<i64> = overlay_scenes.iter().map(|s| s.id).collect();
+            for &(seq, id, t) in &cur_overlays {
+                if !want_overlay_ids.contains(&id) {
+                    mark_leaving(layers, seq, t.unwrap_or(default_dur));
+                }
+            }
+            for os in &overlay_scenes {
+                if !cur_overlays.iter().any(|(_, id, _)| *id == os.id) {
+                    let dur = os.transition_ms.unwrap_or(default_dur);
+                    let layer = make_layer(next_seq, os.clone(), dur);
+                    layers.update(|ls| ls.push(layer));
+                }
+            }
+
+            sort_layers_base_first(layers);
+        });
+    }
+
+    let layers_each = move || layers.get();
 
     view! {
         <div
@@ -280,7 +415,27 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             data-ws-state=ws_state_attr
             data-config-revision=config_rev_attr
         >
-            {render_scenes}
+            <For
+                each=layers_each
+                key=|l| l.seq
+                children=move |l: SceneLayer| {
+                    let seq = l.seq;
+                    // #496/#693: read `leaving` REACTIVELY by seq — a keyed
+                    // `<For>` does not re-run children when only the flag flips.
+                    let leaving = Signal::derive(move || {
+                        layers.with(|ls| {
+                            ls.iter().find(|x| x.seq == seq).map(|x| x.leaving).unwrap_or(true)
+                        })
+                    });
+                    view! {
+                        <SceneRender
+                            scene=l.scene
+                            leaving=leaving
+                            duration_ms=l.duration_ms
+                        />
+                    }
+                }
+            />
         </div>
     }
 }
