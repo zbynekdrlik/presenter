@@ -23,3 +23,17 @@ Every OTHER consumer already has a catch-all and needs no change:
 Verify exhaustiveness by GREP, not the compiler (Tier-0): `grep -rn "LiveEvent::" crates/` and check
 each match site for a catch-all. An exhaustive LiveEvent match always enumerates the common variants
 (`Timers`/`Stage`/`Bible*`), so grepping for those variant ARMS finds every exhaustive consumer.
+
+# A Companion variable that needs ASYNC data can't be set in `apply_live_event`
+
+`apply_live_event` is SYNC (`fn(&mut self, event) -> bool`) with no `AppState` handle — it can only
+set variables from data already inside the event. When a new event carries IDs but the variable needs
+NAMES (or any repository / DB read), resolve it ASYNC in the `companion/mod.rs` live-loop BEFORE
+storing — NOT in `apply_live_event`. Pattern (#711: `StreamState` → `stream_scene`/`stream_overlays`):
+the loop does `if matches!(ev, LiveEvent::StreamState { .. })` → `stream::apply_stream_state_event(&state,
+&mut vars, &ev).await` (async id→name via `repository().load_output_def`) → the sync `apply_stream_state`
+setter; every other event keeps the `variables.apply_live_event(ev)` path. The event's own arm in
+`apply_live_event` then stays a documented no-op kept ONLY for exhaustiveness (a genuinely variable-less
+event like `StreamConfigChanged` legitimately returns `false` there). The `matches!`-then-branch shape
+(borrow in the if-arm, move in the else-arm) compiles under NLL because the branches are mutually
+exclusive and the event is unused afterwards.
