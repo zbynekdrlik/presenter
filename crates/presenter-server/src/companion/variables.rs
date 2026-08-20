@@ -49,6 +49,12 @@ impl CompanionVariableState {
                 // NDI events are handled by stage display, not Companion.
                 false
             }
+            crate::live::LiveEvent::StreamState { .. }
+            | crate::live::LiveEvent::StreamConfigChanged { .. } => {
+                // Stream-graphics events drive the WASM output page (epic #718);
+                // the `stream_*` Companion variables land with a later PR.
+                false
+            }
         }
     }
 

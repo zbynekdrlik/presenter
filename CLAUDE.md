@@ -32,6 +32,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
 | Repository refusal → HTTP 404/409/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |
+| Stream-graphics subsystem (epic #718): serde tag, i32/i64 ids, config_revision vs activation, error taxonomy, test idiom | `.claude/rules/stream-graphics.md` (auto-loads on `**/*stream*.rs`) |
+| Adding a `LiveEvent` variant → the one exhaustive match (`companion/variables.rs`) that breaks (E0004) | `.claude/rules/live-events.md` (auto-loads on `live.rs`, `companion/variables.rs`) |
 | Sync/LWW invariants (synthetic tombstones, clock bumps, best-effort recon) | `.claude/rules/sync-lww.md` (auto-loads on `repository/sync*`, `library_sync*`, `state/sync.rs`) |
 | AI-eval harness (lib.rs split, Cargo autobins gotcha, minimal pub widening) | `.claude/rules/ai-eval-harness.md` (auto-loads on `bin/ai_eval/**`, `lib.rs`, `scripts/dev/ai-eval/**`) |
 | Local quality-gate gotchas (fn-length counts wrapped signature lines, file-size cap) | `.claude/rules/quality-gates.md` (auto-loads on `crates/**/*.rs`) |
