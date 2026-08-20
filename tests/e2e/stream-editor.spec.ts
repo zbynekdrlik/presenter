@@ -2,6 +2,7 @@ import { test, expect, type Browser, type Page } from "@playwright/test";
 import {
   assertVersionLabel,
   attachConsoleErrorCollector,
+  attachEditorConsoleCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -293,8 +294,10 @@ async function setColorInput(page: Page, selector: string, value: string) {
 }
 
 test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => {
+  // Editor collector: the preview iframe legitimately 404s on the placeholder
+  // asset of a freshly-added, not-yet-picked image element (authoring transient).
   const errors: string[] = [];
-  attachConsoleErrorCollector(page, errors);
+  attachEditorConsoleCollector(page, errors);
   await openEditor(page);
 
   const scene = await addScene(page, "SE_ElemScene", "base");
@@ -382,8 +385,8 @@ test("a config change reflects live in a second editor context", async ({
   const pageB = await ctxB.newPage();
   const errorsA: string[] = [];
   const errorsB: string[] = [];
-  attachConsoleErrorCollector(pageA, errorsA);
-  attachConsoleErrorCollector(pageB, errorsB);
+  attachEditorConsoleCollector(pageA, errorsA);
+  attachEditorConsoleCollector(pageB, errorsB);
 
   // Seed a base scene both contexts can open.
   const createRes = await pageA.request.post(

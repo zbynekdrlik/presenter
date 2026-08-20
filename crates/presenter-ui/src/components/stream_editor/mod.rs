@@ -389,6 +389,17 @@ impl StreamEditorCtx {
     }
 }
 
+/// Render a bool as the `"true"`/`"false"` string used by every `data-active`
+/// / `data-selected` attribute in the editor (one place instead of the same
+/// inline ternary repeated across scene columns, overlay chips + element rows).
+pub fn bool_attr(b: bool) -> &'static str {
+    if b {
+        "true"
+    } else {
+        "false"
+    }
+}
+
 /// Scene ids of one kind, in current (def) order.
 fn kind_ids(def: &StreamOutputDef, kind: SceneKind) -> Vec<i64> {
     def.scenes

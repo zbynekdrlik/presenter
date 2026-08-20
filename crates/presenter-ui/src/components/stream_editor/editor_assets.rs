@@ -139,7 +139,7 @@ pub fn AssetPickerButton(
                                             asset_error.set(String::new());
                                             load();
                                         }
-                                        Err(e) => asset_error.set(format!("{e}")),
+                                        Err(e) => asset_error.set(e.to_string()),
                                     }
                                 });
                             };

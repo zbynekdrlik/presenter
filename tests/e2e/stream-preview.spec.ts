@@ -1,7 +1,7 @@
 import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import {
-  attachConsoleErrorCollector,
+  attachEditorConsoleCollector,
   deriveTestConfig,
   refreshDevData,
   REPO_ROOT,
@@ -15,9 +15,11 @@ import {
 // REST surface are PARALLEL lanes (#709 / #708); these tests therefore run in
 // integrated CI (where those routes exist), not in an isolated worktree.
 //
-// `page.on("console")` (attachConsoleErrorCollector) captures console messages
+// `page.on("console")` (attachEditorConsoleCollector) captures console messages
 // from child frames too, so the zero-console assertions cover the preview
-// iframe as required by the stream-graphics UI skill.
+// iframe as required by the stream-graphics UI skill. It ignores only the
+// expected `/stream/assets/<id>` 404 of a not-yet-picked placeholder image
+// asset (authoring transient); every other iframe error still fails.
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
@@ -82,7 +84,7 @@ async function openPanel(page: Page, sceneId: number) {
 
 test("preview iframe forces the selected scene and toggles live", async ({ page }) => {
   const errors: string[] = [];
-  attachConsoleErrorCollector(page, errors);
+  attachEditorConsoleCollector(page, errors);
   await openEditor(page);
 
   const sceneId = await createScene(page, "SP_PreviewScene");
@@ -110,7 +112,7 @@ test("preview iframe forces the selected scene and toggles live", async ({ page 
 
 test("upload → picker → assign → visible in preview; guarded delete 409", async ({ page }) => {
   const errors: string[] = [];
-  attachConsoleErrorCollector(page, errors);
+  attachEditorConsoleCollector(page, errors);
   await openEditor(page);
 
   const sceneId = await createScene(page, "SP_AssetScene");

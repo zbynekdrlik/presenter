@@ -228,6 +228,8 @@ pub fn default_element_props(kind: &str) -> StreamElementProps {
             frame: default_frame(),
             content_transition: ContentTransition::default(),
         },
+        // "verse" (the only remaining valid kind) + a defensive default — the
+        // panel's add-buttons only ever pass the four valid kind strings.
         _ => StreamElementProps::Verse {
             show_secondary: false,
             text_style: default_text_style(),
