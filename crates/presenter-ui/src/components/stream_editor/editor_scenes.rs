@@ -121,7 +121,10 @@ fn OverlayChip(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 type="button"
                 class="stream-editor__activate stream-editor__activate--toggle"
                 data-role="stream-overlay-toggle"
-                on:click=move |_| ctx.toggle_overlay(id, !is_active())
+                on:click=move |_| {
+                    let now = ctx.active.get_untracked().active_overlay_ids.contains(&id);
+                    ctx.toggle_overlay(id, !now);
+                }
             >
                 {move || if is_active() { "Vypnúť" } else { "Zapnúť" }}
             </button>
@@ -140,7 +143,12 @@ fn SceneHead(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     let name = move || scene_name(ctx, id);
     let count = move || scene_element_count(ctx, id);
     let start = move |_| {
-        draft.set(scene_name(ctx, id));
+        let current = ctx
+            .def
+            .get_untracked()
+            .and_then(|d| d.scenes.iter().find(|s| s.id == id).map(|s| s.name.clone()))
+            .unwrap_or_default();
+        draft.set(current);
         editing.set(true);
     };
     let save = move |_| {
