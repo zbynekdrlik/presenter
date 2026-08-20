@@ -66,4 +66,17 @@ stream repo test.
 A raw-string fixture containing a color like `"#ffffff"` contains the sequence `"#`, which CLOSES an
 `r#"..."#` raw string early → a confusing `unknown prefix` parse error. Use `r##"..."##` for any
 JSON fixture that embeds a `#rrggbb`/`#rrggbbaa` value. Caught only by `cargo fmt` locally (Tier-0),
-so run `cargo fmt --all --check` before committing stream fixtures.
+so run `cargo fmt --all --check` before committing stream fixtures. (Building the fixtures with
+`serde_json::json!({...})` instead of raw strings sidesteps this entirely — the `#` lives in a
+normal string literal — and is what the #707 router tests do.)
+
+## Server-side (state/router) tests share the in-memory DB → own a UNIQUE slug per test (#706/#707)
+The repository-test isolation idiom above is NOT available from `presenter-server`: `Repository { db }`
+is `pub(crate)` to `presenter-persistence`, so a server test cannot build the isolated single-connection
+repo. `AppState::in_memory()` uses `Repository::connect_in_memory()` = `sqlite::memory:?cache=shared`,
+so ALL server tests in the process share ONE DB. Existing server tests avoid this by never asserting a
+global list/count on a shared table. Stream state/router tests must do the same: **each test creates its
+own uniquely-slugged output** (`s706-<name>` / `t-<name>`) and operates on THAT — never the seeded
+`stream` output — or two tests activating `stream` race on `active_scene_id`. The per-`AppState`
+`LiveHub` is NOT shared, so hub-subscription assertions (`live_hub().subscribe()` + `try_recv`) are
+safe as-is.
