@@ -16,6 +16,7 @@
 //!    - `stage_layout`: Selected stage display layout code
 //!    - `ableset_cache`: Cached AbleSet library-to-playlist mapping
 //!    - `group_color_cache`: Cached group name → hex color mapping
+//!    - `stream`: StreamManager show-state cache (own lock; never held across a repository await)
 //!
 //! If future changes require holding multiple locks, establish and document a consistent
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
@@ -50,6 +51,7 @@ pub mod slides;
 pub(crate) mod stage;
 pub(crate) mod stage_display;
 mod stage_state;
+mod stream;
 pub(crate) mod sync;
 #[cfg(test)]
 mod sync_integration_breaker_tests;
@@ -171,6 +173,7 @@ pub struct AppState {
     /// are next saved with `enabled: true`, so the warning logs once per
     /// enabled->disabled transition instead of once per OSC event.
     ableset_disabled_warn_shown: Arc<AtomicBool>,
+    stream: stream::StreamManager,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -328,6 +331,7 @@ impl AppState {
             presentation_locks: PresentationLockRegistry::new(),
             ableset_ack_lock: Arc::new(tokio::sync::Mutex::new(())),
             ableset_disabled_warn_shown: Arc::new(AtomicBool::new(false)),
+            stream: stream::StreamManager::new(),
         };
         state.spawn_heartbeat_tasks();
         state
