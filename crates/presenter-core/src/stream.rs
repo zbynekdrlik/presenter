@@ -117,6 +117,7 @@ impl SceneKind {
 /// A rectangle expressed as percentages of the fixed 16:9 output canvas
 /// (`0..=100`; the OBS source is 1920×1080 so `%` maps 1:1 to CSS `vw`/`vh`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Frame {
     pub x_pct: f32,
     pub y_pct: f32,
@@ -126,6 +127,7 @@ pub struct Frame {
 
 /// A CSS text/box shadow. `color` is `#rrggbb` or `#rrggbbaa`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Shadow {
     pub x_px: f32,
     pub y_px: f32,
@@ -137,6 +139,7 @@ pub struct Shadow {
 /// height (⇒ CSS `vh`); `color` is `#rrggbb`/`#rrggbbaa`; `weight` is a CSS
 /// font weight `1..=1000`; `line_height` is a unitless multiplier `0.5..=3.0`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextStyle {
     pub font_family: String,
     pub size_pct: f32,
@@ -226,6 +229,7 @@ impl StreamElementProps {
 /// `StreamState` LiveEvent and the StreamManager's in-memory cache. `base` is
 /// exclusive (`Option`); overlays are an independent set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamShowState {
     pub active_scene_id: Option<i64>,
     pub active_overlay_ids: Vec<i64>,
@@ -234,6 +238,7 @@ pub struct StreamShowState {
 
 /// A lightweight output row (no scenes) — returned by output CRUD + list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamOutputSummary {
     pub id: i64,
     pub slug: String,
@@ -245,6 +250,7 @@ pub struct StreamOutputSummary {
 
 /// One element within a [`StreamSceneDef`], ordered by `z_order`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamElementDef {
     pub id: i64,
     pub z_order: i32,
@@ -253,6 +259,7 @@ pub struct StreamElementDef {
 
 /// One scene within a [`StreamOutputDef`], with its ordered elements.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamSceneDef {
     pub id: i64,
     pub name: String,
@@ -268,6 +275,7 @@ pub struct StreamSceneDef {
 /// — the cold-load payload for the WASM output page and the editor. Scenes are
 /// ordered by (kind, position); each scene's elements are ordered by `z_order`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamOutputDef {
     pub id: i64,
     pub slug: String,
@@ -281,6 +289,7 @@ pub struct StreamOutputDef {
 /// Metadata for an uploaded, sha256-addressed image asset — listed by the
 /// editor and referenced by `StreamElementProps::Image { asset_id }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StreamAsset {
     pub id: i64,
     pub sha256: String,
@@ -533,25 +542,28 @@ mod tests {
         }
     }
 
-    fn assert_round_trips(props: &StreamElementProps) {
-        let json = serde_json::to_string(props).expect("serialize");
-        let back: StreamElementProps = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(&back, props);
-    }
-
     #[test]
     fn all_four_kinds_round_trip() {
-        assert_round_trips(&image_props());
-        assert_round_trips(&countdown_props());
-        assert_round_trips(&lyrics_props());
-        assert_round_trips(&verse_props());
+        for (props, tag) in [
+            (image_props(), "image"),
+            (countdown_props(), "countdown"),
+            (lyrics_props(), "lyrics"),
+            (verse_props(), "verse"),
+        ] {
+            let json = serde_json::to_value(&props).expect("serialize");
+            assert_eq!(json["kind"], json!(tag));
+            let parsed: StreamElementProps =
+                serde_json::from_value(json.clone()).expect("deserialize");
+            assert_eq!(parsed, props);
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), json);
+        }
     }
 
     #[test]
     fn image_props_wire_shape_is_exact() {
         // Exact wire shape (single-line fixture keeps braces balanced for the
         // fn-length gate's brace counter).
-        let wire = r#"{"kind":"image","asset_id":7,"fit":"contain","frame":{"x_pct":10.0,"y_pct":20.0,"w_pct":50.0,"h_pct":30.0},"opacity":1.0}"#;
+        let wire = r#"{"kind":"image","asset_id":7,"fit":"contain","frame":{"xPct":10.0,"yPct":20.0,"wPct":50.0,"hPct":30.0},"opacity":1.0}"#;
         let parsed: StreamElementProps = serde_json::from_str(wire).expect("parse");
         assert_eq!(parsed, image_props());
         assert_eq!(
@@ -576,7 +588,7 @@ mod tests {
 
     #[test]
     fn omitted_content_transition_defaults_to_fade_300() {
-        let wire = r##"{"kind":"lyrics","show_main":true,"show_translation":false,"main_style":{"font_family":"Inter","size_pct":8.0,"color":"#ffffff","weight":700,"align":"center","line_height":1.2},"translation_style":{"font_family":"Inter","size_pct":8.0,"color":"#ffffff","weight":700,"align":"center","line_height":1.2},"frame":{"x_pct":10.0,"y_pct":20.0,"w_pct":50.0,"h_pct":30.0}}"##;
+        let wire = r##"{"kind":"lyrics","show_main":true,"show_translation":false,"main_style":{"fontFamily":"Inter","sizePct":8.0,"color":"#ffffff","weight":700,"align":"center","lineHeight":1.2},"translation_style":{"fontFamily":"Inter","sizePct":8.0,"color":"#ffffff","weight":700,"align":"center","lineHeight":1.2},"frame":{"xPct":10.0,"yPct":20.0,"wPct":50.0,"hPct":30.0}}"##;
         let parsed: StreamElementProps = serde_json::from_str(wire).expect("parse");
         // The wire fixture omits `content_transition`; it must deserialise to
         // the Fade{300} default (arch §4), so the whole value equals this.
