@@ -423,20 +423,21 @@ mod tests {
     #[tokio::test]
     async fn foreign_output_activation_surfaces_typed_error() {
         let state = AppState::in_memory().await.unwrap();
-        // A scene on a SECOND output must not be activatable on `stream`.
+        seed_output(&state, "s706-foreign-a").await;
+        // A scene on a SECOND output must not be activatable on the first.
         state
             .repository()
-            .create_stream_output("other", "Other")
+            .create_stream_output("s706-foreign-b", "B")
             .await
             .unwrap();
         let foreign = state
             .repository()
-            .create_stream_scene("other", "Base", SceneKind::Base)
+            .create_stream_scene("s706-foreign-b", "Base", SceneKind::Base)
             .await
             .unwrap();
 
         let err = state
-            .stream_activate_scene("stream", Some(foreign.id))
+            .stream_activate_scene("s706-foreign-a", Some(foreign.id))
             .await
             .expect_err("activating a foreign output's scene must be refused");
         assert!(
