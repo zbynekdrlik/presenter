@@ -121,9 +121,12 @@ async fn upload_asset(
     Ok(Json(asset))
 }
 
-/// `GET /stream/assets/{id}` — serve the content-addressed bytes with a
-/// forever-immutable cache header (the bytes for a content-addressed name can
-/// never change). `404` for a missing row OR a missing file.
+/// `GET /stream/assets/{id}` — serve the stored image bytes with a
+/// forever-immutable cache header. The URL is id-addressed, but the id→bytes
+/// binding IS immutable: `stream_assets.id` is AUTOINCREMENT (never reused after
+/// delete), there is no sha256-update path, and dedup keeps one row per content
+/// — so a cached response can only ever go 200→404, never point at different
+/// bytes. `404` for a missing row OR a missing file.
 #[instrument(skip_all)]
 async fn serve_asset(
     State(state): State<AppState>,
@@ -149,6 +152,13 @@ async fn serve_asset(
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    // Defense-in-depth for a route that streams user-uploaded bytes: even though
+    // the content-type is magic-byte-derived and restricted to image/*, tell the
+    // browser never to MIME-sniff the body.
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
     );
     Ok(response)
 }

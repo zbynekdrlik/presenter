@@ -297,6 +297,28 @@ impl AssetStore {
             Err(e) => Err(e),
         }
     }
+
+    /// Remove stale `.upload-<uuid>.tmp` files left by a crash between the write
+    /// and the rename in [`Self::store`]. Such files are inert (never served —
+    /// `path_for` only accepts a bare sha256 + whitelisted ext) but would
+    /// otherwise accumulate disk; swept once at startup.
+    pub(crate) async fn sweep_tmp(&self) -> std::io::Result<()> {
+        let mut entries = match tokio::fs::read_dir(&self.dir).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(".upload-") && name.ends_with(".tmp") {
+                // Best-effort: a concurrent upload's rename may already have
+                // moved it, or a permission quirk — never fail startup over it.
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Resolve the stream-assets directory: an explicit `PRESENTER_STREAM_ASSETS_DIR`
@@ -351,14 +373,19 @@ impl AppState {
         AssetStore::new(self.stream_assets_dir.clone())
     }
 
-    /// Ensure the stream-assets directory exists (startup hook, idempotent,
-    /// logged).
+    /// Ensure the stream-assets directory exists and clear any stale upload
+    /// tmp files (startup hook, idempotent, logged).
     pub(crate) async fn ensure_stream_assets_dir(&self) -> std::io::Result<()> {
         tracing::info!(
             dir = %self.stream_assets_dir.display(),
             "ensuring stream-assets directory exists"
         );
-        self.asset_store().ensure_dir().await
+        let store = self.asset_store();
+        store.ensure_dir().await?;
+        if let Err(e) = store.sweep_tmp().await {
+            tracing::warn!(error = %e, "stream-assets tmp sweep failed (non-fatal)");
+        }
+        Ok(())
     }
 
     /// Point the store at a specific directory (test isolation only).
@@ -503,6 +530,31 @@ mod tests {
         store.remove(&sha, "png").await.unwrap();
         assert_eq!(store.read(&sha, "png").await.unwrap(), None);
         store.remove(&sha, "png").await.unwrap(); // no error on missing
+    }
+
+    #[tokio::test]
+    async fn sweep_tmp_removes_stale_upload_files_but_keeps_assets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = AssetStore::new(tmp.path().join("stream-assets"));
+        let bytes = minimal_png(4, 4);
+        let sha = sha256_hex(&bytes);
+        store.store(&sha, "png", &bytes).await.unwrap();
+
+        // Simulate a crash-orphaned tmp file.
+        let orphan = store.dir().join(".upload-deadbeef.tmp");
+        std::fs::write(&orphan, b"partial").unwrap();
+        assert!(orphan.exists());
+
+        store.sweep_tmp().await.unwrap();
+
+        assert!(!orphan.exists(), "stale .tmp swept");
+        assert_eq!(
+            store.read(&sha, "png").await.unwrap(),
+            Some(bytes),
+            "real asset untouched by the sweep"
+        );
+        // Idempotent on an empty/clean dir.
+        store.sweep_tmp().await.unwrap();
     }
 
     #[test]
