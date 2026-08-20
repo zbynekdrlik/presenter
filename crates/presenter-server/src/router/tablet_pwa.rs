@@ -14,19 +14,13 @@ pub async fn tablet_manifest() -> impl IntoResponse {
         "start_url": "/ui/tablet",
         "scope": "/ui/tablet",
         "display": "standalone",
-        // #569: the tablet UI has one design orientation (landscape) and must
-        // never flip with phone position. An installed/standalone PWA honors
-        // this manifest field directly; the plain-browser-tab flow (not
-        // installed) is covered separately by a first-tap fullscreen +
-        // screen.orientation.lock() attempt plus a CSS counter-rotation
-        // fallback (see tablet_orientation.rs / tablet.css).
-        //
-        // #638: "landscape-primary" (not generic "landscape") — generic
-        // "landscape" is honored by resolving to EITHER landscape-primary or
-        // landscape-secondary, so an installed PWA could still visually flip
-        // 180° on a physical turn. The specific value pins the exact single
-        // orientation the design assumes.
-        "orientation": "landscape-primary",
+        // #699: the Bible Tablet FOLLOWS device rotation and is usable in both
+        // portrait and landscape (reversing the #569/#638 landscape lock — the
+        // owner now wants rotation to work). "any" lets an installed/standalone
+        // PWA render at whatever orientation the device is held in; the former
+        // force-rotate CSS + screen.orientation.lock gesture were removed too
+        // (see tablet.css / the deleted tablet_orientation.rs).
+        "orientation": "any",
         "background_color": "#0f172a",
         "theme_color": "#0f172a",
         "icons": [

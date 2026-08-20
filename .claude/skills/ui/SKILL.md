@@ -169,6 +169,13 @@ Stage Output controls in `operator__header-right`.
 
 ## `(pointer: coarse)` CSS/JS scoping needs `hasTouch: true` in Playwright to test (#569)
 
+> **The /ui/tablet landscape-LOCK this section's examples describe was REMOVED in #699** (the
+> owner reversed the fixed-landscape requirement — the Bible Tablet now FOLLOWS device rotation
+> and is usable in both orientations). The `hasTouch: true` / coarse-vs-fine TESTING PATTERN is
+> unchanged and still correct — `tests/e2e/tablet-orientation.spec.ts` (the #699 rewrite) uses
+> exactly it to prove the tablet renders natively in BOTH orientations on touch while desktop
+> is untouched. Only the "force-rotate" example behavior is gone.
+
 A touch-only UI behavior (a CSS `@media (pointer: coarse)` rule, or a JS
 `matchMedia("(pointer: coarse)")` gate — e.g. "only force-rotate / only auto-fullscreen on a real
 phone/tablet, never on a desktop browser window") needs the `(pointer: coarse)` media feature to
@@ -315,6 +322,15 @@ marked card's `boundingBox().y` are unchanged (±2px). Assert `scrollBefore > 50
 can't false-pass on non-scrolling content.
 
 ## `screen.orientation` tracks PHYSICAL orientation, not the DISPLAYED viewport — never counter-rotate from an instantaneous read (#694)
+
+> **REMOVED in #699 — `tablet_orientation.rs` no longer exists.** The whole /ui/tablet
+> landscape-lock + 180° flip machinery this section describes (`install_orientation_flip_watcher`,
+> `install_orientation_lock_gesture`, `body[data-tablet-flip]`, the portrait `@media` counter-
+> rotation, the `landscape-primary` PWA manifest) was DELETED when the owner reversed the
+> fixed-landscape requirement — the Bible Tablet now follows device orientation natively, so no
+> flip/lock code is needed at all. The W3C Screen-Orientation SPEC FACTS below stay valuable
+> reference if such a watcher is ever reintroduced, but do NOT go looking for `tablet_orientation.rs`
+> or `data-tablet-flip` in the tree — they are gone.
 
 `tablet_orientation.rs`'s `install_orientation_flip_watcher` counter-rotates the tablet UI
 180° when the device is landscape-secondary (`body[data-tablet-flip]` → CSS `rotate(180deg)`).
