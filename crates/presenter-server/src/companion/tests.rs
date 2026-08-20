@@ -1,4 +1,3 @@
-use super::protocol::*;
 use super::variables::CompanionVariableState;
 use super::*;
 use crate::live::LiveEvent;

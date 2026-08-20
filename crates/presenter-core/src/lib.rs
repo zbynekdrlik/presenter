@@ -26,6 +26,7 @@ pub mod search;
 pub mod slide;
 pub mod stage_client;
 pub mod stage_display;
+pub mod stream;
 pub mod sync;
 pub mod timer;
 pub mod video_source;
@@ -64,6 +65,13 @@ pub use stage_client::{StageClientSnapshot, StageClientStatus};
 pub use stage_display::{
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
     UpcomingGroup, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
+};
+pub use stream::{
+    validate_props, validate_scene_name, validate_slug, ContentTransition, Frame, ImageFit,
+    SceneKind, Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamOutputDef,
+    StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
+    TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
+    STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX, STREAM_TRANSITION_MAX_MS,
 };
 pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};
 pub use timer::{
