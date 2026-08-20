@@ -163,6 +163,7 @@ pub(super) fn parse_command(command: &str, payload: Value) -> Result<CompanionCo
                 enabled: data.enabled,
             })
         }
+        name if name.starts_with("stream_") => super::stream::parse_stream_command(name, payload),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -314,6 +315,7 @@ pub(super) enum CompanionCommand {
     BroadcastSetLive {
         enabled: bool,
     },
+    Stream(super::stream::StreamCommand),
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,6 +467,24 @@ pub(super) async fn handle_command(
             let refresh = variables.apply_broadcast_live(enabled);
             Ok(CommandResponse::ack(command).with_refresh(refresh))
         }
+        CompanionCommand::Stream(stream_command) => {
+            Ok(stream_command_response(state, command, stream_command).await)
+        }
+    }
+}
+
+/// Run a stream command and map the outcome to an `Ack`/`Error` reply. Stream
+/// variables refresh via the `StreamState` live event the command publishes (the
+/// same session's `live_rx` receives it), so there is no `with_refresh` here —
+/// kept out of `handle_command` to hold that fn under the length gate.
+async fn stream_command_response(
+    state: &AppState,
+    command: &str,
+    stream_command: super::stream::StreamCommand,
+) -> CommandResponse {
+    match super::stream::execute_stream_command(state, stream_command).await {
+        Ok(()) => CommandResponse::ack(command),
+        Err(message) => CommandResponse::error(message),
     }
 }
 

@@ -16,6 +16,7 @@ pub(super) struct CompanionVariableState {
     stage_layouts: HashMap<String, StageDisplayLayout>,
     pub(super) broadcast_live: bool,
     pub(super) bible_slide: Option<BibleSlideOverride>,
+    pub(super) stream: Option<super::stream::StreamVariables>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,10 +52,26 @@ impl CompanionVariableState {
             }
             crate::live::LiveEvent::StreamState { .. }
             | crate::live::LiveEvent::StreamConfigChanged { .. } => {
-                // Stream-graphics events drive the WASM output page (epic #718);
-                // the `stream_*` Companion variables land with a later PR.
+                // `StreamState` drives the `stream_scene`/`stream_overlays`
+                // variables, but resolving scene ids → names needs an async
+                // repository read, so it is handled in the companion live-loop
+                // (`stream::apply_stream_state_event`), never this sync path.
+                // `StreamConfigChanged` drives no Companion variable (it prompts
+                // the WASM output page to refetch its def).
                 false
             }
+        }
+    }
+
+    /// Store the resolved stream variables (base scene + overlay names). Returns
+    /// whether they changed. Resolution happens in `stream.rs`; this only holds
+    /// the result.
+    pub(super) fn apply_stream_state(&mut self, vars: super::stream::StreamVariables) -> bool {
+        if self.stream.as_ref() == Some(&vars) {
+            false
+        } else {
+            self.stream = Some(vars);
+            true
         }
     }
 
@@ -184,6 +201,7 @@ impl CompanionVariableState {
         write_stage_variables(&mut builder, self.stage.as_ref());
         write_timer_variables(&mut builder, self.timers.as_ref());
         write_bible_variables(&mut builder, self.bible.as_ref(), self.bible_slide.as_ref());
+        super::stream::write_stream_variables(&mut builder, self.stream.as_ref());
         builder.set(
             "broadcast_live",
             if self.broadcast_live { "true" } else { "false" }.to_string(),

@@ -1,5 +1,6 @@
 use crate::state::AppState;
 mod protocol;
+mod stream;
 mod variables;
 use axum::{
     extract::{
@@ -89,7 +90,15 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
             event = live_rx.recv() => {
                 match event {
                     Ok(live_event) => {
-                        if variables.apply_live_event(live_event) {
+                        // `StreamState` needs an async id→name resolution, so it
+                        // is handled in `stream` rather than the sync
+                        // `apply_live_event` (see companion/stream.rs).
+                        let changed = if matches!(live_event, crate::live::LiveEvent::StreamState { .. }) {
+                            stream::apply_stream_state_event(&state, &mut variables, &live_event).await
+                        } else {
+                            variables.apply_live_event(live_event)
+                        };
+                        if changed {
                             if let Err(err) = send_variables(&sender, &variables).await {
                                 warn!(?err, "failed to send companion live variables");
                                 break;

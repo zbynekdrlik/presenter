@@ -403,6 +403,405 @@ fn bible_slide_event_updates_companion_variables() {
     assert!(!vars.get("bible_triggered_at").unwrap().is_empty());
 }
 
+// ---- Stream-graphics companion commands + variables (#711) ----------------
+
+/// Seed a uniquely-slugged output with a base scene "Chvaly" and an overlay
+/// scene "Verse". Returns `(base_id, overlay_id)`. Unique slug per test — the
+/// in-memory DB is process-shared (`.claude/rules/stream-graphics.md`).
+async fn seed_stream(state: &AppState, slug: &str) -> (i64, i64) {
+    use presenter_core::SceneKind;
+    state
+        .repository()
+        .create_stream_output(slug, "Test")
+        .await
+        .unwrap();
+    let base = state
+        .repository()
+        .create_stream_scene(slug, "Chvaly", SceneKind::Base)
+        .await
+        .unwrap();
+    let overlay = state
+        .repository()
+        .create_stream_scene(slug, "Verse", SceneKind::Overlay)
+        .await
+        .unwrap();
+    (base.id, overlay.id)
+}
+
+async fn expect_ack(state: &AppState, command: &str, payload: Value) {
+    let mut variables = CompanionVariableState::default();
+    let response = handle_command(state, &mut variables, command, payload)
+        .await
+        .unwrap();
+    match response.reply {
+        Some(OutgoingMessage::Ack { command: acked }) => {
+            assert_eq!(acked, command, "ack command mismatch")
+        }
+        other => panic!("expected ack for {command}, got {other:?}"),
+    }
+}
+
+async fn expect_error(state: &AppState, command: &str, payload: Value) -> String {
+    let mut variables = CompanionVariableState::default();
+    let response = handle_command(state, &mut variables, command, payload)
+        .await
+        .unwrap();
+    match response.reply {
+        Some(OutgoingMessage::Error { message }) => message,
+        other => panic!("expected error reply for {command}, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn stream_scene_set_activates_base_and_emits_event() {
+    let state = AppState::in_memory().await.unwrap();
+    let (base, _overlay) = seed_stream(&state, "t711-set").await;
+    let mut rx = state.live_hub().subscribe();
+
+    expect_ack(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "Chvaly", "output": "t711-set" }),
+    )
+    .await;
+
+    assert_eq!(
+        state
+            .stream_show_state("t711-set")
+            .await
+            .unwrap()
+            .active_scene_id,
+        Some(base)
+    );
+
+    let mut saw = false;
+    for _ in 0..5 {
+        let event = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("event")
+            .unwrap();
+        if matches!(event, LiveEvent::StreamState { ref output, .. } if output == "t711-set") {
+            saw = true;
+            break;
+        }
+    }
+    assert!(saw, "expected StreamState live event");
+}
+
+#[tokio::test]
+async fn stream_scene_set_matches_name_case_insensitively() {
+    let state = AppState::in_memory().await.unwrap();
+    let (base, _overlay) = seed_stream(&state, "t711-ci").await;
+
+    // Stored name is "Chvaly"; the command sends "chvaly".
+    expect_ack(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "chvaly", "output": "t711-ci" }),
+    )
+    .await;
+
+    assert_eq!(
+        state
+            .stream_show_state("t711-ci")
+            .await
+            .unwrap()
+            .active_scene_id,
+        Some(base)
+    );
+}
+
+#[tokio::test]
+async fn stream_scene_set_unknown_scene_errors_without_state_change() {
+    let state = AppState::in_memory().await.unwrap();
+    seed_stream(&state, "t711-unknown-scene").await;
+
+    let message = expect_error(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "Nope", "output": "t711-unknown-scene" }),
+    )
+    .await;
+    assert!(message.contains("unknown stream scene"), "got: {message}");
+
+    // No base was activated.
+    assert_eq!(
+        state
+            .stream_show_state("t711-unknown-scene")
+            .await
+            .unwrap()
+            .active_scene_id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn stream_scene_set_unknown_output_errors() {
+    let state = AppState::in_memory().await.unwrap();
+    let message = expect_error(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "Chvaly", "output": "t711-nonexistent-output" }),
+    )
+    .await;
+    assert!(message.contains("unknown stream output"), "got: {message}");
+}
+
+#[tokio::test]
+async fn stream_scene_set_on_overlay_name_is_refused() {
+    let state = AppState::in_memory().await.unwrap();
+    seed_stream(&state, "t711-wrongkind").await;
+
+    // "Verse" is an OVERLAY — activating it as the base must be refused (typed
+    // RepositoryError::Invalid → error reply), never a panic.
+    let message = expect_error(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "Verse", "output": "t711-wrongkind" }),
+    )
+    .await;
+    assert!(message.contains("not a base scene"), "got: {message}");
+    assert_eq!(
+        state
+            .stream_show_state("t711-wrongkind")
+            .await
+            .unwrap()
+            .active_scene_id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn stream_overlay_on_then_off() {
+    let state = AppState::in_memory().await.unwrap();
+    let (_base, overlay) = seed_stream(&state, "t711-overlay").await;
+
+    expect_ack(
+        &state,
+        "stream_overlay_on",
+        json!({ "scene": "Verse", "output": "t711-overlay" }),
+    )
+    .await;
+    assert_eq!(
+        state
+            .stream_show_state("t711-overlay")
+            .await
+            .unwrap()
+            .active_overlay_ids,
+        vec![overlay]
+    );
+
+    expect_ack(
+        &state,
+        "stream_overlay_off",
+        json!({ "scene": "Verse", "output": "t711-overlay" }),
+    )
+    .await;
+    assert!(state
+        .stream_show_state("t711-overlay")
+        .await
+        .unwrap()
+        .active_overlay_ids
+        .is_empty());
+}
+
+#[tokio::test]
+async fn stream_overlay_toggle_flips_twice_to_original() {
+    let state = AppState::in_memory().await.unwrap();
+    let (_base, overlay) = seed_stream(&state, "t711-toggle").await;
+
+    // First toggle turns it on.
+    expect_ack(
+        &state,
+        "stream_overlay_toggle",
+        json!({ "scene": "Verse", "output": "t711-toggle" }),
+    )
+    .await;
+    assert_eq!(
+        state
+            .stream_show_state("t711-toggle")
+            .await
+            .unwrap()
+            .active_overlay_ids,
+        vec![overlay]
+    );
+
+    // Second toggle turns it back off (original state).
+    expect_ack(
+        &state,
+        "stream_overlay_toggle",
+        json!({ "scene": "Verse", "output": "t711-toggle" }),
+    )
+    .await;
+    assert!(state
+        .stream_show_state("t711-toggle")
+        .await
+        .unwrap()
+        .active_overlay_ids
+        .is_empty());
+}
+
+#[tokio::test]
+async fn stream_scene_clear_and_clear_reset_state() {
+    let state = AppState::in_memory().await.unwrap();
+    let (base, overlay) = seed_stream(&state, "t711-clear").await;
+
+    // Activate base + overlay first.
+    expect_ack(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "Chvaly", "output": "t711-clear" }),
+    )
+    .await;
+    expect_ack(
+        &state,
+        "stream_overlay_on",
+        json!({ "scene": "Verse", "output": "t711-clear" }),
+    )
+    .await;
+
+    // stream_scene_clear drops only the base.
+    expect_ack(
+        &state,
+        "stream_scene_clear",
+        json!({ "output": "t711-clear" }),
+    )
+    .await;
+    let after_scene_clear = state.stream_show_state("t711-clear").await.unwrap();
+    assert_eq!(after_scene_clear.active_scene_id, None);
+    assert_eq!(after_scene_clear.active_overlay_ids, vec![overlay]);
+
+    // Re-set the base, then stream_clear drops base + all overlays.
+    expect_ack(
+        &state,
+        "stream_scene_set",
+        json!({ "scene": "Chvaly", "output": "t711-clear" }),
+    )
+    .await;
+    assert_eq!(
+        state
+            .stream_show_state("t711-clear")
+            .await
+            .unwrap()
+            .active_scene_id,
+        Some(base)
+    );
+    expect_ack(&state, "stream_clear", json!({ "output": "t711-clear" })).await;
+    let after_clear = state.stream_show_state("t711-clear").await.unwrap();
+    assert_eq!(after_clear.active_scene_id, None);
+    assert!(after_clear.active_overlay_ids.is_empty());
+}
+
+#[test]
+fn stream_command_defaults_output_to_stream_and_trims() {
+    use super::stream::StreamCommand;
+
+    // Omitting `output` defaults it to "stream"; scene + output are trimmed.
+    match parse_command("stream_scene_set", json!({ "scene": "  Chvaly  " })) {
+        Ok(CompanionCommand::Stream(StreamCommand::SceneSet { output, scene })) => {
+            assert_eq!(output, "stream");
+            assert_eq!(scene, "Chvaly");
+        }
+        _ => panic!("expected a Stream(SceneSet) with defaulted output"),
+    }
+
+    // A blank output also falls back to the default.
+    match parse_command("stream_clear", json!({ "output": "   " })) {
+        Ok(CompanionCommand::Stream(StreamCommand::Clear { output })) => {
+            assert_eq!(output, "stream");
+        }
+        _ => panic!("expected a Stream(Clear) with defaulted output"),
+    }
+}
+
+#[tokio::test]
+async fn resolve_stream_variables_maps_ids_to_names() {
+    use super::stream::resolve_stream_variables;
+    let state = AppState::in_memory().await.unwrap();
+    let (base, overlay) = seed_stream(&state, "t711-vars").await;
+
+    let vars = resolve_stream_variables(&state, "t711-vars", Some(base), &[overlay]).await;
+    assert_eq!(vars.scene, "Chvaly");
+    assert_eq!(vars.overlays, "Verse");
+
+    // Cleared activation → placeholders.
+    let cleared = resolve_stream_variables(&state, "t711-vars", None, &[]).await;
+    assert_eq!(cleared.scene, "-");
+    assert_eq!(cleared.overlays, "-");
+}
+
+#[test]
+fn stream_variables_default_to_placeholders() {
+    let map: std::collections::HashMap<_, _> = CompanionVariableState::default()
+        .to_variables()
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect();
+    assert_eq!(map.get("stream_scene").unwrap(), "-");
+    assert_eq!(map.get("stream_overlays").unwrap(), "-");
+}
+
+#[test]
+fn apply_stream_state_updates_variables_and_dedups() {
+    use super::stream::StreamVariables;
+    let mut state = CompanionVariableState::default();
+    let vars = StreamVariables {
+        scene: "Chvaly".to_string(),
+        overlays: "Verse, Lower Third".to_string(),
+    };
+    assert!(state.apply_stream_state(vars.clone()));
+    // Idempotent: applying the same values again reports no change.
+    assert!(!state.apply_stream_state(vars));
+
+    let map: std::collections::HashMap<_, _> = state
+        .to_variables()
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect();
+    assert_eq!(map.get("stream_scene").unwrap(), "Chvaly");
+    assert_eq!(map.get("stream_overlays").unwrap(), "Verse, Lower Third");
+}
+
+#[test]
+fn parse_command_accepts_all_stream_commands() {
+    let cases: Vec<(&str, Value)> = vec![
+        (
+            "stream_scene_set",
+            json!({ "scene": "Chvaly", "output": "stream" }),
+        ),
+        ("stream_scene_clear", json!({ "output": "stream" })),
+        (
+            "stream_overlay_on",
+            json!({ "scene": "Verse", "output": "stream" }),
+        ),
+        (
+            "stream_overlay_off",
+            json!({ "scene": "Verse", "output": "stream" }),
+        ),
+        (
+            "stream_overlay_toggle",
+            json!({ "scene": "Verse", "output": "stream" }),
+        ),
+        ("stream_clear", json!({ "output": "stream" })),
+    ];
+    for (command, payload) in &cases {
+        let parsed = parse_command(command, payload.clone());
+        assert!(
+            matches!(parsed, Ok(CompanionCommand::Stream(_))),
+            "parse_command({command}) should be a Stream command, got {:?}",
+            parsed.err()
+        );
+    }
+
+    // Missing scene on a scene-required command is a parse error.
+    let missing_scene = parse_command("stream_scene_set", json!({ "output": "stream" }));
+    assert!(missing_scene.is_err(), "missing scene should error");
+
+    // An unknown stream_* command is still an error (not a silent accept).
+    let unknown = parse_command("stream_bogus", json!({}));
+    assert!(unknown.is_err(), "unknown stream_* command should error");
+}
+
 #[test]
 fn bible_slide_event_cleared_by_bible_cleared() {
     use presenter_core::bible::BibleSlideOutput;
