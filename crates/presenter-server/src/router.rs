@@ -11,6 +11,7 @@ mod search;
 mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
+mod stream_assets;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -395,6 +396,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/proxy/login", post(ai::proxy_login))
         .route("/ai/proxy/complete-login", post(ai::proxy_complete_login))
         .route("/api/network-mode", get(network_mode::get_network_mode))
+        // #708: stream-graphics asset upload/serve/delete/list. Static
+        // `/stream/assets` + `/stream/api/assets` prefixes; matchit gives them
+        // priority over #706+'s `/stream/{slug}` catch, and both are reserved
+        // slugs — collision-free regardless of merge order.
+        .merge(stream_assets::routes())
         .with_state(state)
 }
 
