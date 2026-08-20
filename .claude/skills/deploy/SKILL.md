@@ -25,17 +25,26 @@ sequence.
 
 This project is Tier-0 (#592): heavy compilation (`cargo build`, `cargo build
 --release`, `trunk build`, `wasm-pack build`, a test run that RUNS tests) happens ONLY
-on GitHub-hosted runners. Locally, only cheap checks are allowed/expected before every
-push (`.claude/skills/local-builds`):
+on GitHub-hosted runners.
+
+> **#557 (2026-08-18) TIGHTENED Tier-0 to ZERO local cargo compilation** — `block-tier0-local-build.sh`
+> now hard-blocks EVERY compiling cargo shape locally, **including `cargo check` AND
+> `cargo clippy`** (they run the compiler frontend), narrow or whole-workspace. So the
+> `cargo check --workspace --tests` / `cargo clippy` lines below, and the
+> `cargo check --target wasm32-unknown-unknown` "one thing allowed locally" note further
+> down, are **STALE post-#557 — they are hook-blocked now.** The only pre-push checks that
+> actually run locally are the NON-compiling ones:
 
 ```bash
-cargo fmt --all --check
-cargo check --workspace --tests
-cargo clippy --workspace --all-targets -- -D warnings   # Rust-only, no codegen/link
+cargo fmt --all --check                                   # + (cd crates/presenter-ui && cargo fmt --all --check)
+bash scripts/dev/count_prod_lines.sh <touched-file>       # file-size gate
+QC_TARGETS="<touched-file>" python3 scripts/dev/fn_length_check.py .   # fn-length gate
 ```
 
-`presenter-ui` is OUTSIDE the workspace (its own `Cargo.lock`, WASM target) — its cheap
-check is separate, see the "WASM build mechanics" note below.
+`cargo check`, `cargo clippy`, and `cargo check --target wasm32-unknown-unknown` all now
+require CI (or a deliberate `# airuleset:build-ok` per-command override / Tier-1 / `/fast-iterate`).
+For a routine PR, push and let `pipeline.yml` run fmt/clippy/check/build/test/e2e — do NOT
+disarm the hook. `presenter-ui` is OUTSIDE the workspace (its own `Cargo.lock`, WASM target).
 
 CI (`pipeline.yml`, push to `dev`, ~38 min) then does the FULL loop for you: WASM build
 (`scripts/build-ui.sh` under nightly + `-Zbuild-std`), the server release build, E2E, and

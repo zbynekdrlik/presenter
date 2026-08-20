@@ -31,18 +31,6 @@ pub fn TabletPage() -> impl IntoView {
     // Register service worker
     register_service_worker();
 
-    // #569: attempt to lock the UI to a fixed orientation on the first tap
-    // (no-op on an already-landscape viewport, incl. desktop E2E runs). The
-    // CSS media-query fallback in tablet.css covers browsers where the lock
-    // is unsupported or the gesture never fires.
-    super::tablet_orientation::install_orientation_lock_gesture();
-
-    // #638: continuously watch for landscape-secondary (a tablet turned 180°
-    // from landscape-primary) — the CSS portrait/landscape fallback above
-    // can't see this (both keep width > height), so this needs to read
-    // `screen.orientation.type` directly.
-    super::tablet_orientation::install_orientation_flip_watcher();
-
     // Connect WebSocket
     let (ws_state, last_event) = ws::use_live_websocket("tablet");
 
