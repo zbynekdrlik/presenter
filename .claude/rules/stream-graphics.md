@@ -67,3 +67,40 @@ A raw-string fixture containing a color like `"#ffffff"` contains the sequence `
 `r#"..."#` raw string early → a confusing `unknown prefix` parse error. Use `r##"..."##` for any
 JSON fixture that embeds a `#rrggbb`/`#rrggbbaa` value. Caught only by `cargo fmt` locally (Tier-0),
 so run `cargo fmt --all --check` before committing stream fixtures.
+
+## WASM output page (`/stream/{slug}`, #709+) — page-lane gotchas
+
+- **OBS transparency needs an `html` override, not just `body`.** `styles/tablet.css` ships a BARE
+  GLOBAL `html { background:#1e293b }` that trunk bundles into EVERY page. A transparent stream page
+  must force BOTH transparent: the page sets `class="stream"` on `<body>` AND `data-stream="true"` on
+  `document.documentElement`, and `styles/stream_output.css` overrides
+  `html[data-stream="true"]` + `body.stream` to `background: transparent !important`. Scope every new
+  stream CSS rule to `html[data-stream]`/`body.stream`/`.stream-*` (bundled globally, must not touch
+  other pages). E2E asserts `getComputedStyle(document.documentElement).backgroundColor` == `rgba(0, 0, 0, 0)`.
+- **The timer model has NO id-addressable registry.** `presenter_core::TimersOverview` has exactly
+  `countdown_to_start` (a `CountdownTimerSnapshot`) + `preach_timer` — there is no per-id timer. The
+  Countdown element's `timer_id` prop is currently FORWARD-LOOKING: every countdown binds to
+  `countdown_to_start`. Reuse `presenter_core::format_countdown(seconds_remaining)` (the shared stage
+  formatter). Tick smoothly BETWEEN server `Timers` pushes with a received-at delta —
+  `seconds_remaining - floor((now_ms - received_at_ms)/1000)` — never absolute `target - Date::now()`
+  (client-clock-skew footgun) and never server-cadence-only (no smooth tick). Render nothing when
+  there is no snapshot, when `state == TimerState::Idle` (the un-started default), or when
+  `format_countdown` returns "".
+- **Parallel-lane WS decoupling: parse NEW LiveEvents from RAW JSON, don't import them.** The
+  `stream_state`/`stream_config_changed` variants live in `presenter-core::live::LiveEvent` on the
+  #706 branch. A WASM page lane that must compile BEFORE #706 merges parses those two frames as
+  `serde_json::Value` (switch on `"type"`) into LOCAL mirror structs matching the #706 wire shape
+  (`tag="type"`, snake_case, extra `type` field ignored — no `deny_unknown_fields`), and parses the
+  already-existing `Timers`/`Heartbeat` through the real `LiveEvent` type. The wire shape IS the
+  contract, so nothing changes at integration. Model the reconnect/backoff/zombie hook on
+  `ws/stage.rs`; a stream output page is a passive CONSUMER — send NO presence and NO heartbeat ACK
+  (like the plain `ws/mod.rs` hook), just read + reset the zombie deadline on any frame.
+- **Client def-sync rule (arch §6/§8):** apply `StreamState` directly; refetch the def on an unknown
+  scene id OR a higher `config_revision`, on `StreamConfigChanged`, and on every WS reconnect (the
+  live hub does not replay). Derive show-state from the def on cold load
+  (`active_scene_id` + overlay `is_active` flags). The OBS output page is deliberately CHROME-FREE:
+  NO version label (it would leak onto the broadcast) — the project's version display lives on the
+  operator UI, not here.
+- **Route precedence:** register `GET /stream/{slug}` (the WASM shell, mirror `stage_shell.rs`) AFTER
+  the `/stream/api/*` (#707) + `/stream/assets/*` (#708) prefixes; axum 0.8 / matchit 0.8 resolve a
+  static segment before a `{param}` sibling, and `api`/`assets` are reserved slugs, so no collision.
