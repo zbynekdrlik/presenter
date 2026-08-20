@@ -1,0 +1,59 @@
+/* Stream-graphics OUTPUT page (/stream/{slug}) — the transparent OBS browser
+ * source (#709, epic #718).
+ *
+ * TRANSPARENCY: this CSS is bundled with every page by trunk, but every rule is
+ * scoped to `html[data-stream]` / `body.stream` / `.stream-*` (set only by the
+ * stream output page), so it never affects the operator/stage/tablet pages.
+ * `tablet.css` ships a bare global `html { background:#1e293b }` — hence the
+ * explicit `!important` html override below, or the OBS capture would be opaque.
+ */
+
+html[data-stream="true"] {
+    background: transparent !important;
+}
+
+body.stream {
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+    overflow: hidden;
+}
+
+/* Fixed 16:9 output surface. The OBS source is 1920x1080, so viewport % maps
+ * 1:1 to the design percentages (Frame.x/y/w/h_pct -> left/top/width/height %,
+ * TextStyle.size_pct -> font-size in vh). */
+.stream-canvas {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: transparent;
+}
+
+/* Each rendered scene fills the canvas; its elements are absolutely positioned
+ * within it by their Frame (inline styles). Base scene renders first, overlays
+ * stack on top in activation order. */
+.stream-scene {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* Elements carry their own left/top/width/height/z-index via inline style
+ * (computed from the typed Frame). */
+.stream-element {
+    position: absolute;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.stream-element--image img {
+    display: block;
+}
+
+/* The countdown element is a flex box (inline style sets font, color, size,
+ * alignment, shadow, and the justify/align for the frame). */
+.stream-element--countdown {
+    white-space: nowrap;
+}
