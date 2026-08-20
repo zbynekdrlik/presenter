@@ -382,6 +382,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     <div><dt>"#song-name"</dt><dd>"The active song title (numeric prefixes like \"001 \" are removed automatically)."</dd></div>
                     <div><dt>"#band-name"</dt><dd>"The library the current song belongs to."</dd></div>
                     <div><dt>"Suffixes: -u / -re"</dt><dd>"Append -u to force uppercase, or -re to collapse multi-line text into a single line."</dd></div>
+                    <div><dt>"Also accepted"</dt><dd>"Aliases: #translation (= #translate), #bibleclear (= #bible-clear); suffixes -upper (= -u) and -noenter / -singleline (= -re). Use the canonical forms above when naming new clips."</dd></div>
                 </dl>
             </section>
         </section>
