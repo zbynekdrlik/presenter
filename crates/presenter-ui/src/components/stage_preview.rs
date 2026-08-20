@@ -140,6 +140,10 @@ pub fn StagePreview() -> impl IntoView {
         });
     };
 
+    // #700: the stage-display mirror iframe is worship-only; the bible tab
+    // shows the pre-#460 verse preview instead.
+    let is_worship = move || ctx.view.get() == "worship";
+
     view! {
         <div
             class="operator__stage-preview"
@@ -149,20 +153,73 @@ pub fn StagePreview() -> impl IntoView {
                 if snap.as_ref().and_then(|s| s.current_slide_id.as_ref()).is_some() { "true" } else { "false" }
             }
         >
+            // #700: the live stage mirror is WORSHIP-ONLY. It is an expensive
+            // live stage WS client that can carry NDI video, so on non-worship
+            // tabs it is UNMOUNTED (via `<Show>`), not merely hidden — freeing
+            // the socket/decoder and keeping it genuinely absent on the bible tab.
+            //
             // Live mirror of the real stage output (lyrics / Bible / timer AND
             // video). Full stage resolution, CSS-scaled into the slot; its own
             // stage WS client (auto-updates live). `?preview=1` excludes it from
             // the stage-monitor count; `pointer-events:none` (CSS) and tabindex
             // keep operator clicks/focus from driving the embedded stage (#460).
-            <div class="operator__stage-iframe-wrap" data-role="stage-preview-frame">
-                <iframe
-                    class="operator__stage-iframe"
-                    src="/stage?preview=1"
-                    title="Live stage preview"
-                    tabindex="-1"
-                    aria-hidden="true"
-                    scrolling="no"
-                ></iframe>
+            <Show when=is_worship fallback=|| ()>
+                <div class="operator__stage-iframe-wrap" data-role="stage-preview-frame">
+                    <iframe
+                        class="operator__stage-iframe"
+                        src="/stage?preview=1"
+                        title="Live stage preview"
+                        tabindex="-1"
+                        aria-hidden="true"
+                        scrolling="no"
+                    ></iframe>
+                </div>
+            </Show>
+            // #700: bible-tab verse preview, restored from the pre-#460 design.
+            // Shown only on the bible tab (cheap text, so display:none off-tab
+            // like the sibling worship actions); reads the active bible broadcast.
+            <div
+                class="operator__bible-preview"
+                data-role="bible-preview"
+                style=move || {
+                    if ctx.view.get() == "bible" { "" } else { "display:none" }
+                }
+                data-active=move || {
+                    if ctx.active_bible_broadcast.get().is_some() { "true" } else { "false" }
+                }
+            >
+                {move || {
+                    match ctx.active_bible_broadcast.get() {
+                        Some(broadcast) => {
+                            let text = &broadcast.passage.text;
+                            let truncated = if text.chars().count() > 100 {
+                                let end: String = text.chars().take(100).collect();
+                                format!("{end}\u{2026}")
+                            } else {
+                                text.clone()
+                            };
+                            let reference = broadcast
+                                .reference_label
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "{} ({})",
+                                        broadcast.passage.reference.to_human_readable(),
+                                        broadcast.passage.translation.code
+                                    )
+                                });
+                            leptos::prelude::view! {
+                                <span class="operator__bible-preview-text" data-role="bible-preview-text">{truncated}</span>
+                                <span class="operator__bible-preview-ref" data-role="bible-preview-ref">{reference}</span>
+                            }.into_any()
+                        }
+                        None => {
+                            leptos::prelude::view! {
+                                <span class="operator__bible-preview-empty">"No active passage"</span>
+                            }.into_any()
+                        }
+                    }
+                }}
             </div>
             // Worship-only quick toggles (AbleSet enable + follow). Kept from the
             // old text preview — these are functional controls, not preview text,

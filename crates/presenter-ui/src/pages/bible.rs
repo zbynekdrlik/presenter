@@ -49,6 +49,23 @@ pub fn BiblePage() -> impl IntoView {
                 }
                 character_limit.set(prefs.character_limit);
             }
+            // #701: per-browser localStorage override wins over the server-global
+            // default, so concurrent operators keep independent selections and an
+            // explicitly-cleared secondary survives a refresh. Applied AFTER the
+            // server-pref load (so it takes precedence) and BEFORE the
+            // "default main to first translation" step below.
+            if let Some(main) = crate::state::session::get_persistent("bibleMainTranslation") {
+                if !main.is_empty() {
+                    selected_translation.set(Some(main));
+                }
+            }
+            match crate::state::session::get_persistent("bibleSecondaryTranslation") {
+                // Empty "" sentinel = the user explicitly cleared the secondary.
+                Some(sec) if sec.is_empty() => secondary_translation.set(None),
+                Some(sec) => secondary_translation.set(Some(sec)),
+                // Absent key = never chosen for this browser; keep server/default.
+                None => {}
+            }
             if let Ok(trans) = bible::list_translations().await {
                 // Set default if preferences didn't set one
                 if selected_translation.get_untracked().is_none() {
@@ -74,6 +91,20 @@ pub fn BiblePage() -> impl IntoView {
             // Skip if translations haven't loaded yet (initial hydration)
             if !translations_loaded.get_untracked() {
                 return;
+            }
+            // #701: persist the selection PER BROWSER (localStorage) so it wins
+            // over the server-global default on the next load. Secondary uses an
+            // empty "" sentinel to record an EXPLICITLY cleared secondary (vs an
+            // absent key = never chosen). Written from references before `main`/
+            // `sec` are moved into the server-preferences POST below.
+            if let Some(m) = main.as_deref() {
+                crate::state::session::set_persistent("bibleMainTranslation", m);
+            }
+            match sec.as_deref() {
+                Some(code) => {
+                    crate::state::session::set_persistent("bibleSecondaryTranslation", code)
+                }
+                None => crate::state::session::set_persistent("bibleSecondaryTranslation", ""),
             }
             let limit = character_limit.get_untracked();
             leptos::task::spawn_local(async move {
@@ -639,7 +670,14 @@ fn ReferenceInputs() -> impl IntoView {
             .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
         if let Some(input) = target {
             if let Ok(val) = input.value().parse::<u16>() {
-                verse_start_signal.set(val.max(1));
+                let start = val.max(1);
+                verse_start_signal.set(start);
+                // #702: mirror the start into the end — the dominant case is a
+                // single verse, so entering a start auto-fills the end with the
+                // same number. A later explicit end edit persists (nothing
+                // re-mirrors until the start changes again), so a range / to-end
+                // is still one edit away.
+                verse_end_signal.set(Some(start));
             }
         }
     };
@@ -685,7 +723,11 @@ fn ReferenceInputs() -> impl IntoView {
         ev.prevent_default();
         if let Some(input) = refs.verse_start.get() {
             if let Ok(val) = input.value().parse::<u16>() {
-                verse_start_signal.set(val.max(1));
+                let start = val.max(1);
+                verse_start_signal.set(start);
+                // #702: mirror start -> end (single-verse fast path). The end
+                // input is focused + selected below, so a range is one type away.
+                verse_end_signal.set(Some(start));
             }
         }
         if let Some(el) = refs.verse_end.get() {
@@ -741,7 +783,7 @@ fn ReferenceInputs() -> impl IntoView {
                     min="1"
                     node_ref=refs.verse_start
                     prop:value=move || verse_start_signal.get().to_string()
-                    on:change=on_verse_start
+                    on:input=on_verse_start
                     on:keydown=on_verse_start_keydown
                 />
             </label>
@@ -795,10 +837,13 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     loading.set(true);
     selected_ids.set(std::collections::HashSet::new());
 
-    let label = if let Some(ve) = v_end {
-        format!("{} {}:{}-{}", book.book, chapter, v_start, ve)
-    } else {
-        format!("{} {}:{}", book.book, chapter, v_start)
+    // #702: a mirrored end == start (the single-verse fast path) must read as a
+    // single verse, not a "5-5" range. Any end <= start collapses to the
+    // single-verse label; the resolve request still sends verse_end verbatim,
+    // where Some(start) yields exactly that one verse (None = whole chapter).
+    let label = match v_end {
+        Some(ve) if ve > v_start => format!("{} {}:{}-{}", book.book, chapter, v_start, ve),
+        _ => format!("{} {}:{}", book.book, chapter, v_start),
     };
     let history_entry = LoadedPassage {
         book: book.book.clone(),
