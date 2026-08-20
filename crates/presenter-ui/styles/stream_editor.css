@@ -1,0 +1,271 @@
+/* Stream-graphics operator editor (/ui/stream) — #713, epic #718.
+ * v1 skeleton: overlay row on top, base scenes as columns left→right below,
+ * add/remove/rename/reorder + click-to-activate. Element editing (#714) and
+ * preview/assets (#715) are separate PRs. */
+
+body.stream-editor-page {
+  margin: 0;
+  background: #14161c;
+  color: #e7e9ee;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.stream-editor {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.stream-editor__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #2a2e3a;
+  background: #1a1d26;
+}
+
+.stream-editor__header-title h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.stream-editor__header-title p {
+  margin: 0.25rem 0 0;
+  color: #9aa1b1;
+  font-size: 0.85rem;
+}
+
+.stream-editor__header-nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  white-space: nowrap;
+}
+
+.stream-editor__link {
+  color: #8ab4ff;
+  text-decoration: none;
+}
+
+.stream-editor__link:hover {
+  text-decoration: underline;
+}
+
+.stream-editor__version {
+  color: #6f7688;
+  font-size: 0.8rem;
+}
+
+.stream-editor__main {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+.stream-editor__loading {
+  color: #9aa1b1;
+}
+
+.stream-editor__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.stream-editor__section-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9aa1b1;
+}
+
+.stream-editor__bases-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.stream-editor__overlay-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.stream-editor__columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.stream-editor__empty {
+  color: #6f7688;
+  font-style: italic;
+  margin: 0.25rem 0;
+}
+
+/* A scene card (base column or overlay chip). */
+.stream-editor__scene {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid #2f3442;
+  border-radius: 8px;
+  background: #1f2330;
+}
+
+.stream-editor__scene--base {
+  width: 200px;
+}
+
+.stream-editor__scene--overlay {
+  width: 200px;
+  background: #241f30;
+}
+
+/* Active-state highlight is driven by data-active (set reactively) so no
+ * class toggle is needed — the same attribute the E2E test asserts on. */
+.stream-editor__scene[data-active="true"] {
+  border-color: #4f8cff;
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.35);
+}
+
+.stream-editor__scene-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.stream-editor__scene-name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stream-editor__scene-count {
+  width: 100%;
+  color: #6f7688;
+  font-size: 0.75rem;
+}
+
+.stream-editor__rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #3a4152;
+  border-radius: 5px;
+  background: #12141b;
+  color: #e7e9ee;
+}
+
+.stream-editor__scene-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.stream-editor__activate {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #3a4152;
+  border-radius: 6px;
+  background: #2b3550;
+  color: #e7e9ee;
+  cursor: pointer;
+}
+
+.stream-editor__scene[data-active="true"] .stream-editor__activate {
+  background: #4f8cff;
+  border-color: #4f8cff;
+  color: #0e1016;
+  font-weight: 600;
+}
+
+.stream-editor__btn {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #3a4152;
+  border-radius: 6px;
+  background: #262b38;
+  color: #e7e9ee;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.stream-editor__btn:hover {
+  background: #303646;
+}
+
+.stream-editor__btn--primary {
+  background: #4f8cff;
+  border-color: #4f8cff;
+  color: #0e1016;
+  font-weight: 600;
+}
+
+.stream-editor__btn--ghost {
+  background: transparent;
+}
+
+.stream-editor__btn--danger {
+  border-color: #6b2b34;
+  color: #ff9aa6;
+}
+
+.stream-editor__btn--danger:hover {
+  background: #3a2027;
+}
+
+.stream-editor__add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding-top: 0.5rem;
+  border-top: 1px solid #2a2e3a;
+}
+
+.stream-editor__add-name,
+.stream-editor__add-kind {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #3a4152;
+  border-radius: 6px;
+  background: #12141b;
+  color: #e7e9ee;
+}
+
+.stream-editor__add-name {
+  min-width: 220px;
+}
+
+/* Toast — opacity fade only; visibility asserted via data-visible. */
+.stream-editor__toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  background: #2b3550;
+  color: #e7e9ee;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.stream-editor__toast[data-visible="true"] {
+  opacity: 1;
+}
+
+.stream-editor__toast[data-state="error"] {
+  background: #5a2530;
+}
+
+.stream-editor__toast[data-state="success"] {
+  background: #234a34;
+}

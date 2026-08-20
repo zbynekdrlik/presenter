@@ -14,6 +14,7 @@ pub fn SurfaceNav() -> impl IntoView {
         ("Camera", "/ui/camera"),
         ("Tablet", "/ui/tablet"),
         ("Timer", "/overlays/timer"),
+        ("Stream", "/ui/stream"),
     ];
 
     view! {

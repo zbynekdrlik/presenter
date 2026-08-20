@@ -22,6 +22,7 @@ mod slide_selection_logic;
 pub mod slide_stage_layout_picker;
 pub mod stage;
 pub mod stage_preview;
+pub mod stream_editor;
 pub mod surface_nav;
 pub mod timer_panel;
 pub mod toast;
