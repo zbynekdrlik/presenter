@@ -12,6 +12,7 @@
 use leptos::prelude::*;
 use presenter_core::{LiveEvent, StreamShowState};
 
+use crate::components::stream_editor::editor_panel::EditorPanel;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
 use crate::components::stream_editor::{StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
 use crate::components::version_label::VersionLabel;
@@ -40,6 +41,9 @@ pub fn StreamEditorPage() -> impl IntoView {
         toast_msg: RwSignal::new(String::new()),
         toast_visible: RwSignal::new(false),
         toast_state: RwSignal::new(String::from("info")),
+        selected_scene: RwSignal::new(None),
+        selected_element: RwSignal::new(None),
+        prop_error: RwSignal::new(String::new()),
     };
 
     // Cold load.
@@ -95,6 +99,11 @@ pub fn StreamEditorPage() -> impl IntoView {
             </header>
             <main class="stream-editor__main">
                 <EditorScenes ctx=ctx />
+                <Show when=move || ctx.selected_scene.get().is_some()>
+                    <section class="stream-editor__workspace" data-role="stream-workspace">
+                        <EditorPanel ctx=ctx />
+                    </section>
+                </Show>
             </main>
             <div
                 class="stream-editor__toast"

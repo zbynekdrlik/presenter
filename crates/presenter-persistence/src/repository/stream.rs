@@ -242,7 +242,8 @@ impl Repository {
             .filter(stream_scene::Column::OutputId.eq(output.id))
             .all(&txn)
             .await?;
-        Self::validate_scene_order_set(&scenes, &ids)?;
+        let existing: HashSet<i64> = scenes.iter().map(|s| s.id as i64).collect();
+        Self::validate_order_set(&existing, &ids, "scene")?;
         let by_id: HashMap<i64, &stream_scene::Model> =
             scenes.iter().map(|s| (s.id as i64, s)).collect();
         let (mut base_pos, mut overlay_pos) = (0i32, 0i32);
@@ -359,7 +360,8 @@ impl Repository {
             .filter(stream_element::Column::SceneId.eq(scene.id))
             .all(&txn)
             .await?;
-        Self::validate_element_order_set(&elements, &ids)?;
+        let existing: HashSet<i64> = elements.iter().map(|e| e.id as i64).collect();
+        Self::validate_order_set(&existing, &ids, "element")?;
         let by_id: HashMap<i64, &stream_element::Model> =
             elements.iter().map(|e| (e.id as i64, e)).collect();
         let mut z = 0i32;
@@ -683,40 +685,20 @@ impl Repository {
         Ok(())
     }
 
-    fn validate_scene_order_set(scenes: &[stream_scene::Model], ids: &[i64]) -> anyhow::Result<()> {
+    /// Validate a reorder id set: no duplicates, and EXACTLY the `existing` set
+    /// (none missing, none extra). Shared by scene + element reorder; `what`
+    /// names the collection in the 422 message. A partial/dup set is `Invalid`.
+    fn validate_order_set(existing: &HashSet<i64>, ids: &[i64], what: &str) -> anyhow::Result<()> {
         let requested: HashSet<i64> = ids.iter().copied().collect();
         if requested.len() != ids.len() {
             return Err(
-                RepositoryError::Invalid("scene order contains duplicate ids".to_string()).into(),
+                RepositoryError::Invalid(format!("{what} order contains duplicate ids")).into(),
             );
         }
-        let existing: HashSet<i64> = scenes.iter().map(|s| s.id as i64).collect();
-        if existing != requested {
-            return Err(RepositoryError::Invalid(
-                "scene order id set does not match this output's scenes".to_string(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn validate_element_order_set(
-        elements: &[stream_element::Model],
-        ids: &[i64],
-    ) -> anyhow::Result<()> {
-        let requested: HashSet<i64> = ids.iter().copied().collect();
-        if requested.len() != ids.len() {
-            return Err(RepositoryError::Invalid(
-                "element order contains duplicate ids".to_string(),
-            )
-            .into());
-        }
-        let existing: HashSet<i64> = elements.iter().map(|e| e.id as i64).collect();
-        if existing != requested {
-            return Err(RepositoryError::Invalid(
-                "element order id set does not match this scene's elements".to_string(),
-            )
-            .into());
+        if existing != &requested {
+            return Err(
+                RepositoryError::Invalid(format!("{what} order id set does not match")).into(),
+            );
         }
         Ok(())
     }

@@ -30,12 +30,19 @@ const sel = {
   toast: '[data-role="toast"]',
 };
 
+type ElementDef = {
+  id: number;
+  z_order: number;
+  props: Record<string, unknown> & { kind: string };
+};
+
 type SceneDef = {
   id: number;
   name: string;
   kind: string;
   position: number;
   is_active: boolean;
+  elements: ElementDef[];
 };
 
 type OutputDef = {
@@ -232,6 +239,175 @@ test("a second operator context reflects activation live", async ({
   await expect(cardById(pageB, liveId)).toHaveAttribute("data-active", "true", {
     timeout: 15_000,
   });
+
+  expect(errorsA, "context A console clean").toEqual([]);
+  expect(errorsB, "context B console clean").toEqual([]);
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+// --- #714: element CRUD + property panel -----------------------------------
+
+async function getScene(page: Page, sceneId: string): Promise<SceneDef> {
+  const def = await getDef(page);
+  const scene = def.scenes.find((s) => String(s.id) === sceneId);
+  expect(scene, `scene ${sceneId} present`).toBeTruthy();
+  return scene as SceneDef;
+}
+
+/** Open a scene's element panel via its "Upraviť prvky" button. */
+async function openPanel(page: Page, sceneId: string) {
+  await cardById(page, sceneId).locator('[data-role="stream-scene-edit"]').click();
+  await page.waitForSelector('[data-role="stream-element-panel"]', { timeout: 15_000 });
+}
+
+/** Add an element of `kind` to the currently-open panel; return its new id. */
+async function addElement(
+  page: Page,
+  sceneId: string,
+  kind: "image" | "countdown" | "lyrics" | "verse",
+): Promise<string> {
+  const before = (await getScene(page, sceneId)).elements.map((e) => e.id);
+  await page.locator(`[data-role="stream-add-element-${kind}"]`).click();
+  let newId = "";
+  await expect
+    .poll(async () => {
+      const after = (await getScene(page, sceneId)).elements;
+      const added = after.find((e) => !before.includes(e.id));
+      if (added) {
+        newId = String(added.id);
+        return true;
+      }
+      return false;
+    })
+    .toBe(true);
+  return newId;
+}
+
+async function setColorInput(page: Page, selector: string, value: string) {
+  await page.locator(selector).evaluate((el, v) => {
+    (el as HTMLInputElement).value = v;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, value);
+}
+
+test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await openEditor(page);
+
+  const scene = await addScene(page, "SE_ElemScene", "base");
+  await openPanel(page, scene);
+
+  // Add one element of each kind.
+  const img = await addElement(page, scene, "image");
+  const cd = await addElement(page, scene, "countdown");
+  const lyr = await addElement(page, scene, "lyrics");
+  const verse = await addElement(page, scene, "verse");
+  {
+    const kinds = (await getScene(page, scene)).elements.map((e) => e.props.kind);
+    expect(kinds).toEqual(["image", "countdown", "lyrics", "verse"]);
+  }
+
+  // --- Edit the countdown's frame + font size + color + shadow + alignment ---
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${cd}"] [data-role="stream-element-select"]`)
+    .click();
+  await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
+  await page.locator('[data-role="stream-frame-x"]').fill("12.5");
+  const tsCd = '[data-role="stream-ts-countdown"] ';
+  await page.locator(`${tsCd}[data-role="stream-ts-size"]`).fill("9.5");
+  await setColorInput(page, `${tsCd}[data-role="stream-ts-color"]`, "#ff0000");
+  await page.locator(`${tsCd}[data-role="stream-ts-align-left"]`).click();
+  await page.locator(`${tsCd}[data-role="stream-ts-shadow-enable"]`).check();
+  await page.locator(`${tsCd}[data-role="stream-ts-shadow-blur"]`).fill("6");
+  await page.locator('[data-role="stream-prop-save"]').click();
+
+  await expect
+    .poll(async () => {
+      const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === cd);
+      const p = el?.props as Record<string, any> | undefined;
+      return (
+        p &&
+        p.frame.x_pct === 12.5 &&
+        p.style.size_pct === 9.5 &&
+        p.style.color === "#ff0000" &&
+        p.style.align === "left" &&
+        p.style.shadow &&
+        p.style.shadow.blur_px === 6
+      );
+    })
+    .toBeTruthy();
+
+  // --- Invalid value (pct > 100) → inline 422, def unchanged ---
+  await page.locator('[data-role="stream-frame-x"]').fill("150");
+  await page.locator('[data-role="stream-prop-save"]').click();
+  await expect(page.locator('[data-role="stream-prop-error"]')).toBeVisible({ timeout: 10_000 });
+  {
+    const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === cd);
+    expect((el?.props as any).frame.x_pct, "def unchanged after 422").toBe(12.5);
+  }
+
+  // --- z-order: move the last element (verse) up one; def order reflects it ---
+  const orderBefore = (await getScene(page, scene)).elements.map((e) => String(e.id));
+  expect(orderBefore).toEqual([img, cd, lyr, verse]);
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${verse}"] [data-role="stream-element-up"]`)
+    .click();
+  await expect
+    .poll(async () => (await getScene(page, scene)).elements.map((e) => String(e.id)))
+    .toEqual([img, cd, verse, lyr]);
+
+  // --- Delete the image element via the native confirm ---
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${img}"] [data-role="stream-element-delete"]`)
+    .click();
+  await expect
+    .poll(async () => (await getScene(page, scene)).elements.some((e) => String(e.id) === img))
+    .toBe(false);
+
+  expect(errors, "browser console must be clean").toEqual([]);
+});
+
+test("a config change reflects live in a second editor context", async ({
+  browser,
+}: {
+  browser: Browser;
+}) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const pageB = await ctxB.newPage();
+  const errorsA: string[] = [];
+  const errorsB: string[] = [];
+  attachConsoleErrorCollector(pageA, errorsA);
+  attachConsoleErrorCollector(pageB, errorsB);
+
+  // Seed a base scene both contexts can open.
+  const createRes = await pageA.request.post(
+    new URL("/stream/api/outputs/stream/scenes", baseURL).toString(),
+    { data: { name: "SE_LiveElems", kind: "base" }, timeout: 30_000 },
+  );
+  expect(createRes.ok()).toBeTruthy();
+  const sceneId = String(((await createRes.json()) as SceneDef).id);
+
+  await openEditor(pageA);
+  await openEditor(pageB);
+  await openPanel(pageA, sceneId);
+  await openPanel(pageB, sceneId);
+
+  await expect(
+    pageB.locator('[data-role="stream-element-list"] [data-role="stream-element"]'),
+  ).toHaveCount(0);
+
+  // A adds an element → its PATCH bumps config_revision → B refetches the def
+  // (StreamConfigChanged) and its list reflects the new element without reload.
+  await addElement(pageA, sceneId, "lyrics");
+  await expect(
+    pageB.locator('[data-role="stream-element-list"] [data-role="stream-element"]'),
+  ).toHaveCount(1, { timeout: 15_000 });
 
   expect(errorsA, "context A console clean").toEqual([]);
   expect(errorsB, "context B console clean").toEqual([]);
