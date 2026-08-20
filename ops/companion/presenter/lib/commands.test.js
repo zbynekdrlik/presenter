@@ -34,6 +34,12 @@ describe("Companion COMMANDS parity", () => {
     "bible.trigger",
     "bible.clear",
     "broadcast.set_live",
+    "stream_scene_set",
+    "stream_scene_clear",
+    "stream_overlay_on",
+    "stream_overlay_off",
+    "stream_overlay_toggle",
+    "stream_clear",
   ];
 
   test("COMMANDS array contains all expected command IDs", () => {

@@ -7,6 +7,11 @@ const WebSocket = require("ws");
 const { version: MODULE_VERSION } = require("./package.json");
 const { normaliseCountdownTarget } = require("./lib/time");
 const { applyVariablesMessage } = require("./lib/variable-batch");
+const {
+  isStreamCommand,
+  streamActionOptions,
+  buildStreamPayload,
+} = require("./lib/stream");
 
 const VARIABLE_DEFINITIONS = [
   "stage_layout_code",
@@ -47,6 +52,8 @@ const VARIABLE_DEFINITIONS = [
   "bible_triggered_at",
   "broadcast_live",
   "live_ws_connected",
+  "stream_scene",
+  "stream_overlays",
 ];
 
 const COMMANDS = [
@@ -67,6 +74,12 @@ const COMMANDS = [
   { id: "bible.trigger", label: "Bible: trigger passage" },
   { id: "bible.clear", label: "Bible: clear passage" },
   { id: "broadcast.set_live", label: "Broadcast: set live state" },
+  { id: "stream_scene_set", label: "Stream: set base scene (by name)" },
+  { id: "stream_scene_clear", label: "Stream: clear base scene" },
+  { id: "stream_overlay_on", label: "Stream: overlay on (by name)" },
+  { id: "stream_overlay_off", label: "Stream: overlay off (by name)" },
+  { id: "stream_overlay_toggle", label: "Stream: overlay toggle (by name)" },
+  { id: "stream_clear", label: "Stream: clear base + all overlays" },
 ];
 
 const STAGE_LAYOUT_CHOICES = [
@@ -298,6 +311,9 @@ class PresenterInstance extends InstanceBase {
   }
 
   _commandOptionsFor(commandId) {
+    if (isStreamCommand(commandId)) {
+      return streamActionOptions(commandId);
+    }
     switch (commandId) {
       case "timer.set_countdown_target":
         return [
@@ -533,8 +549,19 @@ class PresenterInstance extends InstanceBase {
         };
         break;
       }
-      default:
+      default: {
+        if (isStreamCommand(command)) {
+          const result = buildStreamPayload(command, options);
+          if (result.error) {
+            // Bad input (e.g. empty scene name) — log and skip, do not send.
+            this.log("error", result.error);
+            return;
+          }
+          payload = result.payload;
+          break;
+        }
         payload = {};
+      }
     }
 
     this.log("info", `Presenter command ${command} ${JSON.stringify(payload)}`);
