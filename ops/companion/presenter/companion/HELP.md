@@ -27,12 +27,15 @@ Timers now expose derived formats ready for button text:
 The currently selected stage layout is surfaced as `stage_layout_code`, `stage_layout_name`, and `stage_layout_description`.
 The active song metadata is available as `song_name` (prefix-trimmed presentation name) and `band_name` (source library).
 
+The stream-graphics output exposes `stream_scene` (active base scene name, or `-` when cleared) and `stream_overlays` (comma-joined active overlay scene names, or `-`).
+
 ## Actions
 
 - Timer start/pause/reset
 - Set countdown duration (plain minutes or HH:MM time-of-day for the next occurrence)
 - Stage layout switcher (single `stage.layout` action with dropdown for SNV, PP, Timer, Preach)
 - Bible trigger & clear
+- Stream graphics: set/clear base scene, overlay on/off/toggle, and clear-all — scenes addressed by name, with an optional output slug (default `stream`)
 
 ## Feedback
 
