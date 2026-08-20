@@ -783,7 +783,7 @@ fn ReferenceInputs() -> impl IntoView {
                     min="1"
                     node_ref=refs.verse_start
                     prop:value=move || verse_start_signal.get().to_string()
-                    on:change=on_verse_start
+                    on:input=on_verse_start
                     on:keydown=on_verse_start_keydown
                 />
             </label>
