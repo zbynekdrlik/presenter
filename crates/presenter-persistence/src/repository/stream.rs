@@ -346,6 +346,37 @@ impl Repository {
         Ok(())
     }
 
+    /// Reorder a scene's elements by list order — the client sends the FULL set
+    /// of the scene's element ids (no dupes, none missing) and z_order is
+    /// reassigned 0..n by that order. Mirrors [`Self::set_scene_order`] (the
+    /// per-output scene reorder); a partial/duplicate set is `Invalid` (422).
+    /// Bumps `config_revision` (a CONFIG write).
+    #[instrument(skip_all)]
+    pub async fn set_element_order(&self, scene_id: i64, ids: Vec<i64>) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
+        let scene = Self::scene_by_id(&txn, scene_id).await?;
+        let elements = stream_element::Entity::find()
+            .filter(stream_element::Column::SceneId.eq(scene.id))
+            .all(&txn)
+            .await?;
+        Self::validate_element_order_set(&elements, &ids)?;
+        let by_id: HashMap<i64, &stream_element::Model> =
+            elements.iter().map(|e| (e.id as i64, e)).collect();
+        let mut z = 0i32;
+        for id in &ids {
+            let Some(element) = by_id.get(id).copied() else {
+                continue;
+            };
+            let mut active = element.clone().into_active_model();
+            active.z_order = Set(next_index(&mut z));
+            active.updated_at = Set(Utc::now().into());
+            active.update(&txn).await?;
+        }
+        Self::bump_config_revision(&txn, scene.output_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     // ---- Activation (show-state; NO config_revision bump) -----------------
 
     #[instrument(skip_all)]
@@ -663,6 +694,27 @@ impl Repository {
         if existing != requested {
             return Err(RepositoryError::Invalid(
                 "scene order id set does not match this output's scenes".to_string(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn validate_element_order_set(
+        elements: &[stream_element::Model],
+        ids: &[i64],
+    ) -> anyhow::Result<()> {
+        let requested: HashSet<i64> = ids.iter().copied().collect();
+        if requested.len() != ids.len() {
+            return Err(RepositoryError::Invalid(
+                "element order contains duplicate ids".to_string(),
+            )
+            .into());
+        }
+        let existing: HashSet<i64> = elements.iter().map(|e| e.id as i64).collect();
+        if existing != requested {
+            return Err(RepositoryError::Invalid(
+                "element order id set does not match this scene's elements".to_string(),
             )
             .into());
         }
