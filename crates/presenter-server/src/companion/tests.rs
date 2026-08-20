@@ -730,6 +730,34 @@ async fn resolve_stream_variables_maps_ids_to_names() {
     assert_eq!(cleared.overlays, "-");
 }
 
+#[tokio::test]
+async fn apply_stream_state_event_resolves_names_and_ignores_other_events() {
+    use super::stream::apply_stream_state_event;
+    let state = AppState::in_memory().await.unwrap();
+    let (base, overlay) = seed_stream(&state, "t711-event").await;
+    let mut variables = CompanionVariableState::default();
+
+    // A StreamState event is resolved id→name and updates the variables (this is
+    // the companion live-loop glue that the mod.rs branch routes to).
+    let event = LiveEvent::StreamState {
+        output: "t711-event".to_string(),
+        active_scene_id: Some(base),
+        active_overlay_ids: vec![overlay],
+        config_revision: 0,
+    };
+    assert!(apply_stream_state_event(&state, &mut variables, &event).await);
+    let map: std::collections::HashMap<_, _> = variables
+        .to_variables()
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect();
+    assert_eq!(map.get("stream_scene").unwrap(), "Chvaly");
+    assert_eq!(map.get("stream_overlays").unwrap(), "Verse");
+
+    // A non-StreamState event is not this glue's concern → no change reported.
+    assert!(!apply_stream_state_event(&state, &mut variables, &LiveEvent::BibleCleared).await);
+}
+
 #[test]
 fn stream_variables_default_to_placeholders() {
     let map: std::collections::HashMap<_, _> = CompanionVariableState::default()
