@@ -357,6 +357,33 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     />
                 </Show>
             </ul>
+            // #697: static reference of the special clip-name conventions
+            // Presenter supports and what each one does. Compiled-in (derived
+            // from `presenter-server`'s resolume::clip_map), NOT a live fetch —
+            // it renders identically whether a Resolume host is connected or
+            // not, so an operator can always discover which magic clip names
+            // exist (the discoverability the pre-WASM settings page had and the
+            // #347 Leptos migration dropped). Reuses the existing
+            // `.settings__legend` styling.
+            <section class="settings__legend" data-role="resolume-clip-legend">
+                <h3>"Supported Clip Names"</h3>
+                <p class="settings__legend-note">
+                    "Presenter automatically updates every Resolume clip whose name contains one of these tokens (for example, #main-a or #main-a-2) and alternates between the A/B lanes so the next look is always preloaded. This list is compiled into Presenter — it is the same whether or not a Resolume host is currently connected."
+                </p>
+                <dl>
+                    <div><dt>"#main-a / #main-b"</dt><dd>"Main lyric text, alternating between A and B for seamless cuts."</dd></div>
+                    <div><dt>"#translate-a / #translate-b"</dt><dd>"Translation lyric text matched to each lane."</dd></div>
+                    <div><dt>"#bible-a / #bible-b"</dt><dd>"Bible verse text with verse numbers."</dd></div>
+                    <div><dt>"#bible-reference-a / #bible-reference-b"</dt><dd>"Bible reference with translation code (e.g. \"1 Samuel 1:4-5 (ROH)\")."</dd></div>
+                    <div><dt>"#bible-translate-a / #bible-translate-b"</dt><dd>"Secondary-translation verse text, or empty if no secondary translation is configured."</dd></div>
+                    <div><dt>"#bible-translate-reference-a / #bible-translate-reference-b"</dt><dd>"Secondary-translation reference with its translation code."</dd></div>
+                    <div><dt>"#bible-clear"</dt><dd>"Fired when a Bible verse is cleared — blanks the Bible clips and triggers this clip."</dd></div>
+                    <div><dt>"#timer"</dt><dd>"Receives the running countdown / preach timer text."</dd></div>
+                    <div><dt>"#song-name"</dt><dd>"The active song title (numeric prefixes like \"001 \" are removed automatically)."</dd></div>
+                    <div><dt>"#band-name"</dt><dd>"The library the current song belongs to."</dd></div>
+                    <div><dt>"Suffixes: -u / -re"</dt><dd>"Append -u to force uppercase, or -re to collapse multi-line text into a single line."</dd></div>
+                </dl>
+            </section>
         </section>
     }
 }

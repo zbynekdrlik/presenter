@@ -527,3 +527,43 @@ test('#455 out-of-range port is rejected, not silently saved', async ({ page }) 
 
   expect(consoleMessages).toEqual([]);
 });
+
+test('resolume settings shows the static supported-clip-names reference panel (#697)', async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+
+  // The panel is compiled-in (no live Arena fetch) — it must render regardless
+  // of whether any Resolume host is connected (#697).
+  const legend = page.locator('[data-role="resolume-clip-legend"]');
+  await expect(legend).toBeVisible();
+  await expect(legend.locator('h3')).toHaveText('Supported Clip Names');
+
+  // Every supported magic clip name is documented — spot-check the full set,
+  // including #bible-clear (fired when a Bible verse is cleared) and #timer
+  // (which the pre-WASM-migration legend omitted).
+  for (const token of [
+    '#main-a',
+    '#translate-a',
+    '#bible-a',
+    '#bible-reference-a',
+    '#bible-translate-a',
+    '#bible-translate-reference-a',
+    '#bible-clear',
+    '#timer',
+    '#song-name',
+    '#band-name',
+  ]) {
+    await expect(legend).toContainText(token);
+  }
+
+  expect(consoleMessages).toEqual([]);
+});
