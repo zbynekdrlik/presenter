@@ -11,6 +11,7 @@ mod search;
 mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
+mod stream_page;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -181,6 +182,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/stage/connections", get(stage::list_stage_connections))
         .route("/stage", get(stage_shell::stage_shell))
+        // Stream-graphics OBS output page (#709). `/stream/api/*` (#707) and
+        // `/stream/assets/*` (#708) are deeper static prefixes and take
+        // precedence over this `{slug}` param; `api`/`assets` are reserved slugs.
+        .route("/stream/{slug}", get(stream_page::stream_page))
         .route(
             "/stage/snapshot",
             get(stage::stage_display_selected_snapshot_json),
@@ -635,6 +640,15 @@ impl From<anyhow::Error> for AppError {
                 Self::unprocessable(*msg)
             }
             Some(presenter_persistence::RepositoryError::Conflict(msg)) => Self::conflict(*msg),
+            // #705: owned-message variants — same status as their static-str
+            // siblings, mapped here so a new stream repository refusal gets the
+            // right status by construction (never a silent 500 in the router PR).
+            Some(presenter_persistence::RepositoryError::ConflictDetail(msg)) => {
+                Self::conflict(msg.clone())
+            }
+            Some(presenter_persistence::RepositoryError::Invalid(msg)) => {
+                Self::unprocessable(msg.clone())
+            }
             _ => Self::new(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
     }
