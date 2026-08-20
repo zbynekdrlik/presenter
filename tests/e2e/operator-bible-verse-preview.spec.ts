@@ -94,6 +94,18 @@ test("switching worship <-> bible toggles the header preview reactively", async 
   const versePreview = page.locator('[data-role="bible-preview"]');
 
   await expect(iframe).toBeVisible();
+  // Gate on the embedded /stage app fully connecting BEFORE we unmount it: a
+  // cleanly-connected stage WS closes silently on unmount, whereas tearing the
+  // iframe down mid-connect can surface aborted-subresource / WS-close noise in
+  // the parent console (this spec asserts the console is empty, and per project
+  // rule the parent listener also captures the iframe's console). Mirrors the
+  // readiness gate the sibling iframe specs (wasm-stage / wasm-bible / api-stage)
+  // use before reading the embedded stage.
+  await expect(
+    page
+      .frameLocator("iframe.operator__stage-iframe")
+      .locator(".stage-container"),
+  ).toBeVisible({ timeout: 30_000 });
 
   // Switch to Bible (the real-user action from the bug report).
   await page.locator('[data-role="view-toggle"][data-view="bible"]').click();

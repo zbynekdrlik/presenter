@@ -77,8 +77,19 @@ test("primary + secondary translation selection persists across refresh", async 
   const main = page.locator('[data-role="main-translation"]');
   const secondary = page.locator('[data-role="secondary-translation"]');
 
-  // Pick a concrete main + a concrete (non-empty) secondary.
-  await main.selectOption({ index: 0 });
+  // Need a non-default main (>=2 translations) and >=2 secondary options besides
+  // "None" for a meaningful test.
+  if (
+    (await main.locator("option").count()) < 2 ||
+    (await secondary.locator("option").count()) < 3
+  ) {
+    test.skip(true, "Need >=2 bible translations for the persistence test");
+    return;
+  }
+
+  // Pick a NON-default main (index 1 — the default is index 0) so the assertion
+  // actually fails if persistence is broken, plus a concrete non-empty secondary.
+  await main.selectOption({ index: 1 });
   await secondary.selectOption({ index: 2 }); // index 0 == "None"
   const chosenMain = await main.inputValue();
   const chosenSecondary = await secondary.inputValue();
@@ -113,6 +124,12 @@ test("explicitly-empty secondary persists and browsers keep independent selectio
     const aMain = a.page.locator('[data-role="main-translation"]');
     const aSecondary = a.page.locator('[data-role="secondary-translation"]');
     const bSecondary = b.page.locator('[data-role="secondary-translation"]');
+
+    // Need >=2 secondary options besides "None" for a concrete non-empty pick.
+    if ((await aSecondary.locator("option").count()) < 3) {
+      test.skip(true, "Need >=2 secondary bible translations for this test");
+      return;
+    }
 
     // Browser A: choose a concrete, non-empty secondary.
     await aMain.selectOption({ index: 0 });
