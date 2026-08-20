@@ -21,6 +21,7 @@ mod m20260702_000001_create_slide_stage_layouts;
 mod m20260715_000001_add_presentation_sync_columns;
 mod m20260717_000001_add_resolume_active_port;
 mod m20260725_000001_add_library_sync_columns;
+mod m20260820_000001_create_stream_tables;
 
 pub struct Migrator;
 
@@ -46,6 +47,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260715_000001_add_presentation_sync_columns::Migration),
             Box::new(m20260717_000001_add_resolume_active_port::Migration),
             Box::new(m20260725_000001_add_library_sync_columns::Migration),
+            Box::new(m20260820_000001_create_stream_tables::Migration),
         ]
     }
 }
