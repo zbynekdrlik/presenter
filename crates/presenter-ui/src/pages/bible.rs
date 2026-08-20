@@ -49,6 +49,23 @@ pub fn BiblePage() -> impl IntoView {
                 }
                 character_limit.set(prefs.character_limit);
             }
+            // #701: per-browser localStorage override wins over the server-global
+            // default, so concurrent operators keep independent selections and an
+            // explicitly-cleared secondary survives a refresh. Applied AFTER the
+            // server-pref load (so it takes precedence) and BEFORE the
+            // "default main to first translation" step below.
+            if let Some(main) = crate::state::session::get_persistent("bibleMainTranslation") {
+                if !main.is_empty() {
+                    selected_translation.set(Some(main));
+                }
+            }
+            match crate::state::session::get_persistent("bibleSecondaryTranslation") {
+                // Empty "" sentinel = the user explicitly cleared the secondary.
+                Some(sec) if sec.is_empty() => secondary_translation.set(None),
+                Some(sec) => secondary_translation.set(Some(sec)),
+                // Absent key = never chosen for this browser; keep server/default.
+                None => {}
+            }
             if let Ok(trans) = bible::list_translations().await {
                 // Set default if preferences didn't set one
                 if selected_translation.get_untracked().is_none() {
@@ -74,6 +91,20 @@ pub fn BiblePage() -> impl IntoView {
             // Skip if translations haven't loaded yet (initial hydration)
             if !translations_loaded.get_untracked() {
                 return;
+            }
+            // #701: persist the selection PER BROWSER (localStorage) so it wins
+            // over the server-global default on the next load. Secondary uses an
+            // empty "" sentinel to record an EXPLICITLY cleared secondary (vs an
+            // absent key = never chosen). Written from references before `main`/
+            // `sec` are moved into the server-preferences POST below.
+            if let Some(m) = main.as_deref() {
+                crate::state::session::set_persistent("bibleMainTranslation", m);
+            }
+            match sec.as_deref() {
+                Some(code) => {
+                    crate::state::session::set_persistent("bibleSecondaryTranslation", code)
+                }
+                None => crate::state::session::set_persistent("bibleSecondaryTranslation", ""),
             }
             let limit = character_limit.get_untracked();
             leptos::task::spawn_local(async move {
