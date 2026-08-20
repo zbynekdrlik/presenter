@@ -17,7 +17,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [0002](0002-bible-sources.md)                     | Bible Source Pipeline           | Accepted | 2025-09-27 |
 | [0004](0004-resolume-settings-and-integration.md) | Resolume Settings & Integration | Proposed | 2025-09-30 |
 | [0005](0005-stage-heartbeat.md)                   | Stage Display Heartbeat         | Accepted | 2025-10-01 |
-| [0009](0009-stream-graphics.md)                   | Stream Graphics (Resolume replacement) | Accepted | 2026-08-20 |
+| [0009](0009-stream-graphics.md)                   | Stream Graphics                 | Accepted | 2026-08-20 |
 
 ## Creating New ADRs
 

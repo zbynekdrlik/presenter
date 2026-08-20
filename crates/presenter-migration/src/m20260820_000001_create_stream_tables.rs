@@ -15,9 +15,10 @@ use sea_orm_migration::prelude::*;
 /// - `stream_assets`   — sha256-addressed uploaded images (referenced only via
 ///   `props.asset_id`, no FK — matches the ADR's disk-hash asset model).
 ///
-/// Mirrors `m20260625_000001_add_video_sources.rs` (idempotent `if_not_exists`
-/// + `INSERT OR IGNORE` seed + `DEFAULT CURRENT_TIMESTAMP` timestamps) and the
-/// FK builder style of `m20250927_000001_create_core_tables.rs`.
+/// Mirrors the `if_not_exists` + `DEFAULT CURRENT_TIMESTAMP` idiom of
+/// `m20260625_000001_add_video_sources.rs`, the idempotent `INSERT OR IGNORE`
+/// seed of `m20260420_000001_create_group_colors.rs`, and the FK builder style
+/// of `m20250927_000001_create_core_tables.rs`.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
