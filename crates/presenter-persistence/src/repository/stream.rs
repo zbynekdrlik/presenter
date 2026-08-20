@@ -472,6 +472,28 @@ impl Repository {
         })
     }
 
+    // ---- Owning-output resolution (router notify targeting, #707) ---------
+
+    /// The owning output's slug for a scene id. The #707 scene-patch/delete
+    /// handlers are addressed by scene id but must broadcast the CONFIG change
+    /// on the owning output — this resolves that slug. A missing scene id
+    /// surfaces `NotFound` (404), reusing the same `scene_by_id` lookup as the
+    /// mutating paths (so an out-of-`i32`-range id refuses rather than
+    /// wrap-truncates).
+    pub async fn stream_scene_output_slug(&self, scene_id: i64) -> anyhow::Result<String> {
+        let scene = Self::scene_by_id(&self.db, scene_id).await?;
+        Ok(Self::output_by_id(&self.db, scene.output_id).await?.slug)
+    }
+
+    /// The owning output's slug for an element id — the element-handler
+    /// counterpart of [`Self::stream_scene_output_slug`] (#707). A missing
+    /// element id surfaces `NotFound` (404).
+    pub async fn stream_element_output_slug(&self, element_id: i64) -> anyhow::Result<String> {
+        let element = Self::element_by_id(&self.db, element_id).await?;
+        let scene = Self::scene_by_id(&self.db, element.scene_id as i64).await?;
+        Ok(Self::output_by_id(&self.db, scene.output_id).await?.slug)
+    }
+
     // ---- Private helpers --------------------------------------------------
 
     async fn output_by_slug<C: ConnectionTrait>(
