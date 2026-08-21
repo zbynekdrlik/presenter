@@ -48,12 +48,12 @@ const FONT = "Arial";
 
 function textStyle(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    font_family: FONT,
-    size_pct: 6,
+    fontFamily: FONT,
+    sizePct: 6,
     color: "#ffffff",
     weight: 700,
     align: "center",
-    line_height: 1.2,
+    lineHeight: 1.2,
     ...overrides,
   };
 }
@@ -77,10 +77,9 @@ async function createScene(
   request: APIRequestContext,
   name: string,
   kind: "base" | "overlay",
-  position: number,
 ): Promise<number> {
   const resp = await request.post(`${baseURL}/stream/api/outputs/${SLUG}/scenes`, {
-    data: { name, kind, position },
+    data: { name, kind },
   });
   expect(resp.ok(), `create scene ${name} -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
@@ -89,11 +88,12 @@ async function createScene(
 async function addElement(
   request: APIRequestContext,
   sceneId: number,
-  zOrder: number,
   props: Record<string, unknown>,
 ): Promise<number> {
+  // Bare StreamElementProps JSON — no {kind,z_order,props} wrapper. z_order is
+  // server-computed (creation order), never client-settable.
   const resp = await request.post(`${baseURL}/stream/api/scenes/${sceneId}/elements`, {
-    data: { kind: props.kind, z_order: zOrder, props },
+    data: props,
   });
   expect(resp.ok(), `add element -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
@@ -101,7 +101,7 @@ async function addElement(
 
 async function activateBase(request: APIRequestContext, sceneId: number): Promise<void> {
   const resp = await request.put(`${baseURL}/stream/api/outputs/${SLUG}/active-scene`, {
-    data: { scene_id: sceneId },
+    data: { sceneId },
   });
   expect(resp.ok(), `activate base -> ${resp.status()}`).toBeTruthy();
 }
@@ -196,42 +196,42 @@ test.describe("Stream output content (lyrics + verse)", () => {
 
     // Base scene: two lyrics elements — L_BOTH (main+translation), L_MAIN
     // (translation OFF, the toggle case).
-    const baseId = await createScene(request, "LyricsScene", "base", 0);
-    const lBoth = await addElement(request, baseId, 0, {
+    const baseId = await createScene(request, "LyricsScene", "base");
+    const lBoth = await addElement(request, baseId, {
       kind: "lyrics",
       show_main: true,
       show_translation: true,
-      main_style: textStyle({ size_pct: 8 }),
-      translation_style: textStyle({ size_pct: 5, color: "#cccccc" }),
-      frame: { x_pct: 5, y_pct: 10, w_pct: 60, h_pct: 30 },
+      main_style: textStyle({ sizePct: 8 }),
+      translation_style: textStyle({ sizePct: 5, color: "#cccccc" }),
+      frame: { xPct: 5, yPct: 10, wPct: 60, hPct: 30 },
     });
-    const lMain = await addElement(request, baseId, 1, {
+    const lMain = await addElement(request, baseId, {
       kind: "lyrics",
       show_main: true,
       show_translation: false,
-      main_style: textStyle({ size_pct: 8 }),
+      main_style: textStyle({ sizePct: 8 }),
       translation_style: textStyle(),
-      frame: { x_pct: 5, y_pct: 45, w_pct: 60, h_pct: 20 },
+      frame: { xPct: 5, yPct: 45, wPct: 60, hPct: 20 },
     });
 
     // Overlay scene: two verse elements — V_BOTH (secondary ON), V_MAIN
     // (secondary OFF, the toggle case).
-    const overlayId = await createScene(request, "VerseScene", "overlay", 0);
-    const vBoth = await addElement(request, overlayId, 0, {
+    const overlayId = await createScene(request, "VerseScene", "overlay");
+    const vBoth = await addElement(request, overlayId, {
       kind: "verse",
       show_secondary: true,
-      text_style: textStyle({ size_pct: 7 }),
-      secondary_style: textStyle({ size_pct: 5, color: "#dddddd" }),
-      reference_style: textStyle({ size_pct: 3, color: "#aaaaaa" }),
-      frame: { x_pct: 20, y_pct: 60, w_pct: 60, h_pct: 35 },
+      text_style: textStyle({ sizePct: 7 }),
+      secondary_style: textStyle({ sizePct: 5, color: "#dddddd" }),
+      reference_style: textStyle({ sizePct: 3, color: "#aaaaaa" }),
+      frame: { xPct: 20, yPct: 60, wPct: 60, hPct: 35 },
     });
-    const vMain = await addElement(request, overlayId, 1, {
+    const vMain = await addElement(request, overlayId, {
       kind: "verse",
       show_secondary: false,
-      text_style: textStyle({ size_pct: 7 }),
+      text_style: textStyle({ sizePct: 7 }),
       secondary_style: textStyle(),
-      reference_style: textStyle({ size_pct: 3 }),
-      frame: { x_pct: 20, y_pct: 5, w_pct: 60, h_pct: 20 },
+      reference_style: textStyle({ sizePct: 3 }),
+      frame: { xPct: 20, yPct: 5, wPct: 60, hPct: 20 },
     });
 
     await activateBase(request, baseId);

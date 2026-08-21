@@ -49,12 +49,12 @@ const FONT = "Arial";
 
 function textStyle(): Record<string, unknown> {
   return {
-    font_family: FONT,
-    size_pct: 6,
+    fontFamily: FONT,
+    sizePct: 6,
     color: "#ffffff",
     weight: 700,
     align: "center",
-    line_height: 1.2,
+    lineHeight: 1.2,
   };
 }
 
@@ -77,10 +77,9 @@ async function createScene(
   request: APIRequestContext,
   name: string,
   kind: "base" | "overlay",
-  position: number,
 ): Promise<number> {
   const resp = await request.post(`${baseURL}/stream/api/outputs/${SLUG}/scenes`, {
-    data: { name, kind, position },
+    data: { name, kind },
   });
   expect(resp.ok(), `create scene ${name} -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
@@ -89,20 +88,23 @@ async function createScene(
 async function addLyrics(
   request: APIRequestContext,
   sceneId: number,
-  zOrder: number,
+  layoutIndex: number,
   contentTransition: Record<string, unknown>,
 ): Promise<number> {
+  // Bare StreamElementProps JSON — no {kind,z_order,props} wrapper. z_order is
+  // server-computed (creation order); `layoutIndex` only spaces the Frame Y
+  // position so the two lyrics elements don't overlap on screen.
   const props = {
     kind: "lyrics",
     show_main: true,
     show_translation: false,
     main_style: textStyle(),
     translation_style: textStyle(),
-    frame: { x_pct: 5, y_pct: 5 + zOrder * 30, w_pct: 60, h_pct: 25 },
+    frame: { xPct: 5, yPct: 5 + layoutIndex * 30, wPct: 60, hPct: 25 },
     content_transition: contentTransition,
   };
   const resp = await request.post(`${baseURL}/stream/api/scenes/${sceneId}/elements`, {
-    data: { kind: "lyrics", z_order: zOrder, props },
+    data: props,
   });
   expect(resp.ok(), `add lyrics -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
@@ -110,7 +112,7 @@ async function addLyrics(
 
 async function activateBase(request: APIRequestContext, sceneId: number): Promise<void> {
   const resp = await request.put(`${baseURL}/stream/api/outputs/${SLUG}/active-scene`, {
-    data: { scene_id: sceneId },
+    data: { sceneId },
   });
   expect(resp.ok(), `activate base -> ${resp.status()}`).toBeTruthy();
 }
@@ -183,8 +185,8 @@ test.describe("Stream output transitions", () => {
     const consoleErrors: string[] = [];
     attachConsoleErrorCollector(page, consoleErrors);
 
-    const sceneA = await createScene(request, "CrossfadeA", "base", 0);
-    const sceneB = await createScene(request, "CrossfadeB", "base", 1);
+    const sceneA = await createScene(request, "CrossfadeA", "base");
+    const sceneB = await createScene(request, "CrossfadeB", "base");
 
     await activateBase(request, sceneA);
     await gotoStream(page);
@@ -257,7 +259,7 @@ test.describe("Stream output transitions", () => {
 
     // One base scene, two lyrics elements bound to the same worship content: one
     // Fade (600 ms, to widen the overlap window), one Cut.
-    const scene = await createScene(request, "ContentScene", "base", 0);
+    const scene = await createScene(request, "ContentScene", "base");
     const lFade = await addLyrics(request, scene, 0, { mode: "fade", duration_ms: 600 });
     const lCut = await addLyrics(request, scene, 1, { mode: "cut" });
     await activateBase(request, scene);
