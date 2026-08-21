@@ -156,6 +156,7 @@ pub fn BiblePage() -> impl IntoView {
     {
         let selected_translation = bs.selected_translation;
         let books = bs.books;
+        let books_translation = bs.books_translation;
         let selected_book = bs.selected_book;
         let selected_chapter = bs.selected_chapter;
         let verse_start = bs.verse_start;
@@ -173,35 +174,47 @@ pub fn BiblePage() -> impl IntoView {
                     let current_v_end = verse_end.get_untracked();
                     books.set(book_list.clone());
 
-                    let Some(current) = current else {
-                        return;
-                    };
-                    // Find the same book (by code) in the new translation
-                    let Some(new_book) = book_list.iter().find(|b| b.code == current.code) else {
-                        // Book doesn't exist in new translation - clear selection
-                        selected_book.set(None);
-                        return;
-                    };
-                    let chapter_count = new_book.chapters.len() as u16;
-                    let verse_counts: Vec<u16> =
-                        new_book.chapters.iter().map(|c| c.verse_count).collect();
-                    let clamped = crate::state::bible::clamp_selection(
-                        chapter_count,
-                        &verse_counts,
-                        current_chapter,
-                        current_v_start,
-                        current_v_end,
-                    );
-                    selected_book.set(Some(SelectedBook {
-                        book: new_book.book.clone(),
-                        code: new_book.code.clone(),
-                        number: new_book.number,
-                        chapter_count,
-                        verse_counts,
-                    }));
-                    selected_chapter.set(clamped.chapter);
-                    verse_start.set(clamped.verse_start);
-                    verse_end.set(clamped.verse_end);
+                    if let Some(current) = current {
+                        // Find the same book (by code) in the new translation
+                        if let Some(new_book) =
+                            book_list.iter().find(|b| b.code == current.code)
+                        {
+                            let chapter_count = new_book.chapters.len() as u16;
+                            let verse_counts: Vec<u16> = new_book
+                                .chapters
+                                .iter()
+                                .map(|c| c.verse_count)
+                                .collect();
+                            let clamped = crate::state::bible::clamp_selection(
+                                chapter_count,
+                                &verse_counts,
+                                current_chapter,
+                                current_v_start,
+                                current_v_end,
+                            );
+                            selected_book.set(Some(SelectedBook {
+                                book: new_book.book.clone(),
+                                code: new_book.code.clone(),
+                                number: new_book.number,
+                                chapter_count,
+                                verse_counts,
+                            }));
+                            selected_chapter.set(clamped.chapter);
+                            verse_start.set(clamped.verse_start);
+                            verse_end.set(clamped.verse_end);
+                        } else {
+                            // Book doesn't exist in new translation - clear selection
+                            selected_book.set(None);
+                        }
+                    }
+
+                    // Settle marker (LAST write): the book list + selection now
+                    // reflect `code`. Observers/E2E await this to know the
+                    // translation-switch effect finished, instead of racing the
+                    // async re-render. Leptos coalesces the synchronous signal
+                    // writes above into one flush, so the render that first
+                    // exposes this value already reflects the settled selection.
+                    books_translation.set(Some(code));
                 });
             }
         });
@@ -535,9 +548,14 @@ fn BookFilter() -> impl IntoView {
 #[component]
 fn BookList() -> impl IntoView {
     let bs = use_ctx!(BibleState);
+    let books_translation = bs.books_translation;
 
     view! {
-        <div class="operator__list operator__list--tight" data-role="book-list">
+        <div
+            class="operator__list operator__list--tight"
+            data-role="book-list"
+            data-books-translation=move || books_translation.get().unwrap_or_default()
+        >
             {move || {
                 let filtered = bs.filtered_books();
                 let selected_book = bs.selected_book;
@@ -558,6 +576,7 @@ fn BookList() -> impl IntoView {
                             <div
                                 class="operator__list-button"
                                 data-role="book-item"
+                                data-book-code=selected.code.clone()
                                 data-active="true"
                             >
                                 <span class="operator__list-label">{selected.book.clone()}</span>
