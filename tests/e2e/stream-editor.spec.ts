@@ -33,7 +33,7 @@ const sel = {
 
 type ElementDef = {
   id: number;
-  z_order: number;
+  zOrder: number;
   props: Record<string, unknown> & { kind: string };
 };
 
@@ -42,12 +42,12 @@ type SceneDef = {
   name: string;
   kind: string;
   position: number;
-  is_active: boolean;
+  isActive: boolean;
   elements: ElementDef[];
 };
 
 type OutputDef = {
-  active_scene_id: number | null;
+  activeSceneId: number | null;
   scenes: SceneDef[];
 };
 
@@ -172,7 +172,7 @@ test("create, rename, reorder, activate, overlay-toggle and delete scenes", asyn
   await expect(cardById(page, alpha)).toHaveAttribute("data-active", "true");
   await expect(cardById(page, beta)).toHaveAttribute("data-active", "false");
   await expect
-    .poll(async () => (await getDef(page)).active_scene_id)
+    .poll(async () => (await getDef(page)).activeSceneId)
     .toBe(Number(alpha));
 
   // --- Activation persists across a reload ---
@@ -192,7 +192,7 @@ test("create, rename, reorder, activate, overlay-toggle and delete scenes", asyn
   await expect
     .poll(async () => {
       const def = await getDef(page);
-      return def.scenes.find((s) => String(s.id) === overlay)?.is_active;
+      return def.scenes.find((s) => String(s.id) === overlay)?.isActive;
     })
     .toBe(true);
 
@@ -333,12 +333,12 @@ test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => 
       const p = el?.props as Record<string, any> | undefined;
       return (
         p &&
-        p.frame.x_pct === 12.5 &&
-        p.style.size_pct === 9.5 &&
+        p.frame.xPct === 12.5 &&
+        p.style.sizePct === 9.5 &&
         p.style.color === "#ff0000" &&
         p.style.align === "left" &&
         p.style.shadow &&
-        p.style.shadow.blur_px === 6
+        p.style.shadow.blurPx === 6
       );
     })
     .toBeTruthy();
@@ -349,7 +349,7 @@ test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => 
   await expect(page.locator('[data-role="stream-prop-error"]')).toBeVisible({ timeout: 10_000 });
   {
     const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === cd);
-    expect((el?.props as any).frame.x_pct, "def unchanged after 422").toBe(12.5);
+    expect((el?.props as any).frame.xPct, "def unchanged after 422").toBe(12.5);
   }
 
   // --- z-order: move the last element (verse) up one; def order reflects it ---

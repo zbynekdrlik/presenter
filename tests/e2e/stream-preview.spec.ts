@@ -65,7 +65,7 @@ async function createImageElement(page: Page, sceneId: number, assetId: number):
         kind: "image",
         asset_id: assetId,
         fit: "contain",
-        frame: { x_pct: 10, y_pct: 10, w_pct: 80, h_pct: 60 },
+        frame: { xPct: 10, yPct: 10, wPct: 80, hPct: 60 },
         opacity: 1.0,
       },
       timeout: 30_000,

@@ -37,13 +37,13 @@ async fn req(app: &Router, method: Method, uri: &str, body: Option<Value>) -> (S
 
 fn text_style() -> Value {
     json!({
-        "font_family": "Inter", "size_pct": 8.0, "color": "#ffffff",
-        "weight": 700, "align": "center", "line_height": 1.2
+        "fontFamily": "Inter", "sizePct": 8.0, "color": "#ffffff",
+        "weight": 700, "align": "center", "lineHeight": 1.2
     })
 }
 
 fn frame() -> Value {
-    json!({"x_pct": 10.0, "y_pct": 20.0, "w_pct": 50.0, "h_pct": 30.0})
+    json!({"xPct": 10.0, "yPct": 20.0, "wPct": 50.0, "hPct": 30.0})
 }
 
 fn image_props() -> Value {
@@ -86,7 +86,7 @@ async fn def_of_seeded_output_returns_200() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(def["slug"], json!("stream"));
     assert!(def["scenes"].is_array(), "def carries a scenes array");
-    assert!(def["config_revision"].is_number());
+    assert!(def["configRevision"].is_number());
 }
 
 #[tokio::test]
@@ -118,7 +118,7 @@ async fn create_output_then_patch_renames() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(summary["name"], json!("Renamed"));
-    assert_eq!(summary["default_transition_ms"], json!(600));
+    assert_eq!(summary["defaultTransitionMs"], json!(600));
 }
 
 #[tokio::test]
@@ -176,7 +176,7 @@ async fn full_scene_and_element_flow_with_def_ordering() {
     assert_eq!(kinds, vec!["image", "countdown", "lyrics", "verse"]);
     let z: Vec<i64> = elements
         .iter()
-        .filter_map(|e| e["z_order"].as_i64())
+        .filter_map(|e| e["zOrder"].as_i64())
         .collect();
     assert_eq!(z, vec![0, 1, 2, 3], "elements ordered by z_order");
 }
@@ -297,10 +297,10 @@ async fn patch_element_out_of_range_is_422_with_message() {
     )
     .await;
     let el_id = el["id"].as_i64().unwrap();
-    // x_pct > 100 → core validate_props rejects → 422 with a message body the
+    // xPct > 100 → core validate_props rejects → 422 with a message body the
     // editor renders inline.
     let mut bad = image_props();
-    bad["frame"]["x_pct"] = json!(150.0);
+    bad["frame"]["xPct"] = json!(150.0);
     let (status, body) = req(
         &app,
         Method::PATCH,
@@ -344,7 +344,7 @@ async fn activation_flow_reflected_in_def_read() {
     )
     .await;
     assert_eq!(s1, StatusCode::OK);
-    assert_eq!(show["active_scene_id"], json!(base_id));
+    assert_eq!(show["activeSceneId"], json!(base_id));
     let (s2, _) = req(
         &app,
         Method::PUT,
@@ -362,13 +362,13 @@ async fn activation_flow_reflected_in_def_read() {
         None,
     )
     .await;
-    assert_eq!(def["active_scene_id"], json!(base_id));
+    assert_eq!(def["activeSceneId"], json!(base_id));
     let overlay_active = def["scenes"]
         .as_array()
         .unwrap()
         .iter()
         .find(|s| s["id"].as_i64() == Some(overlay_id))
-        .map(|s| s["is_active"].as_bool().unwrap())
+        .map(|s| s["isActive"].as_bool().unwrap())
         .unwrap();
     assert!(overlay_active, "overlay is_active in the def");
 
@@ -381,7 +381,7 @@ async fn activation_flow_reflected_in_def_read() {
     )
     .await;
     assert_eq!(s3, StatusCode::OK);
-    assert_eq!(cleared["active_scene_id"], Value::Null);
+    assert_eq!(cleared["activeSceneId"], Value::Null);
     let (_, def2) = req(
         &app,
         Method::GET,
@@ -389,7 +389,7 @@ async fn activation_flow_reflected_in_def_read() {
         None,
     )
     .await;
-    assert_eq!(def2["active_scene_id"], Value::Null);
+    assert_eq!(def2["activeSceneId"], Value::Null);
 }
 
 #[tokio::test]
