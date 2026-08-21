@@ -185,15 +185,10 @@ pub fn BiblePage() -> impl IntoView {
 
                     if let Some(current) = current {
                         // Find the same book (by code) in the new translation
-                        if let Some(new_book) =
-                            book_list.iter().find(|b| b.code == current.code)
-                        {
+                        if let Some(new_book) = book_list.iter().find(|b| b.code == current.code) {
                             let chapter_count = new_book.chapters.len() as u16;
-                            let verse_counts: Vec<u16> = new_book
-                                .chapters
-                                .iter()
-                                .map(|c| c.verse_count)
-                                .collect();
+                            let verse_counts: Vec<u16> =
+                                new_book.chapters.iter().map(|c| c.verse_count).collect();
                             let clamped = crate::state::bible::clamp_selection(
                                 chapter_count,
                                 &verse_counts,
