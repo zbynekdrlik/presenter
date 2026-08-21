@@ -168,6 +168,15 @@ pub fn BiblePage() -> impl IntoView {
                     let Ok(book_list) = bible::list_books(&code).await else {
                         return;
                     };
+                    // A newer translation switch may have started while this
+                    // request was in flight. Discard a stale result so the
+                    // last-SELECTED translation wins regardless of which
+                    // list_books resolves last (and so the settle marker below
+                    // never publishes a code that no longer matches the
+                    // selection).
+                    if selected_translation.get_untracked().as_deref() != Some(code.as_str()) {
+                        return;
+                    }
                     let current = selected_book.get_untracked();
                     let current_chapter = selected_chapter.get_untracked();
                     let current_v_start = verse_start.get_untracked();
