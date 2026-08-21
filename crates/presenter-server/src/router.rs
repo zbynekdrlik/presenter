@@ -13,6 +13,7 @@ pub(crate) mod stage;
 mod stage_shell;
 mod stream;
 mod stream_assets;
+mod stream_page;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -183,6 +184,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/stage/connections", get(stage::list_stage_connections))
         .route("/stage", get(stage_shell::stage_shell))
+        // Stream-graphics OBS output page (#709). `/stream/api/*` (#707) and
+        // `/stream/assets/*` (#708) are deeper static prefixes and take
+        // precedence over this `{slug}` param; `api`/`assets` are reserved slugs.
+        .route("/stream/{slug}", get(stream_page::stream_page))
         .route(
             "/stage/snapshot",
             get(stage::stage_display_selected_snapshot_json),

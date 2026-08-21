@@ -23,6 +23,21 @@ pub fn current_pathname() -> String {
         .unwrap_or_else(|_| "/".to_string())
 }
 
+/// Read a query-string parameter's raw string value from the current URL.
+///
+/// Returns `None` when the parameter is absent (or the URL/search cannot be
+/// parsed). Used by the stream output page's preview mode
+/// (`?preview=1&scene=<id>&overlays=<id,id>`, #709) to read the forced base
+/// scene and overlay ids. `url_flag_enabled` above is the boolean-only sibling.
+pub fn url_param(name: &str) -> Option<String> {
+    window()
+        .location()
+        .search()
+        .ok()
+        .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
+        .and_then(|params| params.get(name))
+}
+
 /// True when the current URL carries `?<name>=1` (or `=true`).
 ///
 /// Used to detect the operator-header stage preview (`/stage?preview=1`, #460):
