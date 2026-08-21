@@ -375,7 +375,15 @@ impl AppState {
 
     /// Ensure the stream-assets directory exists and clear any stale upload
     /// tmp files (startup hook, idempotent, logged).
-    pub(crate) async fn ensure_stream_assets_dir(&self) -> std::io::Result<()> {
+    ///
+    /// `pub`, not `pub(crate)`: `main.rs` is a SEPARATE crate root from this
+    /// lib (see `lib.rs`'s doc comment / `.claude/rules/ai-eval-harness.md`)
+    /// and calls this at startup — a `pub(crate)` method is invisible across
+    /// that crate boundary, which is also exactly why clippy's `dead_code`
+    /// lint flagged this (and transitively [`AssetStore::sweep_tmp`], reached
+    /// only through this method in the non-test build) as unreachable: within
+    /// the lib crate itself, nothing else calls it.
+    pub async fn ensure_stream_assets_dir(&self) -> std::io::Result<()> {
         tracing::info!(
             dir = %self.stream_assets_dir.display(),
             "ensuring stream-assets directory exists"
