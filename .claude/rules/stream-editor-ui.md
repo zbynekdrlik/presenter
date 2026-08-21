@@ -70,3 +70,53 @@ plus the size gates — never a local build.
 `scripts/dev/fn_length_check.py` skips Leptos `#[component]` fns (view! DSL), so
 a large `view!` block is fine. Non-component helpers/methods still cap at 120 —
 keep the ctx action methods small.
+
+## Property panel (#714): ONE draft `RwSignal<StreamElementProps>` + field accessors
+The element property form edits a SINGLE working copy (`draft`), not a wall of
+per-field signals. `components/stream_editor/props_access.rs` holds the accessors:
+`read_frame`/`with_frame_mut` (one `|`-pattern across all 4 kinds), the six
+`TextStyle` slots via a `TsSlot` selector (`read_ts`/`with_ts_mut`) so the shared
+`TextStyleForm` component works for every kind, `read_transition`/
+`with_transition_mut`, `split_color`/`join_color` (`#rrggbb` + alpha byte ⇄
+`#rrggbb[aa]`), and `default_element_props(kind)`. The seed Effect tracks
+`selected_element` and reads `def` UNTRACKED, so a live `StreamConfigChanged`
+refetch never clobbers unsaved edits; Save is EXPLICIT (PATCH the raw props enum).
+Element create/patch bodies are the RAW `StreamElementProps` JSON (serde
+snake_case, `kind` tag) — POST/PATCH `&props` directly, no camelCase wrapper DTO.
+
+## Surface a 422/409 body inline with `crate::api::*_detail`
+The plain api helpers only carry the HTTP status TEXT. To render a server refusal
+message inline (props-validation 422; referenced-asset 409 naming the scenes), use
+`post_json_detail` / `patch_json_detail` / `delete_detail` — they read the
+`ErrorBody { message }` from the response. `ctx.prop_error` (set by `save_props`)
+holds the panel's inline error; the asset picker has its own `asset_error`.
+
+## Element reorder needs the FULL element-id set (like scene reorder)
+`PUT /stream/api/scenes/{scene_id}/elements/order {ids}` requires the EXACT set of
+the scene's element ids (422 on a partial/dup set); it reassigns z_order by list
+order. `update_stream_element` PRESERVES z_order (props-only), so this endpoint is
+the ONLY way to change element order. Repo `validate_order_set` is shared by scene
++ element reorder.
+
+## Countdown `timer_id`: fixed 2-timer dropdown, conventional ids 1/2
+`TimersOverview` has exactly two timers (`countdown_to_start`, `preach_timer`) and
+NO id registry; per #709's contract `Countdown.timer_id` is forward-looking (the
+output page always binds `countdown_to_start`). The countdown form offers a fixed
+dropdown mapped 1=countdown_to_start / 2=preach_timer (passes `validate_ref > 0`).
+
+## Preview iframe + assets (#715) are RUNTIME-coupled to parallel lanes
+`editor_preview.rs` embeds `<iframe src="/stream/{slug}?preview=1&scene=<id>">`
+(reactive `src`; a "live" toggle drops the `scene` param). `editor_assets.rs`
+uploads via `web_sys::FormData` + `crate::api::post_form_data` to `POST
+/stream/assets` (field `file`), lists `GET /stream/api/assets`, thumbnails
+`/stream/assets/{id}`. The output page (`/stream/{slug}`, #709) and asset routes
+(#708) are SEPARATE lanes — E2E that drives them (`stream-preview.spec.ts` beyond
+the src-string checks) only passes in INTEGRATED CI, not an isolated editor
+worktree. Capture iframe console too (`page.on("console")` covers child frames);
+never mock a non-2xx in a zero-console spec (#598 — use the real 409 / a
+malformed-200).
+
+## Inline `move ||` is fine for attributes / `<Show when>` — only `<For each>` needs a `let`
+See the ui skill's view!-macro note (corrected in #714): do NOT hoist every
+`data-x=move ||` / `prop:value=move ||` / `<Show when=move ||>`; that churn is
+unnecessary. Only `<For each=…>` needs a named closure.

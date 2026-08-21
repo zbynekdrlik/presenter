@@ -67,13 +67,31 @@ body.stream {
  * `isolation: isolate` gives each scene its OWN stacking context, so a per-
  * element `z-index` orders elements WITHIN a scene only — it can never let a
  * high-z base-scene element paint over an overlay-scene element. Cross-scene
- * layering is then purely DOM order (base rendered before overlays). */
+ * layering is then purely DOM order (base rendered before overlays).
+ *
+ * SCENE-SWITCH CROSSFADE (#716): a scene fades IN on mount via `@starting-style`
+ * (opacity 0 -> the resting 1) and fades OUT via the `--leaving` class before the
+ * page removes it. `transition-duration` is set inline per layer
+ * (`scene.transition_ms ?? output.default_transition_ms`). During a switch the
+ * outgoing scene stays mounted (opacity animating to 0) while the incoming fades
+ * in — no flash of an empty frame, transparency preserved throughout. */
 .stream-scene {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
     isolation: isolate;
+    opacity: 1;
+    transition-property: opacity;
+    transition-timing-function: ease;
+}
+@starting-style {
+    .stream-scene {
+        opacity: 0;
+    }
+}
+.stream-scene--leaving {
+    opacity: 0;
 }
 
 /* Elements carry their own left/top/width/height/z-index via inline style
@@ -105,7 +123,44 @@ body.stream {
 .stream-verse__reference {
     /* Honour newlines in slide/verse text AND wrap; `anywhere` breaks even a
      * space-less 4000-char run at the box edge so it can never overflow
-     * horizontally. */
+     * horizontally. The crossfade LAYERS inherit these (they hold the text). */
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+/* CONTENT CROSSFADE (#716): a per-element text line (lyric line / verse line /
+ * countdown text) whose CONTENT changes. `CrossfadeText` renders the current
+ * text plus, transiently, the OUTGOING text, each as a `.stream-crossfade__layer`
+ * inside this wrapper. The layers stack in ONE grid cell (`grid-area:1/1`) so old
+ * and new overlap during a `Fade` while the wrapper keeps its intrinsic size; a
+ * `Cut` never keeps two layers, so it swaps with no overlap frame. */
+.stream-crossfade {
+    display: grid;
+}
+/* Lyrics/verse lines fill the element width so their text WRAPS within the Frame
+ * (a single `minmax(0, 1fr)` column; the `0` min lets a long run break instead of
+ * overflowing). The countdown wrapper omits this — it stays content-sized so the
+ * element's flex `justify-content` keeps the digits centered. */
+.stream-crossfade--fill {
+    grid-template-columns: minmax(0, 1fr);
+}
+.stream-crossfade__layer {
+    grid-area: 1 / 1;
+    min-width: 0;
+}
+/* A `Fade` layer fades IN on mount (`@starting-style`) / OUT via `--leaving`,
+ * `transition-duration` set inline. A `Cut` layer carries neither class, so it
+ * appears/vanishes instantly. */
+.stream-crossfade__layer--fade {
+    opacity: 1;
+    transition-property: opacity;
+    transition-timing-function: ease;
+}
+@starting-style {
+    .stream-crossfade__layer--fade {
+        opacity: 0;
+    }
+}
+.stream-crossfade__layer--leaving {
+    opacity: 0;
 }

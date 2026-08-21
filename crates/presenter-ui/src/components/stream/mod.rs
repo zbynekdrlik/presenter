@@ -12,6 +12,7 @@ pub mod element_lyrics;
 pub mod element_verse;
 pub mod scene_render;
 pub mod style;
+pub mod transition;
 
 use leptos::prelude::*;
 use presenter_core::{BibleSlideOutput, StageDisplaySnapshot};

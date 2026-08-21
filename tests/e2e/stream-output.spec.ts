@@ -234,14 +234,15 @@ test.describe("Stream output page", () => {
     );
     expect(textShadow).not.toBe("none");
     expect(textShadow.length).toBeGreaterThan(0);
-    // Ticks: the text changes as the local tick advances between server
-    // pushes. Poll for a changed value instead of an arbitrary sleep.
+    // Ticks: the countdown text advances across a tick (local tick between server
+    // pushes). Poll rather than sample once after a fixed sleep — under load the
+    // local tick can be starved past a single fixed window, so a double-read races
+    // the tick and reads the same value twice (flake). The poll re-reads until the
+    // text changes, expressing the real contract: "the countdown advances".
     const t0 = (await countdown.textContent())?.trim() ?? "";
     expect(t0).not.toBe("");
     await expect
-      .poll(async () => (await countdown.textContent())?.trim() ?? "", {
-        timeout: 5_000,
-      })
+      .poll(async () => (await countdown.textContent())?.trim(), { timeout: 5_000 })
       .not.toBe(t0);
 
     // ── Clear ⇒ elements gone ──

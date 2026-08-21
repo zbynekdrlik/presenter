@@ -221,6 +221,101 @@ async fn reorder_scenes_reflected_in_def() {
 }
 
 #[tokio::test]
+async fn reorder_elements_reflected_in_def() {
+    let app = app_with_output("t-elreorder").await;
+    let (_, scene) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-elreorder/scenes",
+        Some(json!({"name": "Base", "kind": "base"})),
+    )
+    .await;
+    let scene_id = scene["id"].as_i64().unwrap();
+    let mut ids = Vec::new();
+    for props in [image_props(), countdown_props(), image_props()] {
+        let (_, el) = req(
+            &app,
+            Method::POST,
+            &format!("/stream/api/scenes/{scene_id}/elements"),
+            Some(props),
+        )
+        .await;
+        ids.push(el["id"].as_i64().unwrap());
+    }
+    // Reverse (full set required).
+    let reversed: Vec<i64> = ids.iter().rev().copied().collect();
+    let (status, _) = req(
+        &app,
+        Method::PUT,
+        &format!("/stream/api/scenes/{scene_id}/elements/order"),
+        Some(json!({ "ids": reversed })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, def) = req(
+        &app,
+        Method::GET,
+        "/stream/api/outputs/t-elreorder/def",
+        None,
+    )
+    .await;
+    let got: Vec<i64> = def["scenes"][0]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["id"].as_i64())
+        .collect();
+    assert_eq!(got, reversed, "def reflects the new element z-order");
+
+    // A partial set is 422 (the editor must resend the full set).
+    let (status, _) = req(
+        &app,
+        Method::PUT,
+        &format!("/stream/api/scenes/{scene_id}/elements/order"),
+        Some(json!({ "ids": [ids[0]] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn patch_element_out_of_range_is_422_with_message() {
+    let app = app_with_output("t-el422").await;
+    let (_, scene) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-el422/scenes",
+        Some(json!({"name": "Base", "kind": "base"})),
+    )
+    .await;
+    let scene_id = scene["id"].as_i64().unwrap();
+    let (_, el) = req(
+        &app,
+        Method::POST,
+        &format!("/stream/api/scenes/{scene_id}/elements"),
+        Some(image_props()),
+    )
+    .await;
+    let el_id = el["id"].as_i64().unwrap();
+    // xPct > 100 → core validate_props rejects → 422 with a message body the
+    // editor renders inline.
+    let mut bad = image_props();
+    bad["frame"]["xPct"] = json!(150.0);
+    let (status, body) = req(
+        &app,
+        Method::PATCH,
+        &format!("/stream/api/elements/{el_id}"),
+        Some(bad),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "422 carries a non-empty message, got {body:?}"
+    );
+}
+
+#[tokio::test]
 async fn activation_flow_reflected_in_def_read() {
     let app = app_with_output("t-activate").await;
     let (_, base) = req(
