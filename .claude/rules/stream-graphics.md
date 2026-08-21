@@ -99,7 +99,11 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   sqlite file → cwd `./stream-assets`. Prod/dev units set both `WorkingDirectory` and `PRESENTER_DB_URL`,
   so all paths land on `<deploy-dir>/stream-assets`. Handlers get `state.asset_store()`; tests set an
   isolated `TempDir` via `#[cfg(test)] set_stream_assets_dir`. The startup `ensure_stream_assets_dir()`
-  is wired in `main.rs`.
+  is wired in `main.rs` — and is therefore `pub`, not `pub(crate)`: `main.rs` is a SEPARATE crate root
+  from the lib, so a `pub(crate)` method called only from `main.rs` is dead code to clippy (`-D warnings`
+  failed CI on exactly this, Pipeline 32455457688). Any `AppState` method `main.rs` calls must be `pub`.
+- **Route split: upload is `POST /stream/assets` (multipart field `file`), list is `GET /stream/api/assets`**
+  — a `POST /stream/api/assets` 405s. Verification curl: `curl -F 'file=@x.png;type=image/png' $P/stream/assets`.
 - **axum default body limit is 2 MiB** — ANY multipart/upload route MUST add
   `.layer(DefaultBodyLimit::max(N))` (on the `post(..)` MethodRouter) or real images 413 before the
   handler. The 20 MiB business cap is enforced separately in the handler (precise 413 + message);
