@@ -268,3 +268,23 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   but the recommended default for a countdown is `Cut` (per-second fades look wrong). The OUTPUT page
   HONORS whatever is stored; setting the `Cut` default belongs in the EDITOR's new-element defaults
   (`stream_editor.rs`, not built yet) — a CONTRACT-ASSUMPTION for the editor lane, not a core-default change.
+
+## Bundled OFL fonts (#717) — trunk `copy-dir` + relative `@font-face url()`
+
+The three whitelisted OFL families (`STREAM_FONT_FAMILIES`: Inter / Bebas Neue / Oswald) are
+bundled as latin-subset `woff2` so the OBS output page renders identically OFFLINE at the rig:
+- Files live in `crates/presenter-ui/fonts/*.woff2` (+ `OFL.txt`). Grab the latin subset from Google
+  Fonts with a Chrome User-Agent so the API serves `woff2` (`curl -A "Mozilla/5.0 … Chrome/120 …"
+  "https://fonts.googleapis.com/css2?family=Inter:wght@100..900"` → take the `/* latin */` block's
+  gstatic `url()` → `curl -A "<chrome UA>" -o <file>.woff2 <url>`; gstatic 404s without the UA).
+- `index.html` carries `<link data-trunk rel="copy-dir" href="fonts">`; trunk copies the dir to
+  `dist/fonts/`, served under `/ui-pkg/fonts/` by `wasm_ui_asset` (`include_dir!` of `../presenter-ui/dist`).
+- `@font-face` lives in `styles/stream_output.css` with a RELATIVE `src: url("fonts/<f>.woff2")` — trunk
+  copies `rel="css"` verbatim (no `url()` rewrite), so it resolves against the CSS's own `/ui-pkg/` path.
+  The `font-family` name MUST match `components/stream/style.rs::css_font_family`'s output (`"Inter"` /
+  `"Bebas Neue"` / `"Oswald"`), which keeps a `system-ui, sans-serif` fallback; add `font-display: swap`.
+- `wasm_ui.rs::mime_from_path` serves `.woff2` as `font/woff2` (the browser uses the `format("woff2")`
+  hint regardless, but correct MIME is cheap). A wrong `@font-face` path 404s and the zero-console E2E
+  gate catches it — so a spec that renders text in a bundled family (e.g. countdown=Oswald,
+  lyrics/verse=Inter, verse-reference=Bebas Neue) verifies the bundling end-to-end. Bebas Neue ships
+  ONE weight (400); request weight 400 in a `TextStyle` to avoid synth-bold.

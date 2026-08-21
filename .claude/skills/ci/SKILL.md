@@ -505,3 +505,28 @@ rehearsal branch. The real merge onto `dev` then replays the recipe in 2–3 com
 3 predicted additive conflicts, zero surprises). Typical catch: rustfmt `reorder_modules` wants
 `pub mod` lines alphabetical after a union merge (`stream_editor` before `stream_output`) — the
 gate reports it before CI does.
+
+## Which E2E test failed, when `gh run view --log-failed` is EMPTY
+
+The self-hosted runner's E2E job step logs are often NOT retrievable through the GitHub API —
+`gh run view <id> --log-failed` returns nothing and the check-run annotations only say
+`Process completed with exit code 1`. The failing test name + error live in the uploaded
+**Playwright blob-report artifact**, not the logs. `Playwright E2E (N/3)` = shard index `N-1`
+(so "E2E (2/3)" is `playwright-blob-report-shard-1-<runid>`). Recipe:
+
+```bash
+aid=$(gh api repos/OWNER/REPO/actions/runs/<runid>/artifacts \
+  --jq '.artifacts[]|select(.name=="playwright-blob-report-shard-1-<runid>")|.id')
+gh api "repos/OWNER/REPO/actions/artifacts/$aid/zip" > shard1.zip   # own Bash call, no && chain
+unzip -q shard1.zip -d s1 && unzip -q s1/report-*.zip -d s1/inner   # NESTED zip
+```
+
+Then parse `s1/inner/report.jsonl` (a JSONL of `onTestEnd` events) with python — the failing
+`test` object carries `expectedStatus`/`timeout` but NOT the title/location; the human signal is
+`result.errors[].message` (e.g. `browser console must be clean … "[error] Failed to load
+resource: … 422"`, or `expect(...).not.toBe("02:04")` for a countdown-tick poll). Match the error
+MESSAGE to the spec's assertion string to identify the test (grep the specs for the message). The
+exact failing REQUEST url is only in the `playwright-traces-shard-<n>` artifact, not the blob report.
+Cross-check pass/fail history with `gh run list --limit 8 --json headSha,workflowName,conclusion`
+(NOT `--branch dev`, which returned stale week-old runs here) to bisect which merge introduced a
+regression.
