@@ -234,12 +234,15 @@ test.describe("Stream output page", () => {
     );
     expect(textShadow).not.toBe("none");
     expect(textShadow.length).toBeGreaterThan(0);
-    // Ticks: text changes across a >1s window (local tick between server pushes).
+    // Ticks: the text changes as the local tick advances between server
+    // pushes. Poll for a changed value instead of an arbitrary sleep.
     const t0 = (await countdown.textContent())?.trim() ?? "";
-    await page.waitForTimeout(1_500);
-    const t1 = (await countdown.textContent())?.trim() ?? "";
     expect(t0).not.toBe("");
-    expect(t1).not.toBe(t0);
+    await expect
+      .poll(async () => (await countdown.textContent())?.trim() ?? "", {
+        timeout: 5_000,
+      })
+      .not.toBe(t0);
 
     // ── Clear ⇒ elements gone ──
     await clearOutput(request);

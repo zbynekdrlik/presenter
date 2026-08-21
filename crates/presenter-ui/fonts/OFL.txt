@@ -1,0 +1,34 @@
+Bundled stream-graphics fonts — SIL Open Font License 1.1
+=========================================================
+
+The three font files in this directory are latin-subset WOFF2 builds taken
+from Google Fonts. Each is licensed under the SIL Open Font License,
+Version 1.1. The full license text is available at:
+
+    https://openfontlicense.org/open-font-license-official-text/
+
+They are bundled (rather than loaded from a CDN) so the transparent OBS
+stream output page (/stream/{slug}) renders identically offline — the
+church rig has no guaranteed internet at service time. Only the latin
+subset is shipped to keep each file small.
+
+Files and their upstream copyright / Reserved Font Name notices:
+
+  inter-latin.woff2      — Inter (variable, weights 100–900)
+    Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter).
+    "Inter" is a Reserved Font Name.
+
+  oswald-latin.woff2     — Oswald (variable, weights 200–700)
+    Copyright 2016 The Oswald Project Authors
+    (https://github.com/googlefonts/OswaldFont).
+    "Oswald" is a Reserved Font Name.
+
+  bebas-neue-latin.woff2 — Bebas Neue (weight 400)
+    Copyright 2010 The Bebas Neue Project Authors
+    (https://github.com/dharmatype/Bebas-Neue).
+    "Bebas Neue" is a Reserved Font Name.
+
+Per the OFL: these fonts may be used, studied, modified and redistributed
+freely, must not be sold by themselves, and any derivative must not use a
+Reserved Font Name. This bundle redistributes them unmodified (subset only)
+as part of a larger software work, which the OFL permits.

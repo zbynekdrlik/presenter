@@ -76,6 +76,43 @@ upload handler); if ever lost, every asset is re-uploadable from the editor.
 | Dev          | `/opt/presenter-dev/stream-assets` |
 | PP (release) | `/opt/presenter/stream-assets`     |
 
+#### Stream-graphics OBS browser source (#717)
+
+The stream-graphics output (epic #718 — the Resolume replacement) renders as a
+transparent web page you add to OBS as a **Browser Source**. It replaces a
+Resolume composition: one exclusive base scene + independently-toggled overlay
+scenes, all driven from Bitfocus Companion.
+
+Add it in OBS: **Sources → + → Browser**, then:
+
+| Setting            | Value                                          |
+| ------------------ | ---------------------------------------------- |
+| URL                | `http://<presenter-host>/stream/<output-name>` |
+| Width              | `1920`                                         |
+| Height             | `1080`                                         |
+| Custom CSS         | *(leave empty — none needed)*                  |
+| Shutdown when not visible | unchecked (keep it live so it stays in sync) |
+
+- `<output-name>` is the output **slug**. The migration seeds one output whose
+  slug is `stream`, so the default URL is
+  `http://<presenter-host>/stream/stream` (e.g. production
+  `http://10.77.9.205/stream/stream`, dev `http://10.77.8.134:8080/stream/stream`).
+- The page is **transparent** by design — no green screen, no chroma key. OBS
+  composites it directly over your camera/video below it. Do NOT add a colour
+  key filter.
+- It is **chrome-free**: no version label, no controls (they would leak onto the
+  broadcast). Operate it from `/ui/stream` (the editor) and from Companion.
+- Fonts (Inter, Bebas Neue, Oswald) are **bundled** with the app, so the source
+  renders identically even with no internet at the rig.
+- 1920×1080 is assumed by the layout maths (`Frame` percentages map 1:1 to the
+  16:9 canvas). Other sizes still work but element positions are relative to the
+  actual browser-source dimensions.
+
+Companion controls the show over the WebSocket (see **Companion WebSocket**
+below): `stream_scene_set` switches the exclusive base scene by name,
+`stream_overlay_on`/`_off`/`_toggle` flip overlays independently, and
+`stream_clear` blanks the output back to transparent.
+
 ## Feature Flags
 
 Managed via Settings UI (`/ui/settings`):
