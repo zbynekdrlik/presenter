@@ -15,9 +15,10 @@
 //! line, so the transparent output stays clean.
 
 use leptos::prelude::*;
-use presenter_core::{Frame, TextStyle};
+use presenter_core::{ContentTransition, Frame, TextStyle};
 
 use super::style::{frame_css, text_style_css};
+use super::transition::CrossfadeText;
 use super::StreamContext;
 
 /// Container CSS: the `Frame` box as a vertically-centered flex column so the
@@ -46,50 +47,77 @@ pub fn ElementVerse(
     frame: Frame,
     /// `z_order` mirrored to `z-index`.
     z: i32,
+    /// How a verse change animates all four lines (#716): `Fade` crossfades the
+    /// old lines out while the new fade in; `Cut` swaps instantly.
+    content_transition: ContentTransition,
 ) -> impl IntoView {
     let ctx = use_context::<StreamContext>().expect("StreamContext not provided");
     let container = container_style(&frame, z);
     let text_css = line_style(&text_style);
     let secondary_css = line_style(&secondary_style);
-    // Both references share `reference_style`, but each `<Show>` child closure
-    // must OWN its style string (a non-`Copy` String can be moved into only one
-    // closure), so build one per reference line.
+    // Both references share `reference_style`, but each style string is moved into
+    // its own `CrossfadeText`, so build one per reference line.
     let main_reference_css = line_style(&reference_style);
     let secondary_reference_css = line_style(&reference_style);
 
-    // Each field closure captures only `ctx.bible` (a `Copy` signal), so it is
-    // itself `Copy` and can be reused in both its `<Show when=>` guard and the
-    // rendered `{text}` child.
-    let main_text = move || {
+    // `Memo`s over the (small) Bible output so `CrossfadeText` crossfades only on
+    // a genuine verse change. Empty text ⇒ the line renders nothing (a
+    // `BibleCleared` fades every line out then removes it — count 0).
+    let main_text = Memo::new(move |_| {
         ctx.bible
             .with(|b| b.as_ref().map(|o| o.main_text.clone()).unwrap_or_default())
-    };
-    let main_reference = move || {
+    });
+    let main_reference = Memo::new(move |_| {
         ctx.bible.with(|b| {
             b.as_ref()
                 .map(|o| o.main_reference.clone())
                 .unwrap_or_default()
         })
-    };
-    let secondary_text = move || {
+    });
+    let secondary_text = Memo::new(move |_| {
         ctx.bible.with(|b| {
             b.as_ref()
                 .map(|o| o.secondary_text.clone())
                 .unwrap_or_default()
         })
-    };
-    let secondary_reference = move || {
+    });
+    let secondary_reference = Memo::new(move |_| {
         ctx.bible.with(|b| {
             b.as_ref()
                 .map(|o| o.secondary_reference.clone())
                 .unwrap_or_default()
         })
-    };
+    });
 
-    let show_main_text = move || !main_text().is_empty();
-    let show_main_reference = move || !main_reference().is_empty();
-    let show_secondary_text = move || show_secondary && !secondary_text().is_empty();
-    let show_secondary_reference = move || show_secondary && !secondary_reference().is_empty();
+    // The main lines are always rendered (visibility follows content); the
+    // secondary lines follow the STATIC `show_secondary` toggle (`show_secondary`
+    // IS the translation-vs-combined switch, arch §4).
+    let ct_secondary_text = content_transition.clone();
+    let ct_secondary_reference = content_transition.clone();
+    let secondary_text_view = show_secondary.then(move || {
+        view! {
+            <CrossfadeText
+                text=secondary_text
+                transition=ct_secondary_text
+                role="stream-verse-secondary-text"
+                wrapper_class="stream-verse__text stream-verse__secondary"
+                wrapper_style=secondary_css
+                fill=true
+            />
+        }
+    });
+    let secondary_reference_view = show_secondary.then(move || {
+        view! {
+            <CrossfadeText
+                text=secondary_reference
+                transition=ct_secondary_reference
+                role="stream-verse-secondary-reference"
+                wrapper_class="stream-verse__reference stream-verse__secondary-reference"
+                wrapper_style=secondary_reference_css
+                fill=true
+            />
+        }
+    });
 
     view! {
         <div
@@ -98,38 +126,24 @@ pub fn ElementVerse(
             data-element-id=id.to_string()
             style=container
         >
-            <Show when=show_main_text>
-                <div class="stream-verse__text" data-role="stream-verse-text" style=text_css.clone()>
-                    {main_text}
-                </div>
-            </Show>
-            <Show when=show_main_reference>
-                <div
-                    class="stream-verse__reference"
-                    data-role="stream-verse-reference"
-                    style=main_reference_css.clone()
-                >
-                    {main_reference}
-                </div>
-            </Show>
-            <Show when=show_secondary_text>
-                <div
-                    class="stream-verse__text stream-verse__secondary"
-                    data-role="stream-verse-secondary-text"
-                    style=secondary_css.clone()
-                >
-                    {secondary_text}
-                </div>
-            </Show>
-            <Show when=show_secondary_reference>
-                <div
-                    class="stream-verse__reference stream-verse__secondary-reference"
-                    data-role="stream-verse-secondary-reference"
-                    style=secondary_reference_css.clone()
-                >
-                    {secondary_reference}
-                </div>
-            </Show>
+            <CrossfadeText
+                text=main_text
+                transition=content_transition.clone()
+                role="stream-verse-text"
+                wrapper_class="stream-verse__text"
+                wrapper_style=text_css
+                fill=true
+            />
+            <CrossfadeText
+                text=main_reference
+                transition=content_transition
+                role="stream-verse-reference"
+                wrapper_class="stream-verse__reference"
+                wrapper_style=main_reference_css
+                fill=true
+            />
+            {secondary_text_view}
+            {secondary_reference_view}
         </div>
     }
 }

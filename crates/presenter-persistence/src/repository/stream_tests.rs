@@ -316,6 +316,49 @@ async fn scene_reorder_validates_and_rewrites() {
 }
 
 #[tokio::test]
+async fn element_reorder_validates_and_rewrites() {
+    let repo = repo().await;
+    let scene = repo
+        .create_stream_scene("stream", "Base", SceneKind::Base)
+        .await
+        .unwrap();
+    // Created in order → z_order 0,1,2.
+    let a = repo
+        .create_stream_element(scene.id, image(1))
+        .await
+        .unwrap();
+    let b = repo
+        .create_stream_element(scene.id, countdown(2))
+        .await
+        .unwrap();
+    let c = repo
+        .create_stream_element(scene.id, image(3))
+        .await
+        .unwrap();
+    // Reverse order → z_order rewritten, def reflects it.
+    repo.set_element_order(scene.id, vec![c.id, b.id, a.id])
+        .await
+        .unwrap();
+    let def = repo.load_output_def("stream").await.unwrap();
+    let ids: Vec<i64> = def.scenes[0].elements.iter().map(|e| e.id).collect();
+    assert_eq!(ids, vec![c.id, b.id, a.id]);
+    let z: Vec<i32> = def.scenes[0].elements.iter().map(|e| e.z_order).collect();
+    assert_eq!(z, vec![0, 1, 2]);
+    // Wrong set (missing an id) → 422.
+    let err = repo
+        .set_element_order(scene.id, vec![a.id, b.id])
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+    // Duplicate ids → 422.
+    let err = repo
+        .set_element_order(scene.id, vec![a.id, a.id, a.id])
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+}
+
+#[tokio::test]
 async fn config_revision_bumps_on_config_writes_not_activation() {
     let repo = repo().await;
     assert_eq!(rev(&repo).await, 0);

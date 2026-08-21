@@ -39,6 +39,18 @@ inlining it *inside* the macro. Closures over only `Copy` signals (and the
 `StageContext`/`AppContext`, which are `Copy`) can be copied into several `move`
 closures, so re-using `items` in multiple derived closures is fine.
 
+**Scope of the named-closure rule — verified empirically (#714).** The requirement
+is really only for **`<For each=…>`** (and no mainline code inlines it). An inline
+`move ||` DOES compile as an **HTML element attribute / `prop:` / `on:` value** and
+as **`<Show when=…>`** — confirmed against COMPILED mainline code:
+`pages/settings/ableton.rs` (`prop:checked=move || enabled.get()`,
+`on:change=move |ev| …`) and `components/header.rs`
+(`<Show when=move || new_version_available.get() …>`). So do NOT hoist every
+`data-x=move || …` / `prop:value=move || …` / `<Show when=move || …>` to a `let` —
+that is unnecessary churn; hoist only the `<For each>` closure. (When two derived
+readers must share a closure, a `let` is still handy because a `Copy` closure can be
+moved into several attributes — but that's a convenience, not a parse requirement.)
+
 ## Keyed `<For>`: key by a UNIQUE id, read changing values REACTIVELY (#496)
 
 `key=|e| e.name.clone()` collides when two rows share a name (e.g. a worship set
@@ -210,6 +222,25 @@ branch with a clean console, fulfill with a MALFORMED 200 instead:
 `get_json()` in `crates/presenter-ui/src/api/mod.rs` funnels non-2xx (`ApiError::Status`)
 and parse failure (`ApiError::Deserialize`) into the same `Err` path, and gloo-net's
 `json()` parses in pure Rust (zero browser console noise).
+
+**A DELIBERATE REAL non-2xx has the SAME physics as a mocked one — but you can't swap it
+for a malformed-200 when the non-2xx IS the behavior under test (#718).** When the spec's
+whole point is that a REAL server-side validation path returns 422 and the client renders
+its inline error (e.g. `stream-editor.spec.ts`'s "element CRUD, property edit, inline 422
+and z-order" — `PATCH …/elements/:id` with `xPct=150` → 422 → `stream-prop-error` shown),
+you must keep the real 422 AND keep the console assertion. The malformed-200 trick would
+destroy the very coverage. Chrome still logs the `Failed to load resource … 422` line, so
+the idiom is a **narrow filter with a count-assert** applied right before the final assert:
+partition the collected errors by a regex matched narrowly on the exact status
+(`/Failed to load resource: the server responded with a status of 422\b/`), assert the
+matched count EXACTLY equals the number of deliberate non-2xx requests the test makes (here
+1) so an unexpected extra 422 or a missing one still fails, then assert the REMAINDER is
+`toEqual([])`. Never a blanket `errors.filter(e => !/Failed to load resource/.test(e))`
+(that would hide a genuine unrelated non-2xx), never drop the console assertion, never
+route-mock away the real validation. (This is distinct from the `attachEditorConsoleCollector`
+url-scoped filter for the preview iframe's `/stream/assets/` 404 authoring-transient — that
+one is filtered by URL because it is not the behavior under test; the deliberate 422 is,
+so it is asserted-for-then-removed by count.)
 
 ## `#571`'s re-entry (double-submit) guard is on CREATE handlers only, never on `on_delete` (#641)
 

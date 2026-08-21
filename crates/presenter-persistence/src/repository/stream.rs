@@ -242,7 +242,8 @@ impl Repository {
             .filter(stream_scene::Column::OutputId.eq(output.id))
             .all(&txn)
             .await?;
-        Self::validate_scene_order_set(&scenes, &ids)?;
+        let existing: HashSet<i64> = scenes.iter().map(|s| s.id as i64).collect();
+        Self::validate_order_set(&existing, &ids, "scene")?;
         let by_id: HashMap<i64, &stream_scene::Model> =
             scenes.iter().map(|s| (s.id as i64, s)).collect();
         let (mut base_pos, mut overlay_pos) = (0i32, 0i32);
@@ -342,6 +343,38 @@ impl Repository {
             .exec(&txn)
             .await?;
         Self::bump_config_revision(&txn, output_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Reorder a scene's elements by list order — the client sends the FULL set
+    /// of the scene's element ids (no dupes, none missing) and z_order is
+    /// reassigned 0..n by that order. Mirrors [`Self::set_scene_order`] (the
+    /// per-output scene reorder); a partial/duplicate set is `Invalid` (422).
+    /// Bumps `config_revision` (a CONFIG write).
+    #[instrument(skip_all)]
+    pub async fn set_element_order(&self, scene_id: i64, ids: Vec<i64>) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
+        let scene = Self::scene_by_id(&txn, scene_id).await?;
+        let elements = stream_element::Entity::find()
+            .filter(stream_element::Column::SceneId.eq(scene.id))
+            .all(&txn)
+            .await?;
+        let existing: HashSet<i64> = elements.iter().map(|e| e.id as i64).collect();
+        Self::validate_order_set(&existing, &ids, "element")?;
+        let by_id: HashMap<i64, &stream_element::Model> =
+            elements.iter().map(|e| (e.id as i64, e)).collect();
+        let mut z = 0i32;
+        for id in &ids {
+            let Some(element) = by_id.get(id).copied() else {
+                continue;
+            };
+            let mut active = element.clone().into_active_model();
+            active.z_order = Set(next_index(&mut z));
+            active.updated_at = Set(Utc::now().into());
+            active.update(&txn).await?;
+        }
+        Self::bump_config_revision(&txn, scene.output_id).await?;
         txn.commit().await?;
         Ok(())
     }
@@ -652,19 +685,20 @@ impl Repository {
         Ok(())
     }
 
-    fn validate_scene_order_set(scenes: &[stream_scene::Model], ids: &[i64]) -> anyhow::Result<()> {
+    /// Validate a reorder id set: no duplicates, and EXACTLY the `existing` set
+    /// (none missing, none extra). Shared by scene + element reorder; `what`
+    /// names the collection in the 422 message. A partial/dup set is `Invalid`.
+    fn validate_order_set(existing: &HashSet<i64>, ids: &[i64], what: &str) -> anyhow::Result<()> {
         let requested: HashSet<i64> = ids.iter().copied().collect();
         if requested.len() != ids.len() {
             return Err(
-                RepositoryError::Invalid("scene order contains duplicate ids".to_string()).into(),
+                RepositoryError::Invalid(format!("{what} order contains duplicate ids")).into(),
             );
         }
-        let existing: HashSet<i64> = scenes.iter().map(|s| s.id as i64).collect();
-        if existing != requested {
-            return Err(RepositoryError::Invalid(
-                "scene order id set does not match this output's scenes".to_string(),
-            )
-            .into());
+        if existing != &requested {
+            return Err(
+                RepositoryError::Invalid(format!("{what} order id set does not match")).into(),
+            );
         }
         Ok(())
     }

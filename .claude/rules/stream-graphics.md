@@ -222,3 +222,49 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
 - **Shared text-style CSS helpers live in `components/stream/style.rs`** (`frame_css`, `text_style_css`,
   `css_font_family`/`css_align`/`css_justify`) — used by countdown/lyrics/verse. Add a new text element
   by reusing these, not by re-inlining the mapping (the #709 countdown was refactored onto them).
+
+## Transitions — scene crossfade + content fade/cut (#716)
+
+- **CSS crossfade primitive = `@starting-style` + a SINGLE `opacity` transition + inline dynamic
+  `transition-duration`.** Resting `opacity:1`; `@starting-style { .X { opacity:0 } }` fades a
+  freshly-inserted node IN with zero JS timing (no next-frame `requestAnimationFrame`/0-ms `Timeout`);
+  a `--leaving` class (`opacity:0`) fades it OUT; `transition-duration` set inline per node (dynamic
+  per scene/element). One animated property throughout ⇒ a mid-fade interruption (rapid A→B→A)
+  interpolates smoothly. Chosen over `@keyframes` (animation-vs-transition conflict, pop on interrupt)
+  and JS-rAF (timing fragility). Works in OBS CEF (Chromium 120+) + Playwright chromium.
+- **Fade-OUT before unmount needs a leaving BUFFER — Leptos has no "animate before removal" for
+  changing keyed content.** Keep the outgoing node in the list with a `leaving` flag, schedule its
+  removal with `gloo_timers::callback::Timeout::new(dur + ~80, ...).forget()`, and remove via
+  `layers.try_update(|ls| ls.retain(...))` — `try_update` is DISPOSE-SAFE (a Timeout firing after the
+  page/element disposed is a no-op; the crate can't use `on_cleanup` for a `!Send` gloo timer).
+- **KEY layers on a monotonic `seq`, never the scene/content id.** A scene/text re-entering while its
+  previous copy is still leaving (A→B→A) would key-collide on the natural id.
+- **The keyed-`<For>` reactive-field trap (#496/#693) applies to EVERY mutable per-layer field, not
+  just the obvious one.** A keyed `<For>` does NOT re-run `children` when a field flips, so BOTH
+  `leaving` AND `duration_ms` must be read REACTIVELY by seq (`Signal::derive(move || layers.with(...))`),
+  and the child must apply them via reactive closures (`class:...=leaving`, `style=move || format!(...)`).
+  Real #716 bug: `duration_ms` was passed as a plain `u32` baked into the inline style at creation, so
+  `mark_leaving` re-pointing the outgoing base to the incoming scene's duration was a DEAD WRITE — the
+  scene faded over its creation duration while its removal timeout used the new one → a pop when
+  per-scene overrides differ. Tier-0 hides this (no local build); catch it by reading + review.
+- **Content fade = a reusable `components/stream/transition.rs::CrossfadeText`.** Props: `text:
+  Memo<String>` (the Memo dedups so a per-250 ms-re-derived countdown crossfades only on the per-second
+  value change), a `ContentTransition`, wrapper role/class/style, a `fill` flag. It stacks layers in
+  ONE CSS grid cell (`.stream-crossfade { display:grid }`, layers `grid-area:1/1`; `--fill` =
+  `grid-template-columns: minmax(0,1fr)` so lyrics/verse text wraps, countdown stays content-sized).
+  `Fade` marks old layers leaving + adds new; `Cut` replaces atomically (never 2 layers). It renders
+  the wrapper ONLY when a layer exists, so empty/cleared content is DOM-ABSENT — preserving the #710
+  `toHaveCount(0)` count-0-on-clear/toggle contract. Keep the outer element's text-style on the ELEMENT
+  (countdown) so the layers INHERIT it and the #709 font-size/text-shadow asserts on the element still pass.
+- **Scene reconcile = a `RwSignal<Vec<SceneLayer>>` + one Effect on `def`+`show_state`.** A
+  `config_revision` bump ⇒ rebuild fresh (config edits are not the smooth path); same revision ⇒
+  crossfade the base + reconcile overlays individually. Read `layers` only via `with_untracked`/`update`
+  inside the Effect (never tracked `.get()`) or it self-triggers. Keep base layers before overlays with
+  a STABLE sort (`isolation:isolate` ⇒ cross-scene layering is DOM order); gate the sort on an actual
+  base add (a new base is pushed at the vec end and must move before overlays; overlays pushed at the
+  end are already ordered). Incoming scene's `transition_ms ?? default_transition_ms` governs both fades;
+  a clear uses the outgoing scene's own duration.
+- **Countdown content-transition default is `Fade{300}` from core** (`ContentTransition::default()`),
+  but the recommended default for a countdown is `Cut` (per-second fades look wrong). The OUTPUT page
+  HONORS whatever is stored; setting the `Cut` default belongs in the EDITOR's new-element defaults
+  (`stream_editor.rs`, not built yet) — a CONTRACT-ASSUMPTION for the editor lane, not a core-default change.

@@ -492,3 +492,16 @@ done
 Then grep the result for BOTH sides (e.g. both `mod` lines, both `.merge(` calls) and for `<<<<<<<`.
 Gotcha: a paragraph both sides EDITED differently (not appended) is kept TWICE by `--union` — check
 prose files for a doubled sentence after the merge (stream-graphics.md, PR-4 round of #718).
+
+### Rehearse the NEXT wave's merges while the current wave's CI runs
+
+Serial integration leaves the main session idle for ~45 min per Pipeline. Use that time: dispatch a
+sonnet agent to `git worktree add -b rehearsal-<wave> <scratchpad>/rehearsal dev`, merge the held
+worker branches there in the planned order, union-resolve, run the non-compiling gates (`cargo fmt
+--check` in BOTH the root and `crates/presenter-ui`, `count_prod_lines.sh`, `fn_length_check.py`,
+`npx tsc --noEmit -p tsconfig.json`, `npm run test:companion`), write a recipe file (per merge:
+conflicted files + exact resolution), then `git worktree remove --force` + `git branch -D` the
+rehearsal branch. The real merge onto `dev` then replays the recipe in 2–3 commands (PR-6 of #718:
+3 predicted additive conflicts, zero surprises). Typical catch: rustfmt `reorder_modules` wants
+`pub mod` lines alphabetical after a union merge (`stream_editor` before `stream_output`) — the
+gate reports it before CI does.

@@ -78,7 +78,8 @@ fn BaseColumns(ctx: StreamEditorCtx) -> impl IntoView {
 #[component]
 fn BaseColumn(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     let is_active = move || ctx.active.get().active_scene_id == Some(id);
-    let active_str = move || if is_active() { "true" } else { "false" };
+    let active_str = move || super::bool_attr(is_active());
+    let selected_str = move || super::bool_attr(ctx.selected_scene.get() == Some(id));
     view! {
         <div
             class="stream-editor__scene stream-editor__scene--base"
@@ -86,6 +87,7 @@ fn BaseColumn(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
             data-kind="base"
             data-scene-id=id.to_string()
             data-active=active_str
+            data-selected=selected_str
         >
             <SceneHead ctx=ctx id=id />
             <button
@@ -107,7 +109,8 @@ fn BaseColumn(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
 #[component]
 fn OverlayChip(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     let is_active = move || ctx.active.get().active_overlay_ids.contains(&id);
-    let active_str = move || if is_active() { "true" } else { "false" };
+    let active_str = move || super::bool_attr(is_active());
+    let selected_str = move || super::bool_attr(ctx.selected_scene.get() == Some(id));
     view! {
         <div
             class="stream-editor__scene stream-editor__scene--overlay"
@@ -115,6 +118,7 @@ fn OverlayChip(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
             data-kind="overlay"
             data-scene-id=id.to_string()
             data-active=active_str
+            data-selected=selected_str
         >
             <SceneHead ctx=ctx id=id />
             <button
@@ -201,10 +205,20 @@ fn SceneHead(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     }
 }
 
-/// Reorder (up/down within kind) + delete controls, shared by base + overlay.
+/// Reorder (up/down within kind) + edit-elements + delete controls, shared by
+/// base + overlay.
 #[component]
 fn SceneControls(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     view! {
+        <button
+            type="button"
+            class="stream-editor__btn stream-editor__btn--primary"
+            data-role="stream-scene-edit"
+            title="Upraviť prvky scény"
+            on:click=move |_| ctx.select_scene(id)
+        >
+            "Upraviť prvky"
+        </button>
         <button
             type="button"
             class="stream-editor__btn stream-editor__btn--ghost"
