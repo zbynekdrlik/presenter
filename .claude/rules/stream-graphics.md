@@ -71,6 +71,24 @@ so run `cargo fmt --all --check` before committing stream fixtures. (Building th
 `serde_json::json!({...})` instead of raw strings sidesteps this entirely — the `#` lives in a
 normal string literal — and is what the #707 router tests do.)
 
+## Companion `stream_*` commands (companion/stream.rs, #711)
+Wire contract is FIXED (arch §7 + the built JS plugin `ops/companion/presenter/lib/stream.js`):
+`stream_scene_set` / `stream_overlay_on` / `_off` / `_toggle` → `{scene, output?}`;
+`stream_scene_clear` / `stream_clear` → `{output?}`. `output` defaults to `"stream"` (both plugin- and
+server-side); the payload structs use `#[serde(deny_unknown_fields)]` (the plugin sends exactly those
+fields). Scenes are addressed by NAME, case-insensitively — there is NO scene-by-name repository query,
+so `companion/stream.rs` resolves name→id via `load_output_def(slug)` + a `to_lowercase()` match
+(consistent with the repo's own uniqueness rule; unique-per-output ⇒ first match is unambiguous, and it
+can't leak across outputs since the def is per-slug). Execute via the `AppState::stream_activate_scene /
+stream_set_overlay / stream_clear` methods (NEVER the repository directly) so `LiveEvent::StreamState`
+fires. Kind validation is delegated to those methods (base-as-overlay / overlay-as-base →
+`RepositoryError::Invalid`); surface EVERY refusal (unknown output/scene, wrong kind, bad payload) as the
+non-fatal `OutgoingMessage::Error` reply the plugin logs — never a panic. Variables `stream_scene`
+(active base name or `-`) / `stream_overlays` (comma-joined active overlay names or `-`) are resolved
+async in the live-loop (see `live-events.md`), not in the sync `apply_live_event`. The dispatch arm goes
+in `protocol.rs::handle_command` (where every command dispatches, post the protocol.rs extraction), NOT
+literally in `mod.rs` — the arch's "mod.rs" wording predates that split.
+
 ## Server-side (state/router) tests share the in-memory DB → own a UNIQUE slug per test (#706/#707)
 The repository-test isolation idiom above is NOT available from `presenter-server`: `Repository { db }`
 is `pub(crate)` to `presenter-persistence`, so a server test cannot build the isolated single-connection
