@@ -15,9 +15,10 @@
 //! rule (it never spills outside its box).
 
 use leptos::prelude::*;
-use presenter_core::{Frame, TextStyle};
+use presenter_core::{ContentTransition, Frame, TextStyle};
 
 use super::style::{frame_css, text_style_css};
+use super::transition::CrossfadeText;
 use super::StreamContext;
 
 /// Container CSS: the `Frame` box as a vertically-centered flex column so the
@@ -46,6 +47,10 @@ pub fn ElementLyrics(
     frame: Frame,
     /// `z_order` mirrored to `z-index`.
     z: i32,
+    /// How a slide change animates the lines (#716): `Fade` crossfades the old
+    /// line out while the new fades in; `Cut` swaps instantly. Applies to both
+    /// lines together, so a slide switch shows the same two-layer overlap.
+    content_transition: ContentTransition,
 ) -> impl IntoView {
     let ctx = use_context::<StreamContext>().expect("StreamContext not provided");
     let container = container_style(&frame, z);
@@ -53,27 +58,56 @@ pub fn ElementLyrics(
     let translation_css = line_style(&translation_style);
 
     // Read only the needed String out of the (large) `Stage` snapshot via
-    // `.with()` — never clone the whole snapshot. Each closure captures only the
-    // `Copy` `ctx.stage` signal, so it is itself `Copy` and reusable in both its
-    // `<Show when=>` guard and the rendered `{text}` child.
-    let main_text = move || {
+    // `.with()` — never clone the whole snapshot. `Memo`s so `CrossfadeText`
+    // crossfades only on a genuine slide-text change. Empty text ⇒ the line
+    // renders nothing (the wrapper is unmounted), preserving the count-0-on-clear
+    // contract the #710 spec asserts.
+    let main_text = Memo::new(move |_| {
         ctx.stage.with(|s| {
             s.as_ref()
                 .and_then(|s| s.current.as_ref())
                 .map(|c| c.main.clone())
                 .unwrap_or_default()
         })
-    };
-    let translation_text = move || {
+    });
+    let translation_text = Memo::new(move |_| {
         ctx.stage.with(|s| {
             s.as_ref()
                 .and_then(|s| s.current.as_ref())
                 .map(|c| c.translation.clone())
                 .unwrap_or_default()
         })
-    };
-    let show_main_line = move || show_main && !main_text().is_empty();
-    let show_translation_line = move || show_translation && !translation_text().is_empty();
+    });
+
+    // The `show_main` / `show_translation` toggles are STATIC element config, so
+    // a disabled line is never rendered at all (count 0) — content visibility
+    // (empty ⇒ absent) is handled inside `CrossfadeText`.
+    let ct_main = content_transition.clone();
+    let ct_translation = content_transition;
+    let main_view = show_main.then(move || {
+        view! {
+            <CrossfadeText
+                text=main_text
+                transition=ct_main
+                role="stream-lyrics-main"
+                wrapper_class="stream-lyrics__line stream-lyrics__main"
+                wrapper_style=main_css
+                fill=true
+            />
+        }
+    });
+    let translation_view = show_translation.then(move || {
+        view! {
+            <CrossfadeText
+                text=translation_text
+                transition=ct_translation
+                role="stream-lyrics-translation"
+                wrapper_class="stream-lyrics__line stream-lyrics__translation"
+                wrapper_style=translation_css
+                fill=true
+            />
+        }
+    });
 
     view! {
         <div
@@ -82,24 +116,8 @@ pub fn ElementLyrics(
             data-element-id=id.to_string()
             style=container
         >
-            <Show when=show_main_line>
-                <div
-                    class="stream-lyrics__line stream-lyrics__main"
-                    data-role="stream-lyrics-main"
-                    style=main_css.clone()
-                >
-                    {main_text}
-                </div>
-            </Show>
-            <Show when=show_translation_line>
-                <div
-                    class="stream-lyrics__line stream-lyrics__translation"
-                    data-role="stream-lyrics-translation"
-                    style=translation_css.clone()
-                >
-                    {translation_text}
-                </div>
-            </Show>
+            {main_view}
+            {translation_view}
         </div>
     }
 }
