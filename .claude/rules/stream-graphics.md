@@ -4,6 +4,7 @@ paths:
   - "crates/presenter-persistence/src/repository/stream*.rs"
   - "crates/presenter-server/src/**/stream*.rs"
   - "crates/presenter-ui/src/**/stream*.rs"
+  - "crates/presenter-ui/src/components/stream/**"
   - "crates/presenter-migration/src/*stream*.rs"
 ---
 
@@ -156,3 +157,50 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
 - **Route precedence:** register `GET /stream/{slug}` (the WASM shell, mirror `stage_shell.rs`) AFTER
   the `/stream/api/*` (#707) + `/stream/assets/*` (#708) prefixes; axum 0.8 / matchit 0.8 resolve a
   static segment before a `{param}` sibling, and `api`/`assets` are reserved slugs, so no collision.
+
+## Content elements — lyrics + verse (#710)
+
+- **Content REUSES existing events; events that EXIST on-tree are IMPORTED, not mirror-parsed.** The
+  raw-JSON mirror-struct trick above is ONLY for the not-yet-merged #706 events. Lyrics bind to
+  `LiveEvent::Stage { snapshot }` (tag `stage`) → `snapshot.current` (a `StageDisplaySlide`:
+  `.main`/`.translation`); verse binds to `LiveEvent::BibleSlide { output: BibleSlideOutput }`
+  (tag `bible_slide`: `main_text`/`main_reference`/`secondary_text`/`secondary_reference`) and
+  `LiveEvent::BibleCleared` (tag `bible_cleared`). All three exist in `presenter-core::live` today,
+  so `ws/stream.rs` parses them through the REAL `LiveEvent` type in `handle_text`. `bible_slide`
+  ⇒ `Some(output)`, `bible_cleared` ⇒ `None` — one `RwSignal<Option<BibleSlideOutput>>` (None = no
+  verse). Stage never needs a separate clear event: a broom/clear arrives as a `Stage` snapshot with
+  `current == None`, which the lyrics element already renders as nothing.
+- **`Stage.current` (main/translation) is LAYOUT-INDEPENDENT — the surface=stream client gets worship
+  content under ANY operator layout.** `state/stage.rs::build_stage_snapshot` sets
+  `current: context.resolution.current.clone()` for EVERY layout, and
+  `state/broadcasting.rs::publish_stage_context` ALWAYS publishes the camera-crew snapshot (same
+  `current`) alongside (or, for the `api` layout, instead of) the operator-layout snapshot. So a
+  worship trigger reaches `/live/ws?surface=stream` with a populated `current` regardless of the
+  globally-selected stage layout — no `?layout=` workaround is needed for the LIVE path. Cold-load
+  uses the selected `GET /stage/snapshot` (agrees with the live path's last event for worship layouts;
+  it reflects the default first-presentation slide on a never-triggered server, same as the stage page).
+- **Cold-load content on WS connect (parity with the countdown's `/timers/overview`).** A reconnecting
+  OBS source must recover the CURRENT lyrics/verse, not wait for the next trigger — so the connected
+  Effect also `spawn`s `GET /stage/snapshot` → `ctx.stage` and `GET /bible/active-slide`
+  (`Option<BibleSlideOutput>`) → `ctx.bible`. Both API clients already exist (`api::stage::get_snapshot`,
+  `api::bible::get_active_slide_output`). Wire the WS `stage` signal only-Some (a clear is a snapshot
+  with `current: None`); wire the WS `bible` signal Some AND None (None IS the `BibleCleared` clear).
+- **Leptos double-move trap: a non-`Copy` `String` style can be captured by only ONE `<Show>` child
+  closure.** `<Show>` children are `move` closures that must OWN their captures. A single `line_style(...)`
+  String reused across two `<Show>` children (e.g. the same `reference_style` for BOTH the main and
+  secondary reference lines) is a double-move compile error — build ONE owned String per `<Show>`
+  child (`main_reference_css` + `secondary_reference_css`). Inside each child, `style=css.clone()`
+  (the child is `Fn`, may run on every mount, so clone). The reactive text closures (`main_text` etc.)
+  ARE reusable in both the `<Show when=>` guard and the `{text}` child because they capture only the
+  `Copy` `ctx.stage`/`ctx.bible` signal, so the closure is itself `Copy` (read the needed field via
+  `.with()`, never `.get()` the whole large snapshot). This whole crate is Tier-0 (no local
+  `cargo check`), so a move error only surfaces in the trunk build / `cargo test --lib` at CI — catch
+  it by reading.
+- **The 4000-char / overflow AC is satisfied by `.stream-element { overflow:hidden }`** (already in
+  `stream_output.css`) plus per-line `white-space: pre-wrap; overflow-wrap: anywhere` — text wraps
+  within the Frame and anything past the box is clipped; the container never grows past its Frame
+  height. Assert `getComputedStyle(el).overflow === "hidden"` + the container's `boundingClientRect`
+  height stays ≈ the Frame `h_pct`% of the viewport.
+- **Shared text-style CSS helpers live in `components/stream/style.rs`** (`frame_css`, `text_style_css`,
+  `css_font_family`/`css_align`/`css_justify`) — used by countdown/lyrics/verse. Add a new text element
+  by reusing these, not by re-inlining the mapping (the #709 countdown was refactored onto them).

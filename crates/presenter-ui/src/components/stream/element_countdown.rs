@@ -13,61 +13,21 @@
 //! placeholder), or when `format_countdown` returns "" (> 10 s past zero).
 
 use leptos::prelude::*;
-use presenter_core::{format_countdown, Frame, TextAlign, TextStyle, TimerState};
+use presenter_core::{format_countdown, Frame, TextStyle, TimerState};
 
+use super::style::{css_justify, frame_css, text_style_css};
 use super::StreamContext;
 
-/// CSS font stack for a whitelisted family. The three OFL families (Inter,
-/// Bebas Neue, Oswald) gracefully fall back until their `@font-face` woff2
-/// assets are bundled (see the ticket hand-back) — no `@font-face` pointing at a
-/// missing file, so no 404 breaks the zero-console E2E gate.
-fn css_font_family(family: &str) -> String {
-    format!("\"{family}\", system-ui, sans-serif")
-}
-
-fn css_align(align: TextAlign) -> &'static str {
-    match align {
-        TextAlign::Left => "left",
-        TextAlign::Center => "center",
-        TextAlign::Right => "right",
-    }
-}
-
-fn css_justify(align: TextAlign) -> &'static str {
-    match align {
-        TextAlign::Left => "flex-start",
-        TextAlign::Center => "center",
-        TextAlign::Right => "flex-end",
-    }
-}
-
 /// Build the (static) container style from the element's `Frame` + `TextStyle`.
+/// The countdown IS its own flex line box (single text line), so the frame,
+/// flex centering, and typography all live on one element.
 fn container_style(frame: &Frame, style: &TextStyle, z: i32) -> String {
-    let mut css = format!(
-        "left:{}%;top:{}%;width:{}%;height:{}%;z-index:{};\
-         display:flex;align-items:center;justify-content:{};\
-         font-family:{};font-size:{}vh;color:{};font-weight:{};\
-         text-align:{};line-height:{};",
-        frame.x_pct,
-        frame.y_pct,
-        frame.w_pct,
-        frame.h_pct,
-        z,
+    format!(
+        "{}display:flex;align-items:center;justify-content:{};{}",
+        frame_css(frame, z),
         css_justify(style.align),
-        css_font_family(&style.font_family),
-        style.size_pct,
-        style.color,
-        style.weight,
-        css_align(style.align),
-        style.line_height,
-    );
-    if let Some(shadow) = &style.shadow {
-        css.push_str(&format!(
-            "text-shadow:{}px {}px {}px {};",
-            shadow.x_px, shadow.y_px, shadow.blur_px, shadow.color
-        ));
-    }
-    css
+        text_style_css(style),
+    )
 }
 
 #[component]
