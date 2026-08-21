@@ -80,3 +80,12 @@ own uniquely-slugged output** (`s706-<name>` / `t-<name>`) and operates on THAT 
 `stream` output — or two tests activating `stream` race on `active_scene_id`. The per-`AppState`
 `LiveHub` is NOT shared, so hub-subscription assertions (`live_hub().subscribe()` + `try_recv`) are
 safe as-is.
+
+## Stream API is SLUG-addressed; show state lives in `/def` + the outputs list (no `/show` route)
+Output-scoped routes take the output SLUG, not the numeric id: `/stream/api/outputs/{slug}/scenes`,
+`.../active-scene` (PUT, body `{"sceneId":N}`), `.../overlays/{scene_id}` (PUT), `.../clear` (POST),
+`.../def` (GET). Only scene/element mutation routes take numeric ids (`/stream/api/scenes/{id}`,
+`/stream/api/elements/{id}`). There is NO `/show` endpoint — read current show state from
+`GET /stream/api/outputs` (summaries) or `GET /stream/api/outputs/{slug}/def` (`activeSceneId`,
+`configRevision`). A verification curl against `/outputs/1/...` 404s with `"stream output not found"`
+(the numeric string is looked up as a slug).
