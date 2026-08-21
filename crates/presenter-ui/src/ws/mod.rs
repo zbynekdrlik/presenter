@@ -1,4 +1,5 @@
 pub mod stage;
+pub mod stream;
 
 use gloo_net::websocket::{futures::WebSocket, Message};
 use gloo_timers::callback::Timeout;

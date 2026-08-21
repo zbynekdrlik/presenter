@@ -12,6 +12,8 @@ mod slide_stage_layout;
 pub(crate) mod stage;
 mod stage_shell;
 mod stream;
+mod stream_assets;
+mod stream_page;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -182,6 +184,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/stage/connections", get(stage::list_stage_connections))
         .route("/stage", get(stage_shell::stage_shell))
+        // Stream-graphics OBS output page (#709). `/stream/api/*` (#707) and
+        // `/stream/assets/*` (#708) are deeper static prefixes and take
+        // precedence over this `{slug}` param; `api`/`assets` are reserved slugs.
+        .route("/stream/{slug}", get(stream_page::stream_page))
         .route(
             "/stage/snapshot",
             get(stage::stage_display_selected_snapshot_json),
@@ -398,6 +404,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
         .merge(stream::router())
+        // #708: stream-graphics asset upload/serve/delete/list. Static
+        // `/stream/assets` + `/stream/api/assets` prefixes; matchit gives them
+        // priority over #706+'s `/stream/{slug}` catch, and both are reserved
+        // slugs — collision-free regardless of merge order.
+        .merge(stream_assets::routes())
         .with_state(state)
 }
 

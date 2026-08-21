@@ -47,6 +47,15 @@ async fn main() -> anyhow::Result<()> {
     let config = ServerConfig::load()?;
     let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], config.http.port));
     let state = AppState::from_config(config).await?;
+
+    // #708: ensure the content-addressed stream-graphics asset directory exists
+    // (next to presenter.db). Non-fatal: the upload handler also creates it on
+    // demand, so a startup failure here (e.g. a transient permission issue)
+    // must not stop the server from serving everything else.
+    if let Err(err) = state.ensure_stream_assets_dir().await {
+        tracing::warn!(?err, "failed to ensure stream-assets directory on startup");
+    }
+
     let app = build_router(state.clone());
 
     let listener = TcpListener::bind(addr)

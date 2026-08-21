@@ -13,6 +13,7 @@ All environment variables and feature flags for Presenter.
 | `RUST_LOG`                  | `info,tower_http=debug`     | Tracing filter                                                                                                                                                     |
 | `PRESENTER_LOCAL_PUBLIC_IP` | unset                       | Church's outbound public IP. When set, `/api/network-mode` classifies a tunnel request with matching `CF-Connecting-IP` as `local` (LAN). See `cloudflare-tunnel-setup.md`. |
 | `PRESENTER_SYNC_PEER_URL`   | unset                       | Base URL of the peer Presenter instance for two-way song sync (#555). Set per env in the deploy units over Tailscale: SNV → `http://100.101.72.101` (PP), PP → `http://100.122.204.47` (SNV). Unset → sync disabled (dev + E2E). |
+| `PRESENTER_STREAM_ASSETS_DIR` | unset                     | Override for the stream-graphics asset directory (#708). Unset → the `stream-assets/` sibling of the `PRESENTER_DB_URL` sqlite file (i.e. `$DEPLOY_DIR/stream-assets`), else `./stream-assets` (cwd). The server creates it at startup. |
 
 ### AI Assistant
 
@@ -57,6 +58,23 @@ ProPresenter libraries are stored in git at `data/libraries/` and synced to depl
 | PP (release) | `/opt/presenter/libraries`     |
 
 Bible files are similarly stored in `data/bibles/` and synced during deploy.
+
+#### Stream-graphics assets (#708)
+
+Uploaded stream-graphics images are stored content-addressed on disk as
+`$DEPLOY_DIR/stream-assets/<sha256>.<ext>` (a sibling of `presenter.db`), with a
+`stream_assets` metadata row per image. Unlike `video_sources` (wiped on every dev deploy),
+these are authored content and **survive deploys**: the deploy `rsync --delete` steps are
+scoped to the `$DEPLOY_DIR/libraries/` subdirectory only — never the deploy-dir root — so
+`stream-assets/` is never in any delete scope, and the binary is delivered via `scp` (which
+deletes nothing). The directory is created by the server at startup (and on demand by the
+upload handler); if ever lost, every asset is re-uploadable from the editor.
+
+| Location     | Path                              |
+| ------------ | --------------------------------- |
+| Production   | `/opt/presenter/stream-assets`     |
+| Dev          | `/opt/presenter-dev/stream-assets` |
+| PP (release) | `/opt/presenter/stream-assets`     |
 
 ## Feature Flags
 

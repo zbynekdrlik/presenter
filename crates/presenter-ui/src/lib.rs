@@ -44,6 +44,14 @@ fn App() -> impl IntoView {
             view! { <pages::tablet::TabletPage /> }.into_any()
         } else if p == "/stage" {
             view! { <pages::stage::StagePage /> }.into_any()
+        } else if let Some(slug) = p
+            .strip_prefix("/stream/")
+            .filter(|s| !s.is_empty() && !s.contains('/'))
+        {
+            // Stream-graphics OBS output page (#709). The server only serves the
+            // WASM shell for `/stream/{slug}` (a single segment); `/stream/api/*`
+            // and `/stream/assets/*` are REST/asset endpoints, never the shell.
+            view! { <pages::stream_output::StreamOutputPage slug=slug.to_string() /> }.into_any()
         } else if p == "/ui/camera" {
             view! { <pages::camera::CameraPage /> }.into_any()
         } else if p == "/ui/settings" {
