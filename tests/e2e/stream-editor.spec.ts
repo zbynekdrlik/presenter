@@ -35,11 +35,11 @@ type SceneDef = {
   name: string;
   kind: string;
   position: number;
-  is_active: boolean;
+  isActive: boolean;
 };
 
 type OutputDef = {
-  active_scene_id: number | null;
+  activeSceneId: number | null;
   scenes: SceneDef[];
 };
 
@@ -164,7 +164,7 @@ test("create, rename, reorder, activate, overlay-toggle and delete scenes", asyn
   await expect(cardById(page, alpha)).toHaveAttribute("data-active", "true");
   await expect(cardById(page, beta)).toHaveAttribute("data-active", "false");
   await expect
-    .poll(async () => (await getDef(page)).active_scene_id)
+    .poll(async () => (await getDef(page)).activeSceneId)
     .toBe(Number(alpha));
 
   // --- Activation persists across a reload ---
@@ -184,7 +184,7 @@ test("create, rename, reorder, activate, overlay-toggle and delete scenes", asyn
   await expect
     .poll(async () => {
       const def = await getDef(page);
-      return def.scenes.find((s) => String(s.id) === overlay)?.is_active;
+      return def.scenes.find((s) => String(s.id) === overlay)?.isActive;
     })
     .toBe(true);
 
