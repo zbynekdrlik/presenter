@@ -89,6 +89,10 @@ fn mime_from_path(path: &str) -> &'static str {
         "text/html"
     } else if path.ends_with(".json") {
         "application/json"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else if path.ends_with(".woff") {
+        "font/woff"
     } else if path.ends_with(".png") {
         "image/png"
     } else if path.ends_with(".svg") {

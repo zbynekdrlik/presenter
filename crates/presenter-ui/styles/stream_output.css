@@ -8,6 +8,36 @@
  * explicit `!important` html override below, or the OBS capture would be opaque.
  */
 
+/* Bundled OFL fonts (#717). Latin-subset woff2, copied to /ui-pkg/fonts/ by
+ * trunk (`<link data-trunk rel="copy-dir" href="fonts">` in index.html); the
+ * relative `url()` resolves against this bundled CSS's own /ui-pkg/ location.
+ * The family names MUST match `components/stream/style.rs::css_font_family`
+ * ("Inter"/"Bebas Neue"/"Oswald"); its stack keeps `system-ui, sans-serif` as
+ * the fallback, so `font-display: swap` shows the fallback until the woff2
+ * loads and never blank-flashes on the broadcast. Bundled (not CDN) so the
+ * church rig renders identically offline. See fonts/OFL.txt for licensing. */
+@font-face {
+    font-family: "Inter";
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("fonts/inter-latin.woff2") format("woff2");
+}
+@font-face {
+    font-family: "Oswald";
+    font-style: normal;
+    font-weight: 200 700;
+    font-display: swap;
+    src: url("fonts/oswald-latin.woff2") format("woff2");
+}
+@font-face {
+    font-family: "Bebas Neue";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("fonts/bebas-neue-latin.woff2") format("woff2");
+}
+
 html[data-stream="true"] {
     background: transparent !important;
 }
