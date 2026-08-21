@@ -34,6 +34,12 @@ pub struct BibleState {
     pub translations: RwSignal<Vec<BibleTranslation>>,
     pub selected_translation: RwSignal<Option<String>>,
     pub secondary_translation: RwSignal<Option<String>>,
+    /// The translation code whose books are currently loaded into `books`.
+    /// Set by the translation-switch effect as its LAST write, once the async
+    /// `list_books` round-trip has resolved and the selection has settled, so
+    /// observers (and E2E) can await switch completion instead of racing the
+    /// re-render. `None` until the first book list loads.
+    pub books_translation: RwSignal<Option<String>>,
 
     // -- Book / chapter / verse selection --
     pub books: RwSignal<Vec<BibleBookDto>>,
@@ -89,6 +95,7 @@ impl BibleState {
             translations: RwSignal::new(Vec::new()),
             selected_translation: RwSignal::new(None),
             secondary_translation: RwSignal::new(None),
+            books_translation: RwSignal::new(None),
 
             books,
             book_keys,

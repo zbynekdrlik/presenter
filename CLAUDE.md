@@ -38,6 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Sync/LWW invariants (synthetic tombstones, clock bumps, best-effort recon) | `.claude/rules/sync-lww.md` (auto-loads on `repository/sync*`, `library_sync*`, `state/sync.rs`) |
 | AI-eval harness (lib.rs split, Cargo autobins gotcha, minimal pub widening) | `.claude/rules/ai-eval-harness.md` (auto-loads on `bin/ai_eval/**`, `lib.rs`, `scripts/dev/ai-eval/**`) |
 | Local quality-gate gotchas (fn-length counts wrapped signature lines, file-size cap) | `.claude/rules/quality-gates.md` (auto-loads on `crates/**/*.rs`) |
+| Bible page DOM contract + async-effect E2E determinism (#727): collapsed/full book-item attribute parity, settle-signal over expect.poll, Tier-0 live-server repro | `.claude/rules/bible-page.md` (auto-loads on `pages/bible.rs`, `state/bible.rs`, `wasm-bible.spec.ts`) |
 
 ## Always-Rules
 

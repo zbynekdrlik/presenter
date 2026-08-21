@@ -3056,31 +3056,40 @@ test.describe("Bible workflow fixes (issue #256)", () => {
     const optCount = await options.count();
     if (optCount >= 2) {
       const currentValue = await select.inputValue();
+      let switchTarget: string | null = null;
       for (let i = 0; i < optCount; i++) {
         const val = await options.nth(i).getAttribute("value");
         if (val && val !== currentValue) {
+          switchTarget = val;
           await select.selectOption(val);
           break;
         }
       }
-      // Either the book is preserved (same code, possibly new label) or
-      // cleared. Use poll-with-timeout so the assertion does not race the
-      // translation-switch effect that re-renders the book list.
-      await expect
-        .poll(
-          async () => {
-            const active = page.locator(
-              '[data-role="book-item"][data-active="true"]',
-            );
-            const count = await active.count();
-            if (count === 0) {
-              return "cleared";
-            }
-            return (await active.first().getAttribute("data-book-code")) ?? "";
-          },
-          { timeout: 10_000 },
-        )
-        .toMatch(new RegExp(`^(cleared|${firstBookCode})$`));
+      expect(switchTarget).not.toBeNull();
+
+      // Await the explicit readiness signal instead of racing the async
+      // translation-switch effect: the book-list container publishes
+      // data-books-translation as the effect's LAST write, once list_books
+      // has resolved and the selection has settled (preserved or cleared).
+      // This waits on the real async completion, not a render-timing guess,
+      // so it is deterministic under CI load (issue #727).
+      await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+        "data-books-translation",
+        switchTarget as string,
+        { timeout: 10_000 },
+      );
+
+      // Settled state: the book is either preserved (same canonical code,
+      // possibly a new localized label) or cleared. Both are acceptable; a
+      // DIFFERENT book code is not. The active book-item — collapsed or in
+      // the full list — always exposes data-book-code.
+      const active = page.locator('[data-role="book-item"][data-active="true"]');
+      const activeCount = await active.count();
+      if (activeCount > 0) {
+        expect(await active.first().getAttribute("data-book-code")).toBe(
+          firstBookCode,
+        );
+      }
     }
 
     expect(consoleMessages).toEqual([]);

@@ -129,6 +129,92 @@ StageLayout
 
 See [ADR 0004](adr/0004-resolume-settings-and-integration.md) and [ADR 0005](adr/0005-stage-heartbeat.md) for integration details.
 
+## Stream Graphics Subsystem
+
+The stream-graphics subsystem (epic #718, [ADR 0009](adr/0009-stream-graphics.md))
+is a self-hosted **replacement for the church's Resolume stream compositing**. It
+renders a nameable, transparent WASM page (`/stream/{slug}`) that is added to OBS
+as a browser source and driven from Bitfocus Companion. See
+[configuration.md](configuration.md#stream-graphics-obs-browser-source-717) for
+the OBS setup.
+
+### Model: outputs → scenes → elements
+
+- **Output** — one transparent page, addressed by a URL **slug** (`/stream/{slug}`).
+  The migration seeds one output, slug `stream`. Each output has a
+  `default_transition_ms` (the crossfade duration) and a persisted **active
+  show-state** (`active_scene_id` + the set of active overlay scene ids).
+- **Scene** — a named layer belonging to an output, of kind **`base`** or
+  **`overlay`**. Exactly one base scene is active at a time (exclusive); any
+  number of overlay scenes can be active simultaneously and independently. Base
+  renders first; overlays stack on top in activation order.
+- **Element** — a typed graphic inside a scene, positioned by a percentage
+  `Frame` and ordered by `z_order`. Four kinds:
+  `image` (an uploaded asset), `countdown` (bound to a Presenter timer),
+  `lyrics` (main + optional translation, from the worship-stage pipeline), and
+  `verse` (main + optional secondary/translation, from the Bible pipeline).
+  Lyrics and verse REUSE the existing `Stage` / `BibleSlide` live events — the
+  stream subsystem adds no new content events, only new rendering.
+
+### Show-state vs. config: `config_revision`
+
+Two distinct change channels keep the OBS page lightweight:
+
+- **Activation** (switch base scene, toggle an overlay, clear) changes only the
+  show-state. It is broadcast by the `StreamState` live event and applied
+  DIRECTLY by clients. It does **not** bump `config_revision` — a scene switch
+  must never force a full config refetch.
+- **Config writes** (create/rename/delete/reorder a scene, create/patch/delete
+  an element) bump the output's `config_revision` and broadcast
+  `StreamConfigChanged`. A client refetches the full output def only when the
+  revision advances (or on WS reconnect, since the live hub does not replay).
+
+This split is mirrored on the server (`bump_config_revision` fires on config
+writes only) and on the WASM editor + output-page clients.
+
+### Companion command surface
+
+Companion drives the show over `/companion/ws`. Scenes are addressed by **name,
+case-insensitively**; `output` defaults to `"stream"`:
+
+| Command                 | Payload            | Effect                              |
+| ----------------------- | ------------------ | ----------------------------------- |
+| `stream_scene_set`      | `{scene, output?}` | Activate a base scene (exclusive)   |
+| `stream_scene_clear`    | `{output?}`        | Clear the base only                 |
+| `stream_overlay_on`     | `{scene, output?}` | Activate an overlay                 |
+| `stream_overlay_off`    | `{scene, output?}` | Deactivate an overlay               |
+| `stream_overlay_toggle` | `{scene, output?}` | Toggle an overlay                   |
+| `stream_clear`          | `{output?}`        | Clear the base and all overlays     |
+
+Each command executes through the `AppState` activation methods (so `StreamState`
+fires) and surfaces every refusal (unknown output/scene, wrong kind, bad payload)
+as a non-fatal error reply the plugin logs — never a panic. Two companion
+variables track the live state: `stream_scene` (active base name, or `-`) and
+`stream_overlays` (comma-joined active overlay names, or `-`).
+
+### Wire-casing split (deliberate, documented)
+
+The stream JSON wire format uses **two casings on purpose**, and this split is a
+settled decision (ADR 0009) — do not "unify" it:
+
+- **`snake_case` with an internal tag** — the two serde-tagged enums:
+  `StreamElementProps` (`#[serde(tag = "kind", rename_all = "snake_case")]`, so
+  `kind`, `asset_id`, `show_main`, `show_translation`, `main_style`,
+  `content_transition`, …) and `ContentTransition`
+  (`#[serde(tag = "mode", rename_all = "snake_case")]`, so `mode`, `duration_ms`).
+  The `kind` tag value MUST equal the `stream_elements.kind` column
+  (`image|countdown|lyrics|verse`).
+- **`camelCase` everywhere else** — every DTO and nested value struct: `Frame`
+  (`xPct`, `yPct`, `wPct`, `hPct`), `TextStyle` (`fontFamily`, `sizePct`,
+  `lineHeight`, …), `Shadow` (`xPx`, `yPx`, `blurPx`), `StreamShowState`
+  (`activeSceneId`, `activeOverlayIds`, `configRevision`), and the output/scene/
+  element def DTOs (`defaultTransitionMs`, `zOrder`, `isActive`, `transitionMs`).
+
+So an element create/patch body is bare `StreamElementProps` JSON — snake_case
+tag/fields with camelCase-keyed `frame`/`style` VALUES nested inside. Both halves
+are internally consistent; every REST/WS fixture and client DTO is reconciled to
+this split.
+
 ## Key HTTP Endpoints
 
 | Endpoint        | Purpose                      |
@@ -139,6 +225,8 @@ See [ADR 0004](adr/0004-resolume-settings-and-integration.md) and [ADR 0005](adr
 | `/ui/bible`     | Bible search/trigger UI      |
 | `/ui/settings`  | Configuration interface      |
 | `/stage`        | HTML stage display           |
+| `/ui/stream`    | Stream-graphics editor       |
+| `/stream/{slug}`| Transparent OBS output page  |
 | `/live/ws`      | Live updates (timers, stage) |
 | `/companion/ws` | Bitfocus Companion control   |
 
