@@ -34,6 +34,13 @@ All environment variables and feature flags for Presenter.
 | `PRESENTER_COMPANION_PORT`    | `18175` | Companion listener port          |
 | `PRESENTER_COMPANION_TOKEN`   | (none)  | Shared secret for authentication |
 
+**Precedence:** when `PRESENTER_COMPANION_ENABLED` / `PRESENTER_COMPANION_PORT` are
+explicitly SET in the environment, they win over the runtime settings toggle
+(`POST /settings/features`) on every boot — the env value is re-persisted over the
+stored setting at startup. Leave them UNSET on hosts where the UI toggle should
+survive restarts (production leaves them unset; the dev instance pins `=0`
+deliberately, so a runtime enable on dev is reset by the next service restart).
+
 ### Stage Display
 
 | Variable                          | Default | Description                    |
