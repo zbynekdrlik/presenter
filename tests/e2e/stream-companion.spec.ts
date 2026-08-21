@@ -190,6 +190,7 @@ type Ids = {
   oneMinCd: number;
   chvaly: number;
   chvalyLyrics: number;
+  logo: number;
   logoImg: number;
   verseEl: number;
 };
@@ -327,7 +328,9 @@ async function buildSetup(api: APIRequestContext): Promise<Ids> {
     show_secondary: true,
     text_style: textStyle("Inter", 6),
     secondary_style: textStyle("Inter", 4, { color: "#dddddd" }),
-    reference_style: textStyle("Bebas Neue", 3, { color: "#aaaaaa" }),
+    // Bebas Neue is a single-weight (400) display face — request 400 so the
+    // browser uses the real glyphs instead of synth-bolding a 700.
+    reference_style: textStyle("Bebas Neue", 3, { color: "#aaaaaa", weight: 400 }),
     frame: { xPct: 15, yPct: 60, wPct: 70, hPct: 35 },
     content_transition: { mode: "fade", duration_ms: 400 },
   });
@@ -341,6 +344,7 @@ async function buildSetup(api: APIRequestContext): Promise<Ids> {
     oneMinCd,
     chvaly,
     chvalyLyrics,
+    logo,
     logoImg,
     verseEl,
   };
@@ -691,13 +695,14 @@ test.describe("Stream graphics — companion full journey", () => {
       .get(`${baseURL}/stream/api/outputs/${SLUG}/def`)
       .then((r) => r.json())) as {
       activeSceneId: number | null;
-      scenes: Array<{ id: number; isActive: boolean }>;
+      scenes: Array<{ id: number; kind: string; isActive: boolean }>;
     };
     expect(def.activeSceneId).toBe(ids.ytfast);
-    const activeOverlay = def.scenes.find(
-      (s) => s.id !== ids.ytfast && s.isActive,
-    );
-    expect(activeOverlay, "an overlay stayed active across restart").toBeTruthy();
+    const activeOverlay = def.scenes.find((s) => s.isActive && s.kind === "overlay");
+    expect(
+      activeOverlay?.id,
+      "the Logo overlay stayed active across restart",
+    ).toBe(ids.logo);
 
     // …and re-renders identically once the OBS source reconnects.
     await expect(imageEl(page, ids.ytfastImg)).toHaveCount(1, { timeout: 10_000 });
