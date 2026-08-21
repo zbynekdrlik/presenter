@@ -57,6 +57,10 @@ pub fn router() -> Router<AppState> {
             post(create_element),
         )
         .route(
+            "/stream/api/scenes/{scene_id}/elements/order",
+            put(reorder_elements),
+        )
+        .route(
             "/stream/api/elements/{id}",
             patch(patch_element).delete(delete_element),
         )
@@ -111,6 +115,12 @@ pub(super) struct PatchSceneRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ReorderScenesRequest {
+    ids: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReorderElementsRequest {
     ids: Vec<i64>,
 }
 
@@ -308,6 +318,24 @@ pub(super) async fn delete_element(
     // Resolve the owning output BEFORE the delete — the row is gone afterwards.
     let slug = state.repository().stream_element_output_slug(id).await?;
     state.repository().delete_stream_element(id).await?;
+    state.stream_config_write_notify(&slug).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
+pub(super) async fn reorder_elements(
+    State(state): State<AppState>,
+    Path(scene_id): Path<i64>,
+    Json(req): Json<ReorderElementsRequest>,
+) -> Result<StatusCode, AppError> {
+    state
+        .repository()
+        .set_element_order(scene_id, req.ids)
+        .await?;
+    let slug = state
+        .repository()
+        .stream_scene_output_slug(scene_id)
+        .await?;
     state.stream_config_write_notify(&slug).await?;
     Ok(StatusCode::NO_CONTENT)
 }

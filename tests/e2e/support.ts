@@ -27,6 +27,32 @@ export function attachConsoleErrorCollector(page: Page, errors: string[]): void 
 }
 
 /**
+ * Console collector for the STREAM EDITOR specs. Same as
+ * {@link attachConsoleErrorCollector}, but ignores the one EXPECTED transient it
+ * would otherwise red on: the editor's preview iframe renders the output page,
+ * which requests `/stream/assets/<id>` for an image element and legitimately
+ * 404s while that element still references a not-yet-picked / placeholder asset
+ * (an authoring transient, not a bug). Still captures the iframe's console
+ * (WASM/JS errors, any OTHER 404) so a genuine output-page fault fails the test;
+ * the output page's full console cleanliness is separately covered by its own
+ * specs + the dedicated preview test.
+ */
+export function attachEditorConsoleCollector(page: Page, errors: string[]): void {
+  page.on("console", (msg) => {
+    const type = msg.type();
+    if (type !== "error" && type !== "warning") return;
+    const url = msg.location()?.url ?? "";
+    if (msg.text().includes("Failed to load resource") && url.includes("/stream/assets/")) {
+      return;
+    }
+    errors.push(`[${type}] ${msg.text()}`);
+  });
+  page.on("pageerror", (err) => {
+    errors.push(`[pageerror] ${err.message}`);
+  });
+}
+
+/**
  * Poll `<video data-role="ndi-video">` (or another `selector`) until
  * `videoWidth > 0` AND `readyState >= HAVE_CURRENT_DATA (2)`. Polls every
  * 100 ms for up to 12 s (120 iterations) — chosen to match the existing

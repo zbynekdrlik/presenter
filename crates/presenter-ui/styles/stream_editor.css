@@ -269,3 +269,293 @@ body.stream-editor-page {
 .stream-editor__toast[data-state="success"] {
   background: #234a34;
 }
+
+/* ---- Element panel + property form (#714) -------------------------------- */
+
+/* A scene opened for element authoring. */
+.stream-editor__scene[data-selected="true"] {
+  outline: 2px solid #8ab4ff;
+  outline-offset: 2px;
+}
+
+.stream-editor__workspace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #2a2e3a;
+  align-items: flex-start;
+}
+
+.stream-editor__panel {
+  flex: 1 1 22rem;
+  min-width: 20rem;
+  background: #1a1d26;
+  border: 1px solid #2a2e3a;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.stream-editor__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.stream-editor__add-elements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.stream-editor__element-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.stream-editor__element {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  background: #14161c;
+}
+
+.stream-editor__element[data-selected="true"] {
+  border-color: #8ab4ff;
+}
+
+.stream-editor__element-select {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #e7e9ee;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.2rem 0.3rem;
+}
+
+.stream-editor__element-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+/* The property form + its groups. */
+.stream-editor__prop-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border-top: 1px solid #2a2e3a;
+  padding-top: 0.75rem;
+}
+
+.stream-editor__frame,
+.stream-editor__ts-group,
+.stream-editor__transition {
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.stream-editor__ts-legend {
+  color: #9aa1b1;
+  font-size: 0.8rem;
+  padding: 0 0.3rem;
+}
+
+.stream-editor__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: #9aa1b1;
+}
+
+.stream-editor__field span {
+  white-space: nowrap;
+}
+
+.stream-editor__field input,
+.stream-editor__field select {
+  background: #14161c;
+  color: #e7e9ee;
+  border: 1px solid #2a2e3a;
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  max-width: 9rem;
+}
+
+.stream-editor__field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.stream-editor__align {
+  flex-direction: column;
+}
+
+.stream-editor__align-buttons {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.stream-editor__btn[data-active="true"] {
+  background: #2f6fed;
+  border-color: #2f6fed;
+  color: #fff;
+}
+
+.stream-editor__shadow-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.stream-editor__prop-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.stream-editor__prop-error {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: #5a2530;
+  color: #ffd7dd;
+  font-size: 0.85rem;
+}
+
+/* ---- Preview iframe + asset picker (#715) -------------------------------- */
+
+.stream-editor__preview {
+  flex: 1 1 22rem;
+  min-width: 20rem;
+}
+
+.stream-editor__preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* 16:9 box with a checkerboard so the transparent output page's transparency
+ * is visible behind the composited scene. */
+.stream-editor__preview-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #2a2e3a;
+  background-image:
+    linear-gradient(45deg, #20242e 25%, transparent 25%),
+    linear-gradient(-45deg, #20242e 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #20242e 75%),
+    linear-gradient(-45deg, transparent 75%, #20242e 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+}
+
+.stream-editor__preview-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.stream-editor__btn[data-live="true"] {
+  background: #234a34;
+  border-color: #234a34;
+  color: #fff;
+}
+
+/* Asset picker overlay (opened from the image property form). */
+.stream-editor__asset-picker {
+  margin-top: 0.5rem;
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #14161c;
+}
+
+.stream-editor__asset-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.stream-editor__asset-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.stream-editor__asset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.stream-editor__asset-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid #2a2e3a;
+  border-radius: 6px;
+}
+
+.stream-editor__asset-thumb {
+  width: 56px;
+  height: 32px;
+  object-fit: contain;
+  background: #20242e;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.stream-editor__asset-name {
+  flex: 1;
+  font-size: 0.8rem;
+  color: #c7ccd8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream-editor__asset-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
