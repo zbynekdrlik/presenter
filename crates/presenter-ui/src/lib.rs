@@ -56,6 +56,8 @@ fn App() -> impl IntoView {
             view! { <pages::camera::CameraPage /> }.into_any()
         } else if p == "/ui/settings" {
             view! { <pages::settings::SettingsPage /> }.into_any()
+        } else if p == "/ui/stream" {
+            view! { <pages::stream_editor::StreamEditorPage /> }.into_any()
         } else {
             view! {
                 <div data-role="not-found">
