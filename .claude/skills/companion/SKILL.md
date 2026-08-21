@@ -52,3 +52,35 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
 - Call `setVariableValues(batch)` BEFORE writing local cache — on throw, leave cache clean.
 - Tests in `lib/variable-batch.test.js` enforce this with a behavior-based stub.
 - Bump `package.json` `version` AND `companion/manifest.json` `version` atomically.
+
+## Adding actions / variables / tests (gotchas, #712)
+
+- **The "Companion Tests" CI job runs a HARDCODED test-file list.** Root
+  `package.json` → `test:companion` names each `lib/*.test.js` explicitly
+  (`node --test lib/time.test.js lib/commands.test.js ...`). A NEW test file is
+  **not** discovered automatically — add its path to that script or CI silently
+  never runs it. Run it locally the same way (`npm run test:companion`); it needs
+  only `node` (built-in `node:test`/`node:assert`), no cargo, no npm install.
+- **`lib/commands.test.js` asserts an EXACT command count** and text-parses the
+  `COMMANDS` array from `index.js` source via regex. Adding a command means
+  updating its `EXPECTED_COMMANDS` list too, or the parity test fails. Because it
+  is a **source-text regex parse**, `COMMANDS` (and `VARIABLE_DEFINITIONS`, parsed
+  the same way in `lib/stream.test.js`) MUST stay **inline array literals** — a
+  `[...base, ...IMPORTED]` spread breaks the parse (the spread's ids are invisible
+  to the regex).
+- **Pure logic goes in `lib/<area>.js`, tested without `@companion-module/base`.**
+  `index.js` `require`s the Companion runtime at load, so it can't be imported in
+  `node --test`; keep new logic (payload builders, option fields) in a dependency-free
+  `lib/` module (`lib/time.js`, `lib/variable-batch.js`, `lib/stream.js`) and let
+  `index.js` be a thin adapter. Tests then import the lib module directly.
+- **Stream command family (`lib/stream.js`).** Wire command names MUST start with
+  `stream_` — the server (`companion/stream.rs`, #711) delegates by that prefix; the
+  Companion action id IS the wire command name. Scenes are addressed BY NAME
+  (server matches case-insensitively); `output` slug is optional, default `stream`.
+  Unknown command on an older server → non-fatal `{type:"error"}` reply the plugin
+  already logs (`case "error"`) → graceful degrade, no crash. Payload builders must
+  never throw.
+- **Profile: `ops/companion/generated/` is gitignored.** Edit + commit the SOURCE
+  blueprint `ops/companion/presenter-companion-profile.json`; run
+  `node ops/companion/generate-profile.mjs` only to VERIFY it still renders (the
+  export under `generated/` is never committed).

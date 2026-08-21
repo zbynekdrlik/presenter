@@ -29,6 +29,24 @@ This table mirrors the default profile export (`presenter-companion-profile.json
 | 5 | `Bible Trigger` | `bible.trigger` | `{ "translation": "KJV", "book": "John", "chapter": 3, "verseStart": 16 }` | Shows `bible_reference` |
 | 6 | `Bible Clear` | `bible.clear` | `{}` | Dims when `bible_reference` empty |
 
+## Page 3 – Stream Graphics
+
+Drives the `/stream/{slug}` output (the OBS browser source that replaces Resolume for stream graphics). Scenes are addressed **by name** (matched case-insensitively on the server); the `output` slug defaults to `stream`. The example scene names below (`ytfast`, `chvaly`, `verse`) are placeholders — rename them to match the scenes you author in the `/ui/stream` editor.
+
+| Button | Label | Command | Payload | Feedback |
+|--------|-------|---------|---------|----------|
+| 1 | `Scene ytfast` | `stream_scene_set` | `{ "scene": "ytfast", "output": "stream" }` | Green when `stream_scene === "ytfast"` |
+| 2 | `Scene chvaly` | `stream_scene_set` | `{ "scene": "chvaly", "output": "stream" }` | Green when `stream_scene === "chvaly"` |
+| 3 | `Scene Clear` | `stream_scene_clear` | `{ "output": "stream" }` | Red when `stream_scene === "-"` (base cleared / transparent) |
+| 4 | `Overlay Verse` | `stream_overlay_toggle` | `{ "scene": "verse", "output": "stream" }` | — (toggles the overlay on/off) |
+| 5 | `Clear All` | `stream_clear` | `{ "output": "stream" }` | — (base off + all overlays off) |
+| 6 | `Active Scene` | no command | — | Displays `stream_scene` (active base name or `-`) |
+| 7 | `Overlays` | no command | — | Displays `stream_overlays` (comma-joined active overlay names or `-`) |
+
+Additional stream actions available in the module (no default button): `stream_overlay_on` and `stream_overlay_off` (explicit on/off variants of the toggle). All six `stream_*` actions take an optional `Output slug` field (default `stream`); the base/overlay actions also take a `Scene name` field.
+
+> **Graceful degrade:** on a Presenter server that predates the stream commands, a `stream_*` press returns a non-fatal error reply that the module logs — no crash, no disconnect. The buttons become live once the server side (issue #711) is deployed.
+
 The export ships example macros (`macro_presenter_alert`, `macro_presenter_offset_plus`, `macro_presenter_offset_minus`) that manipulate payloads and trigger alerts; review them in Companion if you extend the layout.
 
 > **Note:** The offset buttons rely on a Companion script that reads `timer_countdown_remaining_seconds`, applies the delta, converts it to an `HH:MM` duration, and reissues `timer.set_countdown_target`. Presenter converts that duration into the absolute countdown target internally.

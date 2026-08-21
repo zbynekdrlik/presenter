@@ -10,7 +10,7 @@
     "test": "npm run test:companion && npm run test:playwright",
     "test:playwright": "playwright test",
     "test:playwright:headed": "playwright test --headed",
-    "test:companion": "node --test ops/companion/presenter/lib/time.test.js ops/companion/presenter/lib/commands.test.js ops/companion/presenter/lib/variable-batch.test.js",
+    "test:companion": "node --test ops/companion/presenter/lib/time.test.js ops/companion/presenter/lib/commands.test.js ops/companion/presenter/lib/variable-batch.test.js ops/companion/presenter/lib/stream.test.js",
     "typecheck": "tsc --noEmit"
   },
   "repository": {

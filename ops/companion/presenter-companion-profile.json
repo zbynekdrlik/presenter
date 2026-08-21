@@ -291,6 +291,108 @@
           "color": "ff0000"
         }
       ]
+    },
+    {
+      "page": 3,
+      "bank": 1,
+      "label": "Scene\nytfast",
+      "command": {
+        "name": "stream_scene_set",
+        "payload": {
+          "scene": "ytfast",
+          "output": "stream"
+        }
+      },
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "stream_scene",
+          "value": "ytfast",
+          "color": "00ff00"
+        }
+      ]
+    },
+    {
+      "page": 3,
+      "bank": 2,
+      "label": "Scene\nchvaly",
+      "command": {
+        "name": "stream_scene_set",
+        "payload": {
+          "scene": "chvaly",
+          "output": "stream"
+        }
+      },
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "stream_scene",
+          "value": "chvaly",
+          "color": "00ff00"
+        }
+      ]
+    },
+    {
+      "page": 3,
+      "bank": 3,
+      "label": "Scene\nClear",
+      "command": {
+        "name": "stream_scene_clear",
+        "payload": {
+          "output": "stream"
+        }
+      },
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "stream_scene",
+          "value": "-",
+          "color": "ff2222"
+        }
+      ]
+    },
+    {
+      "page": 3,
+      "bank": 4,
+      "label": "Overlay\nVerse",
+      "command": {
+        "name": "stream_overlay_toggle",
+        "payload": {
+          "scene": "verse",
+          "output": "stream"
+        }
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 3,
+      "bank": 5,
+      "label": "Clear\nAll",
+      "command": {
+        "name": "stream_clear",
+        "payload": {
+          "output": "stream"
+        }
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 3,
+      "bank": 6,
+      "label": "Active\nScene",
+      "display": {
+        "variable": "stream_scene"
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 3,
+      "bank": 7,
+      "label": "Overlays",
+      "display": {
+        "variable": "stream_overlays"
+      },
+      "feedbacks": []
     }
   ],
   "scripts": {
