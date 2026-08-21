@@ -371,7 +371,23 @@ test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => 
     .poll(async () => (await getScene(page, scene)).elements.some((e) => String(e.id) === img))
     .toBe(false);
 
-  expect(errors, "browser console must be clean").toEqual([]);
+  // The invalid-value save above deliberately exercises a REAL server-side 422
+  // validation path, and its inline error display was already asserted. Chrome
+  // ITSELF logs "Failed to load resource: the server responded with a status of
+  // 422 (Unprocessable Entity)" for EVERY non-2xx fetch — it cannot be suppressed
+  // and is NOT a bug here (it is the very behavior under test). Same
+  // Chrome-logs-non-2xx physics as #598 (never a MOCKED non-2xx in a zero-console
+  // spec) — except this 422 is a REAL, deliberate request, so we cannot avoid it.
+  // Strip EXACTLY the one expected 422 resource-load line (matched narrowly on its
+  // 422 status text, bounded to the single deliberate 422 this test makes), then
+  // assert the remainder is clean AND that we saw exactly that one 422 — so an
+  // UNEXPECTED extra 422 (or none at all) still fails the test.
+  const is422 = (e: string) =>
+    /Failed to load resource: the server responded with a status of 422\b/.test(e);
+  const deliberate422 = errors.filter(is422);
+  const otherErrors = errors.filter((e) => !is422(e));
+  expect(deliberate422, "exactly one deliberate inline-422 console line").toHaveLength(1);
+  expect(otherErrors, "browser console must be clean apart from the deliberate 422").toEqual([]);
 });
 
 test("a config change reflects live in a second editor context", async ({
