@@ -475,3 +475,20 @@ info is usually ALREADY recorded properly elsewhere in the file, since these log
 append-only). Leave the shared stash entry itself alone (`stash list`/`stash drop`
 touches the WHOLE repo's shared `.git`, which other concurrent worktrees in the same
 fleet round may still reference) — fix the file content only.
+
+## Integrating parallel worker branches — union-merge purely additive conflicts
+
+When two worktree-agent branches both APPEND at the same spot (a `mod x;` list, a `.merge(x::routes())`
+chain, an `AppState` field + its `new()` init, a playbook section), the conflict is a pure both-sides
+union. Resolve mechanically from the index stages instead of hand-editing:
+
+```bash
+for f in $(git diff --name-only --diff-filter=U); do
+  git show :1:"$f" > base; git show :2:"$f" > ours; git show :3:"$f" > theirs
+  git merge-file --union ours base theirs && cp ours "$f" && git add "$f"
+done
+```
+
+Then grep the result for BOTH sides (e.g. both `mod` lines, both `.merge(` calls) and for `<<<<<<<`.
+Gotcha: a paragraph both sides EDITED differently (not appended) is kept TWICE by `--union` — check
+prose files for a doubled sentence after the merge (stream-graphics.md, PR-4 round of #718).

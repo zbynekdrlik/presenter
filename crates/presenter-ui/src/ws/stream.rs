@@ -21,7 +21,7 @@
 use gloo_net::websocket::{futures::WebSocket, Message};
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
-use presenter_core::{LiveEvent, TimersOverview};
+use presenter_core::{BibleSlideOutput, LiveEvent, StageDisplaySnapshot, TimersOverview};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -76,12 +76,19 @@ pub struct TimersReceipt {
 /// coalescing `last_event`) so a burst that mixes kinds never drops one kind for
 /// another — each kind is latest-wins, which is correct (every payload is a full
 /// snapshot / a monotonic revision).
+///
+/// `stage` and `bible` reuse the EXISTING worship-stage / Bible live events
+/// (#710): `stage` is the latest `Stage` snapshot (its `current` drives lyrics),
+/// and `bible` is `Some` after a `BibleSlide` event / `None` after `BibleCleared`
+/// (drives the verse element). Content pipelines are reused, not duplicated.
 #[derive(Clone, Copy)]
 pub struct StreamWsHandle {
     pub state: ReadSignal<StreamWsState>,
     pub stream_state: ReadSignal<Option<StreamStateMsg>>,
     pub config_changed: ReadSignal<Option<ConfigChangedMsg>>,
     pub timers: ReadSignal<Option<TimersReceipt>>,
+    pub stage: ReadSignal<Option<StageDisplaySnapshot>>,
+    pub bible: ReadSignal<Option<BibleSlideOutput>>,
 }
 
 /// Signal writers threaded into the reconnecting task.
@@ -91,6 +98,8 @@ struct StreamWsSetters {
     stream_state: WriteSignal<Option<StreamStateMsg>>,
     config_changed: WriteSignal<Option<ConfigChangedMsg>>,
     timers: WriteSignal<Option<TimersReceipt>>,
+    stage: WriteSignal<Option<StageDisplaySnapshot>>,
+    bible: WriteSignal<Option<BibleSlideOutput>>,
 }
 
 /// Open the live socket for the stream output page and keep it reconnected.
@@ -99,12 +108,16 @@ pub fn use_stream_websocket() -> StreamWsHandle {
     let (stream_state, set_stream_state) = signal::<Option<StreamStateMsg>>(None);
     let (config_changed, set_config_changed) = signal::<Option<ConfigChangedMsg>>(None);
     let (timers, set_timers) = signal::<Option<TimersReceipt>>(None);
+    let (stage, set_stage) = signal::<Option<StageDisplaySnapshot>>(None);
+    let (bible, set_bible) = signal::<Option<BibleSlideOutput>>(None);
 
     let setters = StreamWsSetters {
         state: set_state,
         stream_state: set_stream_state,
         config_changed: set_config_changed,
         timers: set_timers,
+        stage: set_stage,
+        bible: set_bible,
     };
 
     let reconnect_delay = Rc::new(RefCell::new(INITIAL_RECONNECT_MS));
@@ -129,6 +142,8 @@ pub fn use_stream_websocket() -> StreamWsHandle {
         stream_state,
         config_changed,
         timers,
+        stage,
+        bible,
     }
 }
 
@@ -253,6 +268,29 @@ fn handle_text(text: &str, setters: StreamWsSetters, last_hb: &Rc<RefCell<f64>>)
                     received_at_ms: now,
                 }));
             }
+        }
+        // Worship-stage snapshot drives the lyrics element (#710). These events
+        // exist in `presenter-core::live` on this tree, so — unlike the
+        // stream_state/config frames above — they are parsed through the REAL
+        // `LiveEvent` type, not a mirror struct.
+        Some("stage") => {
+            if let Ok(LiveEvent::Stage { snapshot }) = serde_json::from_value::<LiveEvent>(value) {
+                *last_hb.borrow_mut() = now;
+                setters.stage.set(Some(snapshot));
+            }
+        }
+        // Bible slide drives the verse element (#710): a `bible_slide` sets the
+        // current output, `bible_cleared` clears it (verse gone).
+        Some("bible_slide") => {
+            if let Ok(LiveEvent::BibleSlide { output }) = serde_json::from_value::<LiveEvent>(value)
+            {
+                *last_hb.borrow_mut() = now;
+                setters.bible.set(Some(output));
+            }
+        }
+        Some("bible_cleared") => {
+            *last_hb.borrow_mut() = now;
+            setters.bible.set(None);
         }
         Some("heartbeat") => {
             *last_hb.borrow_mut() = now;

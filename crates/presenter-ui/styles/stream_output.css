@@ -63,3 +63,19 @@ body.stream {
 .stream-element--countdown {
     white-space: nowrap;
 }
+
+/* Lyrics + verse elements (#710): the Frame is a vertically-centered flex
+ * column (set inline in each element's container style) whose stacked text
+ * lines each carry their own TextStyle inline. The line rules below only govern
+ * WRAPPING — a long/multi-line SlideText wraps within the Frame and anything
+ * past the box is clipped by `.stream-element { overflow:hidden }` (the
+ * 4000-char acceptance criterion: text never spills outside its Frame). */
+.stream-lyrics__line,
+.stream-verse__text,
+.stream-verse__reference {
+    /* Honour newlines in slide/verse text AND wrap; `anywhere` breaks even a
+     * space-less 4000-char run at the box edge so it can never overflow
+     * horizontally. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

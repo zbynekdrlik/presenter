@@ -1,17 +1,20 @@
-//! Renders one stream scene's elements (#709).
+//! Renders one stream scene's elements (#709; lyrics + verse #710).
 //!
 //! Elements arrive already ordered by `z_order` (the repository's def assembly,
-//! #705). Each is mapped to its per-kind component; this lane ships IMAGE +
-//! COUNTDOWN and skips LYRICS/VERSE (#710) by rendering nothing for them. A
-//! scene's element set only changes on a def refetch, which remounts this whole
-//! subtree, so a plain `collect_view()` (no keyed `<For>`) is correct — there is
-//! no live in-place mutation and no scroll container to preserve.
+//! #705). Each is mapped to its per-kind component (IMAGE / COUNTDOWN / LYRICS /
+//! VERSE). A scene's element set only changes on a def refetch, which remounts
+//! this whole subtree, so a plain `collect_view()` (no keyed `<For>`) is correct
+//! — there is no live in-place mutation and no scroll container to preserve.
+//! Live CONTENT changes (a new lyric line / verse) update reactively inside the
+//! lyrics/verse elements themselves, not by rebuilding this subtree.
 
 use leptos::prelude::*;
 use presenter_core::{SceneKind, StreamElementProps, StreamSceneDef};
 
 use super::element_countdown::ElementCountdown;
 use super::element_image::ElementImage;
+use super::element_lyrics::ElementLyrics;
+use super::element_verse::ElementVerse;
 
 #[component]
 pub fn SceneRender(scene: StreamSceneDef) -> impl IntoView {
@@ -43,11 +46,44 @@ pub fn SceneRender(scene: StreamSceneDef) -> impl IntoView {
                     <ElementCountdown id=id timer_id=timer_id style=style frame=frame z=z />
                 }
                 .into_any(),
-                // #710 — lyrics + verse elements. Rendered as nothing here so a
-                // mixed scene stays transparent for them.
-                StreamElementProps::Lyrics { .. } | StreamElementProps::Verse { .. } => {
-                    ().into_any()
+                StreamElementProps::Lyrics {
+                    show_main,
+                    show_translation,
+                    main_style,
+                    translation_style,
+                    frame,
+                    ..
+                } => view! {
+                    <ElementLyrics
+                        id=id
+                        show_main=show_main
+                        show_translation=show_translation
+                        main_style=main_style
+                        translation_style=translation_style
+                        frame=frame
+                        z=z
+                    />
                 }
+                .into_any(),
+                StreamElementProps::Verse {
+                    show_secondary,
+                    text_style,
+                    secondary_style,
+                    reference_style,
+                    frame,
+                    ..
+                } => view! {
+                    <ElementVerse
+                        id=id
+                        show_secondary=show_secondary
+                        text_style=text_style
+                        secondary_style=secondary_style
+                        reference_style=reference_style
+                        frame=frame
+                        z=z
+                    />
+                }
+                .into_any(),
             }
         })
         .collect_view();
