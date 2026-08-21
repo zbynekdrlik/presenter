@@ -223,6 +223,25 @@ branch with a clean console, fulfill with a MALFORMED 200 instead:
 and parse failure (`ApiError::Deserialize`) into the same `Err` path, and gloo-net's
 `json()` parses in pure Rust (zero browser console noise).
 
+**A DELIBERATE REAL non-2xx has the SAME physics as a mocked one — but you can't swap it
+for a malformed-200 when the non-2xx IS the behavior under test (#718).** When the spec's
+whole point is that a REAL server-side validation path returns 422 and the client renders
+its inline error (e.g. `stream-editor.spec.ts`'s "element CRUD, property edit, inline 422
+and z-order" — `PATCH …/elements/:id` with `xPct=150` → 422 → `stream-prop-error` shown),
+you must keep the real 422 AND keep the console assertion. The malformed-200 trick would
+destroy the very coverage. Chrome still logs the `Failed to load resource … 422` line, so
+the idiom is a **narrow filter with a count-assert** applied right before the final assert:
+partition the collected errors by a regex matched narrowly on the exact status
+(`/Failed to load resource: the server responded with a status of 422\b/`), assert the
+matched count EXACTLY equals the number of deliberate non-2xx requests the test makes (here
+1) so an unexpected extra 422 or a missing one still fails, then assert the REMAINDER is
+`toEqual([])`. Never a blanket `errors.filter(e => !/Failed to load resource/.test(e))`
+(that would hide a genuine unrelated non-2xx), never drop the console assertion, never
+route-mock away the real validation. (This is distinct from the `attachEditorConsoleCollector`
+url-scoped filter for the preview iframe's `/stream/assets/` 404 authoring-transient — that
+one is filtered by URL because it is not the behavior under test; the deliberate 422 is,
+so it is asserted-for-then-removed by count.)
+
 ## `#571`'s re-entry (double-submit) guard is on CREATE handlers only, never on `on_delete` (#641)
 
 `op.submitting` guards `on_save` (library/playlist — covers BOTH create AND rename, same
