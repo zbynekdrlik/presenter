@@ -52,6 +52,7 @@ pub(crate) mod stage;
 pub(crate) mod stage_display;
 mod stage_state;
 mod stream;
+pub(crate) mod stream_assets;
 pub(crate) mod sync;
 #[cfg(test)]
 mod sync_integration_breaker_tests;
@@ -174,6 +175,11 @@ pub struct AppState {
     /// enabled->disabled transition instead of once per OSC event.
     ableset_disabled_warn_shown: Arc<AtomicBool>,
     stream: stream::StreamManager,
+    /// Directory holding content-addressed stream-graphics asset files (next to
+    /// `presenter.db`; #708). Resolved once at construction from
+    /// `PRESENTER_STREAM_ASSETS_DIR` / `PRESENTER_DB_URL` / cwd — see
+    /// `state::stream_assets::resolve_dir`.
+    stream_assets_dir: std::path::PathBuf,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -332,6 +338,7 @@ impl AppState {
             ableset_ack_lock: Arc::new(tokio::sync::Mutex::new(())),
             ableset_disabled_warn_shown: Arc::new(AtomicBool::new(false)),
             stream: stream::StreamManager::new(),
+            stream_assets_dir: stream_assets::resolve_dir(),
         };
         state.spawn_heartbeat_tasks();
         state

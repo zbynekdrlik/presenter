@@ -89,3 +89,31 @@ Output-scoped routes take the output SLUG, not the numeric id: `/stream/api/outp
 `GET /stream/api/outputs` (summaries) or `GET /stream/api/outputs/{slug}/def` (`activeSceneId`,
 `configRevision`). A verification curl against `/outputs/1/...` 404s with `"stream output not found"`
 (the numeric string is looked up as a slug).
+so run `cargo fmt --all --check` before committing stream fixtures.
+
+## Asset pipeline on disk (#708)
+Uploaded images live at `<stream_assets_dir>/<sha256>.<ext>` (ext ∈ png|jpg|webp), one file per
+sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`AssetStore` + pure
+`detect_image`/`sha256_hex`/`image_dims`/`resolve_dir`); the metadata row is #705's repository.
+- **Where the dir comes from:** `AppState.stream_assets_dir` (one field, resolved once at construction
+  via `stream_assets::resolve_dir()`): `PRESENTER_STREAM_ASSETS_DIR` → sibling of `PRESENTER_DB_URL`'s
+  sqlite file → cwd `./stream-assets`. Prod/dev units set both `WorkingDirectory` and `PRESENTER_DB_URL`,
+  so all paths land on `<deploy-dir>/stream-assets`. Handlers get `state.asset_store()`; tests set an
+  isolated `TempDir` via `#[cfg(test)] set_stream_assets_dir`. The startup `ensure_stream_assets_dir()`
+  is wired in `main.rs`.
+- **axum default body limit is 2 MiB** — ANY multipart/upload route MUST add
+  `.layer(DefaultBodyLimit::max(N))` (on the `post(..)` MethodRouter) or real images 413 before the
+  handler. The 20 MiB business cap is enforced separately in the handler (precise 413 + message);
+  the layer is a higher DoS ceiling.
+- **`tokio::fs` works in presenter-server** even though the workspace `tokio` features omit `fs` —
+  it's on via feature unification (`ai/proxy.rs` uses it in prod). Don't waste time re-adding the feature.
+- **Serve/delete are id-addressed, traversal-safe:** `GET/DELETE /stream/assets/{id}` (DB i64 id); the
+  file name is built from the stored sha256 + mime→ext, never client input. `AssetStore::path_for`
+  refuses anything not `^[0-9a-f]{64}$` + whitelisted ext. Serve sets
+  `Cache-Control: public, max-age=31536000, immutable`. Delete = row first (guard → 409 via
+  `ConflictDetail`) then best-effort file removal.
+- **Deploy survival:** the deploy `rsync --delete` is scoped to `…/libraries/`, never the deploy-dir
+  root; the binary is `scp`'d. So `stream-assets/` (sibling of `libraries/`) is never deleted — no
+  workflow change needed; documented in `docs/configuration.md`.
+- **`NewStreamAsset` is now re-exported at the persistence crate root** (`presenter_persistence::NewStreamAsset`),
+  not only under the private `repository` module.
