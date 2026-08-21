@@ -7,16 +7,20 @@
  * the body/html are transparent; and a WS drop triggers a reconnect + def
  * refetch. Zero console errors AND warnings asserted last.
  *
- * ── INTEGRATION NOTE (this lane is #709 only) ─────────────────────────────────
+ * ── WIRE CONTRACT (verified against the merged #706/#707/#708 handlers) ───────
  * The REST seeding + activation + asset upload below drive endpoints owned by
- * the PARALLEL lanes #706 (StreamManager + stream_state/timers LiveEvents), #707
- * (`/stream/api/*` REST) and #708 (`/stream/assets` upload). Those land on other
- * branches, so this spec PASSES only after all four lanes are integrated. Every
- * REST shape below is the epic-#718-architecture (§5/§8) + #707/#708 contract
- * reading; the exact create-body field names (`kind`/`z_order`/`props` wrapping,
- * the multipart file field) are CONTRACT ASSUMPTIONS centralized in the helpers
- * here so the integrator can reconcile them against the real #707/#708 handlers
- * in ONE place. See the ticket hand-back's CONTRACT-ASSUMPTIONS list.
+ * the (now merged) lanes #706 (StreamManager + stream_state/timers LiveEvents),
+ * #707 (`/stream/api/*` REST) and #708 (`/stream/assets` upload).
+ * `POST /stream/api/scenes/{scene_id}/elements` deserializes its body directly
+ * as `StreamElementProps` (`crates/presenter-core/src/stream.rs`) — there is NO
+ * `{kind, z_order, props}` wrapper: `z_order` is always server-assigned
+ * (`next_element_z_order`) and is never accepted from the client. The 9 wire
+ * DTO structs in `presenter-core::stream` are `#[serde(rename_all = "camelCase")]`
+ * (`Frame`, `Shadow`, `TextStyle`, ...), so a props payload's `frame`/`style`
+ * VALUES use camelCase keys (`xPct`, `fontFamily`, ...) while the
+ * `StreamElementProps` enum's OWN tag/fields stay snake_case by design
+ * (`#[serde(tag = "kind", rename_all = "snake_case")]` — `asset_id`, `timer_id`).
+ * The multipart upload field name is `file`, matching #708's handler exactly.
  */
 
 import { readFileSync } from "fs";
@@ -59,7 +63,7 @@ test.afterAll(async () => {
   await stopServer(serverHandle);
 });
 
-// ── REST helpers (CONTRACT-shaped; see integration note) ──────────────────────
+// ── REST helpers (see the WIRE CONTRACT note above) ────────────────────────────
 
 async function postJson(
   request: APIRequestContext,
@@ -93,42 +97,40 @@ async function seedBaseScene(
 ): Promise<number> {
   const sceneResp = await request.post(
     `${baseURL}/stream/api/outputs/${SLUG}/scenes`,
-    { data: { name: "BaseA", kind: "base", position: 0 } },
+    { data: { name: "BaseA", kind: "base"} },
   );
   expect(sceneResp.ok(), `create scene -> ${sceneResp.status()}`).toBeTruthy();
   const sceneId = (await sceneResp.json()).id as number;
 
-  // Image element — Frame 10/20/50/30 %, contain, full opacity.
+  // Image element — Frame 10/20/50/30 %, contain, full opacity. The request
+  // body IS the `StreamElementProps` JSON directly (no `{kind, z_order, props}`
+  // wrapper — see the WIRE CONTRACT note above); `z_order` is always
+  // server-assigned. `asset_id`/`fit`/`opacity` stay snake_case (the enum's own
+  // tag/fields); `frame`'s VALUE is a camelCase `Frame`.
   await postJson(request, `/stream/api/scenes/${sceneId}/elements`, {
     kind: "image",
-    z_order: 0,
-    props: {
-      kind: "image",
-      asset_id: assetId,
-      fit: "contain",
-      frame: { x_pct: 10, y_pct: 20, w_pct: 50, h_pct: 30 },
-      opacity: 1.0,
-    },
+    asset_id: assetId,
+    fit: "contain",
+    frame: { xPct: 10, yPct: 20, wPct: 50, hPct: 30 },
+    opacity: 1.0,
   });
 
   // Countdown element — Frame 10/60/80/20 %, big centered white text w/ shadow.
+  // `timer_id` stays snake_case (enum field); `style`'s VALUE is a camelCase
+  // `TextStyle` (nested `shadow` likewise a camelCase `Shadow`).
   await postJson(request, `/stream/api/scenes/${sceneId}/elements`, {
     kind: "countdown",
-    z_order: 1,
-    props: {
-      kind: "countdown",
-      timer_id: 1,
-      style: {
-        font_family: "Arial",
-        size_pct: 12,
-        color: "#ffffff",
-        weight: 700,
-        align: "center",
-        line_height: 1.2,
-        shadow: { x_px: 2, y_px: 2, blur_px: 4, color: "#000000" },
-      },
-      frame: { x_pct: 10, y_pct: 60, w_pct: 80, h_pct: 20 },
+    timer_id: 1,
+    style: {
+      fontFamily: "Arial",
+      sizePct: 12,
+      color: "#ffffff",
+      weight: 700,
+      align: "center",
+      lineHeight: 1.2,
+      shadow: { xPx: 2, yPx: 2, blurPx: 4, color: "#000000" },
     },
+    frame: { xPct: 10, yPct: 60, wPct: 80, hPct: 20 },
   });
 
   return sceneId;
@@ -148,7 +150,7 @@ async function activateBase(
   sceneId: number,
 ): Promise<void> {
   await request.put(`${baseURL}/stream/api/outputs/${SLUG}/active-scene`, {
-    data: { scene_id: sceneId },
+    data: { sceneId },
   });
 }
 
