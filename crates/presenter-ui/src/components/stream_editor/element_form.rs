@@ -77,7 +77,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                                 .collect_view()}
                         </select>
                     </label>
-                    <TextStyleForm draft=draft slot=TsSlot::CountdownStyle label="Štýl" role="countdown" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::CountdownStyle label="Štýl" role="countdown" />
                 </div>
             </Show>
             <Show when=move || kind() == "lyrics">
@@ -110,8 +110,8 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         />
                         <span>"Zobraziť preklad"</span>
                     </label>
-                    <TextStyleForm draft=draft slot=TsSlot::LyricsMain label="Hlavný text" role="main" />
-                    <TextStyleForm draft=draft slot=TsSlot::LyricsTranslation label="Preklad" role="translation" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsMain label="Hlavný text" role="main" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsTranslation label="Preklad" role="translation" />
                 </div>
             </Show>
             <Show when=move || kind() == "verse">
@@ -130,9 +130,9 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         />
                         <span>"Zobraziť druhý jazyk"</span>
                     </label>
-                    <TextStyleForm draft=draft slot=TsSlot::VerseText label="Text verša" role="text" />
-                    <TextStyleForm draft=draft slot=TsSlot::VerseSecondary label="Druhý jazyk" role="secondary" />
-                    <TextStyleForm draft=draft slot=TsSlot::VerseReference label="Odkaz" role="reference" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseText label="Text verša" role="text" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseSecondary label="Druhý jazyk" role="secondary" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseReference label="Odkaz" role="reference" />
                 </div>
             </Show>
 

@@ -14,11 +14,16 @@ use presenter_core::{StreamElementProps, TextAlign, STREAM_FONT_FAMILIES};
 
 use super::props_access::{default_shadow, join_color, read_ts, split_color, with_ts_mut, TsSlot};
 
-/// One labelled `TextStyle` editor bound to `draft` at `slot`.
+/// One labelled `TextStyle` editor bound to `draft` at `ts_slot`.
+///
+/// NOTE: the field-selector prop is `ts_slot`, NOT `slot` — leptos 0.7 reserves
+/// the `slot` view-macro attribute for slot placement (`is_slot` in
+/// `leptos_macro`), so a `slot` prop would be parsed as a parent-slot fill and
+/// fail to compile at every call site.
 #[component]
 pub fn TextStyleForm(
     draft: RwSignal<StreamElementProps>,
-    slot: TsSlot,
+    ts_slot: TsSlot,
     /// Human label shown above the group (e.g. "Hlavný text").
     label: &'static str,
     /// Data-role discriminator for the wrapper (e.g. "main", "translation").
@@ -28,62 +33,62 @@ pub fn TextStyleForm(
 
     // --- reactive readers (each subscribes to `draft`) ---
     let font = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.font_family)
             .unwrap_or_default()
     };
     let size = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.size_pct.to_string())
             .unwrap_or_default()
     };
     let color_rgb = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| split_color(&ts.color).0)
             .unwrap_or_else(|| "#000000".to_string())
     };
     let alpha = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| split_color(&ts.color).1.to_string())
             .unwrap_or_else(|| "255".to_string())
     };
     let weight = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.weight.to_string())
             .unwrap_or_default()
     };
     let line_height = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.line_height.to_string())
             .unwrap_or_default()
     };
     let align_is = move |a: TextAlign| {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.align == a)
             .unwrap_or(false)
     };
     let has_shadow = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.shadow.is_some())
             .unwrap_or(false)
     };
     let shadow_x = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .and_then(|ts| ts.shadow.map(|s| s.x_px.to_string()))
             .unwrap_or_default()
     };
     let shadow_y = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .and_then(|ts| ts.shadow.map(|s| s.y_px.to_string()))
             .unwrap_or_default()
     };
     let shadow_blur = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .and_then(|ts| ts.shadow.map(|s| s.blur_px.to_string()))
             .unwrap_or_default()
     };
     let shadow_color = move || {
-        read_ts(&draft.get(), slot)
+        read_ts(&draft.get(), ts_slot)
             .and_then(|ts| ts.shadow.map(|s| s.color))
             .unwrap_or_else(|| "#000000".to_string())
     };
@@ -105,7 +110,7 @@ pub fn TextStyleForm(
                     prop:value=font
                     on:change=move |ev| {
                         let v = event_target_value(&ev);
-                        draft.update(|p| with_ts_mut(p, slot, |ts| ts.font_family = v.clone()));
+                        draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.font_family = v.clone()));
                     }
                 >
                     {font_options}
@@ -120,7 +125,7 @@ pub fn TextStyleForm(
                     prop:value=size
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| with_ts_mut(p, slot, |ts| ts.size_pct = v));
+                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.size_pct = v));
                         }
                     }
                 />
@@ -134,7 +139,7 @@ pub fn TextStyleForm(
                     prop:value=color_rgb
                     on:input=move |ev| {
                         let rgb = event_target_value(&ev);
-                        draft.update(|p| with_ts_mut(p, slot, |ts| {
+                        draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                             let a = split_color(&ts.color).1;
                             ts.color = join_color(&rgb, a);
                         }));
@@ -146,7 +151,7 @@ pub fn TextStyleForm(
                     prop:value=alpha
                     on:input=move |ev| {
                         if let Ok(a) = event_target_value(&ev).parse::<u8>() {
-                            draft.update(|p| with_ts_mut(p, slot, |ts| {
+                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                                 let rgb = split_color(&ts.color).0;
                                 ts.color = join_color(&rgb, a);
                             }));
@@ -163,7 +168,7 @@ pub fn TextStyleForm(
                     prop:value=weight
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<u16>() {
-                            draft.update(|p| with_ts_mut(p, slot, |ts| ts.weight = v));
+                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.weight = v));
                         }
                     }
                 />
@@ -176,19 +181,19 @@ pub fn TextStyleForm(
                         type="button" class="stream-editor__btn stream-editor__btn--ghost"
                         data-role="stream-ts-align-left"
                         data-active=move || if align_is(TextAlign::Left) { "true" } else { "false" }
-                        on:click=move |_| draft.update(|p| with_ts_mut(p, slot, |ts| ts.align = TextAlign::Left))
+                        on:click=move |_| draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.align = TextAlign::Left))
                     >"◧"</button>
                     <button
                         type="button" class="stream-editor__btn stream-editor__btn--ghost"
                         data-role="stream-ts-align-center"
                         data-active=move || if align_is(TextAlign::Center) { "true" } else { "false" }
-                        on:click=move |_| draft.update(|p| with_ts_mut(p, slot, |ts| ts.align = TextAlign::Center))
+                        on:click=move |_| draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.align = TextAlign::Center))
                     >"◫"</button>
                     <button
                         type="button" class="stream-editor__btn stream-editor__btn--ghost"
                         data-role="stream-ts-align-right"
                         data-active=move || if align_is(TextAlign::Right) { "true" } else { "false" }
-                        on:click=move |_| draft.update(|p| with_ts_mut(p, slot, |ts| ts.align = TextAlign::Right))
+                        on:click=move |_| draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.align = TextAlign::Right))
                     >"◨"</button>
                 </div>
             </div>
@@ -201,7 +206,7 @@ pub fn TextStyleForm(
                     prop:value=line_height
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| with_ts_mut(p, slot, |ts| ts.line_height = v));
+                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.line_height = v));
                         }
                     }
                 />
@@ -214,7 +219,7 @@ pub fn TextStyleForm(
                     prop:checked=has_shadow
                     on:change=move |ev| {
                         let on = event_target_checked(&ev);
-                        draft.update(|p| with_ts_mut(p, slot, |ts| {
+                        draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                             ts.shadow = if on { Some(default_shadow()) } else { None };
                         }));
                     }
@@ -232,7 +237,7 @@ pub fn TextStyleForm(
                             prop:value=shadow_x
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                                    draft.update(|p| with_ts_mut(p, slot, |ts| {
+                                    draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                                         if let Some(s) = ts.shadow.as_mut() { s.x_px = v; }
                                     }));
                                 }
@@ -247,7 +252,7 @@ pub fn TextStyleForm(
                             prop:value=shadow_y
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                                    draft.update(|p| with_ts_mut(p, slot, |ts| {
+                                    draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                                         if let Some(s) = ts.shadow.as_mut() { s.y_px = v; }
                                     }));
                                 }
@@ -262,7 +267,7 @@ pub fn TextStyleForm(
                             prop:value=shadow_blur
                             on:input=move |ev| {
                                 if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                                    draft.update(|p| with_ts_mut(p, slot, |ts| {
+                                    draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                                         if let Some(s) = ts.shadow.as_mut() { s.blur_px = v; }
                                     }));
                                 }
@@ -277,7 +282,7 @@ pub fn TextStyleForm(
                             prop:value=shadow_color
                             on:input=move |ev| {
                                 let c = event_target_value(&ev);
-                                draft.update(|p| with_ts_mut(p, slot, |ts| {
+                                draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
                                     if let Some(s) = ts.shadow.as_mut() { s.color = c.clone(); }
                                 }));
                             }
