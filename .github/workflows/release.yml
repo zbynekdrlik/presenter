@@ -224,6 +224,18 @@ jobs:
             deploy-target:${{ env.DEPLOY_DIR }}/
           ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
 
+      # #730: keep the llmrot channel script fresh on every PP release. The
+      # one-time authorized_keys line for claudy's key is provisioned
+      # separately (deploy/llmrot-provision.sh, run manually per host) —
+      # deliberately NOT in per-push CI. Runs as the deploy user (newlevel),
+      # no sudo — the deploy dir is newlevel-owned.
+      - name: Deploy llmrot channel script (#730)
+        run: |
+          scp -i ~/.ssh/id_deploy deploy/llmrot-apply.sh deploy-target:${{ env.DEPLOY_DIR }}/llmrot-apply.new
+          # atomic swap (new inode): a claudy invocation running mid-deploy keeps
+          # its old inode; the next invocation picks up the new script (#730 review).
+          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/llmrot-apply.new && mv -f ${{ env.DEPLOY_DIR }}/llmrot-apply.new ${{ env.DEPLOY_DIR }}/llmrot-apply"
+
       - name: Deploy Android Stage APK
         run: |
           scp -i ~/.ssh/id_deploy binaries/presenter-stage.apk deploy-target:${{ env.DEPLOY_DIR }}/presenter-stage.apk

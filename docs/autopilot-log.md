@@ -1367,25 +1367,27 @@ across model families); the ticket itself stays open on the user's direction dec
   wall — bible-authoring 0–1/11 in both modes across all four models. Direction decision → user.
 
 **v0.4.260 (#730, llmrot channel):**
-- #730 llmrot subscription channel (mirror odoo-erp gk design 4697) on SNV + PP + dev2:
-  restricted `llmrot` ForceCommand ssh account (zero-arg sudoers lock, all input via
-  SSH_ORIGINAL_COMMAND + STDIN) whose only entry point is `/usr/local/sbin/llmrot-apply`
-  (`deploy/llmrot-apply.sh`) — `list | apply <name> | remove <name>`; claudy (dev1) tops up
-  each host's local CLIProxyAPI auth pool with live "dying" subscriptions.
-- Reload mechanism DECIDED (worker call, live-proven on dev2 binary 7.2.130): CLIProxyAPI's
-  built-in fsnotify auth-dir watcher hot-reloads an atomically-written file in ~1s with NO
-  restart — zero stage/operator outage, no presenter-server change. (Rejected: internal child
-  restart hook; full service restart.)
-- Idempotent provisioning `deploy/llmrot-provision.sh` (account/keys/sudoers/handler/conf/log).
-  llmrot account needs a REAL shell (/bin/bash) not nologin — sshd runs the ForceCommand via
-  the login shell, and nologin refuses ("account not available"), found live.
-- Security hardening from adversarial review (1🔴 3🟡 3🔵, all fixed in-branch): lock out of
-  world-writable /var/lock (root symlink-truncation), newline-proof name validation, same-fs
-  atomic snapshot + EXIT-trap cleanup, fail-closed chown, symlink-safe remove, 0700 auth-dir.
+- #730 llmrot subscription channel on SNV + PP + dev2 — claudy (dev1) tops up each host's
+  local CLIProxyAPI auth pool with live "dying" subscriptions (`list | apply <name> | remove
+  <name>`, payload via SSH_ORIGINAL_COMMAND + STDIN, `remove` prints the current on-disk JSON
+  back for claudy's auto-reclaim).
+- Topology SIMPLIFIED per owner ruling (issue comment 5382188113) vs the gk mirror: NO llmrot
+  unix account, NO sudoers, NO /usr/local/sbin — claudy's existing key gets a forced-command
+  line in `newlevel`'s authorized_keys and `deploy/llmrot-apply.sh` runs newlevel-owned from
+  the deploy dir (auth-dir is newlevel's; root machinery only existed on gk because root owns
+  the pool there). A parallel gk-mirror build (llmrot account + sudoers) was superseded by the
+  ruling; its one keeper — the proxy.rs auth-scan fix below — was salvaged into this release.
+- Reload mechanism DECIDED (live-proven on dev2 binary 7.2.130): CLIProxyAPI's built-in
+  fsnotify auth-dir watcher hot-reloads an atomically-written file in ~1s with NO restart —
+  zero stage/operator outage, no presenter-server change. (Rejected: internal child restart
+  hook; full service restart.)
+- Idempotent `deploy/llmrot-provision.sh` (authorized_keys forced-command line + handler
+  install); deploy/release workflows re-copy the handler on every deploy.
+- Adversarial security review of the channel scripts: findings fixed in-branch; shellcheck
+  clean; core clean (no escape/injection/traversal); E2E over the real channel from dev1
+  verified on all three destinations (list/apply/remove/rollback/validation).
 - proxy.rs auth-scan now counts llmrot-*.json (regression test) so a pool sustained solely by
   channel accounts doesn't wrongly report "not authenticated".
 - docs/configuration.md: PRESENTER_AI_API_URL default port fix 8787->18787 + llmrot section.
-- Full channel apply/list/remove/rollback/validation/security verified LIVE on dev2 from dev1
-  via claudy's key. Real-account completion->helper E2E is claudy's live-verify (gated on the
-  "kanál LIVE" comment; claudy maintains the single-RT-holder invariant, so the presenter side
-  never applies a flotilla account itself).
+- Real-account completion -> helper E2E is claudy's live-verify step (claudy#153, "kanál
+  LIVE" posted 2026-08-22).

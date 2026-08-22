@@ -1,269 +1,269 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# llmrot-apply — restricted "llmrot" subscription channel root handler (#730).
 #
-# Installed as /usr/local/sbin/llmrot-apply (root:root 0755). Invoked ONLY
-# through the `llmrot` account's ForceCommand authorized_keys, as root via
-# `sudo -n /usr/local/sbin/llmrot-apply` with ZERO arguments (sudoers
-# zero-arg lock). All input arrives via $SSH_ORIGINAL_COMMAND (the subcommand)
-# and STDIN (the auth payload) — NEVER argv.
+# llmrot-apply — restricted forced-command channel for the presenter prods.
 #
-# Mirror of the odoo-erp #4697 gk design, adapted for presenter where
-# CLIProxyAPI runs as a child of presenter-server. The reload mechanism is
-# CLIProxyAPI's own fsnotify auth-dir watcher (verified live on dev2, binary
-# 7.2.130): an atomically-written auth file is hot-reloaded incrementally
-# within ~1s with NO process restart — so this script never restarts
-# presenter-server or the proxy, and never causes a stage/operator outage.
+# claudy (dev1) manages a fleet of Claude subscriptions and feeds dying-but-live
+# accounts into the on-device CLIProxyAPI so the AI helper (verse parsing) never
+# stalls on a hit rate limit. This script is the PRESENTER SIDE of that channel
+# (issue #730, mirror of odoo-erp #4697), SIMPLIFIED per owner ruling
+# (#730 comment 5382188113): NO dedicated user, NO sudoers, NO root script.
 #
-# Subcommands (matched exactly):
-#   list                 — llmrot-managed account names + mtime + proxy/completion probe (NO tokens)
-#   apply <name> <STDIN> — atomically install llmrot-<name>.json; rollback if the proxy goes down
-#   remove <name>        — print the current (rotated) auth JSON to stdout, then delete llmrot-<name>.json
+# It is installed into the presenter DEPLOY DIR (e.g. /opt/presenter[-dev]) and
+# runs as the deploy user `newlevel` (which owns the auth-dir) WITHOUT sudo. The
+# ONLY way in is the sshd forced command bound to claudy's key in newlevel's
+# authorized_keys:
 #
-# name := [a-z0-9_-]{1,32}
+#   command="<deploy-dir>/llmrot-apply",restrict,no-pty,no-port-forwarding,\
+#   no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... llmrot-claudy@dev1
 #
-# Security: token content is ONLY ever read from STDIN / written to the 0600
-# auth file / (for remove) printed to stdout back over the ssh channel — it is
-# NEVER written to the log or passed on argv. The log is token-free by
-# construction (only status strings, never payloads).
+# so the key can run ONLY this script — nothing else on the box.
+#
+# Wire contract (identical to gk / odoo-erp #4697, consumed by claudy #153),
+# carried entirely via $SSH_ORIGINAL_COMMAND + STDIN/STDOUT — never argv, never
+# logged, never in the repo:
+#
+#   list                 -> "<name>\t<mtime_epoch>" per llmrot account (no tokens)
+#                           + summary "proxy=up|down completion=<200|limited|err|na> accounts=N"
+#   apply <name> <STDIN>  -> validate + atomically install llmrot-<name>.json (0600),
+#                           hot-reloaded by CLIProxyAPI's fsnotify watcher (no restart);
+#                           rollback ONLY if the proxy goes DOWN.
+#   remove <name>         -> print the CURRENT (rotated) auth JSON to STDOUT, THEN delete
+#                           (claudy reclaims the rotated refresh token); missing = no-op.
+#
+# name = [a-z0-9_-]{1,32}. STDIN payload capped at 64 KiB. Reload is the
+# CLIProxyAPI auth-dir fsnotify watcher — no service restart, zero stage/operator
+# downtime (proven live on dev2, binary 7.2.130; see #730 design comment).
 
-CONF=/etc/llmrot.conf
-if [ ! -r "$CONF" ]; then
-  echo "llmrot: missing or unreadable $CONF" >&2
-  exit 78 # EX_CONFIG
-fi
-# shellcheck source=/dev/null
-. "$CONF"
-: "${AUTH_DIR:?llmrot: AUTH_DIR not set in /etc/llmrot.conf}"
-: "${PROXY_URL:?llmrot: PROXY_URL not set in /etc/llmrot.conf}"
-: "${FILE_OWNER:?llmrot: FILE_OWNER not set in /etc/llmrot.conf}"
-PROBE_MODEL="${PROBE_MODEL:-claude-3-5-haiku-20241022}"
+# --- locate our own deploy dir (works under the sshd forced command, where
+#     $0 is the installed absolute path) --------------------------------------
+SELF="$(readlink -f "$0")"
+DEPLOY_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+AUTH_DIR="$DEPLOY_DIR/.cli-proxy-api"
+CONFIG_YAML="$DEPLOY_DIR/cli-proxy-api-config.yaml"
+LOG_FILE="$DEPLOY_DIR/llmrot.log"
+LOCK_FILE="$DEPLOY_DIR/.llmrot.lock"
+MAX_PAYLOAD=65536
 
-# LOG_DIR / LOCK default to the production paths. They are env-overridable ONLY
-# for isolated testing — this is safe because the real invocation goes through
-# sudo with `env_reset` (default) keeping ONLY SSH_ORIGINAL_COMMAND (per the
-# sudoers env_keep), so a caller on the ssh channel cannot inject either.
-LOG_DIR="${LLMROT_LOG_DIR:-/var/log/llmrot}"
-LOG="$LOG_DIR/apply.log"
-# The lock lives INSIDE the root-owned 0750 log dir — NOT the world-writable
-# (1777) /var/lock (→ /run/lock), where a local unprivileged user could plant
-# a symlink that this script's root `exec 9>"$LOCK"` (O_CREAT|O_TRUNC, follows
-# symlinks) would then truncate to zero bytes as root. A root-only parent dir
-# closes that vector.
-LOCK="${LLMROT_LOCK:-$LOG_DIR/llmrot.lock}"
-MAX_STDIN=$((64 * 1024))
+# proxy port from the presenter-generated config; fall back to the default.
+PORT="$(awk -F': *' '/^port:/ {gsub(/[^0-9]/,"",$2); print $2; exit}' "$CONFIG_YAML" 2>/dev/null || true)"
+PORT="${PORT:-18787}"
+BASE="http://127.0.0.1:${PORT}"
 
-# Temp/snapshot paths — script-global so the EXIT trap set in do_apply can clean
-# them up on any abort (a `local` would be out of scope by the time the trap runs).
-tmp=""
-prev=""
+# Restrictive from the first file creation: the log, lock, auth-dir and every
+# temp are created 0600/0700. (Previously set only inside do_apply, which left
+# the log world-readable when created by a list/reject call — review #730.)
+umask 077
 
-log() {
-  # Token-free by construction: callers only pass status strings, never payloads.
-  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG" 2>/dev/null || true
-}
+# token-free audit log (never logs STDIN / auth content).
+log() { printf '%s [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MODE:-init}" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+die() { echo "ERR: $*" >&2; log "ERROR: $*"; exit 1; }
 
-# Set owner on an auth file to the proxy user; try user:user then user (systems
-# where the primary group name differs). Returns nonzero if BOTH fail so the
-# caller can fail CLOSED rather than publishing a wrong-owner credential file.
-chown_file() {
-  chown "$FILE_OWNER:$FILE_OWNER" "$1" 2>/dev/null || chown "$FILE_OWNER" "$1" 2>/dev/null
-}
-
-# Proxy up == GET /v1/models returns HTTP 200. This is the ONLY rollback
-# trigger for apply: a proxy that stopped serving after a write.
-proxy_up() {
+# --- probes ------------------------------------------------------------------
+# proxy liveness -> "up" | "down"
+probe_proxy() {
   local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$PROXY_URL/v1/models" 2>/dev/null || echo 000)
-  [ "$code" = "200" ]
-}
-
-# Diagnostic completion probe. Prints one of: 200 | limited | err:<code> | na
-# NEVER logs or prints the response body (which could carry provider text).
-# A rate-limited (429 / "limited") result is EXPECTED for a dying account and
-# is NOT a failure — the account is loaded, just throttled.
-completion_probe() {
-  local body code
-  body=$(curl -s -w $'\n%{http_code}' --max-time 20 -X POST "$PROXY_URL/v1/chat/completions" \
-    -H 'Content-Type: application/json' \
-    -d "{\"model\":\"${PROBE_MODEL}\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" 2>/dev/null) || {
-    echo "na"
-    return 0
-  }
-  code=$(printf '%s' "$body" | tail -n1)
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/v1/models" 2>/dev/null || echo 000)"
   case "$code" in
-  200) echo "200" ;;
-  429) echo "limited" ;;
-  *)
-    if printf '%s' "$body" | grep -qiE 'rate.?limit|"limited"|exhausted|overloaded|too many requests'; then
-      echo "limited"
-    else
-      echo "err:${code}"
-    fi
-    ;;
+    2*) echo up ;;
+    *)  echo down ;;
   esac
 }
 
-validate_name() {
-  # bash `[[ =~ ]]` anchors ^/$ to the whole STRING (no REG_NEWLINE), so an
-  # embedded newline cannot smuggle a second line past this — unlike the
-  # line-oriented `grep -qE '^...$'` this replaced, which matched if only the
-  # FIRST line was clean (log-injection / fragile-traversal vector).
-  [[ "$1" =~ ^[a-z0-9_-]{1,32}$ ]]
+# real completion -> "200" | "limited" | "err" | "na"
+# Uses the cheapest available model (prefers a haiku), max_tokens:1.
+probe_completion() {
+  local models model resp code body
+  models="$(curl -s --max-time 8 "$BASE/v1/models" 2>/dev/null || echo '')"
+  [ -n "$models" ] || { echo na; return; }
+  model="$(printf '%s' "$models" | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin).get("data", [])
+except Exception:
+    sys.exit(0)
+ids = [m.get("id") for m in data if m.get("id")]
+if not ids:
+    sys.exit(0)
+haiku = [i for i in ids if "haiku" in i.lower()]
+print((haiku or ids)[0])
+' 2>/dev/null || true)"
+  [ -n "$model" ] || { echo na; return; }
+  resp="$(curl -s -w '\n%{http_code}' --max-time 30 -X POST "$BASE/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"1\"}],\"max_tokens\":1}" \
+    2>/dev/null || echo $'\n000')"
+  code="$(printf '%s' "$resp" | tail -n1)"
+  body="$(printf '%s' "$resp" | sed '$d')"
+  case "$code" in
+    200) echo 200 ;;
+    429) echo limited ;;
+    *)
+      if printf '%s' "$body" | grep -qiE 'rate.?limit|limited|exhaust|quota|resource_exhausted'; then
+        echo limited
+      else
+        echo err
+      fi
+      ;;
+  esac
 }
 
+count_accounts() {
+  local n=0 f
+  shopt -s nullglob
+  for f in "$AUTH_DIR"/llmrot-*.json; do n=$((n + 1)); done
+  shopt -u nullglob
+  echo "$n"
+}
+
+# --- modes -------------------------------------------------------------------
 do_list() {
-  local p comp="na" n=0 f base nm mt
-  if proxy_up; then p=up; comp=$(completion_probe); else p=down; fi
+  local f base name mtime
   shopt -s nullglob
   for f in "$AUTH_DIR"/llmrot-*.json; do
-    base=${f##*/}
-    nm=${base#llmrot-}
-    nm=${nm%.json}
-    mt=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-    printf '%s\t%s\n' "$nm" "$mt"
-    n=$((n + 1))
+    base="$(basename "$f" .json)"   # llmrot-<name>
+    name="${base#llmrot-}"
+    mtime="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    printf '%s\t%s\n' "$name" "$mtime"
   done
-  printf 'proxy=%s completion=%s accounts=%s\n' "$p" "$comp" "$n"
-  log "list proxy=$p completion=$comp accounts=$n"
+  shopt -u nullglob
+  local proxy comp accts
+  proxy="$(probe_proxy)"
+  accts="$(count_accounts)"
+  if [ "$proxy" = up ]; then comp="$(probe_completion)"; else comp=na; fi
+  echo "proxy=$proxy completion=$comp accounts=$accts"
+  log "list: proxy=$proxy completion=$comp accounts=$accts"
 }
 
 do_apply() {
-  local name="$1" payload target comp
-  # tmp/prev are script-global (see top) so the EXIT trap can clean them up.
-  # Clean up any temp/snapshot on ANY exit (abort mid-write, rollback, success).
-  trap 'rm -f "$tmp" "$prev" 2>/dev/null || true' EXIT
-  # STDIN, hard-capped at MAX_STDIN bytes (read one extra byte to detect overflow).
-  payload=$(head -c "$((MAX_STDIN + 1))")
-  if [ "$(printf '%s' "$payload" | wc -c)" -gt "$MAX_STDIN" ]; then
-    echo "llmrot: payload too large (> ${MAX_STDIN} bytes)" >&2
-    log "apply $name REJECT oversize"
-    exit 1
-  fi
-  # JSON shape validation: object with type/access_token/refresh_token present.
-  if ! printf '%s' "$payload" | python3 -c '
+  local name="$1"
+  local target="$AUTH_DIR/llmrot-${name}.json"
+  mkdir -p "$AUTH_DIR"
+
+  # read STDIN into an in-dir temp (same filesystem -> atomic rename later).
+  # temp name does NOT end in .json so the fsnotify watcher ignores it.
+  # The EXIT trap covers BOTH the temp AND the rollback backup, so a kill at
+  # any point never leaks a token-bearing file into the auth-dir; each var is
+  # blanked once it becomes the live file / is consumed.
+  local tmp="" bak="" had_old=0
+  trap 'rm -f "${tmp:-}" "${bak:-}" 2>/dev/null || true' EXIT
+  tmp="$(mktemp "$AUTH_DIR/.llmrot-${name}.tmp.XXXXXX")"
+  head -c $((MAX_PAYLOAD + 1)) >"$tmp"
+
+  local size
+  size="$(stat -c %s "$tmp" 2>/dev/null || echo 0)"
+  [ "$size" -le "$MAX_PAYLOAD" ] || die "apply $name: payload > ${MAX_PAYLOAD} bytes"
+  [ "$size" -gt 0 ] || die "apply $name: empty payload"
+
+  # validate JSON shape: object with string type + non-empty access_token + refresh_token.
+  python3 - "$tmp" <<'PY' || die "apply $name: invalid auth JSON shape (need type + access_token + refresh_token)"
 import sys, json
-d = json.load(sys.stdin)
-assert isinstance(d, dict), "not an object"
+try:
+    with open(sys.argv[1], "rb") as fh:
+        obj = json.load(fh)
+except Exception as e:
+    sys.stderr.write("json parse: %s\n" % e); sys.exit(1)
+if not isinstance(obj, dict):
+    sys.stderr.write("not a json object\n"); sys.exit(1)
 for k in ("type", "access_token", "refresh_token"):
-    assert k in d and isinstance(d[k], str) and d[k], "missing/empty " + k
-' 2>/dev/null; then
-    echo "llmrot: invalid auth JSON shape (need object with type/access_token/refresh_token)" >&2
-    log "apply $name REJECT bad-shape"
-    exit 1
-  fi
+    v = obj.get(k)
+    if not isinstance(v, str) or not v.strip():
+        sys.stderr.write("missing/empty field: %s\n" % k); sys.exit(1)
+sys.exit(0)
+PY
 
-  target="$AUTH_DIR/llmrot-${name}.json"
-  # Snapshot the previous file so a re-apply can roll back to it. The snapshot
-  # lives in the SAME dir (same filesystem → the rollback mv is an atomic
-  # rename, never a cross-fs copy+unlink with a wrong-owner window), dot+random
-  # so the *.json watcher glob ignores it, and never in /tmp (no credential
-  # leak to a fourth sink; the EXIT trap removes it on any abort).
+  # snapshot the current file for rollback (bak name never ends in .json).
   if [ -f "$target" ]; then
-    prev=$(mktemp "$AUTH_DIR/.llmrot-prev.XXXXXX")
-    cp -p "$target" "$prev"
+    had_old=1
+    bak="$(mktemp "$AUTH_DIR/.llmrot-${name}.bak.XXXXXX")"
+    cp -p "$target" "$bak"
   fi
-  # Atomic write: temp in the SAME dir (so mv is a rename on one filesystem),
-  # dot+random so the *.json watcher glob ignores it, correct perms/owner set
-  # BEFORE the rename so the watcher never sees a half-written or wrong-perms file.
-  tmp=$(mktemp "$AUTH_DIR/.llmrot-${name}.XXXXXX")
-  printf '%s' "$payload" >"$tmp"
+
+  # baseline: was the proxy up BEFORE we touch anything? Rollback is for a
+  # regression WE caused (up -> down), never for a pre-existing outage.
+  local proxy_before
+  proxy_before="$(probe_proxy)"
+
   chmod 600 "$tmp"
-  # Fail CLOSED: if the owner cannot be set, the proxy (running as FILE_OWNER)
-  # could not read the file — never rename a wrong-owner credential into place.
-  if ! chown_file "$tmp"; then
-    rm -f "$tmp"
-    tmp=""
-    log "apply $name ABORT chown-failed"
-    echo "llmrot: could not set owner ($FILE_OWNER) on auth file — aborted" >&2
-    exit 1
-  fi
-  mv -f "$tmp" "$target"
-  tmp="" # renamed away; nothing left for the trap to clean
+  mv -f "$tmp" "$target"          # atomic install -> watcher hot-reloads
+  tmp=""                          # the temp is now the live file
 
-  sleep 2 # let the fsnotify watcher pick up the change
+  sleep 1.5                       # give the fsnotify watcher time to reload
 
-  if ! proxy_up; then
-    # Rollback: restore previous content (atomic same-fs rename), or remove.
-    if [ -n "$prev" ]; then
-      mv -f "$prev" "$target"
-      prev=""
-      chmod 600 "$target"
-      chown_file "$target" || true
-    else
-      rm -f "$target"
+  local proxy
+  proxy="$(probe_proxy)"
+  if [ "$proxy" != up ]; then
+    if [ "$proxy_before" = up ]; then
+      # up before, down after -> WE broke it -> roll back and fail (#4697).
+      if [ "$had_old" -eq 1 ]; then
+        mv -f "$bak" "$target"; bak=""
+        log "apply $name: proxy up->DOWN after apply -> rolled back to previous file"
+      else
+        rm -f "$target"
+        log "apply $name: proxy up->DOWN after apply -> removed new file (no previous)"
+      fi
+      sleep 1.0
+      die "apply $name: proxy went DOWN after applying the account (rolled back)"
     fi
-    sleep 2
-    log "apply $name ROLLBACK proxy-down"
-    echo "llmrot: proxy down after apply — rolled back" >&2
-    exit 1
+    # proxy was ALREADY down before apply (unrelated outage): keep the new file
+    # (it loads when the proxy recovers), report proxy=down, do NOT roll back or
+    # fail — claudy owns account liveness and sees proxy=down.
+    rm -f "$bak"; bak=""
+    local accts_down
+    accts_down="$(count_accounts)"
+    log "apply $name: installed (${size}B) but proxy already DOWN before apply (not our regression) accounts=$accts_down"
+    echo "OK apply $name: proxy=down completion=na accounts=$accts_down"
+    return 0
   fi
+  rm -f "$bak"; bak=""
 
-  comp=$(completion_probe)
-  [ -n "$prev" ] && { rm -f "$prev"; prev=""; }
-  log "apply $name OK proxy=up completion=$comp"
-  echo "applied llmrot-${name} proxy=up completion=${comp}"
+  # proxy up. Completion is DIAGNOSTIC only: a dying account is legitimately
+  # rate-limited (429/limited) -> log + exit 0, never roll back.
+  local comp accts
+  comp="$(probe_completion)"
+  accts="$(count_accounts)"
+  log "apply $name: installed (${size}B) proxy=up completion=$comp accounts=$accts"
+  echo "OK apply $name: proxy=up completion=$comp accounts=$accts"
 }
 
 do_remove() {
   local name="$1"
   local target="$AUTH_DIR/llmrot-${name}.json"
-  # Regular file AND not a symlink (never `cat` a symlink to an arbitrary file
-  # out over the ssh channel as root — defense in depth on top of the 0700
-  # proxy-owned auth dir).
-  if [ -f "$target" ] && [ ! -L "$target" ]; then
-    # Print the CURRENT (CLIProxyAPI may have rotated the refresh token) auth
-    # JSON to stdout so claudy can reclaim the live token, THEN delete it.
-    cat "$target"
-    rm -f "$target"
-    sleep 2
-    log "remove $name OK (current auth returned on stdout)"
+  if [ -f "$target" ]; then
+    cat "$target"                 # STDOUT = current (rotated) auth JSON -> claudy reclaim
+    rm -f "$target"               # watcher unregisters the account
+    log "remove $name: printed current auth JSON to stdout, then deleted"
   else
-    # Idempotent: already absent — empty stdout, success.
-    log "remove $name NOOP (absent)"
+    log "remove $name: no such account (idempotent no-op)"
   fi
 }
 
-main() {
-  mkdir -p "$LOG_DIR" 2>/dev/null || true
-  local cmd="${SSH_ORIGINAL_COMMAND:-}" action name=""
-  case "$cmd" in
-  list) action=list ;;
-  "apply "*)
-    action=apply
-    name="${cmd#apply }"
-    ;;
-  "remove "*)
-    action=remove
-    name="${cmd#remove }"
-    ;;
-  *)
-    echo "llmrot: usage: list | apply <name> | remove <name>" >&2
-    log "REJECT bad-cmd"
-    exit 2
-    ;;
-  esac
-  if [ "$action" != list ]; then
-    if ! validate_name "$name"; then
-      echo "llmrot: invalid name (must match [a-z0-9_-]{1,32})" >&2
-      log "$action REJECT bad-name"
-      exit 2
-    fi
-  fi
-  case "$action" in
-  list) do_list ;;
-  apply) do_apply "$name" ;;
-  remove) do_remove "$name" ;;
-  esac
-}
+# --- dispatch (all input via SSH_ORIGINAL_COMMAND; STDIN only for apply) ------
+CMD="${SSH_ORIGINAL_COMMAND:-}"
+# collapse any accidental surrounding whitespace but keep it a single line.
+CMD="$(printf '%s' "$CMD" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
-# Serialize concurrent invocations. The lock dir (LOG_DIR) is root-owned 0750
-# (created by provisioning); ensure it exists before opening the lock so the
-# open never has to create a path a non-root user could have pre-planted.
-mkdir -p "$LOG_DIR" 2>/dev/null || true
-exec 9>"$LOCK"
-if ! flock -w 30 9; then
-  echo "llmrot: busy (could not acquire lock)" >&2
-  exit 75 # EX_TEMPFAIL
+MODE="reject"
+exec 9>"$LOCK_FILE"
+# -w 90 covers a worst-case concurrent `list` hold (two /v1/models probes +
+# one completion probe ≈ 46s) so claudy's periodic list never spuriously
+# fails an overlapping apply (review #730).
+if ! flock -w 90 9; then
+  die "could not acquire lock within 90s"
 fi
-main
+
+if [ "$CMD" = "list" ]; then
+  MODE=list
+  do_list
+elif [[ "$CMD" =~ ^apply\ ([a-z0-9_-]{1,32})$ ]]; then
+  MODE=apply
+  do_apply "${BASH_REMATCH[1]}"
+elif [[ "$CMD" =~ ^remove\ ([a-z0-9_-]{1,32})$ ]]; then
+  MODE=remove
+  do_remove "${BASH_REMATCH[1]}"
+else
+  # log only the length, never the content: a confused client could send a
+  # token as part of the command, and the log must stay token-free (review #730).
+  log "rejected: unrecognized command (len=${#CMD})"
+  die "unrecognized command; allowed: 'list' | 'apply <name>' | 'remove <name>' (name=[a-z0-9_-]{1,32})"
+fi
