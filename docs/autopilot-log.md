@@ -1365,3 +1365,27 @@ across model families); the ticket itself stays open on the user's direction dec
   oneOf now mirrors the validator). Full 5-config tools-vs-constrained sweep on #662: constrained
   unlocks non-tool-calling models (EuroLLM/Gemma template artifact confirmed), but content is the
   wall — bible-authoring 0–1/11 in both modes across all four models. Direction decision → user.
+
+**v0.4.260 (#730, llmrot channel):**
+- #730 llmrot subscription channel (mirror odoo-erp gk design 4697) on SNV + PP + dev2:
+  restricted `llmrot` ForceCommand ssh account (zero-arg sudoers lock, all input via
+  SSH_ORIGINAL_COMMAND + STDIN) whose only entry point is `/usr/local/sbin/llmrot-apply`
+  (`deploy/llmrot-apply.sh`) — `list | apply <name> | remove <name>`; claudy (dev1) tops up
+  each host's local CLIProxyAPI auth pool with live "dying" subscriptions.
+- Reload mechanism DECIDED (worker call, live-proven on dev2 binary 7.2.130): CLIProxyAPI's
+  built-in fsnotify auth-dir watcher hot-reloads an atomically-written file in ~1s with NO
+  restart — zero stage/operator outage, no presenter-server change. (Rejected: internal child
+  restart hook; full service restart.)
+- Idempotent provisioning `deploy/llmrot-provision.sh` (account/keys/sudoers/handler/conf/log).
+  llmrot account needs a REAL shell (/bin/bash) not nologin — sshd runs the ForceCommand via
+  the login shell, and nologin refuses ("account not available"), found live.
+- Security hardening from adversarial review (1🔴 3🟡 3🔵, all fixed in-branch): lock out of
+  world-writable /var/lock (root symlink-truncation), newline-proof name validation, same-fs
+  atomic snapshot + EXIT-trap cleanup, fail-closed chown, symlink-safe remove, 0700 auth-dir.
+- proxy.rs auth-scan now counts llmrot-*.json (regression test) so a pool sustained solely by
+  channel accounts doesn't wrongly report "not authenticated".
+- docs/configuration.md: PRESENTER_AI_API_URL default port fix 8787->18787 + llmrot section.
+- Full channel apply/list/remove/rollback/validation/security verified LIVE on dev2 from dev1
+  via claudy's key. Real-account completion->helper E2E is claudy's live-verify (gated on the
+  "kanál LIVE" comment; claudy maintains the single-RT-holder invariant, so the presenter side
+  never applies a flotilla account itself).
