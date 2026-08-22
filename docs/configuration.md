@@ -19,12 +19,49 @@ All environment variables and feature flags for Presenter.
 
 | Variable                             | Default                        | Description                                                                                                                                          |
 | ------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRESENTER_AI_API_URL`                | `http://localhost:8787/v1`      | OpenAI-compatible chat completions endpoint (the on-device CLIProxyAPI by default). Overridden by a persisted `/ai/settings` value if one is saved. |
+| `PRESENTER_AI_API_URL`                | `http://localhost:18787/v1`     | OpenAI-compatible chat completions endpoint (the on-device CLIProxyAPI by default, `127.0.0.1:18787`). Overridden by a persisted `/ai/settings` value if one is saved. |
 | `PRESENTER_AI_API_KEY`                | unset                           | Bearer token for the AI provider, if required.                                                                                                      |
 | `PRESENTER_AI_MODEL`                  | `claude-opus-4-6`               | Model name sent on every chat completion request.                                                                                                   |
 | `PRESENTER_AI_CONTEXT_BUDGET_BYTES`   | `300000`                        | Conservative byte-size ceiling on the request-side conversation, enforced on every agent-loop iteration (#665). Invalid/zero falls back to default. |
 | `PRESENTER_AI_MAX_TOKENS`             | `8192`                          | Cap on the PROVIDER's own reply size, sent as `max_tokens` on every chat completion request (#665). Invalid/zero falls back to default.             |
 | `PRESENTER_AI_IDLE_CLEAR_MINUTES`     | `30`                            | Idle window after which the shared AI conversation is auto-cleared on the next `/ai/chat` call (#665). Invalid/zero falls back to default.          |
+
+#### AI subscription pool / llmrot channel (#730)
+
+The AI helper talks to a local **CLIProxyAPI** instance that `presenter-server`
+runs as a child process (`<deploy-dir>/cli-proxy-api`, bound to `127.0.0.1:18787`,
+reading OAuth account files from `<deploy-dir>/.cli-proxy-api/`). Each `claude-*.json`
+/ `llmrot-*.json` file in that auth dir is one Claude subscription; CLIProxyAPI
+load-balances across them and its built-in **fsnotify watcher hot-reloads the auth
+dir incrementally** — a file added/removed there goes live/offline within ~1s with
+**no process restart** (verified on binary 7.2.130). If every account hits its
+weekly/rate limit, the helper stops answering (the SNV `rate_limit_error` of 2026-08-16).
+
+The **`llmrot` channel** lets the `claudy` fleet manager (dev1) top the pool up with
+live "dying" subscriptions over a locked-down ssh path — a mirror of the odoo-erp
+gk channel (#4697). It is a restricted `llmrot` system account whose ForceCommand
+authorized_keys runs only `sudo -n /usr/local/sbin/llmrot-apply` (zero-arg sudoers
+lock; all input via `SSH_ORIGINAL_COMMAND` + STDIN, never argv). The account can do
+nothing else on the box — its whole blast radius is the local CLIProxyAPI auth pool,
+with rollback.
+
+- **Provisioning** (idempotent, committed): `deploy/llmrot-provision.sh --deploy-dir <dir> --pubkey-file <file>`
+  installs the account, `authorized_keys`, `/etc/sudoers.d/llmrot`, `/usr/local/sbin/llmrot-apply`,
+  `/etc/llmrot.conf` (`AUTH_DIR` / `PROXY_URL` / `FILE_OWNER` / `PROBE_MODEL`), and the
+  token-free log dir `/var/log/llmrot/`. Run it on each host from a clean committed tree
+  (dev2 `--deploy-dir /opt/presenter-dev`; SNV/PP `--deploy-dir /opt/presenter`).
+- **Channel commands** (from dev1, via claudy's key `~/.ssh/llmrot_gk`):
+  `ssh -i ~/.ssh/llmrot_gk llmrot@<host-ts-ip> list | apply <name> < auth.json | remove <name>`.
+  - `apply <name>` — STDIN is a raw CLIProxyAPI auth JSON (object with `type` /
+    `access_token` / `refresh_token`); it is atomically written to `llmrot-<name>.json`
+    (mode 600, owner = proxy user), hot-reloaded by the watcher, then probed. The apply
+    rolls back only if the proxy goes DOWN (`/v1/models` != 200); a rate-limited
+    completion (`429`) is expected for a dying account and is NOT a failure.
+  - `list` — `<name>\t<mtime>` per llmrot account + a `proxy=up|down completion=<200|limited|err:N|na> accounts=N` summary. No tokens.
+  - `remove <name>` — prints the CURRENT (possibly refresh-token-rotated) auth JSON to
+    stdout, then deletes the file, so claudy can reclaim the live token after a weekly reset.
+- **`name`** := `[a-z0-9_-]{1,32}`. Tokens never touch argv, the log, or the repo — only
+  STDIN / the 0600 file / (for `remove`) stdout back over the ssh channel.
 
 ### Companion Integration
 
