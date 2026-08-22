@@ -56,6 +56,7 @@ echo "installed: $DEPLOY_DIR/llmrot-apply"
 
 # --- 2) ensure auth-dir ------------------------------------------------------
 mkdir -p "$DEPLOY_DIR/.cli-proxy-api"
+chmod 700 "$DEPLOY_DIR/.cli-proxy-api"   # account file NAMES/mtimes not world-visible (contents are already 0600)
 echo "auth-dir ready: $DEPLOY_DIR/.cli-proxy-api"
 
 # --- 3) authorized_keys forced-command line (idempotent) ---------------------
@@ -68,12 +69,21 @@ chmod 600 "$AK"
 
 KEYBLOB="$(awk '{print $2}' <<<"$EXPECTED_PUBKEY")"
 [ -n "$KEYBLOB" ] || err "could not extract key blob from pinned pubkey"
-LINE="command=\"$DEPLOY_DIR/llmrot-apply\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding $EXPECTED_PUBKEY"
+# `restrict` = all current + future no-* restrictions (covers no-user-rc too);
+# the explicit no-* list is kept for readability.
+LINE="command=\"$DEPLOY_DIR/llmrot-apply\",restrict,no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding $EXPECTED_PUBKEY"
 
 TMP_AK="$(mktemp "$SSH_DIR/.authorized_keys.llmrot.XXXXXX")"
-# drop any prior line carrying this exact key blob (so re-runs update, never duplicate)
+# drop any prior line carrying this exact key blob (so re-runs UPDATE, never
+# duplicate). grep exit 1 = "no lines matched" (benign); exit >=2 = a real
+# read/I-O error — that must NOT silently truncate authorized_keys, which would
+# drop every OTHER key of the deploy user (incl. CI's deploy key -> lockout).
 if [ -s "$AK" ]; then
-  grep -vF "$KEYBLOB" "$AK" >"$TMP_AK" || true
+  set +e
+  grep -vF "$KEYBLOB" "$AK" >"$TMP_AK"
+  rc=$?
+  set -e
+  [ "$rc" -le 1 ] || { rm -f "$TMP_AK"; err "grep failed reading $AK (exit $rc) — refusing to rewrite authorized_keys"; }
 fi
 printf '%s\n' "$LINE" >>"$TMP_AK"
 chmod 600 "$TMP_AK"

@@ -412,8 +412,10 @@ jobs:
       # no sudo — the deploy dir is newlevel-owned.
       - name: Deploy llmrot channel script (#730)
         run: |
-          scp -i ~/.ssh/id_deploy deploy/llmrot-apply.sh deploy-target:${{ env.DEPLOY_DIR }}/llmrot-apply
-          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/llmrot-apply"
+          scp -i ~/.ssh/id_deploy deploy/llmrot-apply.sh deploy-target:${{ env.DEPLOY_DIR }}/llmrot-apply.new
+          # atomic swap (new inode): a claudy invocation running mid-deploy keeps
+          # its old inode; the next invocation picks up the new script (#730 review).
+          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/llmrot-apply.new && mv -f ${{ env.DEPLOY_DIR }}/llmrot-apply.new ${{ env.DEPLOY_DIR }}/llmrot-apply"
 
       - name: Sync ProPresenter libraries from git
         run: |

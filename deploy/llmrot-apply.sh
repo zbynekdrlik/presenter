@@ -14,7 +14,7 @@ set -euo pipefail
 # ONLY way in is the sshd forced command bound to claudy's key in newlevel's
 # authorized_keys:
 #
-#   command="<deploy-dir>/llmrot-apply",no-pty,no-port-forwarding,\
+#   command="<deploy-dir>/llmrot-apply",restrict,no-pty,no-port-forwarding,\
 #   no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... llmrot-claudy@dev1
 #
 # so the key can run ONLY this script — nothing else on the box.
@@ -49,6 +49,11 @@ MAX_PAYLOAD=65536
 PORT="$(awk -F': *' '/^port:/ {gsub(/[^0-9]/,"",$2); print $2; exit}' "$CONFIG_YAML" 2>/dev/null || true)"
 PORT="${PORT:-18787}"
 BASE="http://127.0.0.1:${PORT}"
+
+# Restrictive from the first file creation: the log, lock, auth-dir and every
+# temp are created 0600/0700. (Previously set only inside do_apply, which left
+# the log world-readable when created by a list/reject call — review #730.)
+umask 077
 
 # token-free audit log (never logs STDIN / auth content).
 log() { printf '%s [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MODE:-init}" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
@@ -137,11 +142,12 @@ do_apply() {
 
   # read STDIN into an in-dir temp (same filesystem -> atomic rename later).
   # temp name does NOT end in .json so the fsnotify watcher ignores it.
-  local tmp
-  umask 077
+  # The EXIT trap covers BOTH the temp AND the rollback backup, so a kill at
+  # any point never leaks a token-bearing file into the auth-dir; each var is
+  # blanked once it becomes the live file / is consumed.
+  local tmp="" bak="" had_old=0
+  trap 'rm -f "${tmp:-}" "${bak:-}" 2>/dev/null || true' EXIT
   tmp="$(mktemp "$AUTH_DIR/.llmrot-${name}.tmp.XXXXXX")"
-  # trap cleans up the temp on any early exit; the backup is cleaned inline.
-  trap 'rm -f "$tmp"' EXIT
   head -c $((MAX_PAYLOAD + 1)) >"$tmp"
 
   local size
@@ -167,34 +173,49 @@ sys.exit(0)
 PY
 
   # snapshot the current file for rollback (bak name never ends in .json).
-  local bak="" had_old=0
   if [ -f "$target" ]; then
     had_old=1
     bak="$(mktemp "$AUTH_DIR/.llmrot-${name}.bak.XXXXXX")"
     cp -p "$target" "$bak"
   fi
 
+  # baseline: was the proxy up BEFORE we touch anything? Rollback is for a
+  # regression WE caused (up -> down), never for a pre-existing outage.
+  local proxy_before
+  proxy_before="$(probe_proxy)"
+
   chmod 600 "$tmp"
   mv -f "$tmp" "$target"          # atomic install -> watcher hot-reloads
-  trap - EXIT                     # temp is now the live file; nothing to clean
+  tmp=""                          # the temp is now the live file
 
   sleep 1.5                       # give the fsnotify watcher time to reload
 
   local proxy
   proxy="$(probe_proxy)"
   if [ "$proxy" != up ]; then
-    # proxy went DOWN after apply -> roll back and fail (per #4697 contract).
-    if [ "$had_old" -eq 1 ]; then
-      mv -f "$bak" "$target"
-      log "apply $name: proxy DOWN after apply -> rolled back to previous file"
-    else
-      rm -f "$target"
-      log "apply $name: proxy DOWN after apply -> removed new file (no previous)"
+    if [ "$proxy_before" = up ]; then
+      # up before, down after -> WE broke it -> roll back and fail (#4697).
+      if [ "$had_old" -eq 1 ]; then
+        mv -f "$bak" "$target"; bak=""
+        log "apply $name: proxy up->DOWN after apply -> rolled back to previous file"
+      else
+        rm -f "$target"
+        log "apply $name: proxy up->DOWN after apply -> removed new file (no previous)"
+      fi
+      sleep 1.0
+      die "apply $name: proxy went DOWN after applying the account (rolled back)"
     fi
-    sleep 1.0
-    die "apply $name: proxy is DOWN after applying the account (rolled back)"
+    # proxy was ALREADY down before apply (unrelated outage): keep the new file
+    # (it loads when the proxy recovers), report proxy=down, do NOT roll back or
+    # fail — claudy owns account liveness and sees proxy=down.
+    rm -f "$bak"; bak=""
+    local accts_down
+    accts_down="$(count_accounts)"
+    log "apply $name: installed (${size}B) but proxy already DOWN before apply (not our regression) accounts=$accts_down"
+    echo "OK apply $name: proxy=down completion=na accounts=$accts_down"
+    return 0
   fi
-  [ "$had_old" -eq 1 ] && rm -f "$bak"
+  rm -f "$bak"; bak=""
 
   # proxy up. Completion is DIAGNOSTIC only: a dying account is legitimately
   # rate-limited (429/limited) -> log + exit 0, never roll back.
@@ -224,8 +245,11 @@ CMD="$(printf '%s' "$CMD" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:spa
 
 MODE="reject"
 exec 9>"$LOCK_FILE"
-if ! flock -w 30 9; then
-  die "could not acquire lock within 30s"
+# -w 90 covers a worst-case concurrent `list` hold (two /v1/models probes +
+# one completion probe ≈ 46s) so claudy's periodic list never spuriously
+# fails an overlapping apply (review #730).
+if ! flock -w 90 9; then
+  die "could not acquire lock within 90s"
 fi
 
 if [ "$CMD" = "list" ]; then
@@ -238,6 +262,8 @@ elif [[ "$CMD" =~ ^remove\ ([a-z0-9_-]{1,32})$ ]]; then
   MODE=remove
   do_remove "${BASH_REMATCH[1]}"
 else
-  log "rejected command: $(printf '%s' "$CMD" | cut -c1-40)"
+  # log only the length, never the content: a confused client could send a
+  # token as part of the command, and the log must stay token-free (review #730).
+  log "rejected: unrecognized command (len=${#CMD})"
   die "unrecognized command; allowed: 'list' | 'apply <name>' | 'remove <name>' (name=[a-z0-9_-]{1,32})"
 fi

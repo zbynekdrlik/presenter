@@ -39,7 +39,7 @@ accounts into each presenter prod over a narrow, keyed SSH channel — the
 
 - **Transport:** claudy's public key (`llmrot-claudy@dev1`) is authorized in the
   deploy user's (`newlevel`) `~/.ssh/authorized_keys` with a **forced command**
-  (`command="$DEPLOY_DIR/llmrot-apply",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`),
+  (`command="$DEPLOY_DIR/llmrot-apply",restrict,…`),
   so the key can run ONLY `llmrot-apply` — nothing else on the box.
 - **Script:** [`deploy/llmrot-apply.sh`](../deploy/llmrot-apply.sh) is installed
   as `$DEPLOY_DIR/llmrot-apply` (runs as `newlevel`, **no sudo** — the auth-dir is
@@ -54,9 +54,9 @@ accounts into each presenter prod over a narrow, keyed SSH channel — the
 - **Provisioning (one-time, per host):** run
   [`deploy/llmrot-provision.sh`](../deploy/llmrot-provision.sh) from a clean
   checkout as `newlevel` — it installs the script and writes the authorized_keys
-  forced-command line idempotently. Destinations: dev2 dev (`/opt/presenter-dev`,
-  ts `100.82.64.27`), SNV (`/opt/presenter`, ts `100.122.204.47`), PP
-  (`/opt/presenter`, ts `100.101.72.101`).
+  forced-command line idempotently. Destinations: dev2 dev
+  (`/opt/presenter-dev`), SNV prod and PP prod (both `/opt/presenter`), reached
+  over Tailscale.
 
 ### Companion Integration
 
