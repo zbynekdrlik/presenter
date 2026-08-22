@@ -405,6 +405,16 @@ jobs:
             data/bibles/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
+      # #730: keep the llmrot channel script fresh on every prod deploy. The
+      # one-time authorized_keys line for claudy's key is provisioned
+      # separately (deploy/llmrot-provision.sh, run manually per host) —
+      # deliberately NOT in per-push CI. Runs as the deploy user (newlevel),
+      # no sudo — the deploy dir is newlevel-owned.
+      - name: Deploy llmrot channel script (#730)
+        run: |
+          scp -i ~/.ssh/id_deploy deploy/llmrot-apply.sh deploy-target:${{ env.DEPLOY_DIR }}/llmrot-apply
+          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/llmrot-apply"
+
       - name: Sync ProPresenter libraries from git
         run: |
           command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
