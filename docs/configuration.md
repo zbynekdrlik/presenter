@@ -19,12 +19,44 @@ All environment variables and feature flags for Presenter.
 
 | Variable                             | Default                        | Description                                                                                                                                          |
 | ------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRESENTER_AI_API_URL`                | `http://localhost:8787/v1`      | OpenAI-compatible chat completions endpoint (the on-device CLIProxyAPI by default). Overridden by a persisted `/ai/settings` value if one is saved. |
+| `PRESENTER_AI_API_URL`                | `http://127.0.0.1:18787/v1`     | OpenAI-compatible chat completions endpoint — the on-device CLIProxyAPI bundled proxy, which listens on `127.0.0.1:18787`. The raw env-var fallback literal in code is a placeholder (`http://localhost:8787/v1`) that the server self-heals to the proxy's actual configured port (**18787**) at startup, so the effective default is the row's value. Overridden by a persisted `/ai/settings` value if one is saved. |
 | `PRESENTER_AI_API_KEY`                | unset                           | Bearer token for the AI provider, if required.                                                                                                      |
 | `PRESENTER_AI_MODEL`                  | `claude-opus-4-6`               | Model name sent on every chat completion request.                                                                                                   |
 | `PRESENTER_AI_CONTEXT_BUDGET_BYTES`   | `300000`                        | Conservative byte-size ceiling on the request-side conversation, enforced on every agent-loop iteration (#665). Invalid/zero falls back to default. |
 | `PRESENTER_AI_MAX_TOKENS`             | `8192`                          | Cap on the PROVIDER's own reply size, sent as `max_tokens` on every chat completion request (#665). Invalid/zero falls back to default.             |
 | `PRESENTER_AI_IDLE_CLEAR_MINUTES`     | `30`                            | Idle window after which the shared AI conversation is auto-cleared on the next `/ai/chat` call (#665). Invalid/zero falls back to default.          |
+
+#### AI subscription pool (llmrot channel) — #730
+
+The AI assistant runs against the on-device **CLIProxyAPI** bundled proxy
+(`127.0.0.1:18787`), which load-balances across the Claude account auth files in
+its auth-dir (`$DEPLOY_DIR/.cli-proxy-api/*.json`). A single account can hit its
+rate limit (SNV saw a real `rate_limit_error` on 2026-08-16) and stall the
+helper. To keep at least one live subscription available, **claudy** (the fleet
+subscription manager on dev1, repo `zbynekdrlik/claudy`) feeds dying-but-live
+accounts into each presenter prod over a narrow, keyed SSH channel — the
+`llmrot` channel (mirror of odoo-erp #4697), owned and driven by claudy.
+
+- **Transport:** claudy's public key (`llmrot-claudy@dev1`) is authorized in the
+  deploy user's (`newlevel`) `~/.ssh/authorized_keys` with a **forced command**
+  (`command="$DEPLOY_DIR/llmrot-apply",restrict,…`),
+  so the key can run ONLY `llmrot-apply` — nothing else on the box.
+- **Script:** [`deploy/llmrot-apply.sh`](../deploy/llmrot-apply.sh) is installed
+  as `$DEPLOY_DIR/llmrot-apply` (runs as `newlevel`, **no sudo** — the auth-dir is
+  newlevel-owned) and refreshed on every deploy. Commands (all via
+  `SSH_ORIGINAL_COMMAND` + STDIN/STDOUT, never argv/log/repo):
+  `list` (per-account `name<TAB>mtime` + a `proxy=… completion=… accounts=N`
+  summary, no tokens), `apply <name>` (STDIN = raw CLIProxyAPI auth JSON, ≤64 KiB,
+  validated + atomically installed as `llmrot-<name>.json`, hot-reloaded by the
+  proxy's fsnotify watcher with **no restart**; rolled back only if the proxy goes
+  down), and `remove <name>` (prints the current rotated auth JSON to STDOUT for
+  reclaim, then deletes).
+- **Provisioning (one-time, per host):** run
+  [`deploy/llmrot-provision.sh`](../deploy/llmrot-provision.sh) from a clean
+  checkout as `newlevel` — it installs the script and writes the authorized_keys
+  forced-command line idempotently. Destinations: dev2 dev
+  (`/opt/presenter-dev`), SNV prod and PP prod (both `/opt/presenter`), reached
+  over Tailscale.
 
 ### Companion Integration
 

@@ -29,6 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
 | Runner management, GPU wedge, probe cleanup, branch-sync-after-merge | `.claude/skills/ci/SKILL.md` |
 | Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
+| llmrot channel (claudy → CLIProxyAPI live-subscription supply, #730) | `.claude/rules/llmrot-channel.md` (auto-loads on `deploy/llmrot-*.sh`) |
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
 | Repository refusal → HTTP 404/409/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |

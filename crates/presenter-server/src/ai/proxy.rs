@@ -240,7 +240,13 @@ impl ProxyManager {
 
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.contains("claude") {
+            // CLIProxyAPI serves completions off EVERY *.json auth file it loads —
+            // both the OAuth-login `claude-*.json` files AND the `llmrot-*.json`
+            // files the #730 subscription channel writes. Both are claude-provider
+            // OAuth token files of the same on-disk shape, so the auth-state scan
+            // must count BOTH; otherwise a pool sustained solely by llmrot
+            // accounts would serve fine yet the UI would report "not authenticated".
+            if !(name.contains("claude") || name.starts_with("llmrot-")) {
                 continue;
             }
             // Only regular files are token files. A directory whose name happens
@@ -762,6 +768,32 @@ mod tests {
         assert!(
             mgr.scan_claude_auth().await.authenticated,
             "a fresh token must count as authenticated"
+        );
+    }
+
+    /// #730: an `llmrot-*.json` token (written by the subscription channel) is
+    /// a claude-provider OAuth token of the same shape as `claude-*.json` and
+    /// MUST count toward the auth-state scan. Before the fix the scan skipped
+    /// any name not containing "claude", so a pool sustained SOLELY by llmrot
+    /// accounts served completions fine while the UI wrongly showed "not
+    /// authenticated" (an unnecessary manual re-login prompt).
+    #[tokio::test]
+    async fn fresh_llmrot_token_is_authenticated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let auth_dir = mgr.auth_dir();
+        tokio::fs::create_dir_all(&auth_dir).await.unwrap();
+        let future = (Utc::now() + Duration::hours(8)).to_rfc3339();
+        // Same on-disk shape CLIProxyAPI writes, but named llmrot-*.json.
+        let body = format!(
+            r#"{{"access_token":"a","refresh_token":"r","id_token":"i","email":"pool@example.com","expired":"{future}","last_refresh":"2026-08-01T00:00:00+02:00","type":"claude","disabled":false}}"#
+        );
+        tokio::fs::write(auth_dir.join("llmrot-pool.json"), body)
+            .await
+            .unwrap();
+        assert!(
+            mgr.scan_claude_auth().await.authenticated,
+            "a fresh llmrot-*.json token must count as authenticated"
         );
     }
 
