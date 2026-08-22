@@ -139,11 +139,13 @@ else
 fi
 rm -f "$SUDO_TMP"
 
-# 6. Token-free log dir + ensure auth-dir exists (owned by proxy user).
+# 6. Token-free log dir + ensure auth-dir exists (owned by proxy user, 0700 so
+#    no other local user can plant a symlink among the credential files).
 sudo mkdir -p /var/log/llmrot
 sudo chmod 0750 /var/log/llmrot
 sudo mkdir -p "$AUTH_DIR"
 sudo chown "$FILE_OWNER:$FILE_OWNER" "$AUTH_DIR" 2>/dev/null || true
+sudo chmod 0700 "$AUTH_DIR"
 
 # 7. Smoke test: run the handler locally exactly as the sudoers path would
 #    (root, zero-arg, SSH_ORIGINAL_COMMAND=list). Proves conf + proxy reachability.

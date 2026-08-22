@@ -45,12 +45,29 @@ PROBE_MODEL="${PROBE_MODEL:-claude-3-5-haiku-20241022}"
 # sudoers env_keep), so a caller on the ssh channel cannot inject either.
 LOG_DIR="${LLMROT_LOG_DIR:-/var/log/llmrot}"
 LOG="$LOG_DIR/apply.log"
-LOCK="${LLMROT_LOCK:-/var/lock/llmrot.lock}"
+# The lock lives INSIDE the root-owned 0750 log dir — NOT the world-writable
+# (1777) /var/lock (→ /run/lock), where a local unprivileged user could plant
+# a symlink that this script's root `exec 9>"$LOCK"` (O_CREAT|O_TRUNC, follows
+# symlinks) would then truncate to zero bytes as root. A root-only parent dir
+# closes that vector.
+LOCK="${LLMROT_LOCK:-$LOG_DIR/llmrot.lock}"
 MAX_STDIN=$((64 * 1024))
+
+# Temp/snapshot paths — script-global so the EXIT trap set in do_apply can clean
+# them up on any abort (a `local` would be out of scope by the time the trap runs).
+tmp=""
+prev=""
 
 log() {
   # Token-free by construction: callers only pass status strings, never payloads.
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+# Set owner on an auth file to the proxy user; try user:user then user (systems
+# where the primary group name differs). Returns nonzero if BOTH fail so the
+# caller can fail CLOSED rather than publishing a wrong-owner credential file.
+chown_file() {
+  chown "$FILE_OWNER:$FILE_OWNER" "$1" 2>/dev/null || chown "$FILE_OWNER" "$1" 2>/dev/null
 }
 
 # Proxy up == GET /v1/models returns HTTP 200. This is the ONLY rollback
@@ -88,7 +105,11 @@ completion_probe() {
 }
 
 validate_name() {
-  printf '%s' "$1" | grep -qE '^[a-z0-9_-]{1,32}$'
+  # bash `[[ =~ ]]` anchors ^/$ to the whole STRING (no REG_NEWLINE), so an
+  # embedded newline cannot smuggle a second line past this — unlike the
+  # line-oriented `grep -qE '^...$'` this replaced, which matched if only the
+  # FIRST line was clean (log-injection / fragile-traversal vector).
+  [[ "$1" =~ ^[a-z0-9_-]{1,32}$ ]]
 }
 
 do_list() {
@@ -108,7 +129,10 @@ do_list() {
 }
 
 do_apply() {
-  local name="$1" payload target tmp prev restore=0 comp
+  local name="$1" payload target comp
+  # tmp/prev are script-global (see top) so the EXIT trap can clean them up.
+  # Clean up any temp/snapshot on ANY exit (abort mid-write, rollback, success).
+  trap 'rm -f "$tmp" "$prev" 2>/dev/null || true' EXIT
   # STDIN, hard-capped at MAX_STDIN bytes (read one extra byte to detect overflow).
   payload=$(head -c "$((MAX_STDIN + 1))")
   if [ "$(printf '%s' "$payload" | wc -c)" -gt "$MAX_STDIN" ]; then
@@ -130,29 +154,42 @@ for k in ("type", "access_token", "refresh_token"):
   fi
 
   target="$AUTH_DIR/llmrot-${name}.json"
-  # Snapshot the previous file so a re-apply can roll back to it.
+  # Snapshot the previous file so a re-apply can roll back to it. The snapshot
+  # lives in the SAME dir (same filesystem → the rollback mv is an atomic
+  # rename, never a cross-fs copy+unlink with a wrong-owner window), dot+random
+  # so the *.json watcher glob ignores it, and never in /tmp (no credential
+  # leak to a fourth sink; the EXIT trap removes it on any abort).
   if [ -f "$target" ]; then
-    prev=$(mktemp)
+    prev=$(mktemp "$AUTH_DIR/.llmrot-prev.XXXXXX")
     cp -p "$target" "$prev"
-    restore=1
   fi
   # Atomic write: temp in the SAME dir (so mv is a rename on one filesystem),
-  # dot+.tmp so the *.json watcher glob ignores it, correct perms/owner set
+  # dot+random so the *.json watcher glob ignores it, correct perms/owner set
   # BEFORE the rename so the watcher never sees a half-written or wrong-perms file.
-  tmp="$AUTH_DIR/.llmrot-${name}.$$.tmp"
+  tmp=$(mktemp "$AUTH_DIR/.llmrot-${name}.XXXXXX")
   printf '%s' "$payload" >"$tmp"
   chmod 600 "$tmp"
-  chown "$FILE_OWNER:$FILE_OWNER" "$tmp" 2>/dev/null || chown "$FILE_OWNER" "$tmp" 2>/dev/null || true
+  # Fail CLOSED: if the owner cannot be set, the proxy (running as FILE_OWNER)
+  # could not read the file — never rename a wrong-owner credential into place.
+  if ! chown_file "$tmp"; then
+    rm -f "$tmp"
+    tmp=""
+    log "apply $name ABORT chown-failed"
+    echo "llmrot: could not set owner ($FILE_OWNER) on auth file — aborted" >&2
+    exit 1
+  fi
   mv -f "$tmp" "$target"
+  tmp="" # renamed away; nothing left for the trap to clean
 
   sleep 2 # let the fsnotify watcher pick up the change
 
   if ! proxy_up; then
-    # Rollback: restore previous content, or remove the new file.
-    if [ "$restore" = 1 ]; then
+    # Rollback: restore previous content (atomic same-fs rename), or remove.
+    if [ -n "$prev" ]; then
       mv -f "$prev" "$target"
+      prev=""
       chmod 600 "$target"
-      chown "$FILE_OWNER:$FILE_OWNER" "$target" 2>/dev/null || chown "$FILE_OWNER" "$target" 2>/dev/null || true
+      chown_file "$target" || true
     else
       rm -f "$target"
     fi
@@ -163,7 +200,7 @@ for k in ("type", "access_token", "refresh_token"):
   fi
 
   comp=$(completion_probe)
-  [ "$restore" = 1 ] && rm -f "$prev"
+  [ -n "$prev" ] && { rm -f "$prev"; prev=""; }
   log "apply $name OK proxy=up completion=$comp"
   echo "applied llmrot-${name} proxy=up completion=${comp}"
 }
@@ -171,7 +208,10 @@ for k in ("type", "access_token", "refresh_token"):
 do_remove() {
   local name="$1"
   local target="$AUTH_DIR/llmrot-${name}.json"
-  if [ -f "$target" ]; then
+  # Regular file AND not a symlink (never `cat` a symlink to an arbitrary file
+  # out over the ssh channel as root — defense in depth on top of the 0700
+  # proxy-owned auth dir).
+  if [ -f "$target" ] && [ ! -L "$target" ]; then
     # Print the CURRENT (CLIProxyAPI may have rotated the refresh token) auth
     # JSON to stdout so claudy can reclaim the live token, THEN delete it.
     cat "$target"
@@ -217,7 +257,10 @@ main() {
   esac
 }
 
-# Serialize concurrent invocations.
+# Serialize concurrent invocations. The lock dir (LOG_DIR) is root-owned 0750
+# (created by provisioning); ensure it exists before opening the lock so the
+# open never has to create a path a non-root user could have pre-planted.
+mkdir -p "$LOG_DIR" 2>/dev/null || true
 exec 9>"$LOCK"
 if ! flock -w 30 9; then
   echo "llmrot: busy (could not acquire lock)" >&2
