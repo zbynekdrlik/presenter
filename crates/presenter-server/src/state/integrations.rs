@@ -632,6 +632,103 @@ mod tests {
         );
     }
 
+    /// #745(a) RED: two concurrent `activate_video_source` calls must SERIALIZE so
+    /// the manager's single-active source (the LAST reap) matches the DB's
+    /// last-write winner. Without serialization the two reaps interleave
+    /// independently of the DB "last write wins" order, leaving the manager out of
+    /// step with the DB until the next reconnect cycle (the WRONG source on stage).
+    ///
+    /// Deterministic via the fake's per-source start-gate: A is parked mid-start
+    /// (its DB row already written) while B races. Without the lock B runs to
+    /// completion (reap B) while A is parked, then A's reap lands LAST → the manager
+    /// keeps A while the DB winner is B. With the lock B cannot even begin until A
+    /// releases → strictly grouped, the manager keeps B == DB winner.
+    #[tokio::test]
+    async fn concurrent_activations_serialize_manager_to_db_winner() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        let b = state
+            .create_video_source(
+                VideoSourceDraft::new("Cam 2", "STREAM-B (stream)"),
+                SettingsAuditSource::HttpSetter,
+                "test",
+            )
+            .await
+            .expect("create source B");
+        let b_id = b.id;
+        let b_str = b_id.to_string();
+
+        // Park A's start; it holds any serialization lock while B races.
+        let (release_a, parked_a) = fake.gate_start(&a_str);
+
+        let s_a = state.clone();
+        let ta = tokio::spawn(async move {
+            s_a.activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+        // A has written its DB row (is_active=A) and is now parked inside start.
+        parked_a.notified().await;
+
+        // Race B. Without the lock B runs to completion while A is parked; with the
+        // lock B blocks on the lock until A releases.
+        let s_b = state.clone();
+        let tb = tokio::spawn(async move {
+            s_b.activate_video_source(b_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+
+        // Bounded window: B either COMPLETES its reap (no lock) or is BLOCKED (lock).
+        // 500 ms >> scheduling latency → a reliable "B is serialized" probe, not a
+        // flaky sleep.
+        let b_reaped_while_a_parked =
+            tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                loop {
+                    if fake.reaped(&b_str) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .is_ok();
+
+        // Release A; let both finish (timeout-guarded — a lock regression that
+        // deadlocks fails loudly instead of hanging the suite).
+        release_a.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), ta)
+            .await
+            .expect("activation A did not finish within 5s — deadlock?")
+            .expect("activation A task panicked")
+            .expect("activation A returned Err");
+        tokio::time::timeout(std::time::Duration::from_secs(5), tb)
+            .await
+            .expect("activation B did not finish within 5s — deadlock?")
+            .expect("activation B task panicked")
+            .expect("activation B returned Err");
+
+        // B is the DB's last-write winner (A wrote its row before parking, B after).
+        // Serialization means B cannot reap while A holds the lock…
+        assert!(
+            !b_reaped_while_a_parked,
+            "#745(a): a second activation must NOT proceed while the first holds the \
+             activation lock; B reaped while A was parked → activations interleaved. \
+             ledger = {:?}",
+            fake.calls(),
+        );
+        // …and the manager's final single-active source (the LAST reap) must equal
+        // the DB winner B.
+        let last_reap = fake.calls().into_iter().rev().find_map(|c| match c {
+            NdiCall::StopOtherPipelines { keep_id } => Some(keep_id),
+            _ => None,
+        });
+        assert_eq!(
+            last_reap.as_deref(),
+            Some(b_str.as_str()),
+            "#745(a): the manager's final single-active source (last reap) must equal \
+             the DB last-write winner (B); ledger = {:?}",
+            fake.calls(),
+        );
+    }
+
     // #741: a SUPERSEDED start (a concurrent deactivate/stop removed the in-flight
     // reservation, or an activate-switch replaced it) must make activate_video_source
     // return Ok WITHOUT reaping siblings and WITHOUT publishing a stage status — the

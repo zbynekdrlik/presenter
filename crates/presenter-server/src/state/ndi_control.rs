@@ -200,6 +200,20 @@ pub(crate) struct FakeNdiControl {
     finder_never_scanned: Mutex<bool>,
     /// What `whep_signaller_call` should return (#630 call-site wiring tests).
     whep_outcome: Mutex<Option<WhepOutcome>>,
+    /// #745(a): parks `start_pipeline` for ONE specific source until released, so a
+    /// test can hold an activation mid-flight and race a second one — proving
+    /// `activate_video_source` serializes (or, pre-fix, interleaves) two concurrent
+    /// activations. `None` = no gate (every start runs to completion immediately).
+    start_gate: Mutex<Option<StartGate>>,
+}
+
+/// A one-source start-gate for the #745(a) concurrency test. `start_pipeline` for
+/// `source_id` signals `parked` and then awaits `release` before returning.
+#[cfg(test)]
+struct StartGate {
+    source_id: String,
+    release: Arc<tokio::sync::Notify>,
+    parked: Arc<tokio::sync::Notify>,
 }
 
 /// What [`FakeNdiControl::whep_signaller_call`] should return.
@@ -278,6 +292,24 @@ impl FakeNdiControl {
     /// The ordered sequence of calls recorded so far.
     pub(crate) fn calls(&self) -> Vec<NdiCall> {
         self.calls.lock().expect("calls lock").clone()
+    }
+
+    /// #745(a): gate `start_pipeline` for `source_id` — it will record its
+    /// `StartPipeline` call, then PARK until the returned `release` is notified.
+    /// Await the returned `parked` to know the activation is parked mid-flight
+    /// (its DB row already written). Returns `(release, parked)`.
+    pub(crate) fn gate_start(
+        &self,
+        source_id: &str,
+    ) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let parked = Arc::new(tokio::sync::Notify::new());
+        *self.start_gate.lock().expect("start_gate lock") = Some(StartGate {
+            source_id: source_id.to_string(),
+            release: Arc::clone(&release),
+            parked: Arc::clone(&parked),
+        });
+        (release, parked)
     }
 
     /// Put these NDI names "on the network" (#546).
@@ -366,6 +398,23 @@ impl FakeNdiControl {
             source_id: source_id.to_string(),
             ndi_name: ndi_name.to_string(),
         });
+        // #745(a) test gate: if this source is gated, signal we've parked (its DB
+        // row is already written by activate_video_source) and wait for release.
+        // Clone the Notify handles out from under the std Mutex — never await while
+        // holding it.
+        let gate = {
+            let g = self.start_gate.lock().expect("start_gate lock");
+            match g.as_ref() {
+                Some(sg) if sg.source_id == source_id => {
+                    Some((Arc::clone(&sg.parked), Arc::clone(&sg.release)))
+                }
+                _ => None,
+            }
+        };
+        if let Some((parked, release)) = gate {
+            parked.notify_one();
+            release.notified().await;
+        }
         match *self.start_outcome.lock().expect("start_outcome lock") {
             StartOutcome::Ok => Ok(()),
             StartOutcome::SilentSource => Err(PipelineStartError::SourceSilent {
