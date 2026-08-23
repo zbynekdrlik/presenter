@@ -663,6 +663,45 @@ async fn fetch_setlist(
 mod tests {
     use super::*;
 
+    #[test]
+    fn ableset_backoff_grows_exponentially_and_caps() {
+        // #735: 0 failures = the normal poll cadence; each subsequent failure
+        // doubles from 500 ms, capped at 60 s — so an unreachable AbleSet host
+        // is not re-requested every 250 ms. Without the fix there is no backoff
+        // (the loop polled at a fixed 250 ms regardless of failures).
+        assert_eq!(
+            ableset_backoff_interval(0),
+            Duration::from_millis(POLL_INTERVAL_MS)
+        );
+        assert_eq!(ableset_backoff_interval(1), Duration::from_millis(500));
+        assert_eq!(ableset_backoff_interval(2), Duration::from_secs(1));
+        assert_eq!(ableset_backoff_interval(3), Duration::from_secs(2));
+        assert_eq!(ableset_backoff_interval(7), Duration::from_secs(32));
+        // 500 ms * 2^7 = 64 s → capped at the 60 s BACKOFF_CAP.
+        assert_eq!(ableset_backoff_interval(8), ABLESET_BACKOFF_CAP);
+        assert_eq!(ableset_backoff_interval(100), ABLESET_BACKOFF_CAP);
+    }
+
+    #[test]
+    fn ableset_failure_log_is_power_of_two_gated() {
+        // #735: the 244,039-line flood came from logging EVERY failed tick.
+        // Now only the 1st failure + power-of-two milestones emit a WARN, so a
+        // host down for N ticks produces ~log2(N)+1 lines instead of N.
+        assert!(
+            !should_log_ableset_failure(0),
+            "a never-failed poll must not log"
+        );
+        assert!(should_log_ableset_failure(1));
+        assert!(should_log_ableset_failure(2));
+        assert!(!should_log_ableset_failure(3));
+        assert!(should_log_ableset_failure(4));
+        assert!(!should_log_ableset_failure(5));
+        assert!(!should_log_ableset_failure(6));
+        assert!(!should_log_ableset_failure(7));
+        assert!(should_log_ableset_failure(8));
+        assert!(!should_log_ableset_failure(9));
+    }
+
     #[tokio::test]
     async fn next_song_name_returns_next_non_skipped_song() {
         let bridge = AbleSetBridge::new();
