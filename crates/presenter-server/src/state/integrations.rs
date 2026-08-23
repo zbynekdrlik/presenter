@@ -85,6 +85,14 @@ fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
             status: format!("failed: {e}"),
             is_hard_error: true,
         },
+        // #741: the in-flight reservation was superseded mid-wait (a concurrent
+        // deactivate/switch). Defensive arm only — `activate_video_source`
+        // handles Superseded FIRST and publishes nothing; keep it non-hard and
+        // neutral so this fn stays total and can never surface a red overlay.
+        PipelineStartError::Superseded => NdiStartStatus {
+            status: "no-signal".to_string(),
+            is_hard_error: false,
+        },
     }
 }
 
@@ -418,6 +426,19 @@ impl AppState {
                 .start_pipeline(&source.id.to_string(), &source.ndi_name)
                 .await
             {
+                // #741: a SUPERSEDED start (a concurrent deactivate/stop removed
+                // the in-flight reservation, or an activate-switch replaced it) is
+                // neither success nor failure — return Ok and publish NOTHING; the
+                // concurrent op owns the source's real status. Mapping it to a
+                // status would emit a stray `no-signal` after a deactivate.
+                if matches!(e, PipelineStartError::Superseded) {
+                    tracing::info!(
+                        source_id = %source.id,
+                        ndi_name = %source.ndi_name,
+                        "NDI start superseded by a concurrent activation change (#741) — publishing nothing"
+                    );
+                    return Ok(source);
+                }
                 let classified = ndi_status_for_start_error(&e);
                 if classified.is_hard_error {
                     // A GENUINE pipeline failure. Surface the reason to the
@@ -611,6 +632,36 @@ mod tests {
         );
     }
 
+    // #741: a SUPERSEDED start (a concurrent deactivate/stop removed the in-flight
+    // reservation, or an activate-switch replaced it) must make activate_video_source
+    // return Ok WITHOUT reaping siblings and WITHOUT publishing a stage status — the
+    // concurrent op owns the source's real status. The early-return path is guarded
+    // here: the reap runs only on the Ok/silent paths, never on Superseded.
+    #[tokio::test]
+    async fn activation_superseded_returns_ok_without_reap() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::Superseded).await;
+
+        let activated = state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("a superseded start must still return Ok(source)");
+        assert_eq!(activated.id.to_string(), id);
+
+        let calls = fake.calls();
+        assert_eq!(
+            calls,
+            vec![NdiCall::StartPipeline {
+                source_id: id.clone(),
+                ndi_name: "STREAM-SNV (stream)".to_string(),
+            }],
+            "a superseded start returns Ok early — only start_pipeline, no reap; calls = {calls:?}",
+        );
+        assert!(
+            !fake.reaped(&id),
+            "a superseded start must NOT reap siblings — it returns before the reap (#741)",
+        );
+    }
+
     #[tokio::test]
     async fn activation_does_not_reap_when_start_hard_errors() {
         let (state, source_id, id, fake) = state_with_fake(StartOutcome::HardError).await;
@@ -695,6 +746,22 @@ mod tests {
         assert!(
             classified.is_hard_error,
             "a genuine pipeline failure must fail the activation",
+        );
+    }
+
+    // #741: the defensive Superseded arm keeps `ndi_status_for_start_error` total
+    // and never surfaces a red overlay (activate_video_source handles Superseded
+    // first, so this arm is a safety net only).
+    #[test]
+    fn superseded_maps_to_neutral_and_is_not_a_hard_error() {
+        let classified = ndi_status_for_start_error(&PipelineStartError::Superseded);
+        assert!(
+            !classified.is_hard_error,
+            "a superseded start must never be a hard error (#741)",
+        );
+        assert_eq!(
+            classified.status, "no-signal",
+            "the defensive Superseded arm stays neutral",
         );
     }
 

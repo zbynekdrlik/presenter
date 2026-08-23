@@ -254,6 +254,9 @@ pub(crate) enum StartOutcome {
     SilentSource,
     /// A genuine hard failure — activation returns Err.
     HardError,
+    /// The in-flight reservation was superseded mid-wait (#741) — activation must
+    /// return Ok WITHOUT publishing a status.
+    Superseded,
 }
 
 #[cfg(test)]
@@ -371,6 +374,7 @@ impl FakeNdiControl {
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(
                 "simulated start failure"
             ))),
+            StartOutcome::Superseded => Err(PipelineStartError::Superseded),
         }
     }
 

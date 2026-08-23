@@ -319,6 +319,34 @@ mod start_pipeline_state_check_tests {
         );
     }
 
+    /// #741: a `Starting` entry (an in-flight reservation from `start_pipeline`/
+    /// `rebuild_pipeline`) is healthy → idempotent no-op, exactly like Streaming.
+    /// The reservation design RELIES on this: a concurrent start for the same
+    /// source must see the `Starting` slot as Idempotent (and observer-join it)
+    /// rather than treat it as dead and double-build a second pipeline/encoder.
+    #[tokio::test]
+    async fn starting_entry_is_left_alone_idempotent() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
+        p.set_state_for_test(PipelineState::Starting);
+        assert_eq!(p.state(), PipelineState::Starting);
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: std::sync::Arc::new(p),
+                supervisor: None,
+            },
+        );
+
+        let outcome = check_active_entry(&mut active, "test-id").await;
+
+        assert_eq!(outcome, StateCheckOutcome::Idempotent);
+        assert!(
+            active.contains_key("test-id"),
+            "a Starting reservation must NOT be removed — it is the #741 in-flight marker",
+        );
+    }
+
     /// `Errored` entry → same outcome as Stopped: remove + rebuild. Catches
     /// regressions that only handle the Stopped variant.
     #[tokio::test]

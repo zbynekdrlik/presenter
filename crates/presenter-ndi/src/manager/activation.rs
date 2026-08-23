@@ -67,9 +67,26 @@ pub(in crate::manager) async fn wait_for_streaming(
     mut rx: watch::Receiver<PipelineState>,
     budget: Duration,
 ) -> WaitOutcome {
-    // STUB (#741 RED): always TimedOut — the real logic lands in the GREEN commit.
-    let _ = (&mut rx, budget);
-    WaitOutcome::TimedOut
+    let waited = tokio::time::timeout(budget, async {
+        loop {
+            let state = rx.borrow_and_update().clone();
+            match state {
+                PipelineState::Streaming => return WaitOutcome::Streaming,
+                PipelineState::Errored(e) => return WaitOutcome::Errored(e),
+                // #741: return immediately on Stopped — the old inline wait's
+                // catch-all waited the full budget on a pipeline stopped/EOS'd
+                // out from under it.
+                PipelineState::Stopped => return WaitOutcome::Stopped,
+                PipelineState::Starting => {}
+            }
+            if rx.changed().await.is_err() {
+                // Sender dropped (pipeline gone) — treat as Stopped, never hang.
+                return WaitOutcome::Stopped;
+            }
+        }
+    })
+    .await;
+    waited.unwrap_or(WaitOutcome::TimedOut)
 }
 
 /// Finalize an in-flight reservation under the `active` lock. `ours` is the
@@ -82,9 +99,42 @@ pub(in crate::manager) async fn finalize_reservation(
     ours: &Arc<NdiPipeline>,
     outcome: WaitOutcome,
 ) -> Finalize {
-    // STUB (#741 RED): always Superseded, no map mutation — real logic in GREEN.
-    let _ = (active, source_id, ours, outcome);
-    Finalize::Superseded
+    // Decide under the lock; STOP any removed/orphaned pipeline OUTSIDE it so the
+    // finalize never holds `active` across `stop().await` (the whole #741 point).
+    let removed: Option<WaitOutcome> = {
+        let mut guard = active.lock().await;
+        let is_ours = guard
+            .get(source_id)
+            .map(|slot| Arc::ptr_eq(&slot.pipeline, ours))
+            .unwrap_or(false);
+        if !is_ours {
+            // Slot gone (concurrent stop) or now a DIFFERENT pipeline (concurrent
+            // activate-switch) — leave the map untouched.
+            None
+        } else {
+            match outcome {
+                // Ours and Streaming → leave the slot for the caller to promote.
+                WaitOutcome::Streaming => return Finalize::Promote,
+                // Ours but not Streaming → drop the slot; stop the pipeline below.
+                other => {
+                    guard.remove(source_id);
+                    Some(other)
+                }
+            }
+        }
+    }; // guard dropped here — stop() runs unlocked
+    match removed {
+        Some(o) => {
+            ours.stop().await;
+            Finalize::Removed(o)
+        }
+        None => {
+            // Our orphan pipeline is not in the map — stop it (idempotent; Drop
+            // would also tear it down) so a superseded start never leaks it.
+            ours.stop().await;
+            Finalize::Superseded
+        }
+    }
 }
 
 #[cfg(test)]

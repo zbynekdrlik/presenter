@@ -12,6 +12,7 @@ use crate::discovery;
 use crate::ndi_sdk::NdiLib;
 use crate::pipeline::NdiPipeline;
 
+use super::activation::{finalize_reservation, wait_for_streaming, Finalize, WaitOutcome};
 use super::{check_active_entry, ActiveSource, NdiManager, StateCheckOutcome};
 
 /// Outcome classification for [`NdiManager::start_pipeline`] failures.
@@ -31,6 +32,11 @@ pub enum PipelineStartError {
     /// A genuine failure to build/start/run the pipeline (encoder build failure,
     /// GStreamer element error, etc.).
     Failed(anyhow::Error),
+    /// The in-flight `Starting` reservation was SUPERSEDED mid-wait (#741): a
+    /// concurrent `stop`/deactivate removed it, or an activate-switch replaced it
+    /// with a different pipeline. Not a failure — the caller must return `Ok`
+    /// WITHOUT publishing a stage status (the concurrent op owns the outcome).
+    Superseded,
 }
 
 impl std::fmt::Display for PipelineStartError {
@@ -41,6 +47,10 @@ impl std::fmt::Display for PipelineStartError {
                 "NDI source '{ndi_name}' is not producing — broadcaster silent or off"
             ),
             PipelineStartError::Failed(e) => write!(f, "{e}"),
+            PipelineStartError::Superseded => write!(
+                f,
+                "pipeline start superseded by a concurrent activation change"
+            ),
         }
     }
 }
@@ -108,114 +118,145 @@ impl NdiManager {
         source_id: &str,
         ndi_name: &str,
     ) -> std::result::Result<(), PipelineStartError> {
-        let mut active = self.active.lock().await;
+        // Phase 1 — RESERVE under the lock (fast: check + build + start + insert a
+        // `Starting` entry). The lock is RELEASED before the ~8 s streaming-ready
+        // wait (#741), so status polls / stop / reap / WHEP no longer stall behind
+        // an activation. An early `return` inside this block leaves the guard
+        // scope, so the guard never spans the wait.
+        let reserved: std::sync::Arc<NdiPipeline> = {
+            let mut active = self.active.lock().await;
 
-        // Operator-reactivation path: if the existing entry is dead, snapshot
-        // its supervisor handle BEFORE `check_active_entry` removes the entry,
-        // so we can abort the prior supervisor below. Without this, a
-        // cool-off-bound supervisor that's mid-5-min-sleep keeps running and
-        // ends up double-watching the new pipeline alongside the fresh
-        // supervisor we spawn below (deep-review 🔵 #3, 2026-05-24 PR #340).
-        // Safe to `.take()` here because we hold the lock: state observed by
-        // `check_active_entry` below cannot change between these two reads.
-        let prior_supervisor: Option<tokio::task::JoinHandle<()>> = active
-            .get_mut(source_id)
-            .filter(|entry| {
-                matches!(
-                    entry.pipeline.state(),
-                    crate::pipeline::PipelineState::Stopped
-                        | crate::pipeline::PipelineState::Errored(_)
-                )
-            })
-            .and_then(|entry| entry.supervisor.take());
+            // Operator-reactivation path: snapshot a dead entry's supervisor
+            // BEFORE check_active_entry removes the entry, so we can abort it
+            // below (else it double-watches the fresh pipeline — deep-review 🔵 #3,
+            // PR #340). Safe to `.take()` under the lock.
+            let prior_supervisor: Option<tokio::task::JoinHandle<()>> = active
+                .get_mut(source_id)
+                .filter(|entry| {
+                    matches!(
+                        entry.pipeline.state(),
+                        crate::pipeline::PipelineState::Stopped
+                            | crate::pipeline::PipelineState::Errored(_)
+                    )
+                })
+                .and_then(|entry| entry.supervisor.take());
 
-        if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
-            // Pipeline turned out healthy — the dead-state filter above didn't
-            // match, so prior_supervisor is None. If somehow it leaked, drop
-            // the handle (does NOT cancel the task in tokio; the supervisor
-            // is still owned by its `ActiveSource.supervisor` slot if we
-            // didn't `.take()`).
-            debug_assert!(prior_supervisor.is_none());
-            return Ok(());
-        }
-        // The entry was dead → check_active_entry removed it. Abort the prior
-        // supervisor (if any) so it doesn't double-watch the new pipeline we
-        // build below.
-        if let Some(handle) = prior_supervisor {
-            handle.abort();
-        }
-
-        let whep_url = format!("/ndi/whep/{}", source_id);
-        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
-        pipeline.start().await?;
-
-        // Wait for the pipeline to reach Streaming state. The bus-watch task
-        // (started by pipeline.start()) sets state to Streaming once the
-        // GStreamer pipeline element posts StateChanged → Playing.
-        //
-        // The new shared-encoder topology (ndisrc → demux → videoconvert →
-        // encoder → rtph264pay → tee) has no whepserversink, so polling
-        // `sink_element.static_pad("video_0").current_caps()` is no longer
-        // applicable. Watching for PipelineState::Streaming is the correct
-        // signal: the bus-watch only promotes to Streaming after PLAYING,
-        // which requires ndisrcdemux to have negotiated caps with its upstream
-        // ndisrc — equivalent timing to the old caps-wait.
-        //
-        // 8-second budget: ndisrc takes ~2-5s on a healthy LAN to find a
-        // broadcast + receive first frame. Beyond 8s the source likely doesn't
-        // exist and we'd rather fail fast than hang the operator UI.
-        let mut watcher = pipeline.state_watcher();
-        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
-            loop {
-                let state = watcher.borrow_and_update().clone();
-                match state {
-                    crate::pipeline::PipelineState::Errored(ref e) => {
-                        return Err(anyhow!("pipeline errored: {e}"));
+            if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await
+            {
+                debug_assert!(prior_supervisor.is_none());
+                // Healthy entry. If it is still STARTING, it is an in-flight
+                // reservation from a CONCURRENT start for this source (#741) —
+                // observer-join it rather than build a second pipeline; otherwise
+                // it is Streaming → a true idempotent no-op.
+                if let Some(entry) = active.get(source_id) {
+                    if matches!(
+                        entry.pipeline.state(),
+                        crate::pipeline::PipelineState::Starting
+                    ) {
+                        let in_flight = std::sync::Arc::clone(&entry.pipeline);
+                        drop(active);
+                        return Self::observe_in_flight(in_flight, ndi_name).await;
                     }
-                    crate::pipeline::PipelineState::Streaming => return Ok(()),
-                    _ => {}
                 }
-                if watcher.changed().await.is_err() {
-                    return Err(anyhow!("state watcher closed unexpectedly"));
-                }
+                return Ok(());
             }
-        })
-        .await;
+            // The entry was dead → check_active_entry removed it. Abort the prior
+            // supervisor so it doesn't double-watch the pipeline we build now.
+            if let Some(handle) = prior_supervisor {
+                handle.abort();
+            }
 
-        match streaming_ready {
-            Ok(Ok(())) => {
-                // pipeline.state_watcher() and self.spawn_supervisor must
-                // run before pipeline is wrapped into Arc and moved into
-                // ActiveSource on the active.insert line below.
-                let watcher = pipeline.state_watcher();
-                let supervisor =
-                    self.spawn_supervisor(source_id.to_string(), ndi_name.to_string(), watcher);
-                active.insert(
-                    source_id.to_string(),
-                    ActiveSource {
-                        pipeline: std::sync::Arc::new(pipeline),
-                        supervisor: Some(supervisor),
-                    },
-                );
+            let whep_url = format!("/ndi/whep/{}", source_id);
+            let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+            pipeline.start().await?;
+            let arc = std::sync::Arc::new(pipeline);
+            // Insert the reservation in `Starting`. It (a) blocks a concurrent
+            // start(A) from double-building (that start observer-joins this Arc)
+            // and (b) makes the status reader show `Starting` (→ Connecting,
+            // #546-safe) during the unlocked wait below.
+            active.insert(
+                source_id.to_string(),
+                ActiveSource {
+                    pipeline: std::sync::Arc::clone(&arc),
+                    supervisor: None,
+                },
+            );
+            arc
+            // `active` guard dropped here — the wait below runs UNLOCKED.
+        };
+
+        // Phase 2 — wait for Streaming WITHOUT the lock (8 s budget: ndisrc takes
+        // ~2-5 s on a healthy LAN; beyond 8 s the broadcaster is silent/absent).
+        let outcome =
+            wait_for_streaming(reserved.state_watcher(), std::time::Duration::from_secs(8)).await;
+
+        // Phase 3 — finalize under the lock.
+        match finalize_reservation(&self.active, source_id, &reserved, outcome).await {
+            Finalize::Promote => self.attach_supervisor(source_id, ndi_name, &reserved).await,
+            Finalize::Removed(WaitOutcome::Errored(e)) => {
+                Err(PipelineStartError::Failed(anyhow!("pipeline errored: {e}")))
+            }
+            // Stopped/TimedOut → broadcaster silent / not producing (#448): a
+            // neutral "waiting for source" placeholder, not a red error.
+            Finalize::Removed(_) => Err(PipelineStartError::SourceSilent {
+                ndi_name: ndi_name.to_string(),
+            }),
+            Finalize::Superseded => Err(PipelineStartError::Superseded),
+        }
+    }
+
+    /// The `Promote` tail of `start_pipeline` (#741): spawn the supervisor OUTSIDE
+    /// the finalize lock, then re-lock and attach it — but ONLY if the slot is
+    /// STILL our reservation (a concurrent op in the tiny gap could have removed
+    /// or replaced it). Extracted so `start_pipeline` stays under the fn-length cap.
+    async fn attach_supervisor(
+        self: &std::sync::Arc<Self>,
+        source_id: &str,
+        ndi_name: &str,
+        reserved: &std::sync::Arc<NdiPipeline>,
+    ) -> std::result::Result<(), PipelineStartError> {
+        let supervisor = self.spawn_supervisor(
+            source_id.to_string(),
+            ndi_name.to_string(),
+            reserved.state_watcher(),
+        );
+        let mut active = self.active.lock().await;
+        match active.get_mut(source_id) {
+            Some(slot) if std::sync::Arc::ptr_eq(&slot.pipeline, reserved) => {
+                slot.supervisor = Some(supervisor);
                 Ok(())
             }
-            Ok(Err(e)) => {
-                // The pipeline element posted an error (encoder build failure,
-                // GStreamer element error, …) — a GENUINE failure.
-                pipeline.stop().await;
-                Err(PipelineStartError::Failed(e))
+            _ => {
+                // Slot vanished/replaced between finalize and here — abort the
+                // just-spawned supervisor; stop our now-orphaned pipeline. Treat
+                // as superseded (publish nothing).
+                supervisor.abort();
+                drop(active);
+                reserved.stop().await;
+                Err(PipelineStartError::Superseded)
             }
-            Err(_) => {
-                // The pipeline never reached Streaming within the budget. With
-                // no element error posted, this is the broadcaster-silent /
-                // not-producing case (e.g. the Resolume output is off) — an
-                // EXPECTED state, not a failure (#448). The caller surfaces it
-                // as a neutral "waiting for source" placeholder, not a red error.
-                pipeline.stop().await;
-                Err(PipelineStartError::SourceSilent {
-                    ndi_name: ndi_name.to_string(),
-                })
+        }
+    }
+
+    /// Observer-join an in-flight `Starting` reservation created by a CONCURRENT
+    /// start for the same source (#741). We did NOT reserve it, so we never touch
+    /// the active map — we only wait for it and report its outcome, preserving the
+    /// "start_pipeline returns only after Streaming" contract for this caller too.
+    async fn observe_in_flight(
+        in_flight: std::sync::Arc<NdiPipeline>,
+        ndi_name: &str,
+    ) -> std::result::Result<(), PipelineStartError> {
+        match wait_for_streaming(in_flight.state_watcher(), std::time::Duration::from_secs(8)).await
+        {
+            WaitOutcome::Streaming => Ok(()),
+            WaitOutcome::Errored(e) => {
+                Err(PipelineStartError::Failed(anyhow!("pipeline errored: {e}")))
             }
+            // The owner tore the reservation down (deactivate/reset) — publish nothing.
+            WaitOutcome::Stopped => Err(PipelineStartError::Superseded),
+            WaitOutcome::TimedOut => Err(PipelineStartError::SourceSilent {
+                ndi_name: ndi_name.to_string(),
+            }),
         }
     }
 

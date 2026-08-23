@@ -10,6 +10,7 @@ use anyhow::{anyhow, Result};
 
 use crate::pipeline::NdiPipeline;
 
+use super::activation::{finalize_reservation, wait_for_streaming, Finalize, WaitOutcome};
 use super::{check_active_entry, NdiManager, StateCheckOutcome};
 
 /// #388 periodic RTCP-liveness sweep cadence: how often each source's
@@ -368,61 +369,48 @@ impl NdiManager {
         source_id: &str,
         ndi_name: &str,
     ) -> Result<()> {
-        let mut active = self.active.lock().await;
-        // Force-remove the dead entry. If somehow it has become healthy in
-        // the meantime, leave it alone (idempotent).
-        if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
-            return Ok(());
-        }
+        // Same reservation shape as `start_pipeline` (#741): reserve under the
+        // lock (fast), RELEASE before the 8 s streaming-ready wait, then finalize.
+        // Called by the source's OWN supervisor, which re-subscribes to the fresh
+        // watcher via `state_watcher_for` — so we insert `supervisor: None` and
+        // never spawn a supervisor here.
+        let reserved = {
+            let mut active = self.active.lock().await;
+            // Force-remove the dead entry. If it has become healthy in the
+            // meantime, leave it alone (idempotent).
+            if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await
+            {
+                return Ok(());
+            }
+            let whep_url = format!("/ndi/whep/{}", source_id);
+            let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+            pipeline.start().await?;
+            let arc = std::sync::Arc::new(pipeline);
+            active.insert(
+                source_id.to_string(),
+                super::ActiveSource {
+                    pipeline: std::sync::Arc::clone(&arc),
+                    supervisor: None,
+                },
+            );
+            arc
+            // `active` guard dropped here — the wait below runs UNLOCKED.
+        };
 
-        let whep_url = format!("/ndi/whep/{}", source_id);
-        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
-        pipeline.start().await?;
+        let outcome =
+            wait_for_streaming(reserved.state_watcher(), std::time::Duration::from_secs(8)).await;
 
-        // Wait for the pipeline to reach Streaming — same rationale as
-        // start_pipeline: state-watcher replaces the whepserversink pad
-        // caps-wait in the new shared-encoder topology.
-        let mut watcher = pipeline.state_watcher();
-        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
-            loop {
-                let state = watcher.borrow_and_update().clone();
-                match state {
-                    crate::pipeline::PipelineState::Errored(ref e) => {
-                        return Err(anyhow!("pipeline errored: {e}"));
-                    }
-                    crate::pipeline::PipelineState::Streaming => return Ok(()),
-                    _ => {}
-                }
-                if watcher.changed().await.is_err() {
-                    return Err(anyhow!("state watcher closed unexpectedly"));
-                }
-            }
-        })
-        .await;
-
-        match streaming_ready {
-            Ok(Ok(())) => {
-                active.insert(
-                    source_id.to_string(),
-                    super::ActiveSource {
-                        pipeline: std::sync::Arc::new(pipeline),
-                        // Supervisor task is reused — it'll fetch the new watcher
-                        // from us via `state_watcher_for`.
-                        supervisor: None,
-                    },
-                );
-                Ok(())
-            }
-            Ok(Err(e)) => {
-                pipeline.stop().await;
-                Err(e)
-            }
-            Err(_) => {
-                pipeline.stop().await;
-                Err(anyhow!(
-                    "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
-                ))
-            }
+        match finalize_reservation(&self.active, source_id, &reserved, outcome).await {
+            // Slot left in place (supervisor: None) — the calling supervisor
+            // re-subscribes to the fresh watcher via `state_watcher_for`.
+            Finalize::Promote => Ok(()),
+            Finalize::Removed(WaitOutcome::Errored(e)) => Err(anyhow!("pipeline errored: {e}")),
+            Finalize::Removed(_) => Err(anyhow!(
+                "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
+            )),
+            Finalize::Superseded => Err(anyhow!(
+                "rebuild superseded — source no longer holds this pipeline"
+            )),
         }
     }
 }
