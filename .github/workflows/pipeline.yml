@@ -587,9 +587,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # #740: fail fast if the debug signing config regressed to a per-run
+      # auto-generated key (which breaks `adb install -r` on the stage TVs).
+      - name: Verify stable APK signing config
+        run: bash scripts/dev/stage_apk_signing_test.sh
+
       - name: Build debug APK
         working-directory: android/presenter-stage
         run: gradle assembleDebug --no-daemon --stacktrace
+
+      # #740: verify the BUILT apk is actually signed with the pinned stable key.
+      - name: Verify built APK is signed with the stable key
+        run: bash scripts/dev/stage_apk_signing_test.sh android/presenter-stage/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Stage APK artifact
         run: |

@@ -41,6 +41,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Local quality-gate gotchas (fn-length counts wrapped signature lines, file-size cap) | `.claude/rules/quality-gates.md` (auto-loads on `crates/**/*.rs`) |
 | Down-dependency log floods → resolume #484 backoff + power-of-two log gate (AbleSet/Resolume/NDI/ADB pollers) | `.claude/rules/log-flood-backoff.md` (auto-loads on `ableset.rs`, `resolume/**`, `manager/**`, `android_stage.rs`) |
 | Bible page DOM contract + async-effect E2E determinism (#727): collapsed/full book-item attribute parity, settle-signal over expect.poll, Tier-0 live-server repro | `.claude/rules/bible-page.md` (auto-loads on `pages/bible.rs`, `state/bible.rs`, `wasm-bible.spec.ts`) |
+| NdiManager active-map locking: never hold `active` across build/wait/stop; the #741 reservation activation pattern; Tier-0 seam testing without libndi | `.claude/rules/ndi-manager-locking.md` (auto-loads on `manager/**`) |
+| Presenter Stage APK stable-signing: committed debug keystore + guard, don't delete it (#740) | `.claude/rules/android-stage-signing.md` (auto-loads on `android/presenter-stage/**`) |
 
 ## Always-Rules
 
