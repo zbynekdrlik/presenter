@@ -175,6 +175,7 @@ mod tests {
         let msg = InboundMessage::StagePresence {
             client_id: Uuid::new_v4().to_string(),
             layout_code: "worship-snv".to_string(),
+            user_agent: Some("Mozilla/5.0 (Linux; Android 11) Chrome/90".to_string()),
         };
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains(r#""type":"stage_presence""#));
@@ -186,6 +187,7 @@ mod tests {
         let msg = InboundMessage::StageHeartbeatAck {
             client_id: Uuid::new_v4().to_string(),
             heartbeat_id: Some(Uuid::new_v4().to_string()),
+            ndi_video: None,
         };
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains(r#""type":"stage_heartbeat_ack""#));

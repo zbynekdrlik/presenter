@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::stage_client::StageClientSnapshot;
+use crate::stage_client::{NdiVideoDiag, StageClientSnapshot};
 use crate::{BibleBroadcast, BibleSlideOutput, StageDisplaySnapshot, TimersOverview};
 
 /// Events broadcast over the `/live/ws` WebSocket to all connected clients.
@@ -82,11 +82,31 @@ pub enum InboundMessage {
     StagePresence {
         client_id: String,
         layout_code: String,
+        /// #732 diagnostics: `navigator.userAgent` of the connecting TV
+        /// WebView, sent on connect. Additive + optional — an old client
+        /// omits it and the server records `None`.
+        #[serde(default)]
+        user_agent: Option<String>,
     },
     StageHeartbeatAck {
         client_id: String,
         #[serde(default)]
         heartbeat_id: Option<String>,
+        /// #732 diagnostics: the NDI `<video>` state snapshot at this
+        /// heartbeat. Additive + optional — the heartbeat cadence carrier
+        /// for the diagnostics snapshot (`StageDiag` carries the on-change
+        /// pushes between heartbeats).
+        #[serde(default)]
+        ndi_video: Option<NdiVideoDiag>,
+    },
+    /// #732 diagnostics: an out-of-band NDI `<video>` state snapshot pushed
+    /// immediately on a change of paused/error/cover between heartbeats. A
+    /// server that predates the diagnostics protocol deserializes this as
+    /// `Unknown` (via `#[serde(other)]`) and ignores it.
+    StageDiag {
+        client_id: String,
+        #[serde(default)]
+        ndi_video: Option<NdiVideoDiag>,
     },
     StageDisconnect {
         client_id: String,
