@@ -208,7 +208,7 @@ mod tests {
         .to_string();
         let snap: StageClientSnapshot = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(snap.user_agent.as_deref(), Some("Chrome/90"));
-        let diag = snap.ndi_video.expect("ndi_video present");
+        let diag = snap.ndi_video.as_ref().expect("ndi_video present");
         assert_eq!(diag.video_width, Some(1280));
         assert!(snap.last_diag_at.is_some());
         // Re-serialize + re-parse to confirm the camelCase wire is symmetric.

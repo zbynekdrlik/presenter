@@ -85,6 +85,9 @@ mod tests {
                 last_heartbeat: Utc::now(),
                 latency_ms: Some(42),
                 status: StageClientStatus::Connected,
+                user_agent: None,
+                ndi_video: None,
+                last_diag_at: None,
             },
         };
         let json = serde_json::to_string(&event).expect("serialize");
@@ -221,6 +224,9 @@ mod tests {
             last_heartbeat: Utc::now(),
             latency_ms: Some(15),
             status: StageClientStatus::Connected,
+            user_agent: None,
+            ndi_video: None,
+            last_diag_at: None,
         };
         let result = roundtrip_json(&snapshot);
         assert_eq!(result.id, snapshot.id);
@@ -242,6 +248,9 @@ mod tests {
             last_heartbeat: Utc::now(),
             latency_ms: None,
             status: StageClientStatus::Connecting,
+            user_agent: None,
+            ndi_video: None,
+            last_diag_at: None,
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         // latency_ms is skip_serializing_if = None, so it should be absent
@@ -370,6 +379,9 @@ mod tests {
             last_heartbeat: Utc::now(),
             latency_ms: None,
             status: StageClientStatus::Connected,
+            user_agent: None,
+            ndi_video: None,
+            last_diag_at: None,
         };
         let json = serde_json::to_string(&snapshot).unwrap();
         let result: StageClientSnapshot = serde_json::from_str(&json).unwrap();
