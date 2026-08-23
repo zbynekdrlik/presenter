@@ -126,44 +126,40 @@ impl NdiManager {
         let reserved: std::sync::Arc<NdiPipeline> = {
             let mut active = self.active.lock().await;
 
-            // Operator-reactivation path: snapshot a dead entry's supervisor
-            // BEFORE check_active_entry removes the entry, so we can abort it
-            // below (else it double-watches the fresh pipeline — deep-review 🔵 #3,
-            // PR #340). Safe to `.take()` under the lock.
-            let prior_supervisor: Option<tokio::task::JoinHandle<()>> = active
-                .get_mut(source_id)
-                .filter(|entry| {
-                    matches!(
-                        entry.pipeline.state(),
-                        crate::pipeline::PipelineState::Stopped
-                            | crate::pipeline::PipelineState::Errored(_)
-                    )
-                })
-                .and_then(|entry| entry.supervisor.take());
-
-            if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await
-            {
-                debug_assert!(prior_supervisor.is_none());
-                // Healthy entry. If it is still STARTING, it is an in-flight
-                // reservation from a CONCURRENT start for this source (#741) —
-                // observer-join it rather than build a second pipeline; otherwise
-                // it is Streaming → a true idempotent no-op.
-                if let Some(entry) = active.get(source_id) {
-                    if matches!(
-                        entry.pipeline.state(),
-                        crate::pipeline::PipelineState::Starting
-                    ) {
-                        let in_flight = std::sync::Arc::clone(&entry.pipeline);
-                        drop(active);
-                        return Self::observe_in_flight(in_flight, ndi_name).await;
+            // A TOTAL match, not an `if let StateCheckOutcome::Idempotent` — a
+            // non-exhaustive `if let` compiles unchanged under the 3-way outcome
+            // and would SILENTLY DROP the carried supervisor handle, making the
+            // #745(c) fix inert (no compiler backstop on this Tier-0 crate).
+            match check_active_entry(&mut active, source_id).await {
+                StateCheckOutcome::Idempotent => {
+                    // Healthy entry. If it is still STARTING, it is an in-flight
+                    // reservation from a CONCURRENT start for this source (#741) —
+                    // observer-join it rather than build a second pipeline;
+                    // otherwise it is Streaming → a true idempotent no-op.
+                    if let Some(entry) = active.get(source_id) {
+                        if matches!(
+                            entry.pipeline.state(),
+                            crate::pipeline::PipelineState::Starting
+                        ) {
+                            let in_flight = std::sync::Arc::clone(&entry.pipeline);
+                            drop(active);
+                            return Self::observe_in_flight(in_flight, ndi_name).await;
+                        }
+                    }
+                    return Ok(());
+                }
+                // Reactivating a dead source: `check_active_entry` removed the dead
+                // entry and handed back its (now-stale) supervisor. Abort it so it
+                // doesn't keep watching / double-watch the pipeline we build now
+                // (#745 item c — replaces the old pre-snapshot `prior_supervisor`
+                // hack, which missed a rebuilt entry's `supervisor: None`).
+                StateCheckOutcome::RebuildDead(prior_supervisor) => {
+                    if let Some(handle) = prior_supervisor {
+                        handle.abort();
                     }
                 }
-                return Ok(());
-            }
-            // The entry was dead → check_active_entry removed it. Abort the prior
-            // supervisor so it doesn't double-watch the pipeline we build now.
-            if let Some(handle) = prior_supervisor {
-                handle.abort();
+                // No existing entry — nothing to abort; build fresh.
+                StateCheckOutcome::Vacant => {}
             }
 
             let whep_url = format!("/ndi/whep/{}", source_id);

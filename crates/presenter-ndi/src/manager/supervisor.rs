@@ -372,16 +372,34 @@ impl NdiManager {
         // Same reservation shape as `start_pipeline` (#741): reserve under the
         // lock (fast), RELEASE before the 8 s streaming-ready wait, then finalize.
         // Called by the source's OWN supervisor, which re-subscribes to the fresh
-        // watcher via `state_watcher_for` — so we insert `supervisor: None` and
-        // never spawn a supervisor here.
+        // watcher via `state_watcher_for` — so we never spawn a supervisor here;
+        // instead we CARRY FORWARD the removed dead entry's supervisor handle
+        // (that same live caller) into the rebuilt slot, so every abort path can
+        // still reach it (#745 item c — was `supervisor: None`, the double-watch).
         let reserved = {
             let mut active = self.active.lock().await;
-            // Force-remove the dead entry. If it has become healthy in the
-            // meantime, leave it alone (idempotent).
-            if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await
-            {
-                return Ok(());
-            }
+            // A TOTAL match (not `if let Idempotent`) — a non-exhaustive `if let`
+            // compiles unchanged under the 3-way outcome and would silently drop
+            // the carried supervisor, making the #745(c) fix inert (no compiler
+            // backstop on this Tier-0 crate).
+            let carried = match check_active_entry(&mut active, source_id).await {
+                // Entry became healthy on its own during backoff — nothing to
+                // rebuild; `resubscribe_after_rebuild` re-picks the live watcher.
+                StateCheckOutcome::Idempotent => return Ok(()),
+                // Entry gone (a concurrent stop/deactivate, or our own prior
+                // Removed finalize left the map vacant and we retried off the old
+                // watcher's unseen `Stopped` echo). Do NOT rebuild a possibly-
+                // deactivated source (#745 item c — the out-of-map window): return
+                // Ok WITHOUT building → `resubscribe_after_rebuild`'s
+                // `state_watcher_for` finds no entry → `SupervisorStep::Exit`; the
+                // 30s reconnect ticker owns recovery per the DB. Also avoids
+                // re-creating a `supervisor: None` entry (bug (c) reborn).
+                StateCheckOutcome::Vacant => return Ok(()),
+                // Dead entry removed — carry its supervisor forward so THIS same
+                // live supervisor stays reachable from the rebuilt slot (#745 c);
+                // every abort path (stop_*/retain/reactivate) can then reach it.
+                StateCheckOutcome::RebuildDead(carried) => carried,
+            };
             let whep_url = format!("/ndi/whep/{}", source_id);
             let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
             pipeline.start().await?;
@@ -390,7 +408,7 @@ impl NdiManager {
                 source_id.to_string(),
                 super::ActiveSource {
                     pipeline: std::sync::Arc::clone(&arc),
-                    supervisor: None,
+                    supervisor: carried,
                 },
             );
             arc

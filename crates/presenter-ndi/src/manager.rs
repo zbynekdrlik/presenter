@@ -117,16 +117,31 @@ struct ActiveSource {
     pub(in crate::manager) supervisor: Option<tokio::task::JoinHandle<()>>,
 }
 
-/// Outcome of `check_active_entry` — drives `start_pipeline`'s control flow.
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+/// Outcome of `check_active_entry` — drives `start_pipeline` / `rebuild_pipeline`
+/// control flow.
+///
+/// Split three ways (#745 item c) so the caller can distinguish "the existing
+/// entry was dead — here is its supervisor handle to carry forward or abort" from
+/// "there is no entry at all". Conflating them (the old single `Rebuild`) is what
+/// let a rebuilt entry keep `supervisor: None` — unreachable by every abort path —
+/// and let a post-failure retry rebuild a zombie pipeline for a possibly-
+/// deactivated source. Not `PartialEq` (a `JoinHandle` is not `PartialEq`); tests
+/// use `matches!`.
+#[cfg_attr(test, derive(Debug))]
 enum StateCheckOutcome {
     /// Active entry exists and the pipeline is healthy (Streaming or
     /// Starting). Caller should treat the request as a no-op.
     Idempotent,
-    /// No entry, OR the existing entry's pipeline is dead (Stopped or
-    /// Errored). In the dead case the entry has already been removed.
-    /// Caller should proceed to build a fresh pipeline.
-    Rebuild,
+    /// The existing entry's pipeline was dead (Stopped or Errored) and has been
+    /// REMOVED. Carries the removed entry's supervisor handle (if any) so the
+    /// caller can CARRY IT FORWARD (`rebuild_pipeline` re-inserts it, keeping the
+    /// live supervisor reachable) or ABORT it (`start_pipeline` reactivate) —
+    /// instead of silently dropping it, the #745(c) double-watch bug.
+    RebuildDead(Option<tokio::task::JoinHandle<()>>),
+    /// No entry for this source at all. `start_pipeline` builds fresh;
+    /// `rebuild_pipeline` treats the source as gone and returns without building
+    /// (the reconnect ticker owns recovery per the DB).
+    Vacant,
 }
 
 /// Pure state-check for the active-source HashMap. Extracted from
@@ -164,21 +179,19 @@ async fn check_active_entry(
                     // active map empty. The supervisor's lifecycle is owned
                     // by `stop_pipeline` / `stop_all` (explicit deactivation
                     // paths only) — never by the rebuild path.
-                    //
-                    // After this Drops, `dead.supervisor: Option<JoinHandle>`
-                    // is dropped too. Dropping a JoinHandle does NOT cancel
-                    // its task in tokio (unlike abort), so the task keeps
-                    // running — which is exactly what we need for the
-                    // self-rebuild path. `rebuild_pipeline` then re-inserts
-                    // a fresh ActiveSource with `supervisor: None`, and the
-                    // still-running supervisor re-subscribes to the new
-                    // pipeline's state_watcher via `state_watcher_for`.
-                    dead.pipeline.stop().await;
+                    let ActiveSource {
+                        pipeline,
+                        supervisor: _dropped,
+                    } = dead;
+                    pipeline.stop().await;
+                    // #745(c) RED: still DROPS the supervisor (returns None) —
+                    // the double-watch bug. GREEN carries it forward.
+                    return StateCheckOutcome::RebuildDead(None);
                 }
             }
         }
     }
-    StateCheckOutcome::Rebuild
+    StateCheckOutcome::Vacant
 }
 
 /// Remove every active-map entry whose `source_id` is NOT `keep_id`, stopping
@@ -249,7 +262,10 @@ mod start_pipeline_state_check_tests {
     async fn empty_map_requests_rebuild() {
         let mut active = HashMap::new();
         let outcome = check_active_entry(&mut active, "any-id").await;
-        assert_eq!(outcome, StateCheckOutcome::Rebuild);
+        assert!(
+            matches!(outcome, StateCheckOutcome::Vacant),
+            "empty map → Vacant; got {outcome:?}"
+        );
         assert!(active.is_empty());
     }
 
@@ -285,10 +301,9 @@ mod start_pipeline_state_check_tests {
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
-        assert_eq!(
-            outcome,
-            StateCheckOutcome::Rebuild,
-            "REGRESSION: dead Stopped entry must trigger Rebuild, not Idempotent",
+        assert!(
+            matches!(outcome, StateCheckOutcome::RebuildDead(_)),
+            "REGRESSION: dead Stopped entry must trigger RebuildDead, not Idempotent; got {outcome:?}",
         );
         assert!(
             !active.contains_key("test-id"),
@@ -314,7 +329,7 @@ mod start_pipeline_state_check_tests {
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
-        assert_eq!(outcome, StateCheckOutcome::Idempotent);
+        assert!(matches!(outcome, StateCheckOutcome::Idempotent));
         assert!(
             active.contains_key("test-id"),
             "Streaming entry must NOT be removed — that's the idempotent path",
@@ -342,7 +357,7 @@ mod start_pipeline_state_check_tests {
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
-        assert_eq!(outcome, StateCheckOutcome::Idempotent);
+        assert!(matches!(outcome, StateCheckOutcome::Idempotent));
         assert!(
             active.contains_key("test-id"),
             "a Starting reservation must NOT be removed — it is the #741 in-flight marker",
@@ -366,8 +381,51 @@ mod start_pipeline_state_check_tests {
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
-        assert_eq!(outcome, StateCheckOutcome::Rebuild);
+        assert!(
+            matches!(outcome, StateCheckOutcome::RebuildDead(_)),
+            "dead Errored entry → RebuildDead; got {outcome:?}"
+        );
         assert!(!active.contains_key("test-id"));
+    }
+
+    /// #745(c) RED: a removed dead entry's supervisor handle must be CARRIED in
+    /// `RebuildDead(Some(_))`, not silently dropped. Dropping it (the old
+    /// `Rebuild` outcome / the `RebuildDead(None)` RED stub) is exactly what left
+    /// a rebuilt entry with `supervisor: None` — unreachable by every abort path —
+    /// so a later deactivate/reactivate double-watched the source (two encoders).
+    ///
+    /// Uses a real spawned handle (nothing else in these tests constructs a
+    /// non-None supervisor, so only this test catches a re-dropped handle). No
+    /// libndi/GPU needed — `stopped_for_test()` yields a Stopped pipeline.
+    #[tokio::test]
+    async fn check_active_entry_carries_dead_entry_supervisor_forward() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        let dead = crate::pipeline::NdiPipeline::stopped_for_test();
+        assert_eq!(dead.state(), PipelineState::Stopped, "precondition");
+        let handle = tokio::spawn(std::future::pending::<()>());
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: std::sync::Arc::new(dead),
+                supervisor: Some(handle),
+            },
+        );
+
+        let outcome = check_active_entry(&mut active, "test-id").await;
+
+        assert!(
+            matches!(outcome, StateCheckOutcome::RebuildDead(Some(_))),
+            "#745(c): the removed dead entry's supervisor must be carried in \
+             RebuildDead(Some(_)), not dropped; got {outcome:?}",
+        );
+        assert!(
+            !active.contains_key("test-id"),
+            "the dead entry must still be removed from the active map",
+        );
+        // Clean up the spawned task (abort the carried handle if present).
+        if let StateCheckOutcome::RebuildDead(Some(h)) = outcome {
+            h.abort();
+        }
     }
 
     /// Rate-limiter: two Errored transitions within 2s must produce
