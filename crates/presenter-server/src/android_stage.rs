@@ -1286,6 +1286,11 @@ mod tests {
         /// Defaults to [`EXPECTED_STAGE_APK_VERSION_CODE`] (up to date → no
         /// reinstall); lower models a stale install the watchdog must upgrade.
         installed_version: i64,
+        /// When true, `dumpsys package` returns output with NO parseable
+        /// `versionCode=` line (models a transient adb blip / truncated dumpsys),
+        /// so `adb_installed_version_code` reads `None` even though the app is
+        /// present (#734).
+        version_unreadable: bool,
         calls: Mutex<Vec<String>>,
     }
 
@@ -1296,6 +1301,7 @@ mod tests {
                 connect_fails: false,
                 installed: true,
                 installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
+                version_unreadable: false,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -1306,8 +1312,25 @@ mod tests {
                 connect_fails: true,
                 installed: true,
                 installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
+                version_unreadable: false,
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        /// Builder: the app IS installed but its versionCode is UNREADABLE
+        /// (`dumpsys package` returns no parseable `versionCode=`), modelling the
+        /// transient-read false-negative that drove the #734 tear-down.
+        fn version_unreadable(mut self) -> Self {
+            self.installed = true;
+            self.version_unreadable = true;
+            self
+        }
+
+        fn uninstall_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("uninstall"))
+                .count()
         }
 
         /// Builder: the app is NOT yet installed (so `pm path` reports nothing and
@@ -1423,15 +1446,18 @@ mod tests {
             }
 
             // `dumpsys package <pkg>` reports the installed versionCode (empty
-            // when the app is absent).
+            // when the app is absent; no `versionCode=` line when the read is
+            // modelled as unreadable — #734).
             if joined.contains("dumpsys package") {
-                return Ok(ok_output(&if self.installed {
+                return Ok(ok_output(&if !self.installed {
+                    String::new()
+                } else if self.version_unreadable {
+                    "    minSdk=22 targetSdk=34".to_string()
+                } else {
                     format!(
                         "    versionCode={} minSdk=22 targetSdk=34",
                         self.installed_version
                     )
-                } else {
-                    String::new()
                 }));
             }
 
@@ -1567,6 +1593,33 @@ mod tests {
             runner.install_calls(),
             0,
             "an already-installed app MUST NOT be reinstalled",
+        );
+    }
+
+    // #734 REGRESSION: a present app whose versionCode read fails (transient adb
+    // blip / truncated dumpsys) must NOT be reinstalled — the old "reinstall to
+    // be safe" path tore down a healthy running app mid-event (the grey-play-
+    // arrow surface feeding #732, which remains open). Present + unreadable
+    // version = leave the running app in place, ZERO install/uninstall calls.
+    #[tokio::test]
+    async fn does_not_reinstall_when_present_but_version_unreadable() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage).version_unreadable();
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.install_calls(),
+            0,
+            "#734: a healthy app with an unreadable versionCode must NOT be reinstalled",
+        );
+        assert_eq!(
+            runner.uninstall_calls(),
+            0,
+            "#734: must not tear down (uninstall) a healthy running app",
         );
     }
 
