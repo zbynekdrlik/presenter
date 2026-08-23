@@ -62,6 +62,7 @@ impl NdiManager {
             source_list,
             _finder_shutdown: finder_shutdown,
             active: Mutex::new(HashMap::new()),
+            snapshot_contention_streak: std::sync::atomic::AtomicU32::new(0),
         })
     }
 

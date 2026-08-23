@@ -17,6 +17,7 @@
 //! them at a stable path.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -220,6 +221,12 @@ pub struct NdiManager {
     pub(in crate::manager) _finder_shutdown: FinderShutdown,
     /// Map source_id (UUID string) → ActiveSource pipeline.
     pub(in crate::manager) active: Mutex<HashMap<String, ActiveSource>>,
+    /// #736: consecutive `pipeline_snapshots_checked` lock-acquisition timeouts.
+    /// Incremented on each 200 ms timeout, reset to 0 on a successful
+    /// acquisition; the contention WARN is power-of-two-gated on this count so a
+    /// long `start_pipeline`/`rebuild_pipeline` window logs ~log2(N)+1 lines
+    /// instead of one per status poll (the resolume #484 idiom).
+    pub(in crate::manager) snapshot_contention_streak: AtomicU32,
 }
 
 // Re-export the supervisor's pure-state types into the module root so the

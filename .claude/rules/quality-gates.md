@@ -90,3 +90,22 @@ is safely integrated; the compile/lint/quality jobs (Clippy/Format/Quality/TypeS
 green before the cancel are the real validation of your slice. Do NOT open a `dev→main` PR to force
 your slice through — that promotes the whole fleet's in-flight work to prod; the `dev→main` release is
 the supervisor's integration decision once `dev` quiesces.
+
+## Run BOTH gates on EVERY touched file — not just the one you think grew (#735)
+
+A change that adds a `match` arm, a loop body, or an `if/else` branch to an *existing* function
+grows THAT enclosing function silently — even in a file you were not focused on. #735 restructured
+`ableset.rs`'s `run_tracker` poll loop (added a backoff arm + recovery/failure logging) and pushed
+it **108 → 142 lines** (> the 120 hard-fail), while attention was on `android_stage.rs`'s file-size
+in the SAME batch. `cargo fmt`/`cargo check` never flag it, and it was caught only in code review —
+one wasted round-trip that a local check would have prevented. So before pushing, feed **every**
+`.rs` file the change touched to `fn_length_check.py` (newline-separated `QC_TARGETS`), not only the
+biggest one:
+
+```bash
+QC_TARGETS="crates/presenter-server/src/ableset.rs" python3 scripts/dev/fn_length_check.py .
+```
+
+Fix by extracting the arm/loop body into a small helper (the same #687 fix pattern above) — e.g.
+`run_tracker` dropped back to 89 lines by extracting `log_ableset_recovery` +
+`update_active_song_status`.
