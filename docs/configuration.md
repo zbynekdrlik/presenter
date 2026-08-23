@@ -173,7 +173,10 @@ whole dev DB with a fresh production snapshot on every deploy (pipeline.yml step
 stream demo scenes — so scenes created by hand on the dev instance are wiped by
 the next deploy. The durable source of truth is therefore
 `scripts/deploy/seed-stream-demo.sh` (+ `stream-demo-logo.png`), which the
-`deploy-dev` job runs (idempotently, best-effort) AFTER the DB replace. It is
+`deploy-dev` job runs (best-effort) AFTER the DB replace. It is **authoritative +
+convergent**: each demo scene is reseeded to spec (a same-name scene from the
+prod snapshot is deleted and recreated), so the dev set always matches the spec
+even when production carries a same-name scene of a different shape. It is
 deliberately **dev-only, not a migration**: a migration would seed these scenes
 onto production too, which still runs Resolume for the live walls. To change the
 demo set, edit that script. The logo is a placeholder — replace it per scene via

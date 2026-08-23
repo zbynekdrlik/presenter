@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Seed the owner's stream-graphics demo scene set (#739) into a Presenter
-# instance over the REST API. IDEMPOTENT: a scene that already exists (by name,
-# case-insensitive) is skipped, so re-running is safe.
+# instance over the REST API. AUTHORITATIVE + convergent: each demo scene is
+# reseeded to spec (any existing same-name scene is deleted first, then created
+# fresh), so re-running is safe and always yields exactly the spec — even when a
+# prod snapshot brought in a same-name scene of a different shape.
 #
 # WHY this exists (durable source of truth — the #739 finding):
 #   The dev deploy REPLACES the whole dev DB with a fresh PROD snapshot on every
@@ -60,14 +62,23 @@ upload_asset() { # -> asset_id (dedup by sha256 server-side)
     | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])"
 }
 
-# Create a scene only if absent; on create, run the element-builder callback.
+delete_scene() { api -X DELETE "${BASE_URL}/stream/api/scenes/$1" >/dev/null; }
+
+# Reseed a demo scene AUTHORITATIVELY to spec. The dev deploy replaces the DB
+# with a prod snapshot that may ALREADY carry a scene of this name but a
+# DIFFERENT shape (e.g. a real prod `ytfast` with a countdown but no logo PNG) —
+# a name-only "skip if exists" would leave that mismatched scene in place and the
+# demo would never match the spec. So delete any existing same-name scene first,
+# then create it fresh from the builder. Dev-only + demo-owned names, so this
+# never clobbers real prod config (this script never runs on the prod deploy);
+# scenes are addressed by NAME in Companion, so the fresh ids don't matter.
 # $1 name, $2 kind, $3 builder-fn (receives the new scene id).
 ensure_scene() {
   local name="$1" kind="$2" builder="$3" existing
   existing="$(scene_id_by_name "$name" || true)"
   if [ -n "$existing" ]; then
-    log "scene '$name' already exists (id $existing) — skip"
-    return 0
+    log "scene '$name' exists (id $existing) — deleting to reseed to spec"
+    delete_scene "$existing" || log "  (delete of '$name' failed — attempting create anyway)"
   fi
   local id
   id="$(create_scene "$name" "$kind")"
