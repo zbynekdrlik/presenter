@@ -586,6 +586,15 @@ test("stage remounts NDI video and resumes decoding after deactivate→reactivat
       })
       .toBeGreaterThan(0);
 
+    // #732: with REAL decoded frames presenting, the <video> element MUST
+    // be revealed (not dormant/opacity:0). The hook-driven
+    // stage-ndi-hidden-until-frames spec cannot exercise the real-frame
+    // reveal path — this guards it on the actual Chrome decode pipeline
+    // (class assertion, not videoWidth, per this file's headless caveat).
+    await expect(video).not.toHaveClass(/stage-ndi-video--dormant/, {
+      timeout: 10_000,
+    });
+
     // Phase 2: deactivate server-side → the stage must unmount the video.
     await request.post(
       new URL("/integrations/video-sources/deactivate", baseURL).toString(),

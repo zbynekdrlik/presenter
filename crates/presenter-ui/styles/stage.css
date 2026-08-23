@@ -655,6 +655,23 @@ body.stage {
     -webkit-appearance: none;
     appearance: none;
 }
+/* #732: THE actual play-arrow fix. On Chrome >=150 (the real Tesla/Skyworth
+   LEAP-S1 stage TVs, Chrome/150 WebView) the grey play-arrow is painted by
+   `-internal-media-controls-overlay-play-button-internal` — a UA-INTERNAL
+   pseudo-element that author CSS CANNOT select, so the ::-webkit-media-controls*
+   block above (kept as a harmless belt) can never reach it. It paints inside a
+   frameless/paused/empty <video> (no srcObject, readyState 0). Proven live on
+   the real TV SD1 that setting `opacity:0` on the <video> ELEMENT removes it.
+   NdiVideo (ndi_video.rs) toggles `stage-ndi-video--dormant` whenever frames
+   are not presenting — reusing the #500 `ndi_frames_live` signal — so the
+   element is invisible during every no-frame window (broadcast off, cold-open
+   WHEP negotiation, stalls) and revealed only when real frames flow. The
+   attribute+class selector (specificity 0,2,0) guarantees it wins over each
+   layout's own single-class rule (.stage-ndi__video / .stage-timer__ndi /
+   .stage-api__ndi), none of which set opacity. */
+[data-role="ndi-video"].stage-ndi-video--dormant {
+    opacity: 0;
+}
 .stage-ndi__placeholder {
     position: absolute;
     inset: 0;

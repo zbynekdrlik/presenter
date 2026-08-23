@@ -501,3 +501,41 @@ across headless Chromium builds for internal UA pseudo-elements. Instead, walk
 `element.matches(strippedSelector)` + `rule.style.getPropertyValue('display') === 'none'`. This
 deterministically proves the rule's SELECTOR reaches the element — which is what #568 actually
 broke (the rule existed, it just didn't target two of the three stage layouts' video elements).
+
+## The grey play-arrow is CSS-UNREACHABLE on Chrome ≥150 — hide the `<video>`, not its pseudos (#732)
+
+**Never rely on `::-webkit-media-controls*` rules to suppress the grey play-arrow on the real stage
+TV WebViews.** #448/#478/#568 all tried this and all failed on the field (4 recurrences). Proven
+live on the real stage TV **SD1** (Tesla/Skyworth **LEAP-S1**, Android 12, **Chrome/150 WebView** —
+NOT an old vendor Chromium) via adb screencap + CDP:
+
+- The visible arrow is `-internal-media-controls-overlay-play-button-internal` — a Chrome ≥150
+  **UA-INTERNAL** pseudo-element. **Author CSS cannot select any `-internal-*` pseudo**, so the
+  #478/#568 `[data-role="ndi-video"]::-webkit-media-controls-overlay-play-button{display:none}` rule
+  (which DOES compute `display:none` on the field engine — verified) only hides the `-webkit-`-named
+  wrapper and never reaches the `-internal-…-internal` glyph that actually paints. Injecting
+  `::-webkit-media-controls-overlay-enclosure{display:none}` left the `-internal` button
+  `display:block` and the arrow unmoved — decisive.
+- It paints INSIDE an **empty/frameless** `<video data-role="ndi-video">` (no `srcObject`,
+  `readyState 0`, `paused`). Reproduced states: the coverless **timer / api** layouts (broadcast off
+  → arrow for hours), every layout's **cold-open WHEP window** (t+2..t+5s during negotiation —
+  manufactured on every watchdog cold-reload, #734), and stalls. ndi-fullscreen hid it only because
+  its "Connecting…" cover happened to sit over the frameless video — which is exactly why every
+  emulator/desktop probe (and #478's fullscreen-only CSS) missed it.
+
+**THE INVARIANT: the NDI `<video>` element must be INVISIBLE whenever it is not delivering frames.**
+`NdiVideo` (`ndi_video.rs`) toggles a `stage-ndi-video--dormant` class → `opacity:0` (stage.css)
+whenever frames are not presenting, revealed only when real frames flow — proven live on SD1 that
+`opacity:0` on the ELEMENT removes the arrow. It is gated on the existing **`ndi_frames_live`**
+signal (the #500 rVFC-frame-observer signal — set true per presented frame, flipped false after
+`FRAMES_LIVE_STALENESS_MS`=1.5s of no frames / on cleanup / on (de)activate), so there is no new
+signal and no new timer, and a 1-frame hiccup never flickers the element. Keep the element MOUNTED
+(`opacity`, never `display:none`/unmount) so WHEP negotiation + autoplay are unaffected. The
+`::-webkit-media-controls*` block stays as a harmless belt but is NOT the fix.
+
+**E2E it (no NDI/GPU needed):** activate a not-producing bogus source (mounts the coverless
+`<video>`), then drive the frames-live flag with the `__presenterStageSetNdiFramesLive` test hook
+(the SAME signal the rVFC observer writes) — dormant with no frames → visible on `true` → dormant on
+`false`. Assert via the **class attribute + `getComputedStyle(el).opacity`**, never Playwright
+`toBeVisible()` (an `opacity:0` element still reports visible — see `.claude/skills/ui/SKILL.md`).
+`stage-ndi-hidden-until-frames.spec.ts` covers all three layouts.
