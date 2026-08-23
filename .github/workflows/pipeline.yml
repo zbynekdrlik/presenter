@@ -1426,6 +1426,22 @@ jobs:
           echo "Data check passed: $DB_COUNT libraries in DB cover the $DISK_COUNT on disk"
           REMOTE_SCRIPT
 
+      # #739: the "Replace dev database with production snapshot" step above wipes
+      # the dev DB (prod carries no stream demo scenes), so re-seed the owner's
+      # demo scene set on every dev deploy to keep /ui/stream + /stream/stream
+      # usable on the dev/demo instance. DEV-ONLY (NOT a migration → never touches
+      # PROD, which still runs Resolume for the live walls). Idempotent (skips
+      # existing scenes) + best-effort (a ::warning::, never a failed deploy —
+      # same non-blocking pattern as the AI-status check below), because demo data
+      # must not gate the deploy.
+      - name: Seed stream-graphics demo scenes (#739, dev-only)
+        run: |
+          scp -i ~/.ssh/id_deploy \
+            scripts/deploy/seed-stream-demo.sh scripts/deploy/stream-demo-logo.png \
+            deploy-target:${{ env.DEPLOY_DIR }}/ || true
+          ssh deploy-target "bash ${{ env.DEPLOY_DIR }}/seed-stream-demo.sh http://localhost:8080" \
+            || echo "::warning::stream demo seed failed (non-fatal) — /ui/stream demo scenes may be absent"
+
       - name: Post-deploy smoke test
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
