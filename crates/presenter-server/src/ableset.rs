@@ -547,6 +547,71 @@ fn should_log_ableset_failure(consecutive_failures: u32) -> bool {
     consecutive_failures > 0 && consecutive_failures.is_power_of_two()
 }
 
+/// #735: log an "AbleSet reachable again" recovery line on the first reachable
+/// response after a failure streak. The caller resets `consecutive_failures` to
+/// 0 afterwards (resetting when already 0 is a no-op). Extracted from
+/// `run_tracker` to keep it under the fn-length cap.
+fn log_ableset_recovery(host: &str, consecutive_failures: u32) {
+    if consecutive_failures > 0 {
+        info!(
+            host = %host,
+            consecutive_failures,
+            "AbleSet reachable again — resuming normal poll cadence (#735)"
+        );
+    }
+}
+
+/// Update `status.last_song` / `status.last_error` from the setlist's active
+/// song. Extracted verbatim from `run_tracker`'s `Ok(Some(..))` arm to keep that
+/// function under the fn-length cap; behavior is unchanged.
+fn update_active_song_status(
+    status: &mut AbleSetStatusInner,
+    setlist: &SetlistResponse,
+    song_prefix_length: u8,
+) {
+    let Some(active_id) = &setlist.active_song_id else {
+        status.last_song = None;
+        status.last_error = None;
+        return;
+    };
+    let mut found = false;
+    for (idx, song) in setlist.songs.iter().enumerate() {
+        if song.id.as_deref() == Some(active_id.as_str()) {
+            // `status.setlist_songs` is always current here: freshly rebuilt by
+            // `refresh_setlist_songs` if the list changed, or left as-is from a
+            // prior tick whose fingerprint proves it is still identical.
+            let Some(name) = status.setlist_songs.get(idx).map(|s| s.name.clone()) else {
+                continue;
+            };
+            if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
+                let index = song
+                    .internal_meta
+                    .as_ref()
+                    .and_then(|m| m.order)
+                    .or(Some(idx as u32));
+                status.last_song = Some(SongState {
+                    id: active_id.clone(),
+                    name,
+                    prefix,
+                    index,
+                    last_seen_at: Utc::now(),
+                });
+                status.last_error = None;
+                found = true;
+            } else {
+                status.last_error = Some(format!(
+                    "unable to extract prefix of length {} from song '{name}'",
+                    song_prefix_length
+                ));
+            }
+            break;
+        }
+    }
+    if !found && status.last_error.is_none() {
+        status.last_song = None;
+    }
+}
+
 async fn run_tracker(
     inner: Arc<AbleSetInner>,
     config: AbleSetTrackerConfig,
@@ -574,14 +639,8 @@ async fn run_tracker(
             _ = tokio::time::sleep(ableset_backoff_interval(consecutive_failures)) => {
                 match fetch_setlist(&client, &host, http_port).await {
                     Ok(Some(setlist)) => {
-                        if consecutive_failures > 0 {
-                            info!(
-                                host = %host,
-                                consecutive_failures,
-                                "AbleSet reachable again — resuming normal poll cadence (#735)"
-                            );
-                            consecutive_failures = 0;
-                        }
+                        log_ableset_recovery(&host, consecutive_failures);
+                        consecutive_failures = 0;
                         let new_active_id = setlist.active_song_id.clone();
                         let song_changed = new_active_id != prev_active_id;
                         let mut status = inner.status.write().await;
@@ -591,48 +650,7 @@ async fn run_tracker(
                         // refresh_setlist_songs's doc comment for the full "why".
                         let (list_changed, new_fingerprint) =
                             refresh_setlist_songs(&mut status, &setlist, prev_setlist_fingerprint);
-
-                        if let Some(active_id) = &setlist.active_song_id {
-                            let mut found = false;
-                            for (idx, song) in setlist.songs.iter().enumerate() {
-                                if song.id.as_deref() == Some(active_id.as_str()) {
-                                    // `status.setlist_songs` is always current here:
-                                    // freshly rebuilt above if the list changed, or
-                                    // left as-is from a prior tick whose fingerprint
-                                    // proves it is still identical to `setlist.songs`.
-                                    let Some(name) = status.setlist_songs.get(idx).map(|s| s.name.clone()) else {
-                                        continue;
-                                    };
-                                    if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
-                                        let index = song.internal_meta
-                                            .as_ref()
-                                            .and_then(|m| m.order)
-                                            .or(Some(idx as u32));
-                                        status.last_song = Some(SongState {
-                                            id: active_id.clone(),
-                                            name,
-                                            prefix,
-                                            index,
-                                            last_seen_at: Utc::now(),
-                                        });
-                                        status.last_error = None;
-                                        found = true;
-                                    } else {
-                                        status.last_error = Some(format!(
-                                            "unable to extract prefix of length {} from song '{name}'",
-                                            song_prefix_length
-                                        ));
-                                    }
-                                    break;
-                                }
-                            }
-                            if !found && status.last_error.is_none() {
-                                status.last_song = None;
-                            }
-                        } else {
-                            status.last_song = None;
-                            status.last_error = None;
-                        }
+                        update_active_song_status(&mut status, &setlist, song_prefix_length);
                         drop(status);
                         if list_changed {
                             prev_setlist_fingerprint = Some(new_fingerprint);
@@ -644,14 +662,8 @@ async fn run_tracker(
                         }
                     }
                     Ok(None) => {
-                        if consecutive_failures > 0 {
-                            info!(
-                                host = %host,
-                                consecutive_failures,
-                                "AbleSet reachable again — resuming normal poll cadence (#735)"
-                            );
-                            consecutive_failures = 0;
-                        }
+                        log_ableset_recovery(&host, consecutive_failures);
+                        consecutive_failures = 0;
                         let mut status = inner.status.write().await;
                         status.last_song = None;
                         status.setlist_songs.clear();
