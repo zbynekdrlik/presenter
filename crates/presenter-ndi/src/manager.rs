@@ -26,6 +26,7 @@ use crate::discovery::{FinderShutdown, SourceList};
 use crate::ndi_sdk::NdiLib;
 use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 
+mod activation;
 mod lifecycle;
 mod supervisor;
 mod whep;
