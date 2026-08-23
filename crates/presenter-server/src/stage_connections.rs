@@ -1,8 +1,58 @@
 use chrono::{DateTime, Duration, Utc};
-use presenter_core::{StageClientSnapshot, StageClientStatus};
+use presenter_core::{NdiVideoDiag, StageClientSnapshot, StageClientStatus};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+/// #732: how quietly to log an UNCHANGED diagnostics snapshot. A change of
+/// any dimension in [`DiagLogKey`] always logs; otherwise at most one line
+/// per this interval, per stage connection.
+const DIAG_LOG_MIN_INTERVAL_S: i64 = 30;
+
+/// #732: the dimensions whose change forces an immediate diagnostics log line
+/// (`paused`, `error_code`, `cover_visible`, and `video_width==0 vs >0`).
+/// Everything else in the snapshot is stored/exposed but does not by itself
+/// trigger a fresh log line — the 30 s floor covers steady-state drift.
+type DiagLogKey = (Option<bool>, Option<u16>, Option<bool>, Option<bool>);
+
+/// The [`DiagLogKey`] for a snapshot — `video_width` collapses to a
+/// present/absent-frame boolean (0 vs >0), matching the ticket's log rule.
+fn diag_log_key(diag: &NdiVideoDiag) -> DiagLogKey {
+    (
+        diag.paused,
+        diag.error_code,
+        diag.cover_visible,
+        diag.video_width.map(|w| w > 0),
+    )
+}
+
+/// #732 rate-limiter (pure — unit-tested): should this diagnostics snapshot be
+/// logged now? Logs when it was never logged, when the key CHANGED, or when
+/// `min_interval` has elapsed since the last log.
+pub(crate) fn should_log_diag(
+    prev_key: Option<&DiagLogKey>,
+    prev_log_at: Option<DateTime<Utc>>,
+    new_key: &DiagLogKey,
+    now: DateTime<Utc>,
+    min_interval: Duration,
+) -> bool {
+    match prev_key {
+        None => true,
+        Some(prev) if prev != new_key => true,
+        _ => match prev_log_at {
+            None => true,
+            Some(at) => now.signed_duration_since(at) >= min_interval,
+        },
+    }
+}
+
+/// Result of recording a diagnostics snapshot: the updated per-connection
+/// snapshot plus whether the rate-limiter says to emit a log line for it.
+#[derive(Debug)]
+pub struct DiagRecord {
+    pub snapshot: StageClientSnapshot,
+    pub should_log: bool,
+}
 
 #[derive(Debug)]
 struct StageConnection {
@@ -11,6 +61,12 @@ struct StageConnection {
     pending_heartbeat: Option<(Uuid, DateTime<Utc>)>,
     last_round_trip: Option<Duration>,
     status: StageClientStatus,
+    /// #732 diagnostics (see `StageClientSnapshot` / `NdiVideoDiag`).
+    user_agent: Option<String>,
+    ndi_video: Option<NdiVideoDiag>,
+    last_diag_at: Option<DateTime<Utc>>,
+    last_logged_key: Option<DiagLogKey>,
+    last_log_at: Option<DateTime<Utc>>,
 }
 
 impl StageConnection {
@@ -21,6 +77,11 @@ impl StageConnection {
             pending_heartbeat: None,
             last_round_trip: None,
             status: StageClientStatus::Connecting,
+            user_agent: None,
+            ndi_video: None,
+            last_diag_at: None,
+            last_logged_key: None,
+            last_log_at: None,
         }
     }
 
@@ -34,6 +95,9 @@ impl StageConnection {
                 .and_then(|duration| duration.to_std().ok())
                 .map(|std| std.as_millis().min(u32::MAX as u128) as u32),
             status: self.status,
+            user_agent: self.user_agent.clone(),
+            ndi_video: self.ndi_video.clone(),
+            last_diag_at: self.last_diag_at,
         }
     }
 }
@@ -98,6 +162,44 @@ impl StageConnectionTracker {
         let connection = self.connections.get_mut(&id)?;
         connection.status = StageClientStatus::Disconnected;
         Some(connection.snapshot(id))
+    }
+
+    /// #732: store the connecting client's userAgent (set once on presence).
+    /// A `None` never overwrites a previously-recorded UA.
+    pub fn set_user_agent(&mut self, id: Uuid, user_agent: Option<String>) {
+        if let (Some(connection), Some(ua)) = (self.connections.get_mut(&id), user_agent) {
+            connection.user_agent = Some(ua);
+        }
+    }
+
+    /// #732: store the latest NDI `<video>` diagnostics snapshot and decide,
+    /// via the rate-limiter, whether to emit a log line. Returns `None` when
+    /// the connection is unknown (e.g. a preview client that never registered).
+    pub fn record_diag(
+        &mut self,
+        id: Uuid,
+        diag: NdiVideoDiag,
+        now: DateTime<Utc>,
+    ) -> Option<DiagRecord> {
+        let connection = self.connections.get_mut(&id)?;
+        let key = diag_log_key(&diag);
+        let should_log = should_log_diag(
+            connection.last_logged_key.as_ref(),
+            connection.last_log_at,
+            &key,
+            now,
+            Duration::seconds(DIAG_LOG_MIN_INTERVAL_S),
+        );
+        connection.ndi_video = Some(diag);
+        connection.last_diag_at = Some(now);
+        if should_log {
+            connection.last_logged_key = Some(key);
+            connection.last_log_at = Some(now);
+        }
+        Some(DiagRecord {
+            snapshot: connection.snapshot(id),
+            should_log,
+        })
     }
 
     pub fn poll_timeouts(
@@ -197,6 +299,24 @@ impl StageConnections {
     pub async fn mark_disconnected(&self, id: Uuid) -> Option<StageClientSnapshot> {
         let mut guard = self.inner.write().await;
         guard.mark_disconnected(id)
+    }
+
+    /// #732: store the connecting client's userAgent (once, on presence).
+    pub async fn set_user_agent(&self, id: Uuid, user_agent: Option<String>) {
+        let mut guard = self.inner.write().await;
+        guard.set_user_agent(id, user_agent);
+    }
+
+    /// #732: store the latest NDI `<video>` diagnostics snapshot and return
+    /// the rate-limiter's log decision.
+    pub async fn record_diag(
+        &self,
+        id: Uuid,
+        diag: NdiVideoDiag,
+        now: DateTime<Utc>,
+    ) -> Option<DiagRecord> {
+        let mut guard = self.inner.write().await;
+        guard.record_diag(id, diag, now)
     }
 
     pub async fn apply_timeouts(
@@ -344,5 +464,158 @@ mod tests {
             .find(|snapshot| snapshot.id == id)
             .expect("connection snapshot");
         assert_eq!(disconnected.status, StageClientStatus::Disconnected);
+    }
+
+    // ── #732 diagnostics rate-limiter + storage ─────────────────────
+
+    fn diag(paused: bool, error_code: Option<u16>, cover: bool, width: u32) -> NdiVideoDiag {
+        NdiVideoDiag {
+            paused: Some(paused),
+            error_code,
+            cover_visible: Some(cover),
+            video_width: Some(width),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn should_log_diag_logs_first_snapshot_then_throttles_unchanged() {
+        let now = Utc::now();
+        let key = diag_log_key(&diag(false, None, false, 1280));
+        // Never logged → log.
+        assert!(should_log_diag(
+            None,
+            None,
+            &key,
+            now,
+            Duration::seconds(30)
+        ));
+        // Same key, only 5 s later → throttled.
+        assert!(!should_log_diag(
+            Some(&key),
+            Some(now),
+            &key,
+            now + Duration::seconds(5),
+            Duration::seconds(30),
+        ));
+        // Same key, 30 s later → log (interval elapsed).
+        assert!(should_log_diag(
+            Some(&key),
+            Some(now),
+            &key,
+            now + Duration::seconds(30),
+            Duration::seconds(30),
+        ));
+    }
+
+    #[test]
+    fn should_log_diag_always_logs_on_key_change() {
+        let now = Utc::now();
+        let playing = diag_log_key(&diag(false, None, false, 1280));
+        // paused flip → log immediately, even 1 ms later.
+        let paused = diag_log_key(&diag(true, None, false, 1280));
+        assert!(should_log_diag(
+            Some(&playing),
+            Some(now),
+            &paused,
+            now + Duration::milliseconds(1),
+            Duration::seconds(30),
+        ));
+        // error_code appears → log.
+        let errored = diag_log_key(&diag(false, Some(3), false, 1280));
+        assert!(should_log_diag(
+            Some(&playing),
+            Some(now),
+            &errored,
+            now + Duration::milliseconds(1),
+            Duration::seconds(30),
+        ));
+        // cover appears → log.
+        let covered = diag_log_key(&diag(false, None, true, 1280));
+        assert!(should_log_diag(
+            Some(&playing),
+            Some(now),
+            &covered,
+            now + Duration::milliseconds(1),
+            Duration::seconds(30),
+        ));
+        // width 1280→0 (frame lost) → log.
+        let noframe = diag_log_key(&diag(false, None, false, 0));
+        assert!(should_log_diag(
+            Some(&playing),
+            Some(now),
+            &noframe,
+            now + Duration::milliseconds(1),
+            Duration::seconds(30),
+        ));
+    }
+
+    #[test]
+    fn diag_log_key_collapses_width_to_present_absent() {
+        // Any positive width shares the same key dimension; only 0-vs->0 flips.
+        assert_eq!(
+            diag_log_key(&diag(false, None, false, 1280)),
+            diag_log_key(&diag(false, None, false, 640)),
+        );
+        assert_ne!(
+            diag_log_key(&diag(false, None, false, 1280)),
+            diag_log_key(&diag(false, None, false, 0)),
+        );
+    }
+
+    #[test]
+    fn record_diag_stores_snapshot_and_first_record_logs() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "ndi-fullscreen", now);
+
+        let record = tracker
+            .record_diag(id, diag(false, None, false, 1280), now)
+            .expect("record");
+        assert!(record.should_log, "first diagnostics snapshot must log");
+        let stored = record.snapshot.ndi_video.expect("ndi_video stored");
+        assert_eq!(stored.video_width, Some(1280));
+        assert!(record.snapshot.last_diag_at.is_some());
+
+        // An unchanged second snapshot 1 s later is throttled.
+        let record2 = tracker
+            .record_diag(
+                id,
+                diag(false, None, false, 1280),
+                now + Duration::seconds(1),
+            )
+            .expect("record");
+        assert!(
+            !record2.should_log,
+            "unchanged snapshot within 30 s throttles"
+        );
+    }
+
+    #[test]
+    fn record_diag_for_unknown_connection_is_none() {
+        let mut tracker = StageConnectionTracker::new();
+        let record = tracker.record_diag(Uuid::new_v4(), diag(false, None, false, 0), Utc::now());
+        assert!(record.is_none());
+    }
+
+    #[test]
+    fn set_user_agent_stores_and_none_never_overwrites() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "ndi-fullscreen", now);
+
+        tracker.set_user_agent(id, Some("Chrome/90 (Vestel)".to_string()));
+        assert_eq!(
+            tracker.snapshot_for(id).unwrap().user_agent.as_deref(),
+            Some("Chrome/90 (Vestel)"),
+        );
+        // A later None presence must not wipe the recorded UA.
+        tracker.set_user_agent(id, None);
+        assert_eq!(
+            tracker.snapshot_for(id).unwrap().user_agent.as_deref(),
+            Some("Chrome/90 (Vestel)"),
+        );
     }
 }
