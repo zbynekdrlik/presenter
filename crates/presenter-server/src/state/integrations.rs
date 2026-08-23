@@ -749,6 +749,143 @@ mod tests {
         );
     }
 
+    // #745(a): `deactivate_video_sources` tears down ALL pipelines via `stop_all()`.
+    // If it does NOT take the activation lock, that `stop_all()` can land in the
+    // window between a concurrent activation's DB flip and its manager-lock
+    // acquisition — the stop no-ops (nothing in the map yet), the activation then
+    // promotes and supervises a pipeline, and the final state is: DB says inactive
+    // but the source streams to the stage forever, never reconciled by the ticker
+    // (its `Ok(None)` arm). Parks an activation mid-start (holding the lock) and
+    // proves a racing deactivate CANNOT run its `stop_all()` until it releases.
+    #[tokio::test]
+    async fn deactivate_serializes_behind_a_parked_activation() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+
+        let (release_a, parked_a) = fake.gate_start(&a_str);
+        let s_a = state.clone();
+        let ta = tokio::spawn(async move {
+            s_a.activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), parked_a.notified())
+            .await
+            .expect("activation never reached the parked start-gate within 5s");
+
+        let s_d = state.clone();
+        let td = tokio::spawn(async move {
+            s_d.deactivate_video_sources(SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+
+        // Without the lock the deactivate runs `stop_all()` immediately; with the
+        // lock it blocks until the activation releases. 500 ms >> scheduling latency.
+        let stopped_all_while_parked =
+            tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                loop {
+                    if fake.stopped_all() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .is_ok();
+
+        release_a.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), ta)
+            .await
+            .expect("activation did not finish within 5s — deadlock?")
+            .expect("activation task panicked")
+            .expect("activation returned Err");
+        tokio::time::timeout(std::time::Duration::from_secs(5), td)
+            .await
+            .expect("deactivate did not finish within 5s — deadlock?")
+            .expect("deactivate task panicked")
+            .expect("deactivate returned Err");
+
+        assert!(
+            !stopped_all_while_parked,
+            "#745(a): deactivate_video_sources must take the activation lock — its \
+             stop_all() ran while an activation held the lock, so a deactivate can \
+             tear down (no-op) mid-activation and leave DB-inactive-but-streaming. \
+             ledger = {:?}",
+            fake.calls(),
+        );
+        assert!(
+            fake.stopped_all(),
+            "#745(a): deactivate must still stop all pipelines once it acquires the lock",
+        );
+    }
+
+    // #745(a): `delete_video_source` tears down the source's pipeline via
+    // `stop_pipeline()` BEFORE deleting the row — the same activation-window race as
+    // deactivate. Proves delete now serializes behind a parked activation.
+    #[tokio::test]
+    async fn delete_serializes_behind_a_parked_activation() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        let b = state
+            .create_video_source(
+                VideoSourceDraft::new("Cam 2", "STREAM-B (stream)"),
+                SettingsAuditSource::HttpSetter,
+                "test",
+            )
+            .await
+            .expect("create source B");
+        let b_id = b.id;
+        let b_str = b_id.to_string();
+
+        let (release_a, parked_a) = fake.gate_start(&a_str);
+        let s_a = state.clone();
+        let ta = tokio::spawn(async move {
+            s_a.activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), parked_a.notified())
+            .await
+            .expect("activation never reached the parked start-gate within 5s");
+
+        let s_d = state.clone();
+        let td = tokio::spawn(async move {
+            s_d.delete_video_source(b_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+
+        let stopped_while_parked =
+            tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                loop {
+                    if fake.stopped(&b_str) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .is_ok();
+
+        release_a.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), ta)
+            .await
+            .expect("activation did not finish within 5s — deadlock?")
+            .expect("activation task panicked")
+            .expect("activation returned Err");
+        tokio::time::timeout(std::time::Duration::from_secs(5), td)
+            .await
+            .expect("delete did not finish within 5s — deadlock?")
+            .expect("delete task panicked")
+            .expect("delete returned Err");
+
+        assert!(
+            !stopped_while_parked,
+            "#745(a): delete_video_source must take the activation lock — its \
+             stop_pipeline() ran while an activation held the lock. ledger = {:?}",
+            fake.calls(),
+        );
+        assert!(
+            fake.stopped(&b_str),
+            "#745(a): delete must still stop the source's pipeline once it holds the lock",
+        );
+    }
+
     // #741: a SUPERSEDED start (a concurrent deactivate/stop removed the in-flight
     // reservation, or an activate-switch replaced it) must make activate_video_source
     // return Ok WITHOUT reaping siblings and WITHOUT publishing a stage status — the

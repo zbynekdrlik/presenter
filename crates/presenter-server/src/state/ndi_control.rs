@@ -85,7 +85,7 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.stop_all().await,
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::stop_all is never exercised"),
+            Self::Fake(f) => f.stop_all().await,
         }
     }
 
@@ -255,6 +255,10 @@ pub(crate) enum NdiCall {
     StartPipeline { source_id: String, ndi_name: String },
     /// `stop_other_pipelines(keep_id)` — the #370 reap.
     StopOtherPipelines { keep_id: String },
+    /// `stop_pipeline(source_id)` — the delete-source teardown (#745a wiring test).
+    StopPipeline { source_id: String },
+    /// `stop_all()` — the deactivate-all teardown (#745a wiring test).
+    StopAll,
 }
 
 /// What [`FakeNdiControl::start_pipeline`] should return.
@@ -385,6 +389,18 @@ impl FakeNdiControl {
             .any(|c| matches!(c, NdiCall::StopOtherPipelines { keep_id: k } if k == keep_id))
     }
 
+    /// #745(a): did `delete_video_source` tear down this source's pipeline?
+    pub(crate) fn stopped(&self, source_id: &str) -> bool {
+        self.calls()
+            .iter()
+            .any(|c| matches!(c, NdiCall::StopPipeline { source_id: s } if s == source_id))
+    }
+
+    /// #745(a): did `deactivate_video_sources` tear down all pipelines?
+    pub(crate) fn stopped_all(&self) -> bool {
+        self.calls().iter().any(|c| matches!(c, NdiCall::StopAll))
+    }
+
     fn record(&self, call: NdiCall) {
         self.calls.lock().expect("calls lock").push(call);
     }
@@ -427,8 +443,14 @@ impl FakeNdiControl {
         }
     }
 
-    async fn stop_pipeline(&self, _source_id: &str) {
-        // Not exercised by the wiring test; recorded for completeness.
+    async fn stop_pipeline(&self, source_id: &str) {
+        self.record(NdiCall::StopPipeline {
+            source_id: source_id.to_string(),
+        });
+    }
+
+    async fn stop_all(&self) {
+        self.record(NdiCall::StopAll);
     }
 
     async fn stop_other_pipelines(&self, keep_id: &str) {
