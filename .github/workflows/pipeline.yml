@@ -116,6 +116,12 @@ jobs:
       - name: Run companion tests
         run: npm run test:companion
 
+      # Deploy-tool logic (#733): re-pin transform is Python (the box has python3 +
+      # stdlib sqlite3, no sqlite3 CLI). Run by file path — the file stem has hyphens,
+      # so `-m unittest` cannot import it as a module.
+      - name: Run companion deploy-tool tests (python)
+        run: python3 ops/companion/repin-presenter-connection.test.py
+
   # ============================================
   # TypeScript type-check (e2e/tests) — #426
   # ============================================
@@ -1577,38 +1583,64 @@ jobs:
               IdentityFile ~/.ssh/id_pp
           EOF
 
+      # #733: Deploy the presenter module as a Companion DEV module
+      # (--extra-module-path /opt/companion-module-dev, which both hosts already launch
+      # with) so the connection can pin the STABLE version id "dev" instead of a concrete
+      # version. A concrete pin (SNV's old state) breaks with "missing version" on every
+      # version bump and needs a manual re-pin in the UI. The re-pin step below sets
+      # moduleVersionId="dev" idempotently, so the connection auto-switches with no manual
+      # step. Runs with Companion stopped so the module swap + config-DB write are clean.
       - name: Deploy to companion-snv.lan
         if: steps.snv_check.outputs.reachable == 'true'
         run: |
-          MODULE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
+          MODULE_DIR="/opt/companion-module-dev/presenter"
+          OLD_STORE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
+          CONFIG_DIR="/home/companion/.config/companion-nodejs"
           STAGE_DIR=$(ssh companion-snv "mktemp -d /tmp/companion-module-XXXXXX")
           echo "Deploying Companion plugin to companion-snv.lan (staging: $STAGE_DIR)..."
           scp -r ops/companion/presenter/* companion-snv:$STAGE_DIR/
+          scp ops/companion/repin-presenter-connection.py companion-snv:/tmp/repin-presenter-connection.py
           ssh companion-snv "cd $STAGE_DIR && npm install --omit=dev"
-          ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR"
-          echo "Restarting Companion on SNV..."
-          ssh companion-snv "sudo systemctl restart companion"
+          ssh companion-snv "sudo systemctl stop companion"
+          ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
+            || { echo "::error::module swap failed on SNV"; ssh companion-snv "sudo systemctl start companion" || true; exit 1; }
+          ssh companion-snv "sudo rm -rf $OLD_STORE_DIR" || true
+          REPIN_RC=0
+          ssh companion-snv "sudo python3 /tmp/repin-presenter-connection.py --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD" || REPIN_RC=$?
+          ssh companion-snv "rm -f /tmp/repin-presenter-connection.py" || true
+          ssh companion-snv "sudo systemctl start companion"
           sleep 5
           ssh companion-snv "systemctl is-active companion" || { echo "::error::Companion failed to restart on SNV"; exit 1; }
-          echo "Companion plugin deployed to companion-snv.lan"
+          if [ "$REPIN_RC" -ne 0 ]; then echo "::error::presenter connection re-pin failed on SNV (rc=$REPIN_RC)"; exit 1; fi
+          echo "Companion plugin deployed to companion-snv.lan (dev module + connection pinned to 'dev')"
 
       - name: Deploy to companion-pp.lan
         if: steps.pp_check.outputs.reachable == 'true'
         run: |
-          # companion-pp now runs the CompanionPi (Raspberry-Pi-style) build,
-          # not Docker. Modules go in --extra-module-path /opt/companion-module-dev,
-          # service is the systemd unit "companion", run as user "companion".
+          # companion-pp runs the CompanionPi build; modules go in
+          # --extra-module-path /opt/companion-module-dev, service is systemd unit
+          # "companion", run as user "companion". PP is already on the dev-module + "dev"
+          # pin; the re-pin below is an idempotent no-op there (keeps both hosts uniform).
           MODULE_DIR="/opt/companion-module-dev/presenter"
+          OLD_STORE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
+          CONFIG_DIR="/home/companion/.config/companion-nodejs"
           STAGE_DIR=$(ssh companion-pp "mktemp -d /tmp/companion-module-XXXXXX")
           echo "Deploying Companion plugin to companion-pp.lan (staging: $STAGE_DIR)..."
           scp -r ops/companion/presenter/* companion-pp:$STAGE_DIR/
+          scp ops/companion/repin-presenter-connection.py companion-pp:/tmp/repin-presenter-connection.py
           ssh companion-pp "cd $STAGE_DIR && npm install --omit=dev"
-          ssh companion-pp "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR"
-          echo "Restarting Companion on PP..."
-          ssh companion-pp "sudo systemctl restart companion"
+          ssh companion-pp "sudo systemctl stop companion"
+          ssh companion-pp "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
+            || { echo "::error::module swap failed on PP"; ssh companion-pp "sudo systemctl start companion" || true; exit 1; }
+          ssh companion-pp "sudo rm -rf $OLD_STORE_DIR" || true
+          REPIN_RC=0
+          ssh companion-pp "sudo python3 /tmp/repin-presenter-connection.py --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD" || REPIN_RC=$?
+          ssh companion-pp "rm -f /tmp/repin-presenter-connection.py" || true
+          ssh companion-pp "sudo systemctl start companion"
           sleep 5
           ssh companion-pp "systemctl is-active companion" || { echo "::error::Companion failed to restart on PP"; exit 1; }
-          echo "Companion plugin deployed to companion-pp.lan"
+          if [ "$REPIN_RC" -ne 0 ]; then echo "::error::presenter connection re-pin failed on PP (rc=$REPIN_RC)"; exit 1; fi
+          echo "Companion plugin deployed to companion-pp.lan (dev module + connection pinned to 'dev')"
 
       - name: Show deployment info
         run: |
