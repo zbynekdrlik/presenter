@@ -85,7 +85,7 @@ pub enum InboundMessage {
         /// #732 diagnostics: `navigator.userAgent` of the connecting TV
         /// WebView, sent on connect. Additive + optional — an old client
         /// omits it and the server records `None`.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         user_agent: Option<String>,
     },
     StageHeartbeatAck {
@@ -95,8 +95,9 @@ pub enum InboundMessage {
         /// #732 diagnostics: the NDI `<video>` state snapshot at this
         /// heartbeat. Additive + optional — the heartbeat cadence carrier
         /// for the diagnostics snapshot (`StageDiag` carries the on-change
-        /// pushes between heartbeats).
-        #[serde(default)]
+        /// pushes between heartbeats). Omitted on the wire when absent
+        /// (non-NDI layouts) so a heartbeat carries no `null` bloat.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         ndi_video: Option<NdiVideoDiag>,
     },
     /// #732 diagnostics: an out-of-band NDI `<video>` state snapshot pushed
@@ -105,7 +106,7 @@ pub enum InboundMessage {
     /// `Unknown` (via `#[serde(other)]`) and ignores it.
     StageDiag {
         client_id: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         ndi_video: Option<NdiVideoDiag>,
     },
     StageDisconnect {
