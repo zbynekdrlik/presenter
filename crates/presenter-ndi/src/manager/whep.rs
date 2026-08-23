@@ -291,6 +291,25 @@ mod tests {
     use super::*;
     use crate::pipeline::MAX_CONSUMERS_PER_SOURCE;
 
+    #[test]
+    fn contention_warn_is_power_of_two_gated() {
+        // #736: the WARN used to fire on EVERY 200 ms lock-acquisition timeout,
+        // flooding the journal with thousands of identical lines during the 8 s
+        // pipeline start/rebuild windows. Now only the 1st timeout + power-of-two
+        // milestones log, so a streak of N contentions produces ~log2(N)+1 lines
+        // instead of N.
+        assert!(!should_log_contention(0), "no contention must not log");
+        assert!(should_log_contention(1));
+        assert!(should_log_contention(2));
+        assert!(!should_log_contention(3));
+        assert!(should_log_contention(4));
+        assert!(!should_log_contention(5));
+        assert!(!should_log_contention(6));
+        assert!(!should_log_contention(7));
+        assert!(should_log_contention(8));
+        assert!(!should_log_contention(9));
+    }
+
     /// #616 Gap A: `translate_add_consumer_error` is the ONLY place
     /// `AddConsumerError::CapReached` becomes
     /// `NdiSessionError::ConsumerCapReached`. Before this function was
