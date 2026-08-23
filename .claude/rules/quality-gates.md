@@ -109,3 +109,20 @@ QC_TARGETS="crates/presenter-server/src/ableset.rs" python3 scripts/dev/fn_lengt
 Fix by extracting the arm/loop body into a small helper (the same #687 fix pattern above) — e.g.
 `run_tracker` dropped back to 89 lines by extracting `log_ableset_recovery` +
 `update_active_song_status`.
+
+## Over-cap FILE → split via a `foo.rs` + `foo/sub.rs` submodule (#742)
+
+When a `.rs` file nears the >1000-line hard-fail (`count_prod_lines.sh`), extract a cohesive
+submodule: keep `foo.rs` and add `mod sub;` + `use sub::*;`, with the moved items at
+`foo/sub.rs` (Rust-2021 sibling-dir layout). Make the moved items `pub(super)`; the parent's
+`use sub::*;` re-flattens them so EVERY existing call site AND the parent's `#[cfg(test)] mod
+tests { use super::*; }` resolve unchanged — a pure relocation with zero behavior change and
+no test edits (tests are cap-exempt, so leave them in the parent). `clippy::wildcard_imports`
+is already crate-allowed (presenter-server `lib.rs`, `#![allow(...)]`), so `use sub::*;` is
+fine. Two Tier-0 traps (no local compiler): (1) recompute the parent's top-level `use` block —
+imports only the MOVED code used (e.g. `OsString`, `async_trait`, `Output`, `Command`) become
+unused → `-D warnings`; move a test-only one INTO the `#[cfg(test)]` block. (2) a `super::CONST`
+back-reference from the submodule works because a child module sees ancestor-private items.
+Verify with `count_prod_lines.sh` (both files) + `fn_length_check.py` + `cargo fmt --all --check`;
+CI is the compile gate. Real case #742: `android_stage.rs` 992 → 620 by extracting
+`android_stage/adb.rs` (397).
