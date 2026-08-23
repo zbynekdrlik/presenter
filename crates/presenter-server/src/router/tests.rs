@@ -203,6 +203,10 @@ async fn home_route_returns_menu() {
     assert!(body.contains("Operator UI"));
     assert!(body.contains("Tablet UI"));
     assert!(body.contains("Bible Control"));
+    // #737: stream-graphics links — output PROMINENTLY first among all sections.
+    assert!(body.contains("Stream Output (OBS)"));
+    assert!(body.contains("\"/stream/stream\""));
+    assert!(body.contains("\"/ui/stream\""));
 }
 
 #[tokio::test]
@@ -241,6 +245,8 @@ async fn home_route_links_match_live_routes() {
         "/ui/camera",
         "/ui/bible",
         "/ui/settings",
+        "/ui/stream",
+        "/stream/stream",
         "/stage",
         "/overlays/timer",
     ] {
