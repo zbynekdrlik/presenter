@@ -419,6 +419,14 @@ impl AppState {
         // the next reconnect cycle. Held across the ~8 s start_pipeline wait, but
         // this is a server-side lock the status readers never take, so it does not
         // reintroduce the #741 status-poll stall.
+        //
+        // ACCEPTED trade-off: when a source is DOWN, the 30 s reconnect ticker
+        // (`background_tasks.rs`) holds this lock across its full ~8 s futile
+        // `start_pipeline` timeout, so an operator's switch-to-another-source click
+        // can queue up to ~8 s behind it (these ran concurrently pre-#745). This is
+        // the inherent price of serialization — and the ≤30 s WRONG-source-on-stage
+        // mismatch it removes is worse. tokio's Mutex is FIFO-fair, so the operator
+        // waits behind at most one such attempt.
         let _activation_guard = self.activation_lock.lock().await;
         let source = self
             .repository
@@ -674,7 +682,11 @@ mod tests {
                 .await
         });
         // A has written its DB row (is_active=A) and is now parked inside start.
-        parked_a.notified().await;
+        // Bounded so a regression that returns before start_pipeline (e.g. an early
+        // Err) fails loudly here instead of hanging until the CI-job timeout.
+        tokio::time::timeout(std::time::Duration::from_secs(5), parked_a.notified())
+            .await
+            .expect("activation A never reached the parked start-gate within 5s");
 
         // Race B. Without the lock B runs to completion while A is parked; with the
         // lock B blocks on the lock until A releases.

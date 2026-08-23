@@ -108,12 +108,15 @@ struct ActiveSource {
     /// WHEP operations on the manager, stalls `pipeline_snapshots()` (used
     /// by `/healthz`) and blocks the supervisor's `rebuild_pipeline`.
     pub(in crate::manager) pipeline: std::sync::Arc<NdiPipeline>,
-    /// Supervisor task handle. Aborted on `stop_pipeline` / drop to prevent
-    /// leaks. `None` inside the regression-test constructors (which don't spawn
-    /// a real supervisor), in the `rebuild_pipeline` re-insert path (the existing
-    /// supervisor task is reused — see `spawn_supervisor`), AND transiently during
-    /// a `start_pipeline` `Starting` reservation (#741) — the supervisor is
-    /// attached by `finalize_start` only once the pipeline reaches Streaming.
+    /// Supervisor task handle. Aborted on `stop_pipeline` / `stop_all` /
+    /// `retain_only_active` / operator reactivate to prevent leaks. `Some(live
+    /// owner)` after every promote AND every rebuild — `rebuild_pipeline` CARRIES
+    /// this handle forward into the rebuilt slot (#745c; it used to re-insert
+    /// `None`, which was unreachable by every abort path → the double-watch bug).
+    /// `None` only inside the regression-test constructors (which don't spawn a
+    /// real supervisor) and TRANSIENTLY during a not-yet-promoted `start_pipeline`
+    /// `Starting` reservation (#741) — `finalize_start` attaches the handle once
+    /// the pipeline reaches Streaming.
     pub(in crate::manager) supervisor: Option<tokio::task::JoinHandle<()>>,
 }
 

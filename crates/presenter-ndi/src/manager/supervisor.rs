@@ -150,8 +150,10 @@ impl NdiManager {
     ///   supervisor and spawns a fresh one with a zero counter.
     /// - Re-subscribes to the FRESH state watcher after each successful
     ///   rebuild (the old watcher's pipeline was dropped)
-    /// - Exits when the watcher closes (pipeline dropped) OR the task is
-    ///   externally aborted via `stop_pipeline` / operator reactivate
+    /// - Exits when the watcher closes (pipeline dropped), when a rebuild FAILS
+    ///   or finds the source gone (the slot is gone-or-foreign → the 30 s
+    ///   reconnect ticker owns recovery, #745c), OR when the task is externally
+    ///   aborted via `stop_pipeline` / `stop_all` / operator reactivate
     pub(in crate::manager) fn spawn_supervisor(
         self: &std::sync::Arc<Self>,
         source_id: String,
@@ -241,14 +243,26 @@ impl NdiManager {
         }
         state.mark_rebuild_started();
         match self.rebuild_pipeline(source_id, ndi_name).await {
+            // `rebuild_pipeline` logs its own outcome (real rebuild vs already-
+            // healthy vs source-gone). `resubscribe_after_rebuild` swaps to the
+            // live watcher, or Exits when the source is gone (the Vacant path).
             Ok(()) => {
-                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
                 self.resubscribe_after_rebuild(source_id, state, watcher)
                     .await
             }
+            // A failed rebuild means the slot is gone-or-foreign: build/start
+            // errored after `check_active_entry` removed the dead entry, or the
+            // reservation was Removed/Superseded mid-wait. Do NOT loop — retrying
+            // off the old watcher's unseen `Stopped` echo could re-attach this
+            // now-orphaned supervisor to a pipeline a concurrent activation just
+            // promoted, re-opening the #745(c) double-watch. Exit; the 30 s
+            // reconnect ticker owns recovery per the DB — the same delegation the
+            // Vacant arm makes. (The per-supervisor cool-off never engaged on this
+            // path anyway — the closed old watcher already forced an exit within
+            // 1-2 iterations; this just makes it immediate and race-free.)
             Err(e) => {
                 self.note_rebuild_failure(source_id, state, &e.to_string());
-                SupervisorStep::Continue
+                SupervisorStep::Exit
             }
         }
     }
@@ -394,7 +408,13 @@ impl NdiManager {
                 // `state_watcher_for` finds no entry → `SupervisorStep::Exit`; the
                 // 30s reconnect ticker owns recovery per the DB. Also avoids
                 // re-creating a `supervisor: None` entry (bug (c) reborn).
-                StateCheckOutcome::Vacant => return Ok(()),
+                StateCheckOutcome::Vacant => {
+                    tracing::debug!(
+                        source_id = %source_id,
+                        "supervisor: source gone before rebuild — deferring recovery to the reconnect ticker"
+                    );
+                    return Ok(());
+                }
                 // Dead entry removed — carry its supervisor forward so THIS same
                 // live supervisor stays reachable from the rebuilt slot (#745 c);
                 // every abort path (stop_*/retain/reactivate) can then reach it.
@@ -419,9 +439,13 @@ impl NdiManager {
             wait_for_streaming(reserved.state_watcher(), std::time::Duration::from_secs(8)).await;
 
         match finalize_reservation(&self.active, source_id, &reserved, outcome).await {
-            // Slot left in place (supervisor: None) — the calling supervisor
-            // re-subscribes to the fresh watcher via `state_watcher_for`.
-            Finalize::Promote => Ok(()),
+            // Slot left in place with the CARRIED supervisor handle (#745c — was
+            // `supervisor: None`); the calling supervisor re-subscribes to the
+            // fresh watcher via `state_watcher_for`.
+            Finalize::Promote => {
+                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
+                Ok(())
+            }
             Finalize::Removed(WaitOutcome::Errored(e)) => Err(anyhow!("pipeline errored: {e}")),
             Finalize::Removed(_) => Err(anyhow!(
                 "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
