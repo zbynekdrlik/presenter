@@ -53,4 +53,37 @@ and `finalize_reservation` / `check_active_entry` / `retain_only_active` against
 by a libndi integration test — this crate cannot compile locally (Tier-0), so a careful
 adversarial review is the pre-CI safety net for borrow/`Send`/exhaustive-match correctness.
 
-Pre-existing activation concurrency edge cases NOT yet fixed: see #745.
+**Deterministic concurrency tests use a per-source START-GATE on `FakeNdiControl`, NOT sleeps
+(#745a).** `FakeNdiControl::gate_start(source_id)` parks that source's `start_pipeline` (after
+recording its call, so the DB row is already written) and returns `(release, parked)` Notify
+handles: `await parked` to know the activation is parked mid-flight, then race a second
+activation, then `release.notify_one()`. Bound every wait in the test (`tokio::time::timeout`,
+500 ms probe / 5 s join) so a lock regression fails loudly instead of hanging. tokio `Notify`
+permits are stored, so there is no lost-wakeup even if `notify_one` fires before `notified()`.
+
+## Supervisor ownership: the entry's `supervisor` is ALWAYS the live owner (#745c)
+
+`check_active_entry` is 3-way: `Idempotent | RebuildDead(Option<JoinHandle<()>>) | Vacant`. It
+MOVES a removed dead entry's supervisor into `RebuildDead(..)` (it still NEVER aborts it — the
+self-rebuild task calls it). Invariant to preserve: **`ActiveSource.supervisor` is `Some(live
+owner)` after every promote AND every rebuild**, `None` only transiently during a not-yet-promoted
+`Starting` reservation. That is what lets every abort path (`stop_pipeline`/`stop_all`/
+`retain_only_active`/`start_pipeline` reactivate) reach the owning supervisor.
+
+- `rebuild_pipeline` on `RebuildDead(carried)` RE-INSERTS `supervisor: carried` (was `None`, the
+  double-watch bug); on `Vacant` it returns `Ok(())` WITHOUT building (source gone →
+  `resubscribe_after_rebuild`'s `state_watcher_for` finds no entry → `SupervisorStep::Exit`; the
+  30 s reconnect ticker owns recovery per the DB). `start_pipeline` on `RebuildDead(Some h)`
+  ABORTS `h` before building (operator reactivate → no double-watch).
+- A FAILED rebuild (`Err`) exits the supervisor (`handle_dead_state` → `SupervisorStep::Exit`),
+  never loops — retrying off the old watcher's unseen `Stopped` echo could re-attach the orphaned
+  supervisor to a concurrently-promoted pipeline. The ticker re-drives per the DB.
+- **Tier-0 TRAP:** matching `StateCheckOutcome` with `if let StateCheckOutcome::Idempotent = …`
+  compiles UNCHANGED when the enum is later widened and SILENTLY DROPS the new variant's payload
+  (the carried handle) — no compiler backstop on this no-local-compile crate. ALWAYS a total
+  `match`, never `if let`, on this enum. (See the general Tier-0 `if let` trap in `quality-gates.md`.)
+
+Pre-existing activation concurrency edge cases: #745 fixed (a) reap-vs-DB ordering (an
+`AppState.activation_lock` serializing `activate_video_source`) + (c) the rebuilt-entry
+double-watch (above); (b) was descoped (the 30 s reconnect ticker IS the backstop, conditional
+on `hw_h264_encoder()`); the reconnect-ticker-vs-deactivate revive TOCTOU is #747.

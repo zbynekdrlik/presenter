@@ -110,6 +110,30 @@ Fix by extracting the arm/loop body into a small helper (the same #687 fix patte
 `run_tracker` dropped back to 89 lines by extracting `log_ableset_recovery` +
 `update_active_song_status`.
 
+## Widening an enum that some site matches with `if let OneVariant = …` → the payload is SILENTLY dropped (#745)
+
+Adding a variant (or a payload to an existing variant) of an enum is a compile-checked change
+ONLY at `match` sites — but an `if let SingleVariant = expr { … }` site COMPILES UNCHANGED and
+silently ignores every OTHER variant, so a newly-carried payload is dropped with no error and no
+warning. On Tier-0 (no local `cargo check`/`clippy`) nothing catches this until a behavioral test
+fails — or worse, never, if the dropped payload only matters on a rare path. Real case #745:
+`StateCheckOutcome` grew from `Idempotent|Rebuild` to `Idempotent|RebuildDead(Option<JoinHandle>)|
+Vacant`; the two production consumers were `if let StateCheckOutcome::Idempotent = check_active_entry(..)`
+— both compiled fine and would have dropped the carried supervisor handle, making the whole fix
+inert with green tests.
+
+Before widening ANY enum, grep every consumer and convert the relevant `if let <Enum>::` sites to a
+TOTAL `match` so the compiler forces you to handle the new/changed variant:
+
+```bash
+git grep -nE '(if let|while let|matches!)\s+[A-Za-z0-9_]*::' crates/ | grep <EnumName>
+git grep -n '<EnumName>::' crates/ tests/   # every match/construct/consume site
+```
+
+Same family as the struct-field E0063 grep above — a widening whose exhaustiveness the compiler
+would normally enforce is defeated by a non-exhaustive `if let`, and Tier-0 removes the local
+compiler that would otherwise flag the drop as a logic bug only much later.
+
 ## Over-cap FILE → split via a `foo.rs` + `foo/sub.rs` submodule (#742)
 
 When a `.rs` file nears the >1000-line hard-fail (`count_prod_lines.sh`), extract a cohesive
