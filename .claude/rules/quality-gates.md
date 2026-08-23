@@ -90,3 +90,63 @@ is safely integrated; the compile/lint/quality jobs (Clippy/Format/Quality/TypeS
 green before the cancel are the real validation of your slice. Do NOT open a `dev→main` PR to force
 your slice through — that promotes the whole fleet's in-flight work to prod; the `dev→main` release is
 the supervisor's integration decision once `dev` quiesces.
+
+## Run BOTH gates on EVERY touched file — not just the one you think grew (#735)
+
+A change that adds a `match` arm, a loop body, or an `if/else` branch to an *existing* function
+grows THAT enclosing function silently — even in a file you were not focused on. #735 restructured
+`ableset.rs`'s `run_tracker` poll loop (added a backoff arm + recovery/failure logging) and pushed
+it **108 → 142 lines** (> the 120 hard-fail), while attention was on `android_stage.rs`'s file-size
+in the SAME batch. `cargo fmt`/`cargo check` never flag it, and it was caught only in code review —
+one wasted round-trip that a local check would have prevented. So before pushing, feed **every**
+`.rs` file the change touched to `fn_length_check.py` (newline-separated `QC_TARGETS`), not only the
+biggest one:
+
+```bash
+QC_TARGETS="crates/presenter-server/src/ableset.rs" python3 scripts/dev/fn_length_check.py .
+```
+
+Fix by extracting the arm/loop body into a small helper (the same #687 fix pattern above) — e.g.
+`run_tracker` dropped back to 89 lines by extracting `log_ableset_recovery` +
+`update_active_song_status`.
+
+## Widening an enum that some site matches with `if let OneVariant = …` → the payload is SILENTLY dropped (#745)
+
+Adding a variant (or a payload to an existing variant) of an enum is a compile-checked change
+ONLY at `match` sites — but an `if let SingleVariant = expr { … }` site COMPILES UNCHANGED and
+silently ignores every OTHER variant, so a newly-carried payload is dropped with no error and no
+warning. On Tier-0 (no local `cargo check`/`clippy`) nothing catches this until a behavioral test
+fails — or worse, never, if the dropped payload only matters on a rare path. Real case #745:
+`StateCheckOutcome` grew from `Idempotent|Rebuild` to `Idempotent|RebuildDead(Option<JoinHandle>)|
+Vacant`; the two production consumers were `if let StateCheckOutcome::Idempotent = check_active_entry(..)`
+— both compiled fine and would have dropped the carried supervisor handle, making the whole fix
+inert with green tests.
+
+Before widening ANY enum, grep every consumer and convert the relevant `if let <Enum>::` sites to a
+TOTAL `match` so the compiler forces you to handle the new/changed variant:
+
+```bash
+git grep -nE '(if let|while let|matches!)\s+[A-Za-z0-9_]*::' crates/ | grep <EnumName>
+git grep -n '<EnumName>::' crates/ tests/   # every match/construct/consume site
+```
+
+Same family as the struct-field E0063 grep above — a widening whose exhaustiveness the compiler
+would normally enforce is defeated by a non-exhaustive `if let`, and Tier-0 removes the local
+compiler that would otherwise flag the drop as a logic bug only much later.
+
+## Over-cap FILE → split via a `foo.rs` + `foo/sub.rs` submodule (#742)
+
+When a `.rs` file nears the >1000-line hard-fail (`count_prod_lines.sh`), extract a cohesive
+submodule: keep `foo.rs` and add `mod sub;` + `use sub::*;`, with the moved items at
+`foo/sub.rs` (Rust-2021 sibling-dir layout). Make the moved items `pub(super)`; the parent's
+`use sub::*;` re-flattens them so EVERY existing call site AND the parent's `#[cfg(test)] mod
+tests { use super::*; }` resolve unchanged — a pure relocation with zero behavior change and
+no test edits (tests are cap-exempt, so leave them in the parent). `clippy::wildcard_imports`
+is already crate-allowed (presenter-server `lib.rs`, `#![allow(...)]`), so `use sub::*;` is
+fine. Two Tier-0 traps (no local compiler): (1) recompute the parent's top-level `use` block —
+imports only the MOVED code used (e.g. `OsString`, `async_trait`, `Output`, `Command`) become
+unused → `-D warnings`; move a test-only one INTO the `#[cfg(test)]` block. (2) a `super::CONST`
+back-reference from the submodule works because a child module sees ancestor-private items.
+Verify with `count_prod_lines.sh` (both files) + `fn_length_check.py` + `cargo fmt --all --check`;
+CI is the compile gate. Real case #742: `android_stage.rs` 992 → 620 by extracting
+`android_stage/adb.rs` (397).

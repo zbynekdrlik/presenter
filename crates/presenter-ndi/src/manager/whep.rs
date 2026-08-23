@@ -4,11 +4,23 @@
 //! exposes the `/healthz` + `/ndi/snapshot/:id` snapshot helpers. Split out
 //! of the manager god-file (#357).
 
+use std::sync::atomic::Ordering;
+
 use anyhow::{anyhow, Result};
 
 use crate::pipeline::{AddConsumerError, NdiPipeline, PipelineState, StreamProfile};
 
 use super::{ActiveSource, NdiManager, NdiSessionError, WhepOp, WhepReply};
+
+/// Whether to emit the `pipeline_snapshots` contention WARN for this 1-based
+/// consecutive-timeout `streak`. Logs the first timeout and then only at
+/// power-of-two milestones, so a long `start_pipeline`/`rebuild_pipeline` window
+/// (which holds `active` for up to 8 s) produces ~log2(N)+1 WARN lines instead
+/// of one per status poll — the resolume `should_log_error` idiom (#484), fixing
+/// the thousands-of-lines flood this ticket addresses (#736). Pure → unit-tested.
+fn should_log_contention(streak: u32) -> bool {
+    streak > 0 && streak.is_power_of_two()
+}
 
 impl NdiManager {
     /// Snapshot of every active pipeline's current state.
@@ -40,25 +52,47 @@ impl NdiManager {
     /// pipeline), we could not look", as opposed to `Some(vec![])`, "we looked
     /// and there are no pipelines".
     ///
-    /// The distinction is load-bearing for #546: `start_pipeline` holds this same
-    /// mutex across its 8 s caps-wait, so during EVERY normal activation a caller
-    /// that cannot tell the two apart concludes "active, on the network, no
-    /// pipeline" and tells the operator to go fix a sending machine that is fine.
+    /// The distinction is load-bearing for #546: a caller that cannot tell the two
+    /// apart concludes "active, on the network, no pipeline" and tells the operator
+    /// to go fix a sending machine that is fine. Since #741 the `active` lock is no
+    /// longer held across the 8 s streaming-ready wait (a `Starting` reservation is
+    /// inserted, the lock released, the wait done unlocked), so an activating source
+    /// now READS as `Starting` here rather than tripping this timeout — but the
+    /// `None` path stays load-bearing for the brief genuine contention that remains
+    /// (the reserve/finalize critical sections and `stop_*`'s `pipeline.stop().await`
+    /// under the lock).
     pub async fn pipeline_snapshots_checked(&self) -> Option<Vec<(String, PipelineState)>> {
         match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
         {
-            Ok(guard) => Some(
-                guard
-                    .iter()
-                    .map(|(id, src)| (id.clone(), src.pipeline.state()))
-                    .collect(),
-            ),
+            Ok(guard) => {
+                // Acquired → contention (if any) has cleared; reset the streak so
+                // the next contention burst logs fresh from its first timeout.
+                self.snapshot_contention_streak.store(0, Ordering::Relaxed);
+                Some(
+                    guard
+                        .iter()
+                        .map(|(id, src)| (id.clone(), src.pipeline.state()))
+                        .collect(),
+                )
+            }
             Err(_) => {
-                tracing::warn!(
-                    "pipeline_snapshots lock acquisition timed out after 200 ms — \
-                     likely contended with a long-running pipeline start/rebuild; \
-                     reporting the snapshot as unavailable (#333 item 7, #546)"
-                );
+                // #736: the WARN used to fire on EVERY 200 ms timeout, so an 8 s
+                // `start_pipeline`/`rebuild_pipeline` window (holding `active`)
+                // flooded the journal with thousands of identical lines across
+                // status polls + /healthz. Gate it on a power-of-two streak so
+                // contention stays visible but rare, not routine.
+                let streak = self
+                    .snapshot_contention_streak
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1);
+                if should_log_contention(streak) {
+                    tracing::warn!(
+                        streak,
+                        "pipeline_snapshots lock acquisition timed out after 200 ms — \
+                         likely contended with a long-running pipeline start/rebuild; \
+                         reporting the snapshot as unavailable (#333 item 7, #546, #736)"
+                    );
+                }
                 None
             }
         }
@@ -290,6 +324,25 @@ fn translate_add_consumer_error(err: AddConsumerError) -> anyhow::Error {
 mod tests {
     use super::*;
     use crate::pipeline::MAX_CONSUMERS_PER_SOURCE;
+
+    #[test]
+    fn contention_warn_is_power_of_two_gated() {
+        // #736: the WARN used to fire on EVERY 200 ms lock-acquisition timeout,
+        // flooding the journal with thousands of identical lines during the 8 s
+        // pipeline start/rebuild windows. Now only the 1st timeout + power-of-two
+        // milestones log, so a streak of N contentions produces ~log2(N)+1 lines
+        // instead of N.
+        assert!(!should_log_contention(0), "no contention must not log");
+        assert!(should_log_contention(1));
+        assert!(should_log_contention(2));
+        assert!(!should_log_contention(3));
+        assert!(should_log_contention(4));
+        assert!(!should_log_contention(5));
+        assert!(!should_log_contention(6));
+        assert!(!should_log_contention(7));
+        assert!(should_log_contention(8));
+        assert!(!should_log_contention(9));
+    }
 
     /// #616 Gap A: `translate_add_consumer_error` is the ONLY place
     /// `AddConsumerError::CapReached` becomes

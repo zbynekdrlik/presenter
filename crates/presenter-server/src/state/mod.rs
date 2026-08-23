@@ -142,6 +142,16 @@ pub struct AppState {
     /// (concurrent sources: operator HTTP, tablet, Companion, OSC, AI tools).
     /// Only `update_stage_state` locks it — no nesting, no deadlock.
     stage_trigger_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes `activate_video_source` (#745 item a) so two concurrent
+    /// activations cannot interleave their `stop_other_pipelines` reaps
+    /// independently of the DB "last write wins" order — which would leave the
+    /// NDI manager's single-active source out of step with the DB's `is_active`
+    /// flag until the next reconnect cycle (the wrong source on stage). A NEW
+    /// server-side lock, NEVER the NDI manager's `active` mutex, so it does not
+    /// reintroduce the #741 status-poll stall (status readers never take it).
+    /// `Arc<..>` because `AppState` is `Clone` — a per-clone `Mutex` would
+    /// serialize nothing.
+    activation_lock: Arc<tokio::sync::Mutex<()>>,
     osc_bridge: OscBridge,
     ableset_bridge: AbleSetBridge,
     broadcast_live: Arc<AtomicBool>,
@@ -323,6 +333,7 @@ impl AppState {
             caches: CacheManager::new(),
             stage_layout: Arc::new(RwLock::new(default_layout)),
             stage_trigger_lock: Arc::new(tokio::sync::Mutex::new(())),
+            activation_lock: Arc::new(tokio::sync::Mutex::new(())),
             osc_bridge,
             ableset_bridge,
             broadcast_live: Arc::new(AtomicBool::new(false)),

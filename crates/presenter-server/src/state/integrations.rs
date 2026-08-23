@@ -85,6 +85,14 @@ fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
             status: format!("failed: {e}"),
             is_hard_error: true,
         },
+        // #741: the in-flight reservation was superseded mid-wait (a concurrent
+        // deactivate/switch). Defensive arm only — `activate_video_source`
+        // handles Superseded FIRST and publishes nothing; keep it non-hard and
+        // neutral so this fn stays total and can never surface a red overlay.
+        PipelineStartError::Superseded => NdiStartStatus {
+            status: "no-signal".to_string(),
+            is_hard_error: false,
+        },
     }
 }
 
@@ -404,6 +412,22 @@ impl AppState {
         audit_source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<VideoSource> {
+        // #745(a): serialize activations across the WHOLE body (DB flip →
+        // start_pipeline → sibling reap). Two concurrent activations otherwise
+        // interleave their reaps independently of the DB "last write wins" order,
+        // leaving the manager's single-active source out of step with the DB until
+        // the next reconnect cycle. Held across the ~8 s start_pipeline wait, but
+        // this is a server-side lock the status readers never take, so it does not
+        // reintroduce the #741 status-poll stall.
+        //
+        // ACCEPTED trade-off: when a source is DOWN, the 30 s reconnect ticker
+        // (`background_tasks.rs`) holds this lock across its full ~8 s futile
+        // `start_pipeline` timeout, so an operator's switch-to-another-source click
+        // can queue up to ~8 s behind it (these ran concurrently pre-#745). This is
+        // the inherent price of serialization — and the ≤30 s WRONG-source-on-stage
+        // mismatch it removes is worse. tokio's Mutex is FIFO-fair, so the operator
+        // waits behind at most one such attempt.
+        let _activation_guard = self.activation_lock.lock().await;
         let source = self
             .repository
             .activate_video_source(id, audit_source, actor)
@@ -418,6 +442,19 @@ impl AppState {
                 .start_pipeline(&source.id.to_string(), &source.ndi_name)
                 .await
             {
+                // #741: a SUPERSEDED start (a concurrent deactivate/stop removed
+                // the in-flight reservation, or an activate-switch replaced it) is
+                // neither success nor failure — return Ok and publish NOTHING; the
+                // concurrent op owns the source's real status. Mapping it to a
+                // status would emit a stray `no-signal` after a deactivate.
+                if matches!(e, PipelineStartError::Superseded) {
+                    tracing::info!(
+                        source_id = %source.id,
+                        ndi_name = %source.ndi_name,
+                        "NDI start superseded by a concurrent activation change (#741) — publishing nothing"
+                    );
+                    return Ok(source);
+                }
                 let classified = ndi_status_for_start_error(&e);
                 if classified.is_hard_error {
                     // A GENUINE pipeline failure. Surface the reason to the
@@ -497,7 +534,7 @@ mod tests {
     use super::{ndi_status_for_start_error, PipelineStartError};
     use crate::state::ndi_control::{NdiCall, NdiManagerHandle, StartOutcome};
     use crate::state::AppState;
-    use presenter_core::{ResolumeHostDraft, VideoSourceDraft, VideoSourceId};
+    use presenter_core::{LiveEvent, ResolumeHostDraft, VideoSourceDraft, VideoSourceId};
     use presenter_persistence::SettingsAuditSource;
 
     /// #483: `sync_resolume_hosts` must load hosts from the DB and register them
@@ -611,6 +648,152 @@ mod tests {
         );
     }
 
+    /// #745(a) RED: two concurrent `activate_video_source` calls must SERIALIZE so
+    /// the manager's single-active source (the LAST reap) matches the DB's
+    /// last-write winner. Without serialization the two reaps interleave
+    /// independently of the DB "last write wins" order, leaving the manager out of
+    /// step with the DB until the next reconnect cycle (the WRONG source on stage).
+    ///
+    /// Deterministic via the fake's per-source start-gate: A is parked mid-start
+    /// (its DB row already written) while B races. Without the lock B runs to
+    /// completion (reap B) while A is parked, then A's reap lands LAST → the manager
+    /// keeps A while the DB winner is B. With the lock B cannot even begin until A
+    /// releases → strictly grouped, the manager keeps B == DB winner.
+    #[tokio::test]
+    async fn concurrent_activations_serialize_manager_to_db_winner() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        let b = state
+            .create_video_source(
+                VideoSourceDraft::new("Cam 2", "STREAM-B (stream)"),
+                SettingsAuditSource::HttpSetter,
+                "test",
+            )
+            .await
+            .expect("create source B");
+        let b_id = b.id;
+        let b_str = b_id.to_string();
+
+        // Park A's start; it holds any serialization lock while B races.
+        let (release_a, parked_a) = fake.gate_start(&a_str);
+
+        let s_a = state.clone();
+        let ta = tokio::spawn(async move {
+            s_a.activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+        // A has written its DB row (is_active=A) and is now parked inside start.
+        // Bounded so a regression that returns before start_pipeline (e.g. an early
+        // Err) fails loudly here instead of hanging until the CI-job timeout.
+        tokio::time::timeout(std::time::Duration::from_secs(5), parked_a.notified())
+            .await
+            .expect("activation A never reached the parked start-gate within 5s");
+
+        // Race B. Without the lock B runs to completion while A is parked; with the
+        // lock B blocks on the lock until A releases.
+        let s_b = state.clone();
+        let tb = tokio::spawn(async move {
+            s_b.activate_video_source(b_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+        });
+
+        // Bounded window: B either COMPLETES its reap (no lock) or is BLOCKED (lock).
+        // 500 ms >> scheduling latency → a reliable "B is serialized" probe, not a
+        // flaky sleep.
+        let b_reaped_while_a_parked =
+            tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                loop {
+                    if fake.reaped(&b_str) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .is_ok();
+
+        // Release A; let both finish (timeout-guarded — a lock regression that
+        // deadlocks fails loudly instead of hanging the suite).
+        release_a.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), ta)
+            .await
+            .expect("activation A did not finish within 5s — deadlock?")
+            .expect("activation A task panicked")
+            .expect("activation A returned Err");
+        tokio::time::timeout(std::time::Duration::from_secs(5), tb)
+            .await
+            .expect("activation B did not finish within 5s — deadlock?")
+            .expect("activation B task panicked")
+            .expect("activation B returned Err");
+
+        // B is the DB's last-write winner (A wrote its row before parking, B after).
+        // Serialization means B cannot reap while A holds the lock…
+        assert!(
+            !b_reaped_while_a_parked,
+            "#745(a): a second activation must NOT proceed while the first holds the \
+             activation lock; B reaped while A was parked → activations interleaved. \
+             ledger = {:?}",
+            fake.calls(),
+        );
+        // …and the manager's final single-active source (the LAST reap) must equal
+        // the DB winner B.
+        let last_reap = fake.calls().into_iter().rev().find_map(|c| match c {
+            NdiCall::StopOtherPipelines { keep_id } => Some(keep_id),
+            _ => None,
+        });
+        assert_eq!(
+            last_reap.as_deref(),
+            Some(b_str.as_str()),
+            "#745(a): the manager's final single-active source (last reap) must equal \
+             the DB last-write winner (B); ledger = {:?}",
+            fake.calls(),
+        );
+    }
+
+    // #741: a SUPERSEDED start (a concurrent deactivate/stop removed the in-flight
+    // reservation, or an activate-switch replaced it) must make activate_video_source
+    // return Ok WITHOUT reaping siblings and WITHOUT publishing a stage status — the
+    // concurrent op owns the source's real status. The early-return path is guarded
+    // here: the reap runs only on the Ok/silent paths, never on Superseded.
+    #[tokio::test]
+    async fn activation_superseded_returns_ok_without_reap() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::Superseded).await;
+        let mut rx = state.live_hub().subscribe();
+
+        let activated = state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("a superseded start must still return Ok(source)");
+        assert_eq!(activated.id.to_string(), id);
+
+        let calls = fake.calls();
+        assert_eq!(
+            calls,
+            vec![NdiCall::StartPipeline {
+                source_id: id.clone(),
+                ndi_name: "STREAM-SNV (stream)".to_string(),
+            }],
+            "a superseded start returns Ok early — only start_pipeline, no reap; calls = {calls:?}",
+        );
+        assert!(
+            !fake.reaped(&id),
+            "a superseded start must NOT reap siblings — it returns before the reap (#741)",
+        );
+
+        // Drain the live hub: a superseded start must NOT publish any stage status
+        // (NdiConnectionStatus). It DOES publish NdiSourceActivated up front (the DB
+        // row was activated) — that is expected; only the stray stage status is the bug.
+        let mut published = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            published.push(ev);
+        }
+        assert!(
+            !published
+                .iter()
+                .any(|e| matches!(e, LiveEvent::NdiConnectionStatus { .. })),
+            "a superseded start must publish NO stage status; got {published:?}",
+        );
+    }
+
     #[tokio::test]
     async fn activation_does_not_reap_when_start_hard_errors() {
         let (state, source_id, id, fake) = state_with_fake(StartOutcome::HardError).await;
@@ -695,6 +878,22 @@ mod tests {
         assert!(
             classified.is_hard_error,
             "a genuine pipeline failure must fail the activation",
+        );
+    }
+
+    // #741: the defensive Superseded arm keeps `ndi_status_for_start_error` total
+    // and never surfaces a red overlay (activate_video_source handles Superseded
+    // first, so this arm is a safety net only).
+    #[test]
+    fn superseded_maps_to_neutral_and_is_not_a_hard_error() {
+        let classified = ndi_status_for_start_error(&PipelineStartError::Superseded);
+        assert!(
+            !classified.is_hard_error,
+            "a superseded start must never be a hard error (#741)",
+        );
+        assert_eq!(
+            classified.status, "no-signal",
+            "the defensive Superseded arm stays neutral",
         );
     }
 
