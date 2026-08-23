@@ -396,6 +396,14 @@ impl AppState {
         source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        // #745(a): serialize with `activate_video_source`. Without this, the
+        // `stop_pipeline` below can land in the window between a concurrent
+        // activation's DB flip and its manager-lock acquisition — the stop no-ops
+        // (nothing in the map yet), the activation then promotes and supervises a
+        // pipeline, leaving DB-inactive-but-streaming with no reconciliation. Lock
+        // order is strictly `activation_lock` → manager `active` (never inverted),
+        // so it cannot deadlock with an activation.
+        let _activation_guard = self.activation_lock.lock().await;
         // Stop the source's pipeline BEFORE deleting the row. Without this,
         // deleting an ACTIVE source leaked its encoder pipeline (it kept
         // streaming forever — observed as N zombie `ndi_pipelines` in
@@ -517,6 +525,11 @@ impl AppState {
         source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        // #745(a): serialize with `activate_video_source` — same window as delete.
+        // `stop_all()` must not interleave with a concurrent activation's DB-flip →
+        // manager-lock gap (would leave DB-inactive-but-streaming). Lock order is
+        // strictly `activation_lock` → manager `active`, so no deadlock.
+        let _activation_guard = self.activation_lock.lock().await;
         self.repository
             .deactivate_all_video_sources(source, actor)
             .await?;
