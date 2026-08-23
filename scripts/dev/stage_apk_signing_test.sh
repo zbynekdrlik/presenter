@@ -57,6 +57,10 @@ grep -q 'getByName("debug")' "$GRADLE" \
 echo "OK: committed debug keystore present, fingerprint pinned, build.gradle references it"
 
 # (c) optional — verify the BUILT apk is actually signed with the same stable key.
+# `keytool -printcert -jarfile` reads the v1 (JAR/META-INF) signature. AGP keeps
+# v1 signing on by default here because minSdk=22 (<24); if minSdk is ever raised
+# to >=24, AGP may drop v1 by default and this check would false-FAIL (a fail-safe
+# direction — never a false pass) — switch to `apksigner verify --print-certs` then.
 if [ "${1:-}" != "" ]; then
     APK="$1"
     [ -f "$APK" ] || fail "apk not found at $APK"
