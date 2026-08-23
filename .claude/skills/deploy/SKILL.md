@@ -62,6 +62,36 @@ which still lands its commit through these same CI gates retroactively.
    built by hand: `curl http://10.77.8.134:8080/healthz`, then open
    `http://10.77.8.134:8080/ui/operator` for a functional check.
 
+### GOTCHA — the shared MCP Playwright browser is often LOCKED on dev2; verify DOM with your OWN isolated chromium
+
+dev2 is shared, so a `browser_navigate` / `browser_evaluate` MCP call frequently fails with
+`Browser is already in use for .../ms-playwright-mcp/mcp-chrome-<id>, use --isolated` — a
+live chrome from ANOTHER session holds that profile's `SingletonLock`. Do **NOT** `pkill`
+/ kill that chrome (it may be another session's live browser). Instead launch your OWN
+isolated headless chromium via a tiny node script against the workspace Playwright
+(`node_modules/@playwright/test`, v1.55.x), which needs its OWN profile so it never
+contends on the MCP lock. Use `.cjs` + `require` (the package is CommonJS — an ESM
+`import { chromium }` fails with "Named export 'chromium' not found"):
+
+```js
+// verify.cjs  →  node verify.cjs /tmp/shot.png
+const { chromium } = require('/home/newlevel/devel/presenter/presenter-dev2/node_modules/@playwright/test');
+(async () => {
+  const b = await chromium.launch({ headless: true });           // fresh isolated profile
+  const p = await (await b.newContext({ viewport:{width:1280,height:720} })).newPage();
+  await p.goto('http://10.77.8.134:8080/stage', { waitUntil:'domcontentloaded' });
+  await p.waitForSelector('body[data-wasm-ready="true"]', { timeout:30000 });
+  console.log(await p.evaluate(() => {
+    const el = document.querySelector('[data-role="ndi-video"]');
+    return el && { cls: el.className, opacity: getComputedStyle(el).opacity }; // assert opacity, NOT toBeVisible
+  }));
+  await p.screenshot({ path: process.argv[2] }); await b.close();
+})().catch(e => { console.error(e.message); process.exit(1); });
+```
+
+Assert opacity via `getComputedStyle(el).opacity` (an `opacity:0` element still reports
+`toBeVisible()`); the stage version label sits in the `/stage` DOM top-left (`v0.4.x (dev)`).
+
 ## Disk budget — incremental compilation disabled (#585)
 
 `target/` dirs grew to **55 GB** on dev2 (41 GB workspace `target/` + 14 GB
@@ -241,9 +271,9 @@ without polluting the count, reuse `?preview=1`.
 
 PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main --generate-notes`, X.Y.Z = current main version) → `release.yml` builds + `deploy-pp` SSH-deploys. SSH from dev2: `newlevel@companion-pp.lan` (creds in memory `project-pp-location-upgrade`; no `sqlite3` CLI on the box — use `python3 -c "import sqlite3; ..."`).
 
-⚠️ **`release.yml` deploy-pp is currently BROKEN for PP (#469):** it hard-fails the VA-API check (`vah264enc not available` — PP has no GPU/NDI) AND stops the service + swaps the binary BEFORE that check, so a failure leaves PP **DOWN**. Until #469 is fixed, expect to finish a PP release by hand.
+✅ **`release.yml` deploy-pp WORKS — #469 is CLOSED (fixed 2026-06-25).** The VA-API probe that used to hard-fail the deploy (`vah264enc not available` — PP is GPU-less) is now **NON-FATAL** (`::warning::` + continue, see `release.yml` "Ensure GStreamer + VA-API"), so a GPU-less PP no longer aborts mid-deploy. Verified end-to-end green + PP live afterward on v0.4.191, v0.4.210, and **v0.4.262** (2026-08-23, deploy-pp job GREEN automatically, PP libraries survived the 0.4.210→0.4.262 migration). So the DEFAULT expectation is now a clean automated PP release — **only fall back to the manual recovery below if the deploy-pp job actually fails.** (The whole deploy-pp job is DB-safe: it backs up the DB, schema-validates on a copy, and skips import on an existing DB.) Note when creating the release: the tag MUST be strictly greater than the latest GitHub release (`gh release list --limit 1`), which is normally satisfied because dev bumped ahead of main.
 
-**Manual recovery (binary is already deployed when it fails):**
+**Manual recovery — ONLY if the deploy-pp job fails (binary is already deployed when it does):**
 1. Backup: `cp /opt/presenter/presenter.db /opt/presenter/backups/presenter-prerelease-$(date +%Y%m%d-%H%M%S).db`
 2. Schema-validate on a COPY: run the new binary with `PRESENTER_DB_URL=sqlite:///tmp/x.db PRESENTER_PORT=18099`, poll `/healthz` (migrations apply) + `/libraries/summary` (data survives), kill + rm the copy.
 3. `sudo systemctl start presenter`; verify `/healthz` version, `/libraries/summary` non-empty, `/stage` + `/ui/operator` = 200.

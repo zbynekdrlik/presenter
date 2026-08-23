@@ -16,6 +16,48 @@ use thiserror::Error;
 pub const DEFAULT_LAUNCH_PACKAGE: &str = "sk.newlevel.presenterstage";
 pub const DEFAULT_ADB_PORT: u16 = 5555;
 
+/// What the Android stage watchdog should do about the Presenter Stage app on a
+/// TV, derived PURELY from whether the package is installed and its readable
+/// versionCode (#734). Kept in core (no I/O) so the decision is unit-tested
+/// without an adb runner, and so the watchdog file stays under its size cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageAppInstallAction {
+    /// App absent → install it (a fresh install; nothing running to disturb).
+    Install,
+    /// App present at a versionCode below `expected` → upgrade it in place.
+    Upgrade,
+    /// App present and current (versionCode >= `expected`) → nothing to do.
+    UpToDate,
+    /// App present but its versionCode could not be read (a transient adb blip /
+    /// truncated `dumpsys` — NOT evidence of staleness). Leave the running app in
+    /// place; NEVER reinstall on a false-negative read — reinstalling tears the
+    /// running app down mid-event (the #734 harm feeding the grey-play-arrow
+    /// surface; #732 remains open).
+    PresentVersionUnknown,
+}
+
+/// Decide the watchdog's install action from the observed device state (#734).
+/// `installed` = the package is present (`pm path` returned a `package:` line);
+/// `version_code` = the readable installed versionCode, or `None` when the
+/// `dumpsys` read failed or had no parseable `versionCode=`. The watchdog only
+/// (re)installs when the app is genuinely absent or at a readable LOWER
+/// versionCode — never as a routine keep-alive step and never on an unreadable
+/// read.
+pub fn stage_app_install_action(
+    installed: bool,
+    version_code: Option<i64>,
+    expected: i64,
+) -> StageAppInstallAction {
+    if !installed {
+        return StageAppInstallAction::Install;
+    }
+    match version_code {
+        Some(v) if v >= expected => StageAppInstallAction::UpToDate,
+        Some(_) => StageAppInstallAction::Upgrade,
+        None => StageAppInstallAction::PresentVersionUnknown,
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AndroidStageDisplayValidationError {
     #[error("label cannot be empty")]
@@ -154,6 +196,53 @@ impl Default for AndroidStageDisplayDraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_action_absent_installs() {
+        // Absent → install (fresh; nothing running to tear down). versionCode is
+        // irrelevant when the package is not present.
+        assert_eq!(
+            stage_app_install_action(false, None, 1),
+            StageAppInstallAction::Install
+        );
+        assert_eq!(
+            stage_app_install_action(false, Some(1), 1),
+            StageAppInstallAction::Install
+        );
+    }
+
+    #[test]
+    fn install_action_current_is_up_to_date() {
+        assert_eq!(
+            stage_app_install_action(true, Some(1), 1),
+            StageAppInstallAction::UpToDate
+        );
+        assert_eq!(
+            stage_app_install_action(true, Some(2), 1),
+            StageAppInstallAction::UpToDate
+        );
+    }
+
+    #[test]
+    fn install_action_stale_upgrades() {
+        assert_eq!(
+            stage_app_install_action(true, Some(0), 1),
+            StageAppInstallAction::Upgrade
+        );
+    }
+
+    #[test]
+    fn install_action_present_but_unreadable_version_is_left_in_place() {
+        // #734 regression: a present app whose versionCode read failed (a
+        // transient adb blip / truncated dumpsys — NOT staleness) must NOT be
+        // reinstalled. The old "reinstall to be safe" default tore down a
+        // healthy running app mid-event (the grey-play-arrow surface; #732
+        // remains open). Present + unknown version = leave it running.
+        assert_eq!(
+            stage_app_install_action(true, None, 1),
+            StageAppInstallAction::PresentVersionUnknown
+        );
+    }
 
     #[test]
     fn default_launch_component_is_bare_app_package() {

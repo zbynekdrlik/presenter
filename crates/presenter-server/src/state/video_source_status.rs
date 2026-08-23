@@ -68,8 +68,12 @@ pub(crate) enum PipelineFact<'a> {
     /// pipeline at all).
     Known(Option<&'a str>),
     /// The manager's lock was held past our 200 ms budget, so we could not look.
-    /// In practice that means it is BUSY — `start_pipeline` holds that same lock
-    /// across its 8 s caps-wait, so this is the normal state during an activation.
+    /// In practice that means it is BUSY — a brief reserve/finalize critical section
+    /// or a `stop_*` doing `pipeline.stop().await` under the lock. (Before #741 an
+    /// activating source tripped this for its whole 8 s wait; #741 now inserts a
+    /// `Starting` reservation and does the wait UNLOCKED, so an activating source
+    /// READS as `Known(Some("starting"))` instead — but the Unreadable→Connecting
+    /// mapping stays correct for the brief genuine contention that remains.)
     Unreadable,
 }
 
@@ -271,10 +275,12 @@ mod tests {
         );
     }
 
-    /// THE ACTIVATION WINDOW (deep review 🟡 #1). `start_pipeline` holds the manager's
-    /// lock across its 8 s caps-wait, so for the whole of a NORMAL activation the
-    /// snapshot map cannot be read. Collapsing that into "no pipeline" would paint the
-    /// happy path amber and tell the operator to go start an output that is already on.
+    /// A BUSY manager (deep review 🟡 #1): the snapshot lock was held past our 200 ms
+    /// budget — a brief reserve/finalize critical section or a `stop_*` doing
+    /// `pipeline.stop().await` under the lock (pre-#741 this was the WHOLE 8 s
+    /// activation; #741 now shows an activating source as `Starting` instead).
+    /// Collapsing "cannot read" into "no pipeline" would paint the happy path amber
+    /// and tell the operator to go start an output that is already on.
     #[test]
     fn connecting_when_the_manager_is_busy_and_the_snapshot_cannot_be_read() {
         let net = network(&[MAPPED]);

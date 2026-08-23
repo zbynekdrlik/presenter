@@ -1,76 +1,17 @@
 use anyhow::anyhow;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId, DEFAULT_LAUNCH_PACKAGE};
 use serde::Serialize;
-use std::{
-    collections::HashMap,
-    env,
-    ffi::{OsStr, OsString},
-    path::{Path, PathBuf},
-    process::Output,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
-    process::Command,
     sync::{mpsc, RwLock},
     task::JoinHandle,
-    time::{interval, timeout, MissedTickBehavior},
+    time::{interval, MissedTickBehavior},
 };
 use tracing::{debug, error, info, warn};
 
-const ADB_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Injection seam for adb invocation (#421). All device I/O goes through this
-/// trait so the keep-alive wiring (`run_device_worker` → `connect_and_launch`
-/// → the adb helpers) is testable without a real `adb` binary or device: the
-/// production impl (`ProcessAdbRunner`) spawns `adb`, while tests inject a fake
-/// that records the invocations and returns canned `Output`.
-///
-/// `args` is the full adb argument vector (e.g. `["-s", serial, "shell", …]`).
-/// The implementation is responsible for applying `ADB_COMMAND_TIMEOUT`.
-#[async_trait]
-pub trait AdbRunner: Send + Sync {
-    async fn run(&self, args: &[OsString]) -> std::io::Result<Output>;
-}
-
-/// Production [`AdbRunner`]: spawns the configured `adb` binary with a timeout.
-/// A timeout maps to an `io::Error` of kind `TimedOut` so callers handle it
-/// identically to a spawn failure.
-struct ProcessAdbRunner {
-    adb_bin: Arc<OsString>,
-}
-
-#[async_trait]
-impl AdbRunner for ProcessAdbRunner {
-    async fn run(&self, args: &[OsString]) -> std::io::Result<Output> {
-        match timeout(
-            ADB_COMMAND_TIMEOUT,
-            Command::new(self.adb_bin.as_os_str()).args(args).output(),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_elapsed) => Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "adb command timed out",
-            )),
-        }
-    }
-}
-
-/// Convenience for building an adb argument vector from string-ish parts.
-fn adb_args<I, S>(parts: I) -> Vec<OsString>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    parts
-        .into_iter()
-        .map(|p| p.as_ref().to_os_string())
-        .collect()
-}
+mod adb;
+use adb::*;
 
 const COMMAND_CHANNEL_CAPACITY: usize = 8;
 const RETRY_INTERVAL: Duration = Duration::from_secs(20);
@@ -218,10 +159,7 @@ enum DeviceCommand {
 
 impl AndroidStageRegistry {
     pub fn new() -> Self {
-        let adb_bin = env::var_os("PRESENTER_ANDROID_ADB_BIN")
-            .map(Arc::from)
-            .unwrap_or_else(|| Arc::new(OsString::from("adb")));
-        let runner: Arc<dyn AdbRunner> = Arc::new(ProcessAdbRunner { adb_bin });
+        let runner: Arc<dyn AdbRunner> = adb::make_process_runner();
         let raw_stage_url = env::var(STAGE_URL_ENV).ok();
         let stage_url = raw_stage_url.as_deref().and_then(validate_stage_url);
         match (&stage_url, raw_stage_url.as_deref().map(str::trim)) {
@@ -441,29 +379,6 @@ async fn run_device_worker(
     Ok(())
 }
 
-/// Disconnect any stale entry then `adb connect <serial>`, returning an error
-/// (without recording status) on timeout, exec failure, or a connect error.
-///
-/// The disconnect clears stale offline entries ADB leaves after a TV power
-/// cycle, which otherwise make subsequent `-s serial` commands fail until the
-/// daemon restarts. Its result is intentionally ignored — the typical case is
-/// "not connected", a non-zero exit we don't care about.
-async fn adb_connect(runner: &dyn AdbRunner, serial: &str) -> anyhow::Result<()> {
-    let _ = runner.run(&adb_args(["disconnect", serial])).await;
-
-    let connect_output = match runner.run(&adb_args(["connect", serial])).await {
-        Ok(output) => output,
-        Err(io_err) => {
-            return Err(anyhow!("failed to execute adb for {}: {}", serial, io_err));
-        }
-    };
-
-    if let Err(msg) = ensure_success(&connect_output) {
-        return Err(anyhow!("adb connect error for {}: {}", serial, msg));
-    }
-    Ok(())
-}
-
 async fn connect_and_launch(
     runner: &dyn AdbRunner,
     stage_url: &Arc<Option<String>>,
@@ -585,184 +500,6 @@ async fn connect_and_launch(
     Ok(())
 }
 
-/// Run `adb -s <serial> shell <launch_args>` (the `am start` VIEW intent),
-/// returning an error (without recording status) on timeout, exec failure, or
-/// a non-success `am start` result.
-async fn adb_launch(
-    runner: &dyn AdbRunner,
-    serial: &str,
-    launch_args: &[String],
-) -> anyhow::Result<()> {
-    let mut args = adb_args(["-s", serial, "shell"]);
-    args.extend(launch_args.iter().map(OsString::from));
-
-    let launch_output = match runner.run(&args).await {
-        Ok(output) => output,
-        Err(io_err) => {
-            return Err(anyhow!(
-                "failed to execute adb shell for {}: {}",
-                serial,
-                io_err
-            ));
-        }
-    };
-
-    if let Err(msg) = ensure_success(&launch_output) {
-        return Err(anyhow!("adb shell error for {}: {}", serial, msg));
-    }
-    Ok(())
-}
-
-/// Disable the TV's display-sleep timeout so a stage TV never drops to standby
-/// (#481). `screen_off_timeout` is set to the i32 max (~24 days), effectively
-/// "never". Best-effort: errors are ignored. Idempotent — safe every connect.
-async fn keep_screen_awake(runner: &dyn AdbRunner, serial: &str) {
-    let _ = runner
-        .run(&adb_args([
-            "-s",
-            serial,
-            "shell",
-            "settings",
-            "put",
-            "system",
-            "screen_off_timeout",
-            "2147483647",
-        ]))
-        .await;
-}
-
-/// Disable the known per-brand kiosk browsers ([`KIOSK_PACKAGES_TO_SUPPRESS`])
-/// via `pm disable-user`, so the TV cannot keep resurfacing them over our stage
-/// app (#477). Best-effort: a package that is absent, already disabled, or not
-/// disable-able just no-ops (its error is ignored). Idempotent — safe to call on
-/// every connect.
-async fn suppress_kiosk_browsers(runner: &dyn AdbRunner, serial: &str) {
-    for pkg in KIOSK_PACKAGES_TO_SUPPRESS {
-        let _ = runner
-            .run(&adb_args([
-                "-s",
-                serial,
-                "shell",
-                "pm",
-                "disable-user",
-                "--user",
-                "0",
-                pkg,
-            ]))
-            .await;
-    }
-}
-
-/// True when `package` is installed on the device — `pm path <package>` prints a
-/// `package:` line. A missing package prints nothing (or errors) → false.
-async fn adb_package_installed(runner: &dyn AdbRunner, serial: &str, package: &str) -> bool {
-    let args = adb_args(["-s", serial, "shell", "pm", "path", package]);
-    match runner.run(&args).await {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).contains("package:"),
-        Err(_) => false,
-    }
-}
-
-/// `adb install` reports failure on stdout (`Failure [INSTALL_FAILED_…]`) and,
-/// depending on adb version, may still exit 0 — so require BOTH a success exit
-/// AND a `Success` line.
-fn adb_install_succeeded(output: &Output) -> bool {
-    ensure_success(output).is_ok() && String::from_utf8_lossy(&output.stdout).contains("Success")
-}
-
-/// Read the `versionCode` of `package` installed on the device via
-/// `dumpsys package <pkg>`. Returns `None` when the command fails or no
-/// `versionCode=` line is present (e.g. package absent).
-async fn adb_installed_version_code(
-    runner: &dyn AdbRunner,
-    serial: &str,
-    package: &str,
-) -> Option<i64> {
-    let args = adb_args(["-s", serial, "shell", "dumpsys", "package", package]);
-    let output = runner.run(&args).await.ok()?;
-    parse_version_code(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Parse the first `versionCode=<n>` integer out of `dumpsys package` output.
-/// `dumpsys` prints e.g. `    versionCode=7 minSdk=22 targetSdk=34` — we take the
-/// digits immediately after the first `versionCode=`. Returns `None` when no such
-/// field is present. Pure (no I/O) so the parsing is unit-testable.
-fn parse_version_code(dumpsys: &str) -> Option<i64> {
-    let after = dumpsys.split("versionCode=").nth(1)?;
-    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-
-/// Ensure our Presenter Stage app is installed AND up to date on the device.
-/// No-op when present at a versionCode >= [`EXPECTED_STAGE_APK_VERSION_CODE`].
-/// Otherwise (absent, stale, or version unreadable) `adb install -r <apk>`; if
-/// that fails (e.g. a signature mismatch from a rebuilt APK, or a downgrade),
-/// fall back to `adb uninstall` + a clean `adb install`. The app is a stateless
-/// WebView shell, so reinstalling loses nothing.
-async fn ensure_app_installed(
-    runner: &dyn AdbRunner,
-    serial: &str,
-    package: &str,
-    apk: &Path,
-) -> anyhow::Result<()> {
-    if adb_package_installed(runner, serial, package).await {
-        match adb_installed_version_code(runner, serial, package).await {
-            // Up to date — nothing to do.
-            Some(installed) if installed >= EXPECTED_STAGE_APK_VERSION_CODE => return Ok(()),
-            // Older than the bundled APK — upgrade in place.
-            Some(installed) => {
-                info!(
-                    serial,
-                    package,
-                    installed,
-                    expected = EXPECTED_STAGE_APK_VERSION_CODE,
-                    "Presenter Stage app is stale — upgrading"
-                );
-            }
-            // Present but versionCode unreadable — reinstall to be safe.
-            None => {
-                warn!(
-                    serial,
-                    package, "Presenter Stage installed but versionCode unreadable — reinstalling"
-                );
-            }
-        }
-    } else {
-        info!(serial, package, apk = %apk.display(), "installing Presenter Stage app on TV");
-    }
-
-    let mut install_args = adb_args(["-s", serial, "install", "-r"]);
-    install_args.push(apk.as_os_str().to_os_string());
-    if let Ok(output) = runner.run(&install_args).await {
-        if adb_install_succeeded(&output) {
-            return Ok(());
-        }
-    }
-
-    // Reinstall path: drop any conflicting/old copy, then install clean.
-    warn!(
-        serial,
-        package, "adb install -r failed — retrying with uninstall + install"
-    );
-    let _ = runner
-        .run(&adb_args(["-s", serial, "uninstall", package]))
-        .await;
-    let mut clean_args = adb_args(["-s", serial, "install"]);
-    clean_args.push(apk.as_os_str().to_os_string());
-    let output = runner
-        .run(&clean_args)
-        .await
-        .map_err(|e| anyhow!("failed to execute adb install for {serial}: {e}"))?;
-    if adb_install_succeeded(&output) {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "adb install failed for {serial}: {}",
-            format_command_failure(&output)
-        ))
-    }
-}
-
 /// Extract the Android PACKAGE from a stored `launch_component`. New rows store
 /// a bare package (`com.tcl.browser`); legacy rows may store
 /// `package/activity` — in that case we take the substring before the first
@@ -848,83 +585,6 @@ fn should_launch_stage(foreground_component: Option<&str>, launch_package: &str)
         // launch; (re)launch and let the device sort it out.
         None => true,
     }
-}
-
-/// Parse the resumed-activity COMPONENT (`<pkg>/<activity>`) from
-/// `dumpsys activity activities` output. Finds the
-/// `[m]ResumedActivity: ActivityRecord{<hash> u0 <pkg>/<activity> …}` line and
-/// returns `<pkg>/<activity>`. Returns None when no resumed activity is reported
-/// (`mResumedActivity: null`) or the line is absent — the caller treats None as
-/// "foreground unknown → (re)launch".
-///
-/// The component (package AND activity) is required by [`should_launch_stage`]
-/// to tell the loaded stage page (`…BrowsePageActivity`) from the home portal
-/// (`…StartActivity`), which share the `com.tcl.browser` package (#447).
-fn parse_foreground_component(dumpsys_output: &str) -> Option<String> {
-    // Match either `mResumedActivity:` or `ResumedActivity:` (label varies by
-    // Android version); both carry the same `<pkg>/<activity>` component token.
-    let line = dumpsys_output
-        .lines()
-        .find(|l| l.contains("ResumedActivity"))?;
-    // The component is the first whitespace token shaped `<pkg>/<activity>`;
-    // the package part always contains a dot and never a `{` (which excludes
-    // the `ActivityRecord{<hash>` token).
-    line.split_whitespace().find_map(|tok| {
-        let (pkg, _activity) = tok.split_once('/')?;
-        (pkg.contains('.') && !pkg.contains('{')).then(|| tok.to_string())
-    })
-}
-
-/// Query the device's currently-resumed COMPONENT (`<pkg>/<activity>`) via
-/// `adb -s <serial> shell dumpsys activity activities`. Returns the resumed
-/// component, or None on any adb error/timeout/non-success or when no resumed
-/// activity is reported — the caller treats None as "foreground unknown →
-/// (re)launch". Read-only: the dumpsys probe never disturbs the running browser.
-async fn adb_foreground_component(runner: &dyn AdbRunner, serial: &str) -> Option<String> {
-    let output = runner
-        .run(&adb_args([
-            "-s",
-            serial,
-            "shell",
-            "dumpsys",
-            "activity",
-            "activities",
-        ]))
-        .await
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_foreground_component(&String::from_utf8_lossy(&output.stdout))
-}
-
-fn ensure_success(output: &Output) -> Result<(), String> {
-    if !output.status.success() {
-        return Err(format_command_failure(output));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-    if stdout.contains("unable to connect")
-        || stdout.contains("failed to connect")
-        || stdout.contains("error:")
-        || stderr.contains("unable to connect")
-        || stderr.contains("failed to connect")
-        || stderr.contains("error:")
-    {
-        return Err(format_command_failure(output));
-    }
-    Ok(())
-}
-
-fn format_command_failure(output: &Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    format!(
-        "status: {} stdout: {} stderr: {}",
-        output.status,
-        stdout.trim(),
-        stderr.trim()
-    )
 }
 
 async fn mark_disabled(status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>) {
@@ -1236,6 +896,8 @@ mod tests {
     //   (c) LaunchNow (force_launch=true) always fires `am start`, regardless
     //       of foreground state and WITHOUT probing it.
 
+    use async_trait::async_trait;
+    use std::ffi::OsString;
     use std::os::unix::process::ExitStatusExt;
     use std::process::{ExitStatus, Output};
     use std::sync::Mutex;
@@ -1286,6 +948,11 @@ mod tests {
         /// Defaults to [`EXPECTED_STAGE_APK_VERSION_CODE`] (up to date → no
         /// reinstall); lower models a stale install the watchdog must upgrade.
         installed_version: i64,
+        /// When true, `dumpsys package` returns output with NO parseable
+        /// `versionCode=` line (models a transient adb blip / truncated dumpsys),
+        /// so `adb_installed_version_code` reads `None` even though the app is
+        /// present (#734).
+        version_unreadable: bool,
         calls: Mutex<Vec<String>>,
     }
 
@@ -1296,6 +963,7 @@ mod tests {
                 connect_fails: false,
                 installed: true,
                 installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
+                version_unreadable: false,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -1306,8 +974,25 @@ mod tests {
                 connect_fails: true,
                 installed: true,
                 installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
+                version_unreadable: false,
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        /// Builder: the app IS installed but its versionCode is UNREADABLE
+        /// (`dumpsys package` returns no parseable `versionCode=`), modelling the
+        /// transient-read false-negative that drove the #734 tear-down.
+        fn version_unreadable(mut self) -> Self {
+            self.installed = true;
+            self.version_unreadable = true;
+            self
+        }
+
+        fn uninstall_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("uninstall"))
+                .count()
         }
 
         /// Builder: the app is NOT yet installed (so `pm path` reports nothing and
@@ -1423,15 +1108,18 @@ mod tests {
             }
 
             // `dumpsys package <pkg>` reports the installed versionCode (empty
-            // when the app is absent).
+            // when the app is absent; no `versionCode=` line when the read is
+            // modelled as unreadable — #734).
             if joined.contains("dumpsys package") {
-                return Ok(ok_output(&if self.installed {
+                return Ok(ok_output(&if !self.installed {
+                    String::new()
+                } else if self.version_unreadable {
+                    "    minSdk=22 targetSdk=34".to_string()
+                } else {
                     format!(
                         "    versionCode={} minSdk=22 targetSdk=34",
                         self.installed_version
                     )
-                } else {
-                    String::new()
                 }));
             }
 
@@ -1567,6 +1255,33 @@ mod tests {
             runner.install_calls(),
             0,
             "an already-installed app MUST NOT be reinstalled",
+        );
+    }
+
+    // #734 REGRESSION: a present app whose versionCode read fails (transient adb
+    // blip / truncated dumpsys) must NOT be reinstalled — the old "reinstall to
+    // be safe" path tore down a healthy running app mid-event (the grey-play-
+    // arrow surface feeding #732, which remains open). Present + unreadable
+    // version = leave the running app in place, ZERO install/uninstall calls.
+    #[tokio::test]
+    async fn does_not_reinstall_when_present_but_version_unreadable() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage).version_unreadable();
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.install_calls(),
+            0,
+            "#734: a healthy app with an unreadable versionCode must NOT be reinstalled",
+        );
+        assert_eq!(
+            runner.uninstall_calls(),
+            0,
+            "#734: must not tear down (uninstall) a healthy running app",
         );
     }
 

@@ -10,6 +10,7 @@ use anyhow::{anyhow, Result};
 
 use crate::pipeline::NdiPipeline;
 
+use super::activation::{finalize_reservation, wait_for_streaming, Finalize, WaitOutcome};
 use super::{check_active_entry, NdiManager, StateCheckOutcome};
 
 /// #388 periodic RTCP-liveness sweep cadence: how often each source's
@@ -149,8 +150,10 @@ impl NdiManager {
     ///   supervisor and spawns a fresh one with a zero counter.
     /// - Re-subscribes to the FRESH state watcher after each successful
     ///   rebuild (the old watcher's pipeline was dropped)
-    /// - Exits when the watcher closes (pipeline dropped) OR the task is
-    ///   externally aborted via `stop_pipeline` / operator reactivate
+    /// - Exits when the watcher closes (pipeline dropped), when a rebuild FAILS
+    ///   or finds the source gone (the slot is gone-or-foreign → the 30 s
+    ///   reconnect ticker owns recovery, #745c), OR when the task is externally
+    ///   aborted via `stop_pipeline` / `stop_all` / operator reactivate
     pub(in crate::manager) fn spawn_supervisor(
         self: &std::sync::Arc<Self>,
         source_id: String,
@@ -240,14 +243,26 @@ impl NdiManager {
         }
         state.mark_rebuild_started();
         match self.rebuild_pipeline(source_id, ndi_name).await {
+            // `rebuild_pipeline` logs its own outcome (real rebuild vs already-
+            // healthy vs source-gone). `resubscribe_after_rebuild` swaps to the
+            // live watcher, or Exits when the source is gone (the Vacant path).
             Ok(()) => {
-                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
                 self.resubscribe_after_rebuild(source_id, state, watcher)
                     .await
             }
+            // A failed rebuild means the slot is gone-or-foreign: build/start
+            // errored after `check_active_entry` removed the dead entry, or the
+            // reservation was Removed/Superseded mid-wait. Do NOT loop — retrying
+            // off the old watcher's unseen `Stopped` echo could re-attach this
+            // now-orphaned supervisor to a pipeline a concurrent activation just
+            // promoted, re-opening the #745(c) double-watch. Exit; the 30 s
+            // reconnect ticker owns recovery per the DB — the same delegation the
+            // Vacant arm makes. (The per-supervisor cool-off never engaged on this
+            // path anyway — the closed old watcher already forced an exit within
+            // 1-2 iterations; this just makes it immediate and race-free.)
             Err(e) => {
                 self.note_rebuild_failure(source_id, state, &e.to_string());
-                SupervisorStep::Continue
+                SupervisorStep::Exit
             }
         }
     }
@@ -368,61 +383,76 @@ impl NdiManager {
         source_id: &str,
         ndi_name: &str,
     ) -> Result<()> {
-        let mut active = self.active.lock().await;
-        // Force-remove the dead entry. If somehow it has become healthy in
-        // the meantime, leave it alone (idempotent).
-        if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
-            return Ok(());
-        }
-
-        let whep_url = format!("/ndi/whep/{}", source_id);
-        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
-        pipeline.start().await?;
-
-        // Wait for the pipeline to reach Streaming — same rationale as
-        // start_pipeline: state-watcher replaces the whepserversink pad
-        // caps-wait in the new shared-encoder topology.
-        let mut watcher = pipeline.state_watcher();
-        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
-            loop {
-                let state = watcher.borrow_and_update().clone();
-                match state {
-                    crate::pipeline::PipelineState::Errored(ref e) => {
-                        return Err(anyhow!("pipeline errored: {e}"));
-                    }
-                    crate::pipeline::PipelineState::Streaming => return Ok(()),
-                    _ => {}
+        // Same reservation shape as `start_pipeline` (#741): reserve under the
+        // lock (fast), RELEASE before the 8 s streaming-ready wait, then finalize.
+        // Called by the source's OWN supervisor, which re-subscribes to the fresh
+        // watcher via `state_watcher_for` — so we never spawn a supervisor here;
+        // instead we CARRY FORWARD the removed dead entry's supervisor handle
+        // (that same live caller) into the rebuilt slot, so every abort path can
+        // still reach it (#745 item c — was `supervisor: None`, the double-watch).
+        let reserved = {
+            let mut active = self.active.lock().await;
+            // A TOTAL match (not `if let Idempotent`) — a non-exhaustive `if let`
+            // compiles unchanged under the 3-way outcome and would silently drop
+            // the carried supervisor, making the #745(c) fix inert (no compiler
+            // backstop on this Tier-0 crate).
+            let carried = match check_active_entry(&mut active, source_id).await {
+                // Entry became healthy on its own during backoff — nothing to
+                // rebuild; `resubscribe_after_rebuild` re-picks the live watcher.
+                StateCheckOutcome::Idempotent => return Ok(()),
+                // Entry gone (a concurrent stop/deactivate, or our own prior
+                // Removed finalize left the map vacant and we retried off the old
+                // watcher's unseen `Stopped` echo). Do NOT rebuild a possibly-
+                // deactivated source (#745 item c — the out-of-map window): return
+                // Ok WITHOUT building → `resubscribe_after_rebuild`'s
+                // `state_watcher_for` finds no entry → `SupervisorStep::Exit`; the
+                // 30s reconnect ticker owns recovery per the DB. Also avoids
+                // re-creating a `supervisor: None` entry (bug (c) reborn).
+                StateCheckOutcome::Vacant => {
+                    tracing::debug!(
+                        source_id = %source_id,
+                        "supervisor: source gone before rebuild — deferring recovery to the reconnect ticker"
+                    );
+                    return Ok(());
                 }
-                if watcher.changed().await.is_err() {
-                    return Err(anyhow!("state watcher closed unexpectedly"));
-                }
-            }
-        })
-        .await;
+                // Dead entry removed — carry its supervisor forward so THIS same
+                // live supervisor stays reachable from the rebuilt slot (#745 c);
+                // every abort path (stop_*/retain/reactivate) can then reach it.
+                StateCheckOutcome::RebuildDead(carried) => carried,
+            };
+            let whep_url = format!("/ndi/whep/{}", source_id);
+            let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+            pipeline.start().await?;
+            let arc = std::sync::Arc::new(pipeline);
+            active.insert(
+                source_id.to_string(),
+                super::ActiveSource {
+                    pipeline: std::sync::Arc::clone(&arc),
+                    supervisor: carried,
+                },
+            );
+            arc
+            // `active` guard dropped here — the wait below runs UNLOCKED.
+        };
 
-        match streaming_ready {
-            Ok(Ok(())) => {
-                active.insert(
-                    source_id.to_string(),
-                    super::ActiveSource {
-                        pipeline: std::sync::Arc::new(pipeline),
-                        // Supervisor task is reused — it'll fetch the new watcher
-                        // from us via `state_watcher_for`.
-                        supervisor: None,
-                    },
-                );
+        let outcome =
+            wait_for_streaming(reserved.state_watcher(), std::time::Duration::from_secs(8)).await;
+
+        match finalize_reservation(&self.active, source_id, &reserved, outcome).await {
+            // Slot left in place with the CARRIED supervisor handle (#745c — was
+            // `supervisor: None`); the calling supervisor re-subscribes to the
+            // fresh watcher via `state_watcher_for`.
+            Finalize::Promote => {
+                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
                 Ok(())
             }
-            Ok(Err(e)) => {
-                pipeline.stop().await;
-                Err(e)
-            }
-            Err(_) => {
-                pipeline.stop().await;
-                Err(anyhow!(
-                    "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
-                ))
-            }
+            Finalize::Removed(WaitOutcome::Errored(e)) => Err(anyhow!("pipeline errored: {e}")),
+            Finalize::Removed(_) => Err(anyhow!(
+                "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
+            )),
+            Finalize::Superseded => Err(anyhow!(
+                "rebuild superseded — source no longer holds this pipeline"
+            )),
         }
     }
 }

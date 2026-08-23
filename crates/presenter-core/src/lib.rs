@@ -40,8 +40,9 @@ pub use ableset::{
 };
 pub use ai_auth::{is_expiring_soon, EXPIRY_WARNING_WINDOW};
 pub use android_stage_display::{
-    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,
-    DEFAULT_ADB_PORT, DEFAULT_LAUNCH_PACKAGE,
+    stage_app_install_action, AndroidStageDisplay, AndroidStageDisplayDraft,
+    AndroidStageDisplayValidationError, StageAppInstallAction, DEFAULT_ADB_PORT,
+    DEFAULT_LAUNCH_PACKAGE,
 };
 pub use bible::{
     BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BiblePresentation,

@@ -18,17 +18,37 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        // #740: pin the debug signing key to a COMMITTED keystore so every build
+        // signs with the SAME certificate — assembleDebug on ephemeral CI runners
+        // AND assembleRelease (which reuses this config below). Without an explicit
+        // storeFile, Gradle auto-generates a fresh ~/.android/debug.keystore per
+        // run, so each CI APK is signed with a different key → `adb install -r`
+        // fails INSTALL_FAILED_UPDATE_INCOMPATIBLE on every upgrade and the stage
+        // watchdog tears the running app down mid-event. A debug keystore uses
+        // universally-known credentials (not a secret); this app is a LAN-only
+        // internal WebView shell, never store-distributed, so a debug key is
+        // appropriate and no managed release keystore is needed.
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
-        // We ship a debug-signed APK: it installs via `adb install` on any TV
-        // without Play, and the server watchdog handles signature changes by
-        // uninstall+reinstall. No release keystore / Play distribution needed.
+        // Debug-signed APK, now signed with the committed stable key above (#740):
+        // it installs via `adb install` on any TV without Play, and in-place
+        // `adb install -r` upgrades succeed because the signature is stable across
+        // builds (no more per-run key → no forced uninstall+reinstall).
         getByName("debug") {
             isMinifyEnabled = false
         }
         getByName("release") {
             isMinifyEnabled = false
             // Reuse the debug signing config so `assembleRelease` is also
-            // ADB-installable without a managed keystore.
+            // ADB-installable with the same committed stable key.
             signingConfig = signingConfigs.getByName("debug")
         }
     }

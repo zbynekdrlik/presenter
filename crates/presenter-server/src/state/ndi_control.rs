@@ -85,7 +85,7 @@ impl NdiManagerHandle {
         match self {
             Self::Real(m) => m.stop_all().await,
             #[cfg(test)]
-            Self::Fake(_) => unreachable!("FakeNdiControl::stop_all is never exercised"),
+            Self::Fake(f) => f.stop_all().await,
         }
     }
 
@@ -200,6 +200,20 @@ pub(crate) struct FakeNdiControl {
     finder_never_scanned: Mutex<bool>,
     /// What `whep_signaller_call` should return (#630 call-site wiring tests).
     whep_outcome: Mutex<Option<WhepOutcome>>,
+    /// #745(a): parks `start_pipeline` for ONE specific source until released, so a
+    /// test can hold an activation mid-flight and race a second one — proving
+    /// `activate_video_source` serializes (or, pre-fix, interleaves) two concurrent
+    /// activations. `None` = no gate (every start runs to completion immediately).
+    start_gate: Mutex<Option<StartGate>>,
+}
+
+/// A one-source start-gate for the #745(a) concurrency test. `start_pipeline` for
+/// `source_id` signals `parked` and then awaits `release` before returning.
+#[cfg(test)]
+struct StartGate {
+    source_id: String,
+    release: Arc<tokio::sync::Notify>,
+    parked: Arc<tokio::sync::Notify>,
 }
 
 /// What [`FakeNdiControl::whep_signaller_call`] should return.
@@ -241,6 +255,10 @@ pub(crate) enum NdiCall {
     StartPipeline { source_id: String, ndi_name: String },
     /// `stop_other_pipelines(keep_id)` — the #370 reap.
     StopOtherPipelines { keep_id: String },
+    /// `stop_pipeline(source_id)` — the delete-source teardown (#745a wiring test).
+    StopPipeline { source_id: String },
+    /// `stop_all()` — the deactivate-all teardown (#745a wiring test).
+    StopAll,
 }
 
 /// What [`FakeNdiControl::start_pipeline`] should return.
@@ -254,6 +272,9 @@ pub(crate) enum StartOutcome {
     SilentSource,
     /// A genuine hard failure — activation returns Err.
     HardError,
+    /// The in-flight reservation was superseded mid-wait (#741) — activation must
+    /// return Ok WITHOUT publishing a status.
+    Superseded,
 }
 
 #[cfg(test)]
@@ -275,6 +296,24 @@ impl FakeNdiControl {
     /// The ordered sequence of calls recorded so far.
     pub(crate) fn calls(&self) -> Vec<NdiCall> {
         self.calls.lock().expect("calls lock").clone()
+    }
+
+    /// #745(a): gate `start_pipeline` for `source_id` — it will record its
+    /// `StartPipeline` call, then PARK until the returned `release` is notified.
+    /// Await the returned `parked` to know the activation is parked mid-flight
+    /// (its DB row already written). Returns `(release, parked)`.
+    pub(crate) fn gate_start(
+        &self,
+        source_id: &str,
+    ) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let parked = Arc::new(tokio::sync::Notify::new());
+        *self.start_gate.lock().expect("start_gate lock") = Some(StartGate {
+            source_id: source_id.to_string(),
+            release: Arc::clone(&release),
+            parked: Arc::clone(&parked),
+        });
+        (release, parked)
     }
 
     /// Put these NDI names "on the network" (#546).
@@ -350,6 +389,18 @@ impl FakeNdiControl {
             .any(|c| matches!(c, NdiCall::StopOtherPipelines { keep_id: k } if k == keep_id))
     }
 
+    /// #745(a): did `delete_video_source` tear down this source's pipeline?
+    pub(crate) fn stopped(&self, source_id: &str) -> bool {
+        self.calls()
+            .iter()
+            .any(|c| matches!(c, NdiCall::StopPipeline { source_id: s } if s == source_id))
+    }
+
+    /// #745(a): did `deactivate_video_sources` tear down all pipelines?
+    pub(crate) fn stopped_all(&self) -> bool {
+        self.calls().iter().any(|c| matches!(c, NdiCall::StopAll))
+    }
+
     fn record(&self, call: NdiCall) {
         self.calls.lock().expect("calls lock").push(call);
     }
@@ -363,6 +414,23 @@ impl FakeNdiControl {
             source_id: source_id.to_string(),
             ndi_name: ndi_name.to_string(),
         });
+        // #745(a) test gate: if this source is gated, signal we've parked (its DB
+        // row is already written by activate_video_source) and wait for release.
+        // Clone the Notify handles out from under the std Mutex — never await while
+        // holding it.
+        let gate = {
+            let g = self.start_gate.lock().expect("start_gate lock");
+            match g.as_ref() {
+                Some(sg) if sg.source_id == source_id => {
+                    Some((Arc::clone(&sg.parked), Arc::clone(&sg.release)))
+                }
+                _ => None,
+            }
+        };
+        if let Some((parked, release)) = gate {
+            parked.notify_one();
+            release.notified().await;
+        }
         match *self.start_outcome.lock().expect("start_outcome lock") {
             StartOutcome::Ok => Ok(()),
             StartOutcome::SilentSource => Err(PipelineStartError::SourceSilent {
@@ -371,11 +439,18 @@ impl FakeNdiControl {
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(
                 "simulated start failure"
             ))),
+            StartOutcome::Superseded => Err(PipelineStartError::Superseded),
         }
     }
 
-    async fn stop_pipeline(&self, _source_id: &str) {
-        // Not exercised by the wiring test; recorded for completeness.
+    async fn stop_pipeline(&self, source_id: &str) {
+        self.record(NdiCall::StopPipeline {
+            source_id: source_id.to_string(),
+        });
+    }
+
+    async fn stop_all(&self) {
+        self.record(NdiCall::StopAll);
     }
 
     async fn stop_other_pipelines(&self, keep_id: &str) {

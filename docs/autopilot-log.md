@@ -1391,3 +1391,31 @@ across model families); the ticket itself stays open on the user's direction dec
 - docs/configuration.md: PRESENTER_AI_API_URL default port fix 8787->18787 + llmrot section.
 - Real-account completion -> helper E2E is claudy's live-verify step (claudy#153, "kanál
   LIVE" posted 2026-08-22).
+
+**v0.4.262 (#732, grey NDI play-arrow root-cause fix — 4th recurrence of #448/#478/#568/#637):**
+- Root cause proven LIVE on the real stage TV SD1 (Tesla/Skyworth LEAP-S1, Chrome/150 WebView):
+  the grey arrow is `-internal-media-controls-overlay-play-button-internal`, a Chrome >=150
+  UA-INTERNAL pseudo-element author CSS CANNOT select — so the prior `::-webkit-media-controls*`
+  rules (which DO compute display:none on the field engine, verified via CDP) reach only the
+  `-webkit-`-named wrapper, never the `-internal-…` glyph. It paints inside a frameless/paused
+  `<video data-role="ndi-video">`. That is why every "verified in Chromium" CSS fix left the
+  field arrow unchanged. Proven on SD1 that `opacity:0` on the `<video>` ELEMENT removes it.
+- Fix: NdiVideo (`ndi_video.rs`) toggles `stage-ndi-video--dormant` (opacity:0, `stage.css`)
+  whenever frames are NOT presenting — gated on the EXISTING #500 `ndi_frames_live` signal, so no
+  new timer/signal and a 1-frame hiccup can't flicker it. Applies to ALL 3 layouts
+  (fullscreen/timer/api) and closes every no-frame window (broadcast off, cold-open WHEP, stalls).
+  Element stays MOUNTED (opacity, not display:none/unmount) so WHEP negotiation + autoplay are
+  untouched.
+- Tests: RED->GREEN `tests/e2e/stage-ndi-hidden-until-frames.spec.ts` (all 3 layouts, opacity via
+  getComputedStyle). Review 🔵 hardening: real-decoded-frames reveal assertion added to the
+  synthetic reactivate test (e2e-ndi lane) — the exact recurrence lesson (never only hook-driven).
+- Adversarial review (Fable tier): 0 crit, 0 warn, 2 sugg. Permanent-black-stage regression ruled
+  out three ways (empirical headless probe + code-read + the in-repo #500 cover precedent).
+- Rollout: SNV via dev->main (merge 9f226a27) at v0.4.262; PP via GitHub Release v0.4.262
+  (deploy-pp GREEN automatically — VA-API check now non-fatal; PP libraries survived the
+  0.4.210->0.4.262 migration). Dev verified: timer layout + streamless source -> `<video>` =
+  stage-ndi-video--dormant, opacity 0, mounted, zero console errors.
+- Ticket stays OPEN until post-fix adb screenshots from the real TVs confirm the arrow is gone
+  (PP trap ~05:10 no-stream window; SNV at next power-on).
+- Flaky test filed separately (resolume port-drift tests bind configured_port+1 without verifying
+  it free — transient CI red, cleared on rerun).

@@ -7,12 +7,14 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::{
     sync::{oneshot, Mutex, RwLock},
     task::JoinHandle,
-    time::{interval, MissedTickBehavior},
 };
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 const SETLIST_ENDPOINT: &str = "/api/setlist";
 const POLL_INTERVAL_MS: u64 = 250;
+/// Backoff cap when the AbleSet host is unreachable — a down host is re-polled
+/// at most this often (#735), mirroring the resolume driver's `BACKOFF_CAP` (#484).
+const ABLESET_BACKOFF_CAP: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AbleSetBridge {
@@ -520,6 +522,96 @@ fn refresh_setlist_songs(
     (list_changed, new_fingerprint)
 }
 
+/// Minimum spacing before the next AbleSet poll given `consecutive_failures`
+/// consecutive failed fetches (1-based). `0` → the normal [`POLL_INTERVAL_MS`]
+/// cadence; otherwise exponential (0.5 s, 1 s, 2 s, …) capped at
+/// [`ABLESET_BACKOFF_CAP`], so a down host stops being hammered every 250 ms
+/// (#735). Mirrors the resolume driver's `backoff_interval` (#484). Pure +
+/// deterministic → unit-tested without sleeping.
+fn ableset_backoff_interval(consecutive_failures: u32) -> Duration {
+    if consecutive_failures == 0 {
+        return Duration::from_millis(POLL_INTERVAL_MS);
+    }
+    // 500 ms * 2^(n-1), saturating, then capped. Shift clamped well under 64.
+    let shift = consecutive_failures.saturating_sub(1).min(32);
+    let ms = 500u64.saturating_mul(1u64 << shift);
+    Duration::from_millis(ms).min(ABLESET_BACKOFF_CAP)
+}
+
+/// Whether to emit the WARN log line for the AbleSet poll failure with this
+/// 1-based `consecutive_failures` count. Logs the first failure and then only at
+/// power-of-two milestones, so a host down for N ticks produces ~log2(N)+1 WARN
+/// lines instead of N — the resolume `should_log_error` idiom (#484), fixing the
+/// 244,039-line flood this ticket addresses (#735).
+fn should_log_ableset_failure(consecutive_failures: u32) -> bool {
+    consecutive_failures > 0 && consecutive_failures.is_power_of_two()
+}
+
+/// #735: log an "AbleSet reachable again" recovery line on the first reachable
+/// response after a failure streak. The caller resets `consecutive_failures` to
+/// 0 afterwards (resetting when already 0 is a no-op). Extracted from
+/// `run_tracker` to keep it under the fn-length cap.
+fn log_ableset_recovery(host: &str, consecutive_failures: u32) {
+    if consecutive_failures > 0 {
+        info!(
+            host = %host,
+            consecutive_failures,
+            "AbleSet reachable again — resuming normal poll cadence (#735)"
+        );
+    }
+}
+
+/// Update `status.last_song` / `status.last_error` from the setlist's active
+/// song. Extracted verbatim from `run_tracker`'s `Ok(Some(..))` arm to keep that
+/// function under the fn-length cap; behavior is unchanged.
+fn update_active_song_status(
+    status: &mut AbleSetStatusInner,
+    setlist: &SetlistResponse,
+    song_prefix_length: u8,
+) {
+    let Some(active_id) = &setlist.active_song_id else {
+        status.last_song = None;
+        status.last_error = None;
+        return;
+    };
+    let mut found = false;
+    for (idx, song) in setlist.songs.iter().enumerate() {
+        if song.id.as_deref() == Some(active_id.as_str()) {
+            // `status.setlist_songs` is always current here: freshly rebuilt by
+            // `refresh_setlist_songs` if the list changed, or left as-is from a
+            // prior tick whose fingerprint proves it is still identical.
+            let Some(name) = status.setlist_songs.get(idx).map(|s| s.name.clone()) else {
+                continue;
+            };
+            if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
+                let index = song
+                    .internal_meta
+                    .as_ref()
+                    .and_then(|m| m.order)
+                    .or(Some(idx as u32));
+                status.last_song = Some(SongState {
+                    id: active_id.clone(),
+                    name,
+                    prefix,
+                    index,
+                    last_seen_at: Utc::now(),
+                });
+                status.last_error = None;
+                found = true;
+            } else {
+                status.last_error = Some(format!(
+                    "unable to extract prefix of length {} from song '{name}'",
+                    song_prefix_length
+                ));
+            }
+            break;
+        }
+    }
+    if !found && status.last_error.is_none() {
+        status.last_song = None;
+    }
+}
+
 async fn run_tracker(
     inner: Arc<AbleSetInner>,
     config: AbleSetTrackerConfig,
@@ -533,17 +625,22 @@ async fn run_tracker(
     } = config;
     let mut prev_active_id: Option<String> = None;
     let mut prev_setlist_fingerprint: Option<u64> = None;
-    let mut interval = interval(Duration::from_millis(POLL_INTERVAL_MS));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // #735: consecutive failed fetches drive an exponential backoff on the poll
+    // cadence AND a power-of-two-gated WARN, so an unreachable AbleSet host is
+    // neither hammered every 250 ms nor floods the journal. Reset to 0 on any
+    // reachable response (Ok(Some)/Ok(None)).
+    let mut consecutive_failures: u32 = 0;
 
     loop {
         tokio::select! {
             _ = &mut shutdown => {
                 break;
             }
-            _ = interval.tick() => {
+            _ = tokio::time::sleep(ableset_backoff_interval(consecutive_failures)) => {
                 match fetch_setlist(&client, &host, http_port).await {
                     Ok(Some(setlist)) => {
+                        log_ableset_recovery(&host, consecutive_failures);
+                        consecutive_failures = 0;
                         let new_active_id = setlist.active_song_id.clone();
                         let song_changed = new_active_id != prev_active_id;
                         let mut status = inner.status.write().await;
@@ -553,48 +650,7 @@ async fn run_tracker(
                         // refresh_setlist_songs's doc comment for the full "why".
                         let (list_changed, new_fingerprint) =
                             refresh_setlist_songs(&mut status, &setlist, prev_setlist_fingerprint);
-
-                        if let Some(active_id) = &setlist.active_song_id {
-                            let mut found = false;
-                            for (idx, song) in setlist.songs.iter().enumerate() {
-                                if song.id.as_deref() == Some(active_id.as_str()) {
-                                    // `status.setlist_songs` is always current here:
-                                    // freshly rebuilt above if the list changed, or
-                                    // left as-is from a prior tick whose fingerprint
-                                    // proves it is still identical to `setlist.songs`.
-                                    let Some(name) = status.setlist_songs.get(idx).map(|s| s.name.clone()) else {
-                                        continue;
-                                    };
-                                    if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
-                                        let index = song.internal_meta
-                                            .as_ref()
-                                            .and_then(|m| m.order)
-                                            .or(Some(idx as u32));
-                                        status.last_song = Some(SongState {
-                                            id: active_id.clone(),
-                                            name,
-                                            prefix,
-                                            index,
-                                            last_seen_at: Utc::now(),
-                                        });
-                                        status.last_error = None;
-                                        found = true;
-                                    } else {
-                                        status.last_error = Some(format!(
-                                            "unable to extract prefix of length {} from song '{name}'",
-                                            song_prefix_length
-                                        ));
-                                    }
-                                    break;
-                                }
-                            }
-                            if !found && status.last_error.is_none() {
-                                status.last_song = None;
-                            }
-                        } else {
-                            status.last_song = None;
-                            status.last_error = None;
-                        }
+                        update_active_song_status(&mut status, &setlist, song_prefix_length);
                         drop(status);
                         if list_changed {
                             prev_setlist_fingerprint = Some(new_fingerprint);
@@ -606,6 +662,8 @@ async fn run_tracker(
                         }
                     }
                     Ok(None) => {
+                        log_ableset_recovery(&host, consecutive_failures);
+                        consecutive_failures = 0;
                         let mut status = inner.status.write().await;
                         status.last_song = None;
                         status.setlist_songs.clear();
@@ -616,9 +674,24 @@ async fn run_tracker(
                         }
                     }
                     Err(err) => {
+                        // #735: exponential backoff (via `consecutive_failures`
+                        // feeding `ableset_backoff_interval`) stops hammering a
+                        // dead host; the WARN is power-of-two-gated so a host
+                        // down for N ticks logs ~log2(N)+1 lines, not N.
+                        consecutive_failures = consecutive_failures.saturating_add(1);
                         let mut status = inner.status.write().await;
                         status.last_error = Some(err.to_string());
-                        debug!(?err, "ableset fetch failed");
+                        drop(status);
+                        if should_log_ableset_failure(consecutive_failures) {
+                            warn!(
+                                ?err,
+                                host = %host,
+                                consecutive_failures,
+                                "AbleSet setlist poll failing — backing off (#735)"
+                            );
+                        } else {
+                            debug!(?err, "ableset fetch failed");
+                        }
                     }
                 }
             }
@@ -662,6 +735,45 @@ async fn fetch_setlist(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ableset_backoff_grows_exponentially_and_caps() {
+        // #735: 0 failures = the normal poll cadence; each subsequent failure
+        // doubles from 500 ms, capped at 60 s — so an unreachable AbleSet host
+        // is not re-requested every 250 ms. Without the fix there is no backoff
+        // (the loop polled at a fixed 250 ms regardless of failures).
+        assert_eq!(
+            ableset_backoff_interval(0),
+            Duration::from_millis(POLL_INTERVAL_MS)
+        );
+        assert_eq!(ableset_backoff_interval(1), Duration::from_millis(500));
+        assert_eq!(ableset_backoff_interval(2), Duration::from_secs(1));
+        assert_eq!(ableset_backoff_interval(3), Duration::from_secs(2));
+        assert_eq!(ableset_backoff_interval(7), Duration::from_secs(32));
+        // 500 ms * 2^7 = 64 s → capped at the 60 s BACKOFF_CAP.
+        assert_eq!(ableset_backoff_interval(8), ABLESET_BACKOFF_CAP);
+        assert_eq!(ableset_backoff_interval(100), ABLESET_BACKOFF_CAP);
+    }
+
+    #[test]
+    fn ableset_failure_log_is_power_of_two_gated() {
+        // #735: the 244,039-line flood came from logging EVERY failed tick.
+        // Now only the 1st failure + power-of-two milestones emit a WARN, so a
+        // host down for N ticks produces ~log2(N)+1 lines instead of N.
+        assert!(
+            !should_log_ableset_failure(0),
+            "a never-failed poll must not log"
+        );
+        assert!(should_log_ableset_failure(1));
+        assert!(should_log_ableset_failure(2));
+        assert!(!should_log_ableset_failure(3));
+        assert!(should_log_ableset_failure(4));
+        assert!(!should_log_ableset_failure(5));
+        assert!(!should_log_ableset_failure(6));
+        assert!(!should_log_ableset_failure(7));
+        assert!(should_log_ableset_failure(8));
+        assert!(!should_log_ableset_failure(9));
+    }
 
     #[tokio::test]
     async fn next_song_name_returns_next_non_skipped_song() {
