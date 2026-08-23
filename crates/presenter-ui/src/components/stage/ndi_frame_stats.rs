@@ -336,6 +336,19 @@ impl FrameStats {
 /// most one frame per 1s tick, so it can never reach 100 frames in 10s —
 /// rVFC-less browsers therefore never persist a proven mode, which is the
 /// honest outcome of a measurement too coarse to prove a frame RATE.
+/// #732 diagnostics: stamp a window global with the wall-clock (`Date.now()`)
+/// time of the most recent presented frame, so the stage-display diagnostics
+/// collector (`ws/stage_diag.rs`) can report `last_frame_age_ms` without
+/// coupling to the per-session `FrameStats`. `Date.now()` (not `now_ms()`'s
+/// `performance.now()`) so the collector's own `Date.now()` age math lines up.
+fn stamp_last_frame_global() {
+    let _ = js_sys::Reflect::set(
+        &js_sys::global(),
+        &JsValue::from_str(crate::ws::stage_diag::LAST_FRAME_AT_GLOBAL),
+        &JsValue::from_f64(js_sys::Date::now()),
+    );
+}
+
 pub(crate) fn record_presented_frame(stats: &FrameStats) -> u32 {
     let n = stats.frames_presented.get().saturating_add(1);
     stats.frames_presented.set(n);
@@ -351,6 +364,7 @@ pub(crate) fn record_presented_frame(stats: &FrameStats) -> u32 {
         .presented_in_interval
         .set(stats.presented_in_interval.get().saturating_add(1));
     stats.last_frame_at.set(now);
+    stamp_last_frame_global();
     if n == 1 {
         stats.first_frame_at.set(now);
     }
