@@ -61,7 +61,7 @@ pub use presentation::Presentation;
 pub use resolume::{ResolumeHost, ResolumeHostDraft, ResolumeHostValidationError};
 pub use search::{SearchMatchField, SearchResult, SearchResultKind};
 pub use slide::{resolve_sequence, ResolvedSlide, Slide, SlideContent, SlideGroup, SlideText};
-pub use stage_client::{StageClientSnapshot, StageClientStatus};
+pub use stage_client::{NdiVideoDiag, StageClientSnapshot, StageClientStatus};
 pub use stage_display::{
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
     UpcomingGroup, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,

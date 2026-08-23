@@ -22,13 +22,25 @@ use crate::components::version_label::VersionLabel;
 #[component]
 pub fn StreamEditorPage() -> impl IntoView {
     // Own the <body> for full-page dark styling; restore on unmount so an
-    // in-app navigation can't leave a stale class behind.
+    // in-app navigation can't leave a stale class behind. Also mark the <html>
+    // element: tablet.css ships a bare global `html { height:100%; overflow:hidden }`
+    // (its iOS-bounce guard) that trunk bundles into every page, which clips the
+    // editor's tall property panel and stops the page scrolling (#738). The
+    // `data-stream-editor` attribute lets stream_editor.css restore normal
+    // document scrolling for this page only — mirrors the output page's
+    // `data-stream` html override.
     if let Some(body) = crate::utils::window::document_body() {
         let _ = body.set_attribute("class", "stream-editor-page");
+    }
+    if let Some(html) = crate::utils::window::document().document_element() {
+        let _ = html.set_attribute("data-stream-editor", "true");
     }
     on_cleanup(|| {
         if let Some(body) = crate::utils::window::document_body() {
             let _ = body.set_attribute("class", "");
+        }
+        if let Some(html) = crate::utils::window::document().document_element() {
+            let _ = html.remove_attribute("data-stream-editor");
         }
     });
 

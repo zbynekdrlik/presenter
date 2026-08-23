@@ -152,6 +152,36 @@ below): `stream_scene_set` switches the exclusive base scene by name,
 `stream_overlay_on`/`_off`/`_toggle` flip overlays independently, and
 `stream_clear` blanks the output back to transparent.
 
+#### Stream-graphics demo scene set (dev/demo instance, #739)
+
+The dev/demo instance ships the owner's ready-made scene set so `/ui/stream` and
+`/stream/stream` are usable out of the box:
+
+| Kind    | Scene              | Contents                                        |
+| ------- | ------------------ | ----------------------------------------------- |
+| base    | `ytfast`           | logo PNG + countdown (Oswald 10vh)              |
+| base    | `5 min`            | countdown (Oswald 14vh)                         |
+| base    | `1 min`            | countdown (Oswald 18vh)                         |
+| base    | `chvaly`           | lyrics main + translation, fade content-transition |
+| overlay | `Logo`             | logo PNG                                         |
+| overlay | `Verš s prekladom` | verse text + translation + reference, fade       |
+| overlay | `Verš bez prekladu`| verse text + reference (no translation), fade    |
+
+**Durability — where the source of truth lives.** The dev deploy REPLACES the
+whole dev DB with a fresh production snapshot on every deploy (pipeline.yml step
+*"Replace dev database with production snapshot"*), and production carries no
+stream demo scenes — so scenes created by hand on the dev instance are wiped by
+the next deploy. The durable source of truth is therefore
+`scripts/deploy/seed-stream-demo.sh` (+ `stream-demo-logo.png`), which the
+`deploy-dev` job runs (best-effort) AFTER the DB replace. It is **authoritative +
+convergent**: each demo scene is reseeded to spec (a same-name scene from the
+prod snapshot is deleted and recreated), so the dev set always matches the spec
+even when production carries a same-name scene of a different shape. It is
+deliberately **dev-only, not a migration**: a migration would seed these scenes
+onto production too, which still runs Resolume for the live walls. To change the
+demo set, edit that script. The logo is a placeholder — replace it per scene via
+the editor's asset picker (`/ui/stream`).
+
 ## Feature Flags
 
 Managed via Settings UI (`/ui/settings`):

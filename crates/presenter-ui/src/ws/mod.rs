@@ -1,4 +1,5 @@
 pub mod stage;
+pub mod stage_diag;
 pub mod stream;
 
 use gloo_net::websocket::{futures::WebSocket, Message};

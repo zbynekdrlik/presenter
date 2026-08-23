@@ -5,11 +5,16 @@ use presenter_core::{InboundMessage, LiveEvent};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::ws::stage_diag::{collect_ndi_video_diag, diag_change_key, DiagChangeKey};
+
 const INITIAL_RECONNECT_MS: u32 = 1_000;
 const MAX_RECONNECT_MS: u32 = 30_000;
 const HEARTBEAT_CHECK_INTERVAL_MS: u32 = 500;
 const DEFAULT_GRACE_MS: f64 = 4_500.0;
 const DEFAULT_DISCONNECT_MS: f64 = 12_000.0;
+/// #732: how often the on-change diagnostics poll checks the NDI `<video>`
+/// for a paused/error/cover change to push immediately (between heartbeats).
+const DIAG_POLL_INTERVAL_MS: u32 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageWsState {
@@ -68,6 +73,25 @@ pub fn use_stage_websocket(client_id: String, layout_code: RwSignal<String>) -> 
 /// each async send).
 type SharedWrite = Rc<RefCell<Option<futures_util::stream::SplitSink<WebSocket, Message>>>>;
 
+/// #732: latest-wins slot for an on-change diagnostics frame the poll produced
+/// and the read loop (the sole writer) drains. A serialized `StageDiag` JSON so
+/// the poll's `Interval` callback (sync) never touches the socket sink.
+type PendingDiag = Rc<RefCell<Option<String>>>;
+
+/// Send one text frame over the shared write half: take the sink, send, restore.
+/// Safe against no borrow-across-await conflict because EVERY caller runs in the
+/// single read-loop task (heartbeat ACK + the pending-diag drain) — there is
+/// never a second task holding the sink (#732 review WARNING).
+async fn send_via_writer(write: &SharedWrite, json: String) {
+    use futures_util::SinkExt;
+
+    let mut writer = write.borrow_mut().take();
+    if let Some(ref mut w) = writer {
+        let _ = w.send(Message::Text(json)).await;
+    }
+    *write.borrow_mut() = writer;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_stage_ws(
     client_id: String,
@@ -91,10 +115,12 @@ fn spawn_stage_ws(
             Ok(ws) => {
                 let (mut write, read) = ws.split();
 
-                // Send StagePresence
+                // Send StagePresence — carries the TV WebView's userAgent for
+                // the #732 diagnostics (its Chromium version lives in the UA).
                 let presence = InboundMessage::StagePresence {
                     client_id: client_id_for_task.clone(),
                     layout_code: layout_code.get_untracked(),
+                    user_agent: navigator_user_agent(),
                 };
                 if let Ok(json) = serde_json::to_string(&presence) {
                     let _ = write.send(Message::Text(json)).await;
@@ -105,9 +131,20 @@ fn spawn_stage_ws(
                 *last_hb.borrow_mut() = js_sys::Date::now();
 
                 let write: SharedWrite = Rc::new(RefCell::new(Some(write)));
+                // #732: poll the NDI <video> for a paused/error/cover change and
+                // stash a StageDiag frame the instant it changes (between
+                // heartbeats). The poll NEVER sends — the read loop is the sole
+                // writer of the socket sink (heartbeat ACK + this drain), so
+                // there is exactly one writer and no frame can be lost to a
+                // two-task take/restore race. Scoped to THIS connection —
+                // dropped after the read loop returns so a reconnect doesn't
+                // leak overlapping pollers.
+                let pending_diag: PendingDiag = Rc::new(RefCell::new(None));
+                let diag_poll = start_diag_poll(client_id_for_task.clone(), pending_diag.clone());
                 run_stage_read_loop(
                     read,
                     &write,
+                    &pending_diag,
                     &client_id_for_task,
                     set_state,
                     set_last_event,
@@ -115,6 +152,7 @@ fn spawn_stage_ws(
                     &last_hb,
                 )
                 .await;
+                drop(diag_poll);
 
                 set_state.set(StageWsState::Reconnecting);
             }
@@ -159,6 +197,7 @@ fn spawn_stage_ws(
 async fn run_stage_read_loop(
     mut read: futures_util::stream::SplitStream<WebSocket>,
     write: &SharedWrite,
+    pending_diag: &PendingDiag,
     client_id: &str,
     set_state: WriteSignal<StageWsState>,
     set_last_event: WriteSignal<Option<LiveEvent>>,
@@ -168,6 +207,17 @@ async fn run_stage_read_loop(
     use futures_util::StreamExt;
 
     loop {
+        // #732: drain the on-change diagnostics frame the poll stashed. Done
+        // HERE (the sole writer task) so ack + diag never race the sink; runs
+        // at least every HEARTBEAT_CHECK_INTERVAL_MS (the select timeout below)
+        // and after each inbound message, so a change is pushed within ~500ms.
+        // Take-then-drop the RefMut on its OWN line so the RefCell borrow is
+        // released BEFORE the await — otherwise the poll's Interval firing
+        // mid-send would hit an already-borrowed panic.
+        let pending = pending_diag.borrow_mut().take();
+        if let Some(json) = pending {
+            send_via_writer(write, json).await;
+        }
         let msg = {
             let next_msg = read.next();
             let timeout = gloo_timers::future::TimeoutFuture::new(HEARTBEAT_CHECK_INTERVAL_MS);
@@ -216,24 +266,21 @@ async fn handle_stage_text(
     set_latency_ms: WriteSignal<Option<f64>>,
     last_hb: &Rc<RefCell<f64>>,
 ) {
-    use futures_util::SinkExt;
-
     match serde_json::from_str::<LiveEvent>(text) {
         Ok(LiveEvent::Heartbeat { id, timestamp: _ }) => {
             *last_hb.borrow_mut() = js_sys::Date::now();
             set_state.set(StageWsState::Connected);
 
-            // Send heartbeat ACK (latency is measured server-side)
+            // Send heartbeat ACK (latency is measured server-side). #732: the
+            // heartbeat is the steady-cadence carrier for the NDI <video>
+            // diagnostics snapshot (on-change pushes go via StageDiag).
             let ack = InboundMessage::StageHeartbeatAck {
                 client_id: client_id.to_string(),
                 heartbeat_id: Some(id.to_string()),
+                ndi_video: collect_ndi_video_diag(),
             };
             if let Ok(json) = serde_json::to_string(&ack) {
-                let mut writer = write.borrow_mut().take();
-                if let Some(ref mut w) = writer {
-                    let _ = w.send(Message::Text(json)).await;
-                }
-                *write.borrow_mut() = writer;
+                send_via_writer(write, json).await;
             }
         }
         Ok(LiveEvent::StageConnection { snapshot }) => {
@@ -250,6 +297,44 @@ async fn handle_stage_text(
         }
         Err(_) => {}
     }
+}
+
+/// The browser's `navigator.userAgent` (#732 diagnostics) — `None` if
+/// unavailable. On the TV WebViews this carries the Chromium version, the key
+/// unknown behind the field play-arrow.
+fn navigator_user_agent() -> Option<String> {
+    web_sys::window().and_then(|w| w.navigator().user_agent().ok())
+}
+
+/// #732: start the per-connection on-change diagnostics poll. Every
+/// `DIAG_POLL_INTERVAL_MS` it collects the NDI `<video>` snapshot and, when the
+/// paused/error/cover key CHANGED since the last stash, serializes a `StageDiag`
+/// frame into `pending_diag` (latest-wins) for the read loop to send — so a
+/// stall/freeze/error is captured within ~500 ms rather than waiting for the
+/// next heartbeat. The poll NEVER touches the socket sink itself (single-writer
+/// invariant, #732 review WARNING). The returned `Interval` must be kept alive
+/// for the connection and dropped when it ends.
+fn start_diag_poll(client_id: String, pending_diag: PendingDiag) -> Interval {
+    let last_key: Rc<RefCell<Option<DiagChangeKey>>> = Rc::new(RefCell::new(None));
+    Interval::new(DIAG_POLL_INTERVAL_MS, move || {
+        let diag = collect_ndi_video_diag();
+        let key = diag.as_ref().map(diag_change_key);
+        if key == *last_key.borrow() {
+            return;
+        }
+        *last_key.borrow_mut() = key;
+        // Only stash when there is a snapshot (video mounted); a video that
+        // disappeared just updates the key so its reappearance re-triggers.
+        if let Some(diag) = diag {
+            let msg = InboundMessage::StageDiag {
+                client_id: client_id.clone(),
+                ndi_video: Some(diag),
+            };
+            if let Ok(json) = serde_json::to_string(&msg) {
+                *pending_diag.borrow_mut() = Some(json);
+            }
+        }
+    })
 }
 
 fn ws_url() -> String {
