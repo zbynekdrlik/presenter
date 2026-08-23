@@ -1,7 +1,8 @@
-use crate::stage_connections::StageConnections;
+use crate::stage_connections::{DiagRecord, StageConnections};
 use axum::extract::ws::{Message, WebSocket};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use presenter_core::NdiVideoDiag;
 pub use presenter_core::{InboundMessage, LiveEvent};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
@@ -66,6 +67,220 @@ where
     }
 }
 
+/// #732: emit ONE `presenter::stage::diag` INFO line for a recorded NDI
+/// `<video>` diagnostics snapshot — but only when the tracker's rate-limiter
+/// (change-triggered, else ≤1/30 s per stage) allowed it. This is the
+/// evidence lane the owner reads live at the next event
+/// (`journalctl -u presenter | grep stage::diag`).
+fn log_stage_diag(client_ip: &str, id: Uuid, record: &DiagRecord) {
+    if !record.should_log {
+        return;
+    }
+    let d = record.snapshot.ndi_video.as_ref();
+    info!(
+        target: "presenter::stage::diag",
+        client_ip = %client_ip,
+        id = %id,
+        layout = %record.snapshot.layout_code,
+        paused = ?d.and_then(|v| v.paused),
+        ready_state = ?d.and_then(|v| v.ready_state),
+        video_width = ?d.and_then(|v| v.video_width),
+        video_height = ?d.and_then(|v| v.video_height),
+        current_time = ?d.and_then(|v| v.current_time),
+        error_code = ?d.and_then(|v| v.error_code),
+        has_src_object = ?d.and_then(|v| v.has_src_object),
+        muted = ?d.and_then(|v| v.muted),
+        controls = ?d.and_then(|v| v.controls),
+        frames_decoded = ?d.and_then(|v| v.frames_decoded),
+        frames_dropped = ?d.and_then(|v| v.frames_dropped),
+        last_frame_age_ms = ?d.and_then(|v| v.last_frame_age_ms),
+        playback_guard_replays = ?d.and_then(|v| v.playback_guard_replays),
+        cover_visible = ?d.and_then(|v| v.cover_visible),
+        "stage ndi video diagnostics (#732)"
+    );
+}
+
+/// Route one parsed inbound message to its handler. Extracted from
+/// `serve_websocket` so that function stays well under the fn-length cap
+/// (#732 added the diagnostics arms).
+async fn dispatch_inbound(
+    inbound: InboundMessage,
+    hub: &LiveHub,
+    connections: &StageConnections,
+    client_ip: &str,
+    preview: bool,
+    registered_client: &mut Option<Uuid>,
+) {
+    match inbound {
+        InboundMessage::StagePresence {
+            client_id,
+            layout_code,
+            user_agent,
+        } => {
+            handle_stage_presence(
+                client_id,
+                layout_code,
+                user_agent,
+                hub,
+                connections,
+                client_ip,
+                preview,
+                registered_client,
+            )
+            .await;
+        }
+        InboundMessage::StageHeartbeatAck {
+            client_id,
+            heartbeat_id,
+            ndi_video,
+        } => {
+            handle_heartbeat_ack(
+                client_id,
+                heartbeat_id,
+                ndi_video,
+                hub,
+                connections,
+                client_ip,
+            )
+            .await;
+        }
+        InboundMessage::StageDiag {
+            client_id,
+            ndi_video,
+        } => {
+            handle_stage_diag(client_id, ndi_video, hub, connections, client_ip).await;
+        }
+        InboundMessage::StageDisconnect { client_id } => {
+            handle_stage_disconnect(client_id, hub, connections, registered_client).await;
+        }
+        InboundMessage::Unknown => {}
+    }
+}
+
+/// A stage TV (or the operator preview mirror) announcing itself. A preview
+/// client (`/stage?preview=1`, #460) renders live but is excluded from the
+/// stage-monitor count, so it never registers. A real client registers,
+/// records its `user_agent` (#732), and logs it once under
+/// `presenter::stage::diag`.
+#[allow(clippy::too_many_arguments)]
+async fn handle_stage_presence(
+    client_id: String,
+    layout_code: String,
+    user_agent: Option<String>,
+    hub: &LiveHub,
+    connections: &StageConnections,
+    client_ip: &str,
+    preview: bool,
+    registered_client: &mut Option<Uuid>,
+) {
+    if preview {
+        debug!(
+            %client_id,
+            %layout_code,
+            "preview stage client — excluded from stage-monitor count"
+        );
+        return;
+    }
+    match Uuid::parse_str(&client_id) {
+        Ok(id) => {
+            let now = Utc::now();
+            let snapshot = connections.register(id, &layout_code, now).await;
+            connections.set_user_agent(id, user_agent.clone()).await;
+            hub.publish(LiveEvent::StageConnection { snapshot });
+            *registered_client = Some(id);
+            info!(
+                target: "presenter::stage::diag",
+                client_ip = %client_ip,
+                %id,
+                user_agent = ?user_agent,
+                "stage display connected — user agent (#732)"
+            );
+        }
+        Err(err) => warn!(?client_id, ?err, "invalid stage client id"),
+    }
+}
+
+/// Heartbeat ACK — records the round-trip and, when the client attached a
+/// diagnostics snapshot (#732 heartbeat cadence), stores + rate-limit-logs it.
+/// A single `StageConnection` broadcast carries the freshest snapshot (the
+/// diag one when present, else the ack one).
+async fn handle_heartbeat_ack(
+    client_id: String,
+    heartbeat_id: Option<String>,
+    ndi_video: Option<NdiVideoDiag>,
+    hub: &LiveHub,
+    connections: &StageConnections,
+    client_ip: &str,
+) {
+    let id = match Uuid::parse_str(&client_id) {
+        Ok(id) => id,
+        Err(err) => {
+            warn!(?client_id, ?err, "invalid stage heartbeat id");
+            return;
+        }
+    };
+    let now = Utc::now();
+    let heartbeat_uuid = heartbeat_id.as_ref().and_then(|v| Uuid::parse_str(v).ok());
+    let ack_snapshot = connections
+        .record_heartbeat_ack(id, heartbeat_uuid, now)
+        .await;
+    if let Some(diag) = ndi_video {
+        if let Some(record) = connections.record_diag(id, diag, now).await {
+            log_stage_diag(client_ip, id, &record);
+            hub.publish(LiveEvent::StageConnection {
+                snapshot: record.snapshot,
+            });
+            return;
+        }
+    }
+    if let Some(snapshot) = ack_snapshot {
+        hub.publish(LiveEvent::StageConnection { snapshot });
+    }
+}
+
+/// An out-of-band diagnostics push (#732) — the client saw paused/error/cover
+/// change between heartbeats. Store + rate-limit-log + rebroadcast the snapshot.
+async fn handle_stage_diag(
+    client_id: String,
+    ndi_video: Option<NdiVideoDiag>,
+    hub: &LiveHub,
+    connections: &StageConnections,
+    client_ip: &str,
+) {
+    let Some(diag) = ndi_video else { return };
+    match Uuid::parse_str(&client_id) {
+        Ok(id) => {
+            if let Some(record) = connections.record_diag(id, diag, Utc::now()).await {
+                log_stage_diag(client_ip, id, &record);
+                hub.publish(LiveEvent::StageConnection {
+                    snapshot: record.snapshot,
+                });
+            }
+        }
+        Err(err) => warn!(?client_id, ?err, "invalid stage diag id"),
+    }
+}
+
+/// A stage client announcing an intentional disconnect.
+async fn handle_stage_disconnect(
+    client_id: String,
+    hub: &LiveHub,
+    connections: &StageConnections,
+    registered_client: &mut Option<Uuid>,
+) {
+    match Uuid::parse_str(&client_id) {
+        Ok(id) => {
+            if let Some(snapshot) = connections.mark_disconnected(id).await {
+                hub.publish(LiveEvent::StageConnection { snapshot });
+            }
+            if *registered_client == Some(id) {
+                *registered_client = None;
+            }
+        }
+        Err(err) => warn!(?client_id, ?err, "invalid stage disconnect id"),
+    }
+}
+
 pub async fn serve_websocket(
     hub: LiveHub,
     connections: StageConnections,
@@ -92,69 +307,17 @@ pub async fn serve_websocket(
     while let Some(Ok(msg)) = receiver.next().await {
         match msg {
             Message::Text(payload) => match serde_json::from_str::<InboundMessage>(&payload) {
-                Ok(inbound) => match inbound {
-                    InboundMessage::StagePresence {
-                        client_id,
-                        layout_code,
-                    } => {
-                        if preview {
-                            // The operator-header preview mirror (`/stage?preview=1`,
-                            // #460) is NOT a real stage TV. It still receives every
-                            // broadcast event (so it renders live), but it must NOT
-                            // register in the connection tracker — otherwise it would
-                            // inflate the operator's "N stage displays connected"
-                            // monitor count. Skip registration entirely.
-                            debug!(
-                                %client_id,
-                                %layout_code,
-                                "preview stage client — excluded from stage-monitor count"
-                            );
-                        } else {
-                            match Uuid::parse_str(&client_id) {
-                                Ok(id) => {
-                                    let now = Utc::now();
-                                    let snapshot =
-                                        connections.register(id, &layout_code, now).await;
-                                    hub.publish(LiveEvent::StageConnection { snapshot });
-                                    registered_client = Some(id);
-                                }
-                                Err(err) => warn!(?client_id, ?err, "invalid stage client id"),
-                            }
-                        }
-                    }
-                    InboundMessage::StageHeartbeatAck {
-                        client_id,
-                        heartbeat_id,
-                    } => match Uuid::parse_str(&client_id) {
-                        Ok(id) => {
-                            let now = Utc::now();
-                            let heartbeat_uuid = heartbeat_id
-                                .as_ref()
-                                .and_then(|value| Uuid::parse_str(value).ok());
-                            if let Some(snapshot) = connections
-                                .record_heartbeat_ack(id, heartbeat_uuid, now)
-                                .await
-                            {
-                                hub.publish(LiveEvent::StageConnection { snapshot });
-                            }
-                        }
-                        Err(err) => warn!(?client_id, ?err, "invalid stage heartbeat id"),
-                    },
-                    InboundMessage::StageDisconnect { client_id } => {
-                        match Uuid::parse_str(&client_id) {
-                            Ok(id) => {
-                                if let Some(snapshot) = connections.mark_disconnected(id).await {
-                                    hub.publish(LiveEvent::StageConnection { snapshot });
-                                }
-                                if registered_client == Some(id) {
-                                    registered_client = None;
-                                }
-                            }
-                            Err(err) => warn!(?client_id, ?err, "invalid stage disconnect id"),
-                        }
-                    }
-                    InboundMessage::Unknown => {}
-                },
+                Ok(inbound) => {
+                    dispatch_inbound(
+                        inbound,
+                        &hub,
+                        &connections,
+                        &client_ip,
+                        preview,
+                        &mut registered_client,
+                    )
+                    .await;
+                }
                 Err(err) => warn!(?err, "failed to parse inbound live message"),
             },
             Message::Close(_) => break,
