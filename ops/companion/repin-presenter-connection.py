@@ -17,6 +17,7 @@ Only the pure transform functions (`repin_value`, `repin_rows`) contain the logi
 the rest is DB/CLI plumbing.
 """
 import argparse
+import glob
 import json
 import os
 import re
@@ -27,6 +28,9 @@ import time
 
 DEFAULT_MODULE_ID = "presenter"
 DEFAULT_DEV_VERSION_ID = "dev"
+# Match Companion's own JSON.stringify output: compact separators, non-escaped UTF-8, so the
+# re-pinned blob stays byte-consistent with rows Companion writes itself (minimal diff noise).
+_JSON_SEP = (",", ":")
 
 
 def parse_major_minor(build_str):
@@ -42,6 +46,15 @@ def parse_major_minor(build_str):
     return "v%s.%s" % (m.group(1), m.group(2))
 
 
+def _is_presenter_connection(d, module_id):
+    """True iff `d` (a parsed instances.value dict) is a connection for `module_id`."""
+    return (
+        isinstance(d, dict)
+        and d.get("moduleInstanceType") == "connection"
+        and d.get("moduleId") == module_id
+    )
+
+
 def repin_value(value_str, module_id=DEFAULT_MODULE_ID, dev_version_id=DEFAULT_DEV_VERSION_ID):
     """Transform one `instances.value` JSON string.
 
@@ -55,18 +68,13 @@ def repin_value(value_str, module_id=DEFAULT_MODULE_ID, dev_version_id=DEFAULT_D
     except (ValueError, TypeError) as exc:
         print("WARNING: skipping row with non-JSON value: %s" % exc, file=sys.stderr)
         return None, False, None
-    if not isinstance(d, dict):
-        print("WARNING: skipping row whose value is not a JSON object", file=sys.stderr)
-        return None, False, None
-    if d.get("moduleInstanceType") != "connection":
-        return None, False, None
-    if d.get("moduleId") != module_id:
+    if not _is_presenter_connection(d, module_id):
         return None, False, None
     old_version = d.get("moduleVersionId")
     if old_version == dev_version_id:
         return None, False, old_version  # already pinned to dev — idempotent no-op
     d["moduleVersionId"] = dev_version_id
-    return json.dumps(d), True, old_version
+    return json.dumps(d, separators=_JSON_SEP, ensure_ascii=False), True, old_version
 
 
 def repin_rows(rows, module_id=DEFAULT_MODULE_ID, dev_version_id=DEFAULT_DEV_VERSION_ID):
@@ -83,10 +91,9 @@ def repin_rows(rows, module_id=DEFAULT_MODULE_ID, dev_version_id=DEFAULT_DEV_VER
         new_value, changed, old_version = repin_value(value_str, module_id, dev_version_id)
         try:
             parsed = json.loads(value_str)
-            is_match = isinstance(parsed, dict) and parsed.get("moduleInstanceType") == "connection" and parsed.get("moduleId") == module_id
         except (ValueError, TypeError):
-            is_match = False
-        if is_match:
+            parsed = None
+        if _is_presenter_connection(parsed, module_id):
             matched_ids.append(rid)
         if changed:
             updates.append((rid, new_value, old_version))
@@ -96,29 +103,67 @@ def repin_rows(rows, module_id=DEFAULT_MODULE_ID, dev_version_id=DEFAULT_DEV_VER
 def resolve_db_path(config_dir, build_file, explicit_db):
     """Determine the active Companion config DB path.
 
-    Precedence: explicit --db, else v<major>.<minor>/db.sqlite derived from the running
-    Companion BUILD, else <config_dir>/db.sqlite. Raises if none exists.
+    Precedence:
+      1. explicit --db (must exist).
+      2. v<major>.<minor>/db.sqlite derived from the running Companion BUILD. If BUILD parses
+         but that DB is missing, FAIL LOUD (never silently edit a different/legacy DB — that
+         would report a green deploy while the wrong DB, not the active one, was touched).
+      3. BUILD absent/unparseable only: the NEWEST v<major>.<minor>/db.sqlite present, else the
+         legacy top-level db.sqlite. Raises if none exists.
     """
     if explicit_db:
         if not os.path.isfile(explicit_db):
             raise FileNotFoundError("explicit --db not found: %s" % explicit_db)
         return explicit_db
+
     build_str = None
     if build_file and os.path.isfile(build_file):
         with open(build_file, "r") as fh:
             build_str = fh.read().strip()
+
     version_dir = parse_major_minor(build_str)
     if version_dir:
         candidate = os.path.join(config_dir, version_dir, "db.sqlite")
         if os.path.isfile(candidate):
             return candidate
-        print("WARNING: expected active DB %s not found; falling back" % candidate, file=sys.stderr)
-    fallback = os.path.join(config_dir, "db.sqlite")
-    if os.path.isfile(fallback):
-        return fallback
+        raise FileNotFoundError(
+            "Companion BUILD reports %s but %s does not exist — refusing to edit a "
+            "different DB (config_dir=%s)" % (version_dir, candidate, config_dir)
+        )
+
+    # BUILD missing/unparseable: pick the newest versioned DB, else legacy.
+    versioned = []
+    for path in glob.glob(os.path.join(config_dir, "v*")):
+        mm = parse_major_minor(os.path.basename(path).lstrip("v"))
+        db = os.path.join(path, "db.sqlite")
+        if mm and os.path.isfile(db):
+            major, minor = (int(x) for x in mm[1:].split("."))
+            versioned.append(((major, minor), db))
+    if versioned:
+        versioned.sort()
+        chosen = versioned[-1][1]
+        print("WARNING: Companion BUILD unreadable; using newest versioned DB %s" % chosen, file=sys.stderr)
+        return chosen
+
+    legacy = os.path.join(config_dir, "db.sqlite")
+    if os.path.isfile(legacy):
+        print("WARNING: Companion BUILD unreadable and no v*/db.sqlite; using legacy %s" % legacy, file=sys.stderr)
+        return legacy
     raise FileNotFoundError(
         "no Companion config DB found (config_dir=%s, build=%r)" % (config_dir, build_str)
     )
+
+
+def _backup_db(db_path):
+    """Copy the DB plus any -wal/-shm sidecars so the backup is a complete snapshot."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = "%s.repin-bak-%s" % (db_path, stamp)
+    shutil.copy2(db_path, backup)
+    for suffix in ("-wal", "-shm"):
+        side = db_path + suffix
+        if os.path.isfile(side):
+            shutil.copy2(side, backup + suffix)
+    return backup
 
 
 def main(argv=None):
@@ -129,6 +174,12 @@ def main(argv=None):
     parser.add_argument("--module-id", default=DEFAULT_MODULE_ID)
     parser.add_argument("--dev-version-id", default=DEFAULT_DEV_VERSION_ID)
     parser.add_argument("--dry-run", action="store_true", help="report changes but do not write")
+    parser.add_argument(
+        "--expect-connection",
+        action="store_true",
+        help="fail (exit 2) if no presenter connection is found — use on hosts where the "
+        "connection must exist, so a mis-resolved/empty DB fails the deploy loudly",
+    )
     args = parser.parse_args(argv)
 
     db_path = resolve_db_path(args.config_dir, args.build_file, args.db)
@@ -141,7 +192,11 @@ def main(argv=None):
         updates, matched_ids = repin_rows(rows, args.module_id, args.dev_version_id)
 
         if not matched_ids:
-            print("No '%s' connection found in instances table — nothing to re-pin." % args.module_id)
+            msg = "No '%s' connection found in instances table." % args.module_id
+            if args.expect_connection:
+                print("ERROR: %s (--expect-connection set) — refusing to report success." % msg, file=sys.stderr)
+                return 2
+            print(msg + " Nothing to re-pin.")
             return 0
 
         if not updates:
@@ -155,8 +210,7 @@ def main(argv=None):
             print("--dry-run: not writing.")
             return 0
 
-        backup = "%s.repin-bak-%s" % (db_path, time.strftime("%Y%m%d-%H%M%S"))
-        shutil.copy2(db_path, backup)
+        backup = _backup_db(db_path)
         print("Backed up DB to %s" % backup)
 
         for rid, new_value, _old in updates:

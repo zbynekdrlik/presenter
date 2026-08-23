@@ -108,11 +108,15 @@ launch Companion with `--extra-module-path /opt/companion-module-dev`.
   10.77.9.205, PP = companion-pp.lan). Never the store dir `…/modules/presenter` — remove any
   stale store copy so it can't compete with the dev module.
 - **Idempotent re-pin: `ops/companion/repin-presenter-connection.py`.** Run it with Companion
-  STOPPED (the deploy does stop → swap module → repin → start). It backs up the DB, sets
-  `moduleVersionId="dev"` for every `moduleId="presenter"` connection, and is a no-op if
-  already "dev". The box has `python3` + stdlib `sqlite3` but **no `sqlite3` CLI** — always
-  python. Its pure logic is unit-tested in `repin-presenter-connection.test.py`, run in the
+  STOPPED (the deploy does stop → swap module → repin → start). It resolves the active DB from
+  `/opt/companion/BUILD` (`v<major>.<minor>/db.sqlite`; fails loud if BUILD names a version dir
+  that is missing — never silently edits a legacy DB), backs up the DB (+ any `-wal`/`-shm`),
+  sets `moduleVersionId="dev"` for every `moduleId="presenter"` connection, and is a no-op if
+  already "dev". The deploy passes **`--expect-connection`** so a mis-resolved/empty DB with no
+  presenter connection fails the deploy (exit 2) instead of reporting a false green. The box has
+  `python3` + stdlib `sqlite3` but **no `sqlite3` CLI** — always python. Its pure logic +
+  DB write path are unit/integration-tested in `repin-presenter-connection.test.py`, run in the
   `companion-tests` CI job **by file path** (`python3 ops/companion/repin-presenter-connection.test.py`;
   the hyphenated stem can't be imported via `-m unittest`).
-- **Inspect a live connection's pin (read-only):**
+- **Inspect a live connection's pin (read-only; adjust `v<major>.<minor>` per host — SNV=v5.0, PP=v4.3):**
   `sudo python3 -c "import sqlite3,json; [print(json.loads(v).get('moduleVersionId')) for i,v in sqlite3.connect('file:/home/companion/.config/companion-nodejs/v5.0/db.sqlite?mode=ro',uri=True).execute('select id,value from instances') if json.loads(v).get('moduleId')=='presenter']"`

@@ -1599,15 +1599,18 @@ jobs:
           STAGE_DIR=$(ssh companion-snv "mktemp -d /tmp/companion-module-XXXXXX")
           echo "Deploying Companion plugin to companion-snv.lan (staging: $STAGE_DIR)..."
           scp -r ops/companion/presenter/* companion-snv:$STAGE_DIR/
-          scp ops/companion/repin-presenter-connection.py companion-snv:/tmp/repin-presenter-connection.py
+          REPIN_REMOTE=$(ssh companion-snv "mktemp /tmp/repin-presenter-XXXXXX.py")
+          scp ops/companion/repin-presenter-connection.py "companion-snv:$REPIN_REMOTE"
           ssh companion-snv "cd $STAGE_DIR && npm install --omit=dev"
           ssh companion-snv "sudo systemctl stop companion"
+          # Swap the module. Best-effort recovery: on failure Companion is restarted (never
+          # left stopped), though the module dir may be a partial state — the job fails loudly.
           ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
             || { echo "::error::module swap failed on SNV"; ssh companion-snv "sudo systemctl start companion" || true; exit 1; }
           ssh companion-snv "sudo rm -rf $OLD_STORE_DIR" || true
           REPIN_RC=0
-          ssh companion-snv "sudo python3 /tmp/repin-presenter-connection.py --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD" || REPIN_RC=$?
-          ssh companion-snv "rm -f /tmp/repin-presenter-connection.py" || true
+          ssh companion-snv "sudo python3 $REPIN_REMOTE --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD --expect-connection" || REPIN_RC=$?
+          ssh companion-snv "rm -f $REPIN_REMOTE" || true
           ssh companion-snv "sudo systemctl start companion"
           sleep 5
           ssh companion-snv "systemctl is-active companion" || { echo "::error::Companion failed to restart on SNV"; exit 1; }
@@ -1627,15 +1630,18 @@ jobs:
           STAGE_DIR=$(ssh companion-pp "mktemp -d /tmp/companion-module-XXXXXX")
           echo "Deploying Companion plugin to companion-pp.lan (staging: $STAGE_DIR)..."
           scp -r ops/companion/presenter/* companion-pp:$STAGE_DIR/
-          scp ops/companion/repin-presenter-connection.py companion-pp:/tmp/repin-presenter-connection.py
+          REPIN_REMOTE=$(ssh companion-pp "mktemp /tmp/repin-presenter-XXXXXX.py")
+          scp ops/companion/repin-presenter-connection.py "companion-pp:$REPIN_REMOTE"
           ssh companion-pp "cd $STAGE_DIR && npm install --omit=dev"
           ssh companion-pp "sudo systemctl stop companion"
+          # Swap the module. Best-effort recovery: on failure Companion is restarted (never
+          # left stopped), though the module dir may be a partial state — the job fails loudly.
           ssh companion-pp "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
             || { echo "::error::module swap failed on PP"; ssh companion-pp "sudo systemctl start companion" || true; exit 1; }
           ssh companion-pp "sudo rm -rf $OLD_STORE_DIR" || true
           REPIN_RC=0
-          ssh companion-pp "sudo python3 /tmp/repin-presenter-connection.py --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD" || REPIN_RC=$?
-          ssh companion-pp "rm -f /tmp/repin-presenter-connection.py" || true
+          ssh companion-pp "sudo python3 $REPIN_REMOTE --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD --expect-connection" || REPIN_RC=$?
+          ssh companion-pp "rm -f $REPIN_REMOTE" || true
           ssh companion-pp "sudo systemctl start companion"
           sleep 5
           ssh companion-pp "systemctl is-active companion" || { echo "::error::Companion failed to restart on PP"; exit 1; }
