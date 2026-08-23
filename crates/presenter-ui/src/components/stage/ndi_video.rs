@@ -400,12 +400,31 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 
     let class_attr = class.unwrap_or("");
     let data_source_id = source_id.clone();
+    // #732: HIDE the `<video>` ELEMENT (opacity:0 via the dormant class)
+    // whenever frames are NOT presenting. On Chrome >=150 (the real
+    // Tesla/Skyworth LEAP-S1 stage TVs, Chrome/150 WebView) the grey
+    // play-arrow is `-internal-media-controls-overlay-play-button-internal` —
+    // a UA-INTERNAL pseudo-element author CSS cannot select, so the #478/#568
+    // `::-webkit-media-controls*` rules (kept as a harmless belt in stage.css)
+    // can never reach it; it paints inside a frameless/paused/empty `<video>`.
+    // Proven live on SD1 that `opacity:0` on the element itself removes it.
+    // Reuse the EXISTING `#500 ndi_frames_live` signal the rVFC frame observer
+    // writes (true per presented frame; flipped false after
+    // FRAMES_LIVE_STALENESS_MS=1.5s of no frames, and on (de)activate /
+    // cleanup) — no parallel signal, no new timer, so a 1-frame hiccup never
+    // flickers the element. The element stays MOUNTED (opacity, not
+    // display:none / unmount) so WHEP negotiation + autoplay are unaffected;
+    // ndi-fullscreen's "Connecting…" cover composes fine over it. No
+    // StageContext (a bare `<NdiVideo>`, test-only) → no observer can ever
+    // report frames → default VISIBLE, never permanently hidden.
+    let dormant = move || frames_live_sig.map(|sig| !sig.get()).unwrap_or(false);
     view! {
         <video
             node_ref=video_ref
             data-role="ndi-video"
             data-source-id=data_source_id
             class=class_attr
+            class:stage-ndi-video--dormant=dormant
             autoplay
             muted
             playsinline
