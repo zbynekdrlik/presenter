@@ -412,6 +412,14 @@ impl AppState {
         audit_source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<VideoSource> {
+        // #745(a): serialize activations across the WHOLE body (DB flip →
+        // start_pipeline → sibling reap). Two concurrent activations otherwise
+        // interleave their reaps independently of the DB "last write wins" order,
+        // leaving the manager's single-active source out of step with the DB until
+        // the next reconnect cycle. Held across the ~8 s start_pipeline wait, but
+        // this is a server-side lock the status readers never take, so it does not
+        // reintroduce the #741 status-poll stall.
+        let _activation_guard = self.activation_lock.lock().await;
         let source = self
             .repository
             .activate_video_source(id, audit_source, actor)
