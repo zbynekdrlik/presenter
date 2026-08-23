@@ -10,6 +10,19 @@ body.stream-editor-page {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* #738: tablet.css ships a bare GLOBAL `html { height:100%; overflow:hidden }`
+ * (its iOS-bounce guard) that trunk bundles into every page. The editor's
+ * element property panel legitimately exceeds the viewport height, so that
+ * global rule clips everything past the fold and the page cannot be scrolled —
+ * the owner could not reach or edit the lower parameters. Restore normal
+ * document scrolling for the editor page only (marked by data-stream-editor on
+ * <html> in stream_editor.rs), mirroring the output page's html[data-stream]
+ * override in stream_output.css. */
+html[data-stream-editor="true"] {
+  height: auto;
+  overflow-y: auto;
+}
+
 .stream-editor {
   min-height: 100vh;
   display: flex;

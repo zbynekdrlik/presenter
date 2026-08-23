@@ -20,6 +20,13 @@ fn HomeDocument() -> impl IntoView {
                         <p>"Quick links to control surfaces and stage displays for live verification."</p>
                     </header>
                     <section class="home__section">
+                        <h2>"Stream Graphics"</h2>
+                        <ul class="home__links">
+                            <li><a href="/stream/stream">"Stream Output (OBS)"</a></li>
+                            <li><a href="/ui/stream">"Stream Editor"</a></li>
+                        </ul>
+                    </section>
+                    <section class="home__section">
                         <h2>"Control Surfaces"</h2>
                         <ul class="home__links">
                             <li><a href="/ui/operator">"Operator UI"</a></li>

@@ -23,11 +23,47 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use leptos::wasm_bindgen::{closure::Closure, JsCast};
+use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::HtmlVideoElement;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_watchdog::now_ms;
+
+// #732 diagnostics: window global holding this guard's CUMULATIVE `.play()`
+// replay count, read by the stage-display diagnostics collector
+// (`ws/stage_diag.rs`) so the owner can see how often the guard fired on a
+// given TV. Cumulative across the page session (survives NdiVideo remounts).
+// The key name is owned by the collector (single source of truth).
+use crate::ws::stage_diag::GUARD_REPLAYS_GLOBAL;
+
+fn guard_replays_global() -> Option<f64> {
+    js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str(GUARD_REPLAYS_GLOBAL))
+        .ok()
+        .and_then(|v| v.as_f64())
+}
+
+fn set_guard_replays_global(value: f64) {
+    let _ = js_sys::Reflect::set(
+        &js_sys::global(),
+        &JsValue::from_str(GUARD_REPLAYS_GLOBAL),
+        &JsValue::from_f64(value),
+    );
+}
+
+/// Initialise the replay counter to 0 when a guard is first installed (only if
+/// unset) so the collector can distinguish "guard active, 0 replays" (Some(0))
+/// from "no guard installed" (None) — without resetting a cumulative count on
+/// a later remount.
+fn init_guard_replays_global() {
+    if guard_replays_global().is_none() {
+        set_guard_replays_global(0.0);
+    }
+}
+
+/// Increment the cumulative replay counter (#732 diagnostics).
+fn bump_guard_replays_global() {
+    set_guard_replays_global(guard_replays_global().unwrap_or(0.0) + 1.0);
+}
 
 /// At most this many `.play()` replay attempts within any `RETRY_WINDOW_MS`
 /// window. Beyond that, this guard stops trying and lets the frame-based
@@ -98,6 +134,7 @@ pub(crate) fn should_attempt_replay(state: &mut RetryWindow, now_ms: f64) -> boo
 /// `.dispose()` on it from `on_cleanup`, symmetric with how the WHEP session
 /// and watchdog are torn down there.
 pub(crate) fn install(video: &HtmlVideoElement) -> PlaybackGuardHandle {
+    init_guard_replays_global();
     let state = Rc::new(RefCell::new(RetryWindow::new(now_ms())));
     let mut video_listeners: Vec<(&'static str, Closure<dyn FnMut()>)> = Vec::with_capacity(3);
 
@@ -238,6 +275,7 @@ fn replay_if_within_budget(
         );
         return;
     }
+    bump_guard_replays_global();
     video.set_muted(true);
     play_and_log(video, format!("ndi_playback_guard: replay after {source}"));
 }
