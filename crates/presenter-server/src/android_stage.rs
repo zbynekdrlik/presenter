@@ -1,7 +1,10 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId, DEFAULT_LAUNCH_PACKAGE};
+use presenter_core::{
+    stage_app_install_action, AndroidStageDisplay, AndroidStageDisplayId, StageAppInstallAction,
+    DEFAULT_LAUNCH_PACKAGE,
+};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -693,57 +696,86 @@ fn parse_version_code(dumpsys: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
-/// Ensure our Presenter Stage app is installed AND up to date on the device.
-/// No-op when present at a versionCode >= [`EXPECTED_STAGE_APK_VERSION_CODE`].
-/// Otherwise (absent, stale, or version unreadable) `adb install -r <apk>`; if
-/// that fails (e.g. a signature mismatch from a rebuilt APK, or a downgrade),
-/// fall back to `adb uninstall` + a clean `adb install`. The app is a stateless
-/// WebView shell, so reinstalling loses nothing.
+/// Ensure our Presenter Stage app is installed + up to date, per
+/// [`stage_app_install_action`] (#734): (re)install ONLY when genuinely absent
+/// or at a readable LOWER versionCode — an UNREADABLE code leaves it in place
+/// (never tear a healthy app down mid-event, the harm this fixes; #732 open).
 async fn ensure_app_installed(
     runner: &dyn AdbRunner,
     serial: &str,
     package: &str,
     apk: &Path,
 ) -> anyhow::Result<()> {
-    if adb_package_installed(runner, serial, package).await {
-        match adb_installed_version_code(runner, serial, package).await {
-            // Up to date — nothing to do.
-            Some(installed) if installed >= EXPECTED_STAGE_APK_VERSION_CODE => return Ok(()),
-            // Older than the bundled APK — upgrade in place.
-            Some(installed) => {
-                info!(
-                    serial,
-                    package,
-                    installed,
-                    expected = EXPECTED_STAGE_APK_VERSION_CODE,
-                    "Presenter Stage app is stale — upgrading"
-                );
-            }
-            // Present but versionCode unreadable — reinstall to be safe.
-            None => {
-                warn!(
-                    serial,
-                    package, "Presenter Stage installed but versionCode unreadable — reinstalling"
-                );
-            }
-        }
+    let installed = adb_package_installed(runner, serial, package).await;
+    let version_code = if installed {
+        adb_installed_version_code(runner, serial, package).await
     } else {
-        info!(serial, package, apk = %apk.display(), "installing Presenter Stage app on TV");
-    }
+        None
+    };
 
+    match stage_app_install_action(installed, version_code, EXPECTED_STAGE_APK_VERSION_CODE) {
+        StageAppInstallAction::UpToDate => Ok(()),
+        StageAppInstallAction::PresentVersionUnknown => {
+            // #734: a failed read is NOT evidence of staleness — never tear down
+            // a healthy running app; a real upgrade needs a readable LOWER code.
+            warn!(
+                serial,
+                package,
+                "Presenter Stage installed but versionCode unreadable — leaving the \
+                 running app in place (#734); not reinstalling"
+            );
+            Ok(())
+        }
+        StageAppInstallAction::Upgrade => {
+            info!(
+                serial,
+                package,
+                expected = EXPECTED_STAGE_APK_VERSION_CODE,
+                "Presenter Stage app is stale — upgrading"
+            );
+            install_stage_apk(runner, serial, package, apk).await
+        }
+        StageAppInstallAction::Install => {
+            info!(serial, package, apk = %apk.display(), "installing Presenter Stage app on TV");
+            install_stage_apk(runner, serial, package, apk).await
+        }
+    }
+}
+
+/// `adb install -r <apk>`; on failure fall back to uninstall + clean install
+/// (stateless WebView shell → loses nothing). Called ONLY for a genuine
+/// absent/lower-version install (#734). The `install -r` failure OUTPUT is now
+/// logged — it fails ~100% on these debug-signed builds (fresh per-run CI debug
+/// key → `INSTALL_FAILED_UPDATE_INCOMPATIBLE`) and was previously swallowed.
+async fn install_stage_apk(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    package: &str,
+    apk: &Path,
+) -> anyhow::Result<()> {
     let mut install_args = adb_args(["-s", serial, "install", "-r"]);
     install_args.push(apk.as_os_str().to_os_string());
-    if let Ok(output) = runner.run(&install_args).await {
-        if adb_install_succeeded(&output) {
-            return Ok(());
+    match runner.run(&install_args).await {
+        Ok(output) if adb_install_succeeded(&output) => return Ok(()),
+        Ok(output) => {
+            warn!(
+                serial,
+                package,
+                adb_output = %format_command_failure(&output),
+                "adb install -r failed — retrying with uninstall + install (#734)"
+            );
+        }
+        Err(err) => {
+            warn!(
+                serial,
+                package,
+                %err,
+                "adb install -r could not run — retrying with uninstall + install (#734)"
+            );
         }
     }
 
     // Reinstall path: drop any conflicting/old copy, then install clean.
-    warn!(
-        serial,
-        package, "adb install -r failed — retrying with uninstall + install"
-    );
     let _ = runner
         .run(&adb_args(["-s", serial, "uninstall", package]))
         .await;
