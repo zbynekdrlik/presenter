@@ -78,6 +78,21 @@ Fix by extracting the arm/loop body into a small helper (the same #687 fix patte
 `run_tracker` dropped back to 89 lines by extracting `log_ableset_recovery` +
 `update_active_song_status`.
 
+## A new `pub` item in a `presenter-core` submodule needs an explicit `pub use` in `lib.rs` (E0432)
+
+`presenter-core/src/lib.rs` re-exports each submodule's public API through **explicit `pub use`
+lists** (e.g. `pub use android_stage_display::{ AndroidStageDisplay, DEFAULT_LAUNCH_PACKAGE, … };`),
+NOT a glob. So a new `pub fn`/`pub enum`/`pub const` you add inside a submodule is reachable as
+`crate::submodule::Name` but NOT as `presenter_core::Name` until you ADD it to that `pub use` list.
+A downstream `use presenter_core::Name;` then fails `E0432: no `Name` in the root` — surfaced only at
+CI's Clippy job ~5 min in (Tier-0, no local `cargo check`), costing a cycle (#734: `stage_app_install_action`
++ `StageAppInstallAction` added to `android_stage_display.rs` but not re-exported). When you add a
+`pub` item to a core submodule that another crate imports, grep the re-export first:
+
+```bash
+grep -n 'pub use <submodule>::' crates/presenter-core/src/lib.rs
+```
+
 ## Adding a field to a struct under Tier-0: grep EVERY construction site (E0063), not just the obvious ones
 
 `#[serde(default)]` on a new field makes the WIRE back-compatible, but a Rust struct LITERAL
