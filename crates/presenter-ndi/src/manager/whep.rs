@@ -52,10 +52,15 @@ impl NdiManager {
     /// pipeline), we could not look", as opposed to `Some(vec![])`, "we looked
     /// and there are no pipelines".
     ///
-    /// The distinction is load-bearing for #546: `start_pipeline` holds this same
-    /// mutex across its 8 s caps-wait, so during EVERY normal activation a caller
-    /// that cannot tell the two apart concludes "active, on the network, no
-    /// pipeline" and tells the operator to go fix a sending machine that is fine.
+    /// The distinction is load-bearing for #546: a caller that cannot tell the two
+    /// apart concludes "active, on the network, no pipeline" and tells the operator
+    /// to go fix a sending machine that is fine. Since #741 the `active` lock is no
+    /// longer held across the 8 s streaming-ready wait (a `Starting` reservation is
+    /// inserted, the lock released, the wait done unlocked), so an activating source
+    /// now READS as `Starting` here rather than tripping this timeout — but the
+    /// `None` path stays load-bearing for the brief genuine contention that remains
+    /// (the reserve/finalize critical sections and `stop_*`'s `pipeline.stop().await`
+    /// under the lock).
     pub async fn pipeline_snapshots_checked(&self) -> Option<Vec<(String, PipelineState)>> {
         match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
         {

@@ -518,7 +518,7 @@ mod tests {
     use super::{ndi_status_for_start_error, PipelineStartError};
     use crate::state::ndi_control::{NdiCall, NdiManagerHandle, StartOutcome};
     use crate::state::AppState;
-    use presenter_core::{ResolumeHostDraft, VideoSourceDraft, VideoSourceId};
+    use presenter_core::{LiveEvent, ResolumeHostDraft, VideoSourceDraft, VideoSourceId};
     use presenter_persistence::SettingsAuditSource;
 
     /// #483: `sync_resolume_hosts` must load hosts from the DB and register them
@@ -640,6 +640,7 @@ mod tests {
     #[tokio::test]
     async fn activation_superseded_returns_ok_without_reap() {
         let (state, source_id, id, fake) = state_with_fake(StartOutcome::Superseded).await;
+        let mut rx = state.live_hub().subscribe();
 
         let activated = state
             .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
@@ -659,6 +660,20 @@ mod tests {
         assert!(
             !fake.reaped(&id),
             "a superseded start must NOT reap siblings — it returns before the reap (#741)",
+        );
+
+        // Drain the live hub: a superseded start must NOT publish any stage status
+        // (NdiConnectionStatus). It DOES publish NdiSourceActivated up front (the DB
+        // row was activated) — that is expected; only the stray stage status is the bug.
+        let mut published = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            published.push(ev);
+        }
+        assert!(
+            !published
+                .iter()
+                .any(|e| matches!(e, LiveEvent::NdiConnectionStatus { .. })),
+            "a superseded start must publish NO stage status; got {published:?}",
         );
     }
 

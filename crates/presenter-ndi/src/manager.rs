@@ -109,9 +109,11 @@ struct ActiveSource {
     /// by `/healthz`) and blocks the supervisor's `rebuild_pipeline`.
     pub(in crate::manager) pipeline: std::sync::Arc<NdiPipeline>,
     /// Supervisor task handle. Aborted on `stop_pipeline` / drop to prevent
-    /// leaks. `None` only inside the regression-test constructors (which
-    /// don't spawn a real supervisor) AND in the `rebuild_pipeline` re-insert
-    /// path (the existing supervisor task is reused — see `spawn_supervisor`).
+    /// leaks. `None` inside the regression-test constructors (which don't spawn
+    /// a real supervisor), in the `rebuild_pipeline` re-insert path (the existing
+    /// supervisor task is reused — see `spawn_supervisor`), AND transiently during
+    /// a `start_pipeline` `Starting` reservation (#741) — the supervisor is
+    /// attached by `finalize_start` only once the pipeline reaches Streaming.
     pub(in crate::manager) supervisor: Option<tokio::task::JoinHandle<()>>,
 }
 

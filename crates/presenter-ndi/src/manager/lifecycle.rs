@@ -185,56 +185,69 @@ impl NdiManager {
             // `active` guard dropped here — the wait below runs UNLOCKED.
         };
 
-        // Phase 2 — wait for Streaming WITHOUT the lock (8 s budget: ndisrc takes
-        // ~2-5 s on a healthy LAN; beyond 8 s the broadcaster is silent/absent).
+        // Phases 2+3 run in a DETACHED task (#741 review 🟡): a cancelled caller —
+        // an axum activate-handler future dropped on client disconnect, a shutdown,
+        // a `select!` — must NOT be able to orphan the `Starting` reservation. The
+        // spawned task finalizes it regardless; awaiting the handle preserves the
+        // "returns only after Streaming" contract, and if the caller IS dropped the
+        // task keeps running and cleans up on its own.
+        let manager = std::sync::Arc::clone(self);
+        let sid = source_id.to_string();
+        let name = ndi_name.to_string();
+        match tokio::spawn(async move { manager.finalize_start(sid, name, reserved).await }).await {
+            Ok(result) => result,
+            Err(join_err) => Err(PipelineStartError::Failed(anyhow!(
+                "start_pipeline finalize task panicked: {join_err}"
+            ))),
+        }
+    }
+
+    /// Phases 2+3 of `start_pipeline` (#741), run in a DETACHED task for
+    /// cancellation-safety: wait (unlocked) for Streaming, then finalize under the
+    /// lock. On `Promote` the supervisor is spawned AND attached inside the SAME
+    /// critical section as the `Arc::ptr_eq` ownership re-check (#741 review 🟡) — so
+    /// a `stop`/switch that lands in the gap cannot leave an unsupervised pipeline:
+    /// the supervisor is attached atomically with the confirmation the slot is still
+    /// ours (`spawn_supervisor` is a non-blocking `tokio::spawn`, so holding the lock
+    /// across it costs nothing).
+    async fn finalize_start(
+        self: std::sync::Arc<Self>,
+        source_id: String,
+        ndi_name: String,
+        reserved: std::sync::Arc<NdiPipeline>,
+    ) -> std::result::Result<(), PipelineStartError> {
         let outcome =
             wait_for_streaming(reserved.state_watcher(), std::time::Duration::from_secs(8)).await;
-
-        // Phase 3 — finalize under the lock.
-        match finalize_reservation(&self.active, source_id, &reserved, outcome).await {
-            Finalize::Promote => self.attach_supervisor(source_id, ndi_name, &reserved).await,
+        match finalize_reservation(&self.active, &source_id, &reserved, outcome).await {
+            Finalize::Promote => {
+                let mut active = self.active.lock().await;
+                match active.get_mut(&source_id) {
+                    Some(slot) if std::sync::Arc::ptr_eq(&slot.pipeline, &reserved) => {
+                        let supervisor = self.spawn_supervisor(
+                            source_id.clone(),
+                            ndi_name.clone(),
+                            reserved.state_watcher(),
+                        );
+                        slot.supervisor = Some(supervisor);
+                        Ok(())
+                    }
+                    _ => {
+                        // Slot vanished/replaced (a concurrent stop/switch) between
+                        // finalize and here — stop our now-orphaned pipeline; publish
+                        // nothing.
+                        drop(active);
+                        reserved.stop().await;
+                        Err(PipelineStartError::Superseded)
+                    }
+                }
+            }
             Finalize::Removed(WaitOutcome::Errored(e)) => {
                 Err(PipelineStartError::Failed(anyhow!("pipeline errored: {e}")))
             }
             // Stopped/TimedOut → broadcaster silent / not producing (#448): a
             // neutral "waiting for source" placeholder, not a red error.
-            Finalize::Removed(_) => Err(PipelineStartError::SourceSilent {
-                ndi_name: ndi_name.to_string(),
-            }),
+            Finalize::Removed(_) => Err(PipelineStartError::SourceSilent { ndi_name }),
             Finalize::Superseded => Err(PipelineStartError::Superseded),
-        }
-    }
-
-    /// The `Promote` tail of `start_pipeline` (#741): spawn the supervisor OUTSIDE
-    /// the finalize lock, then re-lock and attach it — but ONLY if the slot is
-    /// STILL our reservation (a concurrent op in the tiny gap could have removed
-    /// or replaced it). Extracted so `start_pipeline` stays under the fn-length cap.
-    async fn attach_supervisor(
-        self: &std::sync::Arc<Self>,
-        source_id: &str,
-        ndi_name: &str,
-        reserved: &std::sync::Arc<NdiPipeline>,
-    ) -> std::result::Result<(), PipelineStartError> {
-        let supervisor = self.spawn_supervisor(
-            source_id.to_string(),
-            ndi_name.to_string(),
-            reserved.state_watcher(),
-        );
-        let mut active = self.active.lock().await;
-        match active.get_mut(source_id) {
-            Some(slot) if std::sync::Arc::ptr_eq(&slot.pipeline, reserved) => {
-                slot.supervisor = Some(supervisor);
-                Ok(())
-            }
-            _ => {
-                // Slot vanished/replaced between finalize and here — abort the
-                // just-spawned supervisor; stop our now-orphaned pipeline. Treat
-                // as superseded (publish nothing).
-                supervisor.abort();
-                drop(active);
-                reserved.stop().await;
-                Err(PipelineStartError::Superseded)
-            }
         }
     }
 
@@ -242,6 +255,12 @@ impl NdiManager {
     /// start for the same source (#741). We did NOT reserve it, so we never touch
     /// the active map — we only wait for it and report its outcome, preserving the
     /// "start_pipeline returns only after Streaming" contract for this caller too.
+    ///
+    /// Caveat (#741 review 🔵): when the observed reservation is a supervisor REBUILD
+    /// that then dies/times out, this returns `Superseded`/`SourceSilent` and the
+    /// caller (`activate_video_source`) publishes nothing new, so a stale stage status
+    /// can persist until the 30 s auto-reconnect ticker re-drives activation. Accepted
+    /// — the owner (the rebuild's supervisor) owns that source's real recovery.
     async fn observe_in_flight(
         in_flight: std::sync::Arc<NdiPipeline>,
         ndi_name: &str,
@@ -340,5 +359,17 @@ mod tests {
             msg, "boom",
             "Failed Display must forward the inner error's text verbatim",
         );
+    }
+
+    // #741: pin the Superseded Display so the `fmt → Ok(Default::default())`
+    // (empty-output) mutant is killed on this arm too.
+    #[test]
+    fn superseded_display_is_non_empty_and_explains_the_race() {
+        let msg = PipelineStartError::Superseded.to_string();
+        assert!(
+            msg.contains("superseded"),
+            "Superseded Display must name the superseded condition; got {msg:?}",
+        );
+        assert!(!msg.is_empty(), "Superseded Display must not be empty",);
     }
 }

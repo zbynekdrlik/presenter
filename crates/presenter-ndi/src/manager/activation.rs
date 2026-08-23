@@ -145,6 +145,14 @@ mod tests {
         Arc::new(NdiPipeline::stopped_for_test())
     }
 
+    /// A test pipeline in `Starting` (NOT already Stopped), so a test can prove
+    /// `finalize_reservation` actually STOPPED it (the "stop outside the lock" claim).
+    fn starting_arc() -> Arc<NdiPipeline> {
+        let mut p = NdiPipeline::stopped_for_test();
+        p.set_state_for_test(PipelineState::Starting);
+        Arc::new(p)
+    }
+
     fn reserve(map: &mut HashMap<String, ActiveSource>, id: &str, p: &Arc<NdiPipeline>) {
         map.insert(
             id.to_string(),
@@ -232,8 +240,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finalize_removes_our_errored_reservation() {
-        let p = stopped_arc();
+    async fn finalize_removes_and_stops_our_errored_reservation() {
+        let p = starting_arc();
+        assert_eq!(p.state(), PipelineState::Starting, "precondition");
         let active = Mutex::new(HashMap::new());
         {
             let mut g = active.lock().await;
@@ -246,6 +255,11 @@ mod tests {
         assert!(
             !active.lock().await.contains_key("A"),
             "Removed must drop the slot",
+        );
+        assert_eq!(
+            p.state(),
+            PipelineState::Stopped,
+            "Removed must STOP the removed pipeline (outside the lock)",
         );
     }
 
@@ -286,14 +300,43 @@ mod tests {
         );
     }
 
-    // A concurrent stop removed our slot before we finalized → Superseded.
+    // A concurrent stop removed our slot before we finalized → Superseded, and the
+    // orphaned pipeline is STOPPED (outside the lock) so it never leaks.
     #[tokio::test]
-    async fn finalize_supersedes_when_slot_absent() {
-        let ours = stopped_arc();
+    async fn finalize_supersedes_and_stops_orphan_when_slot_absent() {
+        let ours = starting_arc();
+        assert_eq!(ours.state(), PipelineState::Starting, "precondition");
         let active: Mutex<HashMap<String, ActiveSource>> = Mutex::new(HashMap::new());
         assert_eq!(
             finalize_reservation(&active, "A", &ours, WaitOutcome::Streaming).await,
             Finalize::Superseded
+        );
+        assert_eq!(
+            ours.state(),
+            PipelineState::Stopped,
+            "Superseded must STOP our orphaned pipeline",
+        );
+    }
+
+    // Superseded is decided by ownership (ptr_eq), NOT by the outcome: a replaced
+    // slot with a NON-Streaming outcome is still Superseded, slot untouched.
+    #[tokio::test]
+    async fn finalize_supersedes_regardless_of_outcome() {
+        let ours = stopped_arc();
+        let theirs = stopped_arc();
+        let active = Mutex::new(HashMap::new());
+        {
+            let mut g = active.lock().await;
+            reserve(&mut g, "A", &theirs);
+        }
+        assert_eq!(
+            finalize_reservation(&active, "A", &ours, WaitOutcome::Errored("x".to_string())).await,
+            Finalize::Superseded
+        );
+        let g = active.lock().await;
+        assert!(
+            Arc::ptr_eq(&g.get("A").expect("slot present").pipeline, &theirs),
+            "a non-Streaming outcome must not change the Superseded decision or touch the slot",
         );
     }
 }
