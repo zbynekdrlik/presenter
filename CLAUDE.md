@@ -41,6 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Local quality-gate gotchas (fn-length counts wrapped signature lines, file-size cap) | `.claude/rules/quality-gates.md` (auto-loads on `crates/**/*.rs`) |
 | Down-dependency log floods → resolume #484 backoff + power-of-two log gate (AbleSet/Resolume/NDI/ADB pollers) | `.claude/rules/log-flood-backoff.md` (auto-loads on `ableset.rs`, `resolume/**`, `manager/**`, `android_stage.rs`) |
 | Bible page DOM contract + async-effect E2E determinism (#727): collapsed/full book-item attribute parity, settle-signal over expect.poll, Tier-0 live-server repro | `.claude/rules/bible-page.md` (auto-loads on `pages/bible.rs`, `state/bible.rs`, `wasm-bible.spec.ts`) |
+| Resolume port-drift tests (#744/#564): use `free_port_pair()` for a verified-free CONSECUTIVE port pair, never `free_port()+N`; drift target = configured_port+1 within the 5-port probe window | `.claude/rules/resolume-port-drift.md` (auto-loads on `resolume/port_drift*.rs`) |
 
 ## Always-Rules
 
