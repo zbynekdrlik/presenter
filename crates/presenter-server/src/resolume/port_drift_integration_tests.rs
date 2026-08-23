@@ -18,15 +18,53 @@ use tokio::sync::RwLock;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// A free ephemeral port, released immediately — nothing else binds it in
-/// the tiny window before the test claims it explicitly (negligible flake
-/// risk on loopback within a test's lifetime).
-fn free_port() -> u16 {
-    StdTcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
+/// A pair of CONSECUTIVE free ephemeral ports `(base, base + 1)` — both
+/// verified bindable, then released. The port-drift tests need the drift
+/// target to be exactly `configured_port + 1` (the #564 field incident:
+/// resolume-pp configured on 8090, Arena actually on 8091) AND within the
+/// driver's probe window, so the two ports must stay contiguous and BOTH be
+/// free.
+///
+/// #744: the old `free_port()` grabbed ONE `:0` port and ASSUMED `+ 1` was
+/// free without ever checking it — under parallel `cargo test` load another
+/// process routinely held `base + 1`, so the tests' explicit
+/// `bind(("127.0.0.1", base + 1))` panicked and red the whole Test job. This
+/// binds `base` via `:0`, then ACTUALLY tries to bind `base + 1`; if that is
+/// taken (or `base` is `u16::MAX`), it retries with a fresh `base`. `base + 1`
+/// is now VERIFIED free at allocation instead of blindly assumed. The residual
+/// release-then-rebind TOCTOU is the same negligible on-loopback window the
+/// single-port helper already accepted.
+fn free_port_pair() -> (u16, u16) {
+    for _ in 0..100 {
+        let base_listener = StdTcpListener::bind("127.0.0.1:0").expect("bind base ephemeral port");
+        let base = base_listener.local_addr().expect("base local addr").port();
+        let Some(next) = base.checked_add(1) else {
+            continue; // base == u16::MAX — no room for base + 1; retry
+        };
+        // Hold `base` while probing `next`, so a success proves BOTH ports
+        // were simultaneously free.
+        let Ok(next_listener) = StdTcpListener::bind(("127.0.0.1", next)) else {
+            continue; // base + 1 already taken — pick a different base
+        };
+        drop(next_listener);
+        drop(base_listener);
+        return (base, next);
+    }
+    panic!("could not find a free consecutive port pair after 100 attempts");
+}
+
+#[test]
+fn free_port_pair_returns_two_consecutive_ports() {
+    // The port-drift tests rely on the drift target being exactly
+    // `configured_port + 1` and inside the driver's probe window — the pair
+    // MUST be contiguous. Deterministic: it asserts the invariant only and
+    // never rebinds, so it cannot reintroduce the TOCTOU it guards against.
+    let (base, next) = free_port_pair();
+    assert_eq!(
+        next,
+        base + 1,
+        "free_port_pair must return contiguous ports"
+    );
 }
 
 async fn mount_arena(server: &MockServer) {
@@ -119,8 +157,7 @@ fn fresh_snapshot() -> Arc<RwLock<ResolumeConnectionSnapshot>> {
 
 #[tokio::test]
 async fn driver_adopts_the_drifted_port_after_a_connection_refused_and_reconnects() {
-    let configured_port = free_port();
-    let drifted_port = configured_port + 1;
+    let (configured_port, drifted_port) = free_port_pair();
 
     // Arena starts on the CONFIGURED port; a baseline fetch succeeds.
     let listener_a =
@@ -170,8 +207,7 @@ async fn driver_adopts_the_drifted_port_after_a_connection_refused_and_reconnect
 
 #[tokio::test]
 async fn driver_heals_back_to_the_configured_port_once_it_answers_again() {
-    let configured_port = free_port();
-    let drifted_port = configured_port + 1;
+    let (configured_port, drifted_port) = free_port_pair();
 
     // Start drifted: Arena only answers on drifted_port; the driver has
     // already adopted it (simulating a prior drift discovery).
@@ -221,8 +257,7 @@ async fn driver_heals_back_to_the_configured_port_once_it_answers_again() {
 
 #[tokio::test]
 async fn probe_never_adopts_a_non_resolume_server_on_a_nearby_port() {
-    let configured_port = free_port();
-    let drifted_port = configured_port + 1;
+    let (configured_port, drifted_port) = free_port_pair();
 
     // Nothing listens on the configured port (guaranteed refused). A
     // DIFFERENT, non-Resolume HTTP server happens to be up on the next port —
