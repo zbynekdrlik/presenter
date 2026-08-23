@@ -58,3 +58,35 @@ Same idea applies to the FILE-size gate (`scripts/dev/count_prod_lines.sh`, warn
 ```bash
 bash scripts/dev/count_prod_lines.sh crates/presenter-server/src/ai/agent.rs
 ```
+
+## Adding a field to a struct under Tier-0: grep EVERY construction site (E0063), not just the obvious ones
+
+`#[serde(default)]` on a new field makes the WIRE back-compatible, but a Rust struct LITERAL
+(`Foo { a, b }`) must still name every field — a missing one is a hard `E0063` compile error that
+Tier-0 (no local `cargo check`) surfaces ONLY at CI's Clippy job, ~5 min in, costing a whole cycle
+(#732: 4 missed `StageClientSnapshot { .. }` literals in `contract_tests.rs`, found only after CI).
+
+Before pushing a struct-field addition, grep the WHOLE tree for every literal AND the enum-variant it
+may be nested in — production code AND `#[cfg(test)]`/`tests/`:
+
+```bash
+grep -rn 'StructName {' crates/ tests/   # every construction site, incl. tests
+```
+
+Do NOT grep only for the type in an enum variant you happened to change — the same struct is often
+built directly in unrelated tests. Also watch `E0382` partial-move: `foo.field.expect(...)` MOVES a
+non-`Copy` `Option` field, so a later `&foo` (e.g. re-serialize) fails to borrow — use
+`foo.field.as_ref().expect(...)` when you still need `foo` afterward. Both are invisible to
+`cargo fmt` and the size/fn gates; only a compiler (CI) catches them, so the grep is the Tier-0 stand-in.
+
+## Shared `dev` under a multi-worker fleet: concurrency cancels in-progress pipelines
+
+`pipeline.yml` has a concurrency group that CANCELS an in-progress `dev` run when a newer push lands.
+During active fleet integration (several worktree workers merging different tickets into `dev` within
+minutes), a given worker's run is repeatedly `cancelled` (NOT failed) before Test/E2E/deploy-dev run —
+so its code never deploys to dev and its E2E never executes, through no fault of the code. Your commits
+staying an ancestor of `origin/dev` (`git merge-base --is-ancestor <sha> origin/dev`) confirms the work
+is safely integrated; the compile/lint/quality jobs (Clippy/Format/Quality/TypeScript) that DID run
+green before the cancel are the real validation of your slice. Do NOT open a `dev→main` PR to force
+your slice through — that promotes the whole fleet's in-flight work to prod; the `dev→main` release is
+the supervisor's integration decision once `dev` quiesces.
