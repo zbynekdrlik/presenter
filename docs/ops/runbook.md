@@ -174,6 +174,54 @@ curl http://<host>/ndi/sources  # → [{...}, ...] when senders are reachable
 
 Source discovery uses mDNS, so `avahi-daemon` must be running on the host (`systemctl is-active avahi-daemon`). An empty list with `available:true` means the library is loaded but no NDI senders are reachable on the target's LAN — verify Resolume / cameras are powered on and not isolated by VLAN/Tailscale.
 
+## Stage display diagnostics (#732)
+
+Each stage display (the `sk.newlevel.presenterstage` APK / any `/stage` page) self-reports its browser
+`userAgent` and the live state of the NDI `<video>` element over the same presence/heartbeat socket the
+operator's "N stage displays connected" monitor already uses. This is how we get evidence off the real
+Vestel/TCL TVs at an event without being at the rig — the recurring grey play-arrow (#732) never
+reproduced on emulators, so we need the field TVs to tell us what state their `<video>` is actually in.
+
+**Read it live on prod, during an event:**
+
+```bash
+ssh newlevel@presenter.lan "sudo journalctl -u presenter -f | grep 'stage::diag'"
+```
+
+Each connecting TV logs one `stage display connected — user agent (#732)` line (the WebView's Chromium
+version is in the UA) plus periodic `stage ndi video diagnostics (#732)` snapshot lines. Snapshot
+logging is rate-limited: a line is emitted immediately on a change of `paused` / `error_code` /
+`cover_visible` / `video_width` (0 vs >0), and otherwise at most once per 30 s per stage — so a healthy,
+steady stream is quiet and a stall/error/black-frame TV stands out.
+
+**Read the latest snapshot per TV as JSON** (also what the operator monitor reads):
+
+```bash
+curl -s http://10.77.9.205/stage/connections | jq .   # prod (10.77.8.134:8080 = dev)
+```
+
+Each entry carries `userAgent`, `lastDiagAt`, and an `ndiVideo` object:
+
+| Field | Meaning / what to look for |
+|---|---|
+| `paused` | `true` on a stalled/never-started video — the state that surfaces the native play-arrow |
+| `readyState` | `0`/`1` = no data yet; `4` = playing with buffer |
+| `videoWidth` / `videoHeight` | `0` = no frame decoded (decode-fail / `NullVideoDecoder` on the 1 GB Vestels) |
+| `errorCode` | `MediaError.code` (1..4); non-null = a real media error |
+| `hasSrcObject` | `false` = the WHEP MediaStream never attached |
+| `muted` / `controls` | `controls:true` would draw the native chrome incl. the play button — should be `false` |
+| `framesDecoded` / `framesDropped` | from `getVideoPlaybackQuality()`; rising dropped = decode struggling |
+| `lastFrameAgeMs` | ms since the last presented frame; large/None = frozen or never presenting |
+| `playbackGuardReplays` | cumulative #568 guard `.play()` retries — a high count = the guard is fighting a paused element |
+| `coverVisible` | the neutral "waiting/connecting" cover is over the video |
+| `layoutCode` | the active stage layout (`ndi-fullscreen` etc.) |
+
+**Correlating with the play-arrow sighting:** when the owner reports the arrow at an event, grep the
+journal for that TV's UA line (identify the box), then read its snapshot around that timestamp. The
+arrow almost always coincides with `paused:true` and/or `videoWidth:0` (a non-playing / no-frame
+`<video>`), with the vendor WebView drawing a native overlay the page CSS cannot reach. That is the
+evidence #732's root-cause fix needs — this slice only reports it; it does NOT fix the arrow.
+
 ## Troubleshooting Checklist
 
 - **Service fails to start on port 80:** ensure the unit runs as a user with `CAP_NET_BIND_SERVICE`. The templated unit already applies this capability; if you override it, re-add `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
