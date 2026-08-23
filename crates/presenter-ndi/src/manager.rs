@@ -176,17 +176,24 @@ async fn check_active_entry(
                     // its own JoinHandle would self-cancel at the next
                     // `.await` (pipeline.start / caps_ready) — orphaning the
                     // new pipeline we're about to build and leaving the
-                    // active map empty. The supervisor's lifecycle is owned
-                    // by `stop_pipeline` / `stop_all` (explicit deactivation
-                    // paths only) — never by the rebuild path.
+                    // active map empty.
+                    //
+                    // #745(c): MOVE the supervisor out and RETURN it in
+                    // `RebuildDead` instead of dropping it. `rebuild_pipeline`
+                    // (the self-rebuild path) re-inserts it into the rebuilt slot
+                    // — keeping the live supervisor reachable from its entry so
+                    // every later abort path (`stop_pipeline`/`stop_all`/
+                    // `retain_only_active`/operator reactivate) can reach it;
+                    // `start_pipeline` (an operator reactivate of a dead source)
+                    // ABORTS it. Dropping it — as before — left a rebuilt entry
+                    // with `supervisor: None`, unreachable by every abort path, so
+                    // a later deactivate/reactivate double-watched the source.
                     let ActiveSource {
                         pipeline,
-                        supervisor: _dropped,
+                        supervisor,
                     } = dead;
                     pipeline.stop().await;
-                    // #745(c) RED: still DROPS the supervisor (returns None) —
-                    // the double-watch bug. GREEN carries it forward.
-                    return StateCheckOutcome::RebuildDead(None);
+                    return StateCheckOutcome::RebuildDead(supervisor);
                 }
             }
         }
