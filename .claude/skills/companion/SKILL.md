@@ -84,3 +84,35 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   blueprint `ops/companion/presenter-companion-profile.json`; run
   `node ops/companion/generate-profile.mjs` only to VERIFY it still renders (the
   export under `generated/` is never committed).
+
+## Module version pinning — connection must survive a deploy (#733)
+
+Companion stores each connection's module version as `moduleVersionId` in the `instances`
+table of its config SQLite DB (`~/.config/companion-nodejs/v<major>.<minor>/db.sqlite` — the
+active dir matches the running Companion version, e.g. `v5.0` for 5.0.3). `moduleVersionId`
+is one of: a **concrete version** ("0.9.0"), **null** (= latest), or the special stable id
+**"dev"** for a module loaded from `--extra-module-path`.
+
+**The trap:** a connection pinned to a CONCRETE version breaks with a "missing version"
+error the moment a deploy bumps the plugin version — the old version id no longer exists, and
+a human must re-pin it in the UI. This is what bit SNV (it pinned "0.9.0", installed under the
+store dir `~/.config/companion-nodejs/modules/presenter`).
+
+**The fix (both hosts, unified):** deploy the presenter module into
+`--extra-module-path /opt/companion-module-dev/presenter` (a DEV module — stable id "dev",
+auto-reloads on file change, takes precedence over any store copy) AND pin the connection to
+`moduleVersionId="dev"`. Then a version bump never breaks the connection. Both hosts already
+launch Companion with `--extra-module-path /opt/companion-module-dev`.
+
+- **Deploy target is `/opt/companion-module-dev/presenter` on BOTH hosts** (SNV = prod
+  10.77.9.205, PP = companion-pp.lan). Never the store dir `…/modules/presenter` — remove any
+  stale store copy so it can't compete with the dev module.
+- **Idempotent re-pin: `ops/companion/repin-presenter-connection.py`.** Run it with Companion
+  STOPPED (the deploy does stop → swap module → repin → start). It backs up the DB, sets
+  `moduleVersionId="dev"` for every `moduleId="presenter"` connection, and is a no-op if
+  already "dev". The box has `python3` + stdlib `sqlite3` but **no `sqlite3` CLI** — always
+  python. Its pure logic is unit-tested in `repin-presenter-connection.test.py`, run in the
+  `companion-tests` CI job **by file path** (`python3 ops/companion/repin-presenter-connection.test.py`;
+  the hyphenated stem can't be imported via `-m unittest`).
+- **Inspect a live connection's pin (read-only):**
+  `sudo python3 -c "import sqlite3,json; [print(json.loads(v).get('moduleVersionId')) for i,v in sqlite3.connect('file:/home/companion/.config/companion-nodejs/v5.0/db.sqlite?mode=ro',uri=True).execute('select id,value from instances') if json.loads(v).get('moduleId')=='presenter']"`
