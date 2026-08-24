@@ -106,6 +106,14 @@ body.stream {
     display: block;
 }
 
+/* The color element (#753) is a static solid fill: its background-color,
+ * opacity, frame (left/top/width/height %) and z-index all come from the inline
+ * style computed from the typed Color props. No inner content — it sits BELOW
+ * higher-z content (e.g. a verse) as a semi-transparent band. */
+.stream-element--color {
+    pointer-events: none;
+}
+
 /* The countdown element is a flex box (inline style sets font, color, size,
  * alignment, shadow, and the justify/align for the frame). */
 .stream-element--countdown {

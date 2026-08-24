@@ -231,6 +231,16 @@ pub enum StreamElementProps {
         #[serde(default)]
         content_transition: ContentTransition,
     },
+    /// A static solid-color fill (#753) — a semi-transparent band placed BELOW
+    /// content (e.g. a verse) via `z_order`. `color` is a hex `#rrggbb`/`#rrggbbaa`
+    /// (the subsystem's canonical color format); `opacity` is the transparency
+    /// control (same 0.0..=1.0 pattern as image). No `content_transition`: the
+    /// fill is static, so scene-level crossfade (#716/#752) covers transitions.
+    Color {
+        color: String,
+        opacity: f32,
+        frame: Frame,
+    },
 }
 
 impl StreamElementProps {
@@ -242,6 +252,7 @@ impl StreamElementProps {
             StreamElementProps::Countdown { .. } => "countdown",
             StreamElementProps::Lyrics { .. } => "lyrics",
             StreamElementProps::Verse { .. } => "verse",
+            StreamElementProps::Color { .. } => "color",
         }
     }
 }
@@ -446,6 +457,15 @@ pub fn validate_props(props: &StreamElementProps) -> Result<(), StreamValidation
             validate_frame(frame)?;
             validate_transition(content_transition)?;
         }
+        StreamElementProps::Color {
+            color,
+            opacity,
+            frame,
+        } => {
+            validate_color(color)?;
+            validate_opacity(*opacity)?;
+            validate_frame(frame)?;
+        }
     }
     Ok(())
 }
@@ -622,6 +642,14 @@ mod tests {
         }
     }
 
+    fn color_props() -> StreamElementProps {
+        StreamElementProps::Color {
+            color: "#112233".to_string(),
+            opacity: 0.5,
+            frame: ok_frame(),
+        }
+    }
+
     #[test]
     fn all_four_kinds_round_trip() {
         for (props, tag) in [
@@ -689,6 +717,7 @@ mod tests {
         assert_eq!(countdown_props().kind_str(), "countdown");
         assert_eq!(lyrics_props().kind_str(), "lyrics");
         assert_eq!(verse_props().kind_str(), "verse");
+        assert_eq!(color_props().kind_str(), "color");
     }
 
     #[test]
@@ -759,6 +788,89 @@ mod tests {
         assert!(validate_props(&countdown_props()).is_ok());
         assert!(validate_props(&lyrics_props()).is_ok());
         assert!(validate_props(&verse_props()).is_ok());
+        assert!(validate_props(&color_props()).is_ok());
+    }
+
+    #[test]
+    fn color_props_round_trip_and_tag() {
+        let json = serde_json::to_value(color_props()).expect("serialize");
+        assert_eq!(json["kind"], json!("color"));
+        // Color is static: no content_transition field on the wire.
+        assert!(json.get("content_transition").is_none());
+        let parsed: StreamElementProps = serde_json::from_value(json.clone()).expect("deserialize");
+        assert_eq!(parsed, color_props());
+        assert_eq!(parsed.kind_str(), "color");
+    }
+
+    #[test]
+    fn color_props_wire_shape_is_exact() {
+        // `r##".."##` because the JSON embeds a `#rrggbb` (the `"#` closes an
+        // `r#".."#` early — stream-graphics.md fixture gotcha).
+        let wire = r##"{"kind":"color","color":"#112233","opacity":0.5,"frame":{"xPct":10.0,"yPct":20.0,"wPct":50.0,"hPct":30.0}}"##;
+        let parsed: StreamElementProps = serde_json::from_str(wire).expect("parse");
+        assert_eq!(parsed, color_props());
+        assert_eq!(
+            serde_json::to_value(color_props()).unwrap(),
+            serde_json::from_str::<serde_json::Value>(wire).unwrap()
+        );
+    }
+
+    #[test]
+    fn color_element_accepts_eight_digit_hex() {
+        // The subsystem's canonical color validator also accepts #rrggbbaa; the
+        // editor's <input type=color> only ever emits #rrggbb (matches the issue
+        // regex), but an 8-digit value via the API is still valid.
+        let props = StreamElementProps::Color {
+            color: "#11223344".to_string(),
+            opacity: 1.0,
+            frame: ok_frame(),
+        };
+        assert!(validate_props(&props).is_ok());
+    }
+
+    #[test]
+    fn color_element_bad_color_rejected() {
+        for bad in ["112233", "#12345", "red", "#gggggg"] {
+            let props = StreamElementProps::Color {
+                color: bad.to_string(),
+                opacity: 1.0,
+                frame: ok_frame(),
+            };
+            assert!(
+                matches!(
+                    validate_props(&props),
+                    Err(StreamValidationError::InvalidColor { .. })
+                ),
+                "color {bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn color_element_bad_opacity_and_frame_rejected() {
+        let bad_opacity = StreamElementProps::Color {
+            color: "#000000".to_string(),
+            opacity: 1.5,
+            frame: ok_frame(),
+        };
+        assert!(matches!(
+            validate_props(&bad_opacity),
+            Err(StreamValidationError::OpacityOutOfRange { .. })
+        ));
+        let bad_frame = StreamElementProps::Color {
+            color: "#000000".to_string(),
+            opacity: 1.0,
+            frame: Frame {
+                x_pct: 0.0,
+                y_pct: 0.0,
+                w_pct: 0.0,
+                h_pct: 10.0,
+            },
+        };
+        assert!(matches!(
+            validate_props(&bad_frame),
+            Err(StreamValidationError::NonPositiveFrameSize { .. })
+        ));
     }
 
     fn image_with_frame(frame: Frame) -> StreamElementProps {

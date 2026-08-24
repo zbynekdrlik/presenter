@@ -101,7 +101,7 @@ pub fn read_transition(props: &StreamElementProps) -> Option<ContentTransition> 
         | StreamElementProps::Verse {
             content_transition, ..
         } => Some(content_transition.clone()),
-        StreamElementProps::Image { .. } => None,
+        StreamElementProps::Image { .. } | StreamElementProps::Color { .. } => None,
     }
 }
 
@@ -117,7 +117,7 @@ pub fn with_transition_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut C
         | StreamElementProps::Verse {
             content_transition, ..
         } => f(content_transition),
-        StreamElementProps::Image { .. } => {}
+        StreamElementProps::Image { .. } | StreamElementProps::Color { .. } => {}
     }
 }
 
@@ -127,7 +127,8 @@ pub fn read_frame(props: &StreamElementProps) -> Frame {
         StreamElementProps::Image { frame, .. }
         | StreamElementProps::Countdown { frame, .. }
         | StreamElementProps::Lyrics { frame, .. }
-        | StreamElementProps::Verse { frame, .. } => frame.clone(),
+        | StreamElementProps::Verse { frame, .. }
+        | StreamElementProps::Color { frame, .. } => frame.clone(),
     }
 }
 
@@ -137,7 +138,8 @@ pub fn with_frame_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut Frame)
         StreamElementProps::Image { frame, .. }
         | StreamElementProps::Countdown { frame, .. }
         | StreamElementProps::Lyrics { frame, .. }
-        | StreamElementProps::Verse { frame, .. } => f(frame),
+        | StreamElementProps::Verse { frame, .. }
+        | StreamElementProps::Color { frame, .. } => f(frame),
     }
 }
 
@@ -228,8 +230,16 @@ pub fn default_element_props(kind: &str) -> StreamElementProps {
             frame: default_frame(),
             content_transition: ContentTransition::default(),
         },
+        // A static solid fill (#753): opaque black by default in a lower-third
+        // band; the operator drags opacity down for a semi-transparent
+        // background and picks the color.
+        "color" => StreamElementProps::Color {
+            color: "#000000".to_string(),
+            opacity: 1.0,
+            frame: default_frame(),
+        },
         // "verse" (the only remaining valid kind) + a defensive default — the
-        // panel's add-buttons only ever pass the four valid kind strings.
+        // panel's add-buttons only ever pass the five valid kind strings.
         _ => StreamElementProps::Verse {
             show_secondary: false,
             text_style: default_text_style(),

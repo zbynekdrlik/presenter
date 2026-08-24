@@ -63,6 +63,14 @@ fn countdown(timer_id: i64) -> StreamElementProps {
     }
 }
 
+fn color(hex: &str, opacity: f32) -> StreamElementProps {
+    StreamElementProps::Color {
+        color: hex.to_string(),
+        opacity,
+        frame: frame(),
+    }
+}
+
 fn as_repo_error(err: &anyhow::Error) -> &RepositoryError {
     err.downcast_ref::<RepositoryError>()
         .unwrap_or_else(|| panic!("expected RepositoryError, got: {err:?}"))
@@ -189,6 +197,36 @@ async fn element_crud_and_kind_mismatch() {
         .unwrap_err();
     assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
     repo.delete_stream_element(el.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn color_element_round_trips_through_def() {
+    let repo = repo().await;
+    let scene = repo
+        .create_stream_scene("stream", "Base", SceneKind::Base)
+        .await
+        .unwrap();
+    let el = repo
+        .create_stream_element(scene.id, color("#112233", 0.5))
+        .await
+        .unwrap();
+    // Stored kind column equals the serde tag.
+    assert_eq!(el.props.kind_str(), "color");
+    // Read back through the full def-assembly path (parses props JSON).
+    let def = repo.load_output_def("stream").await.unwrap();
+    let stored = def
+        .scenes
+        .iter()
+        .flat_map(|s| &s.elements)
+        .find(|e| e.id == el.id)
+        .expect("color element present in def");
+    assert_eq!(stored.props, color("#112233", 0.5));
+    // A bad color on create is rejected 422 by core validate_props.
+    let err = repo
+        .create_stream_element(scene.id, color("not-a-color", 1.0))
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
 }
 
 #[tokio::test]
