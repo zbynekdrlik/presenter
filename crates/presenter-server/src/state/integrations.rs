@@ -540,6 +540,23 @@ impl AppState {
         }
         Ok(())
     }
+
+    /// The NDI 30 s auto-reconnect ticker's read-then-activate step
+    /// (`background_tasks.rs`): (re)activate whatever source is currently
+    /// `is_active` in the DB, restoring its pipeline after the sender comes back
+    /// online. Returns the reconnected source, or `None` when no source is active.
+    pub async fn reconnect_active_video_source(
+        &self,
+        audit_source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<Option<VideoSource>> {
+        let Some(source) = self.repository.get_active_video_source().await? else {
+            return Ok(None);
+        };
+        self.activate_video_source(source.id, audit_source, actor)
+            .await
+            .map(Some)
+    }
 }
 
 #[cfg(test)]
@@ -896,6 +913,103 @@ mod tests {
         assert!(
             fake.stopped(&b_str),
             "#745(a): delete must still stop the source's pipeline once it holds the lock",
+        );
+    }
+
+    // #747: the 30 s NDI auto-reconnect ticker (`background_tasks.rs`) reads the
+    // active source and then re-activates it. If that read happens OUTSIDE the
+    // `activation_lock`, an operator deactivate committing in the read→activate gap
+    // is UNDONE — the ticker revives a source the operator just turned off (~within
+    // one tick). The fix holds `activation_lock` across the ticker's DB re-read AND
+    // its activation, so the deactivate is seen and the reconnect skips (Ok(None)).
+    //
+    // A TOCTOU can only be shown with concurrency. This models the read→activate
+    // window deterministically: the test HOLDS `activation_lock` (white-box — the
+    // test module is a descendant of `crate::state`) while the operator's deactivate
+    // commits at the repository (the state-level `deactivate_video_sources` would
+    // deadlock on the lock we hold). Pre-fix the reconnect's read races ahead of the
+    // lock and revives the source (RED); post-fix its read is UNDER the lock, sees
+    // the source inactive, and returns None (GREEN). Outcome is asserted on committed
+    // DB state after the join; the bounded settle only lets the spawned task reach its
+    // steady blocking state (>> the sub-ms in-memory read).
+    #[tokio::test]
+    async fn reconnect_must_not_revive_a_source_deactivated_in_the_read_window() {
+        let (state, a_id, _a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        // A is the active source the ticker will try to (re)connect.
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        assert_eq!(
+            state
+                .repository()
+                .get_active_video_source()
+                .await
+                .expect("read active")
+                .map(|s| s.id),
+            Some(a_id),
+            "precondition: A is the active source",
+        );
+
+        // Hold the activation lock: this IS the read→activate window the ticker races.
+        let guard = state.activation_lock.lock().await;
+
+        // The reconnect ticker fires now.
+        let s = state.clone();
+        let tr = tokio::spawn(async move {
+            s.reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+                .await
+        });
+
+        // Let the reconnect reach its steady blocking state:
+        //   fixed  — blocked on the lock (its read is UNDER the lock, not taken yet);
+        //   pre-fix — has already read A (active) OUTSIDE the lock, now blocked on it.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // The operator deactivates A while we hold the lock — the deactivate landing
+        // in the reconnect's read→activate gap. Committed at the repository (the
+        // state-level deactivate would deadlock on the lock we hold).
+        state
+            .repository()
+            .deactivate_all_video_sources(SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("deactivate A");
+        assert_eq!(
+            state
+                .repository()
+                .get_active_video_source()
+                .await
+                .expect("read active"),
+            None,
+            "A is inactive immediately after the operator's deactivate",
+        );
+
+        // Release the lock; the reconnect proceeds.
+        drop(guard);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), tr)
+            .await
+            .expect("reconnect did not finish within 5s — deadlock?")
+            .expect("reconnect task panicked")
+            .expect("reconnect returned Err");
+
+        // The fix: the reconnect re-read the active source UNDER the lock, saw A
+        // inactive, and skipped — no revive.
+        assert!(
+            result.is_none(),
+            "#747: reconnect must return None when the source was deactivated in the \
+             read window (it must re-read under the activation lock); returned {result:?}",
+        );
+        assert_eq!(
+            state
+                .repository()
+                .get_active_video_source()
+                .await
+                .expect("read active"),
+            None,
+            "#747: the NDI auto-reconnect ticker revived a source the operator just \
+             deactivated — its DB read must happen under the activation lock so a \
+             concurrent deactivate is seen. ledger = {:?}",
+            fake.calls(),
         );
     }
 
