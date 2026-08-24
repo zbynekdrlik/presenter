@@ -9,6 +9,8 @@
 
 use leptos::prelude::*;
 
+use super::style::frame_css;
+
 #[component]
 pub fn ElementColor(
     /// `stream_elements.id` — for E2E targeting + a stable DOM identity.
@@ -21,9 +23,14 @@ pub fn ElementColor(
     /// content even if the DOM order is ever perturbed.
     z: i32,
 ) -> impl IntoView {
+    // Reuse the shared frame→CSS helper (left/top/width/height/z-index), then add
+    // the color-specific background-color + opacity — same helper the text
+    // elements use (#710), so the frame mapping stays in one place.
     let container_style = format!(
-        "left:{}%;top:{}%;width:{}%;height:{}%;background-color:{};opacity:{};z-index:{};",
-        frame.x_pct, frame.y_pct, frame.w_pct, frame.h_pct, color, opacity, z
+        "{}background-color:{};opacity:{};",
+        frame_css(&frame, z),
+        color,
+        opacity
     );
     view! {
         <div
