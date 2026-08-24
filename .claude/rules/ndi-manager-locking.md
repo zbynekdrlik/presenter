@@ -1,6 +1,8 @@
 ---
 paths:
   - "crates/presenter-ndi/src/manager/**"
+  - "crates/presenter-server/src/state/integrations.rs"
+  - "crates/presenter-server/src/state/mod.rs"
 ---
 
 # NdiManager active-map locking + the reservation activation pattern (#741)
@@ -87,3 +89,32 @@ Pre-existing activation concurrency edge cases: #745 fixed (a) reap-vs-DB orderi
 `AppState.activation_lock` serializing `activate_video_source`) + (c) the rebuilt-entry
 double-watch (above); (b) was descoped (the 30 s reconnect ticker IS the backstop, conditional
 on `hw_h264_encoder()`); the reconnect-ticker-vs-deactivate revive TOCTOU is #747.
+
+## Server-side `activation_lock` must cover EVERY DB↔manager mutation site, not just activate (#745a)
+
+Separate from the manager's `active` map lock above, `AppState` holds a `activation_lock:
+Arc<Mutex<()>>` (`state/mod.rs`) that serializes the SERVER-side DB↔manager transitions so the
+DB's `is_active` flag and the NDI manager's single-active source cannot drift. It is NEVER the
+manager's `active` mutex (taking that across the 8 s wait is the #741 stall) — it is a distinct
+server lock the status readers never touch.
+
+**The invariant is only as strong as its LEAST-covered mutation site.** `activate_video_source`
+took the lock from day one, but `deactivate_video_sources` (`stop_all`) and `delete_video_source`
+(`stop_pipeline`) did NOT — so a teardown could land in the window between a concurrent
+activation's DB flip and its manager-lock acquisition: the stop no-ops (nothing in the map yet),
+the activation then promotes and supervises a pipeline, and the final state is **DB says inactive
+but the source streams to the stage forever**, never reconciled (the reconnect ticker's `Ok(None)`
+arm does nothing for it). On a live church system that is the wrong-source-on-stage class the lock
+exists to kill. Fix: take `activation_lock` at the TOP of every method that flips `is_active`
+OR tears a pipeline down, not just activate.
+
+- **Lock order is strictly `activation_lock` → manager `active`, never inverted** (activate takes
+  `activation_lock` then `start_pipeline` takes `active`; deactivate/delete take `activation_lock`
+  then `stop_*` takes `active`). Keep it that way — an inversion deadlocks.
+- **Test the seam WITHOUT libndi via the `FakeNdiControl` gate.** `fake.gate_start(&id)` parks an
+  activation mid-`start_pipeline` (its DB row already written); spawn a racing
+  deactivate/delete and assert (500 ms window) it did NOT record its `StopAll`/`StopPipeline`
+  while the activation held the lock, then release and confirm it runs after. `FakeNdiControl`
+  records `StopAll`/`StopPipeline`/`StopOtherPipelines` in its `NdiCall` ledger for exactly this.
+- When adding ANY new server method that activates/deactivates/deletes a video source, grep
+  `activation_lock` first and take it — a new uncovered mutation site silently reopens this hole.

@@ -43,6 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Bible page DOM contract + async-effect E2E determinism (#727): collapsed/full book-item attribute parity, settle-signal over expect.poll, Tier-0 live-server repro | `.claude/rules/bible-page.md` (auto-loads on `pages/bible.rs`, `state/bible.rs`, `wasm-bible.spec.ts`) |
 | NdiManager active-map locking: never hold `active` across build/wait/stop; the #741 reservation activation pattern; Tier-0 seam testing without libndi | `.claude/rules/ndi-manager-locking.md` (auto-loads on `manager/**`) |
 | Presenter Stage APK stable-signing: committed debug keystore + guard, don't delete it (#740) | `.claude/rules/android-stage-signing.md` (auto-loads on `android/presenter-stage/**`) |
+| Resolume port-drift tests (#744/#564): use `free_port_pair()` for a verified-free CONSECUTIVE port pair, never `free_port()+N`; drift target = configured_port+1 within the 5-port probe window | `.claude/rules/resolume-port-drift.md` (auto-loads on `resolume/port_drift*.rs`) |
 
 ## Always-Rules
 
