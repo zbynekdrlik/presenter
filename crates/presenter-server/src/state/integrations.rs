@@ -436,6 +436,23 @@ impl AppState {
         // mismatch it removes is worse. tokio's Mutex is FIFO-fair, so the operator
         // waits behind at most one such attempt.
         let _activation_guard = self.activation_lock.lock().await;
+        self.activate_video_source_locked(id, audit_source, actor)
+            .await
+    }
+
+    /// The body of [`Self::activate_video_source`], assuming the caller ALREADY
+    /// holds `activation_lock`. Split out (#747) so
+    /// [`Self::reconnect_active_video_source`] can hold the lock across BOTH its
+    /// DB re-read AND the activation without re-entering the non-reentrant tokio
+    /// `Mutex` — that atomicity is what closes the reconnect ticker's
+    /// read-then-activate TOCTOU (a deactivate landing in the old read→activate
+    /// gap could otherwise revive a just-deactivated source).
+    async fn activate_video_source_locked(
+        &self,
+        id: VideoSourceId,
+        audit_source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<VideoSource> {
         let source = self
             .repository
             .activate_video_source(id, audit_source, actor)
@@ -545,15 +562,30 @@ impl AppState {
     /// (`background_tasks.rs`): (re)activate whatever source is currently
     /// `is_active` in the DB, restoring its pipeline after the sender comes back
     /// online. Returns the reconnected source, or `None` when no source is active.
+    ///
+    /// #747: acquire `activation_lock` BEFORE reading the active source and hold
+    /// it across the activation, so an operator `deactivate_video_sources` /
+    /// `delete_video_source` (which take the same lock) cannot commit in a
+    /// read→activate gap and get its source revived by this ticker. The read
+    /// used to run outside any activation critical section, so a deactivate could
+    /// land in that gap and the 30 s ticker would flip the row back to active
+    /// ~within one tick. Re-reading the *active* source under the lock (rather
+    /// than a caller-supplied id) also means a concurrent SWITCH reconnects the
+    /// NEW winner, never the stale one. Lock order stays `activation_lock` →
+    /// manager `active`, so this cannot deadlock with an activation/teardown.
     pub async fn reconnect_active_video_source(
         &self,
         audit_source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<Option<VideoSource>> {
+        let _activation_guard = self.activation_lock.lock().await;
         let Some(source) = self.repository.get_active_video_source().await? else {
+            // No source is active: none was ever set, or the operator deactivated
+            // it (possibly in the window the old read-then-activate race missed).
+            // Skip — reviving it here is exactly the #747 bug.
             return Ok(None);
         };
-        self.activate_video_source(source.id, audit_source, actor)
+        self.activate_video_source_locked(source.id, audit_source, actor)
             .await
             .map(Some)
     }
