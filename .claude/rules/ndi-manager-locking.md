@@ -1,6 +1,9 @@
 ---
 paths:
   - "crates/presenter-ndi/src/manager/**"
+  - "crates/presenter-server/src/state/integrations.rs"
+  - "crates/presenter-server/src/state/background_tasks.rs"
+  - "crates/presenter-server/src/state/mod.rs"
 ---
 
 # NdiManager active-map locking + the reservation activation pattern (#741)
