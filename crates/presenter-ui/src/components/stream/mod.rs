@@ -6,6 +6,7 @@
 //! events (no new content pipeline); an element with no active content renders
 //! nothing, so the transparent output stays clean for a scene that mixes kinds.
 
+pub mod element_color;
 pub mod element_countdown;
 pub mod element_image;
 pub mod element_lyrics;

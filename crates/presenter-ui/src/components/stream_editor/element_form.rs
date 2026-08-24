@@ -10,7 +10,8 @@ use leptos::prelude::*;
 use presenter_core::{ContentTransition, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS};
 
 use super::props_access::{
-    default_element_props, read_frame, read_transition, with_frame_mut, with_transition_mut, TsSlot,
+    default_element_props, read_frame, read_transition, split_color, with_frame_mut,
+    with_transition_mut, TsSlot,
 };
 use super::text_style_form::TextStyleForm;
 use super::StreamEditorCtx;
@@ -51,6 +52,9 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
 
             <Show when=move || kind() == "image">
                 <ImageFields draft=draft ctx=ctx />
+            </Show>
+            <Show when=move || kind() == "color">
+                <ColorFields draft=draft />
             </Show>
             <Show when=move || kind() == "countdown">
                 <div class="stream-editor__kind-fields" data-role="stream-countdown-fields">
@@ -137,7 +141,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                 </div>
             </Show>
 
-            <Show when=move || kind() != "image">
+            <Show when=move || kind() != "image" && kind() != "color">
                 <TransitionFields draft=draft />
             </Show>
 
@@ -330,6 +334,49 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
                             draft.update(|p| {
                                 if let StreamElementProps::Image { opacity, .. } = p { *opacity = v; }
+                            });
+                        }
+                    } />
+            </label>
+        </div>
+    }
+}
+
+/// Color-kind fields (#753): a native color picker (`<input type=color>`, which
+/// emits a `#rrggbb`) + an opacity input. Opacity is THE transparency control,
+/// so the color stays a solid RGB — no alpha byte here (unlike a `TextStyle`
+/// color). `split_color` strips any stored alpha for the picker's value.
+#[component]
+fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
+    let color = move || match draft.get() {
+        StreamElementProps::Color { color, .. } => split_color(&color).0,
+        _ => "#000000".to_string(),
+    };
+    let opacity = move || match draft.get() {
+        StreamElementProps::Color { opacity, .. } => opacity.to_string(),
+        _ => String::new(),
+    };
+    view! {
+        <div class="stream-editor__kind-fields" data-role="stream-color-fields">
+            <label class="stream-editor__field">
+                <span>"Farba"</span>
+                <input type="color" data-role="stream-color-value"
+                    prop:value=color
+                    on:input=move |ev| {
+                        let rgb = event_target_value(&ev);
+                        draft.update(|p| {
+                            if let StreamElementProps::Color { color, .. } = p { *color = rgb; }
+                        });
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Priehľadnosť"</span>
+                <input type="number" min="0" max="1" step="0.05" data-role="stream-color-opacity"
+                    prop:value=opacity
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                            draft.update(|p| {
+                                if let StreamElementProps::Color { opacity, .. } = p { *opacity = v; }
                             });
                         }
                     } />

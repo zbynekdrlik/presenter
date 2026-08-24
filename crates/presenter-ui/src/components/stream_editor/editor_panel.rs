@@ -35,6 +35,7 @@ pub fn EditorPanel(ctx: StreamEditorCtx) -> impl IntoView {
 
             <div class="stream-editor__add-elements" data-role="stream-add-elements">
                 <AddElementButton ctx=ctx kind="image" label="+ Obrázok" />
+                <AddElementButton ctx=ctx kind="color" label="+ Farba" />
                 <AddElementButton ctx=ctx kind="countdown" label="+ Odpočet" />
                 <AddElementButton ctx=ctx kind="lyrics" label="+ Text piesne" />
                 <AddElementButton ctx=ctx kind="verse" label="+ Verš" />
@@ -187,6 +188,7 @@ fn element_kind(ctx: StreamEditorCtx, id: i64) -> String {
 fn kind_label_sk(kind: &str) -> &'static str {
     match kind {
         "image" => "Obrázok",
+        "color" => "Farba",
         "countdown" => "Odpočet",
         "lyrics" => "Text piesne",
         "verse" => "Verš",
