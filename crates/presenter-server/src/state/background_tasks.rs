@@ -147,32 +147,29 @@ impl AppState {
                     let encoder_available =
                         manager_loaded && presenter_ndi::hw_h264_encoder().is_some();
                     if should_auto_restore_ndi(manager_loaded, encoder_available) {
-                        match ndi_state.repository.get_active_video_source().await {
+                        // #747: the read (active source) + activate is done atomically
+                        // under `activation_lock` inside `reconnect_active_video_source`,
+                        // so an operator deactivate cannot land in a read→activate gap
+                        // and get its source revived by this ticker.
+                        match ndi_state
+                            .reconnect_active_video_source(
+                                presenter_persistence::SettingsAuditSource::StartupDefault,
+                                "system",
+                            )
+                            .await
+                        {
                             Ok(Some(source)) => {
-                                let ndi_name = source.ndi_name.clone();
-                                if let Err(err) = ndi_state
-                                    .activate_video_source(
-                                        source.id,
-                                        presenter_persistence::SettingsAuditSource::StartupDefault,
-                                        "system",
-                                    )
-                                    .await
-                                {
-                                    tracing::debug!(
-                                        ?err,
-                                        ndi_name = %ndi_name,
-                                        "NDI auto-reconnect: source not yet available"
-                                    );
-                                } else {
-                                    tracing::info!(
-                                        ndi_name = %ndi_name,
-                                        "NDI auto-reconnect: source restored"
-                                    );
-                                }
+                                tracing::info!(
+                                    ndi_name = %source.ndi_name,
+                                    "NDI auto-reconnect: source restored"
+                                );
                             }
                             Ok(None) => {}
                             Err(err) => {
-                                tracing::debug!(?err, "NDI auto-reconnect: DB query failed");
+                                tracing::debug!(
+                                    ?err,
+                                    "NDI auto-reconnect: source not yet available or DB query failed"
+                                );
                             }
                         }
                     }
