@@ -15,7 +15,8 @@
 //! crossfade layer. The output page keeps an outgoing scene mounted with
 //! `leaving=true` (the `--leaving` class fades opacity to 0) while the incoming
 //! one fades in via `@starting-style`; `duration_ms`
-//! (`scene.transition_ms ?? output.default_transition_ms`) sets the inline
+//! (`scene.transition_ms ?? kind-level ?? default`, resolved on the output page
+//! per #752) sets the inline
 //! `transition-duration`. `leaving` is read REACTIVELY (a `Signal`) because a
 //! keyed `<For>` does not re-run children when only the leaving flag flips
 //! (ui skill #496/#693).
@@ -35,7 +36,8 @@ pub fn SceneRender(
     /// so the fade-out class applies without re-running the keyed `<For>` child.
     #[prop(into)]
     leaving: Signal<bool>,
-    /// Crossfade duration in ms (`scene.transition_ms ?? default_transition_ms`),
+    /// Crossfade duration in ms (`scene.transition_ms ?? kind-level ?? default`,
+    /// resolved on the output page per #752),
     /// mirrored to the inline `transition-duration`. REACTIVE (a keyed `<For>`
     /// does not re-run the child), so `mark_leaving` re-pointing an outgoing base
     /// to the incoming scene's duration actually reaches the DOM — the fade-out

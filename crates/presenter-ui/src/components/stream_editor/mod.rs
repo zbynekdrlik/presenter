@@ -22,8 +22,8 @@ pub mod text_style_form;
 
 use leptos::prelude::*;
 use presenter_core::{
-    SceneKind, StreamElementDef, StreamElementProps, StreamOutputDef, StreamSceneDef,
-    StreamShowState,
+    SceneKind, StreamElementDef, StreamElementProps, StreamOutputDef, StreamOutputSummary,
+    StreamSceneDef, StreamShowState,
 };
 use serde::Serialize;
 
@@ -65,6 +65,17 @@ struct RenameSceneReq {
 #[serde(rename_all = "camelCase")]
 struct ReorderReq {
     ids: Vec<i64>,
+}
+
+/// LAYER-level (kind-level) transition PATCH body (#752). Exactly one field is
+/// `Some` per call — the other is skipped so the server leaves it unchanged.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KindTransitionReq {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_transition_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlay_transition_ms: Option<u32>,
 }
 
 /// Derive the show-state (active base + active overlays + revision) implied by
@@ -263,6 +274,32 @@ impl StreamEditorCtx {
         });
     }
 
+    /// Set the LAYER-level (kind-level) scene transition for a whole layer
+    /// (#752): `ms` is the crossfade in milliseconds, `0` = cut. Applies to ALL
+    /// base scene switches (`SceneKind::Base`) or ALL overlay on/off toggles
+    /// (`SceneKind::Overlay`). A config write, so it refetches the def.
+    pub fn set_kind_transition(self, kind: SceneKind, ms: u32) {
+        let req = match kind {
+            SceneKind::Base => KindTransitionReq {
+                base_transition_ms: Some(ms),
+                overlay_transition_ms: None,
+            },
+            SceneKind::Overlay => KindTransitionReq {
+                base_transition_ms: None,
+                overlay_transition_ms: Some(ms),
+            },
+        };
+        leptos::task::spawn_local(async move {
+            match crate::api::patch_json::<_, StreamOutputSummary>(&output_path(), &req).await {
+                Ok(_) => {
+                    self.refresh();
+                    self.show_toast("Prechod uložený.", "success");
+                }
+                Err(e) => self.show_toast(&format!("Uloženie prechodu zlyhalo: {e}"), "error"),
+            }
+        });
+    }
+
     // ---- Element authoring (#714) -----------------------------------------
 
     /// Open a scene for element authoring; clears any element selection + error.
@@ -411,6 +448,11 @@ fn kind_ids(def: &StreamOutputDef, kind: SceneKind) -> Vec<i64> {
 
 fn def_path() -> String {
     format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/def")
+}
+
+/// The output resource itself (PATCH target for rename / transitions). #752.
+fn output_path() -> String {
+    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}")
 }
 
 fn scenes_path() -> String {

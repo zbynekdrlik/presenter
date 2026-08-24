@@ -6,9 +6,14 @@
 //! stale after a rename / reorder / activation.
 
 use leptos::prelude::*;
-use presenter_core::SceneKind;
+use presenter_core::{SceneKind, StreamOutputDef, STREAM_TRANSITION_MAX_MS};
 
 use super::StreamEditorCtx;
+
+/// Initial ms shown in a kind-transition input before the def loads (or when the
+/// layer is currently a cut and has no stored fade value) — matches the output's
+/// migration-seeded `default_transition_ms`.
+const DEFAULT_TRANSITION_DRAFT_MS: u32 = 400;
 
 /// Root of the editor body. Renders only once the def has loaded.
 #[component]
@@ -35,7 +40,10 @@ fn OverlayRow(ctx: StreamEditorCtx) -> impl IntoView {
     let empty = move || scene_ids_of_kind(ctx, SceneKind::Overlay).is_empty();
     view! {
         <section class="stream-editor__overlays" data-role="stream-overlay-row">
-            <h2 class="stream-editor__section-title">"Overlay scény"</h2>
+            <div class="stream-editor__bases-head">
+                <h2 class="stream-editor__section-title">"Overlay scény"</h2>
+                <KindTransitionControl ctx=ctx kind=SceneKind::Overlay />
+            </div>
             <div class="stream-editor__overlay-list">
                 <For each=overlays key=|id| *id children=move |id| view! { <OverlayChip ctx=ctx id=id /> } />
                 <Show when=empty>
@@ -55,6 +63,7 @@ fn BaseColumns(ctx: StreamEditorCtx) -> impl IntoView {
         <section class="stream-editor__bases" data-role="stream-base-section">
             <div class="stream-editor__bases-head">
                 <h2 class="stream-editor__section-title">"Base scény"</h2>
+                <KindTransitionControl ctx=ctx kind=SceneKind::Base />
                 <button
                     type="button"
                     class="stream-editor__btn stream-editor__btn--ghost"
@@ -293,7 +302,101 @@ fn AddSceneForm(ctx: StreamEditorCtx) -> impl IntoView {
     }
 }
 
+/// LAYER-level scene-transition control (#752): one zap/vyp toggle + čas (ms)
+/// input that applies to ALL scenes of one kind at once (base OR overlay).
+/// Toggle OFF stores `0` = cut (no extra boolean flag — 0 means cut per #716).
+/// The number auto-commits on change; the toggle auto-commits immediately.
+#[component]
+fn KindTransitionControl(ctx: StreamEditorCtx, kind: SceneKind) -> impl IntoView {
+    let slot = match kind {
+        SceneKind::Base => "base",
+        SceneKind::Overlay => "overlay",
+    };
+    let wrap_role = format!("stream-{slot}-transition");
+    let toggle_role = format!("stream-{slot}-transition-toggle");
+    let ms_role = format!("stream-{slot}-transition-ms");
+
+    // Local draft for the ms input, seeded from the persisted fade value and
+    // kept across a toggle-off so re-enabling restores the last value.
+    let draft = RwSignal::new(DEFAULT_TRANSITION_DRAFT_MS);
+    Effect::new(move |_| {
+        if let Some(def) = ctx.def.get() {
+            if let Some(n) = kind_transition_col(&def, kind) {
+                if n > 0 {
+                    draft.set(n);
+                }
+            }
+        }
+    });
+
+    let on_toggle = move |_| {
+        if kind_transition_enabled(ctx, kind, false) {
+            ctx.set_kind_transition(kind, 0); // turning OFF -> cut
+        } else {
+            ctx.set_kind_transition(kind, draft.get_untracked().max(1)); // ON -> restore fade
+        }
+    };
+
+    let on_ms_change = move |ev: leptos::ev::Event| {
+        let value = event_target_value(&ev)
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(0)
+            .min(STREAM_TRANSITION_MAX_MS);
+        draft.set(value);
+        if kind_transition_enabled(ctx, kind, false) {
+            ctx.set_kind_transition(kind, value);
+        }
+    };
+
+    view! {
+        <div class="stream-editor__transition-ctl" data-role=wrap_role>
+            <label class="stream-editor__transition-toggle">
+                <input
+                    type="checkbox"
+                    data-role=toggle_role
+                    prop:checked=move || kind_transition_enabled(ctx, kind, true)
+                    on:change=on_toggle
+                />
+                "Prechod"
+            </label>
+            <input
+                type="number"
+                class="stream-editor__transition-ms"
+                data-role=ms_role
+                min="0"
+                max=STREAM_TRANSITION_MAX_MS.to_string()
+                prop:value=move || draft.get().to_string()
+                prop:disabled=move || !kind_transition_enabled(ctx, kind, true)
+                on:change=on_ms_change
+            />
+            <span class="stream-editor__transition-unit">"ms"</span>
+        </div>
+    }
+}
+
 // ---- Reactive readers (track the def signal) ------------------------------
+
+/// The stored kind-level column for a scene kind (`None` = inherit default).
+fn kind_transition_col(def: &StreamOutputDef, kind: SceneKind) -> Option<u32> {
+    match kind {
+        SceneKind::Base => def.base_transition_ms,
+        SceneKind::Overlay => def.overlay_transition_ms,
+    }
+}
+
+/// Whether the kind's transition is a FADE (enabled) rather than a cut. A `None`
+/// column inherits `default_transition_ms` (a fade), so it reads as enabled;
+/// `Some(0)` is a cut (disabled). `tracked` picks a reactive vs untracked read.
+fn kind_transition_enabled(ctx: StreamEditorCtx, kind: SceneKind, tracked: bool) -> bool {
+    let def = if tracked {
+        ctx.def.get()
+    } else {
+        ctx.def.get_untracked()
+    };
+    def.map(|d| kind_transition_col(&d, kind).map(|n| n > 0).unwrap_or(true))
+        .unwrap_or(true)
+}
 
 /// Scene ids of one kind, in current def order (base<overlay, then position).
 fn scene_ids_of_kind(ctx: StreamEditorCtx, kind: SceneKind) -> Vec<i64> {
