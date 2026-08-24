@@ -144,6 +144,13 @@ impl Repository {
         {
             check_transition_ms(value)?;
         }
+        // Defensive no-op guard (#752 review 🔵): with nothing to change, skip
+        // the txn + config_revision bump entirely. The router only calls this
+        // when a field is present, so this hardens the pub method for any
+        // future caller rather than fixing a live path.
+        if base_transition_ms.is_none() && overlay_transition_ms.is_none() {
+            return self.get_stream_output(slug).await;
+        }
         let txn = self.db.begin().await?;
         let output = Self::output_by_slug(&txn, slug).await?;
         let next_revision = output.config_revision + 1;

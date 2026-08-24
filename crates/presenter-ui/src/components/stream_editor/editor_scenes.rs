@@ -316,16 +316,22 @@ fn KindTransitionControl(ctx: StreamEditorCtx, kind: SceneKind) -> impl IntoView
     let toggle_role = format!("stream-{slot}-transition-toggle");
     let ms_role = format!("stream-{slot}-transition-ms");
 
-    // Local draft for the ms input, seeded from the persisted fade value and
-    // kept across a toggle-off so re-enabling restores the last value.
+    // Local draft for the ms input. A persisted fade (col > 0) always seeds it;
+    // otherwise it seeds ONCE from the output's real `default_transition_ms`
+    // (#752 review 🔵 — not a hardcoded guess) and is then kept across a
+    // toggle-off so re-enabling restores the last value. Seeding None only once
+    // (via `seeded`) avoids a reactive clobber of an in-progress edit on an
+    // unrelated def refetch.
     let draft = RwSignal::new(DEFAULT_TRANSITION_DRAFT_MS);
+    let seeded = RwSignal::new(false);
     Effect::new(move |_| {
         if let Some(def) = ctx.def.get() {
-            if let Some(n) = kind_transition_col(&def, kind) {
-                if n > 0 {
-                    draft.set(n);
-                }
+            match kind_transition_col(&def, kind) {
+                Some(n) if n > 0 => draft.set(n),
+                _ if !seeded.get_untracked() => draft.set(def.default_transition_ms),
+                _ => {}
             }
+            seeded.set(true);
         }
     });
 
