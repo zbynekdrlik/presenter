@@ -91,6 +91,15 @@ pub(super) struct PatchOutputRequest {
     name: Option<String>,
     #[serde(default)]
     default_transition_ms: Option<u32>,
+    /// LAYER-level transition for ALL base scene switches (#752). Present incl.
+    /// `null`: `null` clears back to inherit the default, a value sets it (0 =
+    /// cut); absent leaves it unchanged. Double-`Option` per scene `transitionMs`.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    base_transition_ms: Option<Option<u32>>,
+    /// LAYER-level transition for ALL overlay on/off toggles (#752). Same
+    /// absent / `null` / value semantics as `baseTransitionMs`.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    overlay_transition_ms: Option<Option<u32>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,8 +197,22 @@ pub(super) async fn patch_output(
                 .await?,
         );
     }
+    if req.base_transition_ms.is_some() || req.overlay_transition_ms.is_some() {
+        updated = Some(
+            state
+                .repository()
+                .set_stream_output_kind_transitions(
+                    &slug,
+                    req.base_transition_ms,
+                    req.overlay_transition_ms,
+                )
+                .await?,
+        );
+    }
     let summary = updated.ok_or_else(|| {
-        AppError::bad_request_message("patch requires name or defaultTransitionMs")
+        AppError::bad_request_message(
+            "patch requires name, defaultTransitionMs, baseTransitionMs, or overlayTransitionMs",
+        )
     })?;
     state.stream_config_write_notify(&slug).await?;
     Ok(Json(summary))

@@ -122,6 +122,59 @@ async fn create_output_then_patch_renames() {
 }
 
 #[tokio::test]
+async fn patch_output_sets_kind_transitions() {
+    let app = app_with_output("t-kindtrans").await;
+
+    // Set base = 0 (cut) + overlay = 800 via the output PATCH.
+    let (status, summary) = req(
+        &app,
+        Method::PATCH,
+        "/stream/api/outputs/t-kindtrans",
+        Some(json!({"baseTransitionMs": 0, "overlayTransitionMs": 800})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary["baseTransitionMs"], json!(0));
+    assert_eq!(summary["overlayTransitionMs"], json!(800));
+
+    // The def carries them (the output page reads this).
+    let (_, def) = req(
+        &app,
+        Method::GET,
+        "/stream/api/outputs/t-kindtrans/def",
+        None,
+    )
+    .await;
+    assert_eq!(def["baseTransitionMs"], json!(0));
+    assert_eq!(def["overlayTransitionMs"], json!(800));
+
+    // Explicit null clears base back to inherit; overlay (absent) untouched.
+    let (status, summary) = req(
+        &app,
+        Method::PATCH,
+        "/stream/api/outputs/t-kindtrans",
+        Some(json!({"baseTransitionMs": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        summary.get("baseTransitionMs").is_none(),
+        "cleared field omitted from summary (skip_serializing_if None)"
+    );
+    assert_eq!(summary["overlayTransitionMs"], json!(800));
+
+    // Out-of-range kind transition (>10000) → 422.
+    let (status, _) = req(
+        &app,
+        Method::PATCH,
+        "/stream/api/outputs/t-kindtrans",
+        Some(json!({"overlayTransitionMs": 20000})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn full_scene_and_element_flow_with_def_ordering() {
     let app = app_with_output("t-flow").await;
 
