@@ -13,7 +13,8 @@
 //!
 //! Transitions (#716): a base-scene switch CROSSFADES — the outgoing scene stays
 //! mounted (fading out) while the incoming fades in; overlays fade in/out on
-//! toggle; `duration = scene.transition_ms ?? output.default_transition_ms`. The
+//! toggle; `duration = scene.transition_ms ?? kind-level ?? default` (#752
+//! kind-level via `StreamOutputDef::resolve_transition_ms`). The
 //! scene layers are tracked in a keyed list (`SceneLayer`) with scheduled removal
 //! after each fade (no node leaks). Per-element content changes (lyric line /
 //! verse / countdown text) fade or cut via `transition::CrossfadeText`.
@@ -321,7 +322,6 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 live_overlays
             };
 
-            let default_dur = d.default_transition_ms;
             let base_scene = base_id.and_then(|id| {
                 d.scenes
                     .iter()
@@ -345,11 +345,11 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 last_rev.set_value(Some(d.config_revision));
                 let mut fresh = Vec::new();
                 if let Some(bs) = base_scene.clone() {
-                    let dur = bs.transition_ms.unwrap_or(default_dur);
+                    let dur = d.resolve_transition_ms(&bs);
                     fresh.push(make_layer(next_seq, bs, dur));
                 }
                 for os in &overlay_scenes {
-                    let dur = os.transition_ms.unwrap_or(default_dur);
+                    let dur = d.resolve_transition_ms(os);
                     fresh.push(make_layer(next_seq, os.clone(), dur));
                 }
                 layers.set(fresh);
@@ -363,8 +363,10 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             let mut added_base = false;
 
             // Base: fade the old out + the new in when the active base changes.
-            // The INCOMING scene's `transition_ms ?? default` governs both fades;
-            // a clear (no incoming) uses the OUTGOING scene's own duration.
+            // The INCOMING scene's `transition_ms ?? kind-level ?? default`
+            // governs both fades (#752 kind-level via `resolve_transition_ms`);
+            // a clear (no incoming) uses the OUTGOING scene's own resolved
+            // duration — its kind is base, so it falls back to the base level.
             let cur_base = layers.with_untracked(|ls| {
                 ls.iter()
                     .find(|l| !l.leaving && l.kind == SceneKind::Base)
@@ -373,14 +375,16 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             let want_base_id = base_scene.as_ref().map(|s| s.id);
             if cur_base.map(|(_, id, _)| id) != want_base_id {
                 let switch_dur = match &base_scene {
-                    Some(bs) => bs.transition_ms.unwrap_or(default_dur),
-                    None => cur_base.and_then(|(_, _, t)| t).unwrap_or(default_dur),
+                    Some(bs) => d.resolve_transition_ms(bs),
+                    None => cur_base
+                        .and_then(|(_, _, t)| t)
+                        .unwrap_or_else(|| d.kind_transition_ms(SceneKind::Base)),
                 };
                 if let Some((seq, _, _)) = cur_base {
                     mark_leaving(layers, seq, switch_dur);
                 }
                 if let Some(bs) = base_scene.clone() {
-                    let dur = bs.transition_ms.unwrap_or(default_dur);
+                    let dur = d.resolve_transition_ms(&bs);
                     let layer = make_layer(next_seq, bs, dur);
                     layers.update(|ls| ls.push(layer));
                     added_base = true;
@@ -397,12 +401,16 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             let want_overlay_ids: Vec<i64> = overlay_scenes.iter().map(|s| s.id).collect();
             for &(seq, id, t) in &cur_overlays {
                 if !want_overlay_ids.contains(&id) {
-                    mark_leaving(layers, seq, t.unwrap_or(default_dur));
+                    mark_leaving(
+                        layers,
+                        seq,
+                        t.unwrap_or_else(|| d.kind_transition_ms(SceneKind::Overlay)),
+                    );
                 }
             }
             for os in &overlay_scenes {
                 if !cur_overlays.iter().any(|(_, id, _)| *id == os.id) {
-                    let dur = os.transition_ms.unwrap_or(default_dur);
+                    let dur = d.resolve_transition_ms(os);
                     let layer = make_layer(next_seq, os.clone(), dur);
                     layers.update(|ls| ls.push(layer));
                 }

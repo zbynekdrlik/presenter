@@ -269,6 +269,14 @@ pub struct StreamOutputSummary {
     pub slug: String,
     pub name: String,
     pub default_transition_ms: u32,
+    /// LAYER-level scene-transition override for ALL base scene switches
+    /// (#752). `None` = inherit `default_transition_ms`; `Some(0)` = cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_transition_ms: Option<u32>,
+    /// LAYER-level scene-transition override for ALL overlay on/off toggles
+    /// (#752). `None` = inherit `default_transition_ms`; `Some(0)` = cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay_transition_ms: Option<u32>,
     pub active_scene_id: Option<i64>,
     pub config_revision: u64,
 }
@@ -306,9 +314,38 @@ pub struct StreamOutputDef {
     pub slug: String,
     pub name: String,
     pub default_transition_ms: u32,
+    /// LAYER-level scene-transition override for ALL base scene switches
+    /// (#752). `None` = inherit `default_transition_ms`; `Some(0)` = cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_transition_ms: Option<u32>,
+    /// LAYER-level scene-transition override for ALL overlay on/off toggles
+    /// (#752). `None` = inherit `default_transition_ms`; `Some(0)` = cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay_transition_ms: Option<u32>,
     pub active_scene_id: Option<i64>,
     pub config_revision: u64,
     pub scenes: Vec<StreamSceneDef>,
+}
+
+impl StreamOutputDef {
+    /// The kind-level fallback duration for a scene KIND, used when a scene has
+    /// no own `transition_ms` (e.g. a clear / leaving fade, where only the kind
+    /// is known): `kind-level column ?? default_transition_ms` (#752).
+    pub fn kind_transition_ms(&self, kind: SceneKind) -> u32 {
+        match kind {
+            SceneKind::Base => self.base_transition_ms,
+            SceneKind::Overlay => self.overlay_transition_ms,
+        }
+        .unwrap_or(self.default_transition_ms)
+    }
+
+    /// The effective crossfade duration for a scene, in the #752 resolution
+    /// order: `scene.transition_ms ?? kind-level ?? default_transition_ms`.
+    pub fn resolve_transition_ms(&self, scene: &StreamSceneDef) -> u32 {
+        scene
+            .transition_ms
+            .unwrap_or_else(|| self.kind_transition_ms(scene.kind))
+    }
 }
 
 /// Metadata for an uploaded, sha256-addressed image asset — listed by the
@@ -915,5 +952,102 @@ mod tests {
             validate_props(&props),
             Err(StreamValidationError::TransitionTooLong { .. })
         ));
+    }
+
+    // ---- #752 kind-level transition resolution ----------------------------
+
+    fn scene(id: i64, kind: SceneKind, transition_ms: Option<u32>) -> StreamSceneDef {
+        StreamSceneDef {
+            id,
+            name: format!("scene-{id}"),
+            kind,
+            position: 0,
+            is_active: false,
+            transition_ms,
+            elements: Vec::new(),
+        }
+    }
+
+    fn output(
+        default_transition_ms: u32,
+        base_transition_ms: Option<u32>,
+        overlay_transition_ms: Option<u32>,
+    ) -> StreamOutputDef {
+        StreamOutputDef {
+            id: 1,
+            slug: "stream".to_string(),
+            name: "Stream".to_string(),
+            default_transition_ms,
+            base_transition_ms,
+            overlay_transition_ms,
+            active_scene_id: None,
+            config_revision: 0,
+            scenes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_transition_prefers_scene_then_kind_then_default() {
+        // base kind-level = 0 (cut), overlay kind-level = 800, default = 400.
+        let out = output(400, Some(0), Some(800));
+
+        // A per-scene override beats both kind-level and default.
+        let base_override = scene(1, SceneKind::Base, Some(250));
+        assert_eq!(out.resolve_transition_ms(&base_override), 250);
+
+        // No scene override: base falls to its kind-level (0 = cut), overlay to
+        // its own kind-level (800) — NOT the default.
+        let base_inherit = scene(2, SceneKind::Base, None);
+        let overlay_inherit = scene(3, SceneKind::Overlay, None);
+        assert_eq!(out.resolve_transition_ms(&base_inherit), 0);
+        assert_eq!(out.resolve_transition_ms(&overlay_inherit), 800);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_default_when_kind_unset() {
+        // Neither kind-level column set: both kinds inherit the output default.
+        let out = output(400, None, None);
+        assert_eq!(out.kind_transition_ms(SceneKind::Base), 400);
+        assert_eq!(out.kind_transition_ms(SceneKind::Overlay), 400);
+        assert_eq!(
+            out.resolve_transition_ms(&scene(1, SceneKind::Base, None)),
+            400
+        );
+        assert_eq!(
+            out.resolve_transition_ms(&scene(2, SceneKind::Overlay, None)),
+            400
+        );
+    }
+
+    #[test]
+    fn kind_transition_picks_the_right_column() {
+        let out = output(400, Some(100), Some(900));
+        assert_eq!(out.kind_transition_ms(SceneKind::Base), 100);
+        assert_eq!(out.kind_transition_ms(SceneKind::Overlay), 900);
+    }
+
+    #[test]
+    fn kind_transition_fields_omitted_from_json_when_none() {
+        // `skip_serializing_if` keeps the wire clean for legacy/never-configured
+        // outputs, and `default` lets an old payload deserialize them as None.
+        let out = output(400, None, None);
+        let v = serde_json::to_value(&out).unwrap();
+        assert!(v.get("baseTransitionMs").is_none());
+        assert!(v.get("overlayTransitionMs").is_none());
+
+        let with_kind = output(400, Some(0), Some(800));
+        let v2 = serde_json::to_value(&with_kind).unwrap();
+        assert_eq!(v2["baseTransitionMs"], json!(0));
+        assert_eq!(v2["overlayTransitionMs"], json!(800));
+
+        // A def JSON WITHOUT the kind fields still deserializes (defaults None).
+        let legacy = json!({
+            "id": 1, "slug": "stream", "name": "Stream",
+            "defaultTransitionMs": 400, "activeSceneId": null,
+            "configRevision": 0, "scenes": []
+        });
+        let parsed: StreamOutputDef = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.base_transition_ms, None);
+        assert_eq!(parsed.overlay_transition_ms, None);
     }
 }

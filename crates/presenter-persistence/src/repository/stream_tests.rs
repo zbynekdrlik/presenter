@@ -524,6 +524,57 @@ async fn transition_bounds_enforced() {
 }
 
 #[tokio::test]
+async fn kind_transitions_set_clear_and_bump() {
+    let repo = repo().await;
+    // Fresh output: kind columns start unset (inherit default).
+    let seeded = repo.get_stream_output("stream").await.unwrap();
+    assert_eq!(seeded.base_transition_ms, None);
+    assert_eq!(seeded.overlay_transition_ms, None);
+    let rev0 = seeded.config_revision;
+
+    // Set base = 0 (cut) + overlay = 800 in one call → both persist, ONE bump.
+    let patched = repo
+        .set_stream_output_kind_transitions("stream", Some(Some(0)), Some(Some(800)))
+        .await
+        .unwrap();
+    assert_eq!(patched.base_transition_ms, Some(0));
+    assert_eq!(patched.overlay_transition_ms, Some(800));
+    assert_eq!(patched.config_revision, rev0 + 1, "one config bump");
+
+    // Absent field (None) leaves overlay unchanged; base updated to 250.
+    let patched = repo
+        .set_stream_output_kind_transitions("stream", Some(Some(250)), None)
+        .await
+        .unwrap();
+    assert_eq!(patched.base_transition_ms, Some(250));
+    assert_eq!(
+        patched.overlay_transition_ms,
+        Some(800),
+        "overlay untouched"
+    );
+
+    // Explicit null clears base back to inherit (None); overlay still untouched.
+    let patched = repo
+        .set_stream_output_kind_transitions("stream", Some(None), None)
+        .await
+        .unwrap();
+    assert_eq!(patched.base_transition_ms, None, "cleared to inherit");
+    assert_eq!(patched.overlay_transition_ms, Some(800));
+
+    // The def carries both columns too.
+    let def = repo.load_output_def("stream").await.unwrap();
+    assert_eq!(def.base_transition_ms, None);
+    assert_eq!(def.overlay_transition_ms, Some(800));
+
+    // Out-of-range value is rejected (>10000).
+    let err = repo
+        .set_stream_output_kind_transitions("stream", Some(Some(20_000)), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+}
+
+#[tokio::test]
 async fn rename_scene_clash_against_sibling_conflicts() {
     let repo = repo().await;
     repo.create_stream_scene("stream", "Alpha", SceneKind::Base)

@@ -290,8 +290,20 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   inside the Effect (never tracked `.get()`) or it self-triggers. Keep base layers before overlays with
   a STABLE sort (`isolation:isolate` ⇒ cross-scene layering is DOM order); gate the sort on an actual
   base add (a new base is pushed at the vec end and must move before overlays; overlays pushed at the
-  end are already ordered). Incoming scene's `transition_ms ?? default_transition_ms` governs both fades;
-  a clear uses the outgoing scene's own duration.
+  end are already ordered). Incoming scene's duration governs both fades; a clear/leaving uses the
+  outgoing layer's own duration.
+- **Transition resolution is a THREE-level chain since #752, NOT two — `scene.transition_ms ?? kind-level
+  ?? default_transition_ms`.** The middle (kind-level) is `stream_outputs.base_transition_ms` /
+  `overlay_transition_ms` (nullable; `NULL`=inherit default, `0`=cut), the LAYER-level controls the editor
+  exposes (all base switches / all overlay toggles at once — the per-scene `transition_ms` column stays in
+  model+API but has NO editor UI). Resolve via the core helpers `StreamOutputDef::resolve_transition_ms(scene)`
+  (has the full scene) and `kind_transition_ms(kind)` (= `kind col ?? default`, when only the KIND is known).
+  In the reconcile Effect (`pages/stream_output.rs`), rebuild/base-switch/overlay-incoming call
+  `resolve_transition_ms`; **base-clear + overlay-leaving call `kind_transition_ms(kind)`** because the
+  outgoing `SceneLayer` tuple carries only the raw per-scene `transition_ms`, and the layer's kind is fixed
+  by the filter — algebraically identical to `resolve_transition_ms` for that kind. A new nullable output
+  column is a double-`Option` nullable PATCH on `PATCH /stream/api/outputs/{slug}` (reuse
+  `deserialize_double_option`) + `set_stream_output_kind_transitions` (one txn, one config bump).
 - **Countdown content-transition default is `Fade{300}` from core** (`ContentTransition::default()`),
   but the recommended default for a countdown is `Cut` (per-second fades look wrong). The OUTPUT page
   HONORS whatever is stored; setting the `Cut` default belongs in the EDITOR's new-element defaults

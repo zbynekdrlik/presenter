@@ -708,6 +708,11 @@ pub mod stream_output {
         pub slug: String,
         pub name: String,
         pub default_transition_ms: i32,
+        // #752: LAYER-level scene-transition durations. NULL = inherit
+        // `default_transition_ms`; 0 = cut (#716). `base_*` covers all base
+        // scene switches, `overlay_*` all overlay on/off toggles.
+        pub base_transition_ms: Option<i32>,
+        pub overlay_transition_ms: Option<i32>,
         pub active_scene_id: Option<i32>,
         pub config_revision: i32,
         pub created_at: DateTimeWithTimeZone,
@@ -879,6 +884,8 @@ mod stream_entities_roundtrip_tests {
             slug: Set("event".to_string()),
             name: Set("Event".to_string()),
             default_transition_ms: Set(500),
+            base_transition_ms: Set(Some(0)),
+            overlay_transition_ms: Set(Some(800)),
             active_scene_id: Set(None),
             config_revision: Set(0),
             created_at: Set(ts()),
@@ -938,6 +945,16 @@ mod stream_entities_roundtrip_tests {
             .expect("output row");
         assert_eq!(got_output.slug, "event");
         assert_eq!(got_output.default_transition_ms, 500);
+        assert_eq!(
+            got_output.base_transition_ms,
+            Some(0),
+            "base kind transition (0 = cut)"
+        );
+        assert_eq!(
+            got_output.overlay_transition_ms,
+            Some(800),
+            "overlay kind transition"
+        );
         assert_eq!(got_output.active_scene_id, None);
 
         let got_scene = stream_scene::Entity::find_by_id(scene.id)
@@ -974,5 +991,9 @@ mod stream_entities_roundtrip_tests {
         let seeded = seeded.expect("seeded default output present");
         assert_eq!(seeded.name, "Stream");
         assert_eq!(seeded.default_transition_ms, 400);
+        // The kind-transition columns are NULL for the pre-#752 seeded row
+        // (they inherit `default_transition_ms` at resolution time).
+        assert_eq!(seeded.base_transition_ms, None);
+        assert_eq!(seeded.overlay_transition_ms, None);
     }
 }

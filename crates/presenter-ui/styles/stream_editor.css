@@ -99,6 +99,43 @@ html[data-stream-editor="true"] {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* #752 LAYER-level transition control: zap/vyp toggle + čas (ms). */
+.stream-editor__transition-ctl {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: auto;
+  font-size: 0.85rem;
+  color: #9aa1b1;
+}
+
+.stream-editor__transition-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.stream-editor__transition-ms {
+  width: 5.5rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid #3a4152;
+  border-radius: 6px;
+  background: #12141b;
+  color: #e7e9ee;
+}
+
+.stream-editor__transition-ms:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.stream-editor__transition-unit {
+  color: #6f7688;
 }
 
 .stream-editor__overlay-list {

@@ -48,6 +48,10 @@ type SceneDef = {
 
 type OutputDef = {
   activeSceneId: number | null;
+  configRevision: number;
+  defaultTransitionMs: number;
+  baseTransitionMs?: number;
+  overlayTransitionMs?: number;
   scenes: SceneDef[];
 };
 
@@ -502,5 +506,101 @@ test("off-canvas guard: negative Y saves, warning + placement preview", async ({
 
   // Only tolerated noise is the preview iframe's placeholder-asset 404 (editor
   // collector strips it); no 422 (negative Y is valid now), so console is clean.
+  expect(errors, "browser console must be clean").toEqual([]);
+});
+
+// --- #752: LAYER-level (kind-level) transition controls --------------------
+
+/** Create a scene through the REST API (activation/seeding, not the UI). */
+async function createSceneApi(
+  page: Page,
+  name: string,
+  kind: "base" | "overlay",
+): Promise<number> {
+  const res = await page.request.post(
+    new URL("/stream/api/outputs/stream/scenes", baseURL).toString(),
+    { data: { name, kind } },
+  );
+  expect(res.ok(), `create scene ${name} -> ${res.status()}`).toBeTruthy();
+  return (await res.json()).id as number;
+}
+
+async function activateBaseApi(page: Page, sceneId: number): Promise<void> {
+  const res = await page.request.put(
+    new URL("/stream/api/outputs/stream/active-scene", baseURL).toString(),
+    { data: { sceneId } },
+  );
+  expect(res.ok(), `activate base -> ${res.status()}`).toBeTruthy();
+}
+
+async function setOverlayApi(page: Page, sceneId: number, active: boolean): Promise<void> {
+  const res = await page.request.put(
+    new URL(`/stream/api/outputs/stream/overlays/${sceneId}`, baseURL).toString(),
+    { data: { active } },
+  );
+  expect(res.ok(), `set overlay -> ${res.status()}`).toBeTruthy();
+}
+
+test("kind transitions: base OFF (cut) + overlay 800ms via UI reach def and output page", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+
+  // Seed one base + one overlay scene (creation itself is covered above).
+  const baseId = await createSceneApi(page, "SE_KindBase752", "base");
+  const overlayId = await createSceneApi(page, "SE_KindOverlay752", "overlay");
+
+  await openEditor(page);
+  const revBefore = (await getDef(page)).configRevision;
+
+  // Base layer: toggle the crossfade OFF -> stored as 0 (cut). The control is
+  // ON by default (a fresh output inherits the default fade).
+  const baseToggle = page.locator('[data-role="stream-base-transition-toggle"]');
+  await expect(baseToggle).toBeChecked();
+  await baseToggle.uncheck();
+  await expect
+    .poll(async () => (await getDef(page)).baseTransitionMs, { timeout: 15_000 })
+    .toBe(0);
+
+  // Overlay layer: set the crossfade to 800 ms (toggle stays ON).
+  const overlayMs = page.locator('[data-role="stream-overlay-transition-ms"]');
+  await overlayMs.fill("800");
+  await overlayMs.blur();
+  await expect
+    .poll(async () => (await getDef(page)).overlayTransitionMs, { timeout: 15_000 })
+    .toBe(800);
+
+  // A config write on each PATCH bumped configRevision.
+  const def = await getDef(page);
+  expect(def.configRevision, "kind-transition writes bumped configRevision").toBeGreaterThan(
+    revBefore,
+  );
+
+  // --- The output page resolves each layer's transition-duration from the
+  //     kind-level values: base switch = 0ms (cut), overlay toggle = 800ms. ---
+  await activateBaseApi(page, baseId);
+  await setOverlayApi(page, overlayId, true);
+
+  await page.goto(`${baseURL}/stream/stream`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('[data-role="stream-canvas"]', { timeout: 10_000 });
+
+  // Target THIS test's own scenes by id — the shared `stream` output may carry
+  // scenes/overlays left active by earlier tests in this file.
+  const baseLayer = page.locator(
+    `[data-role="stream-scene"][data-scene-id="${baseId}"]`,
+  );
+  await expect(baseLayer).toHaveCount(1, { timeout: 10_000 });
+  await expect(baseLayer).toHaveAttribute("data-scene-kind", "base");
+  await expect(baseLayer).toHaveAttribute("style", /transition-duration:\s*0ms/);
+
+  const overlayLayer = page.locator(
+    `[data-role="stream-scene"][data-scene-id="${overlayId}"]`,
+  );
+  await expect(overlayLayer).toHaveCount(1, { timeout: 10_000 });
+  await expect(overlayLayer).toHaveAttribute("data-scene-kind", "overlay");
+  await expect(overlayLayer).toHaveAttribute("style", /transition-duration:\s*800ms/);
+
   expect(errors, "browser console must be clean").toEqual([]);
 });

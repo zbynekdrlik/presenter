@@ -59,6 +59,9 @@ impl Repository {
             slug: Set(slug.to_string()),
             name: Set(trimmed),
             default_transition_ms: Set(DEFAULT_OUTPUT_TRANSITION_MS),
+            // Kind-level overrides start unset (inherit the default). #752.
+            base_transition_ms: Set(None),
+            overlay_transition_ms: Set(None),
             active_scene_id: Set(None),
             config_revision: Set(0),
             created_at: Set(now.into()),
@@ -114,6 +117,50 @@ impl Repository {
         let next_revision = output.config_revision + 1;
         let mut active = output.into_active_model();
         active.default_transition_ms = Set(default_transition_ms as i32);
+        active.config_revision = Set(next_revision);
+        active.updated_at = Set(Utc::now().into());
+        let updated = active.update(&txn).await?;
+        txn.commit().await?;
+        Ok(output_summary_from_model(updated))
+    }
+
+    /// Set the LAYER-level (kind-level) scene-transition overrides (#752). Each
+    /// argument is a double-`Option`: `None` leaves that column unchanged,
+    /// `Some(None)` clears it back to inherit `default_transition_ms`, and
+    /// `Some(Some(ms))` sets it (`0` = cut). At least one must be `Some` (the
+    /// router only calls this when a kind field is present). One transaction,
+    /// one `config_revision` bump — mirrors `set_stream_output_transition`.
+    #[instrument(skip_all)]
+    pub async fn set_stream_output_kind_transitions(
+        &self,
+        slug: &str,
+        base_transition_ms: Option<Option<u32>>,
+        overlay_transition_ms: Option<Option<u32>>,
+    ) -> anyhow::Result<StreamOutputSummary> {
+        for value in [base_transition_ms, overlay_transition_ms]
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            check_transition_ms(value)?;
+        }
+        // Defensive no-op guard (#752 review 🔵): with nothing to change, skip
+        // the txn + config_revision bump entirely. The router only calls this
+        // when a field is present, so this hardens the pub method for any
+        // future caller rather than fixing a live path.
+        if base_transition_ms.is_none() && overlay_transition_ms.is_none() {
+            return self.get_stream_output(slug).await;
+        }
+        let txn = self.db.begin().await?;
+        let output = Self::output_by_slug(&txn, slug).await?;
+        let next_revision = output.config_revision + 1;
+        let mut active = output.into_active_model();
+        if let Some(base) = base_transition_ms {
+            active.base_transition_ms = Set(base.map(|v| v as i32));
+        }
+        if let Some(overlay) = overlay_transition_ms {
+            active.overlay_transition_ms = Set(overlay.map(|v| v as i32));
+        }
         active.config_revision = Set(next_revision);
         active.updated_at = Set(Utc::now().into());
         let updated = active.update(&txn).await?;
@@ -499,6 +546,8 @@ impl Repository {
             slug: output.slug,
             name: output.name,
             default_transition_ms: output.default_transition_ms.max(0) as u32,
+            base_transition_ms: output.base_transition_ms.map(|v| v.max(0) as u32),
+            overlay_transition_ms: output.overlay_transition_ms.map(|v| v.max(0) as u32),
             active_scene_id: output.active_scene_id.map(|v| v as i64),
             config_revision: output.config_revision.max(0) as u64,
             scenes,
@@ -742,6 +791,8 @@ fn output_summary_from_model(model: stream_output::Model) -> StreamOutputSummary
         slug: model.slug,
         name: model.name,
         default_transition_ms: model.default_transition_ms.max(0) as u32,
+        base_transition_ms: model.base_transition_ms.map(|v| v.max(0) as u32),
+        overlay_transition_ms: model.overlay_transition_ms.map(|v| v.max(0) as u32),
         active_scene_id: model.active_scene_id.map(|v| v as i64),
         config_revision: model.config_revision.max(0) as u64,
     }
