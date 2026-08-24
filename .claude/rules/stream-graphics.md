@@ -109,6 +109,34 @@ Output-scoped routes take the output SLUG, not the numeric id: `/stream/api/outp
 `configRevision`). A verification curl against `/outputs/1/...` 404s with `"stream output not found"`
 (the numeric string is looked up as a slug).
 
+## Element create/PATCH body is the RAW props object, flattened — NOT `{"props":…}`
+`POST /stream/api/scenes/{id}/elements` and `PATCH /stream/api/elements/{id}` take the RAW
+`StreamElementProps` JSON DIRECTLY as the whole body: the serde-tagged enum flattened at the top
+level (the `kind` tag + that kind's fields, top-level snake_case; a nested `frame`/`TextStyle` is
+camelCase). It is NOT wrapped in `{"props": {…}}` — wrapping it 422s with `missing field \`kind\``
+(the handler deserialises the body straight into `StreamElementProps`, and `kind` is then absent at
+the top level). The WASM editor does this correctly (`components/stream_editor/mod.rs::save_props`
+PATCHes `&props`); a hand-rolled curl must send the flattened object, e.g.
+`{"kind":"image","asset_id":2,"fit":"contain","frame":{"xPct":10,"yPct":10,"wPct":30,"hPct":20},"opacity":1}`.
+Verified live 2026-08-24 (#751). PATCH replaces props only — `z_order` is preserved (reorder is the
+`/elements/order` route); `frame` position may be off-canvas (x/y negative or past 100, bounded by
+`presenter_core::STREAM_FRAME_POS_*`) — the editor warns when fully off-canvas but never clamps (#751).
+
+## Frame validation is SPLIT (position off-canvas-OK vs size positive) — a bound change touches 3 test layers
+`validate_frame` (core `stream.rs`) is NOT one range: `validate_frame_pos` (x/y) allows off-canvas
+`STREAM_FRAME_POS_MIN_PCT..=MAX_PCT` (-200..=300) so an element can slide in / bleed off / move up
+past the top; `validate_frame_size` (w/h) stays `0 < v <= STREAM_FRAME_SIZE_MAX_PCT` (300). `validate_pct`
+(0..=100) is now ONLY for text `size_pct` — do not fold frame back into it. When you change a frame
+bound, a hardcoded boundary-value assertion lives in THREE places and Tier-0 (no local build) surfaces
+a miss only at CI: the core unit tests (`stream.rs` `#[cfg(test)]`), the server router test
+(`crates/presenter-server/src/router/stream_tests.rs` — the `xPct` "invalid → 422" case), AND the
+editor E2E (`tests/e2e/stream-editor.spec.ts` — the `stream-frame-x` "invalid → inline 422" case).
+`#751` widened 100→300 and both the router test and the E2E asserted `xPct=150 → 422`, which silently
+became VALID; grep every `150`/`xPct`/`out of range` frame assertion before pushing a bound change.
+New `StreamValidationError` variants are additive-safe (no exhaustive `match` on it outside `stream.rs`),
+but a new `pub const` needs adding to the `lib.rs` `pub use stream::{…}` re-export or `presenter_core::NAME`
+won't resolve (per `quality-gates.md`; #751 review 🔵).
+
 ## Asset pipeline on disk (#708)
 Uploaded images live at `<stream_assets_dir>/<sha256>.<ext>` (ext ∈ png|jpg|webp), one file per
 sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`AssetStore` + pure

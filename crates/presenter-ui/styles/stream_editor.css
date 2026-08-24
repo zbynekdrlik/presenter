@@ -455,6 +455,49 @@ html[data-stream-editor="true"] {
   font-size: 0.85rem;
 }
 
+/* ---- Placement preview + off-canvas guard (#751) ------------------------- */
+
+/* A schematic 16:9 canvas (0..100% both axes) showing where the frame sits.
+ * overflow:hidden clips off-canvas parts, so the box matches what OBS renders. */
+.stream-editor__frame-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.stream-editor__frame-canvas {
+  position: relative;
+  width: 100%;
+  max-width: 18rem;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #2a2e3a;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #14161c;
+}
+
+.stream-editor__frame-rect {
+  position: absolute;
+  box-sizing: border-box;
+  background: rgba(79, 140, 255, 0.35);
+  border: 1px solid #4f8cff;
+}
+
+/* Fully off-canvas → the rect (clipped away) turns red to match the warning. */
+.stream-editor__frame-rect[data-offcanvas="true"] {
+  background: rgba(255, 154, 166, 0.3);
+  border-color: #ff9aa6;
+}
+
+.stream-editor__frame-warning {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: #5a2530;
+  color: #ffd7dd;
+  font-size: 0.8rem;
+}
+
 /* ---- Preview iframe + asset picker (#715) -------------------------------- */
 
 .stream-editor__preview {

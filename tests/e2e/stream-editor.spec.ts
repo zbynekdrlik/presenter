@@ -343,8 +343,10 @@ test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => 
     })
     .toBeTruthy();
 
-  // --- Invalid value (pct > 100) → inline 422, def unchanged ---
-  await page.locator('[data-role="stream-frame-x"]').fill("150");
+  // --- Invalid value (far off-canvas, > core max 300) → inline 422, def unchanged.
+  //     NB: since #751, off-canvas positions (negative / past 100) are VALID, so
+  //     the invalid case must exceed the wide core bound (STREAM_FRAME_POS_MAX 300).
+  await page.locator('[data-role="stream-frame-x"]').fill("5000");
   await page.locator('[data-role="stream-prop-save"]').click();
   await expect(page.locator('[data-role="stream-prop-error"]')).toBeVisible({ timeout: 10_000 });
   {
@@ -433,4 +435,72 @@ test("a config change reflects live in a second editor context", async ({
 
   await ctxA.close();
   await ctxB.close();
+});
+
+// --- #751: off-canvas frame guard + placement preview ----------------------
+
+test("off-canvas guard: negative Y saves, warning + placement preview", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+
+  const scene = await addScene(page, "SE_OffCanvas751", "base");
+  await openPanel(page, scene);
+  const img = await addElement(page, scene, "image");
+
+  // Select the image element and open its property form.
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${img}"] [data-role="stream-element-select"]`)
+    .click();
+  await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
+
+  // Placement preview is present (canvas box + the element rect).
+  await expect(page.locator('[data-role="stream-frame-preview"]')).toBeVisible();
+  await expect(page.locator('[data-role="stream-frame-canvas"]')).toBeVisible();
+  await expect(page.locator('[data-role="stream-frame-rect"]')).toBeVisible();
+
+  // Default frame (x10 y40 w80 h20) is on-canvas → no warning, rect not off-canvas.
+  await expect(page.locator('[data-role="stream-frame-offcanvas-warning"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="stream-frame-rect"]')).toHaveAttribute(
+    "data-offcanvas",
+    "false",
+  );
+
+  // --- Move UP past the top edge: negative Y must SAVE (core relaxed in #751,
+  //     no min="0" editor clamp). y=-10 with h=20 still intersects the canvas,
+  //     so it is a legitimate partial-off-canvas placement (no full-off warning).
+  await page.locator('[data-role="stream-frame-y"]').fill("-10");
+  await page.locator('[data-role="stream-prop-save"]').click();
+  await expect(page.locator('[data-role="stream-prop-error"]')).toHaveCount(0);
+  await expect
+    .poll(async () => {
+      const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === img);
+      return (el?.props as any)?.frame.yPct;
+    })
+    .toBe(-10);
+
+  // --- Fully off-canvas (x >= 100) → the warning shows + the rect flags it.
+  //     This is client-side reactive on the draft (no save, no server request).
+  await page.locator('[data-role="stream-frame-x"]').fill("100");
+  await expect(page.locator('[data-role="stream-frame-offcanvas-warning"]')).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.locator('[data-role="stream-frame-rect"]')).toHaveAttribute(
+    "data-offcanvas",
+    "true",
+  );
+
+  // --- Back on-canvas → the warning clears (warn-only, never clamps).
+  await page.locator('[data-role="stream-frame-x"]').fill("10");
+  await expect(page.locator('[data-role="stream-frame-offcanvas-warning"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="stream-frame-rect"]')).toHaveAttribute(
+    "data-offcanvas",
+    "false",
+  );
+
+  // Only tolerated noise is the preview iframe's placeholder-asset 404 (editor
+  // collector strips it); no 422 (negative Y is valid now), so console is clean.
+  expect(errors, "browser console must be clean").toEqual([]);
 });

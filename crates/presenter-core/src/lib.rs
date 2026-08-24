@@ -72,6 +72,7 @@ pub use stream::{
     SceneKind, Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamOutputDef,
     StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
     TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
+    STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
     STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX, STREAM_TRANSITION_MAX_MS,
 };
 pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};

@@ -47,6 +47,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
     view! {
         <div class="stream-editor__prop-form" data-role="stream-prop-form">
             <FrameFields draft=draft />
+            <FramePreview draft=draft />
 
             <Show when=move || kind() == "image">
                 <ImageFields draft=draft ctx=ctx />
@@ -165,6 +166,10 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
 }
 
 /// The shared Frame (x/y/w/h %) numeric inputs — all four kinds have a frame.
+/// X/Y allow off-canvas positions (`min="-200" max="300"`, no `min="0"` clamp) so
+/// an element can slide in from an edge or be moved up past the top (#751); W/H
+/// stay positive up to `max="300"`. Bounds mirror `presenter_core`'s
+/// `STREAM_FRAME_POS_*` / `STREAM_FRAME_SIZE_MAX_PCT`; core still rejects extremes.
 #[component]
 fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
     let x = move || read_frame(&draft.get()).x_pct.to_string();
@@ -176,7 +181,7 @@ fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
             <legend class="stream-editor__ts-legend">"Rám (% plátna)"</legend>
             <label class="stream-editor__field">
                 <span>"X"</span>
-                <input type="number" step="0.1" min="0" max="100" data-role="stream-frame-x"
+                <input type="number" step="0.1" min="-200" max="300" data-role="stream-frame-x"
                     prop:value=x
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
@@ -186,7 +191,7 @@ fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
             </label>
             <label class="stream-editor__field">
                 <span>"Y"</span>
-                <input type="number" step="0.1" min="0" max="100" data-role="stream-frame-y"
+                <input type="number" step="0.1" min="-200" max="300" data-role="stream-frame-y"
                     prop:value=y
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
@@ -196,7 +201,7 @@ fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
             </label>
             <label class="stream-editor__field">
                 <span>"Šírka"</span>
-                <input type="number" step="0.1" min="0" max="100" data-role="stream-frame-w"
+                <input type="number" step="0.1" min="0" max="300" data-role="stream-frame-w"
                     prop:value=w
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
@@ -206,7 +211,7 @@ fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
             </label>
             <label class="stream-editor__field">
                 <span>"Výška"</span>
-                <input type="number" step="0.1" min="0" max="100" data-role="stream-frame-h"
+                <input type="number" step="0.1" min="0" max="300" data-role="stream-frame-h"
                     prop:value=h
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<f32>() {
@@ -215,6 +220,48 @@ fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
                     } />
             </label>
         </fieldset>
+    }
+}
+
+/// Live placement preview + off-canvas guard (#751). A 16:9 canvas box (0..100%
+/// on both axes) draws the element's frame rect at `left/top/width/height` = the
+/// frame percentages; `overflow:hidden` clips off-canvas parts, so the operator
+/// sees at edit time exactly what OBS will render. When the frame is FULLY
+/// off-canvas (no intersection with the canvas) an inline warning shows — a warn,
+/// never a clamp (partial off-canvas is a legitimate slide-in design).
+#[component]
+fn FramePreview(draft: RwSignal<StreamElementProps>) -> impl IntoView {
+    let off_canvas = move || {
+        let f = read_frame(&draft.get());
+        f.x_pct >= 100.0 || f.y_pct >= 100.0 || f.x_pct + f.w_pct <= 0.0 || f.y_pct + f.h_pct <= 0.0
+    };
+    let rect_style = move || {
+        let f = read_frame(&draft.get());
+        format!(
+            "left:{}%;top:{}%;width:{}%;height:{}%;",
+            f.x_pct, f.y_pct, f.w_pct, f.h_pct
+        )
+    };
+    view! {
+        <div class="stream-editor__frame-preview" data-role="stream-frame-preview">
+            <span class="stream-editor__ts-legend">"Umiestnenie na plátne"</span>
+            <div class="stream-editor__frame-canvas" data-role="stream-frame-canvas">
+                <div
+                    class="stream-editor__frame-rect"
+                    data-role="stream-frame-rect"
+                    data-offcanvas=move || if off_canvas() { "true" } else { "false" }
+                    style=rect_style
+                ></div>
+            </div>
+            <Show when=off_canvas>
+                <p
+                    class="stream-editor__frame-warning"
+                    data-role="stream-frame-offcanvas-warning"
+                >
+                    "Prvok je úplne mimo plátna — nebude vidno"
+                </p>
+            </Show>
+        </div>
     }
 }
 
