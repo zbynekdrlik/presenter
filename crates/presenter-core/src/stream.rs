@@ -35,6 +35,18 @@ pub const STREAM_TRANSITION_MAX_MS: u32 = 10_000;
 /// Default content-transition fade, in milliseconds (arch §4: `Fade{300}`).
 pub const STREAM_DEFAULT_FADE_MS: u32 = 300;
 
+/// Frame position (`x_pct`/`y_pct`) bounds. A frame's top-left corner may sit
+/// OFF the 0..=100 canvas — negative (slide in / bleed past the top-left) or past
+/// 100 (bleed past the bottom-right) — so partial off-canvas and moving an element
+/// up past the top edge are legitimate (#751). Kept bounded so a typo like 10000
+/// still fails validation. The editor warns (never clamps) when a frame is FULLY
+/// off-canvas.
+pub const STREAM_FRAME_POS_MIN_PCT: f32 = -200.0;
+pub const STREAM_FRAME_POS_MAX_PCT: f32 = 300.0;
+/// Frame size (`w_pct`/`h_pct`) upper bound. Size must stay positive (see
+/// [`StreamValidationError::NonPositiveFrameSize`]) and no larger than this.
+pub const STREAM_FRAME_SIZE_MAX_PCT: f32 = 300.0;
+
 /// A typed validation failure for a stream slug, scene name, or element props.
 /// Carries enough detail for a 422 body; the persistence layer maps it to
 /// [`crate`]-external `RepositoryError::Invalid` (#705).
@@ -48,8 +60,21 @@ pub enum StreamValidationError {
     InvalidSceneName,
     #[error("{field} percentage {value} out of range (expected 0..=100)")]
     PctOutOfRange { field: &'static str, value: f32 },
-    #[error("frame {field} must be greater than 0 (got {value})")]
+    #[error("{field} {value} out of range (expected {min}..={max})")]
+    FramePosOutOfRange {
+        field: &'static str,
+        value: f32,
+        min: f32,
+        max: f32,
+    },
+    #[error("{field} must be greater than 0 (got {value})")]
     NonPositiveFrameSize { field: &'static str, value: f32 },
+    #[error("{field} {value} exceeds maximum {max}")]
+    FrameSizeTooLarge {
+        field: &'static str,
+        value: f32,
+        max: f32,
+    },
     #[error("opacity {value} out of range (expected 0.0..=1.0)")]
     OpacityOutOfRange { value: f32 },
     #[error("invalid color {color:?}: expected #rrggbb or #rrggbbaa")]
@@ -396,20 +421,38 @@ fn validate_pct(field: &'static str, value: f32) -> Result<(), StreamValidationE
 }
 
 fn validate_frame(frame: &Frame) -> Result<(), StreamValidationError> {
-    validate_pct("frame.x_pct", frame.x_pct)?;
-    validate_pct("frame.y_pct", frame.y_pct)?;
-    validate_pct("frame.w_pct", frame.w_pct)?;
-    validate_pct("frame.h_pct", frame.h_pct)?;
-    if frame.w_pct <= 0.0 {
-        return Err(StreamValidationError::NonPositiveFrameSize {
-            field: "w_pct",
-            value: frame.w_pct,
+    // Position (x/y) may go off-canvas (negative / past 100) so an element can
+    // slide in from an edge, bleed off, or be nudged up past the top (#751); the
+    // editor warns when a frame is FULLY off-canvas but never clamps. Size (w/h)
+    // must stay positive and bounded.
+    validate_frame_pos("frame.x_pct", frame.x_pct)?;
+    validate_frame_pos("frame.y_pct", frame.y_pct)?;
+    validate_frame_size("frame.w_pct", frame.w_pct)?;
+    validate_frame_size("frame.h_pct", frame.h_pct)?;
+    Ok(())
+}
+
+fn validate_frame_pos(field: &'static str, value: f32) -> Result<(), StreamValidationError> {
+    if !(STREAM_FRAME_POS_MIN_PCT..=STREAM_FRAME_POS_MAX_PCT).contains(&value) {
+        return Err(StreamValidationError::FramePosOutOfRange {
+            field,
+            value,
+            min: STREAM_FRAME_POS_MIN_PCT,
+            max: STREAM_FRAME_POS_MAX_PCT,
         });
     }
-    if frame.h_pct <= 0.0 {
-        return Err(StreamValidationError::NonPositiveFrameSize {
-            field: "h_pct",
-            value: frame.h_pct,
+    Ok(())
+}
+
+fn validate_frame_size(field: &'static str, value: f32) -> Result<(), StreamValidationError> {
+    if value <= 0.0 {
+        return Err(StreamValidationError::NonPositiveFrameSize { field, value });
+    }
+    if value > STREAM_FRAME_SIZE_MAX_PCT {
+        return Err(StreamValidationError::FrameSizeTooLarge {
+            field,
+            value,
+            max: STREAM_FRAME_SIZE_MAX_PCT,
         });
     }
     Ok(())
@@ -681,21 +724,77 @@ mod tests {
         assert!(validate_props(&verse_props()).is_ok());
     }
 
-    #[test]
-    fn out_of_range_pct_rejected() {
-        let props = StreamElementProps::Image {
+    fn image_with_frame(frame: Frame) -> StreamElementProps {
+        StreamElementProps::Image {
             asset_id: 1,
             fit: ImageFit::Cover,
-            frame: Frame {
-                x_pct: 150.0,
-                y_pct: 0.0,
+            frame,
+            opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn off_canvas_frame_positions_accepted() {
+        // Partial off-canvas / slide-in / moved-up placement is legitimate (#751):
+        // negative x/y and x/y past 100 must validate, as long as w/h stay > 0.
+        for (x, y) in [
+            (-10.0, -10.0), // owner's move-up case (negative y)
+            (150.0, 0.0),   // slides off the right edge (was rejected pre-#751)
+            (0.0, 120.0),   // slides off the bottom edge
+            (STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_POS_MAX_PCT), // boundary values inclusive
+        ] {
+            let props = image_with_frame(Frame {
+                x_pct: x,
+                y_pct: y,
+                w_pct: 20.0,
+                h_pct: 20.0,
+            });
+            assert!(
+                validate_props(&props).is_ok(),
+                "frame pos ({x},{y}) should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn extreme_frame_position_rejected() {
+        // A typo far outside the wide bound still fails (so it is not a silent
+        // no-op) — position, not size, so it is FramePosOutOfRange.
+        for (x, y) in [(5000.0, 0.0), (0.0, -5000.0)] {
+            let props = image_with_frame(Frame {
+                x_pct: x,
+                y_pct: y,
                 w_pct: 10.0,
                 h_pct: 10.0,
-            },
-            opacity: 1.0,
-        };
+            });
+            assert!(matches!(
+                validate_props(&props),
+                Err(StreamValidationError::FramePosOutOfRange { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn oversized_frame_rejected() {
+        let props = image_with_frame(Frame {
+            x_pct: 0.0,
+            y_pct: 0.0,
+            w_pct: 400.0,
+            h_pct: 10.0,
+        });
         assert!(matches!(
             validate_props(&props),
+            Err(StreamValidationError::FrameSizeTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn text_size_pct_out_of_range_rejected() {
+        // validate_pct still guards text size_pct at 0..=100 (unchanged by #751).
+        let mut style = ok_text_style();
+        style.size_pct = 250.0;
+        assert!(matches!(
+            validate_text_style(&style),
             Err(StreamValidationError::PctOutOfRange { .. })
         ));
     }

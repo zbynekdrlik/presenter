@@ -297,10 +297,12 @@ async fn patch_element_out_of_range_is_422_with_message() {
     )
     .await;
     let el_id = el["id"].as_i64().unwrap();
-    // xPct > 100 → core validate_props rejects → 422 with a message body the
-    // editor renders inline.
+    // xPct far off-canvas (> core max 300) → core validate_props rejects → 422
+    // with a message body the editor renders inline. NB since #751 off-canvas
+    // positions (negative / past 100) are VALID, so the invalid case must exceed
+    // the wide bound (STREAM_FRAME_POS_MAX = 300).
     let mut bad = image_props();
-    bad["frame"]["xPct"] = json!(150.0);
+    bad["frame"]["xPct"] = json!(5000.0);
     let (status, body) = req(
         &app,
         Method::PATCH,

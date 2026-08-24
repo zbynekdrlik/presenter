@@ -109,6 +109,19 @@ Output-scoped routes take the output SLUG, not the numeric id: `/stream/api/outp
 `configRevision`). A verification curl against `/outputs/1/...` 404s with `"stream output not found"`
 (the numeric string is looked up as a slug).
 
+## Element create/PATCH body is the RAW props object, flattened — NOT `{"props":…}`
+`POST /stream/api/scenes/{id}/elements` and `PATCH /stream/api/elements/{id}` take the RAW
+`StreamElementProps` JSON DIRECTLY as the whole body: the serde-tagged enum flattened at the top
+level (the `kind` tag + that kind's fields, top-level snake_case; a nested `frame`/`TextStyle` is
+camelCase). It is NOT wrapped in `{"props": {…}}` — wrapping it 422s with `missing field \`kind\``
+(the handler deserialises the body straight into `StreamElementProps`, and `kind` is then absent at
+the top level). The WASM editor does this correctly (`components/stream_editor/mod.rs::save_props`
+PATCHes `&props`); a hand-rolled curl must send the flattened object, e.g.
+`{"kind":"image","asset_id":2,"fit":"contain","frame":{"xPct":10,"yPct":10,"wPct":30,"hPct":20},"opacity":1}`.
+Verified live 2026-08-24 (#751). PATCH replaces props only — `z_order` is preserved (reorder is the
+`/elements/order` route); `frame` position may be off-canvas (x/y negative or past 100, bounded by
+`presenter_core::STREAM_FRAME_POS_*`) — the editor warns when fully off-canvas but never clamps (#751).
+
 ## Asset pipeline on disk (#708)
 Uploaded images live at `<stream_assets_dir>/<sha256>.<ext>` (ext ∈ png|jpg|webp), one file per
 sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`AssetStore` + pure
