@@ -65,6 +65,10 @@ fn verse_props() -> Value {
            "secondary_style": text_style(), "reference_style": text_style(), "frame": frame()})
 }
 
+fn color_props() -> Value {
+    json!({"kind": "color", "color": "#112233", "opacity": 0.5, "frame": frame()})
+}
+
 /// Create a fresh, uniquely-slugged output; return the app + the slug.
 async fn app_with_output(slug: &str) -> Router {
     let app = build_router(AppState::in_memory().await.unwrap());
@@ -364,6 +368,62 @@ async fn patch_element_out_of_range_is_422_with_message() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "422 carries a non-empty message, got {body:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_and_patch_color_element() {
+    let app = app_with_output("t-color").await;
+    let (_, scene) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-color/scenes",
+        Some(json!({"name": "Base", "kind": "base"})),
+    )
+    .await;
+    let scene_id = scene["id"].as_i64().unwrap();
+
+    // Create a color element (raw props body, flattened — no {"props":..} wrap).
+    let (s_create, el) = req(
+        &app,
+        Method::POST,
+        &format!("/stream/api/scenes/{scene_id}/elements"),
+        Some(color_props()),
+    )
+    .await;
+    assert_eq!(s_create, StatusCode::OK);
+    let el_id = el["id"].as_i64().unwrap();
+
+    // Def read reflects the stored color props.
+    let (_, def) = req(&app, Method::GET, "/stream/api/outputs/t-color/def", None).await;
+    let stored = &def["scenes"][0]["elements"][0]["props"];
+    assert_eq!(stored["kind"], json!("color"));
+    assert_eq!(stored["color"], json!("#112233"));
+    assert_eq!(stored["opacity"], json!(0.5));
+
+    // Valid PATCH updates color + opacity.
+    let (s_patch, patched) = req(
+        &app,
+        Method::PATCH,
+        &format!("/stream/api/elements/{el_id}"),
+        Some(json!({"kind": "color", "color": "#aabbcc", "opacity": 0.25, "frame": frame()})),
+    )
+    .await;
+    assert_eq!(s_patch, StatusCode::OK);
+    assert_eq!(patched["props"]["color"], json!("#aabbcc"));
+
+    // Out-of-range opacity (>1) → core validate_props rejects → 422 with message.
+    let (s_bad, body) = req(
+        &app,
+        Method::PATCH,
+        &format!("/stream/api/elements/{el_id}"),
+        Some(json!({"kind": "color", "color": "#aabbcc", "opacity": 1.5, "frame": frame()})),
+    )
+    .await;
+    assert_eq!(s_bad, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(
         body["message"].as_str().is_some_and(|m| !m.is_empty()),
         "422 carries a non-empty message, got {body:?}"

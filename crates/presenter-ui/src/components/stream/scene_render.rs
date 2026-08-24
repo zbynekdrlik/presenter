@@ -24,6 +24,7 @@
 use leptos::prelude::*;
 use presenter_core::{SceneKind, StreamElementProps, StreamSceneDef};
 
+use super::element_color::ElementColor;
 use super::element_countdown::ElementCountdown;
 use super::element_image::ElementImage;
 use super::element_lyrics::ElementLyrics;
@@ -120,6 +121,14 @@ pub fn SceneRender(
                         z=z
                         content_transition=content_transition
                     />
+                }
+                .into_any(),
+                StreamElementProps::Color {
+                    color,
+                    opacity,
+                    frame,
+                } => view! {
+                    <ElementColor id=id color=color opacity=opacity frame=frame z=z />
                 }
                 .into_any(),
             }

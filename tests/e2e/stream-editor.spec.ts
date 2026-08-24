@@ -271,7 +271,7 @@ async function openPanel(page: Page, sceneId: string) {
 async function addElement(
   page: Page,
   sceneId: string,
-  kind: "image" | "countdown" | "lyrics" | "verse",
+  kind: "image" | "color" | "countdown" | "lyrics" | "verse",
 ): Promise<string> {
   const before = (await getScene(page, sceneId)).elements.map((e) => e.id);
   await page.locator(`[data-role="stream-add-element-${kind}"]`).click();
@@ -601,6 +601,86 @@ test("kind transitions: base OFF (cut) + overlay 800ms via UI reach def and outp
   await expect(overlayLayer).toHaveCount(1, { timeout: 10_000 });
   await expect(overlayLayer).toHaveAttribute("data-scene-kind", "overlay");
   await expect(overlayLayer).toHaveAttribute("style", /transition-duration:\s*800ms/);
+
+  expect(errors, "browser console must be clean").toEqual([]);
+});
+
+// --- #753: solid-color element kind ----------------------------------------
+
+test("color element: create below a verse, reorder behind, background-color + opacity on output page", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+
+  const scene = await addScene(page, "SE_Color753", "base");
+  await openPanel(page, scene);
+
+  // Verse first (z 0), then color (z 1, on top initially).
+  const verse = await addElement(page, scene, "verse");
+  const colorId = await addElement(page, scene, "color");
+  {
+    const kinds = (await getScene(page, scene)).elements.map((e) => e.props.kind);
+    expect(kinds).toEqual(["verse", "color"]);
+  }
+
+  // Reorder: move the color element UP one → it sits BEFORE the verse in the
+  // list = lower z_order = rendered BEHIND the verse text (the owner's
+  // "semi-transparent background below, verse on top" use case).
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${colorId}"] [data-role="stream-element-up"]`)
+    .click();
+  await expect
+    .poll(async () => (await getScene(page, scene)).elements.map((e) => String(e.id)))
+    .toEqual([colorId, verse]);
+
+  // Edit the color element: pick a known color + semi-transparent opacity.
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${colorId}"] [data-role="stream-element-select"]`)
+    .click();
+  await page.waitForSelector('[data-role="stream-color-fields"]', { timeout: 10_000 });
+  await setColorInput(page, '[data-role="stream-color-value"]', "#ff8800");
+  await page.locator('[data-role="stream-color-opacity"]').fill("0.5");
+  await page.locator('[data-role="stream-prop-save"]').click();
+  await expect
+    .poll(async () => {
+      const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === colorId);
+      const p = el?.props as Record<string, any> | undefined;
+      return p && p.kind === "color" && p.color === "#ff8800" && p.opacity === 0.5;
+    })
+    .toBeTruthy();
+
+  // Activate the base scene so the output page renders its elements.
+  await activateBaseApi(page, Number(scene));
+
+  await page.goto(`${baseURL}/stream/stream`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('[data-role="stream-canvas"]', { timeout: 10_000 });
+
+  // Target THIS test's own scene by id (the shared `stream` output may carry
+  // scenes left active by earlier tests in this file).
+  const sceneLayer = page.locator(
+    `[data-role="stream-scene"][data-scene-id="${scene}"]`,
+  );
+  await expect(sceneLayer).toHaveCount(1, { timeout: 10_000 });
+
+  const colorEl = sceneLayer.locator('[data-role="stream-element-color"]');
+  await expect(colorEl).toHaveCount(1, { timeout: 10_000 });
+
+  // background-color + opacity applied (the whole point of the feature).
+  const bg = await colorEl.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(bg).toBe("rgb(255, 136, 0)");
+  const opacity = await colorEl.evaluate((el) => getComputedStyle(el).opacity);
+  expect(opacity).toBe("0.5");
+
+  // Stacking: the color band's z-index sits BELOW the verse element's (behind
+  // the text) — the verse container always renders even with no active content.
+  const colorZ = await colorEl.evaluate((el) => Number(getComputedStyle(el).zIndex));
+  const verseEl = sceneLayer.locator('[data-role="stream-element-verse"]');
+  await expect(verseEl).toHaveCount(1, { timeout: 10_000 });
+  const verseZ = await verseEl.evaluate((el) => Number(getComputedStyle(el).zIndex));
+  expect(colorZ).toBeLessThan(verseZ);
 
   expect(errors, "browser console must be clean").toEqual([]);
 });
