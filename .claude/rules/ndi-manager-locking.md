@@ -86,4 +86,44 @@ owner)` after every promote AND every rebuild**, `None` only transiently during 
 Pre-existing activation concurrency edge cases: #745 fixed (a) reap-vs-DB ordering (an
 `AppState.activation_lock` serializing `activate_video_source`) + (c) the rebuilt-entry
 double-watch (above); (b) was descoped (the 30 s reconnect ticker IS the backstop, conditional
-on `hw_h264_encoder()`); the reconnect-ticker-vs-deactivate revive TOCTOU is #747.
+on `hw_h264_encoder()`); the reconnect-ticker-vs-deactivate revive TOCTOU was #747 (FIXED).
+
+## The reconnect ticker's read+activate is ONE critical section (#747)
+
+`activation_lock` (a server-side `Arc<Mutex<()>>` in `AppState`, NOT the manager's `active`
+map) covers `activate_video_source` / `deactivate_video_sources` / `delete_video_source`. But
+the 30 s NDI auto-reconnect ticker (`state/background_tasks.rs`) used to **read**
+`get_active_video_source()` OUTSIDE that lock and then activate the stale id — so an operator
+deactivate committing in the read→activate gap was undone: the ticker revived the source the
+operator just turned off (~within one tick). `repository.activate_video_source`'s #375
+idempotency guard does NOT absorb it — it only early-returns when the row is ALREADY active, so
+post-deactivate it re-flips the row to active.
+
+The fix routes the ticker through `AppState::reconnect_active_video_source`, which takes
+`activation_lock` FIRST and holds it across BOTH the DB re-read AND the activation. To take the
+non-reentrant tokio `Mutex` exactly once, `activate_video_source` is split into a public
+lock-taking wrapper + a private `activate_video_source_locked` (assumes the lock is held);
+`reconnect_active_video_source` and the public wrapper both call `_locked`.
+
+- **Re-read the ACTIVE SOURCE under the lock, never re-check a caller-supplied id.** Re-reading
+  `get_active_video_source()` also makes a concurrent SWITCH correct (reconnect the NEW winner,
+  never the stale one); a per-id `is_active` re-check would only handle deactivate.
+- **The re-check is TICKER-ONLY, never baked into `activate_video_source` for all callers** —
+  the operator's own activate deliberately targets an INACTIVE source (turning it ON), so a
+  blanket skip-if-inactive would no-op the operator's explicit activate.
+- **The one-shot startup restore (`restore_active_ndi_source`, `state/mod.rs`) is deliberately
+  NOT routed through this** — it runs during AppState construction before the router serves any
+  request, so no concurrent operator deactivate is possible and the TOCTOU cannot occur there.
+
+## Tier-0 TOCTOU test technique: hold `activation_lock` in the test
+
+A TOCTOU can only be shown with concurrency. The `FakeNdiControl` start-gate parks at
+`start_pipeline`, which is AFTER the read+lock — too late to expose a read-that-raced-the-lock.
+Instead, the test HOLDS `activation_lock` directly (white-box — the `state::integrations::tests`
+module is a descendant of `crate::state`, so the private field is in scope), spawns the
+reconnect, lets it reach its steady blocking state, commits the operator's deactivate at the
+**repository** level while the lock is held (the state-level `deactivate_video_sources` would
+DEADLOCK on the held lock), then releases. Pre-fix the reconnect's read raced ahead of the lock
+and revived the source; post-fix its read is under the lock, sees the source inactive, returns
+`Ok(None)`. Assert on committed DB state after the join; bound every wait with
+`tokio::time::timeout`.
