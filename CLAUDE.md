@@ -44,6 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | NdiManager active-map locking: never hold `active` across build/wait/stop; the #741 reservation activation pattern; Tier-0 seam testing without libndi | `.claude/rules/ndi-manager-locking.md` (auto-loads on `manager/**`) |
 | Presenter Stage APK stable-signing: committed debug keystore + guard, don't delete it (#740) | `.claude/rules/android-stage-signing.md` (auto-loads on `android/presenter-stage/**`) |
 | Resolume port-drift tests (#744/#564): use `free_port_pair()` for a verified-free CONSECUTIVE port pair, never `free_port()+N`; drift target = configured_port+1 within the 5-port probe window | `.claude/rules/resolume-port-drift.md` (auto-loads on `resolume/port_drift*.rs`) |
+| NDI `ndi_frames_live` per-session Cell vs shared-signal desync (#757/#732/#500): never write the shared signal `false` without resetting the `FrameStats` Cell; same-source reactivation must not reset the gate; ticker self-heal + pure/clock-wired host-test split | `.claude/rules/ndi-frames-live-desync.md` (auto-loads on `pages/stage.rs`, `components/stage/ndi_frame_stats.rs`, `ndi_health_ticker.rs`, `ndi_video.rs`) |
 
 ## Always-Rules
 
