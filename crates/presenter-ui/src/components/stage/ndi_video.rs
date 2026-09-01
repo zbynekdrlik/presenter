@@ -18,7 +18,8 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_clock_offset::ClockOffsetSetter;
 use super::ndi_frame_stats::{
-    DroppedFramesSetter, FramesLiveSetter, HealthSetter, StageSignalSetters, VideoLatencySetter,
+    DroppedFramesSetter, FramesLiveReader, FramesLiveSetter, HealthSetter, StageSignalSetters,
+    VideoLatencySetter,
 };
 use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
 use crate::state::stage::{StageContext, StageHealthReading};
@@ -76,6 +77,11 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let frames_live_sig = use_context::<StageContext>().map(|ctx| ctx.ndi_frames_live);
     let frames_live_setter: Option<FramesLiveSetter> =
         frames_live_sig.map(|sig| std::rc::Rc::new(move |v: bool| sig.set(v)) as FramesLiveSetter);
+    // #757: read path for the SAME shared signal so the health ticker can heal a
+    // desync (external `false` write while frames flow). Untracked poll, never a
+    // subscription — the ticker only reads it to compare against fresh frames.
+    let frames_live_read: Option<FramesLiveReader> = frames_live_sig
+        .map(|sig| std::rc::Rc::new(move || sig.get_untracked()) as FramesLiveReader);
 
     // #510 (T3): same shared-signal pattern for the browser<->server
     // pipeline-clock offset estimate. Written by the independent rVFC-driven
@@ -132,6 +138,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let stage_signal_setters = StageSignalSetters {
         video_latency: video_latency_setter,
         frames_live: frames_live_setter,
+        frames_live_read,
         clock_offset: clock_offset_setter,
         dropped_frames: dropped_frames_setter,
         stage_health: stage_health_setter,

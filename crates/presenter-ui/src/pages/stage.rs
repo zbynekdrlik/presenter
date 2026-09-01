@@ -237,12 +237,26 @@ pub fn StagePage() -> impl IntoView {
                     });
                 }
                 LiveEvent::NdiSourceActivated { source_id, .. } => {
+                    // #757: reset the neutral-cover / frames gate ONLY when the
+                    // source actually CHANGED — a same-source re-activation must
+                    // leave the live frames gate alone, or `mark_frames_live`
+                    // (transition-guarded on the still-`true` per-session Cell)
+                    // never re-emits `true` and the video stays stuck dormant
+                    // while frames flow. Mirrors the `sync_ndi_source_state`
+                    // guard (`ndi_active_source_id != incoming id`).
+                    let resets_gate = ndi_activation_resets_gate(
+                        &source_id,
+                        ctx.ndi_active_source_id.get_untracked().as_deref(),
+                    );
                     ctx.ndi_active.set(true);
                     ctx.ndi_active_source_id.set(Some(source_id));
-                    ctx.ndi_status.set("connecting".to_string());
-                    // #500: a freshly-activated source has no frames yet — the
-                    // neutral cover must show until the WHEP video decodes.
-                    ctx.ndi_frames_live.set(false);
+                    if resets_gate {
+                        ctx.ndi_status.set("connecting".to_string());
+                        // #500: a freshly-activated (new/changed) source has no
+                        // frames yet — the neutral cover must show until the
+                        // WHEP video decodes.
+                        ctx.ndi_frames_live.set(false);
+                    }
                 }
                 LiveEvent::NdiSourceDeactivated => {
                     ctx.ndi_active.set(false);
@@ -416,11 +430,7 @@ fn sync_ndi_source_state(ctx: StageContext) {
 /// (opacity:0) while frames flow. Mirrors the `sync_ndi_source_state` guard
 /// (`ndi_active_source_id != incoming id`).
 pub(crate) fn ndi_activation_resets_gate(incoming_id: &str, current_id: Option<&str>) -> bool {
-    // BUGGY (pre-#757): the handler reset the gate on EVERY activation, ignoring
-    // whether the source actually changed — reproduced here so the test below
-    // is RED until the GREEN fix restores the source-change guard.
-    let _ = (incoming_id, current_id);
-    true
+    current_id != Some(incoming_id)
 }
 
 fn set_global_string(name: &str, value: &str) {

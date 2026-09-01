@@ -37,6 +37,17 @@ pub(crate) type VideoLatencySetter = Rc<dyn Fn(Option<f64>)>;
 /// gate entirely (e.g. a video element with no StageContext).
 pub(crate) type FramesLiveSetter = Rc<dyn Fn(bool)>;
 
+/// Read-side companion to `FramesLiveSetter` (#757): returns the CURRENT value
+/// of the shared `StageContext::ndi_frames_live` signal via `get_untracked()`
+/// (a POLL, never a subscription). The 1s health ticker uses it to detect and
+/// heal a desync where an external `false` write left the shared signal `false`
+/// while frames are genuinely still presenting — the per-session `frames_live`
+/// Cell alone cannot see such an external write. Boxed behind `Rc` so it
+/// threads through the same `StageSignalSetters` bundle as the setters. `None`
+/// (no `StageContext`) disables the re-assert heal, same contract as every
+/// other setter.
+pub(crate) type FramesLiveReader = Rc<dyn Fn() -> bool>;
+
 /// Callback that publishes per-display dropped-frame + freeze counts (#523) to
 /// the shared `StageContext::dropped_frames` signal driving the stage's
 /// "⬇N" (and "❄N") health readout beside the latency figure. Fed
@@ -70,6 +81,10 @@ pub(crate) type HealthSetter = Rc<dyn Fn(Option<StageHealthReading>)>;
 pub(crate) struct StageSignalSetters {
     pub(crate) video_latency: Option<VideoLatencySetter>,
     pub(crate) frames_live: Option<FramesLiveSetter>,
+    /// #757: read path for the shared `ndi_frames_live` signal so the health
+    /// ticker can detect + heal a desync (external `false` write while frames
+    /// flow). Untracked poll, not a subscription.
+    pub(crate) frames_live_read: Option<FramesLiveReader>,
     pub(crate) clock_offset: Option<ClockOffsetSetter>,
     pub(crate) dropped_frames: Option<DroppedFramesSetter>,
     pub(crate) stage_health: Option<HealthSetter>,
@@ -137,11 +152,35 @@ pub(crate) fn refresh_frames_live_staleness(stats: &FrameStats, setter: &Option<
 /// in `reassert_frames_live_if_desynced`, the same pure/wired split as
 /// `frames_are_stale` / `refresh_frames_live_staleness`.
 pub(crate) fn should_reassert_frames_live(frames_stale: bool, shared_reads_live: bool) -> bool {
-    // BUGGY (pre-#757): the ticker never re-asserted the shared signal, so an
-    // external `false` write left it desynced forever — reproduced here so the
-    // test below is RED until the GREEN fix restores the heal decision.
-    let _ = (frames_stale, shared_reads_live);
-    false
+    !frames_stale && !shared_reads_live
+}
+
+/// #757 defense-in-depth: heal a `frames_live` desync once per 1s health tick.
+/// When frames are genuinely fresh but the shared `ndi_frames_live` signal was
+/// left `false` by an external write (a same-source re-activation, or any future
+/// stray reset), re-emit `true` and re-sync the local per-session Cell so the
+/// `<video>` is not stuck `stage-ndi-video--dormant` while frames flow. Reads
+/// the live clock + the shared-signal `reader`, delegates the decision to the
+/// pure host-tested `should_reassert_frames_live`, and applies the write —
+/// the same clock-wired-over-pure split as `refresh_frames_live_staleness` over
+/// `frames_are_stale`. `None` reader (no StageContext) → no-op.
+pub(crate) fn reassert_frames_live_if_desynced(
+    stats: &FrameStats,
+    setter: &Option<FramesLiveSetter>,
+    reader: &Option<FramesLiveReader>,
+) {
+    let Some(reader) = reader else { return };
+    let stale = frames_are_stale(
+        now_ms(),
+        stats.last_frame_at.get(),
+        FRAMES_LIVE_STALENESS_MS,
+    );
+    if should_reassert_frames_live(stale, reader()) {
+        stats.frames_live.set(true);
+        if let Some(setter) = setter {
+            setter(true);
+        }
+    }
 }
 
 /// Cadence (ms) at which the smoothed video latency is pushed to the on-screen
@@ -677,6 +716,7 @@ mod tests {
         let setters = StageSignalSetters::default();
         assert!(setters.video_latency.is_none());
         assert!(setters.frames_live.is_none());
+        assert!(setters.frames_live_read.is_none());
         assert!(setters.clock_offset.is_none());
         assert!(setters.dropped_frames.is_none());
         assert!(setters.stage_health.is_none());
@@ -697,6 +737,7 @@ mod tests {
         let setters = StageSignalSetters {
             video_latency: Some(video_latency),
             frames_live: Some(frames_live),
+            frames_live_read: None,
             clock_offset: None,
             dropped_frames: None,
             stage_health: None,
