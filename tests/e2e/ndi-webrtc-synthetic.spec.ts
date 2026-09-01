@@ -813,3 +813,141 @@ test("stage performs LAST-RESORT page reload after prolonged video stall (synthe
     await cleanupSource(request, src.id);
   }
 });
+
+// ── Test 6: the #757 regression — re-activating the ALREADY-active source must
+// NOT permanently hide the stage video. Live on prod v0.4.268 (2026-09-01): the
+// operator pressing "zapnúť NDI" on the source that was already active flipped
+// the <video> to `stage-ndi-video--dormant` (opacity:0) within ~500ms and it
+// NEVER recovered, while frames kept presenting at 30fps. Root cause: the
+// `NdiSourceActivated` handler reset `ndi_frames_live` false on every
+// activation, but `mark_frames_live` only re-emits true on the per-session
+// frames_live Cell's false→true transition — and on a same-source
+// re-activation the pipeline never stopped, so the Cell stayed true → the
+// shared signal was stuck false forever. This drives the exact user-visible
+// flow end-to-end (real frames flowing → activate the SAME source → the video
+// must stay revealed). Frame-advance past the ~500ms bug window is the settle
+// signal — no arbitrary sleep.
+test("stage keeps NDI video revealed after re-activating the ALREADY-active source (#757 regression) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-Reactivate-Same",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    const layoutResp = await request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "ndi-fullscreen" } },
+    );
+    expect(
+      layoutResp.ok(),
+      "switching stage layout to ndi-fullscreen must succeed",
+    ).toBe(true);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+      timeout: 10_000,
+    });
+
+    const video = page.locator('video[data-role="ndi-video"]');
+    await expect(video).toBeVisible({ timeout: 15_000 });
+
+    const framesPresented = () =>
+      video.evaluate(
+        (v: HTMLVideoElement) => v.getVideoPlaybackQuality().totalVideoFrames,
+      );
+
+    // Phase 1: initial playback presents frames and the <video> is revealed
+    // (not dormant/opacity:0) — the healthy baseline before the re-activation.
+    await expect
+      .poll(framesPresented, {
+        timeout: 25_000,
+        message: "initial NDI playback never presented a frame",
+      })
+      .toBeGreaterThan(0);
+    await expect(video).not.toHaveClass(/stage-ndi-video--dormant/, {
+      timeout: 10_000,
+    });
+    const baseline = await framesPresented();
+
+    // Phase 2: re-activate the SAME already-active source (exactly what the
+    // operator's "zapnúť NDI" does). No deactivate — the pipeline never stops,
+    // and <NdiVideo> is NOT remounted (same source id dedups), so the same
+    // <video> element keeps presenting frames throughout.
+    const reactivate = await request.post(
+      new URL(
+        `/integrations/video-sources/${src.id}/activate`,
+        baseURL,
+      ).toString(),
+      { data: {} },
+    );
+    expect(reactivate.ok(), "re-activating the same source must succeed").toBe(
+      true,
+    );
+
+    // #757 core: the <video> must NEVER go dormant during/after the same-source
+    // re-activation. We sample the dormant class on EVERY poll across the
+    // frame-advance settle window (frame advance is the settle signal, not an
+    // arbitrary sleep) and latch if it is EVER observed. A plain
+    // `.not.toHaveClass` only asserts the END state (retries until the class is
+    // absent), so a regression of the layer-1 handler guard alone — which the
+    // layer-2 ticker heals after ~1s — would leave only a ~1s dormant BLINK
+    // that a trailing end-state check misses while the user-visible black flash
+    // returns on every "zapnúť NDI". Sampling across the window (~150ms cadence)
+    // catches both the permanent stuck-dormant (original bug) and the transient
+    // blink (handler-guard-only regression). The desync is that frames KEEP
+    // flowing while the shared signal is stuck false, so frame advance alone
+    // cannot mask it — the class sampling is what catches it.
+    let everDormant = false;
+    await expect
+      .poll(
+        async () => {
+          everDormant ||= await video.evaluate((v: HTMLVideoElement) =>
+            v.classList.contains("stage-ndi-video--dormant"),
+          );
+          return framesPresented();
+        },
+        {
+          timeout: 25_000,
+          intervals: [150],
+          message:
+            "frames stopped presenting after same-source re-activation (unexpected — pipeline should be untouched)",
+        },
+      )
+      .toBeGreaterThan(baseline + 30);
+    expect(
+      everDormant,
+      "video went dormant (stage-ndi-video--dormant) at any point during/after same-source re-activation",
+    ).toBe(false);
+
+    // End-state belt-and-braces: also confirm the <video> is not dormant now.
+    await expect(video).not.toHaveClass(/stage-ndi-video--dormant/, {
+      timeout: 10_000,
+    });
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
+});

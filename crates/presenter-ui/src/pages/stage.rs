@@ -237,12 +237,26 @@ pub fn StagePage() -> impl IntoView {
                     });
                 }
                 LiveEvent::NdiSourceActivated { source_id, .. } => {
+                    // #757: reset the neutral-cover / frames gate ONLY when the
+                    // source actually CHANGED — a same-source re-activation must
+                    // leave the live frames gate alone, or `mark_frames_live`
+                    // (transition-guarded on the still-`true` per-session Cell)
+                    // never re-emits `true` and the video stays stuck dormant
+                    // while frames flow. Mirrors the `sync_ndi_source_state`
+                    // guard (`ndi_active_source_id != incoming id`).
+                    let resets_gate = ndi_activation_resets_gate(
+                        &source_id,
+                        ctx.ndi_active_source_id.get_untracked().as_deref(),
+                    );
                     ctx.ndi_active.set(true);
                     ctx.ndi_active_source_id.set(Some(source_id));
-                    ctx.ndi_status.set("connecting".to_string());
-                    // #500: a freshly-activated source has no frames yet — the
-                    // neutral cover must show until the WHEP video decodes.
-                    ctx.ndi_frames_live.set(false);
+                    if resets_gate {
+                        ctx.ndi_status.set("connecting".to_string());
+                        // #500: a freshly-activated (new/changed) source has no
+                        // frames yet — the neutral cover must show until the
+                        // WHEP video decodes.
+                        ctx.ndi_frames_live.set(false);
+                    }
                 }
                 LiveEvent::NdiSourceDeactivated => {
                     ctx.ndi_active.set(false);
@@ -405,10 +419,57 @@ fn sync_ndi_source_state(ctx: StageContext) {
     });
 }
 
+/// #757: Decide whether a `NdiSourceActivated` live event should RESET the NDI
+/// gate signals (`ndi_status`→"connecting", `ndi_frames_live`→false). Resetting
+/// is correct ONLY for a NEW/changed source: a same-source re-activation (the
+/// operator pressing "zapnúť NDI" on the already-active source) must NOT touch
+/// the frames gate, because the WHEP pipeline never stopped — the per-session
+/// `FrameStats.frames_live` Cell is still `true`, so `mark_frames_live` would
+/// never re-emit `true` and the shared `ndi_frames_live` signal would stay
+/// `false` forever, leaving the `<video>` stuck `stage-ndi-video--dormant`
+/// (opacity:0) while frames flow. Mirrors the `sync_ndi_source_state` guard
+/// (`ndi_active_source_id != incoming id`).
+pub(crate) fn ndi_activation_resets_gate(incoming_id: &str, current_id: Option<&str>) -> bool {
+    current_id != Some(incoming_id)
+}
+
 fn set_global_string(name: &str, value: &str) {
     let _ = js_sys::Reflect::set(
         &js_sys::global(),
         &JsValue::from_str(name),
         &JsValue::from_str(value),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ndi_activation_resets_gate;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #757 — the `NdiSourceActivated` handler must reset the neutral-cover /
+    // frames gate ONLY when the source actually CHANGED. A same-source
+    // re-activation (the operator re-pressing "zapnúť NDI") must leave the
+    // live frames gate alone, or the desync in `mark_frames_live` leaves the
+    // <video> stuck `stage-ndi-video--dormant` while frames keep presenting.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn same_source_reactivation_does_not_reset_the_gate() {
+        // The regression: re-activating the ALREADY-active source must NOT
+        // reset the frames gate.
+        assert!(!ndi_activation_resets_gate("src-1", Some("src-1")));
+    }
+
+    #[test]
+    fn changed_source_resets_the_gate() {
+        // A different active source is genuinely new → reset (neutral cover
+        // until the new WHEP video decodes).
+        assert!(ndi_activation_resets_gate("src-2", Some("src-1")));
+    }
+
+    #[test]
+    fn first_activation_from_none_resets_the_gate() {
+        // No prior source (fresh page load / first activation) → reset.
+        assert!(ndi_activation_resets_gate("src-1", None));
+    }
 }

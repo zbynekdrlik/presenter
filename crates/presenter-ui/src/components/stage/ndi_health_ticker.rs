@@ -17,8 +17,8 @@ use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 use super::ndi_beacon::maybe_post_beacon;
 use super::ndi_clock_offset::ClockOffsetEstimator;
 use super::ndi_frame_stats::{
-    mark_frames_live, record_presented_frame, refresh_frames_live_staleness, FrameStats,
-    HealthSetter, StageSignalSetters,
+    mark_frames_live, reassert_frames_live_if_desynced, record_presented_frame,
+    refresh_frames_live_staleness, FrameStats, HealthSetter, StageSignalSetters,
 };
 use super::ndi_profile::maybe_profile_fallback;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
@@ -79,6 +79,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
     // #527: only the fields this ticker needs, plucked once out of the
     // shared bundle before they're moved into the `move` closure below.
     let frames_live_setter = setters.frames_live.clone();
+    let frames_live_reader = setters.frames_live_read.clone();
     let dropped_frames_setter = setters.dropped_frames.clone();
     let stage_health_setter = setters.stage_health.clone();
     let tick_count = Cell::new(0u32);
@@ -124,6 +125,12 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
         // BOTH rVFC and proxy browsers (the rVFC path only marks live; this is
         // the single place that marks NOT-live). Transition-guarded.
         refresh_frames_live_staleness(&stats, &frames_live_setter);
+        // #757: heal a frames_live desync — if frames are genuinely fresh but
+        // the shared signal was left `false` by an external write (e.g. a
+        // same-source re-activation), re-assert `true` so the <video> is never
+        // stuck dormant while frames flow. No-op when there is no reader, when
+        // frames are stale, or when the shared signal already reads live.
+        reassert_frames_live_if_desynced(&stats, &frames_live_setter, &frames_live_reader);
         let now = now_ms();
         let frames = stats.frames_presented.get();
         if frames == 0 {
