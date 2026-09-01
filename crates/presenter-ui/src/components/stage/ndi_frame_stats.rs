@@ -141,29 +141,46 @@ pub(crate) fn refresh_frames_live_staleness(stats: &FrameStats, setter: &Option<
 }
 
 /// Pure decision for the #757 ticker desync self-heal: should the 1s health
-/// ticker RE-ASSERT `frames_live = true`? Only when frames are genuinely fresh
-/// (`!frames_stale`) AND the shared `ndi_frames_live` signal currently reads
-/// `false` — i.e. an external write (a same-source re-activation, or any future
-/// stray reset) desynced the shared signal from the still-`true` per-session
-/// Cell / real frame flow, leaving the `<video>` stuck dormant. Never fights the
-/// staleness path (stale → never re-assert), and never re-emits when the shared
-/// signal is already `true` (idempotent across the transition). Pure so the
-/// branch is host-unit-testable without a clock — the clock-reading wiring lives
-/// in `reassert_frames_live_if_desynced`, the same pure/wired split as
-/// `frames_are_stale` / `refresh_frames_live_staleness`.
-pub(crate) fn should_reassert_frames_live(frames_stale: bool, shared_reads_live: bool) -> bool {
-    !frames_stale && !shared_reads_live
+/// ticker RE-ASSERT `frames_live = true`? ONLY when ALL of:
+/// - `cell_live` — the per-session `FrameStats.frames_live` Cell is already
+///   `true` (a frame HAS presented this session and the frame path emitted
+///   `true`), AND
+/// - `!frames_stale` — the last frame is still fresh, AND
+/// - `!shared_reads_live` — the shared `ndi_frames_live` signal wrongly reads
+///   `false`.
+/// That triad is the EXACT desync signature of #757: an external write (a
+/// same-source re-activation, or any future stray reset) drove the shared
+/// signal `false` while the per-session Cell / real frame flow say frames are
+/// live. The `cell_live` gate is load-bearing: WITHOUT it, a fresh session that
+/// has NOT yet decoded a frame (Cell `false`, `last_frame_at` seeded to install
+/// time so `!frames_stale` holds for the first ~1s, shared reset `false` by
+/// `Watchdog::install`'s #500 reset) would false-heal `true` on tick 1 and drop
+/// the #500/#448 neutral "Connecting…" cover over a bare frameless `<video>`.
+/// A never-presented session has `cell_live == false`, so it is structurally
+/// unable to false-heal. Never fights the staleness path (stale → never
+/// re-assert), never re-emits when the shared signal already reads `true`. Pure
+/// so the branch is host-unit-testable without a clock — the clock-reading
+/// wiring lives in `reassert_frames_live_if_desynced`, the same pure/wired split
+/// as `frames_are_stale` / `refresh_frames_live_staleness`.
+pub(crate) fn should_reassert_frames_live(
+    cell_live: bool,
+    frames_stale: bool,
+    shared_reads_live: bool,
+) -> bool {
+    cell_live && !frames_stale && !shared_reads_live
 }
 
 /// #757 defense-in-depth: heal a `frames_live` desync once per 1s health tick.
-/// When frames are genuinely fresh but the shared `ndi_frames_live` signal was
-/// left `false` by an external write (a same-source re-activation, or any future
-/// stray reset), re-emit `true` and re-sync the local per-session Cell so the
-/// `<video>` is not stuck `stage-ndi-video--dormant` while frames flow. Reads
-/// the live clock + the shared-signal `reader`, delegates the decision to the
-/// pure host-tested `should_reassert_frames_live`, and applies the write —
-/// the same clock-wired-over-pure split as `refresh_frames_live_staleness` over
-/// `frames_are_stale`. `None` reader (no StageContext) → no-op.
+/// When a frame HAS presented this session (per-session Cell already `true`) and
+/// is still fresh, but the shared `ndi_frames_live` signal was left `false` by an
+/// external write (a same-source re-activation, or any future stray reset),
+/// re-emit `true` so the `<video>` is not stuck `stage-ndi-video--dormant` while
+/// frames flow. Reads the live clock + the shared-signal `reader` + the local
+/// Cell, delegates the decision to the pure host-tested
+/// `should_reassert_frames_live` (whose `cell_live` gate keeps a never-presented
+/// session from false-healing over the #500/#448 neutral cover), and applies the
+/// write — the same clock-wired-over-pure split as `refresh_frames_live_staleness`
+/// over `frames_are_stale`. `None` reader (no StageContext) → no-op.
 pub(crate) fn reassert_frames_live_if_desynced(
     stats: &FrameStats,
     setter: &Option<FramesLiveSetter>,
@@ -175,8 +192,9 @@ pub(crate) fn reassert_frames_live_if_desynced(
         stats.last_frame_at.get(),
         FRAMES_LIVE_STALENESS_MS,
     );
-    if should_reassert_frames_live(stale, reader()) {
-        stats.frames_live.set(true);
+    if should_reassert_frames_live(stats.frames_live.get(), stale, reader()) {
+        // The Cell is already `true` (that is the gate) — the desync is purely
+        // that the SHARED signal was left `false`, so only re-emit that.
         if let Some(setter) = setter {
             setter(true);
         }
@@ -818,37 +836,48 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn reasserts_when_frames_fresh_and_shared_reads_false() {
-        // The desync: frames NOT stale (fresh) + shared signal wrongly false
-        // → heal (re-emit true).
-        assert!(should_reassert_frames_live(false, false));
+    fn reasserts_when_cell_live_frames_fresh_and_shared_reads_false() {
+        // The exact #757 desync: a frame HAS presented (Cell true) + frames NOT
+        // stale (fresh) + shared signal wrongly false → heal (re-emit true).
+        assert!(should_reassert_frames_live(true, false, false));
+    }
+
+    #[test]
+    fn does_not_reassert_when_no_frame_ever_presented() {
+        // The #757-review 🔴 guard: a fresh session that has NOT decoded a frame
+        // yet (Cell false) — where `last_frame_at` is seeded to install time so
+        // frames read "fresh" and the shared signal is the #500 install reset
+        // (false) — must NOT false-heal, or it would drop the #500/#448 neutral
+        // "Connecting…" cover over a bare frameless <video>.
+        assert!(!should_reassert_frames_live(false, false, false));
     }
 
     #[test]
     fn does_not_reassert_when_shared_already_true() {
         // Shared already live → nothing to heal (idempotent, no ~1×/s churn).
-        assert!(!should_reassert_frames_live(false, true));
+        assert!(!should_reassert_frames_live(true, false, true));
     }
 
     #[test]
     fn does_not_reassert_when_frames_are_stale() {
         // Never fight the staleness path: a genuinely stopped source keeps the
         // shared signal false, so the ticker must NOT re-assert regardless of
-        // the shared value.
-        assert!(!should_reassert_frames_live(true, false));
-        assert!(!should_reassert_frames_live(true, true));
+        // the Cell / shared value.
+        assert!(!should_reassert_frames_live(true, true, false));
+        assert!(!should_reassert_frames_live(true, true, true));
     }
 
     #[test]
     fn reasserts_true_exactly_once_across_two_ticks() {
-        // Simulate the ticker's emit path over two 1s ticks with fresh frames.
-        // A `shared` cell stands in for the shared `ndi_frames_live` signal; the
-        // setter writes it, the reader reads it — exactly the wiring
-        // `reassert_frames_live_if_desynced` performs (minus the live clock).
+        // Simulate the ticker's emit path over two 1s ticks with a live Cell +
+        // fresh frames. A `shared` cell stands in for the shared
+        // `ndi_frames_live` signal; the setter writes it, the reader reads it —
+        // exactly the wiring `reassert_frames_live_if_desynced` performs (minus
+        // the live clock). The Cell stays `true` throughout (a frame presented).
         let shared = Rc::new(Cell::new(false));
         let emits = Rc::new(Cell::new(0u32));
         let mut tick = || {
-            if should_reassert_frames_live(false, shared.get()) {
+            if should_reassert_frames_live(true, false, shared.get()) {
                 shared.set(true);
                 emits.set(emits.get() + 1);
             }

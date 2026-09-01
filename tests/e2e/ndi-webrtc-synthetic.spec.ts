@@ -903,24 +903,42 @@ test("stage keeps NDI video revealed after re-activating the ALREADY-active sour
       true,
     );
 
-    // Settle signal: wait until well past the ~500ms window in which the bug
-    // flipped the class to dormant, using continued frame advance (≥30 more
-    // frames ≈ 1s at 30fps) rather than an arbitrary sleep. The desync is that
-    // frames KEEP flowing while the shared signal is stuck false, so frame
-    // advance alone can't mask the bug — the class assertion below is what
-    // catches it.
+    // #757 core: the <video> must NEVER go dormant during/after the same-source
+    // re-activation. We sample the dormant class on EVERY poll across the
+    // frame-advance settle window (frame advance is the settle signal, not an
+    // arbitrary sleep) and latch if it is EVER observed. A plain
+    // `.not.toHaveClass` only asserts the END state (retries until the class is
+    // absent), so a regression of the layer-1 handler guard alone — which the
+    // layer-2 ticker heals after ~1s — would leave only a ~1s dormant BLINK
+    // that a trailing end-state check misses while the user-visible black flash
+    // returns on every "zapnúť NDI". Sampling across the window (~150ms cadence)
+    // catches both the permanent stuck-dormant (original bug) and the transient
+    // blink (handler-guard-only regression). The desync is that frames KEEP
+    // flowing while the shared signal is stuck false, so frame advance alone
+    // cannot mask it — the class sampling is what catches it.
+    let everDormant = false;
     await expect
-      .poll(framesPresented, {
-        timeout: 25_000,
-        message:
-          "frames stopped presenting after same-source re-activation (unexpected — pipeline should be untouched)",
-      })
+      .poll(
+        async () => {
+          everDormant ||= await video.evaluate((v: HTMLVideoElement) =>
+            v.classList.contains("stage-ndi-video--dormant"),
+          );
+          return framesPresented();
+        },
+        {
+          timeout: 25_000,
+          intervals: [150],
+          message:
+            "frames stopped presenting after same-source re-activation (unexpected — pipeline should be untouched)",
+        },
+      )
       .toBeGreaterThan(baseline + 30);
+    expect(
+      everDormant,
+      "video went dormant (stage-ndi-video--dormant) at any point during/after same-source re-activation",
+    ).toBe(false);
 
-    // #757 core: the <video> must NOT be dormant after the same-source
-    // re-activation. Pre-fix this class was set within ~500ms and never
-    // cleared; `.not.toHaveClass` retries until the class is ABSENT, so a
-    // stuck-dormant (buggy) build times out and FAILS here.
+    // End-state belt-and-braces: also confirm the <video> is not dormant now.
     await expect(video).not.toHaveClass(/stage-ndi-video--dormant/, {
       timeout: 10_000,
     });

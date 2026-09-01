@@ -38,10 +38,16 @@ re-activating the already-active source (operator "zapnúť NDI") stuck the stag
   own it.
 - **Defense-in-depth already exists:** the 1s health ticker calls
   `reassert_frames_live_if_desynced` (decided by pure `should_reassert_frames_live`), which
-  re-emits `true` when frames are fresh (`!frames_are_stale`) but the shared signal reads `false`.
-  It reads the shared signal via the `FramesLiveReader` (`StageSignalSetters.frames_live_read`,
-  an untracked `get_untracked()` poll — a poll, NOT a subscription). So a stray desync self-heals
-  within ~1s — but that is a SAFETY NET, not a licence to write the shared signal false carelessly.
+  re-emits `true` on the EXACT desync signature — **per-session Cell `true` (a frame HAS
+  presented) + frames fresh (`!frames_are_stale`) + shared signal reads `false`**. It reads the
+  shared signal via the `FramesLiveReader` (`StageSignalSetters.frames_live_read`, an untracked
+  `get_untracked()` poll — a poll, NOT a subscription). So a stray desync self-heals within ~1s —
+  but that is a SAFETY NET, not a licence to write the shared signal false carelessly.
+  **The `cell_live` gate is load-bearing (was the #757-review 🔴):** without it, a fresh session
+  that has NOT yet decoded a frame (Cell `false`, `last_frame_at` seeded to install time so frames
+  read "fresh" for the first ~1s, shared reset `false` by `Watchdog::install`'s #500 reset) would
+  false-heal on tick 1 and drop the #500/#448 neutral "Connecting…" cover over a bare frameless
+  `<video>`. Never re-assert unless a frame has actually presented (Cell `true`).
 
 **Testing pattern (Tier-0, presenter-ui is host-tested via `cargo test --lib` in the crate dir):**
 keep the DECISION pure and clock-free (`ndi_activation_resets_gate`, `should_reassert_frames_live`)
@@ -50,5 +56,9 @@ calls `now_ms()`) is exercised only in WASM/E2E — the same pure-core / clock-w
 `frames_are_stale` (tested) vs `refresh_frames_live_staleness` (not). `now_ms()` calls
 `js_sys::Date::now()` on host and panics, so a host test must never call it. The end-to-end guard
 is `ndi-webrtc-synthetic.spec.ts` "keeps NDI video revealed after re-activating the ALREADY-active
-source" — real frames flowing, POST activate the SAME source, assert the `<video>` never carries
-`stage-ndi-video--dormant`, using continued frame advance (not a sleep) as the settle signal.
+source" — real frames flowing, POST activate the SAME source, then SAMPLE the dormant class on every
+poll ACROSS the frame-advance settle window (frame advance is the settle signal, not a sleep) and
+fail if `stage-ndi-video--dormant` is EVER observed. Sampling the whole window (not just the end
+state via a trailing `.not.toHaveClass`, which retries until absent) is what catches BOTH the
+permanent stuck-dormant (original bug) AND a transient ~1s blink from a layer-1-guard-only
+regression that the layer-2 ticker would otherwise heal before an end-state check samples.
