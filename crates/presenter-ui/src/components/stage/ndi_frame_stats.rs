@@ -125,6 +125,25 @@ pub(crate) fn refresh_frames_live_staleness(stats: &FrameStats, setter: &Option<
     }
 }
 
+/// Pure decision for the #757 ticker desync self-heal: should the 1s health
+/// ticker RE-ASSERT `frames_live = true`? Only when frames are genuinely fresh
+/// (`!frames_stale`) AND the shared `ndi_frames_live` signal currently reads
+/// `false` — i.e. an external write (a same-source re-activation, or any future
+/// stray reset) desynced the shared signal from the still-`true` per-session
+/// Cell / real frame flow, leaving the `<video>` stuck dormant. Never fights the
+/// staleness path (stale → never re-assert), and never re-emits when the shared
+/// signal is already `true` (idempotent across the transition). Pure so the
+/// branch is host-unit-testable without a clock — the clock-reading wiring lives
+/// in `reassert_frames_live_if_desynced`, the same pure/wired split as
+/// `frames_are_stale` / `refresh_frames_live_staleness`.
+pub(crate) fn should_reassert_frames_live(frames_stale: bool, shared_reads_live: bool) -> bool {
+    // BUGGY (pre-#757): the ticker never re-asserted the shared signal, so an
+    // external `false` write left it desynced forever — reproduced here so the
+    // test below is RED until the GREEN fix restores the heal decision.
+    let _ = (frames_stale, shared_reads_live);
+    false
+}
+
 /// Cadence (ms) at which the smoothed video latency is pushed to the on-screen
 /// signal. rVFC fires ~30×/s; writing the reactive signal that often would
 /// re-run the StatusBar's reactive text (and, before #524, the autofit reflow
@@ -636,10 +655,11 @@ pub(crate) fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &S
 mod tests {
     use super::{
         derive_video_latency_ms, frames_are_stale, mark_frames_live, notify_stage_health,
-        presented_fps_for_window, smooth_latency, stage_health, FrameStats, FramesLiveSetter,
-        HealthSetter, StageSignalSetters, VideoLatencySetter, FRAMES_LIVE_STALENESS_MS,
-        HEALTH_FPS_BAD_MAX, HEALTH_FPS_GOOD_MIN, HEALTH_REPEATED_GAPS_MIN, HEALTH_SEVERE_FREEZE_MS,
-        MIN_FPS_INTERVAL_MS, VIDEO_LATENCY_SMOOTHING_ALPHA,
+        presented_fps_for_window, should_reassert_frames_live, smooth_latency, stage_health,
+        FrameStats, FramesLiveSetter, HealthSetter, StageSignalSetters, VideoLatencySetter,
+        FRAMES_LIVE_STALENESS_MS, HEALTH_FPS_BAD_MAX, HEALTH_FPS_GOOD_MIN,
+        HEALTH_REPEATED_GAPS_MIN, HEALTH_SEVERE_FREEZE_MS, MIN_FPS_INTERVAL_MS,
+        VIDEO_LATENCY_SMOOTHING_ALPHA,
     };
     use crate::state::stage::{StageHealth, StageHealthReading};
     use std::cell::Cell;
@@ -745,6 +765,57 @@ mod tests {
         mark_frames_live(&stats, &Some(Rc::clone(&setter)));
         mark_frames_live(&stats, &Some(setter));
         assert_eq!(calls.get(), 1);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #757 ticker desync self-heal: `should_reassert_frames_live` decides
+    // whether the 1s ticker re-emits `true` after an external write left the
+    // shared `ndi_frames_live` signal `false` while frames are still fresh
+    // (the same-source re-activation desync). Pure so it is host-testable
+    // without a clock; the emit-exactly-once property is proven by walking the
+    // shared-signal state across two simulated ticks.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reasserts_when_frames_fresh_and_shared_reads_false() {
+        // The desync: frames NOT stale (fresh) + shared signal wrongly false
+        // → heal (re-emit true).
+        assert!(should_reassert_frames_live(false, false));
+    }
+
+    #[test]
+    fn does_not_reassert_when_shared_already_true() {
+        // Shared already live → nothing to heal (idempotent, no ~1×/s churn).
+        assert!(!should_reassert_frames_live(false, true));
+    }
+
+    #[test]
+    fn does_not_reassert_when_frames_are_stale() {
+        // Never fight the staleness path: a genuinely stopped source keeps the
+        // shared signal false, so the ticker must NOT re-assert regardless of
+        // the shared value.
+        assert!(!should_reassert_frames_live(true, false));
+        assert!(!should_reassert_frames_live(true, true));
+    }
+
+    #[test]
+    fn reasserts_true_exactly_once_across_two_ticks() {
+        // Simulate the ticker's emit path over two 1s ticks with fresh frames.
+        // A `shared` cell stands in for the shared `ndi_frames_live` signal; the
+        // setter writes it, the reader reads it — exactly the wiring
+        // `reassert_frames_live_if_desynced` performs (minus the live clock).
+        let shared = Rc::new(Cell::new(false));
+        let emits = Rc::new(Cell::new(0u32));
+        let mut tick = || {
+            if should_reassert_frames_live(false, shared.get()) {
+                shared.set(true);
+                emits.set(emits.get() + 1);
+            }
+        };
+        tick(); // shared false → heals once
+        tick(); // shared now true → no re-emit
+        assert!(shared.get());
+        assert_eq!(emits.get(), 1);
     }
 
     #[test]
