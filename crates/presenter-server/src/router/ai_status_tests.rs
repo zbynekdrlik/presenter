@@ -691,3 +691,49 @@ async fn ai_status_connected_recovers_after_a_subsequent_successful_completion()
         "error must be null once connected again: {after_success:?}"
     );
 }
+
+// #762 [red]: after removing the bundled CLIProxyAPI proxy + Claude OAuth,
+// the `/ai/status` payload is backend-agnostic — it must NO LONGER carry the
+// nested `proxy` object or the `requiresClaudeAuth` flag (an API-key backend
+// like OpenRouter has no bundled proxy and no Claude login concept). It keeps
+// only `connected`, `error`, and `modelValid`. This FAILS against the pre-#762
+// handler (which still serializes `proxy`/`requiresClaudeAuth`) and passes once
+// they are removed.
+#[tokio::test]
+async fn ai_status_has_no_proxy_or_requires_claude_auth_fields() {
+    use crate::router::build_router;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ai/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert!(
+        body.get("proxy").is_none(),
+        "the backend-agnostic /ai/status must not carry a nested `proxy` object: {body:?}"
+    );
+    assert!(
+        body.get("requiresClaudeAuth").is_none(),
+        "the backend-agnostic /ai/status must not carry `requiresClaudeAuth`: {body:?}"
+    );
+    // The backend-agnostic shape it DOES keep.
+    assert!(body.get("connected").is_some(), "must keep `connected`: {body:?}");
+    assert!(body.get("error").is_some(), "must keep `error` key: {body:?}");
+    assert!(body.get("modelValid").is_some(), "must keep `modelValid`: {body:?}");
+}
