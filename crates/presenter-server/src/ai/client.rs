@@ -438,17 +438,19 @@ mod tests {
     #[tokio::test]
     async fn list_models_parses_openrouter_catalog_and_sends_bearer() {
         // OpenRouter's /api/v1/models returns the SAME {"data":[{"id":...}]}
-        // OpenAI-compatible shape, with anthropic/... slugs. The connectivity
-        // check must parse it (so evaluate_ai_status can validate the
-        // configured model against the catalog) AND send Authorization: Bearer
-        // <key> (OpenRouter requires the key even for /models).
+        // OpenAI-compatible shape, with provider-prefixed slugs. The
+        // connectivity check must parse it (so evaluate_ai_status can validate
+        // the configured model against the catalog) AND send Authorization:
+        // Bearer <key> (OpenRouter requires the key even for /models). The
+        // configured model here is the production default google/gemini-3.8-flash
+        // (owner ROZHODNUTÉ 2026-09-12, #761).
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/models"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
-                    {"id": "anthropic/claude-sonnet-5", "name": "Anthropic: Claude Sonnet 5"},
-                    {"id": "anthropic/claude-sonnet-4.5", "name": "Anthropic: Claude Sonnet 4.5"}
+                    {"id": "google/gemini-3.8-flash", "name": "Google: Gemini 3.8 Flash"},
+                    {"id": "anthropic/claude-sonnet-5", "name": "Anthropic: Claude Sonnet 5"}
                 ]
             })))
             .mount(&mock_server)
@@ -457,12 +459,12 @@ mod tests {
         let settings = AiSettings {
             api_url: mock_server.uri(),
             api_key: Some("sk-or-testkey".to_string()),
-            model: "anthropic/claude-sonnet-5".to_string(),
+            model: "google/gemini-3.8-flash".to_string(),
             system_prompt_extra: None,
         };
         let models = list_models(&settings).await.expect("must succeed");
         assert!(
-            models.iter().any(|m| m == "anthropic/claude-sonnet-5"),
+            models.iter().any(|m| m == "google/gemini-3.8-flash"),
             "the OpenRouter catalog slug must be parsed so modelValid can match it: {models:?}"
         );
 
@@ -493,7 +495,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let settings = test_settings(&mock_server.uri(), "anthropic/claude-sonnet-5");
+        let settings = test_settings(&mock_server.uri(), "google/gemini-3.8-flash");
         let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
         let _ = call_chat_completions(&messages, None, &settings)
             .await

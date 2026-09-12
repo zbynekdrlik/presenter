@@ -64,7 +64,7 @@ would have been silently inert without the precedence fix below.
   `modelValid` gate (#661) hard-fails. Verify a new slug against the public
   `https://openrouter.ai/api/v1/models` before committing. `DEFAULT_AI_MODEL`
   (`ai/mod.rs`) is the fallback when `PRESENTER_AI_MODEL` is unset — since #761 an
-  OpenRouter slug (`anthropic/claude-sonnet-5`), pinned by a regression test.
+  OpenRouter slug (`google/gemini-3.8-flash`), pinned by a regression test.
 
 - **OpenRouter attribution headers** (`HTTP-Referer`, `X-Title: Presenter`) are
   sent unconditionally on every outbound AI request builder in `ai/client.rs`

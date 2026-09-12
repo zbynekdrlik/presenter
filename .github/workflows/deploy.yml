@@ -536,9 +536,9 @@ jobs:
           if [ -n "$OPENROUTER_API_KEY" ]; then
             ssh deploy-target "sudo install -d -m 755 /etc/presenter"
             printf 'PRESENTER_AI_API_URL=%s\nPRESENTER_AI_API_KEY=%s\nPRESENTER_AI_MODEL=%s\n' \
-              "https://openrouter.ai/api/v1" "$OPENROUTER_API_KEY" "${AI_MODEL:-anthropic/claude-sonnet-5}" \
+              "https://openrouter.ai/api/v1" "$OPENROUTER_API_KEY" "${AI_MODEL:-google/gemini-3.8-flash}" \
               | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
-            echo "AI backend → OpenRouter written to $SECRET_FILE (0600 root-only), model=${AI_MODEL:-anthropic/claude-sonnet-5}"
+            echo "AI backend → OpenRouter written to $SECRET_FILE (0600 root-only), model=${AI_MODEL:-google/gemini-3.8-flash}"
           else
             ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
             echo "OPENROUTER_API_KEY unset — OpenRouter AI backend disabled; any stale $SECRET_FILE removed"

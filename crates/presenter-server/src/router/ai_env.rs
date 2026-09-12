@@ -119,9 +119,9 @@ mod tests {
             &mut s,
             None,
             Some("sk-or-secret".to_string()),
-            Some("anthropic/claude-sonnet-5".to_string()),
+            Some("google/gemini-3.8-flash".to_string()),
         );
-        assert_eq!(s.model, "anthropic/claude-sonnet-5");
+        assert_eq!(s.model, "google/gemini-3.8-flash");
         assert_eq!(s.api_key.as_deref(), Some("sk-or-secret"));
         // apiUrl had no override → stored value kept.
         assert_eq!(s.api_url, "http://127.0.0.1:18787/v1");

@@ -33,14 +33,14 @@ pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
 /// Hardcoded default AI model used when neither a DB override nor the
 /// `PRESENTER_AI_MODEL` env var is set. Since #761 the AI backend is OpenRouter
 /// (`https://openrouter.ai/api/v1`), so this is an OpenRouter model slug —
-/// `anthropic/claude-sonnet-5` (owner ROZHODNUTÉ 2026-09-12, verified present
-/// on the public `/api/v1/models` catalog). In practice the deployed instances
-/// set `PRESENTER_AI_MODEL` via `/etc/presenter/ai.env` from the GH Actions
+/// `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12, verified present on
+/// the public `/api/v1/models` catalog). In practice the deployed instances set
+/// `PRESENTER_AI_MODEL` via `/etc/presenter/ai.env` from the GH Actions
 /// `AI_MODEL` variable, so changing the model in production is a variable edit
 /// + redeploy, not a code change; this const is the fallback when that env var
 /// is unset. Must be a slug OpenRouter's catalog serves or the post-deploy
 /// `modelValid` gate (#661) fails (superseded #437's proxy-only-id rule).
-pub(crate) const DEFAULT_AI_MODEL: &str = "anthropic/claude-sonnet-5";
+pub(crate) const DEFAULT_AI_MODEL: &str = "google/gemini-3.8-flash";
 
 /// AI configuration settings persisted in app_settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,7 +138,7 @@ mod tests {
     /// Regression for #437 + #761: the hardcoded default AI model must NOT be
     /// the retired `claude-opus-4-20250514` (retired at Anthropic 2026-06-15 →
     /// 404) and — since #761 switched the AI backend to OpenRouter — must be the
-    /// OpenRouter slug `anthropic/claude-sonnet-5` (owner ROZHODNUTÉ 2026-09-12,
+    /// OpenRouter slug `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12,
     /// verified present on `https://openrouter.ai/api/v1/models`). The previous
     /// pin (`claude-opus-4-6`) was a CLIProxyAPI proxy-only id that OpenRouter's
     /// catalog does not serve, so it would fail the post-deploy `modelValid`
@@ -150,8 +150,8 @@ mod tests {
             "default AI model must not be the retired claude-opus-4-20250514"
         );
         assert_eq!(
-            DEFAULT_AI_MODEL, "anthropic/claude-sonnet-5",
-            "default AI model must be the OpenRouter slug anthropic/claude-sonnet-5 (#761)"
+            DEFAULT_AI_MODEL, "google/gemini-3.8-flash",
+            "default AI model must be the OpenRouter slug google/gemini-3.8-flash (#761)"
         );
     }
 }
