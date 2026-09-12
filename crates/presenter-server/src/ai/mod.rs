@@ -9,6 +9,7 @@ pub(crate) mod client;
 pub(crate) mod context_budget;
 pub(crate) mod health_cache;
 pub(crate) mod last_error;
+pub(crate) mod preflight;
 pub(crate) mod redact;
 pub(crate) mod tool_defs;
 pub mod tools;

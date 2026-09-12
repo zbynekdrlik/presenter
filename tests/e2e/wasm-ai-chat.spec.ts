@@ -190,12 +190,16 @@ test.describe("AI Chat Input Behavior", () => {
     const sendBtn = page.locator('[data-role="ai-send"]');
     await sendBtn.click();
 
-    // Should show error (no authenticated AI backend in test)
+    // #762 CI follow-up: startTestServer points the AI backend at a DEAD
+    // loopback endpoint (http://127.0.0.1:1/v1) with NO key — a deterministic,
+    // third-party-free setup. A loopback host is exempt from the keyless
+    // preflight guard, so the request is actually attempted and fails to
+    // connect, surfacing the exact "failed to reach AI API" message. Assert it
+    // precisely — the old broad regex also matched a live-backend 401, hiding a
+    // real egress-to-openrouter.ai failure.
     const error = page.locator('[data-role="ai-error"]');
     await expect(error).toBeVisible({ timeout: 15_000 });
-    await expect(error).toContainText(
-      /Failed to get AI response|failed to reach AI API/,
-    );
+    await expect(error).toContainText(/failed to reach AI API/);
   });
 });
 
