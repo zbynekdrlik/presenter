@@ -325,6 +325,14 @@ export async function startTestServer(
     PRESENTER_PORT: String(port),
     ...(oscPort ? { PRESENTER_OSC_LISTEN_PORT: String(oscPort) } : {}),
     PRESENTER_ANDROID_ADB_BIN: process.env.PRESENTER_ANDROID_ADB_BIN ?? "true",
+    // #762 CI follow-up: point the AI backend at a DEAD loopback endpoint with
+    // NO key so no E2E test ever depends on (or egresses to) a third party.
+    // Since #762 the default apiUrl is OpenRouter, so an unset URL made the
+    // keyless test server call openrouter.ai and 401 (run 34720592378). A spec
+    // that needs a specific backend overrides these via process.env before
+    // calling startTestServer.
+    PRESENTER_AI_API_URL:
+      process.env.PRESENTER_AI_API_URL ?? "http://127.0.0.1:1/v1",
     RUST_LOG:
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };

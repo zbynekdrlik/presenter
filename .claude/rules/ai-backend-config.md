@@ -64,3 +64,29 @@ classification and no `requiresClaudeAuth`.
 - **OpenRouter attribution headers** (`HTTP-Referer`, `X-Title: Presenter`) are
   sent unconditionally on every outbound AI request builder in `ai/client.rs`
   (chat + `list_models`) — harmless on any other OpenAI-compatible backend.
+
+- **Keyless request to a REMOTE backend fails fast — never egresses (#762 CI
+  follow-up, `ai/preflight.rs`).** `ai/client.rs::{call_chat_completions_with_options,
+  list_models}` call `preflight::missing_key_for_remote_backend(settings)` BEFORE
+  any HTTP: no API key AND a **non-loopback** `api_url` host → return the
+  operator-facing `AI nie je nakonfigurované: chýba API kľúč (…)` with ZERO
+  network call. Loopback (`127.0.0.1`/`::1`/`localhost`, brackets tolerated) is
+  the legitimate keyless LOCAL backend (llama.cpp/CLIProxyAPI) and is exempt.
+  The policy is host-classification, NOT a string match against
+  `DEFAULT_AI_API_URL`, so a hand-edited remote URL or any future default is
+  covered. This protects prod from silently billing a keyless call and makes
+  `/ai/status` report the real reason.
+
+- **The E2E test server must NEVER point at a real metered backend.** Since #762
+  the default `apiUrl` is OpenRouter, so an UNSET `PRESENTER_AI_API_URL` made the
+  keyless CI test server egress to openrouter.ai and 401 (reddened Playwright E2E
+  2/3, run 34720592378). `tests/e2e/support.ts::startTestServer` now defaults
+  `PRESENTER_AI_API_URL=http://127.0.0.1:1/v1` (dead loopback) + NO key so no
+  test depends on a third party; a loopback host bypasses the preflight guard, so
+  a chat/`/ai/status` call attempts a real connection and cleanly fails
+  ("failed to reach AI API"). **When you change `DEFAULT_AI_API_URL` (or any AI
+  backend default), re-check EVERY e2e spec that assumed the old dead proxy** —
+  `wasm-ai-chat.spec.ts` (the "not configured" send asserts `failed to reach AI
+  API`), `ai-status-chip.spec.ts` (mocks `/ai/status` via `page.route`, so it is
+  insulated), `ai-bible-composition.spec.ts`. Never mock a non-2xx AI response in
+  a zero-console spec (#598).
