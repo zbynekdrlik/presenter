@@ -45,6 +45,13 @@ object so an EXTERNAL watchdog can detect it in minutes.
   and a global would cross-contaminate tests. `/ai/status` stays LIVE (the operator chip
   wants freshness) — only `/healthz` reads through the cache.
 
+- **Clear the single-flight `refreshing` flag from an RAII `Drop` guard, never a manual
+  tail `store(false)`.** If the producer ever panicked, a manual reset would be skipped and
+  the flag would wedge `true` forever — silently freezing this always-polled readiness
+  endpoint's verdict (no more probes ever). `RefreshGuard` resets on drop, so an unwind on
+  either the cold-inline path or the swallowed spawned-task path still clears it. This
+  removes the "correctness depends on the producer never panicking" coupling.
+
 - **Put new AI-status render/format code in `router/ai_health.rs`, not `router/ai.rs`.**
   `router/ai.rs` is already past the 800-line warning cap (under the 1000 hard-fail);
   grow the small sibling module instead (project file-line gate, `quality-gates.md`).

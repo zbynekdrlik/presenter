@@ -55,6 +55,22 @@ impl AiHealthCache {
     }
 }
 
+/// RAII guard that clears `refreshing` on drop — including on an UNWIND. The
+/// single-flight guarantee rests on `refreshing` always being reset after a
+/// probe; a manual tail `store(false)` would be skipped if `produce().await`
+/// ever panicked, wedging the flag `true` forever and silently freezing this
+/// always-polled readiness endpoint's verdict. Holding the reset in `Drop`
+/// removes the "correctness depends on the producer never panicking" coupling
+/// (a spawned-task panic unwinds and swallows into the JoinHandle; a cold-path
+/// panic unwinds the handler future) — either way the flag is cleared.
+struct RefreshGuard(Arc<AiHealthCache>);
+
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        self.0.refreshing.store(false, Ordering::Release);
+    }
+}
+
 /// Cold-start placeholder: a probe is in flight and no value exists yet.
 /// `connected:false` is honest — we genuinely do not know the AI is up.
 fn warming() -> Value {
@@ -101,7 +117,9 @@ where
     if cache.refreshing.swap(true, Ordering::AcqRel) {
         return warming();
     }
-    let verdict = match produce().await {
+    // Clears `refreshing` on scope exit, incl. an unwind if `produce` panics.
+    let _guard = RefreshGuard(cache.clone());
+    match produce().await {
         Some(v) => {
             let mut guard = cache.lock();
             *guard = Some(Cached {
@@ -111,9 +129,7 @@ where
             v
         }
         None => cold_failure(),
-    };
-    cache.refreshing.store(false, Ordering::Release);
-    verdict
+    }
 }
 
 /// Spawn a single background refresh if none is already in flight. On success
@@ -129,15 +145,16 @@ where
     }
     let cache = cache.clone();
     tokio::spawn(async move {
-        let result = produce().await;
-        if let Some(v) = result {
+        // Clears `refreshing` on drop, incl. an unwind if `produce` panics —
+        // a swallowed spawned-task panic must not wedge the flag forever.
+        let _guard = RefreshGuard(cache.clone());
+        if let Some(v) = produce().await {
             let mut guard = cache.lock();
             *guard = Some(Cached {
                 verdict: v,
                 at: Instant::now(),
             });
         }
-        cache.refreshing.store(false, Ordering::Release);
     });
 }
 
