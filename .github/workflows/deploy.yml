@@ -460,8 +460,8 @@ jobs:
       # effective AI call/status path (resolve_effective_settings, #761), so this
       # file is what switches the live backend to OpenRouter WITHOUT a DB write —
       # prod DBs still hold the pre-migration bundled-proxy apiUrl. Empty secret
-      # → remove the file so AI cleanly falls back to the DB/bundled default (AI
-      # off on OpenRouter), never half-configured. Runs BEFORE the swap/restart
+      # → remove the file so AI cleanly falls back to the stored DB row / default
+      # (AI off on OpenRouter), never half-configured. Runs BEFORE the swap/restart
       # step below so the freshly-started service reads the new EnvironmentFile.
       - name: Configure AI backend
         env:

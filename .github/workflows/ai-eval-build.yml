@@ -3,8 +3,8 @@ name: AI-Eval Harness Build
 # Builds the feature-gated `ai_eval` binary (#662/#680, crates/presenter-server/
 # src/bin/ai_eval/) on a GitHub-hosted runner and publishes it as a downloadable
 # artifact — so dev2 (Tier-0: CI-only builds, see CLAUDE.md "Local Build Policy")
-# can RUN the harness against a local candidate endpoint (llama.cpp / the bundled
-# CLIProxyAPI baseline) without ever compiling Rust locally. This extends the
+# can RUN the harness against a local candidate endpoint (llama.cpp / another
+# local OpenAI-compatible baseline) without ever compiling Rust locally. This extends the
 # same runner split the rest of the project already uses: "the local runner does
 # NOT compile Rust — it only runs pre-built artifacts downloaded from
 # GitHub-hosted build jobs" (CLAUDE.md).
