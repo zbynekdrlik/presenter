@@ -234,6 +234,14 @@ pub async fn call_chat_completions_with_options(
     response_format: Option<serde_json::Value>,
     chat_template_kwargs: Option<serde_json::Value>,
 ) -> anyhow::Result<ChatCompletionResponse> {
+    // #762 CI follow-up: never egress a keyless request to a REMOTE backend —
+    // fail fast with an operator-facing message and ZERO network call. A
+    // key-less LOOPBACK backend (local llama.cpp/CLIProxyAPI) is unaffected.
+    if let Some(msg) = super::preflight::missing_key_for_remote_backend(settings) {
+        error!(url = %settings.api_url, "AI chat completion blocked: {msg}");
+        anyhow::bail!("{msg}");
+    }
+
     let url = format!(
         "{}/chat/completions",
         settings.api_url.trim_end_matches('/')
@@ -325,6 +333,13 @@ pub async fn call_chat_completions_with_options(
 /// rather than a fresh client per call — this is polled every 5s by the
 /// status chip (#622 post-merge review finding 3a).
 pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
+    // #762 CI follow-up: same keyless-remote guard as the chat path, so
+    // `/ai/status` reports "chýba API kľúč" instead of egressing to a metered
+    // backend without a key (a keyless remote `/models` probe still 401s).
+    if let Some(msg) = super::preflight::missing_key_for_remote_backend(settings) {
+        anyhow::bail!("{msg}");
+    }
+
     let url = format!("{}/models", settings.api_url.trim_end_matches('/'));
     let mut req = connectivity_client()
         .get(&url)
@@ -513,6 +528,101 @@ mod tests {
                 .map(|v| v.to_str().unwrap_or("")),
             Some("Presenter"),
             "chat request must carry X-Title: Presenter"
+        );
+    }
+
+    // --- #762 CI follow-up: keyless-remote preflight guard on the call path ---
+
+    #[tokio::test]
+    async fn call_chat_completions_blocks_keyless_remote_without_egress() {
+        // A reachable mock stands in as "any backend that WOULD answer"; the
+        // settings point at the OpenRouter default (a non-loopback host), so
+        // the guard must fail fast BEFORE any request — the mock records zero.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(super::super::DEFAULT_AI_API_URL, "google/gemini-3.8-flash");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let err = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect_err("a keyless request to a remote backend must fail fast");
+        assert!(
+            err.to_string().contains("API kľúč"),
+            "must be the missing-key message, got: {err}"
+        );
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert!(
+            reqs.is_empty(),
+            "the guard must make ZERO network calls, saw {} request(s)",
+            reqs.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn call_chat_completions_sends_to_keyless_loopback_backend() {
+        // A key-less LOOPBACK backend (wiremock binds 127.0.0.1) is the local
+        // OpenAI-compatible case and must still be reached — the guard is host-
+        // scoped, not a blanket keyless block.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "local-model");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("a keyless loopback request must still be sent");
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert_eq!(
+            reqs.len(),
+            1,
+            "the loopback backend must receive the request"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_chat_completions_sends_bearer_when_key_present() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = AiSettings {
+            api_url: mock_server.uri(),
+            api_key: Some("sk-or-testkey".to_string()),
+            model: "google/gemini-3.8-flash".to_string(),
+            system_prompt_extra: None,
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("a keyed request must be sent");
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert_eq!(
+            reqs[0]
+                .headers
+                .get("authorization")
+                .map(|v| v.to_str().unwrap_or("")),
+            Some("Bearer sk-or-testkey"),
+            "a keyed chat request must carry Authorization: Bearer <key>"
         );
     }
 
