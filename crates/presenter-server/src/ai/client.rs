@@ -336,6 +336,9 @@ pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
     // #762 CI follow-up: same keyless-remote guard as the chat path, so
     // `/ai/status` reports "chýba API kľúč" instead of egressing to a metered
     // backend without a key (a keyless remote `/models` probe still 401s).
+    // Deliberately NOT logged (unlike the chat path): this is polled every 5s
+    // by the operator status chip, so an `error!` here would flood journald on
+    // a persistently-misconfigured instance.
     if let Some(msg) = super::preflight::missing_key_for_remote_backend(settings) {
         anyhow::bail!("{msg}");
     }
