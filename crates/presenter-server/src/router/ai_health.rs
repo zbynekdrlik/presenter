@@ -14,27 +14,47 @@
 //!
 //! Lives in its own small module rather than growing `router.rs` or the
 //! already-over-warning-cap `router/ai.rs` (project file-line gate).
+//!
+//! The verdict is served through a per-`AppState` stale-while-revalidate cache
+//! (`crate::ai::health_cache`) — `/healthz` is polled by every open operator
+//! tab, so a live probe per hit would multiply external `/models` requests
+//! with tab count. This module supplies the PRODUCER (the shared
+//! `evaluate_ai_status` computation); the cache decides when to actually probe.
 
 use super::ai::evaluate_ai_status;
+use crate::ai::health_cache::{get_ai_health, AiHealthCache};
 use crate::state::AppState;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::warn;
 
-/// Build the `/healthz` `ai` object. Best-effort: a settings/DB failure is
-/// folded into `connected: false` + a generic `error` string rather than
-/// failing the whole readiness probe (the AI verdict must never take
-/// `/healthz` itself down). Performs one bounded (3s) connectivity probe via
-/// `evaluate_ai_status` — see its doc comment.
-pub(super) async fn render_ai_health(state: &AppState) -> Value {
-    match evaluate_ai_status(state).await {
-        Ok((status, model)) => ai_health_json(status.connected, status.error.as_deref(), &model),
-        Err(e) => {
-            // Detail to the log (may contain DB internals); a stable, generic
-            // string to the public endpoint.
-            warn!(?e, "/healthz AI status check failed");
-            ai_health_json(false, Some("AI status check failed"), "")
+/// Build the `/healthz` `ai` object, served through the SWR `cache`. The
+/// producer is best-effort: a settings/DB failure returns `None` so the cache
+/// keeps serving the previous value rather than clobbering it (and never fails
+/// or hangs the readiness probe — the AI verdict must not take `/healthz`
+/// down). The producer's connectivity check is the shared `evaluate_ai_status`
+/// (one bounded 3s probe), executed by the cache at most once per TTL.
+pub(super) async fn render_ai_health(state: &AppState, cache: &Arc<AiHealthCache>) -> Value {
+    let state = state.clone();
+    get_ai_health(cache, move || {
+        let state = state.clone();
+        async move {
+            match evaluate_ai_status(&state).await {
+                Ok((status, model)) => Some(ai_health_json(
+                    status.connected,
+                    status.error.as_deref(),
+                    &model,
+                )),
+                Err(e) => {
+                    // Detail to the log (may contain DB internals); returning
+                    // None preserves the last good verdict in the cache.
+                    warn!(?e, "/healthz AI status refresh failed");
+                    None
+                }
+            }
         }
-    }
+    })
+    .await
 }
 
 /// Pure render of the backend-agnostic `ai` object. `error` is `null` when
