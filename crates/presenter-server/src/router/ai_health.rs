@@ -57,6 +57,35 @@ pub(super) async fn render_ai_health(state: &AppState, cache: &Arc<AiHealthCache
     .await
 }
 
+/// #764: fold a recent REAL completion failure into the probe verdict.
+///
+/// A passing `list_models` (`/models`) probe does NOT prove a metered backend
+/// will serve a completion — an exhausted budget / revoked key 403s
+/// completions while `/models` still 200s. So when the probe says
+/// `connected:true` but a completion failed within the window
+/// (`active_failure` carries its redacted excerpt), report `connected:false`
+/// with the backend message instead. A probe that ALREADY found a more
+/// specific problem (`connected:false`, e.g. invalid model or connectivity)
+/// keeps its own, more actionable error — the completion signal only ever
+/// FLIPS a falsely-green verdict, never overwrites an already-red one.
+///
+/// Pure (no `AppState`, no clock) so the fold is unit-testable in isolation;
+/// `evaluate_ai_status` supplies `active_failure` from
+/// `AiCallHealth::active_failure(AI_LAST_FAILURE_WINDOW)`.
+pub(super) fn apply_last_completion_failure(
+    connected: bool,
+    error: Option<String>,
+    active_failure: Option<String>,
+) -> (bool, Option<String>) {
+    match active_failure {
+        Some(excerpt) if connected => (
+            false,
+            Some(format!("posledné AI volanie zlyhalo: {excerpt}")),
+        ),
+        _ => (connected, error),
+    }
+}
+
 /// Pure render of the backend-agnostic `ai` object. `error` is `null` when
 /// connected, else a human-readable string — the KEY is always present so a
 /// watchdog can rely on the schema.
@@ -97,5 +126,54 @@ mod tests {
         assert!(v.get("error").is_some());
         assert!(v.get("model").is_some());
         assert_eq!(v["model"], serde_json::json!(""));
+    }
+
+    // #764: apply_last_completion_failure fold.
+
+    #[test]
+    fn a_completion_failure_flips_a_green_probe_to_disconnected() {
+        let (connected, error) = apply_last_completion_failure(
+            true,
+            None,
+            Some("AI API returned 403: budget exceeded".to_string()),
+        );
+        assert!(
+            !connected,
+            "a recent completion failure must flip connected:false"
+        );
+        let error = error.expect("error must be set");
+        assert!(
+            error.contains("posledné AI volanie zlyhalo"),
+            "operator-facing SK prefix must be present: {error}"
+        );
+        assert!(
+            error.contains("budget"),
+            "the backend excerpt must be carried through: {error}"
+        );
+    }
+
+    #[test]
+    fn no_active_failure_leaves_a_green_probe_untouched() {
+        let (connected, error) = apply_last_completion_failure(true, None, None);
+        assert!(connected);
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn an_already_red_probe_keeps_its_own_more_specific_error() {
+        // A probe that already found a specific problem (invalid model,
+        // connectivity) must NOT have its actionable error overwritten by a
+        // stale completion excerpt — the fold only flips a falsely-green one.
+        let (connected, error) = apply_last_completion_failure(
+            false,
+            Some("Configured AI model 'x' is not available".to_string()),
+            Some("some old completion error".to_string()),
+        );
+        assert!(!connected);
+        assert_eq!(
+            error.as_deref(),
+            Some("Configured AI model 'x' is not available"),
+            "the probe's own specific error must survive"
+        );
     }
 }
