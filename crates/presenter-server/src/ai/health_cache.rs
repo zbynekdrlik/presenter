@@ -70,18 +70,75 @@ fn cold_failure() -> Value {
 /// verdict, returning `None` on a computation failure that must NOT clobber a
 /// previously-good value.
 ///
-/// RED STATE (#760 rework): this pass-through implementation ignores the cache
-/// and probes on every call — the tests below fail against it. The GREEN
-/// commit replaces the body with the real SWR logic.
-pub(crate) async fn get_ai_health<P, Fut>(_cache: &Arc<AiHealthCache>, produce: P) -> Value
+/// - **fresh** cache → returns it with ZERO awaits (no network on the hot path)
+/// - **stale** cache → returns the stale value immediately and refreshes in the
+///   background (at most one in-flight refresh, guarded by `refreshing`), so a
+///   slow/failing backend never delays or hangs `/healthz`
+/// - **empty** cache → one bounded inline probe, guarded so concurrent cold
+///   hits don't each probe (the loser gets a `warming` placeholder)
+pub(crate) async fn get_ai_health<P, Fut>(cache: &Arc<AiHealthCache>, produce: P) -> Value
 where
     P: Fn() -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Option<Value>> + Send + 'static,
 {
-    match produce().await {
-        Some(v) => v,
-        None => cold_failure(),
+    {
+        let guard = cache.lock();
+        if let Some(c) = guard.as_ref() {
+            let fresh = c.at.elapsed() < cache.ttl;
+            let value = c.verdict.clone();
+            drop(guard);
+            if fresh {
+                return value;
+            }
+            // Stale: serve the stale value NOW, refresh in the background.
+            spawn_refresh_if_idle(cache, produce);
+            return value;
+        }
     }
+    // Cold cache: a single bounded inline probe. Guard it so concurrent cold
+    // hits don't each spawn a probe — the loser returns a warming placeholder
+    // (the next poll, once the winner has stored a value, gets the real one).
+    if cache.refreshing.swap(true, Ordering::AcqRel) {
+        return warming();
+    }
+    let verdict = match produce().await {
+        Some(v) => {
+            let mut guard = cache.lock();
+            *guard = Some(Cached {
+                verdict: v.clone(),
+                at: Instant::now(),
+            });
+            v
+        }
+        None => cold_failure(),
+    };
+    cache.refreshing.store(false, Ordering::Release);
+    verdict
+}
+
+/// Spawn a single background refresh if none is already in flight. On success
+/// the new verdict replaces the cached one; on failure (`None`) the previous
+/// value is kept — a transient failure must not clobber a known-good verdict.
+fn spawn_refresh_if_idle<P, Fut>(cache: &Arc<AiHealthCache>, produce: P)
+where
+    P: Fn() -> Fut + Send + Sync + Clone + 'static,
+    Fut: Future<Output = Option<Value>> + Send + 'static,
+{
+    if cache.refreshing.swap(true, Ordering::AcqRel) {
+        return; // a refresh is already in flight — never spawn N probes
+    }
+    let cache = cache.clone();
+    tokio::spawn(async move {
+        let result = produce().await;
+        if let Some(v) = result {
+            let mut guard = cache.lock();
+            *guard = Some(Cached {
+                verdict: v,
+                at: Instant::now(),
+            });
+        }
+        cache.refreshing.store(false, Ordering::Release);
+    });
 }
 
 #[cfg(test)]
