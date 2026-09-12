@@ -2,7 +2,7 @@
 //! from the environment for the `drive` stage.
 //!
 //! The original harness targeted a LOCAL, keyless candidate endpoint
-//! (llama.cpp / the bundled on-device CLIProxyAPI baseline), so `drive`
+//! (llama.cpp / another local OpenAI-compatible baseline), so `drive`
 //! hard-coded `AiSettings.api_key = None`. #662's OpenRouter rescope
 //! (owner, 2026-09-12) makes the candidate a HOSTED, key-authenticated
 //! endpoint (`https://openrouter.ai/api/v1`), which 401s without a Bearer

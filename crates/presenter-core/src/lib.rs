@@ -12,7 +12,6 @@
 //! - Bible has no library wrapper — there is exactly one bible per system.
 
 pub mod ableset;
-pub mod ai_auth;
 pub mod android_stage_display;
 pub mod bible;
 pub mod id;
@@ -38,7 +37,6 @@ pub use ableset::{
     AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError, AbleSetSongSnapshot,
     AbleSetStatusSnapshot, AbleSetTitleMismatch,
 };
-pub use ai_auth::{is_expiring_soon, EXPIRY_WARNING_WINDOW};
 pub use android_stage_display::{
     stage_app_install_action, AndroidStageDisplay, AndroidStageDisplayDraft,
     AndroidStageDisplayValidationError, StageAppInstallAction, DEFAULT_ADB_PORT,

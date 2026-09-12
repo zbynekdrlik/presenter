@@ -23,11 +23,10 @@ object so an EXTERNAL watchdog can detect it in minutes.
   it in `evaluate_ai_status` only.
 
 - **`/healthz.ai` is backend-agnostic: `{connected, error, model}`.** No OAuth-specific
-  fields (`claudeAuthenticated`/`tokenExpiresAt`/`expiryWarning` were deliberately NOT
-  used — #662 migrates the backend from Claude OAuth/CLIProxyAPI to OpenRouter API-key).
-  `connected`/`error` come from `compute_ai_connected`/`compute_ai_status_error`, whose
-  OAuth input (`claude_authenticated`) participates ONLY when `requires_claude_auth`
-  (bundled proxy). Keep any new field backend-neutral.
+  fields (#662 migrated the backend from Claude OAuth/CLIProxyAPI to OpenRouter API-key;
+  #762 removed the bundled proxy + OAuth entirely). `connected`/`error` come from
+  `compute_ai_connected(connectivity_ok, model_valid)` / `compute_ai_status_error` — pure
+  connectivity + model-validity signals, no auth input. Keep any new field backend-neutral.
 
 - **`/healthz.ai` is served through a per-`AppState` stale-while-revalidate CACHE
   (`crate::ai::health_cache::AiHealthCache`, 30s TTL), NOT a live probe per request.**
@@ -83,11 +82,12 @@ object so an EXTERNAL watchdog can detect it in minutes.
   a transient outage the operator stops exercising doesn't pin a permanent false `false`. The
   fold only ever flips `connected:true → false`, never overwrites an already-`false` probe's
   more specific error (invalid model / connectivity). Redact any completion excerpt with the
-  shared `ai::proxy_output_relay::redact_proxy_output_line` (extended in #764 to OpenRouter
-  `sk-or-v1-` keys) BEFORE it reaches `/healthz`/`/ai/status`. The three deploy gates fire ONE
-  cheap real completion (`POST /ai/chat` + `POST /ai/clear`) before the `/ai/status` read so a
-  budget/credit/key outage is caught at deploy time, not only at first operator use — reusing
-  the existing non-blocking `connected:false` `::error::`, no SSE parsing needed. The operator
-  chip (`presenter-ui/components/ai_status.rs`) computes its state from the nested `proxy.*`
-  flags, so it needs an explicit generic `unavailable` branch (label "AI: nedostupné") to
-  surface a flat-`connected:false` outage — the proxy flags alone don't see it.
+  shared `ai::redact::redact_proxy_output_line` (covers OpenRouter `sk-or-v1-` keys, #764;
+  relocated from the deleted `proxy_output_relay` in #762) BEFORE it reaches
+  `/healthz`/`/ai/status`. The three deploy gates fire ONE cheap real completion (`POST
+  /ai/chat` + `POST /ai/clear`) before the `/ai/status` read so a budget/credit/key outage is
+  caught at deploy time, not only at first operator use — reusing the existing non-blocking
+  `connected:false` `::error::`, no SSE parsing needed. The operator chip
+  (`presenter-ui/components/ai_status.rs`) reads the flat `connected`/`error` fields directly
+  (since #762 there is no nested `proxy.*` — an `unavailable` state, label "AI: nedostupné",
+  surfaces any `connected:false` outage).

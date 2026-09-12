@@ -1,13 +1,19 @@
 /**
- * E2E for #598: the operator-header AI connection indicator, mirroring the
- * Resolume chip (#564, `resolume-status-chip.spec.ts`).
+ * E2E for #598 / #762: the operator-header AI connection indicator.
  *
- * Unlike Resolume (many hosts, each proven by a real mock TCP server), there
- * is exactly one AI proxy on this server, and its real login state depends
- * on this box's CLIProxyAPI session — not something a test should depend
- * on. So the four required states are driven by intercepting `/ai/status`
- * itself via `page.route`, the same technique `operator-version-recovery.spec.ts`
- * already uses for `/healthz`.
+ * Since #762 removed the bundled CLIProxyAPI proxy + Claude OAuth, the chip is
+ * backend-agnostic — it reads only the flat `connected`/`error` fields of
+ * `/ai/status` (no nested `proxy` object, no Claude login state). Three states:
+ * `ok`, `unavailable`, and `checking`. Every scenario drives `/ai/status` via
+ * `page.route` (the real backend verdict depends on OpenRouter reachability,
+ * not something a test should depend on), the same technique
+ * `operator-version-recovery.spec.ts` uses for `/healthz`.
+ *
+ * #598 gotcha: never mock a NON-2xx response in a zero-console spec — Chrome
+ * itself logs a "Failed to load resource" console error for any non-2xx fetch,
+ * which the zero-console assertion (rightly) treats as a bug. `unavailable` is
+ * a well-formed 200 body with `connected:false`; a POLL FAILURE is simulated
+ * with a malformed 200 body (client-side deserialize error, clean console).
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -37,28 +43,17 @@ test.afterAll(async () => {
   serverHandle = undefined;
 });
 
+/** Mock the backend-agnostic `/ai/status` payload (well-formed 200). */
 async function mockAiStatus(
   page: Page,
-  proxy: {
-    running: boolean;
-    binaryFound: boolean;
-    claudeAuthenticated: boolean;
-    tokenExpiresAt?: string | null;
-  },
+  status: { connected: boolean; error?: string | null },
 ) {
   await page.route("**/ai/status", async (route) => {
     await route.fulfill({
       json: {
-        connected: proxy.running && proxy.binaryFound && proxy.claudeAuthenticated,
-        error: null,
-        proxy: {
-          running: proxy.running,
-          port: 18787,
-          apiUrl: "http://127.0.0.1:18787/v1",
-          binaryFound: proxy.binaryFound,
-          claudeAuthenticated: proxy.claudeAuthenticated,
-          tokenExpiresAt: proxy.tokenExpiresAt ?? null,
-        },
+        connected: status.connected,
+        error: status.error ?? null,
+        modelValid: true,
       },
     });
   });
@@ -67,7 +62,7 @@ async function mockAiStatus(
 test("mounted in the top brand row, never next to Stage Output", async ({ page }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
-  await mockAiStatus(page, { running: true, binaryFound: true, claudeAuthenticated: true });
+  await mockAiStatus(page, { connected: true });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
@@ -83,12 +78,10 @@ test("mounted in the top brand row, never next to Stage Output", async ({ page }
   expect(consoleMessages).toEqual([]);
 });
 
-test("all three signals healthy shows the connected state and links to the AI panel", async ({
-  page,
-}) => {
+test("connected shows the ok state and links to the AI panel", async ({ page }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
-  await mockAiStatus(page, { running: true, binaryFound: true, claudeAuthenticated: true });
+  await mockAiStatus(page, { connected: true });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
@@ -97,106 +90,31 @@ test("all three signals healthy shows the connected state and links to the AI pa
   await expect(chip).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
   await expect(chip).toHaveText("AI: pripojené");
   await expect(chip).toHaveAttribute("href", "/ui/operator/ai");
-  await expect(chip).toHaveAttribute("title", /prihlásená/);
+  await expect(chip).toHaveAttribute("title", /pripojená/);
 
   expect(consoleMessages).toEqual([]);
 });
 
-test("not authenticated is reported distinctly from a down proxy or a missing binary", async ({
+test("a backend outage (connected:false) shows the unavailable state with the reason in the tooltip", async ({
   page,
 }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
-  await mockAiStatus(page, { running: true, binaryFound: true, claudeAuthenticated: false });
-
-  await page.goto(new URL("/ui/operator", baseURL).toString());
-  await page.waitForLoadState("networkidle");
-
-  const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "logged-out", { timeout: 30_000 });
-  await expect(chip).toHaveText("AI: odhlásené");
-  await expect(chip).toHaveAttribute("title", /nie je prihlásená/);
-
-  expect(consoleMessages).toEqual([]);
-});
-
-test("#660: a token expiring soon shows a distinct warning state, not a false OK", async ({
-  page,
-}) => {
-  const consoleMessages: string[] = [];
-  attachConsoleErrorCollector(page, consoleMessages);
-  // Before #660, the chip only ever reported "ok" while authenticated —
-  // regardless of whether the token had 8 hours or 8 minutes left. Real
-  // incidents (2026-07-26, 2026-08-02) were only discovered once the token
-  // had already died mid-event.
-  const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  // #764: a metered backend that 200s /models but 403s completions (exhausted
+  // budget) reports connected:false with the reason in `error`. A well-formed
+  // 200 body, so the zero-console assertion still holds.
   await mockAiStatus(page, {
-    running: true,
-    binaryFound: true,
-    claudeAuthenticated: true,
-    tokenExpiresAt: soon,
+    connected: false,
+    error: "posledné AI volanie zlyhalo: Workspace daily budget exceeded",
   });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
 
   const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "expiring-soon", { timeout: 30_000 });
-  await expect(chip).toHaveText("AI: čoskoro treba prihlásiť");
-  await expect(chip).toHaveAttribute("title", /čoskoro vyprší/);
-
-  expect(consoleMessages).toEqual([]);
-});
-
-test("#660: a token with plenty of time left still shows the plain ok state", async ({
-  page,
-}) => {
-  const consoleMessages: string[] = [];
-  attachConsoleErrorCollector(page, consoleMessages);
-  const plenty = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
-  await mockAiStatus(page, {
-    running: true,
-    binaryFound: true,
-    claudeAuthenticated: true,
-    tokenExpiresAt: plenty,
-  });
-
-  await page.goto(new URL("/ui/operator", baseURL).toString());
-  await page.waitForLoadState("networkidle");
-
-  const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
-  await expect(chip).toHaveText("AI: pripojené");
-
-  expect(consoleMessages).toEqual([]);
-});
-
-test("proxy not running is reported distinctly", async ({ page }) => {
-  const consoleMessages: string[] = [];
-  attachConsoleErrorCollector(page, consoleMessages);
-  await mockAiStatus(page, { running: false, binaryFound: true, claudeAuthenticated: false });
-
-  await page.goto(new URL("/ui/operator", baseURL).toString());
-  await page.waitForLoadState("networkidle");
-
-  const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "proxy-down", { timeout: 30_000 });
-  await expect(chip).toHaveText("AI: proxy nebeží");
-
-  expect(consoleMessages).toEqual([]);
-});
-
-test("missing binary is reported distinctly", async ({ page }) => {
-  const consoleMessages: string[] = [];
-  attachConsoleErrorCollector(page, consoleMessages);
-  await mockAiStatus(page, { running: false, binaryFound: false, claudeAuthenticated: false });
-
-  await page.goto(new URL("/ui/operator", baseURL).toString());
-  await page.waitForLoadState("networkidle");
-
-  const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "missing-binary", { timeout: 30_000 });
-  await expect(chip).toHaveText("AI: chýba binárka");
+  await expect(chip).toHaveAttribute("data-state", "unavailable", { timeout: 30_000 });
+  await expect(chip).toHaveText("AI: nedostupné");
+  await expect(chip).toHaveAttribute("title", /budget/);
 
   expect(consoleMessages).toEqual([]);
 });
@@ -204,13 +122,13 @@ test("missing binary is reported distinctly", async ({ page }) => {
 test("clicking the chip navigates straight to the AI panel", async ({ page }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
-  await mockAiStatus(page, { running: true, binaryFound: true, claudeAuthenticated: false });
+  await mockAiStatus(page, { connected: false, error: "AI backend unreachable" });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
 
   const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "logged-out", { timeout: 30_000 });
+  await expect(chip).toHaveAttribute("data-state", "unavailable", { timeout: 30_000 });
   await chip.click();
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
 
@@ -227,28 +145,17 @@ test("a failed poll shows the neutral checking state, never a false failure clai
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
 
-  // #622 post-merge review finding 4: the ORIGINAL version of this test
-  // mocked a failure from the very first load and asserted "checking" — the
-  // chip's INITIAL state before any response ever arrives, so the assertion
-  // was trivially true even if the poll's `Err` arm were deleted entirely.
-  // This version proves an actual OK -> checking TRANSITION caused by real
-  // poll failures: start authenticated (chip reaches "ok"), then break the
-  // route and wait for >=2 poll ticks (5s interval, STALE_AFTER_FAILURES=2)
-  // so the chip is FORCED to fall back to "checking" — a regression that
-  // deletes the `Err` arm leaves the chip stuck on "ok" and fails this.
+  // #622 post-merge review finding 4: prove an actual OK -> checking TRANSITION
+  // caused by real poll failures — start connected (chip reaches "ok"), then
+  // break the route and wait for >=2 poll ticks (5s interval,
+  // STALE_AFTER_FAILURES=2) so the chip is FORCED to fall back to "checking".
   //
-  // A non-2xx status here would be closer to a "real" failure, but Chrome
-  // itself logs a "Failed to load resource: the server responded with a
-  // status of 500" console error for ANY non-2xx fetch response — that is
-  // browser-generated, unrelated to app code, and unavoidable, so the
-  // combination of "mock a 500" + "assert zero console" can never pass
-  // (`crates/presenter-ui/src/api/mod.rs`'s `get_json` returns
-  // `Err(ApiError::Status(..))` before ever touching the body). A malformed
-  // 200 body exercises the exact same client failure branch — `check_status()`
-  // returns `Err(ApiError::Deserialize(..))`, handled identically to
-  // `ApiError::Status` by `ai_status.rs`'s `poll` closure — via a pure
-  // Rust-side `serde_json::from_str` parse error, with a clean console.
-  await mockAiStatus(page, { running: true, binaryFound: true, claudeAuthenticated: true });
+  // A non-2xx status here would make Chrome itself log a "Failed to load
+  // resource" console error (browser-generated, unavoidable), so "mock a 500"
+  // + "assert zero console" can never pass. A malformed 200 body exercises the
+  // exact same client failure branch — `check_status()` returns
+  // `Err(ApiError::Deserialize(..))`, handled identically — with a clean console.
+  await mockAiStatus(page, { connected: true });
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");

@@ -224,62 +224,10 @@ jobs:
             deploy-target:${{ env.DEPLOY_DIR }}/
           ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
 
-      # #730: keep the llmrot channel script fresh on every PP release. The
-      # one-time authorized_keys line for claudy's key is provisioned
-      # separately (deploy/llmrot-provision.sh, run manually per host) —
-      # deliberately NOT in per-push CI. Runs as the deploy user (newlevel),
-      # no sudo — the deploy dir is newlevel-owned.
-      - name: Deploy llmrot channel script (#730)
-        run: |
-          scp -i ~/.ssh/id_deploy deploy/llmrot-apply.sh deploy-target:${{ env.DEPLOY_DIR }}/llmrot-apply.new
-          # atomic swap (new inode): a claudy invocation running mid-deploy keeps
-          # its old inode; the next invocation picks up the new script (#730 review).
-          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/llmrot-apply.new && mv -f ${{ env.DEPLOY_DIR }}/llmrot-apply.new ${{ env.DEPLOY_DIR }}/llmrot-apply"
-
       - name: Deploy Android Stage APK
         run: |
           scp -i ~/.ssh/id_deploy binaries/presenter-stage.apk deploy-target:${{ env.DEPLOY_DIR }}/presenter-stage.apk
           echo "Presenter Stage APK deployed to ${{ env.DEPLOY_DIR }}/presenter-stage.apk"
-
-      # #660: re-downloads whenever the PINNED version differs from what's on
-      # disk (tracked via a `.cliproxy-version` marker file), not only when
-      # the binary is entirely missing — before this fix, bumping
-      # CLIPROXY_VERSION above did nothing on an already-provisioned host.
-      # Runs as a single remote heredoc (not a locally-interpolated
-      # double-quoted string) so $CURRENT_VERSION is read and compared ON
-      # THE REMOTE HOST.
-      #
-      # #675 review finding 1: this job already stops the service BEFORE this
-      # step ("Stop service" above), so there is no live `cli-proxy-api` child
-      # with the binary mapped right now — but `deploy.yml` (prod) uses a
-      # STAGED-PULL model where the old service keeps running through this
-      # exact step, and `tar xz` there was found to overwrite the running
-      # child's inode in place. Downloading via the same atomic
-      # stage-then-`mv -f` swap HERE too (rather than only fixing prod) means
-      # a future reorder of this job's steps can't silently reintroduce that
-      # bug — the safety no longer depends on "the service happens to be
-      # stopped already" staying true forever.
-      - name: Deploy CLIProxyAPI
-        run: |
-          ssh deploy-target << 'REMOTE_SCRIPT'
-          set -e
-          CLIPROXY_VERSION="7.2.130"
-          CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_linux_amd64.tar.gz"
-          VERSION_FILE="${{ env.DEPLOY_DIR }}/.cliproxy-version"
-          CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "")
-          if [ ! -f "${{ env.DEPLOY_DIR }}/cli-proxy-api" ] || [ "$CURRENT_VERSION" != "$CLIPROXY_VERSION" ]; then
-            echo "Downloading CLIProxyAPI v${CLIPROXY_VERSION} (was: ${CURRENT_VERSION:-none})..."
-            TMP_DIR=$(mktemp -d "${{ env.DEPLOY_DIR }}/.cliproxy-download.XXXXXX")
-            curl -sL "$CLIPROXY_URL" | tar xz -C "$TMP_DIR/"
-            chmod +x "$TMP_DIR/cli-proxy-api"
-            mv -f "$TMP_DIR/cli-proxy-api" "${{ env.DEPLOY_DIR }}/cli-proxy-api"
-            rm -rf "$TMP_DIR"
-            echo "$CLIPROXY_VERSION" > "$VERSION_FILE"
-            echo "CLIProxyAPI deployed (atomic swap)"
-          else
-            echo "CLIProxyAPI already at v${CURRENT_VERSION}"
-          fi
-          REMOTE_SCRIPT
 
       - name: Ensure NDI SDK and avahi-daemon are installed
         run: |

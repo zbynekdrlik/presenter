@@ -2,11 +2,11 @@
  * WASM AI Chat Tab Tests
  *
  * Tests the AI chat tab UI: navigation, settings panel, message input,
- * error handling, conversation clearing, and proxy status display.
+ * error handling, and conversation clearing.
  *
- * Note: These tests do NOT test actual AI responses (which require
- * an authenticated Claude proxy). They verify the UI behavior,
- * API integration plumbing, and error handling.
+ * Note: These tests do NOT test actual AI responses (which require a
+ * reachable, credentialed AI backend). They verify the UI behavior, API
+ * integration plumbing, and error handling.
  */
 
 import { test, expect } from "@playwright/test";
@@ -190,12 +190,16 @@ test.describe("AI Chat Input Behavior", () => {
     const sendBtn = page.locator('[data-role="ai-send"]');
     await sendBtn.click();
 
-    // Should show error (no authenticated AI backend in test)
+    // #762 CI follow-up: startTestServer points the AI backend at a DEAD
+    // loopback endpoint (http://127.0.0.1:1/v1) with NO key — a deterministic,
+    // third-party-free setup. A loopback host is exempt from the keyless
+    // preflight guard, so the request is actually attempted and fails to
+    // connect, surfacing the exact "failed to reach AI API" message. Assert it
+    // precisely — the old broad regex also matched a live-backend 401, hiding a
+    // real egress-to-openrouter.ai failure.
     const error = page.locator('[data-role="ai-error"]');
     await expect(error).toBeVisible({ timeout: 15_000 });
-    await expect(error).toContainText(
-      /Failed to get AI response|failed to reach AI API/,
-    );
+    await expect(error).toContainText(/failed to reach AI API/);
   });
 });
 
@@ -367,22 +371,6 @@ test.describe("AI Conversation Management", () => {
   });
 });
 
-test.describe("AI Proxy Status", () => {
-  test("proxy section visible in settings when binary not found", async ({
-    page,
-  }) => {
-    await navigateToAi(page);
-
-    const settingsToggle = page.locator('[data-role="ai-settings-toggle"]');
-    await settingsToggle.click();
-
-    // In E2E test environment, binary is not alongside the test server
-    // So we should see either the proxy controls or the "not found" message
-    const proxyTitle = page.getByText("Built-in Proxy (CLIProxyAPI)");
-    await expect(proxyTitle).toBeVisible();
-  });
-});
-
 test.describe("AI Chat Connection Status", () => {
   test("connection status indicator is visible", async ({ page }) => {
     await navigateToAi(page);
@@ -391,25 +379,18 @@ test.describe("AI Chat Connection Status", () => {
     await expect(statusDot).toBeVisible();
   });
 
-  test("status endpoint returns valid response", async ({ page }) => {
-    // Direct API test
+  test("status endpoint returns the backend-agnostic shape", async ({ page }) => {
+    // Direct API test — since #762 the payload is `{connected, error, modelValid}`
+    // with no nested `proxy` object and no `requiresClaudeAuth` flag.
     const response = await page.request.get(`${baseURL}/ai/status`);
     expect(response.ok()).toBe(true);
 
     const data = await response.json();
     expect(data).toHaveProperty("connected");
-    expect(data).toHaveProperty("proxy");
-    expect(data.proxy).toHaveProperty("running");
-    expect(data.proxy).toHaveProperty("binaryFound");
-    // #622 post-merge review finding 5: #599 added `tokenExpiresAt` to
-    // `ProxyStatus` (no `skip_serializing_if`, so the key is always present,
-    // `null` when unknown) but no test ever proved it at the REAL HTTP
-    // boundary — only via mocked `/ai/status` responses in other specs. This
-    // is coverage-closing, not a regression guard: it already passes against
-    // current server code (the field has shipped since #622), and stays
-    // green as long as nobody adds a `skip_serializing_if` that would hide
-    // the key when the server has no known expiry.
-    expect(data.proxy).toHaveProperty("tokenExpiresAt");
+    expect(data).toHaveProperty("error");
+    expect(data).toHaveProperty("modelValid");
+    expect(data).not.toHaveProperty("proxy");
+    expect(data).not.toHaveProperty("requiresClaudeAuth");
   });
 });
 

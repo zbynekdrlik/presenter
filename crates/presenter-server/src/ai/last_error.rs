@@ -75,10 +75,10 @@ impl AiCallHealth {
 }
 
 /// Redact credentials from a backend error string, then cap it to
-/// [`EXCERPT_MAX_CHARS`]. Reuses the shared proxy-relay redaction so a new
+/// [`EXCERPT_MAX_CHARS`]. Reuses the shared redaction (`ai::redact`) so a new
 /// key format is covered in exactly one place.
 fn build_excerpt(raw_error: &str) -> String {
-    crate::ai::proxy_output_relay::redact_proxy_output_line(raw_error)
+    crate::ai::redact::redact_proxy_output_line(raw_error)
         .chars()
         .take(EXCERPT_MAX_CHARS)
         .collect()

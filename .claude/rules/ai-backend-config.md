@@ -11,11 +11,14 @@ paths:
   - "scripts/deploy/presenter-dev.service"
 ---
 
-# AI backend config — env precedence + `/etc/presenter/ai.env` (#761)
+# AI backend config — env precedence + `/etc/presenter/ai.env` (#761, bundled proxy removed #762)
 
 **Why this exists:** the AI assistant was switched from the on-device CLIProxyAPI
 proxy + Claude OAuth to **OpenRouter** (API key + model via env). The switch
-would have been silently inert without the precedence fix below.
+would have been silently inert without the precedence fix below. #762 then
+REMOVED the bundled proxy + Claude OAuth entirely — the effective `apiUrl` is now
+simply env → DB → default `https://openrouter.ai/api/v1`, with no bundled-proxy
+classification and no `requiresClaudeAuth`.
 
 ## Rules
 
@@ -29,24 +32,16 @@ would have been silently inert without the precedence fix below.
   #679/#683 data-loss class). The root cause the precedence fixes:
   `get_settings_internal` reads the DB row first and only falls back to the
   env-aware `AiSettings::default()` when NO row exists, and every prod DB
-  (SNV/PP/dev) holds a row pinning `apiUrl` to `http://127.0.0.1:18787/v1`, so
-  env was ignored.
-
-- **`is_bundled_default` (= `requiresClaudeAuth`) is recomputed on the EFFECTIVE
-  (post-override) `api_url`**, via `router::ai_env::is_effective_bundled`, against
-  the FIXED `ai::BUNDLED_PROXY_PLACEHOLDER` constant — NEVER
-  `AiSettings::default().api_url`, which is itself env-tainted (when
-  `PRESENTER_AI_API_URL` is set, `default().api_url == env`, so a raw-equality
-  check would falsely classify a foreign OpenRouter URL as "bundled" and keep the
-  Claude login banner stuck visible for an API-key backend, #679).
+  (SNV/PP/dev) still holds a pre-migration row pinning `apiUrl` to the old
+  bundled proxy (`http://127.0.0.1:18787/v1`), so env was ignored.
 
 - **Precedence helpers are PARAMETERIZED on the override values, not reading env
   themselves** (`apply_settings_overrides(settings, url, key, model)`), so they
   are unit-testable WITHOUT mutating process-global env — a mutated env var races
   every other test in this binary reading the same key (same rationale as
-  `parse_idle_clear_minutes` / `should_self_heal_to_canonical`). `apply_env_overrides`
-  is the thin env-reading production wrapper. An empty env value (`…=`) maps to
-  `None` (no override), so a deploy that clears the key does not send an empty key.
+  `parse_idle_clear_minutes`). `apply_env_overrides` is the thin env-reading
+  production wrapper. An empty env value (`…=`) maps to `None` (no override), so a
+  deploy that clears the key does not send an empty key.
 
 - **Deploy writes `/etc/presenter/ai.env` (0600 root-only), never the committed
   unit.** All three deploy workflows (`deploy.yml` SNV, `pipeline.yml` dev,
@@ -69,3 +64,29 @@ would have been silently inert without the precedence fix below.
 - **OpenRouter attribution headers** (`HTTP-Referer`, `X-Title: Presenter`) are
   sent unconditionally on every outbound AI request builder in `ai/client.rs`
   (chat + `list_models`) — harmless on any other OpenAI-compatible backend.
+
+- **Keyless request to a REMOTE backend fails fast — never egresses (#762 CI
+  follow-up, `ai/preflight.rs`).** `ai/client.rs::{call_chat_completions_with_options,
+  list_models}` call `preflight::missing_key_for_remote_backend(settings)` BEFORE
+  any HTTP: no API key AND a **non-loopback** `api_url` host → return the
+  operator-facing `AI nie je nakonfigurované: chýba API kľúč (…)` with ZERO
+  network call. Loopback (`127.0.0.1`/`::1`/`localhost`, brackets tolerated) is
+  the legitimate keyless LOCAL backend (llama.cpp/CLIProxyAPI) and is exempt.
+  The policy is host-classification, NOT a string match against
+  `DEFAULT_AI_API_URL`, so a hand-edited remote URL or any future default is
+  covered. This protects prod from silently billing a keyless call and makes
+  `/ai/status` report the real reason.
+
+- **The E2E test server must NEVER point at a real metered backend.** Since #762
+  the default `apiUrl` is OpenRouter, so an UNSET `PRESENTER_AI_API_URL` made the
+  keyless CI test server egress to openrouter.ai and 401 (reddened Playwright E2E
+  2/3, run 34720592378). `tests/e2e/support.ts::startTestServer` now defaults
+  `PRESENTER_AI_API_URL=http://127.0.0.1:1/v1` (dead loopback) + NO key so no
+  test depends on a third party; a loopback host bypasses the preflight guard, so
+  a chat/`/ai/status` call attempts a real connection and cleanly fails
+  ("failed to reach AI API"). **When you change `DEFAULT_AI_API_URL` (or any AI
+  backend default), re-check EVERY e2e spec that assumed the old dead proxy** —
+  `wasm-ai-chat.spec.ts` (the "not configured" send asserts `failed to reach AI
+  API`), `ai-status-chip.spec.ts` (mocks `/ai/status` via `page.route`, so it is
+  insulated), `ai-bible-composition.spec.ts`. Never mock a non-2xx AI response in
+  a zero-console spec (#598).
