@@ -417,6 +417,89 @@ mod tests {
             .expect_err("a malformed /models body must be an error");
     }
 
+    // --- #761: OpenRouter backend — /models catalog shape, Bearer auth on
+    // the connectivity check, and the HTTP-Referer/X-Title attribution
+    // headers OpenRouter reads for its dashboard. ---
+
+    #[tokio::test]
+    async fn list_models_parses_openrouter_catalog_and_sends_bearer() {
+        // OpenRouter's /api/v1/models returns the SAME {"data":[{"id":...}]}
+        // OpenAI-compatible shape, with anthropic/... slugs. The connectivity
+        // check must parse it (so evaluate_ai_status can validate the
+        // configured model against the catalog) AND send Authorization: Bearer
+        // <key> (OpenRouter requires the key even for /models).
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"id": "anthropic/claude-sonnet-5", "name": "Anthropic: Claude Sonnet 5"},
+                    {"id": "anthropic/claude-sonnet-4.5", "name": "Anthropic: Claude Sonnet 4.5"}
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = AiSettings {
+            api_url: mock_server.uri(),
+            api_key: Some("sk-or-testkey".to_string()),
+            model: "anthropic/claude-sonnet-5".to_string(),
+            system_prompt_extra: None,
+        };
+        let models = list_models(&settings).await.expect("must succeed");
+        assert!(
+            models.iter().any(|m| m == "anthropic/claude-sonnet-5"),
+            "the OpenRouter catalog slug must be parsed so modelValid can match it: {models:?}"
+        );
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert_eq!(
+            reqs[0]
+                .headers
+                .get("authorization")
+                .map(|v| v.to_str().unwrap_or("")),
+            Some("Bearer sk-or-testkey"),
+            "list_models must send Authorization: Bearer <key> to OpenRouter"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_request_sends_openrouter_attribution_headers() {
+        // OpenRouter uses HTTP-Referer + X-Title to attribute API usage in its
+        // dashboard; both are harmless on any other OpenAI-compatible backend.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "anthropic/claude-sonnet-5");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let _ = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("must succeed");
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert!(
+            reqs[0].headers.contains_key("http-referer"),
+            "chat request must carry an HTTP-Referer attribution header"
+        );
+        assert_eq!(
+            reqs[0]
+                .headers
+                .get("x-title")
+                .map(|v| v.to_str().unwrap_or("")),
+            Some("Presenter"),
+            "chat request must carry X-Title: Presenter"
+        );
+    }
+
     // --- AC4: max_tokens is always present on the serialized request ---
 
     #[test]
