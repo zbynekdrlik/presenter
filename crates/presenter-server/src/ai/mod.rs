@@ -36,9 +36,9 @@ pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
 /// `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12, verified present on
 /// the public `/api/v1/models` catalog). In practice the deployed instances set
 /// `PRESENTER_AI_MODEL` via `/etc/presenter/ai.env` from the GH Actions
-/// `AI_MODEL` variable, so changing the model in production is a variable edit
-/// + redeploy, not a code change; this const is the fallback when that env var
-/// is unset. Must be a slug OpenRouter's catalog serves or the post-deploy
+/// `AI_MODEL` variable, so changing the model in production is a variable edit +
+/// redeploy, not a code change; this const is the fallback when that env var is
+/// unset. Must be a slug OpenRouter's catalog serves or the post-deploy
 /// `modelValid` gate (#661) fails (superseded #437's proxy-only-id rule).
 pub(crate) const DEFAULT_AI_MODEL: &str = "google/gemini-3.8-flash";
 
