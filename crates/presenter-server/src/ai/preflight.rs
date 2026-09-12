@@ -20,22 +20,49 @@
 //! `ai_env::apply_settings_overrides`).
 
 use super::AiSettings;
+use std::net::IpAddr;
 
 /// Operator-facing message shown when a keyless request would go to a remote
 /// backend. Slovak, actionable, names both configuration surfaces.
 pub(crate) const MISSING_KEY_MESSAGE: &str =
     "AI nie je nakonfigurované: chýba API kľúč (PRESENTER_AI_API_KEY alebo Nastavenia → AI)";
 
+/// Whether `api_url`'s host is a loopback address — a LOCAL OpenAI-compatible
+/// backend (llama.cpp / CLIProxyAPI on `127.0.0.1`) that legitimately needs no
+/// API key. `127.0.0.1`, `::1` (with or without URL brackets) and `localhost`
+/// all count. An unparseable or host-less URL is treated as NON-loopback so the
+/// guard fails fast rather than risk a keyless egress.
+fn is_loopback_host(api_url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(api_url) else {
+        return false;
+    };
+    match parsed.host_str() {
+        Some(host) => {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            if host.eq_ignore_ascii_case("localhost") {
+                return true;
+            }
+            host.parse::<IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false)
+        }
+        None => false,
+    }
+}
+
 /// If the effective settings would send a KEYLESS request to a NON-loopback
 /// backend, return the operator-facing error message so the caller can fail
 /// fast with ZERO network egress; otherwise `None` (proceed with the call).
 ///
-/// RED STUB (#762 CI follow-up): returns `None` unconditionally — this mirrors
-/// the CURRENT behaviour, which has no preflight guard and lets every keyless
-/// call reach the network. The GREEN commit replaces this body with real host
-/// classification.
-pub(crate) fn missing_key_for_remote_backend(_settings: &AiSettings) -> Option<&'static str> {
-    None
+/// A remote OpenAI-compatible backend always requires auth, so a keyless
+/// request is a misconfiguration that egresses a billable/telemetry call and
+/// returns 401/403. Loopback backends are exempt (see [`is_loopback_host`]).
+pub(crate) fn missing_key_for_remote_backend(settings: &AiSettings) -> Option<&'static str> {
+    let has_key = settings.api_key.as_deref().is_some_and(|k| !k.is_empty());
+    if has_key || is_loopback_host(&settings.api_url) {
+        return None;
+    }
+    Some(MISSING_KEY_MESSAGE)
 }
 
 #[cfg(test)]
