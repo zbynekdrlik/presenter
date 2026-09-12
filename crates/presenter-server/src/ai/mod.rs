@@ -128,10 +128,14 @@ pub(crate) enum AiAgentError {
 mod tests {
     use super::*;
 
-    /// Regression for #437: the hardcoded default AI model must NOT be the
-    /// retired `claude-opus-4-20250514` (retired at Anthropic 2026-06-15 → 404)
-    /// and must be `claude-opus-4-6` — the newest Opus the bundled on-device
-    /// CLIProxyAPI catalog serves (4-8 is not in the proxy catalog → would 404).
+    /// Regression for #437 + #761: the hardcoded default AI model must NOT be
+    /// the retired `claude-opus-4-20250514` (retired at Anthropic 2026-06-15 →
+    /// 404) and — since #761 switched the AI backend to OpenRouter — must be the
+    /// OpenRouter slug `anthropic/claude-sonnet-5` (owner ROZHODNUTÉ 2026-09-12,
+    /// verified present on `https://openrouter.ai/api/v1/models`). The previous
+    /// pin (`claude-opus-4-6`) was a CLIProxyAPI proxy-only id that OpenRouter's
+    /// catalog does not serve, so it would fail the post-deploy `modelValid`
+    /// gate against the new backend (#661).
     #[test]
     fn default_model_is_not_retired() {
         assert_ne!(
@@ -139,8 +143,8 @@ mod tests {
             "default AI model must not be the retired claude-opus-4-20250514"
         );
         assert_eq!(
-            DEFAULT_AI_MODEL, "claude-opus-4-6",
-            "default AI model must be claude-opus-4-6"
+            DEFAULT_AI_MODEL, "anthropic/claude-sonnet-5",
+            "default AI model must be the OpenRouter slug anthropic/claude-sonnet-5 (#761)"
         );
     }
 }
