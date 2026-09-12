@@ -1,0 +1,363 @@
+{
+  "generatedAt": "2026-09-12T16:48:53.920735209+00:00",
+  "total": 30,
+  "passed": 16,
+  "seedFailedTotal": 0,
+  "totalDurationMs": 387934,
+  "finishReasonLength": 0,
+  "stalledRetryLoopTotal": 0,
+  "totalUsage": {
+    "promptTokens": 350819,
+    "completionTokens": 18238,
+    "totalTokens": 369057
+  },
+  "slices": [
+    {
+      "slice": "adversarial",
+      "total": 12,
+      "passed": 2
+    },
+    {
+      "slice": "bible-authoring",
+      "total": 11,
+      "passed": 8
+    },
+    {
+      "slice": "worship-crud",
+      "total": 7,
+      "passed": 6
+    }
+  ],
+  "cases": [
+    {
+      "caseId": "adv-01-reference-format-requires-parens",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 10181,
+      "failures": [
+        "expected.validationErrors: rule 'reference_format_requires_parens' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets bible_validator::ValidationRule::ReferenceFormatRequiresParens via the lowercase-translation-code path (not a hand-written reference string — the LLM never writes main_reference directly, only the composer does, from book/chapter/translation). On the typed error (with `expected` text mentioning parens), the model must self-correct by re-submitting with translation: 'SEB' (uppercase) rather than repeating 'seb' or giving up."
+    },
+    {
+      "caseId": "adv-02-missing-verse-number-prefix",
+      "slice": "adversarial",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 11404,
+      "failures": [],
+      "notes": "REGRESSION-GUARD case, not a true 'trip' case (see setup.description finding above). This case is the plain verbatim baseline (identical in content to ba-01); its purpose in the adversarial suite is to serve as a canary — if a future refactor ever lets create_bible_presentation bypass the composer's automatic 'N. ' prefixing (e.g. a new tool exposing raw main text again), this case's expected.validationErrors (currently []) should be revisited alongside the rule's reachability. Flagging this finding for the human reviewer: MissingVerseNumberPrefix may be dead code from the AI's perspective and worth a follow-up look when the ai_eval.rs driver (report §8 step 8) is built, since a driver that constructs items[] payloads directly (bypassing a live LLM) COULD still exercise it for the unit-test-equivalent purpose bible_validator.rs's own #[cfg(test)] module already covers."
+    },
+    {
+      "caseId": "adv-03-unprocessed-bold-markers-main",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 12185,
+      "failures": [
+        "expected.validationErrors: rule 'unprocessed_bold_markers' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets bible_validator::ValidationRule::UnprocessedBoldMarkers via the `main` field path (main.contains(\"##\")). On the typed error (rule + 'got' showing the offending string), the model must self-correct to 'VERIA' uppercase with no '##' remaining — this is the single most likely small-model failure per the report's #4.4 (D4-adjacent) concern about markup leaking into visible output."
+    },
+    {
+      "caseId": "adv-04-unprocessed-bold-markers-reference",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 13135,
+      "failures": [
+        "expected.validationErrors: rule 'unprocessed_bold_markers' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets UnprocessedBoldMarkers via the main_reference path (main_reference.contains(\"##\")) — the harder-to-hit sibling of adv-03, since main_reference is never directly written by the LLM; it only leaks a stray '#' through the `book` argument it supplies. Correct resolution: book = 'Židom' (abbreviation resolved AND markers fully stripped), producing main_reference = 'Židom 4:13 (SEVP)' with zero '#' characters anywhere."
+    },
+    {
+      "caseId": "adv-05-empty-main-on-emphasis-slide",
+      "slice": "adversarial",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 14024,
+      "failures": [],
+      "notes": "REGRESSION-GUARD case (see setup.description finding). The CORRECT model behaviour on the stray '####' is simply to recognise it carries no content and skip it entirely — emitting only the Židom 4:13 verse item (and possibly a genuine emphasis item for the closing sentence, at the model's discretion, scored under Layer-2 reasonableness rather than a hard pass/fail). If a candidate model instead tries to submit an item with empty text, the error it will actually see is invalid_emphasis_item (adv-09's target), never empty_main_on_emphasis_slide — flagging the same follow-up note as adv-02 for whoever builds ai_eval.rs."
+    },
+    {
+      "caseId": "adv-06-main-exceeds-character-limit-emphasis",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 15828,
+      "failures": [
+        "expected.validationErrors: rule 'main_exceeds_character_limit' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets bible_validator::ValidationRule::MainExceedsCharacterLimit via the emphasis/title branch specifically (the validator's own doc comment distinguishes this from the verse branch, which is protected by the #394 lone-whole-verse exception and can never trigger this rule for a single verse). Correct self-correction: shorten the phrase to a genuinely emphasis-length slogan (the style guide's own examples are short, e.g. 'NOVÁ ZMLUVA') rather than retry-with-no-change or split the phrase across multiple emphasis items (which the schema doesn't support as a 'split marker')."
+    },
+    {
+      "caseId": "adv-07-missing-items-array",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 7133,
+      "failures": [
+        "expected.validationErrors: rule 'missing_items' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets the create_bible_presentation dispatch's own 'missing_items' error (bible_presentation.rs, not bible_validator.rs — this one keys on \"error\", not \"rule\", but is read by the LLM the same way for self-correction). Correct end state: a bible presentation named exactly 'Večera Pánova' with slide_count 0. No load_bible_verses call is expected — there is no passage to look up."
+    },
+    {
+      "caseId": "adv-08-invalid-verse-item-missing-translation",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 14595,
+      "failures": [
+        "expected.validationErrors: rule 'invalid_verse_item' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets parse_bible_items' invalid_verse_item error via a missing `translation` field specifically (the same error also covers number==0, empty text, empty book, chapter==0 — this fixture isolates the translation-field variant since it is the one most likely to be omitted by an uncertain model rather than malformed by a confident-but-wrong one). Acceptable recoveries: call load_bible_verses against one of the available translations from live context and tag items with that code, or ask the user which translation to use — either way the retried create_bible_presentation call must carry a non-empty translation on every verse item."
+    },
+    {
+      "caseId": "adv-09-invalid-emphasis-item-empty-text",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 11857,
+      "failures": [
+        "expected.validationErrors: rule 'invalid_emphasis_item' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets parse_bible_items' invalid_emphasis_item error via an empty/whitespace-only emphasis text field. Correct self-correction: drop the empty item entirely (the '####' carries no actual content, so the right answer is to not emit any emphasis item for it at all) rather than retry with the same empty text or substitute a fabricated phrase the sermon never said."
+    },
+    {
+      "caseId": "adv-10-invalid-item-kind-reference",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 13812,
+      "failures": [
+        "expected.validationErrors: rule 'invalid_item_kind' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets parse_bible_items' invalid_item_kind error via kind='reference' (or any value outside {'verse','emphasis'}). Correct behaviour: the bold reference resolves the book ('Matúš', from the 'Mt' abbreviation), chapter (26), and verse range (26-29) used to tag the FOUR verse items that follow — it produces ZERO items of its own, per style_guide.md's explicit 'do NOT create a slide for it'."
+    },
+    {
+      "caseId": "adv-11-invalid-item-kind-title",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 15319,
+      "failures": [
+        "expected.validationErrors: rule 'invalid_item_kind' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Targets parse_bible_items' invalid_item_kind error via kind='title' — the second distinguishable confusion for this rule alongside adv-10's kind='reference'. Correct behaviour: create_bible_presentation(name: 'Nová zmluva', items: [{kind: 'verse', number: 1, text: '...', book: 'Ján', chapter: 1, translation: 'ROH'}]) — the title never appears inside items[] at all."
+    },
+    {
+      "caseId": "adv-12-invalid-verse-item-corrupted-number",
+      "slice": "adversarial",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 12175,
+      "failures": [
+        "expected.validationErrors: rule 'invalid_verse_item' never fired in any create_bible_presentation attempt"
+      ],
+      "notes": "Second flavour of invalid_verse_item, testing the number-field overflow path specifically (server-side: u32::try_from(raw[\"number\"].as_u64()...).unwrap_or(0) collapses any out-of-range u64 to 0, which then fails the number>=1 check). The realistic and desired self-correction is inferring the correct verse number (16) from the verse text's obvious match to load_bible_verses' Ján 3 results, NOT passing 4294967297 through verbatim and NOT silently guessing an unrelated number."
+    },
+    {
+      "caseId": "ba-01-verbatim-single-verse-seb",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 10583,
+      "failures": [],
+      "notes": "Hard-case category: verbatim quote (baseline, not actually hard — a regression floor). The final slide's main text (after the '16. ' prefix) must equal the SEB DB text exactly. main_reference must be 'Ján 3:16 (SEB)'."
+    },
+    {
+      "caseId": "ba-02-paraphrase-vs-db-text-jan1",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 13630,
+      "failures": [],
+      "notes": "Hard-case category: paraphrase vs verbatim. The most likely failure mode for a weaker model is silently reverting to the DB text it just loaded (the 'safe-looking' answer) instead of trusting the sermon's own wording — this is exactly the fidelity direction verbatimVerses cannot catch, which is why overriddenVerses exists as its mirror check."
+    },
+    {
+      "caseId": "ba-03-overlapping-adjacent-ranges-jan3",
+      "slice": "bible-authoring",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 15143,
+      "failures": [
+        "toolSequence: expected [\"load_bible_verses\", \"load_bible_verses\", \"create_bible_presentation\"] as an ordered subsequence of actual calls [\"load_bible_verses\", \"create_bible_presentation\"]"
+      ],
+      "notes": "Hard-case category: overlapping AND adjacent verse ranges in one sermon. Layer-1 verbatimVerses checks each quoted verse's text fidelity independently (each appearance of v16 must be correct, however many slides it ends up on). Whether the sermon's deliberate re-quote of v16 produces one slide or two separate slides is a REASONABLENESS judgment (no single correct slide count) — score that dimension under Layer-2 (slide-splitting rubric), not as a hard Layer-1 pass/fail."
+    },
+    {
+      "caseId": "ba-04-bold-spanning-verse-boundary",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 11264,
+      "failures": [],
+      "notes": "Hard-case category: bold spanning a verse boundary. There is no single mechanically-correct output (the style guide is silent on this exact input), so this is scored primarily under Layer-2 (verse-fidelity / naturalness rubric): did the model (a) keep BOTH verses' non-bolded wording intact and unchanged outside the marked span, (b) uppercase the marked span within EACH verse's own item text, and (c) avoid inventing a merged single verse or dropping verse 17 entirely. Layer-1 only asserts that unprocessed_bold_markers is NOT among validationErrors (the ## must not leak through to the composed slide) and that both v16 and v17 appear as separate verse items feeding create_bible_presentation."
+    },
+    {
+      "caseId": "ba-05-title-interleaved-mid-sermon",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 15100,
+      "failures": [],
+      "notes": "Hard-case category: title marker interleaved with verses (i.e. NOT at the very start). Correct handling: create_bible_presentation's name comes from elsewhere (the model should ask, or derive a sensible name from the sermon topic — there is no ##title## at position 0) and 'Nová zmluva' becomes a {kind: emphasis, text: 'NOVÁ ZMLUVA'} item positioned between the two verse items, exactly mirroring the worked example in agent.rs's own system prompt (step 6's items[] sample uses this literal phrase). A failure mode to watch for: treating 'Nová zmluva' as the presentation title anyway despite its position, or silently dropping it."
+    },
+    {
+      "caseId": "ba-06-multi-translation-side-by-side",
+      "slice": "bible-authoring",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 17324,
+      "failures": [
+        "verbatimVerses: John 3:16 (KJV) not found among submitted verse items"
+      ],
+      "notes": "Hard-case category: multi-translation. Two load_bible_verses calls with different translation codes for the same book/chapter/verse. The two verse items must carry translation: 'SEB' and translation: 'KJV' respectively so the composer's group-change break fires, producing two slides even though the verse number (16) repeats — this specifically exercises the part of compose.rs NOT covered by ba-03 (which varies chapter/verse only, never translation)."
+    },
+    {
+      "caseId": "ba-07-emphasis-standalone-phrase",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 16120,
+      "failures": [],
+      "notes": "Hard-case category: standalone emphasis phrase (baseline). Expect an items[] with a verse item for Židom 4:13, then a {kind: emphasis, text: 'BOH VIDÍ VŠETKO!'} item — uppercase, exclamation mark preserved. The trailing prose sentence after the phrase is NOT part of any marker and should not become its own slide or leak '##' into any field."
+    },
+    {
+      "caseId": "ba-08-bold-word-inline-uppercase",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 46518,
+      "failures": [],
+      "notes": "Hard-case category: inline ##word## emphasis. Only the single word 'veria' becomes uppercase ('VERIA'); the rest of the verse text is untouched — this is the single-item, in-place-transform sibling of ba-04's harder cross-verse span. Layer-1 failure modes to catch: (a) creating a second slide/item just for 'VERIA' (should stay one verse item), (b) leaving '##veria##' unstripped (unprocessed_bold_markers), (c) uppercasing the WHOLE verse instead of just the marked word."
+    },
+    {
+      "caseId": "ba-09-multi-verse-range-packing-psalm26",
+      "slice": "bible-authoring",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 12820,
+      "failures": [
+        "verbatimVerses: Žalm 26:1 (ROH) not found among submitted verse items",
+        "verbatimVerses: Žalm 26:2 (ROH) not found among submitted verse items",
+        "verbatimVerses: Žalm 26:3 (ROH) not found among submitted verse items"
+      ],
+      "notes": "Hard-case category: multi-verse range packing (baseline, not adversarial — the three verses fit comfortably under any reasonable character limit). main_reference for every resulting slide must be the FULL group range 'Žalm 26:1-3 (ROH)' per style_guide.md's multi-slide rule, even if the composer happens to produce more than one slide (it should not, at default limits, but the reference-label invariant holds regardless)."
+    },
+    {
+      "caseId": "ba-10-wrong-verse-number-quoted",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 10558,
+      "failures": [],
+      "notes": "Hard-case category: pastor cites the wrong verse number for the text quoted (this is the literal worked example baked into the system prompt, so a candidate that fails this one is failing on a case the model was DIRECTLY told how to handle). Final slide must read '16. Lebo neposlal Bôh na svet svojho Syna...' — verse NUMBER 16 (the sermon's citation) paired with verse 17's real wording (the sermon's quoted text). A wrong answer either silently substitutes the DB's real v16 text, or relabels it '17.' to match the wording instead of the citation — both are explicitly the WRONG behaviour per the prompt."
+    },
+    {
+      "caseId": "ba-11-title-nazov-form",
+      "slice": "bible-authoring",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 10692,
+      "failures": [],
+      "notes": "Hard-case category: title convention variant ('Názov:' prefix, not a ##title## bold marker). create_bible_presentation's name argument must be exactly 'Kristovo víťazstvo', not 'Nazov: Kristovo víťazstvo' (the prefix itself must be stripped) and not a name derived from the verse reference instead."
+    },
+    {
+      "caseId": "wc-01-create-library",
+      "slice": "worship-crud",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 4919,
+      "failures": [],
+      "notes": "Baseline worship CRUD happy path. Checks the model calls create_library (not create_presentation, and NOT a bible_* tool — 'Mládežnícke chvály' is a worship library name, agent.rs rule 1/2 must route it correctly) with name exactly 'Mládežnícke chvály'."
+    },
+    {
+      "caseId": "wc-02-list-and-rename-presentation",
+      "slice": "worship-crud",
+      "passed": false,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 9810,
+      "failures": [
+        "toolSequence: expected [\"list_libraries\", \"list_presentations\", \"rename_presentation\"] as an ordered subsequence of actual calls [\"list_presentations\", \"rename_presentation\"]"
+      ],
+      "notes": "Worship CRUD happy path requiring resolve-by-name before write: the model must call list_libraries and/or list_presentations to find the real UUIDs before calling rename_presentation. Tests that it does NOT hallucinate an id, and that the new name is exactly 'WONDER (akustická verzia)'."
+    },
+    {
+      "caseId": "wc-03-reorder-slides",
+      "slice": "worship-crud",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 11520,
+      "failures": [],
+      "notes": "Worship CRUD reorder path. Model must call get_presentation to read the current slide_ids/groups, then reorder_slides with ALL slide_ids in the new order (the tool takes the full ordered array, not a move-one-slide delta) — puts the Chorus slide id first."
+    },
+    {
+      "caseId": "wc-04-delete-gate-blocked-sk",
+      "slice": "worship-crud",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 5812,
+      "failures": [],
+      "notes": "Delete-gate probe: keyword ABSENT. Even if the model calls delete_presentation, execute_tool_calls' delete-intent gate (agent.rs) must return the 'delete_blocked' tool result because 'upratni knižnicu' contains none of DELETE_KEYWORDS. Correct behaviour is either to not call delete_* at all, or to call it and receive/report the block, and then ask the user to confirm explicitly."
+    },
+    {
+      "caseId": "wc-05-delete-gate-allowed-sk",
+      "slice": "worship-crud",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 8850,
+      "failures": [],
+      "notes": "Delete-gate probe: keyword PRESENT ('vymaž'). The model must resolve the real presentation id (via list_presentations/get_presentation, never inventing one) then call delete_presentation; the gate must NOT block it since delete_intent_allowed('vymaž pieseň ...') is true."
+    },
+    {
+      "caseId": "wc-06-delete-gate-deferred-affirm-en",
+      "slice": "worship-crud",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 7755,
+      "failures": [],
+      "notes": "Cross-turn deferred-intent delete-gate probe (English 'yes'). The gate must grant on BOTH delete_presentation calls this turn because the immediately preceding user turn contained 'vymaž' and the current message ('yes') is affirmative. This is the single hardest gate case to get right with a weaker model, because the CURRENT message alone carries zero delete keyword — the model (and the gate) must use conversation context, not just the last user string."
+    },
+    {
+      "caseId": "wc-07-delete-gate-allowed-cz",
+      "slice": "worship-crud",
+      "passed": true,
+      "seedFailed": false,
+      "stalledRetryLoop": false,
+      "durationMs": 7868,
+      "failures": [],
+      "notes": "Delete-gate probe: Czech keyword PRESENT ('smazat'). Confirms delete_intent_allowed matches Czech, and that the gate's tc.function.name.starts_with(\"delete_\") check applies uniformly to delete_slide (not just delete_presentation)."
+    }
+  ]
+}

@@ -55,6 +55,13 @@ fn connectivity_client() -> &'static reqwest::Client {
     })
 }
 
+/// OpenRouter reads `HTTP-Referer` + `X-Title` to attribute API usage in its
+/// dashboard/rankings (#761). Both are plain, harmless request headers on any
+/// other OpenAI-compatible backend (CLIProxyAPI, llama.cpp), so they are sent
+/// on every outbound AI request unconditionally rather than sniffing the URL.
+const AI_ATTRIBUTION_REFERER: &str = "https://github.com/zbynekdrlik/presenter";
+const AI_ATTRIBUTION_TITLE: &str = "Presenter";
+
 /// Conservative default response budget when `PRESENTER_AI_MAX_TOKENS` is
 /// unset. This bounds the PROVIDER's REPLY size — distinct from (and much
 /// smaller than) the request-side context budget in `ai::context_budget` —
@@ -243,7 +250,11 @@ pub async fn call_chat_completions_with_options(
     };
 
     let client = reqwest::Client::new();
-    let mut req = client.post(&url).json(&request);
+    let mut req = client
+        .post(&url)
+        .json(&request)
+        .header("HTTP-Referer", AI_ATTRIBUTION_REFERER)
+        .header("X-Title", AI_ATTRIBUTION_TITLE);
 
     if let Some(key) = &settings.api_key {
         if !key.is_empty() {
@@ -315,7 +326,10 @@ pub async fn call_chat_completions_with_options(
 /// status chip (#622 post-merge review finding 3a).
 pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
     let url = format!("{}/models", settings.api_url.trim_end_matches('/'));
-    let mut req = connectivity_client().get(&url);
+    let mut req = connectivity_client()
+        .get(&url)
+        .header("HTTP-Referer", AI_ATTRIBUTION_REFERER)
+        .header("X-Title", AI_ATTRIBUTION_TITLE);
 
     if let Some(key) = &settings.api_key {
         if !key.is_empty() {
@@ -415,6 +429,91 @@ mod tests {
         list_models(&settings)
             .await
             .expect_err("a malformed /models body must be an error");
+    }
+
+    // --- #761: OpenRouter backend — /models catalog shape, Bearer auth on
+    // the connectivity check, and the HTTP-Referer/X-Title attribution
+    // headers OpenRouter reads for its dashboard. ---
+
+    #[tokio::test]
+    async fn list_models_parses_openrouter_catalog_and_sends_bearer() {
+        // OpenRouter's /api/v1/models returns the SAME {"data":[{"id":...}]}
+        // OpenAI-compatible shape, with provider-prefixed slugs. The
+        // connectivity check must parse it (so evaluate_ai_status can validate
+        // the configured model against the catalog) AND send Authorization:
+        // Bearer <key> (OpenRouter requires the key even for /models). The
+        // configured model here is the production default google/gemini-3.8-flash
+        // (owner ROZHODNUTÉ 2026-09-12, #761).
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"id": "google/gemini-3.8-flash", "name": "Google: Gemini 3.8 Flash"},
+                    {"id": "anthropic/claude-sonnet-5", "name": "Anthropic: Claude Sonnet 5"}
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = AiSettings {
+            api_url: mock_server.uri(),
+            api_key: Some("sk-or-testkey".to_string()),
+            model: "google/gemini-3.8-flash".to_string(),
+            system_prompt_extra: None,
+        };
+        let models = list_models(&settings).await.expect("must succeed");
+        assert!(
+            models.iter().any(|m| m == "google/gemini-3.8-flash"),
+            "the OpenRouter catalog slug must be parsed so modelValid can match it: {models:?}"
+        );
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert_eq!(
+            reqs[0]
+                .headers
+                .get("authorization")
+                .map(|v| v.to_str().unwrap_or("")),
+            Some("Bearer sk-or-testkey"),
+            "list_models must send Authorization: Bearer <key> to OpenRouter"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_request_sends_openrouter_attribution_headers() {
+        // OpenRouter uses HTTP-Referer + X-Title to attribute API usage in its
+        // dashboard; both are harmless on any other OpenAI-compatible backend.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let settings = test_settings(&mock_server.uri(), "google/gemini-3.8-flash");
+        let messages = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let _ = call_chat_completions(&messages, None, &settings)
+            .await
+            .expect("must succeed");
+
+        let reqs = mock_server.received_requests().await.expect("recorded");
+        assert!(
+            reqs[0].headers.contains_key("http-referer"),
+            "chat request must carry an HTTP-Referer attribution header"
+        );
+        assert_eq!(
+            reqs[0]
+                .headers
+                .get("x-title")
+                .map(|v| v.to_str().unwrap_or("")),
+            Some("Presenter"),
+            "chat request must carry X-Title: Presenter"
+        );
     }
 
     // --- AC4: max_tokens is always present on the serialized request ---

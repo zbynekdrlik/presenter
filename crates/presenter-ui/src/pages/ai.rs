@@ -394,7 +394,7 @@ pub fn AiPage() -> impl IntoView {
                             type="text"
                             data-role="ai-model"
                             autocomplete="off"
-                            placeholder="claude-opus-4-6"
+                            placeholder="google/gemini-3.8-flash"
                             prop:value=move || model.get()
                             on:input=move |ev| model.set(event_target_value(&ev))
                         />

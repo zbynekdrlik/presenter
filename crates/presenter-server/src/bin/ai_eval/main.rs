@@ -7,6 +7,7 @@
 //! per this project's file/function size caps and the #680 design comment's
 //! own "thin main + library modules" plan.
 
+mod candidate_key;
 mod cli;
 mod constrained;
 mod corpus;

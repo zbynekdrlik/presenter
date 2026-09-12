@@ -1387,6 +1387,33 @@ jobs:
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
+      # #761: OpenRouter AI backend config → 0600 root-only EnvironmentFile
+      # (mirrors the TURN step; committed unit references it as
+      # `EnvironmentFile=-`). API key is a SECRET (printf over ssh stdin, never
+      # argv, umask 077). PRESENTER_AI_* WIN over the DB `ai-settings` row for
+      # the effective AI call/status path, so this switches the dev backend to
+      # OpenRouter without a DB write. Empty secret → remove the file (AI off,
+      # DB/bundled fallback). Runs BEFORE "Start service" so the freshly-started
+      # dev service reads the new EnvironmentFile.
+      - name: Configure AI backend
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+        run: |
+          set -euo pipefail
+          SECRET_FILE=/etc/presenter/ai.env
+          if [ -n "$OPENROUTER_API_KEY" ]; then
+            ssh deploy-target "sudo install -d -m 755 /etc/presenter"
+            printf 'PRESENTER_AI_API_URL=%s\nPRESENTER_AI_API_KEY=%s\nPRESENTER_AI_MODEL=%s\n' \
+              "https://openrouter.ai/api/v1" "$OPENROUTER_API_KEY" "${AI_MODEL:-google/gemini-3.8-flash}" \
+              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "AI backend → OpenRouter written to $SECRET_FILE (0600 root-only), model=${AI_MODEL:-google/gemini-3.8-flash}"
+          else
+            ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "OPENROUTER_API_KEY unset — OpenRouter AI backend disabled; any stale $SECRET_FILE removed"
+          fi
+          ssh deploy-target "sudo systemctl daemon-reload"
+
       - name: Start service
         run: |
           ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
@@ -1484,23 +1511,27 @@ jobs:
       # (1) moved to run AFTER the core smoke test above, so an AI-side
       # problem can never mask a real dev-deploy regression by skipping it.
       # (2) hard-fails ONLY on `modelValid:false` (a real config regression
-      # this deploy could have caused); a merely-stale Claude OAuth token or
-      # an unreachable proxy is a `::warning::`, never a failed dev deploy.
+      # this deploy could have caused); a backend that is merely unreachable /
+      # not connected is a non-blocking OWNER-VISIBLE `::error::` (#760),
+      # never a failed dev deploy — and never a `::warning::` nobody opens.
       - name: Verify AI status
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           if ! AI_STATUS=$(curl -sf http://localhost:8080/ai/status); then
-            echo "::warning::Post-deploy AI check — /ai/status did not respond (non-blocking)"
+            echo "::error::Post-deploy AI check — /ai/status did not respond; the AI assistant may be DOWN and needs owner attention (non-blocking)"
           else
             if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
-              echo "::error::Post-deploy AI check FAILED — configured AI model is not in the proxy's model catalog: $AI_STATUS"
+              echo "::error::Post-deploy AI check FAILED — configured AI model is not in the backend's model catalog: $AI_STATUS"
               exit 1
             fi
             if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
               echo "AI check passed: $AI_STATUS"
             else
-              echo "::warning::AI is not fully connected post-deploy (stale Claude OAuth token or proxy unreachable — non-blocking): $AI_STATUS"
+              # #760: connected:false = AI is DOWN; owner-visible ::error::,
+              # non-blocking (must not fail an unrelated dev deploy). Primary
+              # owner signal is the external watchdog on /healthz.ai.
+              echo "::error::Post-deploy AI check — AI is NOT connected (connected:false); the AI assistant is DOWN and needs owner attention (non-blocking — #760): $AI_STATUS"
             fi
           fi
           REMOTE_SCRIPT

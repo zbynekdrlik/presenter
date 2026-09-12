@@ -19,12 +19,37 @@ All environment variables and feature flags for Presenter.
 
 | Variable                             | Default                        | Description                                                                                                                                          |
 | ------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRESENTER_AI_API_URL`                | `http://127.0.0.1:18787/v1`     | OpenAI-compatible chat completions endpoint — the on-device CLIProxyAPI bundled proxy, which listens on `127.0.0.1:18787`. The raw env-var fallback literal in code is a placeholder (`http://localhost:8787/v1`) that the server self-heals to the proxy's actual configured port (**18787**) at startup, so the effective default is the row's value. Overridden by a persisted `/ai/settings` value if one is saved. |
-| `PRESENTER_AI_API_KEY`                | unset                           | Bearer token for the AI provider, if required.                                                                                                      |
-| `PRESENTER_AI_MODEL`                  | `claude-opus-4-6`               | Model name sent on every chat completion request.                                                                                                   |
+| `PRESENTER_AI_API_URL`                | `http://localhost:8787/v1` (placeholder → bundled proxy) | OpenAI-compatible chat completions endpoint. The raw env-var fallback literal is a placeholder (`http://localhost:8787/v1`) that the server self-heals to the bundled on-device CLIProxyAPI proxy's actual configured port (**18787**) at startup. **Since #761 this env var WINS over a persisted `/ai/settings` DB row for the EFFECTIVE call/status path** (`resolve_effective_settings`) — reversing the pre-#761 "DB overrides env" behaviour, so a stored bundled-proxy `apiUrl` no longer masks the deployed backend. Deployed instances set it to `https://openrouter.ai/api/v1` via `/etc/presenter/ai.env` (see below). Set to a non-bundled URL → `requiresClaudeAuth` is `false` and the Claude login banner hides (#679). |
+| `PRESENTER_AI_API_KEY`                | unset                           | Bearer token for the AI provider (sent as `Authorization: Bearer …`). Required for OpenRouter. Wins over the DB row on the effective path (#761). |
+| `PRESENTER_AI_MODEL`                  | `google/gemini-3.8-flash`       | Model name sent on every chat completion request. Since #761 the default is the OpenRouter slug `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12); deployed instances set it from the GH Actions `AI_MODEL` variable via `/etc/presenter/ai.env`, so changing the model in production is a variable edit + redeploy (no code change). Wins over the DB row on the effective path (#761). |
 | `PRESENTER_AI_CONTEXT_BUDGET_BYTES`   | `300000`                        | Conservative byte-size ceiling on the request-side conversation, enforced on every agent-loop iteration (#665). Invalid/zero falls back to default. |
 | `PRESENTER_AI_MAX_TOKENS`             | `8192`                          | Cap on the PROVIDER's own reply size, sent as `max_tokens` on every chat completion request (#665). Invalid/zero falls back to default.             |
 | `PRESENTER_AI_IDLE_CLEAR_MINUTES`     | `30`                            | Idle window after which the shared AI conversation is auto-cleared on the next `/ai/chat` call (#665). Invalid/zero falls back to default.          |
+
+#### OpenRouter backend via `/etc/presenter/ai.env` — #761
+
+The deployed instances (SNV prod, dev, PP) run the AI assistant against
+**OpenRouter** (`https://openrouter.ai/api/v1`, OpenAI-compatible, Bearer API
+key). The deploy workflows (`deploy.yml`, `pipeline.yml`, `release.yml`) write a
+0600 root-only `EnvironmentFile` at `/etc/presenter/ai.env` — mirroring the TURN
+pattern — from the `OPENROUTER_API_KEY` GitHub secret and the `AI_MODEL` GitHub
+Actions variable:
+
+```
+PRESENTER_AI_API_URL=https://openrouter.ai/api/v1
+PRESENTER_AI_API_KEY=<OPENROUTER_API_KEY secret>
+PRESENTER_AI_MODEL=<AI_MODEL variable, e.g. google/gemini-3.8-flash>
+```
+
+The committed units (`scripts/deploy/presenter.service`,
+`presenter-dev.service`) reference it as `EnvironmentFile=-/etc/presenter/ai.env`
+(the leading `-` makes it optional). Because these `PRESENTER_AI_*` vars WIN over
+the persisted DB `ai-settings` row on the effective call/status path (#761), the
+switch takes effect with no DB write even though prod DBs still hold the old
+bundled-proxy `apiUrl`. An empty `OPENROUTER_API_KEY` secret makes the deploy
+REMOVE the file, so the AI cleanly falls back to the DB/bundled default rather
+than running half-configured. Changing the model in production is a variable edit
++ redeploy — no code change.
 
 #### AI subscription pool (llmrot channel) — #730
 

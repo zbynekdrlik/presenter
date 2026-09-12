@@ -514,6 +514,37 @@ jobs:
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
+      # #761: write the OpenRouter AI backend config to a 0600 root-only
+      # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`),
+      # mirroring the TURN step above. The API key is a SECRET — never in the
+      # committed unit, never in any process argv (passed via the printf builtin
+      # over ssh stdin, written under `umask 077` so 0600 from creation). The
+      # PRESENTER_AI_* env vars WIN over the stored DB `ai-settings` row for the
+      # effective AI call/status path (resolve_effective_settings, #761), so this
+      # file is what switches the live backend to OpenRouter WITHOUT a DB write —
+      # prod DBs still hold the pre-migration bundled-proxy apiUrl. Empty secret
+      # → remove the file so AI cleanly falls back to the DB/bundled default (AI
+      # off on OpenRouter), never half-configured. Runs BEFORE the swap/restart
+      # step below so the freshly-started service reads the new EnvironmentFile.
+      - name: Configure AI backend
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+        run: |
+          set -euo pipefail
+          SECRET_FILE=/etc/presenter/ai.env
+          if [ -n "$OPENROUTER_API_KEY" ]; then
+            ssh deploy-target "sudo install -d -m 755 /etc/presenter"
+            printf 'PRESENTER_AI_API_URL=%s\nPRESENTER_AI_API_KEY=%s\nPRESENTER_AI_MODEL=%s\n' \
+              "https://openrouter.ai/api/v1" "$OPENROUTER_API_KEY" "${AI_MODEL:-google/gemini-3.8-flash}" \
+              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "AI backend → OpenRouter written to $SECRET_FILE (0600 root-only), model=${AI_MODEL:-google/gemini-3.8-flash}"
+          else
+            ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "OPENROUTER_API_KEY unset — OpenRouter AI backend disabled; any stale $SECRET_FILE removed"
+          fi
+          ssh deploy-target "sudo systemctl daemon-reload"
+
       # The transfers above ran with the OLD service still serving. Downtime
       # window = this single step: stop → swap the staged binaries into place
       # → start. Seconds, not the length of a slow-bridge transfer.
@@ -617,16 +648,23 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
-            echo "::warning::Post-deploy AI check — /ai/status did not respond (non-blocking; this alone does not fail a production deploy)"
+            echo "::error::Post-deploy AI check — /ai/status did not respond; the AI assistant may be DOWN and needs owner attention (non-blocking: this alone does not fail a production deploy)"
           else
             if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
-              echo "::error::Post-deploy AI check FAILED — configured AI model is not in the proxy's model catalog: $AI_STATUS"
+              echo "::error::Post-deploy AI check FAILED — configured AI model is not in the backend's model catalog: $AI_STATUS"
               exit 1
             fi
             if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
               echo "AI check passed: $AI_STATUS"
             else
-              echo "::warning::AI is not fully connected post-deploy (stale Claude OAuth token or proxy unreachable — non-blocking, re-login via /ai panel when convenient): $AI_STATUS"
+              # #760: connected:false = the AI assistant is DOWN. It must NOT
+              # hard-fail an unrelated production deploy (that would block
+              # shipping every other fix while the AI login is dead), but it
+              # must be an OWNER-VISIBLE ::error:: annotation, never a
+              # ::warning:: nobody opens (the 14-day SNV blackout). The
+              # primary owner-visible signal is the external watchdog polling
+              # /healthz.ai; this annotation is the in-CI backstop.
+              echo "::error::Post-deploy AI check — AI is NOT connected (connected:false); the AI assistant is DOWN and needs owner attention (non-blocking: connected:false alone must not fail an unrelated deploy — #760): $AI_STATUS"
             fi
           fi
           REMOTE_SCRIPT

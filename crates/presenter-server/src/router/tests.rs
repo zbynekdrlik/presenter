@@ -150,6 +150,52 @@ async fn health_endpoint_reports_ndi_pipelines_field() {
     );
 }
 
+/// Regression for #760: `/healthz` must carry a backend-agnostic `ai`
+/// summary object `{connected, error, model}` so an EXTERNAL watchdog can
+/// detect a dead AI backend within minutes (the SNV outage sat unnoticed
+/// for 14 days because nothing external could see it). Backend-agnostic on
+/// purpose — no OAuth-specific fields — so it survives the CLIProxyAPI ->
+/// OpenRouter migration (#662). In-memory state has no reachable AI backend,
+/// so `connected` is `false` here; the point of THIS test is the field's
+/// PRESENCE and shape, not the live verdict.
+#[tokio::test]
+async fn health_endpoint_reports_ai_field() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("/healthz returns JSON");
+    let ai = body
+        .get("ai")
+        .expect("/healthz must include an `ai` object for #760");
+    assert!(ai.is_object(), "`ai` must be an object, got: {ai:?}");
+    assert!(
+        ai.get("connected").map(|v| v.is_boolean()).unwrap_or(false),
+        "`ai.connected` must be a bool, got: {ai:?}"
+    );
+    // `error` is null when connected, else a string — either way the KEY
+    // must exist so the watchdog can rely on the schema.
+    let error = ai.get("error").expect("`ai.error` key must be present");
+    assert!(
+        error.is_null() || error.is_string(),
+        "`ai.error` must be null or a string, got: {error:?}"
+    );
+    assert!(
+        ai.get("model").map(|v| v.is_string()).unwrap_or(false),
+        "`ai.model` must be a string, got: {ai:?}"
+    );
+}
+
 /// Schema regression for #333 item 7 (deep-review 🟡 #3): the snapshot
 /// renderer must produce stable JSON for every PipelineState variant and
 /// MUST include `last_error` only on the `errored` variant. Previously

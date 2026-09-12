@@ -7,6 +7,7 @@ pub mod agent;
 pub mod bible_validator;
 pub(crate) mod client;
 pub(crate) mod context_budget;
+pub(crate) mod health_cache;
 pub(crate) mod proxy;
 pub(crate) mod proxy_output_relay;
 pub(crate) mod refresh;
@@ -30,9 +31,16 @@ use serde::{Deserialize, Serialize};
 pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
 
 /// Hardcoded default AI model used when neither a DB override nor the
-/// `PRESENTER_AI_MODEL` env var is set. Must be a model the bundled on-device
-/// CLIProxyAPI catalog actually serves (see #437).
-pub(crate) const DEFAULT_AI_MODEL: &str = "claude-opus-4-6";
+/// `PRESENTER_AI_MODEL` env var is set. Since #761 the AI backend is OpenRouter
+/// (`https://openrouter.ai/api/v1`), so this is an OpenRouter model slug —
+/// `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12, verified present on
+/// the public `/api/v1/models` catalog). In practice the deployed instances set
+/// `PRESENTER_AI_MODEL` via `/etc/presenter/ai.env` from the GH Actions
+/// `AI_MODEL` variable, so changing the model in production is a variable edit +
+/// redeploy, not a code change; this const is the fallback when that env var is
+/// unset. Must be a slug OpenRouter's catalog serves or the post-deploy
+/// `modelValid` gate (#661) fails (superseded #437's proxy-only-id rule).
+pub(crate) const DEFAULT_AI_MODEL: &str = "google/gemini-3.8-flash";
 
 /// AI configuration settings persisted in app_settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,10 +135,14 @@ pub(crate) enum AiAgentError {
 mod tests {
     use super::*;
 
-    /// Regression for #437: the hardcoded default AI model must NOT be the
-    /// retired `claude-opus-4-20250514` (retired at Anthropic 2026-06-15 → 404)
-    /// and must be `claude-opus-4-6` — the newest Opus the bundled on-device
-    /// CLIProxyAPI catalog serves (4-8 is not in the proxy catalog → would 404).
+    /// Regression for #437 + #761: the hardcoded default AI model must NOT be
+    /// the retired `claude-opus-4-20250514` (retired at Anthropic 2026-06-15 →
+    /// 404) and — since #761 switched the AI backend to OpenRouter — must be the
+    /// OpenRouter slug `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12,
+    /// verified present on `https://openrouter.ai/api/v1/models`). The previous
+    /// pin (`claude-opus-4-6`) was a CLIProxyAPI proxy-only id that OpenRouter's
+    /// catalog does not serve, so it would fail the post-deploy `modelValid`
+    /// gate against the new backend (#661).
     #[test]
     fn default_model_is_not_retired() {
         assert_ne!(
@@ -138,8 +150,8 @@ mod tests {
             "default AI model must not be the retired claude-opus-4-20250514"
         );
         assert_eq!(
-            DEFAULT_AI_MODEL, "claude-opus-4-6",
-            "default AI model must be claude-opus-4-6"
+            DEFAULT_AI_MODEL, "google/gemini-3.8-flash",
+            "default AI model must be the OpenRouter slug google/gemini-3.8-flash (#761)"
         );
     }
 }

@@ -443,16 +443,19 @@ pub(super) struct StatusResponse {
     /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
     /// (requiring a Claude OAuth login) or a user's own non-bundled
     /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679,
-    /// the #662 local-LLM scenario). `true` when the RAW stored `api_url`
-    /// either equals `AiSettings::default().api_url` (the literal
-    /// placeholder) OR structurally identifies the bundled proxy's own
-    /// live-resolved address (`is_bundled_proxy_address`, #683 — this is
-    /// what every DB that ever saved AI settings under a pre-#679 build
-    /// actually has stored) — computed in `get_settings_internal` BEFORE
-    /// that function's own substitution of the live resolved proxy URL, so
-    /// the most common case (default config, proxy running) is never
-    /// misclassified as non-bundled, and neither is a historically-poisoned
-    /// row from before #679.
+    /// the #662 local-LLM scenario). `true` when the EFFECTIVE `api_url`
+    /// structurally identifies the bundled proxy — the literal placeholder
+    /// (`BUNDLED_PROXY_PLACEHOLDER`) OR the proxy's own live-resolved address
+    /// (`is_bundled_proxy_address`, #683 — what every DB that saved AI
+    /// settings under a pre-#679 build has stored). Since #761 the value
+    /// surfaced on `/ai/status` is computed in `resolve_effective_settings`
+    /// via `is_effective_bundled` on the api_url AFTER the `PRESENTER_AI_*`
+    /// env overrides are applied — so a foreign `PRESENTER_AI_API_URL`
+    /// (OpenRouter) flips it false and hides the login banner, while the
+    /// common bundled case (default config, proxy running) and a
+    /// historically-poisoned pre-#679 row are still classified bundled.
+    /// (The raw persist/display path `get_settings_internal` keeps its OWN
+    /// raw-value classification for the settings form; env never leaks there.)
     pub requires_claude_auth: bool,
 }
 
@@ -555,9 +558,27 @@ pub(super) fn render_connectivity_error(e: &anyhow::Error) -> String {
 pub(super) async fn check_status(
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
-    // The connectivity/model check needs the REACHABLE url (#679) — never
-    // the raw one; `requires_claude_auth` still reflects the RAW value.
-    let (settings, requires_claude_auth) = resolve_effective_settings(&state).await?;
+    let (status, _model) = evaluate_ai_status(&state).await?;
+    Ok(Json(status))
+}
+
+/// Compute the `/ai/status` verdict AND the configured model id, so the
+/// `/ai/status` handler and the `/healthz` `ai` summary (#760) share ONE
+/// computation, never a duplicate. Cost: one `list_models` round trip bounded
+/// by `connectivity_client`'s 3s timeout, so the readiness path (`/healthz`)
+/// can never hang; there is no on-disk cache because an API-key backend (the
+/// #662 OpenRouter direction) has no on-disk freshness signal to read. The
+/// verdict is backend-agnostic — `connected`/`error` never name OAuth state.
+pub(super) async fn evaluate_ai_status(
+    state: &AppState,
+) -> Result<(StatusResponse, String), AppError> {
+    // The connectivity/model check needs the REACHABLE url (#679) — never the
+    // raw one. Since #761 `requires_claude_auth` reflects the EFFECTIVE
+    // (post-env-override) api_url that `resolve_effective_settings` computed via
+    // `is_effective_bundled`, so a foreign `PRESENTER_AI_API_URL` (OpenRouter)
+    // flips it false and the Claude login banner hides — do NOT revert this to
+    // the raw stored value.
+    let (settings, requires_claude_auth) = resolve_effective_settings(state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
     // #661: list_models (not the old bare check_connectivity) so the SAME
@@ -592,13 +613,17 @@ pub(super) async fn check_status(
         requires_claude_auth,
     );
 
-    Ok(Json(StatusResponse {
-        connected,
-        error,
-        proxy: proxy_status,
-        model_valid,
-        requires_claude_auth,
-    }))
+    let model = settings.model.clone();
+    Ok((
+        StatusResponse {
+            connected,
+            error,
+            proxy: proxy_status,
+            model_valid,
+            requires_claude_auth,
+        },
+        model,
+    ))
 }
 
 // ── Proxy management ──
@@ -695,7 +720,7 @@ const BUNDLED_PROXY_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
 /// place of a matched bundled URL — doing so would silently repoint a
 /// historically-poisoned row at whatever foreign endpoint the operator
 /// happens to have configured via the env var (review finding, #683).
-const BUNDLED_PROXY_PLACEHOLDER: &str = "http://localhost:8787/v1";
+pub(super) const BUNDLED_PROXY_PLACEHOLDER: &str = "http://localhost:8787/v1";
 
 /// Whether `raw_api_url` structurally identifies the bundled CLIProxyAPI
 /// proxy's OWN address at `proxy_port` — i.e. `http://{127.0.0.1|localhost}
@@ -812,7 +837,26 @@ pub(super) async fn get_settings_internal(state: &AppState) -> anyhow::Result<(A
 /// for editing — see `get_settings_internal`'s own doc comment for why
 /// (#679 review finding 1).
 async fn resolve_effective_settings(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
-    let (mut settings, is_bundled_default) = get_settings_internal(state).await?;
+    // Raw stored settings (DB row or default). The persist/display path
+    // (`get_settings_internal`) stays untouched; here we take a mutable copy
+    // for the EFFECTIVE call/status path only.
+    let (mut settings, _raw_is_bundled) = get_settings_internal(state).await?;
+
+    // #761: `PRESENTER_AI_*` env vars win over the stored DB row for the
+    // EFFECTIVE path. Prod DBs still hold the pre-migration bundled-proxy
+    // `apiUrl` (`http://127.0.0.1:18787/v1`), so the deploy-written
+    // `/etc/presenter/ai.env` (the OpenRouter switch) must take effect
+    // without a DB write. Env must NOT reach `get_settings_internal` — it
+    // would leak into a saved/displayed row (the #679/#683 data-loss class).
+    super::ai_env::apply_env_overrides(&mut settings);
+
+    // Recompute "bundled" on the EFFECTIVE (post-override) `api_url` against
+    // the FIXED placeholder — never `AiSettings::default()`, whose `api_url`
+    // is itself env-tainted (#761): an env override to a foreign endpoint
+    // (OpenRouter) must flip `requires_claude_auth` false.
+    let proxy_port = state.ai_proxy().configured_port().await;
+    let is_bundled_default = super::ai_env::is_effective_bundled(&settings.api_url, proxy_port);
+
     if is_bundled_default {
         let proxy_status = state.ai_proxy().status().await;
         if proxy_status.running {

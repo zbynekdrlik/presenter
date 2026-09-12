@@ -1,4 +1,6 @@
 mod ai;
+mod ai_env;
+mod ai_health;
 mod api_stage;
 mod bible;
 mod features;
@@ -469,6 +471,13 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         None => Vec::new(),
     };
 
+    // #760: a backend-agnostic AI-health summary so an EXTERNAL watchdog can
+    // detect a dead AI backend within minutes (the SNV outage sat unnoticed
+    // for 14 days). Served through a per-AppState SWR cache so tab fan-out on
+    // this readiness probe never becomes a live `/models` request storm — it
+    // never blocks or hangs the readiness probe.
+    let ai = ai_health::render_ai_health(&state, state.ai_health_cache()).await;
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -476,6 +485,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "version": VERSION,
             "channel": BUILD_CHANNEL,
             "ndi_pipelines": ndi_pipelines,
+            "ai": ai,
         })),
     )
 }
