@@ -323,3 +323,46 @@ problem, e.g. an unset `PRESENTER_BIBLE_*` var, not a model result).
   (EuroLLM/Gemma emit valid JSON on ~all cases vs 0 tool calls) — but content, not format, is the
   wall: bible content stayed 0–1/11 in BOTH modes across Qwen3-8B/EuroLLM-9B/Gemma-3-4B/Qwen3-4B-2507.
   Full tables: #662 comments (autopsy 5290001713, probe 5290070384, table 5292480819).
+
+## OpenRouter candidate sweep (#662, 2026-09-12) — env-key, two caps, scoring caveats
+
+The #662 rescope pointed the harness at hosted OpenRouter models instead of local llama.cpp.
+Everything OpenRouter-specific lives in `bin/ai_eval/**` — the SHARED client (`ai/client.rs`,
+`ai/mod.rs`) was already OpenRouter-capable and is OWNED by #761; do NOT change it from this lane.
+
+- **Bearer key comes from the env, resolved in `bin/ai_eval/candidate_key.rs`.** `drive` used to
+  hard-code `AiSettings.api_key = None` (keyless local endpoint). Now it reads `OPENROUTER_API_KEY`
+  (precedence) then `PRESENTER_AI_API_KEY`, trims (the `~/.secrets/openrouter-api-key` file has a
+  trailing newline), treats empty/whitespace as unset. `ai::client` already sends
+  `Authorization: Bearer <key>` when `api_key` is `Some(non-empty)`. The base-URL join
+  (`{api_url}/chat/completions`, trailing slash trimmed) and a `/`-containing model id
+  (`google/gemini-3.8-flash`) need NO special handling — the model is a plain JSON string field.
+  Never pass the key on argv (`ps`-visible); export it in the shell, or use a script that reads the
+  file into env.
+- **TWO independent OpenRouter caps — the key limit is NOT the one that bites.** `GET
+  /api/v1/auth/key` shows the KEY's own `limit`/`limit_remaining`, but a separate **workspace
+  `daily budget`** applies too. In this sweep the key limit was raised to $10 while the workspace
+  daily budget stayed **$1.00** — the full Gemini run ($0.32) + partial Sonnet ($0.70) crossed $1
+  and every further call returned **HTTP 403 `Workspace daily budget of $1.00 exceeded`** (not
+  402). To run a full 2-model sweep, the OWNER must raise the *workspace* budget, not just the key
+  limit. Read `usage` before/after each run for measured $/run; it lags slightly (async settling).
+- **The adversarial slice cannot score a STRONG model.** All 12 adversarial cases PASS only if the
+  model first emits a malformed tool call, trips a server validation rule, and self-corrects. A
+  model good enough to produce valid output first-try scores FAIL ("rule X never fired") even when
+  its output is exactly the documented-correct end state (e.g. adv-07 → `Večera Pánova`,
+  slide_count 0). Gemini 3.8 Flash got 12/12 correct-first-try but scored 2/12. ALWAYS read the
+  adversarial traces (final error = None + a successful `create_bible_presentation` result = a good
+  result, not the 2/12 headline). A future fix would add an "accept valid-first-try" pass path.
+- **`toolSequence` is a strict ordered SUBSEQUENCE and over-penalises efficiency.** wc-02 expects
+  `[list_libraries, list_presentations, rename]`; both Gemini AND Sonnet 5 do the efficient
+  `[list_presentations, rename]` and both "fail". ba-03 expects two `load_bible_verses` calls; both
+  models make one and both "fail" though the verse content is byte-perfect. Cross-check a
+  toolSequence fail against the actual submitted content before treating it as a model weakness.
+- **`verbatimVerses` does not normalise book names across a translation's language.** A KJV verse
+  labelled with the Slovak book name (`Ján 3:16 [KJV]`, consistent with the SEB item beside it) is
+  reported "John 3:16 (KJV) not found" because the canonical KJV lookup keys on the English `John`.
+  Both models hit this on ba-06 (multi-translation). A future fix would normalise book names by
+  translation, or accept the source-language book name.
+- **Use the baseline to separate model weakness from harness artifact.** Running the production
+  baseline (Sonnet 5) on the same cases is what proved ba-03/ba-06/wc-02 are harness issues, not
+  Gemini weaknesses — both models fail them identically. Always run at least a partial baseline.
