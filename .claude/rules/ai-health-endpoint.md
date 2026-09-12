@@ -27,14 +27,23 @@ object so an EXTERNAL watchdog can detect it in minutes.
   OAuth input (`claude_authenticated`) participates ONLY when `requires_claude_auth`
   (bundled proxy). Keep any new field backend-neutral.
 
-- **The AI verdict is a LIVE bounded probe, not an on-disk cache.** `evaluate_ai_status`
-  does one `list_models` round trip bounded to 3s by `ai::client::connectivity_client`.
-  An API-key backend has no on-disk freshness signal to read, so a cache is not an
-  option; the 3s bound is what keeps `/healthz` from hanging. `render_ai_health` is
-  best-effort — a settings/DB error folds into `connected:false` + a generic string,
-  never a failed readiness probe. If the watchdog polls very often (OpenRouter `/models`
-  has rate limits / cost), add a short-TTL cache in `evaluate_ai_status` rather than
-  dropping the probe.
+- **`/healthz.ai` is served through a per-`AppState` stale-while-revalidate CACHE
+  (`crate::ai::health_cache::AiHealthCache`, 30s TTL), NOT a live probe per request.**
+  WHY: `/healthz` is polled by EVERY open operator tab (the header version poll in
+  `presenter-ui`), the stage NDI reload guard, `version_label` on mount, AND the deploy
+  gates — a live `/models` probe per hit would scale the readiness probe's latency and
+  external-request rate with the number of open tabs and couple it to the AI backend's
+  response time (the #760 rework finding). The cache (`get_ai_health`): fresh → return
+  with ZERO awaits (no network on the hot path); stale → return the stale value
+  immediately and refresh in the BACKGROUND via `tokio::spawn` (at most ONE in-flight
+  refresh, guarded by an `AtomicBool` so N concurrent hits never spawn N probes); empty
+  (cold) → one bounded inline probe. A failed refresh (`produce` returns `None`) KEEPS
+  the previous value — a transient backend failure never clobbers a known-good verdict.
+  The producer wraps the shared `evaluate_ai_status` (still one bounded 3s `list_models`
+  round trip, run at most once per TTL). Scope the cache PER `AppState` (an `Arc` field),
+  NEVER a module-level `static` — the test suite builds many `AppState`s in one process
+  and a global would cross-contaminate tests. `/ai/status` stays LIVE (the operator chip
+  wants freshness) — only `/healthz` reads through the cache.
 
 - **Put new AI-status render/format code in `router/ai_health.rs`, not `router/ai.rs`.**
   `router/ai.rs` is already past the 800-line warning cap (under the 1000 hard-fail);
