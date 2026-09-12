@@ -31,9 +31,16 @@ use serde::{Deserialize, Serialize};
 pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
 
 /// Hardcoded default AI model used when neither a DB override nor the
-/// `PRESENTER_AI_MODEL` env var is set. Must be a model the bundled on-device
-/// CLIProxyAPI catalog actually serves (see #437).
-pub(crate) const DEFAULT_AI_MODEL: &str = "claude-opus-4-6";
+/// `PRESENTER_AI_MODEL` env var is set. Since #761 the AI backend is OpenRouter
+/// (`https://openrouter.ai/api/v1`), so this is an OpenRouter model slug —
+/// `anthropic/claude-sonnet-5` (owner ROZHODNUTÉ 2026-09-12, verified present
+/// on the public `/api/v1/models` catalog). In practice the deployed instances
+/// set `PRESENTER_AI_MODEL` via `/etc/presenter/ai.env` from the GH Actions
+/// `AI_MODEL` variable, so changing the model in production is a variable edit
+/// + redeploy, not a code change; this const is the fallback when that env var
+/// is unset. Must be a slug OpenRouter's catalog serves or the post-deploy
+/// `modelValid` gate (#661) fails (superseded #437's proxy-only-id rule).
+pub(crate) const DEFAULT_AI_MODEL: &str = "anthropic/claude-sonnet-5";
 
 /// AI configuration settings persisted in app_settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
