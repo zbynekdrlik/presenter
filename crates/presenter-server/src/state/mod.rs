@@ -161,6 +161,11 @@ pub struct AppState {
     /// services. `None` until the first call.
     ai_last_activity: Arc<RwLock<Option<SystemTime>>>,
     ai_proxy: Arc<ProxyManager>,
+    /// #760: per-`AppState` stale-while-revalidate cache of the `/healthz` AI
+    /// verdict, so tab fan-out on the readiness probe never turns into a live
+    /// `/models` request storm. `Arc` so every `AppState` clone shares ONE
+    /// cache (a per-clone cache would defeat the purpose).
+    ai_health_cache: Arc<crate::ai::health_cache::AiHealthCache>,
     ndi_manager: Option<ndi_control::NdiManagerHandle>,
     api_stage: Arc<RwLock<ApiStageState>>,
     pub local_public_ip: Arc<Option<String>>,
@@ -340,6 +345,9 @@ impl AppState {
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
             ai_last_activity: Arc::new(RwLock::new(None)),
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
+            ai_health_cache: Arc::new(crate::ai::health_cache::AiHealthCache::new(
+                crate::ai::health_cache::AI_HEALTH_TTL,
+            )),
             ndi_manager,
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
@@ -685,6 +693,11 @@ impl AppState {
 
     pub fn ai_proxy(&self) -> &Arc<ProxyManager> {
         &self.ai_proxy
+    }
+
+    /// #760: the shared SWR cache backing the `/healthz` `ai` verdict.
+    pub fn ai_health_cache(&self) -> &Arc<crate::ai::health_cache::AiHealthCache> {
+        &self.ai_health_cache
     }
 
     /// Cloudflare Realtime TURN service (#502): mints browser ICE servers for

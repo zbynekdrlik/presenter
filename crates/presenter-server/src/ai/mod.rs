@@ -7,6 +7,7 @@ pub mod agent;
 pub mod bible_validator;
 pub(crate) mod client;
 pub(crate) mod context_budget;
+pub(crate) mod health_cache;
 pub(crate) mod proxy;
 pub(crate) mod proxy_output_relay;
 pub(crate) mod refresh;
