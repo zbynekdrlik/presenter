@@ -55,9 +55,9 @@ pub(super) fn parse_port_in_range(raw: &str) -> Option<u16> {
 /// matching the old `Intl.DateTimeFormat('sk-SK', …)` output. Returns the raw
 /// string unchanged when it cannot be parsed. Thin wrapper over the shared
 /// `utils::timestamp::format_local_timestamp` (#622 post-merge review
-/// finding 10 — this used to duplicate
-/// `components::ai_login_banner::format_expiry`'s parse/format/fallback body
-/// wholesale, differing only in the strftime pattern).
+/// finding 10 — this used to duplicate the AI login banner's `format_expiry`
+/// parse/format/fallback body wholesale, differing only in the strftime
+/// pattern; the banner was removed in #762).
 pub(super) fn format_timestamp(value: &str) -> String {
     crate::utils::timestamp::format_local_timestamp(value, "%d.%m.%Y %H:%M:%S")
 }

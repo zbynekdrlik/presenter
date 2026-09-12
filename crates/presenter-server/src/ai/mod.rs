@@ -9,9 +9,7 @@ pub(crate) mod client;
 pub(crate) mod context_budget;
 pub(crate) mod health_cache;
 pub(crate) mod last_error;
-pub(crate) mod proxy;
-pub(crate) mod proxy_output_relay;
-pub(crate) mod refresh;
+pub(crate) mod redact;
 pub(crate) mod tool_defs;
 pub mod tools;
 
@@ -30,6 +28,13 @@ mod agent_usage_tests;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
+
+/// Default AI provider endpoint used when neither a DB `ai-settings` row nor
+/// the `PRESENTER_AI_API_URL` env var is set. Since #762 removed the bundled
+/// CLIProxyAPI proxy, the effective `apiUrl` is simply env → DB → this default:
+/// OpenRouter (`https://openrouter.ai/api/v1`), the OpenAI-compatible backend
+/// deployed instances point at via `/etc/presenter/ai.env` (#761).
+pub(crate) const DEFAULT_AI_API_URL: &str = "https://openrouter.ai/api/v1";
 
 /// Hardcoded default AI model used when neither a DB override nor the
 /// `PRESENTER_AI_MODEL` env var is set. Since #761 the AI backend is OpenRouter
@@ -59,7 +64,7 @@ impl Default for AiSettings {
     fn default() -> Self {
         Self {
             api_url: std::env::var("PRESENTER_AI_API_URL")
-                .unwrap_or_else(|_| "http://localhost:8787/v1".to_string()),
+                .unwrap_or_else(|_| DEFAULT_AI_API_URL.to_string()),
             api_key: std::env::var("PRESENTER_AI_API_KEY").ok(),
             model: std::env::var("PRESENTER_AI_MODEL")
                 .unwrap_or_else(|_| DEFAULT_AI_MODEL.to_string()),

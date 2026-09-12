@@ -49,7 +49,7 @@ impl AiHealthCache {
 
     /// Recover the guard on a poisoned lock rather than panicking (this repo
     /// bans `unwrap()`/`expect()`/`panic!` in production code) — same
-    /// fail-forward posture as `ai::refresh`'s poisoned-lock handling.
+    /// fail-forward posture as `ai::last_error`'s poisoned-lock handling.
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Cached>> {
         self.cached.lock().unwrap_or_else(|e| e.into_inner())
     }

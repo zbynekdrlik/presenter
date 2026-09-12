@@ -401,10 +401,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/conversation", get(ai::get_conversation))
         .route("/ai/clear", post(ai::clear_conversation))
         .route("/ai/status", get(ai::check_status))
-        .route("/ai/proxy/start", post(ai::proxy_start))
-        .route("/ai/proxy/stop", post(ai::proxy_stop))
-        .route("/ai/proxy/login", post(ai::proxy_login))
-        .route("/ai/proxy/complete-login", post(ai::proxy_complete_login))
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
         .merge(stream::router())

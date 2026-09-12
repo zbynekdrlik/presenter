@@ -35,51 +35,24 @@ pub struct UpdateAiSettings {
     pub system_prompt_extra: Option<String>,
 }
 
-/// Permissive fallback for a `#[serde(default = "default_true")]` field —
-/// used by both `model_valid` and `requires_claude_auth` below so an OLDER
-/// server payload (before either field existed) still deserializes cleanly,
-/// same rationale as `ProxyStatus::token_expires_at`'s `#[serde(default)]`
-/// (the #600 lesson).
+/// Permissive fallback for the `#[serde(default = "default_true")]`
+/// `model_valid` field so an OLDER server payload (before the field existed)
+/// still deserializes cleanly — the #600 lesson.
 fn default_true() -> bool {
     true
 }
 
+/// Backend-agnostic `/ai/status` response (#762 removed the bundled proxy +
+/// Claude OAuth, so there is no `proxy` object and no `requiresClaudeAuth`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiStatusResponse {
     pub connected: bool,
     pub error: Option<String>,
-    pub proxy: ProxyStatus,
-    /// Whether the CONFIGURED model is present in the proxy's model catalog
+    /// Whether the CONFIGURED model is present in the backend's model catalog
     /// (#661) — mirrors the server's `StatusResponse::model_valid`.
     #[serde(default = "default_true")]
     pub model_valid: bool,
-    /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
-    /// (requiring a Claude OAuth login) or a user's own non-bundled
-    /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679).
-    #[serde(default = "default_true")]
-    pub requires_claude_auth: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProxyStatus {
-    pub running: bool,
-    pub port: u16,
-    pub api_url: String,
-    pub binary_found: bool,
-    pub claude_authenticated: bool,
-    /// RFC3339 expiry of the token backing `claude_authenticated` (#599).
-    /// `#[serde(default)]` so an OLDER server payload (before this field
-    /// existed) still deserializes cleanly — the #600 lesson.
-    #[serde(default)]
-    pub token_expires_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginResponse {
-    pub login_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,24 +109,4 @@ pub async fn check_status() -> Result<AiStatusResponse, ApiError> {
 
 pub async fn get_conversation() -> Result<ConversationResponse, ApiError> {
     super::get_json("/ai/conversation").await
-}
-
-pub async fn proxy_start() -> Result<ProxyStatus, ApiError> {
-    super::post_json("/ai/proxy/start", &serde_json::json!({})).await
-}
-
-pub async fn proxy_stop() -> Result<ProxyStatus, ApiError> {
-    super::post_json("/ai/proxy/stop", &serde_json::json!({})).await
-}
-
-pub async fn proxy_login() -> Result<LoginResponse, ApiError> {
-    super::post_json("/ai/proxy/login", &serde_json::json!({})).await
-}
-
-pub async fn proxy_complete_login(callback_url: &str) -> Result<ProxyStatus, ApiError> {
-    super::post_json(
-        "/ai/proxy/complete-login",
-        &serde_json::json!({"callbackUrl": callback_url}),
-    )
-    .await
 }

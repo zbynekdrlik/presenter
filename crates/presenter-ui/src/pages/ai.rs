@@ -5,7 +5,6 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::js_sys;
 
 use crate::api::ai as ai_api;
-use crate::components::ai_login_banner::AiLoginBanner;
 use crate::state::AppContext;
 
 /// A single displayed chat message.
@@ -47,30 +46,6 @@ pub fn AiPage() -> impl IntoView {
     let model: RwSignal<String> = RwSignal::new(String::new());
     let api_key_set: RwSignal<bool> = RwSignal::new(false);
 
-    // Proxy signals
-    let proxy_running: RwSignal<bool> = RwSignal::new(false);
-    let proxy_binary_found: RwSignal<bool> = RwSignal::new(false);
-    // #622 post-merge review finding 1: tri-state — `None` means "no
-    // confirmed answer yet" (first status fetch still in flight, or the
-    // last fetch failed). Before the fix this was a plain `bool` defaulting
-    // to `false`, and a failed fetch never touched it — the login banner
-    // painted "Nie si prihlásený" before any real response arrived, and
-    // permanently after any single failed poll. Only a SUCCESSFUL fetch may
-    // ever set `Some(true)`/`Some(false)`; every fallible call site resets
-    // to `None` on `Err`.
-    let proxy_authenticated: RwSignal<Option<bool>> = RwSignal::new(None);
-    // #599: expiry of the token backing `proxy_authenticated`, when known —
-    // surfaced so the operator can renew BEFORE an event instead of only
-    // discovering a dead login mid-service.
-    let token_expires_at: RwSignal<Option<String>> = RwSignal::new(None);
-    // #679: whether the configured `apiUrl` actually needs a Claude login —
-    // `true` (matches all prior behavior) until the first status fetch says
-    // otherwise, so a non-bundled endpoint stops being nagged about Claude.
-    let requires_claude_auth: RwSignal<bool> = RwSignal::new(true);
-    let proxy_loading: RwSignal<bool> = RwSignal::new(false);
-    let login_url: RwSignal<Option<String>> = RwSignal::new(None);
-    let callback_input: RwSignal<String> = RwSignal::new(String::new());
-
     // Load settings, status, and conversation on mount
     {
         leptos::task::spawn_local(async move {
@@ -81,14 +56,7 @@ pub fn AiPage() -> impl IntoView {
             }
             if let Ok(status) = ai_api::check_status().await {
                 connected.set(status.connected);
-                proxy_running.set(status.proxy.running);
-                proxy_binary_found.set(status.proxy.binary_found);
-                proxy_authenticated.set(Some(status.proxy.claude_authenticated));
-                token_expires_at.set(status.proxy.token_expires_at);
-                requires_claude_auth.set(status.requires_claude_auth);
             }
-            // On `Err` `proxy_authenticated` stays at its initial `None` —
-            // unknown, never a guessed "logged out" (finding 1).
             // Restore conversation from server
             if let Ok(conv) = ai_api::get_conversation().await {
                 let restored: Vec<DisplayMessage> = conv
@@ -130,18 +98,7 @@ pub fn AiPage() -> impl IntoView {
         });
 
         leptos::task::spawn_local(async move {
-            match send_message_sse(
-                &text,
-                messages,
-                tool_progress,
-                error,
-                connected,
-                proxy_authenticated,
-                token_expires_at,
-                requires_claude_auth,
-            )
-            .await
-            {
+            match send_message_sse(&text, messages, tool_progress, error, connected).await {
                 Ok(()) => {}
                 Err(e) => {
                     error.set(Some(format!("Failed to get AI response: {e}")));
@@ -216,20 +173,8 @@ pub fn AiPage() -> impl IntoView {
     let on_check_status = move |_| {
         leptos::task::spawn_local(async move {
             match ai_api::check_status().await {
-                Ok(status) => {
-                    connected.set(status.connected);
-                    proxy_running.set(status.proxy.running);
-                    proxy_binary_found.set(status.proxy.binary_found);
-                    proxy_authenticated.set(Some(status.proxy.claude_authenticated));
-                    token_expires_at.set(status.proxy.token_expires_at);
-                    requires_claude_auth.set(status.requires_claude_auth);
-                }
-                Err(_) => {
-                    connected.set(false);
-                    // Finding 1: a failed status fetch means UNKNOWN, never a
-                    // guessed "logged out" — reset, don't leave stale state.
-                    proxy_authenticated.set(None);
-                }
+                Ok(status) => connected.set(status.connected),
+                Err(_) => connected.set(false),
             }
         });
     };
@@ -252,17 +197,10 @@ pub fn AiPage() -> impl IntoView {
                 Ok(()) => {
                     toast_variant.set("success".to_string());
                     toast.set(Some("AI settings saved".to_string()));
-                    // #679 review finding 2: a saved apiUrl change (e.g.
-                    // switching to/from a non-bundled endpoint) must be
-                    // reflected immediately — not just `connected`, or the
-                    // login banner keeps showing whatever it said before
-                    // the save until the operator clicks the status dot or
-                    // reloads.
+                    // Reflect a saved apiUrl/model change in the connection
+                    // dot immediately, without waiting for the next poll.
                     if let Ok(status) = ai_api::check_status().await {
                         connected.set(status.connected);
-                        proxy_authenticated.set(Some(status.proxy.claude_authenticated));
-                        token_expires_at.set(status.proxy.token_expires_at);
-                        requires_claude_auth.set(status.requires_claude_auth);
                     }
                 }
                 Err(e) => {
@@ -275,30 +213,6 @@ pub fn AiPage() -> impl IntoView {
 
     let toggle_settings = move |_| {
         settings_open.update(|v| *v = !*v);
-    };
-
-    // #599: the ONE Claude-login trigger, shared by the settings-drawer
-    // "Claude Login" button AND the primary logged-out banner's CTA — the
-    // banner never duplicates this flow, it only also opens the drawer so
-    // the link/paste steps below become visible.
-    let start_login = move || {
-        proxy_loading.set(true);
-        login_url.set(None);
-        leptos::task::spawn_local(async move {
-            match ai_api::proxy_login().await {
-                Ok(resp) => {
-                    login_url.set(Some(resp.login_url));
-                }
-                Err(e) => {
-                    error.set(Some(format!("Login failed: {e}")));
-                }
-            }
-            proxy_loading.set(false);
-        });
-    };
-    let on_banner_login = move || {
-        settings_open.set(true);
-        start_login();
     };
 
     view! {
@@ -335,15 +249,6 @@ pub fn AiPage() -> impl IntoView {
                 </div>
             </div>
 
-            // #599: primary logged-out state — never buried, always the
-            // first thing shown when Claude auth is dead.
-            <AiLoginBanner
-                authenticated=proxy_authenticated
-                token_expires_at=token_expires_at
-                requires_claude_auth=requires_claude_auth
-                on_login=on_banner_login
-            />
-
             // Settings panel (collapsible)
             <div
                 class="ai-chat__settings"
@@ -372,7 +277,7 @@ pub fn AiPage() -> impl IntoView {
                             type="text"
                             data-role="ai-api-url"
                             autocomplete="off"
-                            placeholder="http://localhost:8787/v1"
+                            placeholder="https://openrouter.ai/api/v1"
                             prop:value=move || api_url.get()
                             on:input=move |ev| api_url.set(event_target_value(&ev))
                         />
@@ -408,133 +313,6 @@ pub fn AiPage() -> impl IntoView {
                         "Save Settings"
                     </button>
                 </form>
-
-                // Proxy controls
-                <div class="ai-chat__proxy-section">
-                    <h3 class="ai-chat__proxy-title">"Built-in Proxy (CLIProxyAPI)"</h3>
-                    {move || if !proxy_binary_found.get() {
-                        view! {
-                            <p class="ai-chat__proxy-hint">"Binary not found. Place cli-proxy-api next to presenter-server."</p>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <div class="ai-chat__proxy-controls">
-                                <span class="ai-chat__proxy-status">
-                                    {move || if proxy_running.get() { "Running" } else { "Stopped" }}
-                                </span>
-                                <span class="ai-chat__proxy-auth">
-                                    {move || match proxy_authenticated.get() {
-                                        Some(true) => " | Claude: authenticated",
-                                        Some(false) => " | Claude: not authenticated",
-                                        None => " | Claude: unknown",
-                                    }}
-                                </span>
-                                <div class="ai-chat__proxy-buttons">
-                                    <button
-                                        type="button"
-                                        class="ai-chat__btn"
-                                        data-role="ai-proxy-start"
-                                        prop:disabled=move || proxy_loading.get() || proxy_running.get()
-                                        on:click=move |_| {
-                                            proxy_loading.set(true);
-                                            leptos::task::spawn_local(async move {
-                                                if let Ok(status) = ai_api::proxy_start().await {
-                                                    proxy_running.set(status.running);
-                                                }
-                                                proxy_loading.set(false);
-                                            });
-                                        }
-                                    >
-                                        "Start"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="ai-chat__btn"
-                                        data-role="ai-proxy-stop"
-                                        prop:disabled=move || proxy_loading.get() || !proxy_running.get()
-                                        on:click=move |_| {
-                                            proxy_loading.set(true);
-                                            leptos::task::spawn_local(async move {
-                                                if let Ok(status) = ai_api::proxy_stop().await {
-                                                    proxy_running.set(status.running);
-                                                }
-                                                proxy_loading.set(false);
-                                            });
-                                        }
-                                    >
-                                        "Stop"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="ai-chat__btn"
-                                        data-role="ai-proxy-login"
-                                        prop:disabled=move || proxy_loading.get()
-                                        on:click=move |_| start_login()
-                                    >
-                                        "Claude Login"
-                                    </button>
-                                </div>
-                                {move || login_url.get().map(|url| {
-                                    view! {
-                                        <div class="ai-chat__login-flow">
-                                            <div class="ai-chat__login-step">
-                                                <span class="ai-chat__login-step-num">"1"</span>
-                                                <p>"Open this link in your browser and authorize:"</p>
-                                            </div>
-                                            <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">"Open Claude Authorization"</a>
-                                            <div class="ai-chat__login-step">
-                                                <span class="ai-chat__login-step-num">"2"</span>
-                                                <p>"After authorizing, your browser will show an error page. Copy the full URL from your browser's address bar and paste it here:"</p>
-                                            </div>
-                                            <div class="ai-chat__login-paste">
-                                                <input
-                                                    type="text"
-                                                    data-role="ai-callback-input"
-                                                    placeholder="Paste the localhost URL here..."
-                                                    prop:value=move || callback_input.get()
-                                                    on:input=move |ev| callback_input.set(event_target_value(&ev))
-                                                />
-                                                <button
-                                                    type="button"
-                                                    class="ai-chat__btn ai-chat__btn--save"
-                                                    data-role="ai-complete-login"
-                                                    prop:disabled=move || callback_input.get().trim().is_empty() || proxy_loading.get()
-                                                    on:click=move |_| {
-                                                        let url = callback_input.get().trim().to_string();
-                                                        if url.is_empty() { return; }
-                                                        proxy_loading.set(true);
-                                                        let toast = ctx.toast_message;
-                                                        let toast_variant = ctx.toast_variant;
-                                                        leptos::task::spawn_local(async move {
-                                                            match ai_api::proxy_complete_login(&url).await {
-                                                                Ok(status) => {
-                                                                    proxy_running.set(status.running);
-                                                                    proxy_authenticated.set(Some(status.claude_authenticated));
-                                                                    token_expires_at.set(status.token_expires_at);
-                                                                    login_url.set(None);
-                                                                    callback_input.set(String::new());
-                                                                    toast_variant.set("success".to_string());
-                                                                    toast.set(Some("Claude authenticated!".to_string()));
-                                                                }
-                                                                Err(e) => {
-                                                                    toast_variant.set("error".to_string());
-                                                                    toast.set(Some(format!("Login failed: {e}")));
-                                                                }
-                                                            }
-                                                            proxy_loading.set(false);
-                                                        });
-                                                    }
-                                                >
-                                                    "Complete Login"
-                                                </button>
-                                            </div>
-                                        </div>
-                                    }
-                                })}
-                            </div>
-                        }.into_any()
-                    }}
-                </div>
             </div>
 
             // Chat messages area
@@ -665,9 +443,6 @@ async fn send_message_sse(
     tool_progress: RwSignal<Vec<ToolProgress>>,
     error: RwSignal<Option<String>>,
     connected: RwSignal<bool>,
-    proxy_authenticated: RwSignal<Option<bool>>,
-    token_expires_at: RwSignal<Option<String>>,
-    requires_claude_auth: RwSignal<bool>,
 ) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
 
@@ -725,16 +500,7 @@ async fn send_message_sse(
                 while let Some(event_end) = buffer.find("\n\n") {
                     let event_text = buffer[..event_end].to_string();
                     buffer = buffer[event_end + 2..].to_string();
-                    process_sse_event(
-                        &event_text,
-                        &messages,
-                        &tool_progress,
-                        &error,
-                        connected,
-                        proxy_authenticated,
-                        token_expires_at,
-                        requires_claude_auth,
-                    );
+                    process_sse_event(&event_text, &messages, &tool_progress, &error, connected);
                 }
             }
         }
@@ -742,16 +508,7 @@ async fn send_message_sse(
         if done {
             // Process any remaining data in buffer
             if !buffer.trim().is_empty() {
-                process_sse_event(
-                    &buffer,
-                    &messages,
-                    &tool_progress,
-                    &error,
-                    connected,
-                    proxy_authenticated,
-                    token_expires_at,
-                    requires_claude_auth,
-                );
+                process_sse_event(&buffer, &messages, &tool_progress, &error, connected);
             }
             break;
         }
@@ -767,9 +524,6 @@ fn process_sse_event(
     tool_progress: &RwSignal<Vec<ToolProgress>>,
     error: &RwSignal<Option<String>>,
     connected: RwSignal<bool>,
-    proxy_authenticated: RwSignal<Option<bool>>,
-    token_expires_at: RwSignal<Option<String>>,
-    requires_claude_auth: RwSignal<bool>,
 ) {
     let mut event_type = "";
     let mut data = String::new();
@@ -832,42 +586,13 @@ fn process_sse_event(
                 let msg = val["message"].as_str().unwrap_or("Unknown error");
                 error.set(Some(format!("AI error: {msg}")));
             }
-            // #599: a chat error might mean the Claude auth died mid-session —
-            // re-check status so the primary login banner reacts immediately
-            // instead of staying stale until the operator reloads or manually
-            // checks the status dot.
-            //
-            // `error` is `&RwSignal<..>` (a borrowed reference, unlike the
-            // by-value `connected`/`proxy_authenticated`/`token_expires_at`
-            // params) — `RwSignal` is `Copy`, so dereference to an owned
-            // value the `'static` async block can hold (finding 6).
-            let error = *error;
+            // A chat error might mean the AI backend went down mid-session —
+            // re-check status so the connection dot reacts immediately instead
+            // of staying stale until the operator reloads or manually checks it.
             leptos::task::spawn_local(async move {
                 match ai_api::check_status().await {
-                    Ok(status) => {
-                        connected.set(status.connected);
-                        proxy_authenticated.set(Some(status.proxy.claude_authenticated));
-                        token_expires_at.set(status.proxy.token_expires_at);
-                        requires_claude_auth.set(status.requires_claude_auth);
-                        // #622 finding 6: once the recheck CONFIRMS the auth
-                        // is dead, say so in the same error line — but only
-                        // when Claude auth is actually required (#679).
-                        if status.requires_claude_auth && !status.proxy.claude_authenticated {
-                            error.update(|current| {
-                                if let Some(text) = current {
-                                    text.push_str(
-                                        " — prihlásenie ku Claude vypršalo, použi \
-                                         Prihlásiť sa vyššie.",
-                                    );
-                                }
-                            });
-                        }
-                    }
-                    Err(_) => {
-                        // Finding 1: a failed recheck is UNKNOWN, never a
-                        // guessed state either way.
-                        proxy_authenticated.set(None);
-                    }
+                    Ok(status) => connected.set(status.connected),
+                    Err(_) => connected.set(false),
                 }
             });
         }

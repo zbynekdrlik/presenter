@@ -1,11 +1,11 @@
 //! Shared RFC3339 -> local-time timestamp formatting.
 //!
-//! Extracted (#622 post-merge review finding 10) because
-//! `components::ai_login_banner::format_expiry` and
+//! Extracted (#622 post-merge review finding 10) because the AI login banner's
+//! `format_expiry` (removed with the banner in #762) and
 //! `pages::settings::format_timestamp` had grown the exact same
 //! parse-then-format-then-fall-back-to-raw-string body, differing only in
-//! the `strftime` pattern each caller wants (banner: minutes only; settings:
-//! down to the second). One helper, two callers, two formats.
+//! the `strftime` pattern each caller wants. `format_timestamp` remains the
+//! caller today.
 
 use chrono::{DateTime, Local};
 

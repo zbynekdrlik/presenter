@@ -130,7 +130,7 @@ is unaffected.
 ## Running the harness on dev2 — CI builds it, dev2 only runs it (Tier-0)
 
 dev2 is Tier-0 (CI-only builds, see project `CLAUDE.md`), but it's where the harness must RUN —
-against a local llama.cpp endpoint or the bundled CLIProxyAPI baseline. `ai_eval` is never built
+against a local llama.cpp endpoint or a hosted OpenAI-compatible endpoint (OpenRouter). `ai_eval` is never built
 locally there. `.github/workflows/ai-eval-build.yml` (workflow_dispatch only — never wired into
 the push-triggered `dev`/`main` pipelines, since the whole point of the `ai-eval` feature gate is
 that normal CI never pays for it) compiles the release binary on a GitHub-hosted runner and
@@ -148,7 +148,7 @@ gh run view "$run_id" --json status,conclusion
 gh run download "$run_id" -n "ai-eval-$(git rev-parse --short=12 origin/dev)" -D /tmp/ai-eval-bin
 chmod +x /tmp/ai-eval-bin/ai_eval
 
-# 4. Run it against a candidate endpoint (bundled proxy baseline, or a local llama.cpp server) —
+# 4. Run it against a candidate endpoint (OpenRouter, or a local llama.cpp server) —
 #    --corpus-dir/--traces-dir/--report are REQUIRED (no built-in default, #662 defect 3) since
 #    this binary runs from /tmp/ai-eval-bin/, nowhere near the repo checkout it was compiled from.
 #    bible-authoring/adversarial cases ALSO need the 5 env vars below set FIRST (LOCAL files,
@@ -160,7 +160,7 @@ export PRESENTER_BIBLE_ROHACEK=$(pwd)/data/bibles/rohacek.bbl.mybible.zip
 export PRESENTER_BIBLE_SEVP=$(pwd)/data/bibles/sevp.obohu.mybible.zip
 export PRESENTER_BIBLE_MILOST=$(pwd)/data/bibles/milost.bbl.mybible.zip
 
-/tmp/ai-eval-bin/ai_eval drive --candidate-url http://127.0.0.1:8787/v1 --model claude-opus-4-6 \
+/tmp/ai-eval-bin/ai_eval drive --candidate-url https://openrouter.ai/api/v1 --model google/gemini-3.8-flash \
   --corpus-dir scripts/dev/ai-eval/corpus --traces-dir scripts/dev/ai-eval/traces
 /tmp/ai-eval-bin/ai_eval score-l1 --corpus-dir scripts/dev/ai-eval/corpus \
   --traces-dir scripts/dev/ai-eval/traces --report scripts/dev/ai-eval/report/results.json
