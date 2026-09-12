@@ -1,19 +1,16 @@
 //! Router-level tests for the `/ai/chat` + `/ai/settings` handlers: settings
-//! audit-trail recording (#661 item 3), the settings self-heal round-trip
-//! (#679/#683), API-key redaction in the audit log (#675 review), full
-//! anyhow-chain error rendering (#624), idle-clear of the shared AI
-//! conversation (#665), and the friendly-error-message / budget-exceeded
-//! SSE behavior of `POST /ai/chat` (#665 AC5).
+//! audit-trail recording (#661 item 3), the persist-path apiUrl invariant
+//! (an ordinary no-apiUrl save never rewrites a stored value), API-key
+//! redaction in the audit log (#675 review), full anyhow-chain error
+//! rendering (#624), idle-clear of the shared AI conversation (#665), and the
+//! friendly-error-message / budget-exceeded SSE behavior of `POST /ai/chat`
+//! (#665 AC5).
 //!
-//! Split out of this file (#684) once the #679/#683 rounds pushed it past
-//! the repo's 1000-line file-size cap — the AI status-CLASSIFICATION tests
-//! (`compute_ai_connected`, `compute_ai_status_error`,
-//! `is_bundled_proxy_address`, `should_self_heal_to_canonical`, and the
-//! `get_settings_internal`/`/ai/status` bundled-detection tests) moved to
-//! the sibling `ai_status_tests.rs`; this file kept the pre-existing
-//! chat/settings-audit/idle-clear tests. Mechanical move only — no test
-//! body was changed, only `use` paths were re-scoped to what this half
-//! actually calls.
+//! The backend-agnostic status-computation tests (`compute_ai_connected`,
+//! `compute_ai_status_error`, `get_settings_internal`, the #764 completion
+//! fold, and the #762 payload-shape regression) live in the sibling
+//! `ai_status_tests.rs`; this file keeps the chat/settings-audit/idle-clear
+//! tests.
 
 use crate::ai::AiAgentError;
 use crate::router::ai::{
@@ -183,83 +180,12 @@ async fn put_ai_settings_with_no_api_url_never_mutates_the_stored_default() {
     );
 }
 
-// #683 (optional hardening): a legitimate PUT /ai/settings save must
-// self-heal a historically-poisoned row — even one where the payload never
-// mentions `apiUrl` at all — back to the canonical literal default string,
-// so `update_settings`'s persisted value and `check_status`'s live
-// classification can never end up disagreeing about what "bundled" means.
-
+// An ordinary PUT /ai/settings save that never mentions `apiUrl` must leave a
+// stored custom endpoint exactly as the operator configured it (#762 removed
+// the bundled-proxy self-heal, so nothing ever rewrites a stored `apiUrl` on a
+// no-apiUrl save — this pins that persist-path invariant directly).
 #[tokio::test]
-async fn put_ai_settings_normalizes_a_historically_substituted_bundled_url_to_the_canonical_default(
-) {
-    use crate::ai::AI_SETTINGS_KEY;
-    use crate::router::build_router;
-    use crate::state::AppState;
-    use axum::body::Body;
-    use axum::http::{Method, Request, StatusCode};
-    use tower::ServiceExt;
-
-    let state = AppState::in_memory().await.unwrap();
-    let poisoned = crate::ai::AiSettings {
-        api_url: "http://127.0.0.1:18787/v1".to_string(),
-        api_key: None,
-        model: "claude-opus-4-6".to_string(),
-        system_prompt_extra: None,
-    };
-    state
-        .repository()
-        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&poisoned).unwrap())
-        .await
-        .unwrap();
-
-    let app = build_router(state);
-
-    // An ORDINARY settings save that never mentions apiUrl at all.
-    let put_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::PUT)
-                .uri("/ai/settings")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    serde_json::json!({"model": "claude-sonnet-4-6"}).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(put_response.status(), StatusCode::NO_CONTENT);
-
-    let get_response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/ai/settings")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let bytes = axum::body::to_bytes(get_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        body.get("apiUrl").and_then(|v| v.as_str()),
-        Some(crate::ai::AiSettings::default().api_url.as_str()),
-        "a historically-poisoned api_url must self-heal to the canonical \
-         default string on the next ordinary settings save: {body:?}"
-    );
-}
-
-// #683: the normalize-on-save hardening above must NEVER touch a
-// genuinely-foreign `apiUrl` (the #662 local-LLM scenario) — an ordinary
-// save that doesn't mention `apiUrl` must leave a real non-bundled endpoint
-// exactly as the operator configured it.
-
-#[tokio::test]
-async fn put_ai_settings_never_touches_a_genuinely_non_bundled_api_url() {
+async fn put_ai_settings_never_touches_a_stored_custom_api_url() {
     use crate::ai::AI_SETTINGS_KEY;
     use crate::router::build_router;
     use crate::state::AppState;
@@ -320,8 +246,8 @@ async fn put_ai_settings_never_touches_a_genuinely_non_bundled_api_url() {
     assert_eq!(
         body.get("apiUrl").and_then(|v| v.as_str()),
         Some(FOREIGN_URL),
-        "a genuinely non-bundled apiUrl must never be rewritten by the \
-         normalize-on-save hardening: {body:?}"
+        "a stored custom apiUrl must never be rewritten by an ordinary \
+         no-apiUrl settings save: {body:?}"
     );
 }
 

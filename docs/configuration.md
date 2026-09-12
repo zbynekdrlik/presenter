@@ -19,7 +19,7 @@ All environment variables and feature flags for Presenter.
 
 | Variable                             | Default                        | Description                                                                                                                                          |
 | ------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRESENTER_AI_API_URL`                | `http://localhost:8787/v1` (placeholder → bundled proxy) | OpenAI-compatible chat completions endpoint. The raw env-var fallback literal is a placeholder (`http://localhost:8787/v1`) that the server self-heals to the bundled on-device CLIProxyAPI proxy's actual configured port (**18787**) at startup. **Since #761 this env var WINS over a persisted `/ai/settings` DB row for the EFFECTIVE call/status path** (`resolve_effective_settings`) — reversing the pre-#761 "DB overrides env" behaviour, so a stored bundled-proxy `apiUrl` no longer masks the deployed backend. Deployed instances set it to `https://openrouter.ai/api/v1` via `/etc/presenter/ai.env` (see below). Set to a non-bundled URL → `requiresClaudeAuth` is `false` and the Claude login banner hides (#679). |
+| `PRESENTER_AI_API_URL`                | `https://openrouter.ai/api/v1` | OpenAI-compatible chat completions endpoint. Effective `apiUrl` = env → DB `ai-settings` row → this default (since #762 removed the bundled CLIProxyAPI proxy). **Since #761 this env var WINS over a persisted `/ai/settings` DB row for the EFFECTIVE call/status path** (`resolve_effective_settings`) — reversing the pre-#761 "DB overrides env" behaviour, so a stale stored `apiUrl` no longer masks the deployed backend. Deployed instances set it to `https://openrouter.ai/api/v1` via `/etc/presenter/ai.env` (see below). |
 | `PRESENTER_AI_API_KEY`                | unset                           | Bearer token for the AI provider (sent as `Authorization: Bearer …`). Required for OpenRouter. Wins over the DB row on the effective path (#761). |
 | `PRESENTER_AI_MODEL`                  | `google/gemini-3.8-flash`       | Model name sent on every chat completion request. Since #761 the default is the OpenRouter slug `google/gemini-3.8-flash` (owner ROZHODNUTÉ 2026-09-12); deployed instances set it from the GH Actions `AI_MODEL` variable via `/etc/presenter/ai.env`, so changing the model in production is a variable edit + redeploy (no code change). Wins over the DB row on the effective path (#761). |
 | `PRESENTER_AI_CONTEXT_BUDGET_BYTES`   | `300000`                        | Conservative byte-size ceiling on the request-side conversation, enforced on every agent-loop iteration (#665). Invalid/zero falls back to default. |
@@ -47,41 +47,9 @@ The committed units (`scripts/deploy/presenter.service`,
 the persisted DB `ai-settings` row on the effective call/status path (#761), the
 switch takes effect with no DB write even though prod DBs still hold the old
 bundled-proxy `apiUrl`. An empty `OPENROUTER_API_KEY` secret makes the deploy
-REMOVE the file, so the AI cleanly falls back to the DB/bundled default rather
+REMOVE the file, so the AI cleanly falls back to the stored DB row / default rather
 than running half-configured. Changing the model in production is a variable edit
 + redeploy — no code change.
-
-#### AI subscription pool (llmrot channel) — #730
-
-The AI assistant runs against the on-device **CLIProxyAPI** bundled proxy
-(`127.0.0.1:18787`), which load-balances across the Claude account auth files in
-its auth-dir (`$DEPLOY_DIR/.cli-proxy-api/*.json`). A single account can hit its
-rate limit (SNV saw a real `rate_limit_error` on 2026-08-16) and stall the
-helper. To keep at least one live subscription available, **claudy** (the fleet
-subscription manager on dev1, repo `zbynekdrlik/claudy`) feeds dying-but-live
-accounts into each presenter prod over a narrow, keyed SSH channel — the
-`llmrot` channel (mirror of odoo-erp #4697), owned and driven by claudy.
-
-- **Transport:** claudy's public key (`llmrot-claudy@dev1`) is authorized in the
-  deploy user's (`newlevel`) `~/.ssh/authorized_keys` with a **forced command**
-  (`command="$DEPLOY_DIR/llmrot-apply",restrict,…`),
-  so the key can run ONLY `llmrot-apply` — nothing else on the box.
-- **Script:** [`deploy/llmrot-apply.sh`](../deploy/llmrot-apply.sh) is installed
-  as `$DEPLOY_DIR/llmrot-apply` (runs as `newlevel`, **no sudo** — the auth-dir is
-  newlevel-owned) and refreshed on every deploy. Commands (all via
-  `SSH_ORIGINAL_COMMAND` + STDIN/STDOUT, never argv/log/repo):
-  `list` (per-account `name<TAB>mtime` + a `proxy=… completion=… accounts=N`
-  summary, no tokens), `apply <name>` (STDIN = raw CLIProxyAPI auth JSON, ≤64 KiB,
-  validated + atomically installed as `llmrot-<name>.json`, hot-reloaded by the
-  proxy's fsnotify watcher with **no restart**; rolled back only if the proxy goes
-  down), and `remove <name>` (prints the current rotated auth JSON to STDOUT for
-  reclaim, then deletes).
-- **Provisioning (one-time, per host):** run
-  [`deploy/llmrot-provision.sh`](../deploy/llmrot-provision.sh) from a clean
-  checkout as `newlevel` — it installs the script and writes the authorized_keys
-  forced-command line idempotently. Destinations: dev2 dev
-  (`/opt/presenter-dev`), SNV prod and PP prod (both `/opt/presenter`), reached
-  over Tailscale.
 
 ### Companion Integration
 

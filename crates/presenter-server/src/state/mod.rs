@@ -71,7 +71,7 @@ pub(crate) mod video_source_status;
 use crate::config::OscConfig;
 use crate::{
     ableset::AbleSetBridge,
-    ai::{proxy::ProxyManager, ChatMessage},
+    ai::ChatMessage,
     android_stage::AndroidStageRegistry,
     config::ServerConfig,
     live::{LiveEvent, LiveHub},
@@ -160,7 +160,6 @@ pub struct AppState {
     /// (#665) — drives idle auto-clear so it doesn't grow unbounded between
     /// services. `None` until the first call.
     ai_last_activity: Arc<RwLock<Option<SystemTime>>>,
-    ai_proxy: Arc<ProxyManager>,
     /// #760: per-`AppState` stale-while-revalidate cache of the `/healthz` AI
     /// verdict, so tab fan-out on the readiness probe never turns into a live
     /// `/models` request storm. `Arc` so every `AppState` clone shares ONE
@@ -351,7 +350,6 @@ impl AppState {
             broadcast_live: Arc::new(AtomicBool::new(false)),
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
             ai_last_activity: Arc::new(RwLock::new(None)),
-            ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             ai_health_cache: Arc::new(crate::ai::health_cache::AiHealthCache::new(
                 crate::ai::health_cache::AI_HEALTH_TTL,
             )),
@@ -469,11 +467,6 @@ impl AppState {
         state.backfill_orphaned_playlist_entries_on_boot().await;
         state.spawn_background_tasks();
         state.maybe_spawn_sync(config.sync.peer_url.clone());
-        state.ai_proxy.auto_start().await;
-        // #660: proactively WARN before the Claude OAuth token expires, not
-        // only after — the 2026-07-26 and 2026-08-02 outages were both only
-        // discovered once a live event started.
-        crate::ai::refresh::spawn_expiry_warning(state.ai_proxy.clone());
         Ok(state)
     }
 
@@ -697,10 +690,6 @@ impl AppState {
     /// Last-touched timestamp for idle auto-clear — see the field doc.
     pub fn ai_last_activity(&self) -> &Arc<RwLock<Option<SystemTime>>> {
         &self.ai_last_activity
-    }
-
-    pub fn ai_proxy(&self) -> &Arc<ProxyManager> {
-        &self.ai_proxy
     }
 
     /// #760: the shared SWR cache backing the `/healthz` `ai` verdict.

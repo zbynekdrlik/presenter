@@ -1,7 +1,6 @@
 use super::integrations::extract_actor;
 use super::AppError;
 use crate::ai::agent::ProgressEvent;
-use crate::ai::proxy::ProxyStatus;
 use crate::ai::{AiAgentError, AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
 use axum::extract::State;
@@ -94,8 +93,8 @@ pub(super) async fn chat(
         return Err(AppError::bad_request_message("message cannot be empty"));
     }
 
-    // The agent loop needs the REACHABLE url (#679) — never the raw one.
-    let (settings, _) = resolve_effective_settings(&state).await?;
+    // The agent loop needs the EFFECTIVE (env-overridden) settings (#761).
+    let settings = resolve_effective_settings(&state).await?;
 
     // Idle auto-clear (#665): if the shared conversation hasn't been
     // touched in a while, clear it before appending the new message rather
@@ -294,7 +293,7 @@ pub(super) struct SettingsResponse {
 pub(super) async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<SettingsResponse>, AppError> {
-    let (settings, _) = get_settings_internal(&state).await?;
+    let settings = get_settings_internal(&state).await?;
     Ok(Json(SettingsResponse {
         api_url: settings.api_url,
         api_key_set: settings.api_key.as_ref().is_some_and(|k| !k.is_empty()),
@@ -321,8 +320,8 @@ const AI_SETTINGS_AUDIT_TABLE: &str = "app_settings";
 
 /// Audit-safe JSON snapshot of `AiSettings` (#661) — `api_key` is NEVER
 /// persisted verbatim into the `settings_audit` table. This project's
-/// standing "never log token contents" discipline (see `ai/proxy.rs`'s
-/// Claude OAuth handling) applies equally to the AI provider API key: the
+/// standing "never log token contents" discipline (see `ai::redact`) applies
+/// equally to the AI provider API key: the
 /// audit trail's whole point is a forensic "who changed what, when", not a
 /// second place a credential could leak from. Only WHETHER a key is set is
 /// preserved — the same signal `GET /ai/settings`'s `SettingsResponse`
@@ -342,7 +341,7 @@ pub(super) async fn update_settings(
     headers: HeaderMap,
     Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<StatusCode, AppError> {
-    let (mut settings, _) = get_settings_internal(&state).await?;
+    let mut settings = get_settings_internal(&state).await?;
     let before_json = redact_settings_for_audit(&settings);
 
     if let Some(url) = payload.api_url {
@@ -356,19 +355,6 @@ pub(super) async fn update_settings(
     }
     if payload.system_prompt_extra.is_some() {
         settings.system_prompt_extra = payload.system_prompt_extra;
-    }
-
-    // #683 belt-and-suspenders (`should_self_heal_to_canonical`'s own doc
-    // comment covers the WHY, incl. the env-override guard a review finding
-    // required — not required for correctness, the matcher alone already
-    // classifies a poisoned row right on every READ): normalize a poisoned
-    // api_url back to the canonical default on EVERY save, not only one
-    // that touches apiUrl, so this write path and check_status's read path
-    // can never disagree.
-    let proxy_port = state.ai_proxy().configured_port().await;
-    let canonical = AiSettings::default().api_url;
-    if should_self_heal_to_canonical(&settings.api_url, proxy_port, &canonical) {
-        settings.api_url = canonical;
     }
 
     let json = serde_json::to_string(&settings).map_err(|e| anyhow::anyhow!(e))?;
@@ -429,49 +415,31 @@ pub(super) async fn clear_conversation(
 pub(super) struct StatusResponse {
     pub connected: bool,
     pub error: Option<String>,
-    pub proxy: ProxyStatus,
-    /// Whether the CONFIGURED `model` is present in the proxy's own catalog
+    /// Whether the CONFIGURED `model` is present in the backend's own catalog
     /// (#661), surfaced as its OWN field (#675 review finding 2) — a caller
     /// that ANDs it into `connected` (like the deploy workflows used to)
-    /// cannot tell "the model is misconfigured" apart from "the Claude OAuth
-    /// token is merely stale right now", even though only the former is a
-    /// regression a CODE/CONFIG change could have caused. Permissive
-    /// default `true` when the catalog itself couldn't be fetched — see
-    /// `check_status` below — so a caller gating on this field alone never
-    /// mistakes "couldn't check" for "checked and invalid".
+    /// cannot tell "the model is misconfigured" apart from a transient
+    /// connectivity blip, even though only the former is a regression a
+    /// CODE/CONFIG change could have caused. Permissive default `true` when
+    /// the catalog itself couldn't be fetched — see `check_status` below — so
+    /// a caller gating on this field alone never mistakes "couldn't check"
+    /// for "checked and invalid".
     pub model_valid: bool,
-    /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
-    /// (requiring a Claude OAuth login) or a user's own non-bundled
-    /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679,
-    /// the #662 local-LLM scenario). `true` when the EFFECTIVE `api_url`
-    /// structurally identifies the bundled proxy — the literal placeholder
-    /// (`BUNDLED_PROXY_PLACEHOLDER`) OR the proxy's own live-resolved address
-    /// (`is_bundled_proxy_address`, #683 — what every DB that saved AI
-    /// settings under a pre-#679 build has stored). Since #761 the value
-    /// surfaced on `/ai/status` is computed in `resolve_effective_settings`
-    /// via `is_effective_bundled` on the api_url AFTER the `PRESENTER_AI_*`
-    /// env overrides are applied — so a foreign `PRESENTER_AI_API_URL`
-    /// (OpenRouter) flips it false and hides the login banner, while the
-    /// common bundled case (default config, proxy running) and a
-    /// historically-poisoned pre-#679 row are still classified bundled.
-    /// (The raw persist/display path `get_settings_internal` keeps its OWN
-    /// raw-value classification for the settings form; env never leaks there.)
-    pub requires_claude_auth: bool,
 }
 
-/// Compute AI `connected` status by ANDing THREE signals: TCP-level
-/// connectivity, Claude OAuth validity (#597), and whether the CONFIGURED
-/// `model` is actually present in the proxy's own model catalog (#661).
+/// Compute AI `connected` status by ANDing TWO signals: TCP-level
+/// connectivity and whether the CONFIGURED `model` is actually present in the
+/// backend's model catalog (#661). (Since #762 removed the bundled CLIProxyAPI
+/// proxy + Claude OAuth, there is no third auth signal — the effective backend
+/// is an OpenAI-compatible API-key endpoint; a metered backend's real
+/// completion outcome is folded in separately by `evaluate_ai_status` via
+/// `apply_last_completion_failure`, #764.)
 ///
-/// The connectivity check (`list_models`) pings the
-/// proxy's `/models` endpoint — it succeeds whenever the CLIProxyAPI
-/// process is running and answering on its port, regardless of whether the
-/// underlying Claude OAuth token is still valid OR whether the configured
-/// model id is one the proxy actually serves. A real incident
-/// (2026-08-02 → 2026-08-06) had `connected: true` for four days with an
-/// invalid model id, discovered only when a real chat call 502'd. This
-/// function ensures `connected` is `true` ONLY when all three signals are
-/// healthy.
+/// The connectivity check (`list_models`) pings the backend's `/models`
+/// endpoint — it succeeds whenever the endpoint is reachable and answering,
+/// regardless of whether the configured model id is one it actually serves. A
+/// real incident (2026-08-02 → 2026-08-06) had `connected: true` for four days
+/// with an invalid model id, discovered only when a real chat call 502'd.
 ///
 /// `model_valid` is the caller's job to compute FROM the same `/models`
 /// response `connectivity_ok` came from — when connectivity itself failed
@@ -479,66 +447,47 @@ pub(super) struct StatusResponse {
 /// this function's result still reflects the CONNECTIVITY failure, not a
 /// misleading "model not found".
 ///
-/// `requires_claude_auth` (#679): when `false` (the configured `apiUrl` is a
-/// user's own non-bundled OpenAI-compatible endpoint, not the bundled
-/// CLIProxyAPI proxy), `claude_authenticated` is irrelevant and ignored —
-/// Claude auth was never needed to reach that endpoint in the first place.
-///
 /// Extracted as a pure function so the truth-table is unit-testable without
-/// constructing a live ProxyManager + network connectivity.
-pub(super) fn compute_ai_connected(
-    connectivity_ok: bool,
-    claude_authenticated: bool,
-    model_valid: bool,
-    requires_claude_auth: bool,
-) -> bool {
-    connectivity_ok && (!requires_claude_auth || claude_authenticated) && model_valid
+/// network connectivity.
+pub(super) fn compute_ai_connected(connectivity_ok: bool, model_valid: bool) -> bool {
+    connectivity_ok && model_valid
 }
 
 /// Build the `/ai/status` `error` message (#624, extended #661).
 ///
 /// `check_status` used to discard the real underlying error from
 /// `check_connectivity` (removed #661 -- superseded by `list_models`) via
-/// `.is_ok()`, replacing it with a constant "AI proxy unreachable" string —
-/// which is misleading when the actual failure is an HTTP-level error such
-/// as 401 (bad/expired API key) or 500 (proxy-side crash). `connectivity_error`
+/// `.is_ok()`, replacing it with a constant "unreachable" string — which is
+/// misleading when the actual failure is an HTTP-level error such as 401
+/// (bad/expired API key) or 500 (backend-side crash). `connectivity_error`
 /// carries that real message (`list_models`'s `anyhow::Error` rendered via
 /// `render_connectivity_error`, see below) so the caller can see WHY the
-/// proxy is unreachable, not just that it is.
+/// backend is unreachable, not just that it is.
 ///
-/// `model_valid`/`configured_model` (#661): a THIRD branch names the exact
-/// invalid model id when connectivity and auth are both fine but the
-/// configured model isn't in the proxy's catalog — this is the case that
-/// used to sit silently `connected: true` for days.
-///
-/// `requires_claude_auth` (#679): the "Claude not authenticated" message
-/// only applies when the configured `apiUrl` actually IS the bundled proxy
-/// — a non-bundled endpoint never needs a Claude login, so that branch is
-/// skipped entirely regardless of `claude_authenticated`.
+/// `model_valid`/`configured_model` (#661): names the exact invalid model id
+/// when connectivity is fine but the configured model isn't in the backend's
+/// catalog — this is the case that used to sit silently `connected: true` for
+/// days. (Since #762 removed the bundled proxy + Claude OAuth, there is no
+/// "Claude not authenticated" branch — the backend is an API-key endpoint.)
 ///
 /// Extracted as a pure function so the branch logic is unit-testable without
-/// constructing a live ProxyManager + network connectivity (same rationale
-/// as `compute_ai_connected` above).
+/// network connectivity (same rationale as `compute_ai_connected` above).
 pub(super) fn compute_ai_status_error(
     connected: bool,
-    claude_authenticated: bool,
     model_valid: bool,
     configured_model: &str,
     connectivity_error: Option<&str>,
-    requires_claude_auth: bool,
 ) -> Option<String> {
     if connected {
         None
-    } else if requires_claude_auth && !claude_authenticated {
-        Some("Claude not authenticated — run /ai/proxy/login to re-authorize".to_string())
     } else if !model_valid {
         Some(format!(
-            "Configured AI model '{configured_model}' is not available in the proxy's model catalog — check AI settings"
+            "Configured AI model '{configured_model}' is not available in the backend's model catalog — check AI settings"
         ))
     } else {
         Some(match connectivity_error {
-            Some(err) => format!("AI proxy unreachable: {err}"),
-            None => "AI proxy unreachable".to_string(),
+            Some(err) => format!("AI backend unreachable: {err}"),
+            None => "AI backend unreachable".to_string(),
         })
     }
 }
@@ -567,22 +516,17 @@ pub(super) async fn check_status(
 /// computation, never a duplicate. Cost: one `list_models` round trip bounded
 /// by `connectivity_client`'s 3s timeout, so the readiness path (`/healthz`)
 /// can never hang; there is no on-disk cache because an API-key backend (the
-/// #662 OpenRouter direction) has no on-disk freshness signal to read. The
+/// #762 OpenRouter direction) has no on-disk freshness signal to read. The
 /// verdict is backend-agnostic — `connected`/`error` never name OAuth state.
 pub(super) async fn evaluate_ai_status(
     state: &AppState,
 ) -> Result<(StatusResponse, String), AppError> {
-    // The connectivity/model check needs the REACHABLE url (#679) — never the
-    // raw one. Since #761 `requires_claude_auth` reflects the EFFECTIVE
-    // (post-env-override) api_url that `resolve_effective_settings` computed via
-    // `is_effective_bundled`, so a foreign `PRESENTER_AI_API_URL` (OpenRouter)
-    // flips it false and the Claude login banner hides — do NOT revert this to
-    // the raw stored value.
-    let (settings, requires_claude_auth) = resolve_effective_settings(state).await?;
-    let proxy_status = state.ai_proxy().status().await;
+    // The connectivity/model check runs against the EFFECTIVE settings — the
+    // stored DB row with the `PRESENTER_AI_*` env overrides applied (#761).
+    let settings = resolve_effective_settings(state).await?;
 
     // #661: list_models (not the old bare check_connectivity) so the SAME
-    // HTTP round trip that proves the proxy is reachable also gives us the
+    // HTTP round trip that proves the backend is reachable also gives us the
     // catalog to validate the configured model against — one call, two
     // signals, keeping the 5s-polled status chip's cost unchanged.
     let models_result = crate::ai::client::list_models(&settings).await;
@@ -597,20 +541,13 @@ pub(super) async fn evaluate_ai_status(
         .map(|models| models.iter().any(|id| id == &settings.model))
         .unwrap_or(true);
 
-    let connected = compute_ai_connected(
-        connectivity_ok,
-        proxy_status.claude_authenticated,
-        model_valid,
-        requires_claude_auth,
-    );
+    let connected = compute_ai_connected(connectivity_ok, model_valid);
 
     let error = compute_ai_status_error(
         connected,
-        proxy_status.claude_authenticated,
         model_valid,
         &settings.model,
         connectivity_err_msg.as_deref(),
-        requires_claude_auth,
     );
 
     // #764: `list_models` (the probe above) is NOT a liveness proof for a
@@ -630,250 +567,43 @@ pub(super) async fn evaluate_ai_status(
         StatusResponse {
             connected,
             error,
-            proxy: proxy_status,
             model_valid,
-            requires_claude_auth,
         },
         model,
     ))
 }
 
-// ── Proxy management ──
-
-#[instrument(skip_all)]
-pub(super) async fn proxy_start(
-    State(state): State<AppState>,
-) -> Result<Json<ProxyStatus>, AppError> {
-    state
-        .ai_proxy()
-        .start()
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to start proxy: {e}")))?;
-    Ok(Json(state.ai_proxy().status().await))
-}
-
-#[instrument(skip_all)]
-pub(super) async fn proxy_stop(
-    State(state): State<AppState>,
-) -> Result<Json<ProxyStatus>, AppError> {
-    state
-        .ai_proxy()
-        .stop()
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to stop proxy: {e}")))?;
-    Ok(Json(state.ai_proxy().status().await))
-}
-
-// ── Claude OAuth ──
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct LoginResponse {
-    pub login_url: String,
-}
-
-/// Start the Claude login flow. Returns the auth URL for the user to open.
-#[instrument(skip_all)]
-pub(super) async fn proxy_login(
-    State(state): State<AppState>,
-) -> Result<Json<LoginResponse>, AppError> {
-    let url = state
-        .ai_proxy()
-        .claude_login()
-        .await
-        .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
-    Ok(Json(LoginResponse { login_url: url }))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct CompleteLoginRequest {
-    pub callback_url: String,
-}
-
-/// Complete the login by forwarding the callback URL to CLIProxyAPI.
-#[instrument(skip_all)]
-pub(super) async fn proxy_complete_login(
-    State(state): State<AppState>,
-    Json(payload): Json<CompleteLoginRequest>,
-) -> Result<Json<ProxyStatus>, AppError> {
-    let url = payload.callback_url.trim();
-    if url.is_empty() {
-        return Err(AppError::bad_request_message(
-            "callback URL cannot be empty",
-        ));
-    }
-
-    state
-        .ai_proxy()
-        .complete_login(url)
-        .await
-        .map_err(|e| AppError::internal(format!("Login completion failed: {e}")))?;
-
-    Ok(Json(state.ai_proxy().status().await))
-}
-
-/// Host strings this codebase has EVER written into a stored `api_url` for
-/// the bundled CLIProxyAPI proxy: `ProxyManager::status()` always builds the
-/// `127.0.0.1` form (see `ai/proxy.rs`), and `AiSettings::default()`'s
-/// literal placeholder uses `localhost`. Kept as two explicit entries — not
-/// a loopback-range/DNS check — so [`is_bundled_proxy_address`] stays
-/// exactly as broad as the addresses this process has actually ever
-/// produced, never broader (#683).
-const BUNDLED_PROXY_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
-
-/// The bundled proxy's literal placeholder string — `AiSettings::default()`'s
-/// OWN fallback when `PRESENTER_AI_API_URL` is unset. Named as its own
-/// constant (rather than comparing against a freshly-computed
-/// `AiSettings::default().api_url` inline) because that computed value is
-/// NOT always this literal string: `PRESENTER_AI_API_URL` can override it to
-/// a genuinely foreign endpoint (`docs/configuration.md`), and
-/// `update_settings`'s self-heal (below) must never write THAT value in
-/// place of a matched bundled URL — doing so would silently repoint a
-/// historically-poisoned row at whatever foreign endpoint the operator
-/// happens to have configured via the env var (review finding, #683).
-pub(super) const BUNDLED_PROXY_PLACEHOLDER: &str = "http://localhost:8787/v1";
-
-/// Whether `raw_api_url` structurally identifies the bundled CLIProxyAPI
-/// proxy's OWN address at `proxy_port` — i.e. `http://{127.0.0.1|localhost}
-/// :{proxy_port}/v1`, compared by URL PARTS (scheme, host, port, path)
-/// rather than raw string equality, so a trailing slash or different
-/// host/scheme casing can't defeat it (`reqwest::Url` — an `url` crate
-/// re-export already used the same way in `android_stage.rs` — lowercases
-/// scheme/host on parse). Deliberately narrow: only `http`, only the two
-/// literal hosts above, only an exact `/v1` path (trailing slash trimmed),
-/// only the given `proxy_port` — no DNS resolution, no loopback-range/CIDR
-/// check. A malformed/unparseable `raw_api_url` is never bundled.
-///
-/// `proxy_port` is the bundled proxy's CONFIGURED port
-/// (`ProxyManager::configured_port`), used REGARDLESS of whether the proxy
-/// process is currently running (#683 design decision): the port is static
-/// config (default 18787), never something the OS assigns only while the
-/// process is up, so there is no "unknown port" case for a stopped proxy.
-/// A stored address that structurally matches the bundled proxy's
-/// configured host/port/path IS that proxy's address whether or not it
-/// happens to be running right now — gating on `running` instead would make
-/// `requires_claude_auth` flicker true/false for the SAME stored value
-/// purely because the process was started or stopped, which is worse than
-/// the bug this fixes. This also matches the existing precedent in
-/// `compute_ai_status_error`, which already prioritizes the "Claude not
-/// authenticated" message over a connectivity failure whenever
-/// `requires_claude_auth` is true, regardless of whether the proxy is
-/// currently reachable.
-pub(super) fn is_bundled_proxy_address(raw_api_url: &str, proxy_port: u16) -> bool {
-    let Ok(url) = reqwest::Url::parse(raw_api_url) else {
-        return false;
-    };
-    url.scheme() == "http"
-        && url.port() == Some(proxy_port)
-        && url.path().trim_end_matches('/') == "/v1"
-        && url
-            .host_str()
-            .is_some_and(|host| BUNDLED_PROXY_HOSTS.contains(&host))
-}
-
-/// Whether `update_settings` should self-heal `raw_api_url` back to
-/// `canonical` — true only when `raw_api_url` structurally matches the
-/// bundled proxy's own address AND `canonical` genuinely IS the literal
-/// placeholder (i.e. no `PRESENTER_AI_API_URL` override is in effect).
-///
-/// `AiSettings::default().api_url` is NOT always the literal placeholder —
-/// `PRESENTER_AI_API_URL` overrides it to whatever foreign endpoint an
-/// operator configured (`docs/configuration.md`). Without this guard, a
-/// box running that override would have `update_settings`'s self-heal
-/// silently REWRITE a matched (still functionally bundled) row to the
-/// override's foreign value on the very next ordinary save — a data-loss
-/// bug, not a heal (#683 review finding).
-///
-/// Extracted as a pure function, parameterized on `canonical` rather than
-/// reading `AiSettings::default()`/env itself, so the "override present"
-/// branch is unit-testable without mutating process-global env state —
-/// same rationale as `parse_idle_clear_minutes` above (a mutated env var
-/// would race against every OTHER test in this binary reading the same key).
-pub(super) fn should_self_heal_to_canonical(
-    raw_api_url: &str,
-    proxy_port: u16,
-    canonical: &str,
-) -> bool {
-    is_bundled_proxy_address(raw_api_url, proxy_port) && canonical == BUNDLED_PROXY_PLACEHOLDER
-}
-
 /// Read the RAW stored AI settings (or the default, if nothing is stored
-/// yet) — never mutates `api_url`. Returns the settings alongside
-/// `is_bundled_default`: whether this raw `api_url` identifies the bundled
-/// proxy, either as the literal default placeholder
-/// (`AiSettings::default().api_url`) OR — #683 — as the bundled proxy's own
-/// live-resolved address (`is_bundled_proxy_address`), which is what every
-/// DB that ever saved AI settings under a pre-#679 build actually has
-/// stored (the substitute-then-persist bug #679 fixed going forward, but
-/// never migrated). Reads the proxy's CONFIGURED port via
-/// `state.ai_proxy().configured_port()` to do so — a single cheap read-only
-/// `RwLock` read, never `is_running()`/`binary_path()` filesystem work, and
-/// it never touches or mutates the RETURNED `api_url` — the invariant #679
-/// review finding 1 actually cared about (see below) is unchanged.
-///
-/// This is the function to use for anything that gets PERSISTED
-/// (`update_settings`) or DISPLAYED for editing (`get_settings`) — #679
-/// review finding 1: an earlier version of this function ALSO substituted
-/// the live resolved proxy URL (`http://127.0.0.1:{port}/v1`) into
-/// `api_url` whenever it was the bundled default and the proxy was
-/// running, and BOTH of those call sites read straight from it. That
-/// silently leaked the substituted URL into the settings form (echoed back
-/// on the very next ordinary "open Settings, click Save" — no edit
-/// needed) and, whenever a `PUT /ai/settings` omitted `apiUrl` entirely,
-/// straight into the row `update_settings` re-persists — either path
-/// permanently rewrites the stored `api_url` to the substituted value,
-/// which no longer equals `AiSettings::default().api_url` (`localhost` !=
-/// `127.0.0.1` as strings) — so `is_bundled_default`/`requires_claude_auth`
-/// silently and permanently flip to `false` for what is still,
-/// functionally, the bundled proxy. See `resolve_effective_settings` below
-/// for the ONLY call sites that legitimately need the substituted URL.
-pub(super) async fn get_settings_internal(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
+/// yet) — a pure database read that NEVER mutates `api_url`. This is the
+/// function to use for anything that gets PERSISTED (`update_settings`) or
+/// DISPLAYED for editing (`get_settings`); the env-override path lives in
+/// `resolve_effective_settings` and must never leak into a saved/displayed
+/// row (the #679/#683 data-loss class).
+pub(super) async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {
     let settings = match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
         Some(json) => serde_json::from_str(&json)?,
         None => AiSettings::default(),
     };
-    let proxy_port = state.ai_proxy().configured_port().await;
-    let is_bundled_default = settings.api_url == AiSettings::default().api_url
-        || is_bundled_proxy_address(&settings.api_url, proxy_port);
-    Ok((settings, is_bundled_default))
+    Ok(settings)
 }
 
-/// Resolve the EFFECTIVE, reachable `api_url` for actually making an HTTP
-/// call to the AI provider (`chat`'s agent loop, `check_status`'s
-/// connectivity/model check) — substitutes the live resolved bundled-proxy
-/// URL in place of the raw stored default whenever `is_bundled_default` is
-/// true and the proxy is currently running.
+/// Resolve the EFFECTIVE settings for actually reaching the AI provider
+/// (`chat`'s agent loop, `check_status`'s connectivity/model check): the raw
+/// stored settings (DB row or default) with the `PRESENTER_AI_*` env-var
+/// overrides applied on top (#761). Since #762 removed the bundled CLIProxyAPI
+/// proxy, the effective `apiUrl` is simply env → DB → default
+/// (`https://openrouter.ai/api/v1`) — no proxy substitution.
 ///
 /// NEVER use this for a settings value that will be PERSISTED or DISPLAYED
-/// for editing — see `get_settings_internal`'s own doc comment for why
-/// (#679 review finding 1).
-async fn resolve_effective_settings(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
-    // Raw stored settings (DB row or default). The persist/display path
-    // (`get_settings_internal`) stays untouched; here we take a mutable copy
-    // for the EFFECTIVE call/status path only.
-    let (mut settings, _raw_is_bundled) = get_settings_internal(state).await?;
+/// for editing — env must not leak into a saved/displayed row (#679/#683).
+async fn resolve_effective_settings(state: &AppState) -> anyhow::Result<AiSettings> {
+    let mut settings = get_settings_internal(state).await?;
 
     // #761: `PRESENTER_AI_*` env vars win over the stored DB row for the
     // EFFECTIVE path. Prod DBs still hold the pre-migration bundled-proxy
-    // `apiUrl` (`http://127.0.0.1:18787/v1`), so the deploy-written
-    // `/etc/presenter/ai.env` (the OpenRouter switch) must take effect
-    // without a DB write. Env must NOT reach `get_settings_internal` — it
-    // would leak into a saved/displayed row (the #679/#683 data-loss class).
+    // `apiUrl`, so the deploy-written `/etc/presenter/ai.env` (the OpenRouter
+    // switch) must take effect without a DB write.
     super::ai_env::apply_env_overrides(&mut settings);
 
-    // Recompute "bundled" on the EFFECTIVE (post-override) `api_url` against
-    // the FIXED placeholder — never `AiSettings::default()`, whose `api_url`
-    // is itself env-tainted (#761): an env override to a foreign endpoint
-    // (OpenRouter) must flip `requires_claude_auth` false.
-    let proxy_port = state.ai_proxy().configured_port().await;
-    let is_bundled_default = super::ai_env::is_effective_bundled(&settings.api_url, proxy_port);
-
-    if is_bundled_default {
-        let proxy_status = state.ai_proxy().status().await;
-        if proxy_status.running {
-            settings.api_url = proxy_status.api_url;
-        }
-    }
-    Ok((settings, is_bundled_default))
+    Ok(settings)
 }

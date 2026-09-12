@@ -5,7 +5,7 @@
 //! Root cause this module fixes: `get_settings_internal` reads the DB
 //! `ai-settings` row first and only falls back to the env-aware
 //! `AiSettings::default()` when NO row exists. Every prod DB (SNV/PP/dev)
-//! already holds a row pinning `apiUrl` to the bundled proxy
+//! still holds a pre-migration row pinning `apiUrl` to the old bundled proxy
 //! (`http://127.0.0.1:18787/v1`), so `PRESENTER_AI_*` was silently ignored —
 //! the deploy-written `/etc/presenter/ai.env` (the #761 OpenRouter switch)
 //! would never take effect. `resolve_effective_settings` now applies these
@@ -16,9 +16,9 @@
 //! The helpers are PARAMETERIZED on the override values (not reading env
 //! themselves) so precedence is unit-testable WITHOUT mutating process-global
 //! env — a mutated env var races every other test in this binary reading the
-//! same key (the same rationale as `parse_idle_clear_minutes` /
-//! `should_self_heal_to_canonical` in `ai.rs`). `apply_env_overrides` is the
-//! thin env-reading wrapper the production path calls.
+//! same key (the same rationale as `parse_idle_clear_minutes` in `ai.rs`).
+//! `apply_env_overrides` is the thin env-reading wrapper the production path
+//! calls.
 
 use crate::ai::AiSettings;
 
@@ -62,21 +62,6 @@ pub(super) fn apply_env_overrides(settings: &mut AiSettings) {
         env_override("PRESENTER_AI_API_KEY"),
         env_override("PRESENTER_AI_MODEL"),
     );
-}
-
-/// Whether `api_url` identifies the bundled CLIProxyAPI proxy for the EFFECTIVE
-/// (post-override) path — the literal placeholder
-/// (`super::ai::BUNDLED_PROXY_PLACEHOLDER`) OR the proxy's own live-resolved
-/// address (`super::ai::is_bundled_proxy_address`). Deliberately compared
-/// against the FIXED placeholder constant, NEVER `AiSettings::default().api_url`
-/// — the latter is itself env-tainted (when `PRESENTER_AI_API_URL` is set,
-/// `default().api_url == env`), so a raw-equality check would falsely report a
-/// foreign endpoint (OpenRouter) as "bundled" and leave `requires_claude_auth`
-/// stuck true, keeping the Claude login banner visible for an API-key backend
-/// (#679/#761).
-pub(super) fn is_effective_bundled(api_url: &str, proxy_port: u16) -> bool {
-    api_url == super::ai::BUNDLED_PROXY_PLACEHOLDER
-        || super::ai::is_bundled_proxy_address(api_url, proxy_port)
 }
 
 #[cfg(test)]
@@ -152,22 +137,5 @@ mod tests {
             Some("stored-key"),
             "a None (empty/unset) key override must not clear a stored key"
         );
-    }
-
-    #[test]
-    fn openrouter_url_is_not_effective_bundled() {
-        // An env override to OpenRouter must flip requires_claude_auth false.
-        assert!(
-            !is_effective_bundled("https://openrouter.ai/api/v1", 18787),
-            "a foreign API-key endpoint must NOT be classified as the bundled proxy"
-        );
-    }
-
-    #[test]
-    fn placeholder_and_live_proxy_are_effective_bundled() {
-        // The literal default placeholder (env unset) — still bundled.
-        assert!(is_effective_bundled("http://localhost:8787/v1", 18787));
-        // The proxy's own live-resolved address (what prod DBs store).
-        assert!(is_effective_bundled("http://127.0.0.1:18787/v1", 18787));
     }
 }
