@@ -555,9 +555,23 @@ pub(super) fn render_connectivity_error(e: &anyhow::Error) -> String {
 pub(super) async fn check_status(
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
+    let (status, _model) = evaluate_ai_status(&state).await?;
+    Ok(Json(status))
+}
+
+/// Compute the `/ai/status` verdict AND the configured model id, so the
+/// `/ai/status` handler and the `/healthz` `ai` summary (#760) share ONE
+/// computation, never a duplicate. Cost: one `list_models` round trip bounded
+/// by `connectivity_client`'s 3s timeout, so the readiness path (`/healthz`)
+/// can never hang; there is no on-disk cache because an API-key backend (the
+/// #662 OpenRouter direction) has no on-disk freshness signal to read. The
+/// verdict is backend-agnostic — `connected`/`error` never name OAuth state.
+pub(super) async fn evaluate_ai_status(
+    state: &AppState,
+) -> Result<(StatusResponse, String), AppError> {
     // The connectivity/model check needs the REACHABLE url (#679) — never
     // the raw one; `requires_claude_auth` still reflects the RAW value.
-    let (settings, requires_claude_auth) = resolve_effective_settings(&state).await?;
+    let (settings, requires_claude_auth) = resolve_effective_settings(state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
     // #661: list_models (not the old bare check_connectivity) so the SAME
@@ -592,13 +606,17 @@ pub(super) async fn check_status(
         requires_claude_auth,
     );
 
-    Ok(Json(StatusResponse {
-        connected,
-        error,
-        proxy: proxy_status,
-        model_valid,
-        requires_claude_auth,
-    }))
+    let model = settings.model.clone();
+    Ok((
+        StatusResponse {
+            connected,
+            error,
+            proxy: proxy_status,
+            model_valid,
+            requires_claude_auth,
+        },
+        model,
+    ))
 }
 
 // ── Proxy management ──
