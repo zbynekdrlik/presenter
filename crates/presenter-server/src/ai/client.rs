@@ -55,6 +55,13 @@ fn connectivity_client() -> &'static reqwest::Client {
     })
 }
 
+/// OpenRouter reads `HTTP-Referer` + `X-Title` to attribute API usage in its
+/// dashboard/rankings (#761). Both are plain, harmless request headers on any
+/// other OpenAI-compatible backend (CLIProxyAPI, llama.cpp), so they are sent
+/// on every outbound AI request unconditionally rather than sniffing the URL.
+const AI_ATTRIBUTION_REFERER: &str = "https://github.com/zbynekdrlik/presenter";
+const AI_ATTRIBUTION_TITLE: &str = "Presenter";
+
 /// Conservative default response budget when `PRESENTER_AI_MAX_TOKENS` is
 /// unset. This bounds the PROVIDER's REPLY size — distinct from (and much
 /// smaller than) the request-side context budget in `ai::context_budget` —
@@ -243,7 +250,11 @@ pub async fn call_chat_completions_with_options(
     };
 
     let client = reqwest::Client::new();
-    let mut req = client.post(&url).json(&request);
+    let mut req = client
+        .post(&url)
+        .json(&request)
+        .header("HTTP-Referer", AI_ATTRIBUTION_REFERER)
+        .header("X-Title", AI_ATTRIBUTION_TITLE);
 
     if let Some(key) = &settings.api_key {
         if !key.is_empty() {
@@ -315,7 +326,10 @@ pub async fn call_chat_completions_with_options(
 /// status chip (#622 post-merge review finding 3a).
 pub async fn list_models(settings: &AiSettings) -> anyhow::Result<Vec<String>> {
     let url = format!("{}/models", settings.api_url.trim_end_matches('/'));
-    let mut req = connectivity_client().get(&url);
+    let mut req = connectivity_client()
+        .get(&url)
+        .header("HTTP-Referer", AI_ATTRIBUTION_REFERER)
+        .header("X-Title", AI_ATTRIBUTION_TITLE);
 
     if let Some(key) = &settings.api_key {
         if !key.is_empty() {
