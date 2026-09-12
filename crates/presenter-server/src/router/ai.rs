@@ -443,16 +443,19 @@ pub(super) struct StatusResponse {
     /// Whether the configured `apiUrl` is the bundled CLIProxyAPI proxy
     /// (requiring a Claude OAuth login) or a user's own non-bundled
     /// OpenAI-compatible endpoint, where Claude auth is irrelevant (#679,
-    /// the #662 local-LLM scenario). `true` when the RAW stored `api_url`
-    /// either equals `AiSettings::default().api_url` (the literal
-    /// placeholder) OR structurally identifies the bundled proxy's own
-    /// live-resolved address (`is_bundled_proxy_address`, #683 — this is
-    /// what every DB that ever saved AI settings under a pre-#679 build
-    /// actually has stored) — computed in `get_settings_internal` BEFORE
-    /// that function's own substitution of the live resolved proxy URL, so
-    /// the most common case (default config, proxy running) is never
-    /// misclassified as non-bundled, and neither is a historically-poisoned
-    /// row from before #679.
+    /// the #662 local-LLM scenario). `true` when the EFFECTIVE `api_url`
+    /// structurally identifies the bundled proxy — the literal placeholder
+    /// (`BUNDLED_PROXY_PLACEHOLDER`) OR the proxy's own live-resolved address
+    /// (`is_bundled_proxy_address`, #683 — what every DB that saved AI
+    /// settings under a pre-#679 build has stored). Since #761 the value
+    /// surfaced on `/ai/status` is computed in `resolve_effective_settings`
+    /// via `is_effective_bundled` on the api_url AFTER the `PRESENTER_AI_*`
+    /// env overrides are applied — so a foreign `PRESENTER_AI_API_URL`
+    /// (OpenRouter) flips it false and hides the login banner, while the
+    /// common bundled case (default config, proxy running) and a
+    /// historically-poisoned pre-#679 row are still classified bundled.
+    /// (The raw persist/display path `get_settings_internal` keeps its OWN
+    /// raw-value classification for the settings form; env never leaks there.)
     pub requires_claude_auth: bool,
 }
 
@@ -569,8 +572,12 @@ pub(super) async fn check_status(
 pub(super) async fn evaluate_ai_status(
     state: &AppState,
 ) -> Result<(StatusResponse, String), AppError> {
-    // The connectivity/model check needs the REACHABLE url (#679) — never
-    // the raw one; `requires_claude_auth` still reflects the RAW value.
+    // The connectivity/model check needs the REACHABLE url (#679) — never the
+    // raw one. Since #761 `requires_claude_auth` reflects the EFFECTIVE
+    // (post-env-override) api_url that `resolve_effective_settings` computed via
+    // `is_effective_bundled`, so a foreign `PRESENTER_AI_API_URL` (OpenRouter)
+    // flips it false and the Claude login banner hides — do NOT revert this to
+    // the raw stored value.
     let (settings, requires_claude_auth) = resolve_effective_settings(state).await?;
     let proxy_status = state.ai_proxy().status().await;
 
