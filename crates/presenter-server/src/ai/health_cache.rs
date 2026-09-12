@@ -239,4 +239,55 @@ mod tests {
             "a failed refresh must keep the previous value"
         );
     }
+
+    #[tokio::test]
+    async fn failed_refresh_resets_freshness_no_reprobe_storm() {
+        // #760 re-review: a failed refresh must RESET the entry's freshness, not
+        // just keep the value — otherwise the entry stays stale and every hit
+        // re-triggers a probe back-to-back for the whole failure window
+        // (contradicting "at most once per TTL"). The producer succeeds once
+        // (seed), then fails (None) forever.
+        let cache = Arc::new(AiHealthCache::new(Duration::from_millis(100)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let producer = {
+            let calls = calls.clone();
+            move || {
+                let calls = calls.clone();
+                async move {
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        Some(json!({"connected": true, "error": null, "model": "good"}))
+                    } else {
+                        None::<Value>
+                    }
+                }
+            }
+        };
+        // Cold seed (success).
+        let _ = get_ai_health(&cache, producer.clone()).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Go stale, then trigger exactly ONE failing background refresh.
+        tokio::time::sleep(Duration::from_millis(130)).await;
+        let served = get_ai_health(&cache, producer.clone()).await;
+        assert_eq!(served["model"], json!("good"), "stale value still served");
+        tokio::time::sleep(Duration::from_millis(20)).await; // let the failing refresh run
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the failing refresh ran once"
+        );
+        // The failed refresh reset the entry's freshness: a burst of hits within
+        // the reset TTL must NOT re-probe — each round is given a chance to run
+        // a (wrongly) spawned refresh. Before the fix, the entry stayed stale
+        // and `calls` would climb every round.
+        for _ in 0..4 {
+            let _ = get_ai_health(&cache, producer.clone()).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "after a failed refresh, hits within the reset TTL must not re-probe (no probe storm)"
+        );
+    }
 }
