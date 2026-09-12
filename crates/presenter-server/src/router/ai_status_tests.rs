@@ -493,3 +493,148 @@ fn should_self_heal_to_canonical_never_fires_for_a_genuinely_foreign_stored_url(
         "http://localhost:8787/v1"
     ));
 }
+
+// ── #764: `connected` must reflect the last REAL completion, not just the
+// `list_models` probe ──────────────────────────────────────────────────────
+//
+// A metered backend (OpenRouter, #761) serves `GET /models` 200 even when the
+// workspace budget is exhausted / the key is revoked, while `POST
+// /chat/completions` 403s. Before #764 `evaluate_ai_status` derived
+// `connected` solely from `list_models`, so `/ai/status` and `/healthz.ai`
+// reported a false `connected:true` during a budget outage — exactly the
+// failure #760 was meant to surface. These drive the FULL production path
+// (`POST /ai/chat` -> `run_agent` -> `call_chat_completions`) against a
+// wiremock backend, then read the REAL `/ai/status` handler.
+
+/// A `/models` catalog body containing `model` (so the `list_models` probe
+/// succeeds AND the configured model validates — isolating the completion
+/// signal as the only thing that can flip `connected`).
+fn models_catalog(model: &str) -> serde_json::Value {
+    serde_json::json!({
+        "object": "list",
+        "data": [{"id": model, "object": "model", "owned_by": "test"}],
+    })
+}
+
+/// A minimal successful chat-completion body (`run_agent` reads `choices[0]`).
+fn ok_completion_body(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": text, "tool_calls": null},
+            "finish_reason": "stop"
+        }]
+    })
+}
+
+/// The live 403 budget body from the issue's real dev repro.
+const BUDGET_403_BODY: &str =
+    "{\"error\":{\"message\":\"Workspace daily budget of $1.00 exceeded. Contact your org admin.\",\"code\":403}}";
+
+async fn seed_openrouter_like_state(mock_uri: &str, model: &str) -> crate::state::AppState {
+    use crate::ai::AI_SETTINGS_KEY;
+    let state = crate::state::AppState::in_memory().await.unwrap();
+    let settings = crate::ai::AiSettings {
+        api_url: mock_uri.to_string(),
+        api_key: None,
+        model: model.to_string(),
+        system_prompt_extra: None,
+    };
+    state
+        .repository()
+        .set_app_setting(AI_SETTINGS_KEY, &serde_json::to_string(&settings).unwrap())
+        .await
+        .unwrap();
+    state
+}
+
+/// POST `/ai/chat` and fully drain the SSE response, so `run_agent` (and its
+/// completion-health recording) has genuinely finished before we read status.
+async fn drive_ai_chat(state: &crate::state::AppState) {
+    use crate::router::build_router;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/ai/chat")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"message": "Odpovedz iba: OK"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+}
+
+/// GET `/ai/status` through the real handler and return the parsed JSON.
+async fn read_ai_status(state: &crate::state::AppState) -> serde_json::Value {
+    use crate::router::build_router;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ai/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn ai_status_connected_is_false_after_a_completion_403_even_though_models_200() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(models_catalog("test-model")))
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(403).set_body_string(BUDGET_403_BODY))
+        .mount(&mock)
+        .await;
+
+    let state = seed_openrouter_like_state(&mock.uri(), "test-model").await;
+    drive_ai_chat(&state).await; // one failed completion -> records the failure
+
+    let status = read_ai_status(&state).await;
+    assert_eq!(
+        status.get("connected").and_then(|v| v.as_bool()),
+        Some(false),
+        "a completion 403 (exhausted budget) must flip connected:false even though \
+         /models still 200s: {status:?}"
+    );
+    let error = status.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        error.contains("budget"),
+        "the status error must carry the backend budget message: {status:?}"
+    );
+    // #760 guard: /models 200 means the model is still valid — the flip must
+    // come from the completion signal, not a spurious modelValid:false.
+    assert_eq!(
+        status.get("modelValid").and_then(|v| v.as_bool()),
+        Some(true),
+        "modelValid must stay true (the model is in the catalog): {status:?}"
+    );
+}

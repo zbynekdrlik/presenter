@@ -166,6 +166,13 @@ pub struct AppState {
     /// `/models` request storm. `Arc` so every `AppState` clone shares ONE
     /// cache (a per-clone cache would defeat the purpose).
     ai_health_cache: Arc<crate::ai::health_cache::AiHealthCache>,
+    /// #764: health of the most recent REAL AI completion call. A metered
+    /// backend serves `/models` 200 even with an exhausted budget / revoked
+    /// key while completions 403, so `list_models` alone reported a false
+    /// `connected:true`. `run_agent` records each completion's outcome here
+    /// and `evaluate_ai_status` folds a recent failure into the verdict.
+    /// `Arc` so every `AppState` clone shares ONE record.
+    ai_call_health: Arc<crate::ai::last_error::AiCallHealth>,
     ndi_manager: Option<ndi_control::NdiManagerHandle>,
     api_stage: Arc<RwLock<ApiStageState>>,
     pub local_public_ip: Arc<Option<String>>,
@@ -348,6 +355,7 @@ impl AppState {
             ai_health_cache: Arc::new(crate::ai::health_cache::AiHealthCache::new(
                 crate::ai::health_cache::AI_HEALTH_TTL,
             )),
+            ai_call_health: Arc::new(crate::ai::last_error::AiCallHealth::default()),
             ndi_manager,
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
@@ -698,6 +706,12 @@ impl AppState {
     /// #760: the shared SWR cache backing the `/healthz` `ai` verdict.
     pub(crate) fn ai_health_cache(&self) -> &Arc<crate::ai::health_cache::AiHealthCache> {
         &self.ai_health_cache
+    }
+
+    /// #764: the shared record of the most recent REAL AI completion's health,
+    /// recorded by `run_agent` and consulted by `evaluate_ai_status`.
+    pub(crate) fn ai_call_health(&self) -> &Arc<crate::ai::last_error::AiCallHealth> {
+        &self.ai_call_health
     }
 
     /// Cloudflare Realtime TURN service (#502): mints browser ICE servers for
