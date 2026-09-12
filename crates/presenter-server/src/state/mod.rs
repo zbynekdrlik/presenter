@@ -696,7 +696,7 @@ impl AppState {
     }
 
     /// #760: the shared SWR cache backing the `/healthz` `ai` verdict.
-    pub fn ai_health_cache(&self) -> &Arc<crate::ai::health_cache::AiHealthCache> {
+    pub(crate) fn ai_health_cache(&self) -> &Arc<crate::ai::health_cache::AiHealthCache> {
         &self.ai_health_cache
     }
 
