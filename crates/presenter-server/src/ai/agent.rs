@@ -665,6 +665,26 @@ pub type RunAgentResult = anyhow::Result<(
     Option<TokenUsage>,
 )>;
 
+/// Record this REAL completion's outcome into `state.ai_call_health()` and
+/// pass the `Result` straight through, so `run_agent`'s call site stays a
+/// single `?` expression (keeps it under the function-length cap, #764/#687).
+///
+/// A metered backend (OpenRouter, #761) serves `list_models` (`/models`) 200
+/// even when the workspace budget is exhausted / the key revoked, while
+/// completions 403 — so `evaluate_ai_status` cannot rely on the probe alone.
+/// A failure stores the redacted error; a success clears it. Extracted (not
+/// inlined) so its lines land on their OWN budget, not `run_agent`'s.
+fn record_completion_health(
+    state: &AppState,
+    result: anyhow::Result<super::client::ChatCompletionResponse>,
+) -> anyhow::Result<super::client::ChatCompletionResponse> {
+    match &result {
+        Ok(_) => state.ai_call_health().record_success(),
+        Err(e) => state.ai_call_health().record_failure(&format!("{e:#}")),
+    }
+    result
+}
+
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
@@ -710,8 +730,10 @@ pub async fn run_agent(
         let messages = build_api_messages(&system_prompt, conversation)?;
 
         info!(iteration, "AI agent loop iteration");
-        let response =
-            super::client::call_chat_completions(&messages, Some(&tools), settings).await?;
+        let response = record_completion_health(
+            state,
+            super::client::call_chat_completions(&messages, Some(&tools), settings).await,
+        )?;
 
         // #687: see `accumulate_call_usage`'s own doc comment.
         accumulate_call_usage(&mut usage_total, response.usage.as_ref());

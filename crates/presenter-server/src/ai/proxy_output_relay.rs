@@ -29,15 +29,17 @@ const REDACTED_MARKER: &str = "<redacted>";
 /// their STABLE prefix (`sk-ant-oat`/`sk-ant-ort`/`sk-ant-api`, each
 /// followed by a 2-digit version and a `-`) — matches the on-disk token
 /// shape `ProxyManager`'s own `write_token` test helper (`proxy.rs`)
-/// mirrors, and Anthropic's published key format. Anchored on the prefix,
-/// never on entropy, so it never touches an unrelated opaque string the
-/// vendor legitimately logs (e.g. the management-asset integrity hash
-/// observed live on a real run:
+/// mirrors, and Anthropic's published key format — OR an OpenRouter API key
+/// by its stable `sk-or-v1-` prefix (the #761 backend; #764 added it here so
+/// a key in a completion error body is redacted before it reaches
+/// `/healthz`/`/ai/status`). Anchored on the prefix, never on entropy, so it
+/// never touches an unrelated opaque string the vendor legitimately logs
+/// (e.g. the management-asset integrity hash observed live on a real run:
 /// `hash=5eff7e63a6cafe5f32d3622877feb284a80a5ee60ede8c8790d6ab9516acb732`
 /// — a naive "any long hex/base64 string" heuristic would have blanked
 /// that, destroying diagnostic value for no safety gain).
 static SECRET_PREFIX_RE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"sk-ant-(?:oat|ort|api)\d{2}-[A-Za-z0-9_-]+").ok());
+    LazyLock::new(|| Regex::new(r"sk-(?:ant-(?:oat|ort|api)\d{2}|or-v1)-[A-Za-z0-9_-]+").ok());
 
 /// Matches an `Authorization: Bearer <token>` value, case-insensitively,
 /// keeping the `Bearer` keyword and redacting only the token itself.
@@ -222,6 +224,20 @@ mod tests {
         assert!(
             !redacted.contains("abcdefghijklmnop"),
             "the raw API key must not survive redaction: {redacted}"
+        );
+        assert!(redacted.contains(REDACTED_MARKER));
+    }
+
+    #[test]
+    fn redact_hides_openrouter_api_key() {
+        // #761/#764: the backend is now OpenRouter, whose keys carry the
+        // `sk-or-v1-` prefix. A key in a completion error body must be
+        // redacted before it can reach `/healthz`/`/ai/status`.
+        let line = "invalid credentials: sk-or-v1-FAKEnotARealKey_test_XYZ";
+        let redacted = redact_proxy_output_line(line);
+        assert!(
+            !redacted.contains("sk-or-v1-"),
+            "the raw OpenRouter API key must not survive redaction: {redacted}"
         );
         assert!(redacted.contains(REDACTED_MARKER));
     }

@@ -81,6 +81,15 @@ pub(crate) fn ai_chip_state(status: Option<&AiStatusResponse>) -> &'static str {
         {
             "expiring-soon"
         }
+        // #764: the branches above cover the BUNDLED CLIProxyAPI proxy's own
+        // process health. For any OTHER confirmed problem the flat `connected`
+        // field carries — a metered backend that 200s `/models` but 403s
+        // completions (exhausted budget / revoked key), an invalid model id, a
+        // foreign endpoint that is unreachable — surface it generically so the
+        // operator sees the outage instead of a false "AI: pripojené". Placed
+        // AFTER the proxy-specific branches so those keep their more specific
+        // label; the concrete reason rides in `error` (see the tooltip).
+        Some(s) if !s.connected => "unavailable",
         Some(_) => "ok",
     }
 }
@@ -93,6 +102,10 @@ pub(crate) fn ai_chip_label(state: &str) -> &'static str {
         "logged-out" => "AI: odhlásené",
         "proxy-down" => "AI: proxy nebeží",
         "missing-binary" => "AI: chýba binárka",
+        // #764: a confirmed backend problem carried by the flat `connected`
+        // field (budget/credit/key/model) — the concrete reason is in the
+        // tooltip (see `AiStatusChip`).
+        "unavailable" => "AI: nedostupné",
         _ => "AI: kontrolujem…",
     }
 }
@@ -121,6 +134,9 @@ pub(crate) fn ai_chip_tooltip(state: &str) -> &'static str {
         }
         "proxy-down" => "AI proxy nebeží. Kliknutím otvoríš AI panel.",
         "missing-binary" => "Na serveri chýba binárka AI proxy. Kliknutím otvoríš AI panel.",
+        // #764: generic fallback when the concrete `error` string is not
+        // available (the component appends it when it is — see `AiStatusChip`).
+        "unavailable" => "AI je nedostupná. Kliknutím otvoríš AI panel.",
         _ => "Zisťujem stav AI…",
     }
 }
@@ -198,7 +214,24 @@ pub fn AiStatusChip() -> impl IntoView {
         )
     };
     let label = move || ai_chip_label(state());
-    let tooltip = move || ai_chip_tooltip(state());
+    // #764: for the generic `unavailable` state, surface the concrete backend
+    // `error` (budget/credit/key/model) in the tooltip so the operator sees
+    // WHY, not just that AI is down; every other state keeps its fixed copy.
+    let tooltip = move || {
+        status.with(|s| {
+            let st = ai_chip_state(s.as_ref());
+            if st == "unavailable" {
+                match s.as_ref().and_then(|r| r.error.as_deref()) {
+                    Some(err) if !err.is_empty() => {
+                        format!("AI je nedostupná: {err}. Kliknutím otvoríš AI panel.")
+                    }
+                    _ => ai_chip_tooltip(st).to_string(),
+                }
+            } else {
+                ai_chip_tooltip(st).to_string()
+            }
+        })
+    };
 
     view! {
         <a
@@ -445,5 +478,50 @@ mod tests {
         assert!(!is_stale(1));
         assert!(is_stale(2));
         assert!(is_stale(7));
+    }
+
+    // #764: a metered OpenRouter backend that 200s /models but 403s
+    // completions (exhausted budget) reports connected:false with the proxy
+    // process itself healthy (binary present, running) and no Claude auth
+    // required. The chip must surface that generically, not show "AI: ok".
+
+    /// A healthy bundled-proxy PROCESS (binary present + running) pointed at a
+    /// foreign OpenRouter endpoint (`requires_claude_auth=false`), with the
+    /// flat `connected`/`error` set directly — the shape the #764 server fix
+    /// produces during a budget outage.
+    fn openrouter_status(connected: bool, error: Option<&str>) -> AiStatusResponse {
+        let mut s = status_full(true, true, false, None, false);
+        s.connected = connected;
+        s.error = error.map(str::to_string);
+        s
+    }
+
+    #[test]
+    fn budget_outage_is_unavailable_not_ok() {
+        let s = openrouter_status(false, Some("posledné AI volanie zlyhalo: budget exceeded"));
+        assert_eq!(
+            ai_chip_state(Some(&s)),
+            "unavailable",
+            "connected:false with a healthy proxy process must be 'unavailable', not 'ok'"
+        );
+        assert_eq!(ai_chip_label("unavailable"), "AI: nedostupné");
+        assert_eq!(ai_chip_dot("unavailable"), "red");
+    }
+
+    #[test]
+    fn a_healthy_openrouter_backend_is_still_ok() {
+        // The same foreign-endpoint shape, but connected:true — must NOT be
+        // dragged to 'unavailable' by the new branch.
+        let s = openrouter_status(true, None);
+        assert_eq!(ai_chip_state(Some(&s)), "ok");
+    }
+
+    #[test]
+    fn missing_binary_still_wins_over_a_generic_unavailable() {
+        // The proxy-specific branches are more actionable, so they must be
+        // reported even when connected is also false.
+        let mut s = openrouter_status(false, Some("budget exceeded"));
+        s.proxy.binary_found = false;
+        assert_eq!(ai_chip_state(Some(&s)), "missing-binary");
     }
 }
