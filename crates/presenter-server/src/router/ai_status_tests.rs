@@ -638,3 +638,56 @@ async fn ai_status_connected_is_false_after_a_completion_403_even_though_models_
         "modelValid must stay true (the model is in the catalog): {status:?}"
     );
 }
+
+#[tokio::test]
+async fn ai_status_connected_recovers_after_a_subsequent_successful_completion() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(models_catalog("test-model")))
+        .mount(&mock)
+        .await;
+    // First completion 403s (budget), then the mock is exhausted and the
+    // second completion falls through to the 200 mock below — no mid-test
+    // remount needed.
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(403).set_body_string(BUDGET_403_BODY))
+        .up_to_n_times(1)
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_completion_body("OK")))
+        .mount(&mock)
+        .await;
+
+    let state = seed_openrouter_like_state(&mock.uri(), "test-model").await;
+
+    drive_ai_chat(&state).await; // #1: 403 -> records the failure
+    let after_failure = read_ai_status(&state).await;
+    assert_eq!(
+        after_failure.get("connected").and_then(|v| v.as_bool()),
+        Some(false),
+        "the failed completion must have flipped connected:false: {after_failure:?}"
+    );
+
+    drive_ai_chat(&state).await; // #2: 200 -> clears the failure
+    let after_success = read_ai_status(&state).await;
+    assert_eq!(
+        after_success.get("connected").and_then(|v| v.as_bool()),
+        Some(true),
+        "a subsequent successful completion must clear the failure and restore \
+         connected:true: {after_success:?}"
+    );
+    assert!(
+        after_success
+            .get("error")
+            .map(|v| v.is_null())
+            .unwrap_or(false),
+        "error must be null once connected again: {after_success:?}"
+    );
+}

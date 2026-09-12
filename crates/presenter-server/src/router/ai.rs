@@ -613,6 +613,18 @@ pub(super) async fn evaluate_ai_status(
         requires_claude_auth,
     );
 
+    // #764: `list_models` (the probe above) is NOT a liveness proof for a
+    // metered backend — OpenRouter 200s `/models` even with an exhausted
+    // budget / revoked key while completions 403. Fold in the most recent
+    // REAL completion failure (recorded by `run_agent`) so a falsely-green
+    // probe verdict flips to `connected:false`. `/healthz.ai` inherits this
+    // via the shared computation — no second code path.
+    let active_failure = state
+        .ai_call_health()
+        .active_failure(crate::ai::last_error::AI_LAST_FAILURE_WINDOW);
+    let (connected, error) =
+        super::ai_health::apply_last_completion_failure(connected, error, active_failure);
+
     let model = settings.model.clone();
     Ok((
         StatusResponse {

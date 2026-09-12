@@ -3,6 +3,8 @@ paths:
   - "crates/presenter-server/src/router/ai.rs"
   - "crates/presenter-server/src/router/ai_health.rs"
   - "crates/presenter-server/src/router.rs"
+  - "crates/presenter-server/src/ai/last_error.rs"
+  - "crates/presenter-server/src/ai/agent.rs"
 ---
 
 # AI status on `/healthz` + `/ai/status` — one shared computation (#760)
@@ -67,3 +69,25 @@ object so an EXTERNAL watchdog can detect it in minutes.
   `::warning::` nobody reads. The three workflows (deploy/pipeline/release) must stay
   consistent. The `::error::`-without-`exit 1` is intentionally non-blocking and is NOT a
   `continue-on-error` violation (the else-branch is a bare `echo`, exit 0 under `set -e`).
+
+- **`list_models` (`GET /models`) is NOT a liveness proof for a METERED backend (#764).**
+  A metered API-key backend (OpenRouter, #761) serves `/models` 200 even when the workspace
+  budget is exhausted, the key is revoked, or completions 402/429 — so a probe-only verdict
+  reports a false `connected:true` while every real `POST /ai/chat` 403s ("Workspace daily
+  budget … exceeded"). The `connected` verdict therefore ALSO folds in the most recent REAL
+  completion outcome: `ai::agent::run_agent` records each completion's success/failure into
+  the per-`AppState` `ai::last_error::AiCallHealth` (redacted, ≤200-char excerpt + `Instant`),
+  and `evaluate_ai_status` applies `router::ai_health::apply_last_completion_failure` AFTER the
+  probe — a failure within `AI_LAST_FAILURE_WINDOW` (15 min) flips a falsely-green verdict to
+  `connected:false` with the backend message; a later success clears it; the window expires so
+  a transient outage the operator stops exercising doesn't pin a permanent false `false`. The
+  fold only ever flips `connected:true → false`, never overwrites an already-`false` probe's
+  more specific error (invalid model / connectivity). Redact any completion excerpt with the
+  shared `ai::proxy_output_relay::redact_proxy_output_line` (extended in #764 to OpenRouter
+  `sk-or-v1-` keys) BEFORE it reaches `/healthz`/`/ai/status`. The three deploy gates fire ONE
+  cheap real completion (`POST /ai/chat` + `POST /ai/clear`) before the `/ai/status` read so a
+  budget/credit/key outage is caught at deploy time, not only at first operator use — reusing
+  the existing non-blocking `connected:false` `::error::`, no SSE parsing needed. The operator
+  chip (`presenter-ui/components/ai_status.rs`) computes its state from the nested `proxy.*`
+  flags, so it needs an explicit generic `unavailable` branch (label "AI: nedostupné") to
+  surface a flat-`connected:false` outage — the proxy flags alone don't see it.

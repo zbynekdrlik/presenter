@@ -647,6 +647,16 @@ jobs:
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
+          # #764: /models (the /ai/status probe) 200s on a metered backend even
+          # with an exhausted budget / revoked key, while completions 403. Fire
+          # ONE cheap real completion so that failure is recorded server-side;
+          # the /ai/status read below then reports connected:false via the
+          # shared evaluate_ai_status. Best-effort (|| true keeps set -e happy),
+          # never fails the deploy on its own.
+          curl -s -m 30 -X POST http://localhost:80/ai/chat \
+            -H 'content-type: application/json' \
+            -d '{"message":"Odpovedz iba: OK"}' >/dev/null 2>&1 || true
+          curl -s -m 10 -X POST http://localhost:80/ai/clear >/dev/null 2>&1 || true
           if ! AI_STATUS=$(curl -sf http://localhost:80/ai/status); then
             echo "::error::Post-deploy AI check — /ai/status did not respond; the AI assistant may be DOWN and needs owner attention (non-blocking: this alone does not fail a production deploy)"
           else
