@@ -38,7 +38,12 @@ object so an EXTERNAL watchdog can detect it in minutes.
   immediately and refresh in the BACKGROUND via `tokio::spawn` (at most ONE in-flight
   refresh, guarded by an `AtomicBool` so N concurrent hits never spawn N probes); empty
   (cold) → one bounded inline probe. A failed refresh (`produce` returns `None`) KEEPS
-  the previous value — a transient backend failure never clobbers a known-good verdict.
+  the previous value AND resets its freshness timestamp (`at = now`) so the next probe
+  waits a FULL TTL — otherwise a persistently-failing producer leaves the entry stale and
+  every hit re-triggers a probe back-to-back, breaking "at most once per TTL" during an
+  outage. The cold-start failure is likewise cached (`cold_failure()` with `at = now`) so a
+  dead backend at startup also probes once per TTL, not once per hit. Recovery is detected
+  within one TTL either way.
   The producer wraps the shared `evaluate_ai_status` (still one bounded 3s `list_models`
   round trip, run at most once per TTL). Scope the cache PER `AppState` (an `Arc` field),
   NEVER a module-level `static` — the test suite builds many `AppState`s in one process

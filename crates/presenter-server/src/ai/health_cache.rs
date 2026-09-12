@@ -128,13 +128,26 @@ where
             });
             v
         }
-        None => cold_failure(),
+        None => {
+            // Cold start with a failing producer: CACHE the failure verdict with
+            // a fresh timestamp so hits within the TTL serve it instead of each
+            // re-probing on every call; recovery is still picked up <= TTL later
+            // (#760 re-review — "at most once per TTL" must hold on failure too).
+            let verdict = cold_failure();
+            let mut guard = cache.lock();
+            *guard = Some(Cached {
+                verdict: verdict.clone(),
+                at: Instant::now(),
+            });
+            verdict
+        }
     }
 }
 
 /// Spawn a single background refresh if none is already in flight. On success
 /// the new verdict replaces the cached one; on failure (`None`) the previous
-/// value is kept — a transient failure must not clobber a known-good verdict.
+/// value is kept but its freshness is RESET, so the next probe waits a full TTL
+/// (a persistently-failing producer must not re-probe back-to-back every hit).
 fn spawn_refresh_if_idle<P, Fut>(cache: &Arc<AiHealthCache>, produce: P)
 where
     P: Fn() -> Fut + Send + Sync + Clone + 'static,
@@ -148,12 +161,25 @@ where
         // Clears `refreshing` on drop, incl. an unwind if `produce` panics —
         // a swallowed spawned-task panic must not wedge the flag forever.
         let _guard = RefreshGuard(cache.clone());
-        if let Some(v) = produce().await {
-            let mut guard = cache.lock();
-            *guard = Some(Cached {
-                verdict: v,
-                at: Instant::now(),
-            });
+        match produce().await {
+            Some(v) => {
+                let mut guard = cache.lock();
+                *guard = Some(Cached {
+                    verdict: v,
+                    at: Instant::now(),
+                });
+            }
+            None => {
+                // Failed refresh: keep the previous verdict but RESET its
+                // freshness so the next probe waits a FULL TTL again. Without
+                // this the entry stays stale and every hit re-triggers a probe
+                // back-to-back for the whole failure window (#760 re-review) —
+                // the owner-facing latency to detect recovery stays <= TTL.
+                let mut guard = cache.lock();
+                if let Some(c) = guard.as_mut() {
+                    c.at = Instant::now();
+                }
+            }
         }
     });
 }
