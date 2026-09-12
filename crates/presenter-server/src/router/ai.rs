@@ -713,7 +713,7 @@ const BUNDLED_PROXY_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
 /// place of a matched bundled URL — doing so would silently repoint a
 /// historically-poisoned row at whatever foreign endpoint the operator
 /// happens to have configured via the env var (review finding, #683).
-const BUNDLED_PROXY_PLACEHOLDER: &str = "http://localhost:8787/v1";
+pub(super) const BUNDLED_PROXY_PLACEHOLDER: &str = "http://localhost:8787/v1";
 
 /// Whether `raw_api_url` structurally identifies the bundled CLIProxyAPI
 /// proxy's OWN address at `proxy_port` — i.e. `http://{127.0.0.1|localhost}
@@ -830,7 +830,26 @@ pub(super) async fn get_settings_internal(state: &AppState) -> anyhow::Result<(A
 /// for editing — see `get_settings_internal`'s own doc comment for why
 /// (#679 review finding 1).
 async fn resolve_effective_settings(state: &AppState) -> anyhow::Result<(AiSettings, bool)> {
-    let (mut settings, is_bundled_default) = get_settings_internal(state).await?;
+    // Raw stored settings (DB row or default). The persist/display path
+    // (`get_settings_internal`) stays untouched; here we take a mutable copy
+    // for the EFFECTIVE call/status path only.
+    let (mut settings, _raw_is_bundled) = get_settings_internal(state).await?;
+
+    // #761: `PRESENTER_AI_*` env vars win over the stored DB row for the
+    // EFFECTIVE path. Prod DBs still hold the pre-migration bundled-proxy
+    // `apiUrl` (`http://127.0.0.1:18787/v1`), so the deploy-written
+    // `/etc/presenter/ai.env` (the OpenRouter switch) must take effect
+    // without a DB write. Env must NOT reach `get_settings_internal` — it
+    // would leak into a saved/displayed row (the #679/#683 data-loss class).
+    super::ai_env::apply_env_overrides(&mut settings);
+
+    // Recompute "bundled" on the EFFECTIVE (post-override) `api_url` against
+    // the FIXED placeholder — never `AiSettings::default()`, whose `api_url`
+    // is itself env-tainted (#761): an env override to a foreign endpoint
+    // (OpenRouter) must flip `requires_claude_auth` false.
+    let proxy_port = state.ai_proxy().configured_port().await;
+    let is_bundled_default = super::ai_env::is_effective_bundled(&settings.api_url, proxy_port);
+
     if is_bundled_default {
         let proxy_status = state.ai_proxy().status().await;
         if proxy_status.running {
