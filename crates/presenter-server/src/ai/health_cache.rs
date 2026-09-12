@@ -208,14 +208,14 @@ mod tests {
                                                              // A failing refresh (None): the stale serve must return the previous
                                                              // good value immediately (never hang), and the failure must not
                                                              // clobber it.
-        let served = get_ai_health(&cache, || async { None }).await;
+        let served = get_ai_health(&cache, || async { None::<Value> }).await;
         assert_eq!(
             served["model"],
             json!("good"),
             "a stale serve returns the previous value, never a hang"
         );
         tokio::time::sleep(Duration::from_millis(40)).await; // let the failing refresh finish
-        let after = get_ai_health(&cache, || async { None }).await;
+        let after = get_ai_health(&cache, || async { None::<Value> }).await;
         assert_eq!(
             after["model"],
             json!("good"),
