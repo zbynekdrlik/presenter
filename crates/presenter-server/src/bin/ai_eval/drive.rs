@@ -2,6 +2,7 @@
 //! candidate model endpoint, once per corpus case, writing one trace JSON
 //! per case. Never re-implements the agent loop — just wires it up.
 
+use crate::candidate_key::candidate_api_key;
 use crate::constrained;
 use crate::corpus::Case;
 use crate::seed::{build_state_for_case, prior_turns_to_messages};
@@ -54,7 +55,10 @@ pub async fn drive_case(case: &Case, candidate_url: &str, candidate_model: &str)
 
     let settings = AiSettings {
         api_url: candidate_url.to_string(),
-        api_key: None,
+        // Resolved from the environment (OPENROUTER_API_KEY / PRESENTER_AI_API_KEY),
+        // never the command line — see `candidate_key`. `None` for a keyless
+        // local endpoint; `ai::client` only sends the Bearer header when Some+nonempty.
+        api_key: candidate_api_key(),
         model: candidate_model.to_string(),
         system_prompt_extra: None,
     };
@@ -214,7 +218,10 @@ pub async fn drive_case_constrained(
     };
     let settings = AiSettings {
         api_url: candidate_url.to_string(),
-        api_key: None,
+        // Resolved from the environment (OPENROUTER_API_KEY / PRESENTER_AI_API_KEY),
+        // never the command line — see `candidate_key`. `None` for a keyless
+        // local endpoint; `ai::client` only sends the Bearer header when Some+nonempty.
+        api_key: candidate_api_key(),
         model: candidate_model.to_string(),
         system_prompt_extra: None,
     };
