@@ -84,11 +84,11 @@ Expected: at least one ESTABLISHED line. If none, sd1l isn't streaming — check
 - [ ] **Step 4: Capture 30 s of production server logs (collect baseline lag rate)**
 
 ```bash
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
   "sudo journalctl -u presenter --since '30 seconds ago' --no-pager" \
   > /tmp/ndi-profiling/sd1l-baseline/journal-pre.txt
 sleep 30
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
   "sudo journalctl -u presenter --since '60 seconds ago' --no-pager" \
   > /tmp/ndi-profiling/sd1l-baseline/journal-post.txt
 
@@ -169,7 +169,7 @@ Expected: at least one ESTABLISHED to `10.77.9.205:80`. If none, sd2l isn't stre
 The journal lines don't usually carry the client IP, so we capture all MJPEG lag lines and rely on the post-deploy logs (Task 12) to disambiguate per-connection. For baseline, we just record the aggregate count.
 
 ```bash
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
   "sudo journalctl -u presenter --since '60 seconds ago' --no-pager" \
   > /tmp/ndi-profiling/sd2l-baseline/journal-window.txt
 grep -c "MJPEG.*lagged" /tmp/ndi-profiling/sd2l-baseline/journal-window.txt \
@@ -1656,7 +1656,7 @@ In parallel, capture the dev journal during the 120-second window:
 
 ```bash
 sleep 5
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 \
   "sudo journalctl -u presenter-dev --since '5 seconds ago' --no-pager -f" \
   > /tmp/ndi-profiling/postdeploy/journal-tier.txt &
 JOURNAL_PID=$!
@@ -1848,7 +1848,7 @@ adb -s <tv>:5555 shell "netstat -tn 2>/dev/null" | grep -E '10\.77\.9\.205:80\s+
 Then read the production server log for the most recent ten minutes and inspect tier-related lines:
 
 ```bash
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
   "sudo journalctl -u presenter --since '10 minutes ago' --no-pager" \
   > /tmp/ndi-profiling/prod-verify/journal.txt
 mkdir -p /tmp/ndi-profiling/prod-verify

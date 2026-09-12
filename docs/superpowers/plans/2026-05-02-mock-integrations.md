@@ -1238,7 +1238,7 @@ echo "=== Mock Resolume ===" && curl -s http://10.77.8.134:8091/api/v1/compositi
 If port 8091 is not LAN-exposed (the spec says 127.0.0.1 binding), SSH locally:
 
 ```bash
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 "curl -s http://127.0.0.1:8091/api/v1/composition; curl -s http://127.0.0.1:39042/api/setlist; curl -s http://127.0.0.1:8091/__mock/log"
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 "curl -s http://127.0.0.1:8091/api/v1/composition; curl -s http://127.0.0.1:39042/api/setlist; curl -s http://127.0.0.1:8091/__mock/log"
 ```
 
 Or, since this dev2 machine IS the dev server (10.77.8.134 = local), just:
@@ -1263,7 +1263,7 @@ Expected: every row has `host=127.0.0.1`, `port=8091`, label suffixed with ` (mo
 
 ```bash
 echo "=== Prod /healthz (must still be release v0.4.52 — this PR not merged yet) ===" && curl -s http://10.77.9.205/healthz
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan "sqlite3 /opt/presenter/presenter.db 'SELECT host, port FROM resolume_hosts;'"
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan "sqlite3 /opt/presenter/presenter.db 'SELECT host, port FROM resolume_hosts;'"
 ```
 
 Expected: prod still on the previous version, prod's resolume_hosts still point at the real Resolume IPs (NOT 127.0.0.1).

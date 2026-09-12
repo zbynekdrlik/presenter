@@ -1147,7 +1147,7 @@ Expected: `fps≈20`, `kbps≈5000-7000` (~6 Mbps), `frame_size≈30-40 KB`.
 - [ ] **Step 4: Confirm dev journal shows new encoder, no tier/adaptive logs**
 
 ```bash
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 \
   "sudo journalctl -u presenter-dev --since '2 minutes ago' --no-pager 2>/dev/null" \
   | grep -E "encode task started|encoder started|tier|adapt|slow tick"
 ```
@@ -1245,7 +1245,7 @@ Find the newest `Deploy` run. Wait for it to reach `conclusion=success` using th
 
 ```bash
 curl -s http://10.77.9.205/healthz; echo
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan 'uptime'
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan 'uptime'
 ```
 
 Expected: `version: 0.4.35`. `load avg` should drop to roughly the pre-PR-263 baseline (~0.7) within 5 minutes of the new encoder taking over. Pre-fix prod was ~2.77.
@@ -1253,7 +1253,7 @@ Expected: `version: 0.4.35`. `load avg` should drop to roughly the pre-PR-263 ba
 - [ ] **Step 3: Confirm production logs show single encoder, no tier/adaptive**
 
 ```bash
-sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+sshpass -p "$(cat ~/.secrets/presenter-prod-ssh)" ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
   "sudo journalctl -u presenter --since '5 minutes ago' --no-pager 2>/dev/null" \
   | grep -E "encode task started|encoder started|tier|adaptive|slow tick"
 ```
