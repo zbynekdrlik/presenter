@@ -72,8 +72,23 @@ impl HealthWindow {
     /// too-soon call is a no-op — read-driven sampling dedups many pollers).
     /// Then evict every sample strictly older than [`WINDOW`] relative to `now`.
     pub fn record(&mut self, now: Instant, pushed: u64, dropped: u64) {
-        // RED stub — not yet implemented (see the [green] commit).
-        let _ = (now, pushed, dropped);
+        if let Some(last) = self.samples.last() {
+            if now.duration_since(last.at) < MIN_SAMPLE_SPACING {
+                return;
+            }
+        }
+        self.samples.push(Sample {
+            at: now,
+            pushed,
+            dropped,
+        });
+        // Keep only in-window samples (retains the newest even if it is the
+        // only one left — `windowed_delta` returns None below 2 samples).
+        self.samples.retain(|s| now.duration_since(s.at) <= WINDOW);
+        if self.samples.len() > MAX_SAMPLES {
+            let excess = self.samples.len() - MAX_SAMPLES;
+            self.samples.drain(0..excess);
+        }
     }
 
     /// The delta from the oldest in-window sample to the newest:
@@ -81,8 +96,20 @@ impl HealthWindow {
     /// or a non-positive span. Deltas use `saturating_sub` as a belt — a single
     /// link's counters are monotonic, so this only guards a counter reset.
     pub fn windowed_delta(&self) -> Option<(u64, u64, f64)> {
-        // RED stub — not yet implemented (see the [green] commit).
-        None
+        if self.samples.len() < 2 {
+            return None;
+        }
+        let newest = self.samples.last()?;
+        let oldest = self.samples.first()?;
+        let secs = newest.at.duration_since(oldest.at).as_secs_f64();
+        if secs <= 0.0 {
+            return None;
+        }
+        Some((
+            newest.pushed.saturating_sub(oldest.pushed),
+            newest.dropped.saturating_sub(oldest.dropped),
+            secs,
+        ))
     }
 
     /// Trailing-window drop ratio (`dropped_delta / (pushed+dropped)_delta`),
