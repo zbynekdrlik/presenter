@@ -186,6 +186,11 @@ impl NdiPipeline {
 
         let session_id_for_blocking = session_id.clone();
 
+        // #768 D5: coalesce the join-time forced IDR here (under `&self`).
+        let force_keyframe = self
+            .keyframe_throttle
+            .should_force(std::time::Instant::now());
+
         tokio::task::spawn_blocking(move || {
             let result = build_consumer_pipeline_blocking(
                 &producer,
@@ -198,6 +203,7 @@ impl NdiPipeline {
                 enc_base_time,
                 rt,
                 turn_server.as_deref(),
+                force_keyframe,
             );
             // If the receiver is already gone, the returned branch guard drops
             // here and tears itself down.
@@ -225,6 +231,8 @@ impl NdiPipeline {
             // Fresh RTCP-liveness tracker: full stale-window grace from now.
             liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
+            // No client report yet; the display's first POST fills it (#768 D6).
+            client_stats: Arc::new(std::sync::Mutex::new(None)),
         };
 
         // Drain any ICE candidates already buffered (half-trickle: include
@@ -328,13 +336,28 @@ impl NdiPipeline {
     pub async fn snapshot(&self) -> PipelineSnapshot {
         // Phase 1 (cheap, under the lock): identity + counters + consumer age
         // (the pushed_fps denominator, #768) + webrtcbin handle.
-        let partial: Vec<(String, WhepConnectionState, u64, u64, f64, gst::Element)> = {
+        #[allow(clippy::type_complexity)]
+        let partial: Vec<(
+            String,
+            WhepConnectionState,
+            u64,
+            u64,
+            f64,
+            gst::Element,
+            Option<super::client_stats::ClientStatsSample>,
+        )> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
                 .map(|(id, session)| {
                     let connection_state = *session
                         .connection_state
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    // #768 D6: lift the latest client sample out under the lock
+                    // (Copy — no string clone); ageMs is computed in Phase 2.
+                    let client_sample = *session
+                        .client_stats
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
                     (
@@ -344,6 +367,7 @@ impl NdiPipeline {
                         session.link.dropped(),
                         session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
+                        client_sample,
                     )
                 })
                 .collect()
@@ -354,7 +378,15 @@ impl NdiPipeline {
             partial
                 .into_iter()
                 .map(
-                    |(id, connection_state, pushed, dropped, age_secs, webrtcbin)| {
+                    |(
+                        id,
+                        connection_state,
+                        pushed,
+                        dropped,
+                        age_secs,
+                        webrtcbin,
+                        client_sample,
+                    )| {
                         let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
                         SessionSnapshot {
                             id,
@@ -366,6 +398,9 @@ impl NdiPipeline {
                             rtcp_round_trip_ms: rtt,
                             rtcp_jitter_ms: jitter,
                             rtcp_packets_lost: lost,
+                            // #768 D6: stamp ageMs at read time (spawn_blocking is
+                            // near-immediate after Phase 1, so this is accurate).
+                            client: client_sample.map(|s| s.to_snapshot(std::time::Instant::now())),
                         }
                     },
                 )
@@ -477,6 +512,7 @@ fn build_consumer_pipeline_blocking(
     enc_base_time: Option<gst::ClockTime>,
     rt: tokio::runtime::Handle,
     turn_server: Option<&str>,
+    force_keyframe: bool,
 ) -> Result<ConsumerBranch> {
     let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(sdp_offer_bytes)
         .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
@@ -562,9 +598,7 @@ fn build_consumer_pipeline_blocking(
             .map_err(|e| anyhow!("StreamProducer::add_consumer failed: {e}"))?,
     );
 
-    // GOP is 240 frames — explicitly request an IDR so this consumer starts
-    // decoding immediately instead of waiting for the GOP boundary.
-    request_keyframe(producer);
+    maybe_request_join_keyframe(producer, session_id, force_keyframe);
 
     // The answer must announce the send SSRC — wait for media caps first.
     // (await_media_caps keys on the `ssrc` caps field, codec-agnostic.)
@@ -806,6 +840,24 @@ fn connect_branch_signals(
             "WHEP consumer connection-state changed"
         );
     });
+}
+
+/// Issue the join-time IDR for a fresh consumer, unless the pipeline's keyframe
+/// throttle coalesced it (#768 D5). Under reconnect churn (a TV re-creating its
+/// WHEP session every ~24-45s) an unconditional forced IDR per join hammers the
+/// shared encoder; the throttle allows at most one forced IDR per GOP, and a
+/// coalesced join rides the next scheduled keyframe (≤ one GOP away). Extracted
+/// to keep `build_consumer_pipeline_blocking` under the fn-length cap.
+fn maybe_request_join_keyframe(producer: &StreamProducer, session_id: &str, force_keyframe: bool) {
+    if force_keyframe {
+        request_keyframe(producer);
+    } else {
+        tracing::debug!(
+            session_id,
+            "join-time IDR coalesced (another was forced within one GOP) — \
+             riding the next scheduled keyframe"
+        );
+    }
 }
 
 /// Ask the shared H264 encoder for an immediate keyframe — an IDR with

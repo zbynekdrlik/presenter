@@ -13,6 +13,7 @@ mod ndi_pagehide;
 mod ndi_playback_guard;
 mod ndi_profile;
 mod ndi_reload_guard;
+mod ndi_session_stats;
 pub mod ndi_video;
 mod ndi_watchdog;
 pub mod preach_layout;

@@ -55,9 +55,11 @@ use tokio::sync::watch;
 use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
 mod build;
+pub mod client_stats;
 mod consumers;
 pub mod health;
 mod ingest_timing;
+mod keyframe_throttle;
 mod lifecycle;
 mod negotiation;
 mod reaper;
@@ -183,6 +185,12 @@ pub struct SessionSnapshot {
     /// RTCP receiver-report cumulative packets lost.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtcp_packets_lost: Option<i64>,
+    /// Latest client-reported frame stats for this consumer (#768 D6) plus an
+    /// `ageMs` staleness field. `None` (key omitted) until the display's first
+    /// `POST /ndi/sessions/{id}/client-stats`. This is what makes stage-side
+    /// stutter visible server-side without physical presence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<client_stats::ClientStatsSnapshot>,
 }
 
 /// Owns one GStreamer pipeline for one NDI source.
@@ -212,6 +220,10 @@ pub struct NdiPipeline {
     /// fanout that feeds every consumer pipeline's appsrc. Clone-cheap
     /// (internally Arc'd).
     producer: StreamProducer,
+    /// Coalesces join-time forced IDRs so reconnect churn cannot hammer the
+    /// shared encoder with a keyframe per join (#768 D5). Interior-mutable so
+    /// the decision is made behind `&self` in `add_consumer`.
+    keyframe_throttle: keyframe_throttle::KeyframeThrottle,
 }
 
 impl Drop for NdiPipeline {

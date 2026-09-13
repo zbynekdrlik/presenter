@@ -48,6 +48,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer: StreamProducer::from(&appsink),
+            keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
         }
     }
 
@@ -111,6 +112,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
+            keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
         })
     }
 
@@ -231,6 +233,7 @@ impl NdiPipeline {
             connection_state: Arc::new(std::sync::Mutex::new(WhepConnectionState::New)),
             liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
+            client_stats: Arc::new(std::sync::Mutex::new(None)),
         };
         self.sessions
             .lock()
@@ -1034,5 +1037,64 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     assert!(
         json.contains("dropRatio") && json.contains("pushedFps"),
         "camelCase serialization of #768 metrics: {json}"
+    );
+}
+
+/// #768 D6: a client stats report stored for a known session surfaces in the
+/// snapshot under `sessions[].client` (camelCase, with ageMs); a report for an
+/// unknown session is rejected (the pipeline returns `false` → manager 404).
+#[tokio::test]
+async fn record_client_stats_surfaces_in_snapshot_and_rejects_unknown_session() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("test topology");
+    pipeline
+        .add_consumer_stub("client-1")
+        .await
+        .expect("stub consumer");
+
+    // Before any report, the session has no `client` block.
+    let snap = pipeline.snapshot().await;
+    assert!(
+        snap.sessions[0].client.is_none(),
+        "no client block before the first report"
+    );
+
+    // Unknown session id → false (manager maps to 404).
+    let sample = super::client_stats::ClientStatsSample {
+        presented_fps: 29.5,
+        max_present_gap_ms: 42.0,
+        jitter_buffer_ms: Some(11.0),
+        frames_decoded: 1234.0,
+        frames_live: true,
+        received_at: std::time::Instant::now(),
+    };
+    assert!(
+        !pipeline
+            .record_client_stats("no-such-session", sample)
+            .await,
+        "an unknown session must not accept a report"
+    );
+
+    // Known session id → stored and surfaced.
+    assert!(
+        pipeline.record_client_stats("client-1", sample).await,
+        "a known session must accept the report"
+    );
+    let snap = pipeline.snapshot().await;
+    let client = snap.sessions[0]
+        .client
+        .as_ref()
+        .expect("client block present after a report");
+    assert_eq!(client.presented_fps, 29.5);
+    assert_eq!(client.max_present_gap_ms, 42.0);
+    assert_eq!(client.jitter_buffer_ms, Some(11.0));
+    assert_eq!(client.frames_decoded, 1234.0);
+    assert!(client.frames_live);
+
+    let json = serde_json::to_string(&snap).expect("serialize");
+    assert!(
+        json.contains("presentedFps") && json.contains("ageMs"),
+        "client block serializes camelCase with ageMs: {json}"
     );
 }

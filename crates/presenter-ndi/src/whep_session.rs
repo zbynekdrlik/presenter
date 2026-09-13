@@ -195,6 +195,14 @@ pub struct WhepSession {
     /// while building the WHEP answer body OR delivered via subsequent
     /// PATCH responses (trickle).
     pub ice_tx: mpsc::UnboundedSender<IceCandidate>,
+    /// Latest client-reported frame stats for this consumer (#768 D6),
+    /// updated by `POST /ndi/sessions/{id}/client-stats` and surfaced in
+    /// `GET /ndi/snapshot/{source}`. `None` until the display's first report.
+    ///
+    /// `std::sync::Mutex` (not tokio) for parity with `connection_state` /
+    /// `liveness`: the critical section is a trivial swap and is never held
+    /// across an await.
+    pub client_stats: Arc<Mutex<Option<crate::pipeline::client_stats::ClientStatsSample>>>,
 }
 
 impl WhepSession {
