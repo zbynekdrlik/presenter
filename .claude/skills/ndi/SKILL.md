@@ -333,6 +333,36 @@ that classifies buffers on the consumer appsrc. That measurement distinguishes
 D2 into a fixable, review-verifiable ticket. It must be done where the code can be compiled +
 deployed (not a fleet/Tier-0 worktree).
 
+**D2b — that discriminator IS now instrumented (#768 D2b): read `sessions[].link.verdict`.**
+`ConsumptionLink` still exposes only `pushed()`/`dropped()`, so the drop discriminator is
+measured from OUR side — a probe on each consumer `appsrc`
+(`crates/presenter-ndi/src/pipeline/link_probe.rs`, attached in `build_consumer_pipeline_blocking`)
+counts its `need-data`/`enough-data` signals + `current-level-time`, and a src-pad BUFFER probe
+counts DISCONT / keyframe buffers and each buffer's lateness (consumer running-time − buffer PTS,
+ms). A pure `classify()` (unit-tested) turns those into a `verdict`, surfaced per session in
+`GET /ndi/snapshot/{id}`:
+```bash
+curl -s http://<host>/ndi/snapshot/<source_id> | python3 -c 'import json,sys; \
+  [print(s["id"], s.get("dropRatio"), json.dumps(s.get("link",{}))) for s in json.load(sys.stdin).get("sessions",[])]'
+```
+Each `link` block carries `enoughDataEvents`, `needDataEvents`, `discontBuffers`,
+`keyframeBuffers`, `maxQueueLevelMs`, `latenessMs:{min,max,last}` and `verdict`. Read the
+`verdict` to point the D2 fix WITHOUT re-doing the math:
+- **`queueOverflow`** — `enough-data` fired AND buffers fell > 250 ms behind the consumer clock:
+  downstream is draining slower than realtime (the incident signature). The fix belongs on the
+  drain side (encoder throughput / consumer sink pacing / real VA-API uptime), NOT on GOP or
+  `max-time`.
+- **`keyframeWait`** — DISCONT buffers appeared without a sustained backed-up queue: forwarding
+  was IDR-gated. Points at producer keyframe cadence / re-arm behaviour, not queue overflow.
+- **`healthy`** — neither signature: this link is not the source of the drop.
+
+The deploy self-heal step (all 3 workflows) already prints each session's `link` block into the
+job log right before its one-shot deactivate/activate — a deploy restart reproduces the
+source-live-at-boot ordering, so that log is the natural place the next occurrence is captured.
+The probe changes NO drop/timeline mechanism; it is pure instrumentation so the next prod
+occurrence is self-explaining. The D2 root-cause FIX itself stays open (it needs the live
+`verdict` reading during an actual incident).
+
 **Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
 `python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST
 to the block base (10 spaces here) — a line at column 0 terminates the scalar and breaks YAML
