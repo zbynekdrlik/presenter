@@ -314,6 +314,52 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
     StatusCode::NO_CONTENT
 }
 
+/// Compact per-session client frame-stats report (#768 D6) POSTed by the stage
+/// every ~5s to `POST /ndi/sessions/{session_id}/client-stats`. Distinct from
+/// the rich `/ndi/client-stats` beacon above: that one is a `display_id`-keyed
+/// LOG beacon, this one is keyed by the WHEP `session_id` and is STORED on the
+/// session so it surfaces in `GET /ndi/snapshot/{id}` — making stage-side
+/// stutter visible server-side without physical presence.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NdiClientStatsReport {
+    pub presented_fps: f64,
+    pub max_present_gap_ms: f64,
+    pub jitter_buffer_ms: Option<f64>,
+    pub frames_decoded: f64,
+    pub frames_live: bool,
+}
+
+/// `POST /ndi/sessions/:session_id/client-stats` — store the latest client
+/// frame-stats sample on the matching WHEP session (#768 D6).
+///
+/// 204 — stored. 404 — no active pipeline has this session (unknown/expired).
+/// 503 — NDI SDK not available on this host.
+#[instrument(skip_all, fields(session_id = %session_id))]
+pub(crate) async fn ndi_session_client_stats(
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    State(state): State<AppState>,
+    Json(report): Json<NdiClientStatsReport>,
+) -> Result<StatusCode, AppError> {
+    let manager = state
+        .ndi_manager()
+        .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
+    let sample = presenter_ndi::pipeline::client_stats::ClientStatsSample {
+        presented_fps: report.presented_fps,
+        max_present_gap_ms: report.max_present_gap_ms,
+        jitter_buffer_ms: report.jitter_buffer_ms,
+        frames_decoded: report.frames_decoded,
+        frames_live: report.frames_live,
+        received_at: std::time::Instant::now(),
+    };
+    // record_client_stats returns a typed NdiSessionError whose only variant
+    // here is SessionNotFound → 404 (unknown or expired session).
+    match manager.record_client_stats(&session_id, sample).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(_) => Err(AppError::not_found("NDI session not found")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

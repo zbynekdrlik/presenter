@@ -180,6 +180,27 @@ impl NdiManagerHandle {
         }
     }
 
+    /// Forward to [`NdiManager::record_client_stats`] — store a client-reported
+    /// frame-stats sample on the matching WHEP session (#768 D6).
+    /// `NdiSessionError::SessionNotFound` → the router maps to 404.
+    pub(crate) async fn record_client_stats(
+        &self,
+        session_id: &str,
+        sample: presenter_ndi::pipeline::client_stats::ClientStatsSample,
+    ) -> Result<(), presenter_ndi::manager::NdiSessionError> {
+        match self {
+            Self::Real(m) => m.record_client_stats(session_id, sample).await,
+            // The Fake carries no WHEP sessions, so every session id is unknown —
+            // it returns the same SessionNotFound the real manager raises for an
+            // expired/unknown session, keeping the router's 404 mapping coherent
+            // (mirrors the whep_signaller_call typed-error path).
+            #[cfg(test)]
+            Self::Fake(_) => Err(presenter_ndi::manager::NdiSessionError::SessionNotFound {
+                session_id: session_id.to_string(),
+            }),
+        }
+    }
+
     /// Forward to [`NdiManager::simulate_pipeline_error`] (test-helpers feature).
     #[cfg(feature = "test-helpers")]
     pub(crate) async fn simulate_pipeline_error(&self, source_id: &str, msg: &str) -> bool {

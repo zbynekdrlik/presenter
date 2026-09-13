@@ -270,10 +270,17 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                         // It shares the page-session `escalation` so the
                         // last-resort reload spans reconnect cycles (#401).
                         let flag = std::rc::Rc::clone(&reconnect_flag);
+                        // #768 D6: the WHEP session id (Location header's last
+                        // path segment) keys the per-session client-stats POST.
+                        let session_id = session
+                            .resource_url
+                            .as_deref()
+                            .and_then(super::ndi_session_stats::session_id_from_resource_url);
                         let watchdog = Watchdog::install(
                             &video,
                             &session.pc,
                             &source_id,
+                            session_id,
                             &escalation,
                             stage_signal_setters.clone(),
                             move || flag.set(true),
