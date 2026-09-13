@@ -325,6 +325,14 @@ jobs:
             exit 0
           fi
           echo "Validating schema compatibility with new binary (validate mode)..."
+          # #771: probe the STAGED (incoming) binary, NOT the running one. The
+          # new binary lives at staging.new/ until the later "Swap staged
+          # binaries" step; /opt/presenter/presenter-server here is still the OLD
+          # running binary, which predates validate mode — probing it would boot
+          # Normal (Companion 18175 bind, NDI restore) and recur the #771
+          # collision, AND validate the wrong (already-live) binary's schema.
+          NEW_BIN="/opt/presenter/staging.new/presenter-server"
+          test -x "$NEW_BIN" || { echo "::error::staged presenter-server missing at $NEW_BIN — cannot schema-validate the incoming binary"; exit 1; }
           TEST_DB="/tmp/presenter-schema-test-$$.db"
           LOG_FILE="/tmp/presenter-schema-test-$$.log"
           cp "$DB_PATH" "$TEST_DB"
@@ -332,7 +340,7 @@ jobs:
           # + serves /healthz but starts NO integration, so the probe never
           # collides with the live presenter.service (Companion 18175, NDI, OSC).
           PRESENTER_STARTUP_MODE=validate PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
-            timeout 10 /opt/presenter/presenter-server > "$LOG_FILE" 2>&1 &
+            timeout 10 "$NEW_BIN" > "$LOG_FILE" 2>&1 &
           SERVER_PID=$!
           sleep 3
           if kill -0 $SERVER_PID 2>/dev/null; then

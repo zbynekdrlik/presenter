@@ -99,8 +99,14 @@ async fn main() -> anyhow::Result<()> {
     // collide and the second server fails to start. Tests that don't need the
     // mocks (the NDI WebRTC E2E lane) set PRESENTER_SKIP_MOCK_INTEGRATIONS=1
     // to skip them and avoid the conflict.
+    // #771: mock integrations bind FIXED localhost ports — they are an
+    // integration too, so keep them behind the SAME single startup-mode seam
+    // (defence-in-depth: the release probe binary has no `mock-integrations`
+    // feature, but a dev/E2E build run in validate mode must not bind them).
     #[cfg(feature = "mock-integrations")]
-    if std::env::var_os("PRESENTER_SKIP_MOCK_INTEGRATIONS").is_none() {
+    if !startup_mode.starts_integrations() {
+        tracing::info!("startup mode: validate — mock integrations skipped");
+    } else if std::env::var_os("PRESENTER_SKIP_MOCK_INTEGRATIONS").is_none() {
         presenter_server::mock_integrations::start_all().await?;
     } else {
         tracing::info!("PRESENTER_SKIP_MOCK_INTEGRATIONS set — skipping mock integrations");
