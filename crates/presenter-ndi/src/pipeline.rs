@@ -158,7 +158,7 @@ pub struct PipelineSnapshot {
     pub drop_ratio: f64,
     /// Trailing-30s aggregate drop ratio over this pipeline's LIVE consumers
     /// (#768 D3), folded from each session's own windowed delta. `null` until
-    /// >= 2 in-window samples exist on some session. Unlike `drop_ratio`
+    /// two or more in-window samples exist on some session. Unlike `drop_ratio`
     /// (cumulative, diluted on a long-lived pipeline), this reflects CURRENT
     /// health — what an external watchdog needs to catch a mid-life episode.
     pub drop_ratio_30s: Option<f64>,

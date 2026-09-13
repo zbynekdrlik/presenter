@@ -144,13 +144,11 @@ where
     let mut sum_pushed = 0u64;
     let mut sum_dropped = 0u64;
     let mut sum_fps = 0.0f64;
-    for delta in per_session {
-        if let Some((pd, dd, secs)) = delta {
-            any = true;
-            sum_pushed = sum_pushed.saturating_add(pd);
-            sum_dropped = sum_dropped.saturating_add(dd);
-            sum_fps += pushed_fps(pd, secs);
-        }
+    for (pd, dd, secs) in per_session.into_iter().flatten() {
+        any = true;
+        sum_pushed = sum_pushed.saturating_add(pd);
+        sum_dropped = sum_dropped.saturating_add(dd);
+        sum_fps += pushed_fps(pd, secs);
     }
     if any {
         (
