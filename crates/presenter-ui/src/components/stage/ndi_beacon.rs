@@ -126,10 +126,10 @@ pub(crate) fn maybe_post_beacon(
 /// RtcStatsReport map in one pass (`extract_inbound_video`). Split from
 /// `post_client_stats` to keep that function under the 120-line fn cap.
 #[derive(Default)]
-struct InboundVideoStats {
-    frames_decoded: Option<f64>,
+pub(super) struct InboundVideoStats {
+    pub(super) frames_decoded: Option<f64>,
     fps: Option<f64>,
-    jitter_buffer_ms: Option<f64>,
+    pub(super) jitter_buffer_ms: Option<f64>,
     freeze_count: Option<f64>,
     frames_dropped: Option<f64>,
     codec: Option<String>,
@@ -152,7 +152,7 @@ struct InboundVideoStats {
 /// One pass over the RtcStatsReport map: the inbound-rtp video entry's fields,
 /// the negotiated codec (via the codecId → "codec"-entry mimeType lookup), and
 /// the average jitter-buffer depth in ms (cumulative delay / emitted count).
-fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
+pub(super) fn extract_inbound_video(report: &JsValue) -> InboundVideoStats {
     let mut out = InboundVideoStats::default();
     let mut jb_delay = None;
     let mut jb_emitted = None;
