@@ -193,6 +193,12 @@ after a wrap (reads as a new list item). Two CI cycles were lost this way (ai/mo
 start a wrapped prose line with `+`, `-`, `*` or `N.`, and re-read every `///` block you wrote before
 pushing — rustfmt does not reflow doc comments and Tier-0 has no local clippy.
 
+Same family: a `///` Markdown blockquote (`> …`) must repeat `> ` on EVERY continuation line (clippy
+`doc quote line without > marker`), and a `for x in iter { if let Some(y) = x { … } }` loop fails
+`manual_flatten` — write `for y in iter.flatten()`. Both surfaced on #768 D3 (run 34769900594) — the
+third Tier-0 clippy cycle lost this weekend; re-read every `///` block and every `for … if let Some`
+before pushing.
+
 ## `fn_length_check.py` does NOT see GENERIC functions — size them by hand (#768)
 
 The checker's `fn_start` regex is `fn\s+NAME\s*\(` — it requires `(` right after the name, so a

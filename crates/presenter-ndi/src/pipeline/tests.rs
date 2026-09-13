@@ -235,6 +235,7 @@ impl NdiPipeline {
             ice_tx,
             client_stats: Arc::new(std::sync::Mutex::new(None)),
             link_probe: Arc::new(super::link_probe::LinkProbe::default()),
+            health_window: std::sync::Mutex::new(super::health_window::HealthWindow::default()),
         };
         self.sessions
             .lock()
@@ -1041,6 +1042,14 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     assert_eq!(s.drop_ratio, 0.0);
     assert_eq!(s.pushed_fps, 0.0);
     assert_eq!(snap.drop_ratio, 0.0);
+    // #768 D3: a single snapshot() call records ONE window sample, so the
+    // trailing-30s metrics are null (need >= 2 samples) — per session AND the
+    // per-pipeline aggregate. The window math itself is covered by the pure
+    // health_window unit tests.
+    assert_eq!(s.drop_ratio_30s, None, "one sample -> null");
+    assert_eq!(s.pushed_fps_30s, None, "one sample -> null");
+    assert_eq!(snap.drop_ratio_30s, None);
+    assert_eq!(snap.pushed_fps_30s, None);
     // No RTCP from a stub webrtcbin — fields present as None (omitted in JSON).
     assert!(s.rtcp_round_trip_ms.is_none());
     let json = serde_json::to_string(&snap).unwrap();
@@ -1053,6 +1062,17 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     assert!(
         json.contains("dropRatio") && json.contains("pushedFps"),
         "camelCase serialization of #768 metrics: {json}"
+    );
+    // #768 D3: the trailing-window keys serialize as camelCase too (the external
+    // watchdog reads `dropRatio30s`/`pushedFps30s` off /healthz + /ndi/snapshot),
+    // present even when null (stable schema, never an omitted key).
+    assert!(
+        json.contains("dropRatio30s") && json.contains("pushedFps30s"),
+        "camelCase serialization of #768 D3 trailing-window metrics: {json}"
+    );
+    assert!(
+        json.contains("\"dropRatio30s\":null"),
+        "one-sample window must serialize as explicit null: {json}"
     );
 }
 

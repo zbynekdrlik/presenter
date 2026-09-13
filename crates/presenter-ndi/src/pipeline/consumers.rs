@@ -240,6 +240,8 @@ impl NdiPipeline {
             client_stats: Arc::new(std::sync::Mutex::new(None)),
             // #768 D2b: per-link drop discriminator, fed by the appsrc probe.
             link_probe,
+            // #768 D3: empty trailing-30s window; sampled on each snapshot/healthz read.
+            health_window: std::sync::Mutex::new(super::health_window::HealthWindow::default()),
         };
 
         // Drain any ICE candidates already buffered (half-trickle: include
@@ -342,18 +344,9 @@ impl NdiPipeline {
     /// `source_id` is left empty — the manager fills it in (Task 8).
     pub async fn snapshot(&self) -> PipelineSnapshot {
         // Phase 1 (cheap, under the lock): identity + counters + consumer age
-        // (the pushed_fps denominator, #768) + webrtcbin handle.
-        #[allow(clippy::type_complexity)]
-        let partial: Vec<(
-            String,
-            WhepConnectionState,
-            u64,
-            u64,
-            f64,
-            gst::Element,
-            Option<super::client_stats::ClientStatsSample>,
-            super::link_probe::LinkProbeSnapshot,
-        )> = {
+        // (the pushed_fps denominator, #768) + webrtcbin handle + the #768 D3
+        // trailing-30s windowed delta. See `PartialSession` for the tuple shape.
+        let partial: Vec<PartialSession> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
@@ -368,11 +361,24 @@ impl NdiPipeline {
                         .client_stats
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
+                    let pushed = session.link.pushed();
+                    let dropped = session.link.dropped();
+                    // #768 D3: sample the trailing window under the lock (cheap —
+                    // one Instant compare + a bounded Vec push, no network) and
+                    // read its delta for the 30s metrics.
+                    let windowed = {
+                        let mut w = session
+                            .health_window
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        w.record(std::time::Instant::now(), pushed, dropped);
+                        w.windowed_delta()
+                    };
                     (
                         id.clone(),
                         connection_state,
-                        session.link.pushed(),
-                        session.link.dropped(),
+                        pushed,
+                        dropped,
                         session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
                         client_sample,
@@ -380,46 +386,25 @@ impl NdiPipeline {
                         // overflow count is the ground-truth ConsumptionLink
                         // dropped() (the appsrc enough-data signal is
                         // suppressed by StreamProducer's callback — review #1).
-                        session.link_probe.to_snapshot(session.link.dropped()),
+                        session.link_probe.to_snapshot(dropped),
+                        windowed,
                     )
                 })
                 .collect()
         };
+        // #768 D3: per-PIPELINE trailing-30s aggregate, folded from each
+        // session's own (monotonic) windowed delta BEFORE `partial` is moved
+        // into spawn_blocking — never from summed raw counters (which decrease
+        // when a consumer leaves). None until some session has a window.
+        let (pipe_drop_ratio_30s, pipe_pushed_fps_30s) =
+            super::health_window::aggregate_windowed(partial.iter().map(|t| t.8));
         // Phase 2 (blocking): RTCP receiver-report stats per webrtcbin — the
-        // get-stats promise wait must NOT block the async thread.
+        // get-stats promise wait must NOT block the async thread. Each partial
+        // becomes a SessionSnapshot via `session_snapshot_from_partial`.
         let session_snaps: Vec<SessionSnapshot> = tokio::task::spawn_blocking(move || {
             partial
                 .into_iter()
-                .map(
-                    |(
-                        id,
-                        connection_state,
-                        pushed,
-                        dropped,
-                        age_secs,
-                        webrtcbin,
-                        client_sample,
-                        link,
-                    )| {
-                        let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
-                        SessionSnapshot {
-                            id,
-                            connection_state,
-                            buffers_pushed: pushed,
-                            buffers_dropped: dropped,
-                            drop_ratio: super::health::drop_ratio(pushed, dropped),
-                            pushed_fps: super::health::pushed_fps(pushed, age_secs),
-                            rtcp_round_trip_ms: rtt,
-                            rtcp_jitter_ms: jitter,
-                            rtcp_packets_lost: lost,
-                            // #768 D6: stamp ageMs at read time (spawn_blocking is
-                            // near-immediate after Phase 1, so this is accurate).
-                            client: client_sample.map(|s| s.to_snapshot(std::time::Instant::now())),
-                            // #768 D2b: per-link drop discriminator + verdict.
-                            link,
-                        }
-                    },
-                )
+                .map(session_snapshot_from_partial)
                 .collect()
         })
         .await
@@ -446,6 +431,8 @@ impl NdiPipeline {
             encoder_count,
             consumer_count,
             drop_ratio: super::health::drop_ratio(agg_pushed, agg_dropped),
+            drop_ratio_30s: pipe_drop_ratio_30s,
+            pushed_fps_30s: pipe_pushed_fps_30s,
             sessions: session_snaps,
         }
     }
@@ -930,4 +917,51 @@ fn rtcp_remote_inbound(webrtcbin: &gst::Element) -> (Option<f64>, Option<f64>, O
         }
     }
     (None, None, None)
+}
+
+/// One Phase-1 partial-session tuple carried from under the `sessions` lock into
+/// the blocking RTCP phase of [`NdiPipeline::snapshot`]: identity, connection
+/// state, cumulative pushed/dropped, consumer age, the webrtcbin handle, the
+/// latest client sample, the per-link drop-probe snapshot, and (#768 D3) this
+/// session's trailing-30s windowed delta (`None` until >= 2 in-window samples).
+#[allow(clippy::type_complexity)]
+type PartialSession = (
+    String,
+    WhepConnectionState,
+    u64,
+    u64,
+    f64,
+    gst::Element,
+    Option<super::client_stats::ClientStatsSample>,
+    super::link_probe::LinkProbeSnapshot,
+    Option<(u64, u64, f64)>,
+);
+
+/// Build one [`SessionSnapshot`] from a Phase-1 [`PartialSession`], doing the
+/// blocking RTCP receiver-report read. Extracted from `snapshot` to keep it
+/// under the 120-line fn cap after the #768 D3 growth (quality-gates #687).
+fn session_snapshot_from_partial(entry: PartialSession) -> SessionSnapshot {
+    let (id, connection_state, pushed, dropped, age_secs, webrtcbin, client_sample, link, windowed) =
+        entry;
+    let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
+    SessionSnapshot {
+        id,
+        connection_state,
+        buffers_pushed: pushed,
+        buffers_dropped: dropped,
+        drop_ratio: super::health::drop_ratio(pushed, dropped),
+        pushed_fps: super::health::pushed_fps(pushed, age_secs),
+        // #768 D3: trailing-30s per-consumer metrics from the window sampled in
+        // Phase 1 (None until >= 2 samples).
+        drop_ratio_30s: windowed.map(|(pd, dd, _)| super::health::drop_ratio(pd, dd)),
+        pushed_fps_30s: windowed.map(|(pd, _, secs)| super::health::pushed_fps(pd, secs)),
+        rtcp_round_trip_ms: rtt,
+        rtcp_jitter_ms: jitter,
+        rtcp_packets_lost: lost,
+        // #768 D6: stamp ageMs at read time (spawn_blocking is near-immediate
+        // after Phase 1, so this is accurate).
+        client: client_sample.map(|s| s.to_snapshot(std::time::Instant::now())),
+        // #768 D2b: per-link drop discriminator + verdict.
+        link,
+    }
 }

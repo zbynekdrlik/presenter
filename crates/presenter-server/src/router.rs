@@ -472,6 +472,11 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
                 // ~0.75 with consumers attached, while `state` stayed "streaming").
                 entry["dropRatio"] = serde_json::json!(h.drop_ratio);
                 entry["consumers"] = serde_json::json!(h.consumers);
+                // #768 D3: trailing-30s aggregate so the watchdog sees CURRENT
+                // health (the cumulative dropRatio is diluted on a long-lived
+                // pipeline). Always present; `null` until a window exists.
+                entry["dropRatio30s"] = serde_json::json!(h.drop_ratio_30s);
+                entry["pushedFps30s"] = serde_json::json!(h.pushed_fps_30s);
                 entry
             })
             .collect::<Vec<_>>(),
