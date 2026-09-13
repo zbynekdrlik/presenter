@@ -61,14 +61,19 @@ pub fn classify(
     discont_buffers: u64,
     lateness_max_ms: i64,
 ) -> LinkVerdict {
-    // [red] intentionally-wrong stub — real logic lands in the [green] commit.
-    let _ = (
-        enough_data_events,
-        discont_buffers,
-        lateness_max_ms,
-        LATENESS_OVERFLOW_MS,
-    );
-    LinkVerdict::Healthy
+    // Queue overflow is the root when the appsrc queue filled (enough-data)
+    // AND buffers fell well behind the consumer clock — downstream draining
+    // slower than realtime, the #768 incident signature. It takes precedence
+    // over a keyframe wait: the enough-data thrash is what re-arms
+    // needs_keyframe, producing the DISCONT buffers at the next IDR.
+    if enough_data_events > 0 && lateness_max_ms > LATENESS_OVERFLOW_MS {
+        LinkVerdict::QueueOverflow
+    } else if discont_buffers > 0 {
+        // Forwarding resumed at an IDR after a gap, with no sustained overflow.
+        LinkVerdict::KeyframeWait
+    } else {
+        LinkVerdict::Healthy
+    }
 }
 
 /// Cheap per-consumer-link diagnostic counters (#768 D2b). All fields are
