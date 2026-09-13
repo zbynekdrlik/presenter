@@ -1118,3 +1118,119 @@ test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic
     await cleanupSource(request, src.id);
   }
 });
+
+// ── Test 8 (#768 D6): per-session CLIENT stats surface in /ndi/snapshot.
+// The stage POSTs its frame stats every ~5s to
+// POST /ndi/sessions/{session_id}/client-stats; the server stores them on the
+// WHEP session and exposes them under sessions[].client. This guards that a
+// real browser stage's client report reaches the snapshot (so stage-side
+// stutter is visible server-side without physical presence) — with zero
+// console errors.
+test("stage reports per-session client frame stats into /ndi/snapshot (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-ClientStats",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    const layoutResp = await request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "ndi-fullscreen" } },
+    );
+    expect(
+      layoutResp.ok(),
+      "switching stage layout to ndi-fullscreen must succeed",
+    ).toBe(true);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+      timeout: 10_000,
+    });
+
+    const video = page.locator('video[data-role="ndi-video"]');
+    await expect(video).toBeVisible({ timeout: 15_000 });
+
+    // Wait until the stage is genuinely presenting frames — the client
+    // reporter's presentedFps is derived from that count.
+    await expect
+      .poll(
+        () =>
+          video.evaluate(
+            (v: HTMLVideoElement) =>
+              v.getVideoPlaybackQuality().totalVideoFrames,
+          ),
+        {
+          timeout: 25_000,
+          message: "stage never presented a frame",
+        },
+      )
+      .toBeGreaterThan(0);
+
+    // The reporter POSTs every ~5s; poll the snapshot until a session carries a
+    // client block with a live presentedFps (> 0). Give it up to ~20s to allow
+    // for the first interval plus one getStats round-trip.
+    await expect
+      .poll(
+        async () => {
+          const resp = await request.get(
+            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+          );
+          if (!resp.ok()) return 0;
+          const snap = await resp.json();
+          for (const s of snap.sessions ?? []) {
+            const fps = s.client?.presentedFps;
+            if (typeof fps === "number" && fps > 0) return fps;
+          }
+          return 0;
+        },
+        {
+          timeout: 20_000,
+          intervals: [1000],
+          message:
+            "no session reported client.presentedFps > 0 into /ndi/snapshot — " +
+            "the D6 per-session client-stats POST never reached the server",
+        },
+      )
+      .toBeGreaterThan(0);
+
+    // The stored sample must carry a fresh (recent) ageMs staleness figure.
+    const snapResp = await request.get(
+      new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+    );
+    const snap = await snapResp.json();
+    const withClient = (snap.sessions ?? []).find(
+      (s: { client?: { presentedFps?: number; ageMs?: number } }) =>
+        typeof s.client?.presentedFps === "number",
+    );
+    expect(
+      withClient?.client?.ageMs,
+      "the stored client sample must carry an ageMs staleness field",
+    ).toBeLessThan(30_000);
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
+});

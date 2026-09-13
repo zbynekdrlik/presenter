@@ -307,6 +307,10 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::ndi::ndi_client_stats),
         )
         .route(
+            "/ndi/sessions/{session_id}/client-stats",
+            post(integrations::ndi::ndi_session_client_stats),
+        )
+        .route(
             "/ndi/snapshot/{source_id}",
             get(integrations::ndi::ndi_snapshot),
         )

@@ -23,6 +23,7 @@ use wasm_bindgen_futures::spawn_local;
 use super::ndi_clock_offset::{self, ClockOffsetEstimator};
 use super::ndi_frame_stats::{start_rvfc_frame_observer, FrameStats, StageSignalSetters};
 use super::ndi_health_ticker::start_health_ticker;
+use super::ndi_session_stats;
 
 // Re-export the profile-mode query so `ndi_video.rs` keeps importing it from
 // this module's public surface (it owns the whep_url profile decision).
@@ -258,6 +259,10 @@ pub(crate) struct Watchdog {
     /// after the stage is deactivated/unmounted. Also stops ticker accumulation
     /// across reconnects (each replaced Watchdog clears its own).
     health_ticker_handle: i32,
+    /// `setInterval` handle for the ~5s per-session client-stats reporter
+    /// (#768 D6), cleared on `stop()`/drop alongside the health ticker. `-1`
+    /// when this session had no resource URL to derive a session id from.
+    session_stats_handle: i32,
 }
 
 impl Watchdog {
@@ -317,10 +322,12 @@ impl Watchdog {
     /// when video has been dead long enough that reconnect has demonstrably
     /// failed. It is passed in (not created here) precisely so it survives the
     /// Watchdog being recreated on every reconnect.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn install<F: Fn() + 'static>(
         video: &HtmlVideoElement,
         pc: &RtcPeerConnection,
         source_id: &str,
+        session_id: Option<&str>,
         escalation: &Rc<ReloadEscalation>,
         setters: StageSignalSetters,
         on_failure: F,
@@ -409,10 +416,24 @@ impl Watchdog {
             &setters,
             on_failure,
         );
+        // #768 D6: start the per-session client-stats reporter when this
+        // session has a resource URL (→ session id). It reads the SAME
+        // `stats` non-destructively and shares the `active` gate + handle
+        // teardown as the health ticker.
+        let session_stats_handle = match session_id {
+            Some(sid) => ndi_session_stats::start_session_stats_reporter(
+                pc,
+                sid.to_string(),
+                &stats,
+                &active,
+            ),
+            None => -1,
+        };
 
         Self {
             active,
             health_ticker_handle,
+            session_stats_handle,
         }
     }
 
@@ -425,6 +446,9 @@ impl Watchdog {
         // an already-cleared / -1 handle is a harmless no-op.
         if let Some(window) = leptos::web_sys::window() {
             window.clear_interval_with_handle(self.health_ticker_handle);
+            // #768 D6: stop the per-session stats reporter too (harmless no-op
+            // on a -1 / already-cleared handle).
+            window.clear_interval_with_handle(self.session_stats_handle);
         }
     }
 }

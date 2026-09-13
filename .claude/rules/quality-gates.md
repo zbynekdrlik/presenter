@@ -192,3 +192,13 @@ after a wrap (reads as a new list item). Two CI cycles were lost this way (ai/mo
 #768). Rule: indent continuation lines of a doc list item by two extra spaces (`///   text`), never
 start a wrapped prose line with `+`, `-`, `*` or `N.`, and re-read every `///` block you wrote before
 pushing — rustfmt does not reflow doc comments and Tier-0 has no local clippy.
+
+## `fn_length_check.py` does NOT see GENERIC functions — size them by hand (#768)
+
+The checker's `fn_start` regex is `fn\s+NAME\s*\(` — it requires `(` right after the name, so a
+generic signature `fn install<F: Fn() + 'static>(…)` (or any `fn foo<T>(…)`) NEVER matches and is
+invisible to BOTH the warn (>80) and hard-fail (>120) gates. `cargo fmt`/CI-clippy don't enforce
+length either, so a generic function can grow past 120 with every automated check green. When you
+grow a generic fn (e.g. `Watchdog::install` reached 113 lines here), measure it by hand
+(`awk 'NR>=<start>&&/pub.*fn <name></,/^    }$/'`) and split with the #687 helper-extraction pattern
+if it nears 120 — the local gate will not warn you.

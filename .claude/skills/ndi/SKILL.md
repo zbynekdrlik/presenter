@@ -228,6 +228,40 @@ Verified 2026-06-29 on prod: `selectedLocalCandidateType=relay`, 256 frames, var
 - `/healthz.ndi_pipelines[]` — per-pipeline `{source_id, state, dropRatio, consumers}` (#768)
   so an external watchdog can see a degraded fan-out without RTCP get-stats
 - Stage UI beacons `getStats` to `POST /ndi/client-stats` every 15s (→ journald)
+- Stage ALSO POSTs a compact per-session sample to
+  `POST /ndi/sessions/{session_id}/client-stats` every ~5s (#768 D6); the server stores the
+  latest on the WHEP session and exposes it in `/ndi/snapshot/{id}` under `sessions[].client`
+  `{presentedFps, maxPresentGapMs, jitterBufferMs, framesDecoded, framesLive, ageMs}`
+
+### Reading a stage TV's OWN view without being there (#768 D6)
+
+`/ndi/snapshot` `buffersPushed/dropRatio/pushedFps` are the SERVER's view of the fan-out (what
+it fed each consumer). They do NOT show what the TV actually PRESENTED — a frame can be pushed
++ decoded yet reach the screen late (WebView compositor hitch). The `sessions[].client` block
+is the DISPLAY's own render-side view, reported by the stage WASM:
+```bash
+curl -s http://<host>/ndi/snapshot/<source_id> | python3 -c 'import json,sys; \
+  [print(s["id"][:8], s.get("client")) for s in json.load(sys.stdin).get("sessions",[])]'
+```
+`client: null` = that session has not reported yet (or stopped — check `ageMs`: a large/growing
+`ageMs` means the display went silent). `presentedFps < ~27` or a high `maxPresentGapMs` with a
+healthy server `pushedFps ~30` = the stall is PRESENTATION-side, not the server fan-out. The
+session id is the WHEP `Location` header's last path segment; the reporter reads the shared
+`FrameStats` non-destructively (its own count window; never resets the 15s beacon accumulators
+or the `frames_live` signal — the #757 desync). WASM POSTs are fire-and-forget (a 404 for an
+expired session is swallowed, zero console noise).
+
+### Join-time IDR coalescing under reconnect churn (#768 D5)
+
+Each WHEP join forces an IDR on the SHARED encoder (`request_keyframe`, so a fresh consumer
+decodes immediately). A TV re-creating its WHEP session every ~24-45s (incident: PP Sharp TV,
+13 POST/10 min) would hammer a keyframe per join. `KeyframeThrottle`
+(`crates/presenter-ndi/src/pipeline/keyframe_throttle.rs`, pure + unit-tested) coalesces to at
+most ONE forced IDR per GOP (2s); a join inside the window rides the next scheduled keyframe
+(a `debug!` "join-time IDR coalesced" logs it). The browser-PLI path is unchanged (StreamProducer
+forwards force-key-unit internally, not via `request_keyframe`). Note: the incident's 75% DROP is
+a SEPARATE mechanism (timeline offset, D2) — keyframe churn is not its cause, so D5 is a
+load-reduction, not the drop fix.
 
 ### Boot-restore fan-out drop bug — dropRatio + self-heal (#768)
 
