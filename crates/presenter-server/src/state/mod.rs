@@ -51,6 +51,10 @@ pub mod slides;
 pub(crate) mod stage;
 pub(crate) mod stage_display;
 mod stage_state;
+// `pub` re-export below: `StartupMode` is consumed by the `main.rs` binary
+// crate (gates the post-bind Android launch) and by `ServerConfig`, so a
+// `pub fn startup_mode()` must return a `pub` type — see startup_mode.rs (#771).
+pub mod startup_mode;
 mod stream;
 pub(crate) mod stream_assets;
 pub(crate) mod sync;
@@ -64,6 +68,8 @@ mod sync_race_tests;
 mod tests;
 mod timers;
 pub(crate) mod video_source_status;
+
+pub use startup_mode::StartupMode;
 
 // Same cfg as `AppState::in_memory` below (the only user of `OscConfig`
 // here) — widened for #680's `ai-eval` feature the same way.
