@@ -61,6 +61,7 @@ pub mod health;
 mod ingest_timing;
 mod keyframe_throttle;
 mod lifecycle;
+pub mod link_probe;
 mod negotiation;
 mod reaper;
 
@@ -191,6 +192,14 @@ pub struct SessionSnapshot {
     /// stutter visible server-side without physical presence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client: Option<client_stats::ClientStatsSnapshot>,
+    /// Per-consumer-link drop DISCRIMINATOR (#768 D2b): `enough-data`/
+    /// `need-data` event counts, DISCONT/keyframe buffer counts, max appsrc
+    /// queue depth, buffer lateness (min/max/last ms) vs the consumer clock,
+    /// and a `verdict` classifying the drop signature (queueOverflow /
+    /// keyframeWait / healthy). Always present — the probe exists for every
+    /// consumer from join; the counters make the NEXT prod occurrence
+    /// self-explaining without touching GOP / max-time / queue sizes.
+    pub link: link_probe::LinkProbeSnapshot,
 }
 
 /// Owns one GStreamer pipeline for one NDI source.

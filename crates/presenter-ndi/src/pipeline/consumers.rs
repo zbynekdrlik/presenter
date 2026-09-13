@@ -62,6 +62,7 @@ pub(super) struct ConsumerBranch {
     webrtcbin: gst::Element,
     bus_task: Option<tokio::task::JoinHandle<()>>,
     link: Option<ConsumptionLink>,
+    link_probe: Option<Arc<super::link_probe::LinkProbe>>,
     sdp_answer: String,
     session_id: String,
     armed: bool,
@@ -74,6 +75,7 @@ impl ConsumerBranch {
             webrtcbin,
             bus_task: None,
             link: None,
+            link_probe: None,
             sdp_answer: String::new(),
             session_id: session_id.to_string(),
             armed: true,
@@ -92,9 +94,11 @@ impl ConsumerBranch {
         String,
         ConsumptionLink,
         tokio::task::JoinHandle<()>,
+        Arc<super::link_probe::LinkProbe>,
     )> {
         let link = self.link.take()?;
         let bus_task = self.bus_task.take()?;
+        let link_probe = self.link_probe.take()?;
         self.armed = false;
         Some((
             self.pipeline.clone(),
@@ -102,6 +106,7 @@ impl ConsumerBranch {
             std::mem::take(&mut self.sdp_answer),
             link,
             bus_task,
+            link_probe,
         ))
     }
 }
@@ -217,7 +222,7 @@ impl NdiPipeline {
         let branch = answer_rx
             .await
             .context("spawn_blocking answer channel dropped")??;
-        let (consumer_pipeline, webrtcbin, sdp_answer, link, bus_task) = branch
+        let (consumer_pipeline, webrtcbin, sdp_answer, link, bus_task, link_probe) = branch
             .defuse()
             .ok_or_else(|| anyhow!("negotiated consumer branch missing link or bus task"))?;
         let session = WhepSession {
@@ -233,6 +238,8 @@ impl NdiPipeline {
             ice_tx,
             // No client report yet; the display's first POST fills it (#768 D6).
             client_stats: Arc::new(std::sync::Mutex::new(None)),
+            // #768 D2b: per-link drop discriminator, fed by the appsrc probe.
+            link_probe,
         };
 
         // Drain any ICE candidates already buffered (half-trickle: include
@@ -345,6 +352,7 @@ impl NdiPipeline {
             f64,
             gst::Element,
             Option<super::client_stats::ClientStatsSample>,
+            super::link_probe::LinkProbeSnapshot,
         )> = {
             let sessions = self.sessions.lock().await;
             sessions
@@ -368,6 +376,8 @@ impl NdiPipeline {
                         session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
                         client_sample,
+                        // #768 D2b: cheap atomic reads under the lock.
+                        session.link_probe.to_snapshot(),
                     )
                 })
                 .collect()
@@ -386,6 +396,7 @@ impl NdiPipeline {
                         age_secs,
                         webrtcbin,
                         client_sample,
+                        link,
                     )| {
                         let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
                         SessionSnapshot {
@@ -401,6 +412,8 @@ impl NdiPipeline {
                             // #768 D6: stamp ageMs at read time (spawn_blocking is
                             // near-immediate after Phase 1, so this is accurate).
                             client: client_sample.map(|s| s.to_snapshot(std::time::Instant::now())),
+                            // #768 D2b: per-link drop discriminator + verdict.
+                            link,
                         }
                     },
                 )
@@ -536,6 +549,9 @@ fn build_consumer_pipeline_blocking(
 
     let (appsrc, payloader, webrtcbin) =
         build_consumer_elements(session_id, profile, pt, turn_server)?;
+    // #768 D2b: per-link drop-discriminator probe on the appsrc (stored on the
+    // branch → WhepSession → /ndi/snapshot).
+    let link_probe = super::link_probe::attach(&appsrc, session_id);
 
     let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
     adopt_encoder_timeline(&consumer_pipeline, enc_clock, enc_base_time, session_id);
@@ -547,6 +563,7 @@ fn build_consumer_pipeline_blocking(
     // aborting the bus task (if spawned), disconnecting the producer link (if
     // connected) and setting the pipeline to Null.
     let mut branch = ConsumerBranch::new(consumer_pipeline.clone(), webrtcbin.clone(), session_id);
+    branch.link_probe = Some(link_probe);
 
     // appsrc → payloader → webrtcbin. The pay→webrtc link is filtered to the
     // profile codec's application/x-rtp caps (payload OMITTED — it is

@@ -234,12 +234,28 @@ impl NdiPipeline {
             liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
             client_stats: Arc::new(std::sync::Mutex::new(None)),
+            link_probe: Arc::new(super::link_probe::LinkProbe::default()),
         };
         self.sessions
             .lock()
             .await
             .insert(session_id.to_string(), session);
         Ok(())
+    }
+
+    /// Test-only: clone the per-link drop-probe (#768 D2b) of a stored session
+    /// so a seam test can drive it (the stub pushes no real buffers) and assert
+    /// the counters + verdict surface in the snapshot JSON shape.
+    pub fn link_probe_for_test(&self, session_id: &str) -> Arc<super::link_probe::LinkProbe> {
+        let sessions = self
+            .sessions
+            .try_lock()
+            .expect("sessions mutex busy in test");
+        sessions
+            .get(session_id)
+            .unwrap_or_else(|| panic!("no session {session_id} in test"))
+            .link_probe
+            .clone()
     }
 
     /// Test-only: overwrite a stored session's last-seen connection state,
@@ -1037,6 +1053,64 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     assert!(
         json.contains("dropRatio") && json.contains("pushedFps"),
         "camelCase serialization of #768 metrics: {json}"
+    );
+}
+
+/// #768 D2b: the per-consumer-link drop DISCRIMINATOR (`sessions[].link`) is
+/// present for every session and, once the appsrc probe records an overflow
+/// signature, surfaces the new camelCase keys plus a `verdict` in the snapshot
+/// JSON shape — the measurement that makes the next boot-restore drop
+/// self-explaining. The stub pushes no real buffers, so the probe is driven
+/// directly via `link_probe_for_test` (the production path feeds the SAME
+/// `record_*` methods from the appsrc signals + src-pad probe).
+#[tokio::test]
+async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("test topology");
+    pipeline
+        .add_consumer_stub("link-1")
+        .await
+        .expect("stub consumer");
+
+    // A fresh link with no traffic: block present, verdict healthy, absent
+    // lateness (no buffer flowed).
+    let snap = pipeline.snapshot().await;
+    let link = &snap.sessions[0].link;
+    assert_eq!(link.verdict, super::link_probe::LinkVerdict::Healthy);
+    assert_eq!(link.enough_data_events, 0);
+    assert!(link.lateness_ms.max.is_none());
+
+    // Drive the probe to the #768 incident signature: queue full (enough-data)
+    // AND buffers falling well behind the consumer clock.
+    let probe = pipeline.link_probe_for_test("link-1");
+    probe.record_need_data();
+    probe.record_enough_data(510);
+    probe.record_buffer(true, true, 420);
+    probe.record_buffer(false, false, 400);
+
+    let snap = pipeline.snapshot().await;
+    let link = &snap.sessions[0].link;
+    assert_eq!(link.enough_data_events, 1);
+    assert_eq!(link.need_data_events, 1);
+    assert_eq!(link.discont_buffers, 1);
+    assert_eq!(link.keyframe_buffers, 1);
+    assert_eq!(link.max_queue_level_ms, 510);
+    assert_eq!(link.lateness_ms.max, Some(420));
+    assert_eq!(link.lateness_ms.last, Some(400));
+    assert_eq!(link.verdict, super::link_probe::LinkVerdict::QueueOverflow);
+
+    let json = serde_json::to_string(&snap).expect("serialize");
+    assert!(
+        json.contains("enoughDataEvents")
+            && json.contains("discontBuffers")
+            && json.contains("maxQueueLevelMs")
+            && json.contains("latenessMs"),
+        "link block serializes new camelCase keys: {json}"
+    );
+    assert!(
+        json.contains("verdict") && json.contains("queueOverflow"),
+        "link verdict serializes camelCase: {json}"
     );
 }
 
