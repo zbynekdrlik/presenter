@@ -262,6 +262,15 @@ The 3 deploy workflows do this ONE time automatically when a post-deploy `/healt
 **Root-cause FIX status:** deferred — pinning the exact GStreamer timeline offset needs the
 e2e-ndi GPU-lane reproduction (`ndi-webrtc-synthetic.spec.ts` "boot-restore … healthy fan-out",
 tag `@synthetic-ndi`). Do NOT band-aid it by enlarging `max-time` (`no-timeout-band-aids.md`).
+
+**Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
+`python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST
+to the block base (10 spaces here) — a line at column 0 terminates the scalar and breaks YAML
+parsing (CI-invisible on Tier-0 until the run fails). After editing, validate locally:
+`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/pipeline.yml'))"`, extract the
+remote heredoc body and `bash -n` it, and `python3 -c 'import ast; ast.parse(open(...).read())'`
+the embedded program. Keep the step non-blocking (bare-echo else-branch, `if…then break; fi`
+never `[ … ] && break` under `set -e`).
 - Regression guards: `tests/e2e/ndi-webrtc-synthetic.spec.ts` + `tests/e2e/ndi-latency.spec.ts`
   (glass-to-glass median ≤350ms, p95 ≤600ms; measured dev 173/190ms, CI 168/192ms)
 
