@@ -263,6 +263,7 @@ fn config_for_db(url: String) -> crate::config::ServerConfig {
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
         sync: crate::config::SyncConfig::default(),
+        startup_mode: crate::state::StartupMode::default(),
     }
 }
 

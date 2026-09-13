@@ -32,6 +32,17 @@ pub(crate) struct CompanionServerHandle {
 }
 
 impl CompanionServerManager {
+    /// #771: whether a Companion websocket server is currently held (bound and
+    /// not finished). The validate-mode probe boot must never reach the
+    /// `reconfigure` bind, so this stays `false` there even when the DB setting
+    /// enables Companion — the regression test asserts exactly that. Test-only
+    /// (sole caller is `AppState::companion_server_running`), so `#[cfg(test)]`
+    /// keeps it off the non-test build's `dead_code` gate.
+    #[cfg(test)]
+    pub(crate) async fn is_running(&self) -> bool {
+        matches!(self.handle.lock().await.as_ref(), Some(h) if !h.join.is_finished())
+    }
+
     pub(crate) async fn reconfigure(
         &self,
         state: AppState,

@@ -1079,7 +1079,12 @@ test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic
       dropRatio?: number;
       consumer_count?: number;
       consumerCount?: number;
-      sessions?: Array<{ dropRatio?: number; drop_ratio?: number }>;
+      sessions?: Array<{
+        id?: string;
+        dropRatio?: number;
+        drop_ratio?: number;
+        link?: unknown;
+      }>;
     };
     let final: Snap | undefined;
     for (let i = 0; i < 30; i++) {
@@ -1090,6 +1095,15 @@ test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic
       if (resp.ok()) final = (await resp.json()) as Snap;
     }
     expect(final, "/ndi/snapshot must return a body for the restored source").toBeTruthy();
+
+    // #768 D2b: PRINT (never assert) the per-link drop discriminator so CI logs
+    // carry it — verdict/enough-data/DISCONT/lateness explain WHY if this ever
+    // reds. Logged before the drop-ratio asserts so it survives a failure.
+    console.log(
+      `[e2e-evidence] #768 D2b link blocks: ${JSON.stringify(
+        (final!.sessions ?? []).map((s) => ({ id: s.id, link: s.link })),
+      )}`,
+    );
 
     const consumers = final!.consumerCount ?? final!.consumer_count ?? 0;
     expect(consumers, "both held consumers must be attached server-side").toBe(2);

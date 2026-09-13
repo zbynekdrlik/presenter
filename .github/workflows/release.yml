@@ -313,21 +313,30 @@ jobs:
             echo "No database - will be created on first start"
             exit 0
           fi
-          echo "Validating schema compatibility with new binary..."
+          echo "Validating schema compatibility with new binary (validate mode)..."
           TEST_DB="/tmp/presenter-pp-schema-test-$$.db"
+          LOG_FILE="/tmp/presenter-pp-schema-test-$$.log"
           cp "$DB_PATH" "$TEST_DB"
-          PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
-            timeout 10 /opt/presenter/presenter-server &
+          # #771: validate mode — migrations + DB + /healthz, no integrations, so
+          # the probe never collides with the live presenter.service on PP.
+          PRESENTER_STARTUP_MODE=validate PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
+            timeout 10 /opt/presenter/presenter-server > "$LOG_FILE" 2>&1 &
           SERVER_PID=$!
           sleep 3
           if kill -0 $SERVER_PID 2>/dev/null; then
-            echo "Schema is compatible"
+            echo "Schema is compatible (validate mode — no integrations started)"
             kill $SERVER_PID 2>/dev/null || true
             wait $SERVER_PID 2>/dev/null || true
           else
-            echo "::warning::New binary failed to start with existing database. Database preserved - manual migration may be needed."
+            echo "Probe process is not alive — last 40 log lines:"
+            tail -n 40 "$LOG_FILE" 2>/dev/null || true
+            if grep -q 'SCHEMA-VALIDATION-FAILED' "$LOG_FILE"; then
+              echo "::warning::New binary failed to migrate/open the existing database — migration may be broken. Database preserved - manual migration may be needed."
+            else
+              echo "::warning::Schema-validate probe failed to start for a reason OTHER than a broken migration (see the last 40 log lines above). Database preserved."
+            fi
           fi
-          rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
+          rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm" "$LOG_FILE"
           REMOTE_SCRIPT
 
       - name: Deploy Bible files
@@ -583,6 +592,18 @@ jobs:
             SID=$(echo "$SICK" | awk '{print $1}')
             RATIO=$(echo "$SICK" | awk '{print $2}')
             echo "::error::NDI fan-out DEGRADED after deploy — source $SID dropRatio=$RATIO (>0.2) with consumers attached; auto-rebuilding via deactivate/activate. #768 (non-blocking)"
+            echo "::group::#768 D2b per-link drop discriminator (source $SID) — captured before rebuild"
+            curl -sf "$BASE/ndi/snapshot/$SID" 2>/dev/null | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print("(snapshot unavailable)")
+              sys.exit(0)
+          for s in d.get("sessions", []):
+              print(s.get("id", "?"), "dropRatio=", s.get("dropRatio"), "link=", json.dumps(s.get("link", {})))
+          ' 2>/dev/null || echo "(link block unavailable)"
+            echo "::endgroup::"
             curl -sf -X POST "$BASE/integrations/video-sources/deactivate" >/dev/null 2>&1 || true
             sleep 4
             curl -sf -X POST "$BASE/integrations/video-sources/$SID/activate" -H 'content-type: application/json' -d '{}' >/dev/null 2>&1 || true

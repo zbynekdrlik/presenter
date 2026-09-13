@@ -272,9 +272,11 @@ the `StreamProducer`→appsrc bridge, while `/healthz` `state` stayed `"streamin
 25% pushed = exactly the 500 ms appsrc `max-time` queue out of each 2 s GOP (`key-int-max/
 gop-size=60`) — the queue fills, `enough_data` re-arms `needs_keyframe`, the rest of the GOP
 is dropped until the next IDR. **A pipeline built by API `deactivate`+`activate` at runtime is
-healthy (0 drops, 30 fps); the SAME server code builds both — the only difference is the time
-between encoder PLAYING and consumer join (hours at boot-restore vs seconds at API-activate),
-so the root cause is a boot-restore-specific timeline offset, not a different build path.**
+healthy (0 drops, 30 fps); the SAME server code builds both — the only difference is TIMING
+(source-live-at-build + hours of encoder uptime before join) and synthetic-vs-real source, NOT
+a different build path (`restore_active_ndi_source` calls the SAME `activate_video_source`).**
+See **D2 root-cause finding** below — the originally-suspected base_time timeline offset is
+REFUTED by code; do not re-chase it.
 
 **Reading the drop ratio (the diagnostic the incident lacked):**
 ```bash
@@ -293,9 +295,80 @@ Metrics are **cumulative-since-session-join** (`drop_ratio`/`pushed_fps` in
 The 3 deploy workflows do this ONE time automatically when a post-deploy `/healthz` poll shows
 `dropRatio > 0.2` with `consumers >= 1` (owner-visible `::error::`, never fails the deploy).
 
-**Root-cause FIX status:** deferred — pinning the exact GStreamer timeline offset needs the
-e2e-ndi GPU-lane reproduction (`ndi-webrtc-synthetic.spec.ts` "boot-restore … healthy fan-out",
-tag `@synthetic-ndi`). Do NOT band-aid it by enlarging `max-time` (`no-timeout-band-aids.md`).
+**Root-cause FIX status:** deferred (D2 open). Do NOT band-aid it by enlarging `max-time`
+(`no-timeout-band-aids.md`).
+
+**D2 root-cause finding (2026-09-13, code-evidence — proven-negative for the base_time
+hypothesis):** the originally-suspected mechanism (consumer sink holds "future" timestamps →
+500 ms overflow from a base_time/timeline offset) is **STRUCTURALLY IMPOSSIBLE** under this
+code — do NOT re-chase it:
+- ndisrc `timestamp-mode=receive-time` sets PTS = `clock.time() - element.base_time()` = the
+  pipeline running-time at frame arrival (`gst-plugin-ndi-0.15.2/src/ndisrc/receiver.rs:327-335`,
+  `imp.rs:767`). Every frame's PTS tracks the CURRENT running-time.
+- The encoder pipeline is pinned to the system monotonic clock, never slaving to NDI
+  (`build.rs:60-62`).
+- `adopt_encoder_timeline` gives each consumer pipeline the SAME clock AND the SAME
+  `enc_base_time` (read at join, `consumers.rs:165-166,624-646`) with `set_start_time(NONE)`.
+- ⟹ consumer running-time-now == producer running-time-now, and every forwarded buffer's
+  running-time (= its PTS) ≈ now — regardless of uptime or source-live-at-boot. No base_time
+  future-hold is possible.
+
+Why the synthetic e2e-ndi lane can't reproduce it (and the D1 guard stays green): the D1 guard
+ALREADY reproduces the SNV ordering (synthetic source live when the restored pipeline is built)
+and passes — so the test↔prod gap is NOT the ordering. The un-reproduced factors are real
+ndisrc receive-time jitter from a real network sender (Resolume/LAN) vs the local
+`ndi_test_sender`, hours of real VA-API encoding on the prod N100, and real uptime. The drop
+counter over-count in the incident (38.5 events/s > 30 fps) is the `enough_data` queue-thrash
+signature, not a keyframe-wait transient.
+
+**Next concrete step to actually pin D2:** on the live box during the next incident (source
+live at boot), capture per-consumer-link at overflow the ONE discriminator lane 1's
+dropRatio/pushedFps lacks: (a) buffer running-time vs consumer running-time
+(`pipeline.clock().time() - pipeline.base_time()`), and (b) whether the drop is `enough_data`
+(queue overflow) vs `needs_keyframe` (DISCONT/keyframe-wait). NOTE: (b) is INTERNAL to
+`gstreamer-utils::StreamProducer` and NOT exposed via `ConsumptionLink` (only the `dropped()`/
+`pushed()` totals) — capturing it needs either a patched/forked StreamProducer or a pad probe
+that classifies buffers on the consumer appsrc. That measurement distinguishes
+"downstream draining slower than realtime" from "producer emitting DISCONT bursts" and turns
+D2 into a fixable, review-verifiable ticket. It must be done where the code can be compiled +
+deployed (not a fleet/Tier-0 worktree).
+
+**D2b — that discriminator IS now instrumented (#768 D2b): read `sessions[].link.verdict`.**
+`ConsumptionLink` exposes only `pushed()`/`dropped()` totals, so the discriminator is measured
+from OUR side — a probe on each consumer `appsrc`
+(`crates/presenter-ndi/src/pipeline/link_probe.rs`, attached in `build_consumer_pipeline_blocking`).
+CRITICAL GOTCHA (#768 review #1): `StreamProducer::add_consumer` installs its OWN `enough-data`
+CALLBACK on the consumer appsrc (it increments `dropped()` + posts a `dropped-buffer` message), and
+per the GStreamer appsrc contract a slot with a callback NO LONGER emits its signal — so the
+overflow count MUST be read from `ConsumptionLink::dropped()` (threaded into `to_snapshot` at
+snapshot time), NOT from an `emit-signals` `enough-data` handler (which would stay stuck at 0 and
+make `queueOverflow` unreachable). Only `need-data` (the slot `StreamProducer` leaves free) is read
+via signal; everything else — DISCONT / keyframe counts, buffer lateness (consumer running-time −
+buffer PTS, ms), and appsrc `current-level-time` — comes from a src-pad BUFFER probe, which fires
+regardless of callbacks. A pure `classify()` (unit-tested) turns `dropped()` + those into a
+`verdict`, surfaced per session in `GET /ndi/snapshot/{id}`:
+```bash
+curl -s http://<host>/ndi/snapshot/<source_id> | python3 -c 'import json,sys; \
+  [print(s["id"], s.get("dropRatio"), json.dumps(s.get("link",{}))) for s in json.load(sys.stdin).get("sessions",[])]'
+```
+Each `link` block carries `droppedBuffers` (== the session's `buffersDropped`, the ground-truth
+overflow count), `needDataEvents`, `discontBuffers`, `keyframeBuffers`, `maxQueueLevelMs`,
+`latenessMs:{min,max,last}` and `verdict`. Read the `verdict` to point the D2 fix WITHOUT re-doing
+the math:
+- **`queueOverflow`** — the link actually dropped buffers (`dropped()`>0) AND they fell > 250 ms
+  behind the consumer clock: downstream is draining slower than realtime (the incident signature).
+  The fix belongs on the drain side (encoder throughput / consumer sink pacing / real VA-API
+  uptime), NOT on GOP or `max-time`.
+- **`keyframeWait`** — DISCONT buffers appeared without an overflow (`dropped()`==0): forwarding was
+  IDR-gated. Points at producer keyframe cadence / re-arm behaviour, not queue overflow.
+- **`healthy`** — neither signature: this link is not the source of the drop.
+
+The deploy self-heal step (all 3 workflows) already prints each session's `link` block into the
+job log right before its one-shot deactivate/activate — a deploy restart reproduces the
+source-live-at-boot ordering, so that log is the natural place the next occurrence is captured.
+The probe changes NO drop/timeline mechanism; it is pure instrumentation so the next prod
+occurrence is self-explaining. The D2 root-cause FIX itself stays open (it needs the live
+`verdict` reading during an actual incident).
 
 **Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
 `python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST

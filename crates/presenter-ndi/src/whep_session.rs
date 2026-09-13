@@ -203,6 +203,13 @@ pub struct WhepSession {
     /// `liveness`: the critical section is a trivial swap and is never held
     /// across an await.
     pub client_stats: Arc<Mutex<Option<crate::pipeline::client_stats::ClientStatsSample>>>,
+    /// Per-consumer-link drop DISCRIMINATOR probe (#768 D2b), fed from the
+    /// consumer appsrc's `need-data`/`enough-data` signals and a src-pad buffer
+    /// probe. Cheap atomics only; surfaced in `GET /ndi/snapshot/{id}` under
+    /// `sessions[].link` so the next boot-restore drop occurrence is
+    /// self-explaining (queue overflow vs keyframe wait) without physical
+    /// presence. Shared (`Arc`) with the GStreamer-thread signal/probe closures.
+    pub link_probe: Arc<crate::pipeline::link_probe::LinkProbe>,
 }
 
 impl WhepSession {
