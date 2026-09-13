@@ -54,8 +54,8 @@ fn round_to(x: f64, scale: f64) -> f64 {
 /// Per-pipeline delivery health for `/healthz.ndi_pipelines[]` — the cheap
 /// aggregate (state + summed counters over the pipeline's live consumers), read
 /// WITHOUT the per-session RTCP get-stats round trip that `PipelineSnapshot`
-/// does (that endpoint is polled by every operator tab + the stage reload guard
-/// + the deploy gates, so it must stay cheap — the `ai-health-endpoint.md`
+/// does (that endpoint is polled by every operator tab + the stage reload guard +
+/// the deploy gates, so it must stay cheap — the `ai-health-endpoint.md`
 /// shared-computation discipline).
 #[derive(Debug, Clone)]
 pub struct PipelineDropHealth {

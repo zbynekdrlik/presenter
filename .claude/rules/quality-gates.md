@@ -183,3 +183,12 @@ back-reference from the submodule works because a child module sees ancestor-pri
 Verify with `count_prod_lines.sh` (both files) + `fn_length_check.py` + `cargo fmt --all --check`;
 CI is the compile gate. Real case #742: `android_stage.rs` 992 → 620 by extracting
 `android_stage/adb.rs` (397).
+
+## `doc_lazy_continuation`: a wrapped `///` list item MUST indent its continuation lines (#761, #768)
+
+Clippy under `-D warnings` fails on a `///` Markdown list item (`- …`, `* …`, `1. …`) whose wrapped
+continuation line is not indented, and also on a prose line that happens to START with `+`/`-`/`*`
+after a wrap (reads as a new list item). Two CI cycles were lost this way (ai/mod.rs #761, health.rs
+#768). Rule: indent continuation lines of a doc list item by two extra spaces (`///   text`), never
+start a wrapped prose line with `+`, `-`, `*` or `N.`, and re-read every `///` block you wrote before
+pushing — rustfmt does not reflow doc comments and Tier-0 has no local clippy.
