@@ -457,11 +457,18 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     // empty when no NDI manager is loaded OR no sources are active.
     let ndi_pipelines = match state.ndi_manager() {
         Some(manager) => manager
-            .pipeline_snapshots()
+            .pipeline_health_snapshots()
             .await
             .into_iter()
-            .map(|(source_id, pipeline_state)| {
-                render_ndi_pipeline_entry(&source_id, &pipeline_state)
+            .map(|h| {
+                let mut entry = render_ndi_pipeline_entry(&h.source_id, &h.state);
+                // #768: per-pipeline delivery health so an external watchdog AND
+                // the post-deploy self-heal gate detect a pipeline dropping most
+                // of its encoded frames (the boot-restore incident: dropRatio
+                // ~0.75 with consumers attached, while `state` stayed "streaming").
+                entry["dropRatio"] = serde_json::json!(h.drop_ratio);
+                entry["consumers"] = serde_json::json!(h.consumers);
+                entry
             })
             .collect::<Vec<_>>(),
         None => Vec::new(),

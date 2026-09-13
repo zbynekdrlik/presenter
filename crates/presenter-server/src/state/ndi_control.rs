@@ -124,6 +124,35 @@ impl NdiManagerHandle {
         }
     }
 
+    /// Forward to [`NdiManager::pipeline_health_snapshots`] — per-pipeline
+    /// delivery health (state + drop ratio + consumer count) for `/healthz`
+    /// (#768).
+    pub(crate) async fn pipeline_health_snapshots(
+        &self,
+    ) -> Vec<presenter_ndi::pipeline::health::PipelineDropHealth> {
+        match self {
+            Self::Real(m) => m.pipeline_health_snapshots().await,
+            // The Fake carries no real pipeline (no StreamProducer counters), so
+            // it reports each state with a 0.0 ratio / 0 consumers — enough for
+            // the health-endpoint shape tests; the drop-ratio path is exercised
+            // by the presenter-ndi seam tests, not the server Fake.
+            #[cfg(test)]
+            Self::Fake(f) => f
+                .pipeline_snapshots()
+                .unwrap_or_default()
+                .into_iter()
+                .map(
+                    |(source_id, state)| presenter_ndi::pipeline::health::PipelineDropHealth {
+                        source_id,
+                        state,
+                        drop_ratio: 0.0,
+                        consumers: 0,
+                    },
+                )
+                .collect(),
+        }
+    }
+
     /// Forward to [`NdiManager::pipeline_snapshots_checked`] — `None` when the
     /// manager's lock could not be taken (it is busy starting a pipeline), which the
     /// #546 status join must NOT read as "no pipelines".

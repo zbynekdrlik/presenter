@@ -124,6 +124,23 @@ impl NdiPipeline {
         &self.whep_url
     }
 
+    /// Cheap per-pipeline delivery totals for `/healthz` (#768) — summed
+    /// `pushed`/`dropped` over live consumers + the consumer count, read from
+    /// the StreamProducer link's atomics ONLY (NO per-session RTCP get-stats
+    /// round trip, unlike `snapshot`). Returns `(pushed, dropped, consumers)`.
+    /// `/healthz` is polled by every operator tab + the stage reload guard +
+    /// the deploy gates, so this stays the cheap path (`ai-health-endpoint.md`).
+    pub(crate) async fn consumer_delivery_totals(&self) -> (u64, u64, usize) {
+        let sessions = self.sessions.lock().await;
+        let mut pushed = 0u64;
+        let mut dropped = 0u64;
+        for session in sessions.values() {
+            pushed = pushed.saturating_add(session.link.pushed());
+            dropped = dropped.saturating_add(session.link.dropped());
+        }
+        (pushed, dropped, sessions.len())
+    }
+
     pub fn state(&self) -> PipelineState {
         self.state_rx.borrow().clone()
     }

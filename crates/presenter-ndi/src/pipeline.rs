@@ -147,6 +147,11 @@ pub struct PipelineSnapshot {
     pub encoder_factory: Option<String>,
     pub encoder_count: usize,
     pub consumer_count: usize,
+    /// Cumulative drop ratio aggregated over ALL live consumers of this
+    /// pipeline (`dropped / (pushed + dropped)`, 0.0–1.0). The single per-
+    /// pipeline delivery-health signal the #768 self-heal gate reads; `0.0`
+    /// when no consumer has been fed yet.
+    pub drop_ratio: f64,
     pub sessions: Vec<SessionSnapshot>,
 }
 
@@ -160,6 +165,15 @@ pub struct SessionSnapshot {
     pub buffers_pushed: u64,
     /// Buffers dropped because the consumer appsrc queue was full.
     pub buffers_dropped: u64,
+    /// Cumulative drop ratio for THIS consumer since it joined
+    /// (`buffers_dropped / (buffers_pushed + buffers_dropped)`, 0.0–1.0). The
+    /// #768 diagnostic: a healthy consumer reads ~0.0, the boot-restore
+    /// incident read ~0.75. `0.0` when no buffer has flowed yet.
+    pub drop_ratio: f64,
+    /// Average frames/s forwarded to THIS consumer since it joined
+    /// (`buffers_pushed / age`). ~30 on a healthy link, ~9.5 in the #768
+    /// incident. `0.0` for a just-created session.
+    pub pushed_fps: f64,
     /// RTCP receiver-report round-trip time (ms) — the display's link RTT.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtcp_round_trip_ms: Option<f64>,
