@@ -616,6 +616,59 @@ jobs:
           fi
           REMOTE_SCRIPT
 
+      # #768: a boot-restore NDI pipeline can come up degraded — dropping most
+      # encoded frames in the StreamProducer->appsrc bridge while its state
+      # stays "streaming" (the 2026-09-13 SNV incident). This gate reads
+      # /healthz.ndi_pipelines[].dropRatio once consumers have attached and
+      # auto-rebuilds ONCE (the proven deactivate/activate remedy). Owner-
+      # visible ::error:: but NEVER fails the deploy (a live-source hiccup must
+      # not block an unrelated deploy) — same non-blocking posture as the
+      # AI-status gate (the else-branch is a bare echo, exit 0 under set -e, so
+      # this is NOT a continue-on-error violation).
+      - name: NDI fan-out self-heal (#768)
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          BASE=http://localhost:80
+          read_sick() {
+            curl -sf "$BASE/healthz" 2>/dev/null | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          for p in d.get("ndi_pipelines", []):
+              if (p.get("consumers") or 0) >= 1 and (p.get("dropRatio") or 0) > 0.2:
+                  print(p.get("source_id", ""), p.get("dropRatio"))
+                  break
+          ' 2>/dev/null || true
+          }
+          SICK=""
+          for _ in $(seq 1 20); do
+            SICK=$(read_sick)
+            if [ -n "$SICK" ]; then break; fi
+            sleep 2
+          done
+          if [ -z "$SICK" ]; then
+            echo "NDI fan-out check: no degraded pipeline (or no consumers attached within ~40s)"
+          else
+            SID=$(echo "$SICK" | awk '{print $1}')
+            RATIO=$(echo "$SICK" | awk '{print $2}')
+            echo "::error::NDI fan-out DEGRADED after deploy — source $SID dropRatio=$RATIO (>0.2) with consumers attached; auto-rebuilding via deactivate/activate. #768 (non-blocking)"
+            curl -sf -X POST "$BASE/integrations/video-sources/deactivate" >/dev/null 2>&1 || true
+            sleep 4
+            curl -sf -X POST "$BASE/integrations/video-sources/$SID/activate" -H 'content-type: application/json' -d '{}' >/dev/null 2>&1 || true
+            STILL=""
+            for _ in $(seq 1 20); do
+              STILL=$(read_sick)
+              if [ -z "$STILL" ]; then break; fi
+              sleep 2
+            done
+            if [ -n "$STILL" ]; then
+              echo "::error::NDI fan-out STILL degraded after one rebuild ($STILL) — needs owner attention. #768 (non-blocking)"
+            else
+              echo "NDI fan-out self-heal: pipeline healthy after rebuild"
+            fi
+          fi
+          REMOTE_SCRIPT
+
       - name: Show deployment info
         run: |
           echo "=== Deployment Complete ==="

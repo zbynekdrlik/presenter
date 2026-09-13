@@ -149,6 +149,24 @@ Same family as the struct-field E0063 grep above — a widening whose exhaustive
 would normally enforce is defeated by a non-exhaustive `if let`, and Tier-0 removes the local
 compiler that would otherwise flag the drop as a logic bug only much later.
 
+## Re-pointing a caller ORPHANS a `pub(crate)` forward → `dead_code` fails `-D warnings` (#768)
+
+When you switch a handler from method A to a new method B (e.g. `/healthz` moved from
+`NdiManagerHandle::pipeline_snapshots` to `pipeline_health_snapshots`), the OLD forward method
+can lose its last caller and become dead code. A `pub(crate)` (or private) inherent method with
+no caller triggers `dead_code`, which `cargo clippy --workspace --all-targets -- -D warnings`
+(pipeline.yml) turns into a HARD FAIL — invisible on Tier-0 until CI ~5 min in. A `pub` method
+on a `pub` lib struct is NOT flagged (it's public API), so only the crate-private / `pub(crate)`
+forwards bite. After re-pointing ANY caller, grep the old method for remaining callers and DELETE
+the forward if it's orphaned:
+
+```bash
+grep -rn '\.old_method_name(' crates/    # every remaining call site (exclude the def + internal m./f. forwards)
+```
+
+Same Tier-0 family as the E0063 / `if let` traps above — a change the compiler would normally
+flag is only caught at CI's clippy job, so the grep is the local stand-in.
+
 ## Over-cap FILE → split via a `foo.rs` + `foo/sub.rs` submodule (#742)
 
 When a `.rs` file nears the >1000-line hard-fail (`count_prod_lines.sh`), extract a cohesive
@@ -165,3 +183,12 @@ back-reference from the submodule works because a child module sees ancestor-pri
 Verify with `count_prod_lines.sh` (both files) + `fn_length_check.py` + `cargo fmt --all --check`;
 CI is the compile gate. Real case #742: `android_stage.rs` 992 → 620 by extracting
 `android_stage/adb.rs` (397).
+
+## `doc_lazy_continuation`: a wrapped `///` list item MUST indent its continuation lines (#761, #768)
+
+Clippy under `-D warnings` fails on a `///` Markdown list item (`- …`, `* …`, `1. …`) whose wrapped
+continuation line is not indented, and also on a prose line that happens to START with `+`/`-`/`*`
+after a wrap (reads as a new list item). Two CI cycles were lost this way (ai/mod.rs #761, health.rs
+#768). Rule: indent continuation lines of a doc list item by two extra spaces (`///   text`), never
+start a wrapped prose line with `+`, `-`, `*` or `N.`, and re-read every `///` block you wrote before
+pushing — rustfmt does not reflow doc comments and Tier-0 has no local clippy.

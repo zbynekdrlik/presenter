@@ -222,6 +222,7 @@ impl NdiPipeline {
         let (ice_tx, _ice_rx) = tokio::sync::mpsc::unbounded_channel();
         let session = WhepSession {
             session_id: session_id.to_string(),
+            created_at: std::time::Instant::now(),
             consumer_pipeline,
             webrtcbin,
             link,
@@ -1016,11 +1017,22 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     // Stub session pushed nothing — counters exist and are zero.
     assert_eq!(s.buffers_pushed, 0);
     assert_eq!(s.buffers_dropped, 0);
+    // #768: derived per-consumer delivery metrics — a stub that pushed nothing
+    // is 0.0 (never NaN/inf), and the per-pipeline aggregate is 0.0 too.
+    assert_eq!(s.drop_ratio, 0.0);
+    assert_eq!(s.pushed_fps, 0.0);
+    assert_eq!(snap.drop_ratio, 0.0);
     // No RTCP from a stub webrtcbin — fields present as None (omitted in JSON).
     assert!(s.rtcp_round_trip_ms.is_none());
     let json = serde_json::to_string(&snap).unwrap();
     assert!(
         json.contains("buffersPushed"),
         "camelCase serialization: {json}"
+    );
+    // #768: the new metrics serialize as camelCase too (the shell self-heal
+    // gate and the external watchdog read these exact keys).
+    assert!(
+        json.contains("dropRatio") && json.contains("pushedFps"),
+        "camelCase serialization of #768 metrics: {json}"
     );
 }

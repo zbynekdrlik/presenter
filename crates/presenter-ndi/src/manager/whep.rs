@@ -119,6 +119,41 @@ impl NdiManager {
         Some(snap)
     }
 
+    /// Per-pipeline delivery HEALTH for `/healthz.ndi_pipelines[]` (#768):
+    /// `(source_id, state, drop_ratio, consumers)` per active source. Clones the
+    /// pipeline Arcs out from under the `active` lock (200 ms bounded, like the
+    /// other snapshot readers) and computes the cheap delivery totals UNLOCKED,
+    /// so it NEVER holds `active` across the per-pipeline sessions-lock await
+    /// (the #741 stall). Empty vec on lock-timeout — `/healthz` must never hang
+    /// (same fail-cheap posture as [`Self::pipeline_snapshots`]). Uses the cheap
+    /// atomic-only totals, NOT the RTCP get-stats `snapshot()`.
+    pub async fn pipeline_health_snapshots(
+        &self,
+    ) -> Vec<crate::pipeline::health::PipelineDropHealth> {
+        let pipelines: Vec<(String, std::sync::Arc<NdiPipeline>)> =
+            match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
+                .await
+            {
+                Ok(guard) => guard
+                    .iter()
+                    .map(|(id, src)| (id.clone(), std::sync::Arc::clone(&src.pipeline)))
+                    .collect(),
+                Err(_) => return Vec::new(),
+            };
+        let mut out = Vec::with_capacity(pipelines.len());
+        for (source_id, pipeline) in pipelines {
+            let state = pipeline.state();
+            let (pushed, dropped, consumers) = pipeline.consumer_delivery_totals().await;
+            out.push(crate::pipeline::health::PipelineDropHealth {
+                source_id,
+                state,
+                drop_ratio: crate::pipeline::health::drop_ratio(pushed, dropped),
+                consumers,
+            });
+        }
+        out
+    }
+
     /// Test-only: trigger an Errored state on the source's pipeline so
     /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
     /// Returns `true` if the source was active (state injection succeeded),
