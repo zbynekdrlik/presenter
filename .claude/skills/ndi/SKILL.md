@@ -224,9 +224,13 @@ Verified 2026-06-29 on prod: `selectedLocalCandidateType=relay`, 256 frames, var
 ## Observability
 
 - `/ndi/snapshot/{id}` — per-session `buffersPushed/Dropped` + `dropRatio` + `pushedFps`
-  (#768) + RTCP rtt/jitter/loss, plus a per-pipeline aggregate `dropRatio`
-- `/healthz.ndi_pipelines[]` — per-pipeline `{source_id, state, dropRatio, consumers}` (#768)
-  so an external watchdog can see a degraded fan-out without RTCP get-stats
+  + `dropRatio30s`/`pushedFps30s` (#768 D3, trailing 30s) + RTCP rtt/jitter/loss, plus a
+  per-pipeline aggregate `dropRatio` + `dropRatio30s`/`pushedFps30s`
+- `/healthz.ndi_pipelines[]` — per-pipeline `{source_id, state, dropRatio, consumers,
+  dropRatio30s, pushedFps30s}` (#768; the `*30s` keys added in D3) so an external watchdog
+  can see a degraded fan-out — and its CURRENT health, not diluted history — without RTCP
+  get-stats. `dropRatio30s`/`pushedFps30s` are `null` until >=2 in-window samples exist
+  (always present as a key — stable schema)
 - Stage UI beacons `getStats` to `POST /ndi/client-stats` every 15s (→ journald)
 - Stage ALSO POSTs a compact per-session sample to
   `POST /ndi/sessions/{session_id}/client-stats` every ~5s (#768 D6); the server stores the
@@ -285,10 +289,22 @@ curl -s http://<host>/healthz | python3 -c 'import json,sys; \
   [print(p["source_id"], p.get("dropRatio"), p.get("consumers")) for p in json.load(sys.stdin).get("ndi_pipelines",[])]'
 # per-consumer detail (dropRatio + pushedFps per session):
 curl -s http://<host>/ndi/snapshot/<source_id> | python3 -m json.tool
+# CURRENT health (trailing 30s, #768 D3) — what a watchdog should alert on:
+curl -s http://<host>/healthz | python3 -c 'import json,sys; \
+  [print(p["source_id"], "cum", p.get("dropRatio"), "30s", p.get("dropRatio30s"), "fps30s", p.get("pushedFps30s"), "cons", p.get("consumers")) for p in json.load(sys.stdin).get("ndi_pipelines",[])]'
 ```
 Healthy: `dropRatio ~0.0`, `pushedFps ~30`. Degraded: `dropRatio ~0.75`, `pushedFps ~9.5`.
-Metrics are **cumulative-since-session-join** (`drop_ratio`/`pushed_fps` in
-`crates/presenter-ndi/src/pipeline/health.rs`, pure + unit-tested).
+The plain `drop_ratio`/`pushed_fps` are **cumulative-since-session-join**
+(`crates/presenter-ndi/src/pipeline/health.rs`, pure + unit-tested) — right for the
+post-deploy self-heal gate (fresh pipeline) but they DILUTE a mid-life episode on a
+long-lived pipeline. The **trailing-30s** `dropRatio30s`/`pushedFps30s` (#768 D3,
+`crates/presenter-ndi/src/pipeline/health_window.rs`) reflect CURRENT health — use these,
+not the cumulative ones, for a mid-life degradation alert (a 6h-healthy pipeline that drops
+75% for 5 min reads cumulative ~0.0 but `dropRatio30s ~0.75`). They are sampled READ-DRIVEN
+(min-2s spacing) on every `/healthz` + `/ndi/snapshot` read — so a watchdog must poll at
+**<= ~15s** to keep a value (a slower poll reads `null`, since you cannot fill a 30s window
+sampling slower than it). `null` also means <2 samples yet. The pipeline aggregate folds each
+LIVE session's own (monotonic) windowed delta — a consumer leaving never corrupts it.
 
 **Manual remedy (also the automated deploy self-heal):** rebuild the pipeline —
 `POST /integrations/video-sources/deactivate`, wait ~4 s, `POST /integrations/video-sources/{id}/activate`.
