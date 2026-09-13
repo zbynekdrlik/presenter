@@ -154,6 +154,44 @@ impl NdiManager {
         out
     }
 
+    /// Store a client-reported frame-stats sample for one WHEP session (#768
+    /// D6). The session id is globally unique (UUID), so it is matched across
+    /// every active pipeline without needing the source id in the URL.
+    ///
+    /// Clones the pipeline Arcs out from under the `active` lock (200 ms
+    /// bounded, like the other snapshot readers) and records UNLOCKED, so it
+    /// NEVER holds `active` across the per-pipeline sessions-lock await (the
+    /// #741 stall). `NdiSessionError::SessionNotFound` when no active pipeline
+    /// has the session (unknown/expired → router maps to 404).
+    pub async fn record_client_stats(
+        &self,
+        session_id: &str,
+        sample: crate::pipeline::client_stats::ClientStatsSample,
+    ) -> Result<(), NdiSessionError> {
+        let pipelines: Vec<std::sync::Arc<NdiPipeline>> =
+            match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
+                .await
+            {
+                Ok(guard) => guard
+                    .values()
+                    .map(|src| std::sync::Arc::clone(&src.pipeline))
+                    .collect(),
+                Err(_) => {
+                    return Err(NdiSessionError::SessionNotFound {
+                        session_id: session_id.to_string(),
+                    })
+                }
+            };
+        for pipeline in pipelines {
+            if pipeline.record_client_stats(session_id, sample).await {
+                return Ok(());
+            }
+        }
+        Err(NdiSessionError::SessionNotFound {
+            session_id: session_id.to_string(),
+        })
+    }
+
     /// Test-only: trigger an Errored state on the source's pipeline so
     /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
     /// Returns `true` if the source was active (state injection succeeded),

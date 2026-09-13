@@ -135,6 +135,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
+            keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
         })
     }
 }
