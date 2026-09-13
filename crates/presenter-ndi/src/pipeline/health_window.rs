@@ -22,10 +22,12 @@
 //!   - Sampling is READ-DRIVEN (no dedicated thread): `record` is called on the
 //!     existing `/ndi/snapshot` and `/healthz` read paths, min-spacing-gated so
 //!     the many pollers that hit `/healthz` do not oversample. The metric is
-//!     `null` until >= 2 in-window samples exist, and a poller slower than the
-//!     window (> ~15s) will read `null` (you cannot measure a 30s window
-//!     sampling slower than it — the airuleset#1005 watchdog polls well under
-//!     that, and operator tabs keep `/healthz` warm continuously).
+//!     `null` until >= 2 in-window samples exist. Two samples survive as long
+//!     as they are <= `WINDOW` (30s) apart, so a poller reads a value while it
+//!     polls faster than ~30s (over a shorter span the closer it polls); an
+//!     interval > 30s evicts the prior sample on each read and yields `null`.
+//!     The airuleset#1005 watchdog polls well under that, and operator tabs
+//!     keep `/healthz` warm continuously.
 //!
 //! Everything here is pure and side-effect-free (no libndi/GPU), so it is
 //! unit-testable on every CI host with synthetic `Instant`s — the Tier-0 seam

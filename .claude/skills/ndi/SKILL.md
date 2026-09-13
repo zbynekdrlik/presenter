@@ -301,9 +301,10 @@ long-lived pipeline. The **trailing-30s** `dropRatio30s`/`pushedFps30s` (#768 D3
 `crates/presenter-ndi/src/pipeline/health_window.rs`) reflect CURRENT health — use these,
 not the cumulative ones, for a mid-life degradation alert (a 6h-healthy pipeline that drops
 75% for 5 min reads cumulative ~0.0 but `dropRatio30s ~0.75`). They are sampled READ-DRIVEN
-(min-2s spacing) on every `/healthz` + `/ndi/snapshot` read — so a watchdog must poll at
-**<= ~15s** to keep a value (a slower poll reads `null`, since you cannot fill a 30s window
-sampling slower than it). `null` also means <2 samples yet. The pipeline aggregate folds each
+(min-2s spacing) on every `/healthz` + `/ndi/snapshot` read — two samples survive while they
+are <= 30s (the window) apart, so a watchdog reads a value while it polls **faster than ~30s**
+(the closer it polls, the fuller the window; a `>30s` interval evicts the prior sample and reads
+`null`). `null` also means <2 samples yet. The pipeline aggregate folds each
 LIVE session's own (monotonic) windowed delta — a consumer leaving never corrupts it.
 
 **Manual remedy (also the automated deploy self-heal):** rebuild the pipeline —
