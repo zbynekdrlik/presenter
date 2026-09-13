@@ -202,3 +202,30 @@ length either, so a generic function can grow past 120 with every automated chec
 grow a generic fn (e.g. `Watchdog::install` reached 113 lines here), measure it by hand
 (`awk 'NR>=<start>&&/pub.*fn <name></,/^    }$/'`) and split with the #687 helper-extraction pattern
 if it nears 120 — the local gate will not warn you.
+
+## `cargo fmt --all` at the workspace root does NOT format `crates/presenter-ui` (#768 lane 2)
+
+`crates/presenter-ui` is workspace-EXCLUDED (it is a WASM crate with its own `Cargo.lock`), so
+`cargo fmt --all` run at the workspace root never touches it — but CI's **Format** job DOES check
+it. A mis-formatted `presenter-ui` file therefore passes every root-run local check and only reds
+at CI ~min in, costing a whole cycle (#768 lane 2 lost one exactly this way). Before pushing any
+`presenter-ui` change, format + verify it in its OWN directory:
+
+```bash
+cd crates/presenter-ui && cargo fmt --check   # run `cargo fmt` first if it reports diffs
+```
+
+Both `cargo fmt` and `cargo fmt --check` are allowed under Tier-0 (non-compiling). Run the root
+`cargo fmt --all --check` too — the two cover disjoint file sets.
+
+## A new method on `presenter_ndi::NdiManager` used by a router handler needs its forward on the seam (#768)
+
+A router handler never calls the real `NdiManager` directly — it goes through the
+`NdiManagerHandle` seam in `crates/presenter-server/src/state/ndi_control.rs` (`ndi_manager()`
+returns `Option<&NdiManagerHandle>`). So a new `pub async fn` you add to `NdiManager` and call
+from a handler needs a matching `pub(crate)` forward on `NdiManagerHandle` covering BOTH arms —
+`Real(m)` calls through; `#[cfg(test)] Fake(f)` returns a coherent stand-in (for a typed-error
+method, the same error variant the router maps, e.g. `NdiSessionError::SessionNotFound`). Without
+the forward you get `E0599: no method named <name> found for &NdiManagerHandle` at CI's Clippy job
+~min in (Tier-0, no local compile) — same failure family as the E0063 / orphaned-forward traps
+above. Grep the seam before pushing: `grep -n 'fn <name>' crates/presenter-server/src/state/ndi_control.rs`.

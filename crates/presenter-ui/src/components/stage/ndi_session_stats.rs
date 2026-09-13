@@ -124,7 +124,8 @@ pub(crate) fn start_session_stats_reporter(
         let now = now_ms();
         let count_now = stats.frames_presented.get();
         let (prev_count, prev_ts) = window.get();
-        let Some(presented_fps) = session_presented_fps(count_now, prev_count, now - prev_ts) else {
+        let Some(presented_fps) = session_presented_fps(count_now, prev_count, now - prev_ts)
+        else {
             return;
         };
         window.set((count_now, now));
