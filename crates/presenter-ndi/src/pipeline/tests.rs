@@ -234,12 +234,28 @@ impl NdiPipeline {
             liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
             client_stats: Arc::new(std::sync::Mutex::new(None)),
+            link_probe: Arc::new(super::link_probe::LinkProbe::default()),
         };
         self.sessions
             .lock()
             .await
             .insert(session_id.to_string(), session);
         Ok(())
+    }
+
+    /// Test-only: clone the per-link drop-probe (#768 D2b) of a stored session
+    /// so a seam test can drive it (the stub pushes no real buffers) and assert
+    /// the counters + verdict surface in the snapshot JSON shape.
+    pub fn link_probe_for_test(&self, session_id: &str) -> Arc<super::link_probe::LinkProbe> {
+        let sessions = self
+            .sessions
+            .try_lock()
+            .expect("sessions mutex busy in test");
+        sessions
+            .get(session_id)
+            .unwrap_or_else(|| panic!("no session {session_id} in test"))
+            .link_probe
+            .clone()
     }
 
     /// Test-only: overwrite a stored session's last-seen connection state,
@@ -1037,6 +1053,70 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     assert!(
         json.contains("dropRatio") && json.contains("pushedFps"),
         "camelCase serialization of #768 metrics: {json}"
+    );
+}
+
+/// #768 D2b: the per-consumer-link drop DISCRIMINATOR (`sessions[].link`) is
+/// present for every session and surfaces the camelCase keys plus a `verdict`
+/// in the snapshot JSON shape. The overflow count is read at snapshot time from
+/// the ground-truth `ConsumptionLink::dropped()` (the appsrc `enough-data`
+/// signal is suppressed by `StreamProducer`'s callback — review #1), so the
+/// stub link (which pushes no real buffers → `dropped()` stays 0) exercises the
+/// SAME `session.link.dropped()` path the production verdict uses; the buffer
+/// stats are driven via `link_probe_for_test` (the production path feeds the
+/// SAME `record_*` methods from the `need-data` signal + src-pad probe). The
+/// QueueOverflow verdict — which needs a non-zero `dropped()` the stub cannot
+/// inject — is covered by the pure `to_snapshot`/`classify` unit tests in
+/// `link_probe.rs`.
+#[tokio::test]
+async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("test topology");
+    pipeline
+        .add_consumer_stub("link-1")
+        .await
+        .expect("stub consumer");
+
+    // A fresh link with no traffic: block present, verdict healthy, absent
+    // lateness (no buffer flowed), zero drops.
+    let snap = pipeline.snapshot().await;
+    let link = &snap.sessions[0].link;
+    assert_eq!(link.verdict, super::link_probe::LinkVerdict::Healthy);
+    assert_eq!(link.dropped_buffers, 0);
+    assert!(link.lateness_ms.max.is_none());
+
+    // Drive the src-pad-probe stats: a keyframe-gated resume (DISCONT buffers)
+    // WITHOUT an overflow (the stub link's dropped() is 0) → KeyframeWait, never
+    // QueueOverflow. This proves the verdict is gated on the ground-truth drop
+    // count, not on buffer stats alone.
+    let probe = pipeline.link_probe_for_test("link-1");
+    probe.record_need_data();
+    probe.record_buffer(true, true, 420, 510);
+    probe.record_buffer(false, false, 400, 300);
+
+    let snap = pipeline.snapshot().await;
+    let link = &snap.sessions[0].link;
+    assert_eq!(link.dropped_buffers, 0);
+    assert_eq!(link.need_data_events, 1);
+    assert_eq!(link.discont_buffers, 1);
+    assert_eq!(link.keyframe_buffers, 1);
+    assert_eq!(link.max_queue_level_ms, 510);
+    assert_eq!(link.lateness_ms.max, Some(420));
+    assert_eq!(link.lateness_ms.last, Some(400));
+    assert_eq!(link.verdict, super::link_probe::LinkVerdict::KeyframeWait);
+
+    let json = serde_json::to_string(&snap).expect("serialize");
+    assert!(
+        json.contains("droppedBuffers")
+            && json.contains("discontBuffers")
+            && json.contains("maxQueueLevelMs")
+            && json.contains("latenessMs"),
+        "link block serializes new camelCase keys: {json}"
+    );
+    assert!(
+        json.contains("verdict") && json.contains("keyframeWait"),
+        "link verdict serializes camelCase: {json}"
     );
 }
 

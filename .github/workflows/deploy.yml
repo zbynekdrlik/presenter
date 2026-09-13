@@ -652,6 +652,18 @@ jobs:
             SID=$(echo "$SICK" | awk '{print $1}')
             RATIO=$(echo "$SICK" | awk '{print $2}')
             echo "::error::NDI fan-out DEGRADED after deploy — source $SID dropRatio=$RATIO (>0.2) with consumers attached; auto-rebuilding via deactivate/activate. #768 (non-blocking)"
+            echo "::group::#768 D2b per-link drop discriminator (source $SID) — captured before rebuild"
+            curl -sf "$BASE/ndi/snapshot/$SID" 2>/dev/null | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print("(snapshot unavailable)")
+              sys.exit(0)
+          for s in d.get("sessions", []):
+              print(s.get("id", "?"), "dropRatio=", s.get("dropRatio"), "link=", json.dumps(s.get("link", {})))
+          ' 2>/dev/null || echo "(link block unavailable)"
+            echo "::endgroup::"
             curl -sf -X POST "$BASE/integrations/video-sources/deactivate" >/dev/null 2>&1 || true
             sleep 4
             curl -sf -X POST "$BASE/integrations/video-sources/$SID/activate" -H 'content-type: application/json' -d '{}' >/dev/null 2>&1 || true

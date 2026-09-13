@@ -333,6 +333,43 @@ that classifies buffers on the consumer appsrc. That measurement distinguishes
 D2 into a fixable, review-verifiable ticket. It must be done where the code can be compiled +
 deployed (not a fleet/Tier-0 worktree).
 
+**D2b — that discriminator IS now instrumented (#768 D2b): read `sessions[].link.verdict`.**
+`ConsumptionLink` exposes only `pushed()`/`dropped()` totals, so the discriminator is measured
+from OUR side — a probe on each consumer `appsrc`
+(`crates/presenter-ndi/src/pipeline/link_probe.rs`, attached in `build_consumer_pipeline_blocking`).
+CRITICAL GOTCHA (#768 review #1): `StreamProducer::add_consumer` installs its OWN `enough-data`
+CALLBACK on the consumer appsrc (it increments `dropped()` + posts a `dropped-buffer` message), and
+per the GStreamer appsrc contract a slot with a callback NO LONGER emits its signal — so the
+overflow count MUST be read from `ConsumptionLink::dropped()` (threaded into `to_snapshot` at
+snapshot time), NOT from an `emit-signals` `enough-data` handler (which would stay stuck at 0 and
+make `queueOverflow` unreachable). Only `need-data` (the slot `StreamProducer` leaves free) is read
+via signal; everything else — DISCONT / keyframe counts, buffer lateness (consumer running-time −
+buffer PTS, ms), and appsrc `current-level-time` — comes from a src-pad BUFFER probe, which fires
+regardless of callbacks. A pure `classify()` (unit-tested) turns `dropped()` + those into a
+`verdict`, surfaced per session in `GET /ndi/snapshot/{id}`:
+```bash
+curl -s http://<host>/ndi/snapshot/<source_id> | python3 -c 'import json,sys; \
+  [print(s["id"], s.get("dropRatio"), json.dumps(s.get("link",{}))) for s in json.load(sys.stdin).get("sessions",[])]'
+```
+Each `link` block carries `droppedBuffers` (== the session's `buffersDropped`, the ground-truth
+overflow count), `needDataEvents`, `discontBuffers`, `keyframeBuffers`, `maxQueueLevelMs`,
+`latenessMs:{min,max,last}` and `verdict`. Read the `verdict` to point the D2 fix WITHOUT re-doing
+the math:
+- **`queueOverflow`** — the link actually dropped buffers (`dropped()`>0) AND they fell > 250 ms
+  behind the consumer clock: downstream is draining slower than realtime (the incident signature).
+  The fix belongs on the drain side (encoder throughput / consumer sink pacing / real VA-API
+  uptime), NOT on GOP or `max-time`.
+- **`keyframeWait`** — DISCONT buffers appeared without an overflow (`dropped()`==0): forwarding was
+  IDR-gated. Points at producer keyframe cadence / re-arm behaviour, not queue overflow.
+- **`healthy`** — neither signature: this link is not the source of the drop.
+
+The deploy self-heal step (all 3 workflows) already prints each session's `link` block into the
+job log right before its one-shot deactivate/activate — a deploy restart reproduces the
+source-live-at-boot ordering, so that log is the natural place the next occurrence is captured.
+The probe changes NO drop/timeline mechanism; it is pure instrumentation so the next prod
+occurrence is self-explaining. The D2 root-cause FIX itself stays open (it needs the live
+`verdict` reading during an actual incident).
+
 **Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
 `python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST
 to the block base (10 spaces here) — a line at column 0 terminates the scalar and breaks YAML
