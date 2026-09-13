@@ -223,8 +223,54 @@ Verified 2026-06-29 on prod: `selectedLocalCandidateType=relay`, 256 frames, var
 
 ## Observability
 
-- `/ndi/snapshot/{id}` — per-session `buffersPushed/Dropped` + RTCP rtt/jitter/loss
+- `/ndi/snapshot/{id}` — per-session `buffersPushed/Dropped` + `dropRatio` + `pushedFps`
+  (#768) + RTCP rtt/jitter/loss, plus a per-pipeline aggregate `dropRatio`
+- `/healthz.ndi_pipelines[]` — per-pipeline `{source_id, state, dropRatio, consumers}` (#768)
+  so an external watchdog can see a degraded fan-out without RTCP get-stats
 - Stage UI beacons `getStats` to `POST /ndi/client-stats` every 15s (→ journald)
+
+### Boot-restore fan-out drop bug — dropRatio + self-heal (#768)
+
+**Symptom (2026-09-13 SNV incident):** the NDI pipeline the service restores
+AUTOMATICALLY at startup (`restore_active_ndi_source` → `activate_video_source` →
+`start_pipeline`) fed every WHEP consumer ~9.5 fps and DROPPED ~75% of encoded frames in
+the `StreamProducer`→appsrc bridge, while `/healthz` `state` stayed `"streaming"`. Pattern:
+25% pushed = exactly the 500 ms appsrc `max-time` queue out of each 2 s GOP (`key-int-max/
+gop-size=60`) — the queue fills, `enough_data` re-arms `needs_keyframe`, the rest of the GOP
+is dropped until the next IDR. **A pipeline built by API `deactivate`+`activate` at runtime is
+healthy (0 drops, 30 fps); the SAME server code builds both — the only difference is the time
+between encoder PLAYING and consumer join (hours at boot-restore vs seconds at API-activate),
+so the root cause is a boot-restore-specific timeline offset, not a different build path.**
+
+**Reading the drop ratio (the diagnostic the incident lacked):**
+```bash
+# per-pipeline, cheap, external-watchdog-friendly (no RTCP get-stats):
+curl -s http://<host>/healthz | python3 -c 'import json,sys; \
+  [print(p["source_id"], p.get("dropRatio"), p.get("consumers")) for p in json.load(sys.stdin).get("ndi_pipelines",[])]'
+# per-consumer detail (dropRatio + pushedFps per session):
+curl -s http://<host>/ndi/snapshot/<source_id> | python3 -m json.tool
+```
+Healthy: `dropRatio ~0.0`, `pushedFps ~30`. Degraded: `dropRatio ~0.75`, `pushedFps ~9.5`.
+Metrics are **cumulative-since-session-join** (`drop_ratio`/`pushed_fps` in
+`crates/presenter-ndi/src/pipeline/health.rs`, pure + unit-tested).
+
+**Manual remedy (also the automated deploy self-heal):** rebuild the pipeline —
+`POST /integrations/video-sources/deactivate`, wait ~4 s, `POST /integrations/video-sources/{id}/activate`.
+The 3 deploy workflows do this ONE time automatically when a post-deploy `/healthz` poll shows
+`dropRatio > 0.2` with `consumers >= 1` (owner-visible `::error::`, never fails the deploy).
+
+**Root-cause FIX status:** deferred — pinning the exact GStreamer timeline offset needs the
+e2e-ndi GPU-lane reproduction (`ndi-webrtc-synthetic.spec.ts` "boot-restore … healthy fan-out",
+tag `@synthetic-ndi`). Do NOT band-aid it by enlarging `max-time` (`no-timeout-band-aids.md`).
+
+**Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
+`python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST
+to the block base (10 spaces here) — a line at column 0 terminates the scalar and breaks YAML
+parsing (CI-invisible on Tier-0 until the run fails). After editing, validate locally:
+`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/pipeline.yml'))"`, extract the
+remote heredoc body and `bash -n` it, and `python3 -c 'import ast; ast.parse(open(...).read())'`
+the embedded program. Keep the step non-blocking (bare-echo else-branch, `if…then break; fi`
+never `[ … ] && break` under `set -e`).
 - Regression guards: `tests/e2e/ndi-webrtc-synthetic.spec.ts` + `tests/e2e/ndi-latency.spec.ts`
   (glass-to-glass median ≤350ms, p95 ≤600ms; measured dev 173/190ms, CI 168/192ms)
 

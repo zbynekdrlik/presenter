@@ -216,6 +216,7 @@ impl NdiPipeline {
             .ok_or_else(|| anyhow!("negotiated consumer branch missing link or bus task"))?;
         let session = WhepSession {
             session_id: session_id.clone(),
+            created_at: std::time::Instant::now(),
             consumer_pipeline,
             webrtcbin,
             link,
@@ -325,8 +326,9 @@ impl NdiPipeline {
     /// Snapshot the pipeline state for the diagnostic route.
     /// `source_id` is left empty — the manager fills it in (Task 8).
     pub async fn snapshot(&self) -> PipelineSnapshot {
-        // Phase 1 (cheap, under the lock): identity + counters + webrtcbin handle.
-        let partial: Vec<(String, WhepConnectionState, u64, u64, gst::Element)> = {
+        // Phase 1 (cheap, under the lock): identity + counters + consumer age
+        // (the pushed_fps denominator, #768) + webrtcbin handle.
+        let partial: Vec<(String, WhepConnectionState, u64, u64, f64, gst::Element)> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
@@ -340,6 +342,7 @@ impl NdiPipeline {
                         connection_state,
                         session.link.pushed(),
                         session.link.dropped(),
+                        session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
                     )
                 })
@@ -350,22 +353,34 @@ impl NdiPipeline {
         let session_snaps: Vec<SessionSnapshot> = tokio::task::spawn_blocking(move || {
             partial
                 .into_iter()
-                .map(|(id, connection_state, pushed, dropped, webrtcbin)| {
-                    let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
-                    SessionSnapshot {
-                        id,
-                        connection_state,
-                        buffers_pushed: pushed,
-                        buffers_dropped: dropped,
-                        rtcp_round_trip_ms: rtt,
-                        rtcp_jitter_ms: jitter,
-                        rtcp_packets_lost: lost,
-                    }
-                })
+                .map(
+                    |(id, connection_state, pushed, dropped, age_secs, webrtcbin)| {
+                        let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
+                        SessionSnapshot {
+                            id,
+                            connection_state,
+                            buffers_pushed: pushed,
+                            buffers_dropped: dropped,
+                            drop_ratio: super::health::drop_ratio(pushed, dropped),
+                            pushed_fps: super::health::pushed_fps(pushed, age_secs),
+                            rtcp_round_trip_ms: rtt,
+                            rtcp_jitter_ms: jitter,
+                            rtcp_packets_lost: lost,
+                        }
+                    },
+                )
                 .collect()
         })
         .await
         .unwrap_or_default();
+        // Per-pipeline aggregate drop ratio over ALL live consumers (#768) —
+        // the single signal the self-heal gate reads.
+        let (agg_pushed, agg_dropped) = session_snaps.iter().fold((0u64, 0u64), |(p, d), s| {
+            (
+                p.saturating_add(s.buffers_pushed),
+                d.saturating_add(s.buffers_dropped),
+            )
+        });
         let encoders: Vec<gst::Element> = self.iterate_encoders().collect();
         let encoder_count = encoders.len();
         let encoder_factory = encoders
@@ -379,6 +394,7 @@ impl NdiPipeline {
             encoder_factory,
             encoder_count,
             consumer_count,
+            drop_ratio: super::health::drop_ratio(agg_pushed, agg_dropped),
             sessions: session_snaps,
         }
     }

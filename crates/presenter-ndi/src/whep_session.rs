@@ -152,6 +152,10 @@ impl Default for LivenessState {
 pub struct WhepSession {
     /// UUID used as the WHEP HTTP Location path segment.
     pub session_id: String,
+    /// When this consumer joined — the denominator for `pushed_fps` in the
+    /// diagnostic snapshot (#768). Monotonic (`Instant`), Copy, set once at
+    /// `add_consumer`, never mutated.
+    pub created_at: Instant,
     /// This consumer's OWN pipeline: `appsrc → rtph264pay → webrtcbin`.
     /// Set to Null on remove/teardown/Drop.
     pub consumer_pipeline: gst::Pipeline,

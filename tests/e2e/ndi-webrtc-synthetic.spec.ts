@@ -951,3 +951,170 @@ test("stage keeps NDI video revealed after re-activating the ALREADY-active sour
     await cleanupSource(request, src.id);
   }
 });
+
+// ── Test 7 (#768): the BOOT-RESTORE fan-out drop regression guard.
+//
+// The 2026-09-13 SNV incident: the NDI pipeline the service restored
+// AUTOMATICALLY on startup (restore_active_ndi_source → activate_video_source
+// → start_pipeline) fed every WHEP consumer ~9.5 fps and dropped ~75% of
+// encoded frames in the StreamProducer→appsrc bridge, while `state` stayed
+// "streaming". A rebuild via API deactivate/activate produced a healthy 30 fps
+// / 0-drop pipeline. This guard reproduces the RESTORE path (activate, then
+// RESTART the server so the pipeline is rebuilt by the boot-restore code path,
+// not the API-activate one), attaches ≥2 consumers, holds them, and asserts
+// the per-pipeline + per-session drop ratio read from /ndi/snapshot stays
+// healthy (<0.2). It is the RED test for the root-cause fix: if the restore
+// path yields a degraded pipeline, dropRatio climbs toward ~0.75 and this
+// fails. (A real reproduction of the incident's timeline offset may require
+// long encoder-vs-join uptime that a short synthetic run cannot force; the
+// guard still pins the healthy invariant and exercises the #768 metrics
+// end-to-end.)
+async function connectConsumersAndHold(
+  page: Page,
+  sourceId: string,
+  n: number,
+): Promise<{ error?: string }> {
+  return page.evaluate(
+    async ({ sourceId, n }) => {
+      async function connectOne(): Promise<
+        { ok: true; pc: RTCPeerConnection } | { ok: false; reason: string }
+      > {
+        const pc = new RTCPeerConnection();
+        pc.addTransceiver("video", { direction: "recvonly" });
+        pc.addTransceiver("audio", { direction: "recvonly" });
+        await pc.setLocalDescription(await pc.createOffer());
+        await new Promise<void>((res) => {
+          if (pc.iceGatheringState === "complete") return res();
+          pc.addEventListener("icegatheringstatechange", () => {
+            if (pc.iceGatheringState === "complete") res();
+          });
+          setTimeout(res, 4000);
+        });
+        const resp = await fetch(`/ndi/whep/${sourceId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/sdp" },
+          body: pc.localDescription!.sdp,
+        });
+        if (!resp.ok) {
+          pc.close();
+          return { ok: false, reason: `WHEP POST ${resp.status}` };
+        }
+        await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
+        return { ok: true, pc };
+      }
+      const conns = await Promise.all(
+        Array.from({ length: n }, () => connectOne()),
+      );
+      const bad = conns.find((c) => !c.ok);
+      if (bad) {
+        for (const c of conns) if (c.ok) c.pc.close();
+        return { error: (bad as { reason: string }).reason };
+      }
+      // Hold the peer connections open on window so the server-side consumers
+      // stay attached while the test polls /ndi/snapshot. Released explicitly
+      // by releaseHeldConsumers() below.
+      (window as unknown as { __ndiHold: RTCPeerConnection[] }).__ndiHold =
+        conns.map((c) => (c as { pc: RTCPeerConnection }).pc);
+      return {};
+    },
+    { sourceId, n },
+  );
+}
+
+async function releaseHeldConsumers(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const held = (window as unknown as { __ndiHold?: RTCPeerConnection[] })
+      .__ndiHold;
+    if (held) held.forEach((pc) => pc.close());
+  });
+}
+
+test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}, testInfo) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  // Activate the source so the DB row is is_active=true — the precondition the
+  // startup restore path reads.
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-BootRestore",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    // RESTART the server on the SAME db + port. On boot it runs
+    // restore_active_ndi_source (the DB source is active) → the pipeline is
+    // rebuilt by the BOOT-RESTORE path, which is what the incident implicated.
+    const cfg = deriveTestConfig(testInfo);
+    await stopServer(server);
+    // Clear the handle BEFORE the (fallible) restart: if startTestServer throws,
+    // afterAll's stopServer(undefined) is a safe no-op rather than re-killing an
+    // already-dead process and hanging on an exit event that never comes.
+    server = undefined;
+    server = await startTestServer(port, dbUrl, cfg.oscPort);
+    await waitForPipelineStreaming(request, src.id);
+
+    // The page origin was served by the now-restarted server; (re)load it so
+    // relative WHEP fetches hit the fresh server.
+    await page.goto(new URL("/", baseURL).toString());
+
+    // Attach 2 consumers (the incident showed identical drops across all
+    // sessions — 2 is enough to reproduce the shared-encoder fan-out) and HOLD
+    // them so they stay attached while we sample the server-side counters.
+    const held = await connectConsumersAndHold(page, src.id, 2);
+    expect(held.error, `WHEP consumers must connect — ${held.error}`).toBeFalsy();
+
+    // Sample /ndi/snapshot for ~30s; the drop ratio is cumulative-since-join,
+    // so the FINAL sample is the steady-state signal (the brief join-until-IDR
+    // drop dilutes to nothing over 30s of healthy 30fps delivery).
+    type Snap = {
+      drop_ratio?: number;
+      dropRatio?: number;
+      consumer_count?: number;
+      consumerCount?: number;
+      sessions?: Array<{ dropRatio?: number; drop_ratio?: number }>;
+    };
+    let final: Snap | undefined;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const resp = await request.get(
+        new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+      );
+      if (resp.ok()) final = (await resp.json()) as Snap;
+    }
+    expect(final, "/ndi/snapshot must return a body for the restored source").toBeTruthy();
+
+    const consumers = final!.consumerCount ?? final!.consumer_count ?? 0;
+    expect(consumers, "both held consumers must be attached server-side").toBe(2);
+
+    const pipelineDrop = final!.dropRatio ?? final!.drop_ratio ?? 1;
+    expect(
+      pipelineDrop,
+      `boot-restore pipeline drop ratio must stay healthy (<0.2); the #768 ` +
+        `incident sustained ~0.75. Got ${pipelineDrop} — the restore path is ` +
+        `dropping most of its encoded frames in the StreamProducer->appsrc bridge.`,
+    ).toBeLessThan(0.2);
+
+    for (const [i, s] of (final!.sessions ?? []).entries()) {
+      const d = s.dropRatio ?? s.drop_ratio ?? 1;
+      expect(
+        d,
+        `consumer ${i} drop ratio must stay healthy (<0.2), got ${d}`,
+      ).toBeLessThan(0.2);
+    }
+
+  } finally {
+    // Release the held consumers even on an assertion failure (they live on
+    // window across page.evaluate calls); releaseHeldConsumers no-ops if none
+    // were held. Then deactivate + delete the source.
+    await releaseHeldConsumers(page);
+    await cleanupSource(request, src.id);
+  }
+});
