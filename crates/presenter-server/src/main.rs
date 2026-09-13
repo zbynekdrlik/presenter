@@ -45,8 +45,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = ServerConfig::load()?;
+    let startup_mode = config.startup_mode;
     let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], config.http.port));
-    let state = AppState::from_config(config).await?;
+    // #771: in validate (schema-probe) mode, `from_config` runs migrations +
+    // opens the DB but starts no integrations. Any error here is therefore a
+    // DB/migration failure — emit a STABLE, greppable marker so the deploy
+    // "Validate database schema" step can distinguish a real broken migration
+    // from a process that failed to start for another reason, instead of the
+    // old blanket "migration is broken".
+    let state = match AppState::from_config(config).await {
+        Ok(state) => state,
+        Err(err) => {
+            if startup_mode.is_validate() {
+                eprintln!("SCHEMA-VALIDATION-FAILED: {err:#}");
+            }
+            return Err(err);
+        }
+    };
 
     // #708: ensure the content-addressed stream-graphics asset directory exists
     // (next to presenter.db). Non-fatal: the upload handler also creates it on
@@ -69,8 +84,13 @@ async fn main() -> anyhow::Result<()> {
     // connection-refused, showed the browser error page, and the #419
     // foreground-aware keep-alive then skipped the relaunch forever. Non-fatal:
     // a launch failure must never stop the server from serving.
-    if let Err(err) = state.start_android_stage_displays().await {
-        tracing::warn!(?err, "failed to launch android stage displays on startup");
+    // #771: the Android stage launcher is an integration (ADB `am start` to the
+    // TVs) — skip it in validate (schema-probe) mode. `from_config` already
+    // skipped every other integration; this is the one that runs post-bind.
+    if startup_mode.starts_integrations() {
+        if let Err(err) = state.start_android_stage_displays().await {
+            tracing::warn!(?err, "failed to launch android stage displays on startup");
+        }
     }
     // Mock integrations (OSC/AbleSet/Resolume) bind FIXED localhost ports
     // (e.g. 127.0.0.1:8091). When a test server is spawned on a host that

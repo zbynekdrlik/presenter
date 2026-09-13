@@ -1,4 +1,5 @@
 use crate::stage_connections::StageHeartbeatConfig;
+use crate::state::StartupMode;
 use anyhow::{Context, Result};
 use std::{env, ffi::OsString, time::Duration};
 
@@ -17,6 +18,10 @@ pub struct ServerConfig {
     #[allow(dead_code)] // Consumed in Task 2 (AppState) — not yet wired
     pub network: NetworkConfig,
     pub sync: SyncConfig,
+    /// #771: startup mode (normal vs schema-validate probe). Parsed once here
+    /// from `PRESENTER_STARTUP_MODE` and threaded into `AppState::from_config`,
+    /// which gates every integration/background task behind it.
+    pub startup_mode: StartupMode,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +72,7 @@ impl ServerConfig {
             android: AndroidConfig::load(),
             network: NetworkConfig::load(),
             sync: SyncConfig::load(),
+            startup_mode: StartupMode::from_env(),
         })
     }
 }

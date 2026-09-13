@@ -276,6 +276,7 @@ crates/
 | `PRESENTER_COMPANION_PORT`    | 18175                   | Companion listen port                                                |
 | `PRESENTER_LOCAL_PUBLIC_IP`   | unset                   | Church's public egress IP for LAN/WAN detection via Cloudflare Tunnel |
 | `PRESENTER_ANDROID_STAGE_URL` | unset                   | Stage URL the launcher opens on every Android stage display via `am start -a VIEW -d <url> <package>`. Set per env in deploy units (prod `http://10.77.9.205/stage`, dev `http://10.77.8.134:8080/stage`). Unset → launcher warns + skips. |
+| `PRESENTER_STARTUP_MODE`      | `normal`                | `normal` = full boot. `validate` (#771) = deploy schema-validation probe: migrate + open DB + serve `/healthz`, but start NO integration/background task (NDI restore, Companion, OSC, AbleSet, Resolume, sync, Android launcher, tickers) and no AI probe. Used by the "Validate database schema" step in deploy.yml/pipeline.yml/release.yml so the probe never collides with the live service. Unknown value → `normal` (WARN). |
 | `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter                                                       |
 
 ---

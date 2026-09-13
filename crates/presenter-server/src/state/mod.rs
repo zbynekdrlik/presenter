@@ -207,6 +207,11 @@ pub struct AppState {
     /// `PRESENTER_STREAM_ASSETS_DIR` / `PRESENTER_DB_URL` / cwd — see
     /// `state::stream_assets::resolve_dir`.
     stream_assets_dir: std::path::PathBuf,
+    /// #771: how this process booted. In [`StartupMode::Validate`] the
+    /// constructor + `from_config` skip every integration/background task and
+    /// `/healthz` skips the live AI probe. Defaults to `Normal` for every
+    /// test/in-memory constructor.
+    startup_mode: StartupMode,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -295,6 +300,7 @@ impl AppState {
             ableset_bridge,
             heartbeat_config,
             Arc::new(None),
+            StartupMode::Normal,
         )
     }
 
@@ -309,6 +315,7 @@ impl AppState {
         ableset_bridge: AbleSetBridge,
         heartbeat_config: StageHeartbeatConfig,
         local_public_ip: Arc<Option<String>>,
+        startup_mode: StartupMode,
     ) -> Self {
         let stage_connections = StageConnections::new();
         let default_layout = StageDisplayLayout::built_in()
@@ -370,8 +377,13 @@ impl AppState {
             ableset_disabled_warn_shown: Arc::new(AtomicBool::new(false)),
             stream: stream::StreamManager::new(),
             stream_assets_dir: stream_assets::resolve_dir(),
+            startup_mode,
         };
-        state.spawn_heartbeat_tasks();
+        // #771: heartbeat broadcasting is a background task — skip it in the
+        // validate probe boot, which starts nothing beyond the DB + /healthz.
+        if startup_mode.starts_integrations() {
+            state.spawn_heartbeat_tasks();
+        }
         state
     }
 
@@ -380,6 +392,7 @@ impl AppState {
 
     #[instrument(skip_all)]
     pub async fn from_config(config: ServerConfig) -> anyhow::Result<Self> {
+        let startup_mode = config.startup_mode;
         let db_url = config.database.url;
         let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
         let companion_token = config.companion.token;
@@ -412,6 +425,7 @@ impl AppState {
             ableset_bridge.clone(),
             heartbeat_config,
             local_public_ip,
+            startup_mode,
         );
 
         // Pre-load group color cache from database
@@ -433,6 +447,17 @@ impl AppState {
         }
 
         state.ensure_demo_playlist().await?;
+
+        // #771: the single seam that gates every integration + background task.
+        // In validate (schema-probe) mode migrations ran, the DB is open, and
+        // `/healthz` serves above — but nothing that binds a fixed port, builds
+        // the NDI pipeline, polls, or reaches the network starts. See the field
+        // doc + `main`'s post-bind Android-launch gate.
+        if !startup_mode.starts_integrations() {
+            tracing::info!("startup mode: validate — integrations skipped");
+            return Ok(state);
+        }
+
         state.sync_resolume_hosts().await?;
         // #423: android stage displays are launched from `main` AFTER bind, not here (raced the listener) — see start_android_stage_displays.
 
@@ -687,6 +712,20 @@ impl AppState {
 
     pub fn live_hub(&self) -> LiveHub {
         self.live_hub.clone()
+    }
+
+    /// #771: how this process booted (`pub`: read by `main.rs` + `/healthz`).
+    pub fn startup_mode(&self) -> StartupMode {
+        self.startup_mode
+    }
+
+    /// #771: whether the Companion websocket server is currently listening —
+    /// the validate-mode test asserts it stays `false` even with Companion
+    /// enabled in the DB. Test-only (its sole caller is the regression test),
+    /// so `#[cfg(test)]` keeps it out of the non-test build's `dead_code` gate.
+    #[cfg(test)]
+    pub(crate) async fn companion_server_running(&self) -> bool {
+        self.companion.server.is_running().await
     }
 
     pub fn ai_conversation(&self) -> &Arc<RwLock<Vec<ChatMessage>>> {

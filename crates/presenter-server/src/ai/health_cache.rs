@@ -77,6 +77,15 @@ fn warming() -> Value {
     json!({ "connected": false, "error": "AI status not yet available", "model": "" })
 }
 
+/// #771: the cold placeholder served for `/healthz.ai` in validate startup
+/// mode. A schema-validation probe boot must make NO outbound AI request, so
+/// `/healthz` returns this instead of invoking the SWR producer (which
+/// cold-probes the AI backend inline). Reuses the exact `warming()` shape so
+/// the response schema is identical to a genuine cold hit.
+pub(crate) fn cold_placeholder() -> Value {
+    warming()
+}
+
 /// The very first (cold) probe itself failed to produce a verdict.
 fn cold_failure() -> Value {
     json!({ "connected": false, "error": "AI status check failed", "model": "" })

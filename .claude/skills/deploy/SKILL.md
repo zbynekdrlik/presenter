@@ -264,6 +264,44 @@ the operator's "N stage displays connected" count. Fix: it tags its socket
 sockets while still forwarding every live event. To embed another live stage view
 without polluting the count, reuse `?preview=1`.
 
+## Deploy "Validate database schema" probe — the `validate` startup mode (#771)
+
+The "Validate database schema" step in `deploy.yml`, the "Test migration against
+production DB" step in `pipeline.yml`, its "Validate database schema (dev DB)" step, and
+the same step in `release.yml` all start the NEW release binary against a **COPY** of the
+live DB *while the real `presenter.service` (or `presenter-dev.service`) is still
+running*, then treat "process alive after 3 s" as "migration OK".
+
+**The probe MUST run in validate mode — `PRESENTER_STARTUP_MODE=validate`.** In validate
+mode the binary runs migrations, opens the DB, and serves `/healthz` on `PRESENTER_PORT`
+(the steps pass `PRESENTER_PORT=0` → ephemeral), and starts **NOTHING** else: no NDI
+source restore, Companion websocket, OSC listener, AbleSet/Resolume pollers, song-sync
+loop, Android launcher, or background tickers, and `/healthz` returns the cold AI
+placeholder without probing the AI backend. The single gate is `StartupMode` in
+`crates/presenter-server/src/state/startup_mode.rs`, threaded through `ServerConfig` →
+`AppState::from_config` (early-returns before the integration block) + `main.rs` (skips
+the post-bind Android launch) + `router.rs` (`/healthz` AI).
+
+**GOTCHA — the probe must NEVER start integrations, or it false-fails the deploy (#771,
+the incident this mode exists for).** Before validate mode, the probe took the normal boot
+path and tried to bind the **fixed** Companion port **18175** (from the DB setting, NOT
+`PRESENTER_PORT`) — colliding with the live service → `Address already in use` → the step
+misreported "migration is broken" and SNV was stuck a whole version behind. Worse, it also
+restored the NDI source, building a **second** pipeline on the shared VA-API encoder mid-
+deploy (the #768 dropRatio hazard). So: **any new integration/background task MUST be
+inside `from_config`'s `if startup_mode.starts_integrations()` block** (or, if it lives in
+`main.rs` post-bind, behind the same `startup_mode.starts_integrations()` gate). If you add
+a boot-time port bind / pipeline build / poller / launcher, gate it — a regression test
+(`validate_startup_mode_starts_no_integrations_but_serves_healthz` in `state/tests.rs`)
+asserts Companion stays unbound and `/healthz` serves, but it can't enumerate a future
+integration you forget to gate.
+
+**Failure reporting.** On a probe failure the steps print the probe's last 40 log lines
+and grep for the `SCHEMA-VALIDATION-FAILED:` marker the binary prints on a DB/migration
+error in validate mode — a hit → "migration is broken", a miss → "failed to start for
+another reason (NOT necessarily a migration problem)". Never re-add a blanket "migration
+is broken" for any non-alive probe.
+
 ## PP location (companion-pp.lan) — release + manual recovery
 
 PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main --generate-notes`, X.Y.Z = current main version) → `release.yml` builds + `deploy-pp` SSH-deploys. SSH from dev2: `newlevel@companion-pp.lan` (creds in memory `project-pp-location-upgrade`; no `sqlite3` CLI on the box — use `python3 -c "import sqlite3; ..."`).
@@ -272,7 +310,7 @@ PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main
 
 **Manual recovery — ONLY if the deploy-pp job fails (binary is already deployed when it does):**
 1. Backup: `cp /opt/presenter/presenter.db /opt/presenter/backups/presenter-prerelease-$(date +%Y%m%d-%H%M%S).db`
-2. Schema-validate on a COPY: run the new binary with `PRESENTER_DB_URL=sqlite:///tmp/x.db PRESENTER_PORT=18099`, poll `/healthz` (migrations apply) + `/libraries/summary` (data survives), kill + rm the copy.
+2. Schema-validate on a COPY: run the new binary with `PRESENTER_STARTUP_MODE=validate PRESENTER_DB_URL=sqlite:///tmp/x.db PRESENTER_PORT=18099` (validate mode = migrations + `/healthz` only, no integrations, so it won't collide with the live PP service — #771), poll `/healthz` (migrations apply) + `/libraries/summary` (data survives), kill + rm the copy.
 3. `sudo systemctl start presenter`; verify `/healthz` version, `/libraries/summary` non-empty, `/stage` + `/ui/operator` = 200.
 
 Deploy is DB-safe — ProPresenter import is skipped on an existing DB ("preserving presentations"). DBs predating `video_sources` (PP) lack that table → `/integrations/video-sources` 500s; proper fix is an idempotent incremental migration (#468).

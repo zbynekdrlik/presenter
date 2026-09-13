@@ -44,10 +44,18 @@ impl StartupMode {
     /// - anything else → [`StartupMode::Normal`] with a WARN (an unrecognised
     ///   value must NEVER silently skip integrations on a real boot)
     pub fn parse(raw: Option<&str>) -> Self {
-        // NOTE(#771 [red]): naive first cut — recognises nothing, so every
-        // caller falls back to Normal. Made correct in the [green] commit.
-        let _ = raw;
-        StartupMode::Normal
+        match raw.map(str::trim).filter(|s| !s.is_empty()) {
+            None => StartupMode::Normal,
+            Some(value) if value.eq_ignore_ascii_case("validate") => StartupMode::Validate,
+            Some(value) if value.eq_ignore_ascii_case("normal") => StartupMode::Normal,
+            Some(other) => {
+                tracing::warn!(
+                    value = %other,
+                    "unknown PRESENTER_STARTUP_MODE; defaulting to normal (integrations enabled)"
+                );
+                StartupMode::Normal
+            }
+        }
     }
 
     /// Parse the mode from the process environment (`PRESENTER_STARTUP_MODE`).
