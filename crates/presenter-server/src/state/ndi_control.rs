@@ -113,17 +113,6 @@ impl NdiManagerHandle {
         }
     }
 
-    /// Forward to [`NdiManager::pipeline_snapshots`].
-    pub(crate) async fn pipeline_snapshots(
-        &self,
-    ) -> Vec<(String, presenter_ndi::pipeline::PipelineState)> {
-        match self {
-            Self::Real(m) => m.pipeline_snapshots().await,
-            #[cfg(test)]
-            Self::Fake(f) => f.pipeline_snapshots().unwrap_or_default(),
-        }
-    }
-
     /// Forward to [`NdiManager::pipeline_health_snapshots`] — per-pipeline
     /// delivery health (state + drop ratio + consumer count) for `/healthz`
     /// (#768).

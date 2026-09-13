@@ -1110,8 +1110,11 @@ test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic
       ).toBeLessThan(0.2);
     }
 
-    await releaseHeldConsumers(page);
   } finally {
+    // Release the held consumers even on an assertion failure (they live on
+    // window across page.evaluate calls); releaseHeldConsumers no-ops if none
+    // were held. Then deactivate + delete the source.
+    await releaseHeldConsumers(page);
     await cleanupSource(request, src.id);
   }
 });
