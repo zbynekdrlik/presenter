@@ -1057,12 +1057,17 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
 }
 
 /// #768 D2b: the per-consumer-link drop DISCRIMINATOR (`sessions[].link`) is
-/// present for every session and, once the appsrc probe records an overflow
-/// signature, surfaces the new camelCase keys plus a `verdict` in the snapshot
-/// JSON shape — the measurement that makes the next boot-restore drop
-/// self-explaining. The stub pushes no real buffers, so the probe is driven
-/// directly via `link_probe_for_test` (the production path feeds the SAME
-/// `record_*` methods from the appsrc signals + src-pad probe).
+/// present for every session and surfaces the camelCase keys plus a `verdict`
+/// in the snapshot JSON shape. The overflow count is read at snapshot time from
+/// the ground-truth `ConsumptionLink::dropped()` (the appsrc `enough-data`
+/// signal is suppressed by `StreamProducer`'s callback — review #1), so the
+/// stub link (which pushes no real buffers → `dropped()` stays 0) exercises the
+/// SAME `session.link.dropped()` path the production verdict uses; the buffer
+/// stats are driven via `link_probe_for_test` (the production path feeds the
+/// SAME `record_*` methods from the `need-data` signal + src-pad probe). The
+/// QueueOverflow verdict — which needs a non-zero `dropped()` the stub cannot
+/// inject — is covered by the pure `to_snapshot`/`classify` unit tests in
+/// `link_probe.rs`.
 #[tokio::test]
 async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
     super::super::init().expect("gst init");
@@ -1074,42 +1079,43 @@ async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
         .expect("stub consumer");
 
     // A fresh link with no traffic: block present, verdict healthy, absent
-    // lateness (no buffer flowed).
+    // lateness (no buffer flowed), zero drops.
     let snap = pipeline.snapshot().await;
     let link = &snap.sessions[0].link;
     assert_eq!(link.verdict, super::link_probe::LinkVerdict::Healthy);
-    assert_eq!(link.enough_data_events, 0);
+    assert_eq!(link.dropped_buffers, 0);
     assert!(link.lateness_ms.max.is_none());
 
-    // Drive the probe to the #768 incident signature: queue full (enough-data)
-    // AND buffers falling well behind the consumer clock.
+    // Drive the src-pad-probe stats: a keyframe-gated resume (DISCONT buffers)
+    // WITHOUT an overflow (the stub link's dropped() is 0) → KeyframeWait, never
+    // QueueOverflow. This proves the verdict is gated on the ground-truth drop
+    // count, not on buffer stats alone.
     let probe = pipeline.link_probe_for_test("link-1");
     probe.record_need_data();
-    probe.record_enough_data(510);
-    probe.record_buffer(true, true, 420);
-    probe.record_buffer(false, false, 400);
+    probe.record_buffer(true, true, 420, 510);
+    probe.record_buffer(false, false, 400, 300);
 
     let snap = pipeline.snapshot().await;
     let link = &snap.sessions[0].link;
-    assert_eq!(link.enough_data_events, 1);
+    assert_eq!(link.dropped_buffers, 0);
     assert_eq!(link.need_data_events, 1);
     assert_eq!(link.discont_buffers, 1);
     assert_eq!(link.keyframe_buffers, 1);
     assert_eq!(link.max_queue_level_ms, 510);
     assert_eq!(link.lateness_ms.max, Some(420));
     assert_eq!(link.lateness_ms.last, Some(400));
-    assert_eq!(link.verdict, super::link_probe::LinkVerdict::QueueOverflow);
+    assert_eq!(link.verdict, super::link_probe::LinkVerdict::KeyframeWait);
 
     let json = serde_json::to_string(&snap).expect("serialize");
     assert!(
-        json.contains("enoughDataEvents")
+        json.contains("droppedBuffers")
             && json.contains("discontBuffers")
             && json.contains("maxQueueLevelMs")
             && json.contains("latenessMs"),
         "link block serializes new camelCase keys: {json}"
     );
     assert!(
-        json.contains("verdict") && json.contains("queueOverflow"),
+        json.contains("verdict") && json.contains("keyframeWait"),
         "link verdict serializes camelCase: {json}"
     );
 }

@@ -2,22 +2,41 @@
 //!
 //! Lane 3 refuted the base_time/timeline-offset root-cause hypothesis by code
 //! and concluded the ONE missing measurement is a per-consumer-link
-//! discriminator AT DROP TIME: is a drop an `enough_data` queue overflow
-//! (downstream draining slower than realtime) or a `needs_keyframe` /
-//! DISCONT wait (forwarding gated on the next IDR), and how late is the
-//! forwarded buffer relative to the consumer pipeline's own running-time.
-//! `gstreamer_utils::ConsumptionLink` exposes only `pushed()`/`dropped()`
-//! totals — the discriminator is internal to `StreamProducer` — so this probe
-//! reads it from OUR side of the bridge: the consumer `appsrc` that
-//! `StreamProducer::add_consumer` feeds.
+//! discriminator AT DROP TIME: is a drop an appsrc queue overflow (downstream
+//! draining slower than realtime) or a `needs_keyframe` / DISCONT wait
+//! (forwarding gated on the next IDR), and how late is the forwarded buffer
+//! relative to the consumer pipeline's own running-time.
 //!
-//! The signal path is ADDITIVE: `emit-signals=true` plus a generic signal
-//! connect never touches the appsrc's callback slot (which `StreamProducer`
-//! may set), unlike `set_callbacks`. The consumer appsrc carries no need-data/
-//! enough-data callback in normal operation (`configure_consumer` sets only
-//! properties), so with emit-signals the signals fire. Everything is cheap:
-//! plain atomics, no allocation per buffer, and a `debug!` rate-limited to at
-//! most once per 5 s per session (`log-flood-backoff.md`).
+//! GROUND TRUTH for the drop count, NOT the appsrc signal (the #1 review
+//! finding): `gstreamer_utils::StreamProducer::add_consumer` INSTALLS an
+//! `enough-data` CALLBACK on the consumer appsrc (`streamproducer.rs`
+//! `StreamConsumer::new` → `appsrc.set_callbacks(...enough_data...)`), which
+//! increments the `ConsumptionLink`'s `dropped()` counter and posts a
+//! `dropped-buffer` element message on every overflow. Per the GStreamer
+//! appsrc contract a slot with an installed callback NO LONGER emits its
+//! signal, so an `emit-signals` + `connect("enough-data", …)` handler on the
+//! SAME appsrc never fires in production — reading overflow from the signal
+//! would leave the count stuck at 0 and make `QueueOverflow` unreachable. So
+//! the drop count is taken from `ConsumptionLink::dropped()`, threaded in at
+//! snapshot time. Only the `need-data` slot is left NULL by `StreamProducer`,
+//! so THAT signal does fire and is the one signal we still connect (a
+//! healthy-pull indicator).
+//!
+//! `dropped()` aggregates BOTH drop paths in `StreamProducer`: the `enough-data`
+//! callback (queue overflow) AND `process_sample` dropping non-keyframe samples
+//! while `needs_keyframe` is armed (a keyframe wait). So `dropped()>0` alone
+//! cannot tell the two apart — the LATENESS gate is the real discriminator: a
+//! genuine overflow backs the appsrc queue up so forwarded buffers fall well
+//! behind the consumer clock (high lateness), whereas a pure keyframe wait just
+//! holds for the next IDR without a backed-up queue (low/zero lateness). Hence
+//! `classify` requires `dropped()>0` AND lateness > 250 ms for `QueueOverflow`.
+//!
+//! Everything else is measured from a src-pad BUFFER probe, which fires
+//! reliably regardless of callbacks: DISCONT / keyframe buffer counts, buffer
+//! lateness vs the consumer clock, and the appsrc's `current-level-time` at
+//! forward time (the max is the queue-depth evidence). All cheap: plain
+//! atomics, no allocation per buffer, and a `debug!` rate-limited to at most
+//! once per 5 s per session (`log-flood-backoff.md`).
 //!
 //! The whole module is pure/atomic and the classifier is unit-tested, so it is
 //! verifiable on every CI host without libndi/GPU — this crate is Tier-0 (no
@@ -32,8 +51,8 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 
-/// Lateness (ms) beyond which an `enough_data` queue-full condition is read as
-/// a genuine overflow rather than a startup transient — half the 500 ms appsrc
+/// Lateness (ms) beyond which a queue-full condition is read as a genuine
+/// overflow rather than a startup transient — half the 500 ms appsrc
 /// `max-time` bound. A buffer more than this far in the PAST relative to the
 /// consumer clock means the queue is genuinely backing up.
 const LATENESS_OVERFLOW_MS: i64 = 250;
@@ -42,31 +61,32 @@ const LATENESS_OVERFLOW_MS: i64 = 250;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LinkVerdict {
-    /// The appsrc queue filled (`enough-data`) and buffers fell behind the
-    /// consumer clock — downstream is draining slower than realtime.
+    /// The appsrc queue overflowed (`ConsumptionLink::dropped()` climbed) and
+    /// buffers fell behind the consumer clock — downstream is draining slower
+    /// than realtime.
     QueueOverflow,
     /// Forwarding was keyframe-gated: DISCONT-flagged buffers appeared on the
-    /// src pad (the producer re-armed `needs_keyframe` and resumed at an IDR).
+    /// src pad (the producer re-armed `needs_keyframe` and resumed at an IDR)
+    /// WITHOUT a sustained overflow.
     KeyframeWait,
     /// Neither signature present — the link looks healthy.
     Healthy,
 }
 
 /// Classify a consumer link's drop signature (#768 D2b). Pure so it is
-/// unit-testable on any CI host. `QueueOverflow` requires BOTH an `enough-data`
-/// event AND buffers falling behind the consumer clock, so a brief startup
-/// queue blip with near-zero lateness is not misread as an overflow.
-pub fn classify(
-    enough_data_events: u64,
-    discont_buffers: u64,
-    lateness_max_ms: i64,
-) -> LinkVerdict {
-    // Queue overflow is the root when the appsrc queue filled (enough-data)
-    // AND buffers fell well behind the consumer clock — downstream draining
-    // slower than realtime, the #768 incident signature. It takes precedence
-    // over a keyframe wait: the enough-data thrash is what re-arms
-    // needs_keyframe, producing the DISCONT buffers at the next IDR.
-    if enough_data_events > 0 && lateness_max_ms > LATENESS_OVERFLOW_MS {
+/// unit-testable on any CI host. `dropped_buffers` is `ConsumptionLink::dropped()`,
+/// which aggregates BOTH the `enough-data` overflow drops AND the keyframe-wait
+/// drops (module doc). `QueueOverflow` therefore requires BOTH a real drop AND
+/// buffers falling well behind the consumer clock — the lateness gate is what
+/// isolates a genuine backed-up-queue overflow from a keyframe wait, whose drops
+/// carry near-zero lateness.
+pub fn classify(dropped_buffers: u64, discont_buffers: u64, lateness_max_ms: i64) -> LinkVerdict {
+    // Queue overflow is the root when the producer actually dropped buffers for
+    // this link (dropped()>0) AND buffers fell well behind the consumer clock —
+    // downstream draining slower than realtime, the #768 incident signature. It
+    // takes precedence over a keyframe wait: an overflow re-arms needs_keyframe
+    // inside the same callback, producing the DISCONT buffers at the next IDR.
+    if dropped_buffers > 0 && lateness_max_ms > LATENESS_OVERFLOW_MS {
         LinkVerdict::QueueOverflow
     } else if discont_buffers > 0 {
         // Forwarding resumed at an IDR after a gap, with no sustained overflow.
@@ -77,14 +97,15 @@ pub fn classify(
 }
 
 /// Cheap per-consumer-link diagnostic counters (#768 D2b). All fields are
-/// atomics updated from GStreamer streaming threads (the appsrc signal
-/// handlers and the src-pad buffer probe) and read losslessly by the snapshot
-/// reader. Lateness is tracked in milliseconds; `lateness_min_ms`/`max` carry
+/// atomics updated from GStreamer streaming threads (the appsrc `need-data`
+/// signal handler and the src-pad buffer probe) and read losslessly by the
+/// snapshot reader. The OVERFLOW count is NOT stored here — it is read from the
+/// `ConsumptionLink::dropped()` ground truth at snapshot time (see the module
+/// doc). Lateness is tracked in milliseconds; `lateness_min_ms`/`max` carry
 /// sentinels (`i64::MAX`/`MIN`) until the first buffer so `min`/`max` are
 /// reported as `None` while nothing has flowed.
 #[derive(Debug)]
 pub struct LinkProbe {
-    enough_data_events: AtomicU64,
     need_data_events: AtomicU64,
     discont_buffers: AtomicU64,
     keyframe_buffers: AtomicU64,
@@ -98,7 +119,6 @@ pub struct LinkProbe {
 impl Default for LinkProbe {
     fn default() -> Self {
         Self {
-            enough_data_events: AtomicU64::new(0),
             need_data_events: AtomicU64::new(0),
             discont_buffers: AtomicU64::new(0),
             keyframe_buffers: AtomicU64::new(0),
@@ -113,24 +133,27 @@ impl Default for LinkProbe {
 
 impl LinkProbe {
     /// Record one appsrc `need-data` emission (the queue drained below its low
-    /// watermark and is asking for more — the healthy steady state).
+    /// watermark and is asking for more — the healthy steady state). This is
+    /// the one appsrc signal `StreamProducer` leaves free (no callback), so it
+    /// fires reliably with `emit-signals=true`.
     pub(crate) fn record_need_data(&self) {
         self.need_data_events.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record one appsrc `enough-data` emission (the queue reached its bound),
-    /// keeping the max observed queue depth (ms) at that moment.
-    pub(crate) fn record_enough_data(&self, queue_level_ms: u64) {
-        self.enough_data_events.fetch_add(1, Ordering::Relaxed);
-        self.max_queue_level_ms
-            .fetch_max(queue_level_ms, Ordering::Relaxed);
-    }
-
     /// Record one buffer forwarded out of the appsrc src pad: whether it is
-    /// DISCONT-flagged, whether it is a keyframe (`!DELTA_UNIT`), and its
-    /// lateness (ms) relative to the consumer pipeline's current running-time
-    /// (positive = in the past; negative = in the future = a sync sink holds).
-    pub(crate) fn record_buffer(&self, discont: bool, keyframe: bool, lateness_ms: i64) {
+    /// DISCONT-flagged, whether it is a keyframe (`!DELTA_UNIT`), its lateness
+    /// (ms) relative to the consumer pipeline's current running-time (positive
+    /// = in the past; negative = in the future = a sync sink holds), and the
+    /// appsrc's `current-level-time` (ms) at that moment (the running max is
+    /// the queue-depth evidence). Fired from the src-pad probe, which is
+    /// unaffected by the callback-vs-signal contract.
+    pub(crate) fn record_buffer(
+        &self,
+        discont: bool,
+        keyframe: bool,
+        lateness_ms: i64,
+        queue_level_ms: u64,
+    ) {
         self.total_buffers.fetch_add(1, Ordering::Relaxed);
         if discont {
             self.discont_buffers.fetch_add(1, Ordering::Relaxed);
@@ -138,6 +161,8 @@ impl LinkProbe {
         if keyframe {
             self.keyframe_buffers.fetch_add(1, Ordering::Relaxed);
         }
+        self.max_queue_level_ms
+            .fetch_max(queue_level_ms, Ordering::Relaxed);
         self.lateness_min_ms
             .fetch_min(lateness_ms, Ordering::Relaxed);
         self.lateness_max_ms
@@ -146,11 +171,13 @@ impl LinkProbe {
     }
 
     /// Render the diagnostic snapshot (a cheap set of atomic loads plus the
-    /// classifier verdict). Lateness min/max/last are `None` until the first
+    /// classifier verdict). `dropped_buffers` is the ground-truth drop count
+    /// from `ConsumptionLink::dropped()`, supplied by the caller because
+    /// the appsrc `enough-data` signal is suppressed by `StreamProducer`'s
+    /// callback (module doc). Lateness min/max/last are `None` until the first
     /// buffer has flowed.
-    pub(crate) fn to_snapshot(&self) -> LinkProbeSnapshot {
+    pub(crate) fn to_snapshot(&self, dropped_buffers: u64) -> LinkProbeSnapshot {
         let total = self.total_buffers.load(Ordering::Relaxed);
-        let enough_data_events = self.enough_data_events.load(Ordering::Relaxed);
         let discont_buffers = self.discont_buffers.load(Ordering::Relaxed);
         let lateness_max = self.lateness_max_ms.load(Ordering::Relaxed);
         let lateness_ms = if total == 0 {
@@ -169,19 +196,23 @@ impl LinkProbe {
         // The classifier only trusts lateness once a buffer has flowed.
         let lateness_for_verdict = if total == 0 { 0 } else { lateness_max };
         LinkProbeSnapshot {
-            enough_data_events,
+            dropped_buffers,
             need_data_events: self.need_data_events.load(Ordering::Relaxed),
             discont_buffers,
             keyframe_buffers: self.keyframe_buffers.load(Ordering::Relaxed),
             max_queue_level_ms: self.max_queue_level_ms.load(Ordering::Relaxed),
             lateness_ms,
-            verdict: classify(enough_data_events, discont_buffers, lateness_for_verdict),
+            verdict: classify(dropped_buffers, discont_buffers, lateness_for_verdict),
         }
     }
 }
 
 /// Lateness (ms) of forwarded buffers relative to the consumer clock, as
-/// min/max/last over the session. All `None` until the first buffer.
+/// min/max/last over the session. All `None` until the first buffer. NOTE: this
+/// is `running_time_now − buffer.pts()`; for a live appsrc whose segment starts
+/// at 0 (the case here) that IS clock lateness, but it is a segment-relative
+/// approximation if a non-zero segment offset is ever introduced — diagnostic,
+/// not a hard SLA.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatenessSnapshot {
@@ -196,10 +227,13 @@ pub struct LatenessSnapshot {
 /// Serialized per-consumer-link diagnostic for `GET /ndi/snapshot/{id}`
 /// `sessions[].link` (#768 D2b). `verdict` classifies the drop signature so an
 /// operator or the deploy self-heal log can read it WITHOUT doing the math.
+/// `droppedBuffers` is the ground-truth drop count from the
+/// `ConsumptionLink` (== the session's `buffersDropped`, restated here so the
+/// link block is self-contained).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkProbeSnapshot {
-    pub enough_data_events: u64,
+    pub dropped_buffers: u64,
     pub need_data_events: u64,
     pub discont_buffers: u64,
     pub keyframe_buffers: u64,
@@ -208,31 +242,23 @@ pub struct LinkProbeSnapshot {
     pub verdict: LinkVerdict,
 }
 
-/// Attach the #768 D2b diagnostic probe to a consumer `appsrc`: the
-/// `need-data`/`enough-data` signals (counters + max queue depth) and a
-/// src-pad buffer probe (DISCONT / keyframe / lateness). Creates the
-/// [`LinkProbe`] and returns it for storage on the `WhepSession`. The buffer
-/// probe holds a WEAK appsrc ref, so it never forms a reference cycle keeping
-/// the appsrc alive after the consumer pipeline is torn down.
+/// Attach the #768 D2b diagnostic probe to a consumer `appsrc`: the `need-data`
+/// signal (the one slot `StreamProducer` leaves free) and a src-pad buffer
+/// probe (DISCONT / keyframe / lateness / queue level). Creates the
+/// [`LinkProbe`] and returns it for storage on the `WhepSession`; the overflow
+/// count is read separately from `ConsumptionLink::dropped()` at snapshot time.
+/// The buffer probe holds a WEAK appsrc ref, so it never forms a reference
+/// cycle keeping the appsrc alive after the consumer pipeline is torn down.
 pub(crate) fn attach(appsrc: &gst_app::AppSrc, session_id: &str) -> Arc<LinkProbe> {
     let probe = Arc::new(LinkProbe::default());
-    // Additive: enable signal emission without touching the callback slot.
+    // Additive: enable signal emission without touching the callback slot. Only
+    // `need-data` actually fires — `StreamProducer::add_consumer` later installs
+    // an `enough-data` callback that suppresses that signal (module doc).
     appsrc.set_property("emit-signals", true);
 
     let p_need = probe.clone();
     appsrc.connect("need-data", false, move |_args| {
         p_need.record_need_data();
-        None
-    });
-
-    let p_enough = probe.clone();
-    appsrc.connect("enough-data", false, move |args| {
-        let level_ms = args
-            .first()
-            .and_then(|v| v.get::<gst_app::AppSrc>().ok())
-            .map(|src| src.current_level_time().mseconds())
-            .unwrap_or(0);
-        p_enough.record_enough_data(level_ms);
         None
     });
 
@@ -253,18 +279,26 @@ pub(crate) fn attach(appsrc: &gst_app::AppSrc, session_id: &str) -> Arc<LinkProb
             let flags = buffer.flags();
             let discont = flags.contains(gst::BufferFlags::DISCONT);
             let keyframe = !flags.contains(gst::BufferFlags::DELTA_UNIT);
-            let lateness_ms = appsrc_weak
+            let (lateness_ms, queue_level_ms) = appsrc_weak
                 .upgrade()
-                .and_then(|src| {
-                    let now = src.upcast_ref::<gst::Element>().current_running_time()?;
-                    let pts = buffer.pts()?;
-                    Some((now.nseconds() as i64 - pts.nseconds() as i64) / 1_000_000)
+                .map(|src| {
+                    let queue_level_ms = src.current_level_time().mseconds();
+                    let lateness_ms = src
+                        .upcast_ref::<gst::Element>()
+                        .current_running_time()
+                        .zip(buffer.pts())
+                        .map(|(now, pts)| {
+                            (now.nseconds() as i64 - pts.nseconds() as i64) / 1_000_000
+                        })
+                        .unwrap_or(0);
+                    (lateness_ms, queue_level_ms)
                 })
-                .unwrap_or(0);
-            p_buf.record_buffer(discont, keyframe, lateness_ms);
+                .unwrap_or((0, 0));
+            p_buf.record_buffer(discont, keyframe, lateness_ms, queue_level_ms);
 
             // Rate-limited (≤ 1 per 5 s per session) so a per-buffer signal
-            // never floods the log (`log-flood-backoff.md`).
+            // never floods the log (`log-flood-backoff.md`). dropped() is read
+            // here for the log line only; the snapshot reads it authoritatively.
             let elapsed = base.elapsed().as_millis() as i64;
             let prev = last_log_ms.load(Ordering::Relaxed);
             if elapsed - prev >= 5_000
@@ -272,17 +306,15 @@ pub(crate) fn attach(appsrc: &gst_app::AppSrc, session_id: &str) -> Arc<LinkProb
                     .compare_exchange(prev, elapsed, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
             {
-                let snap = p_buf.to_snapshot();
+                let snap = p_buf.to_snapshot(0);
                 tracing::debug!(
                     session_id = %sid,
-                    enough_data = snap.enough_data_events,
                     need_data = snap.need_data_events,
                     discont = snap.discont_buffers,
                     keyframes = snap.keyframe_buffers,
                     max_queue_ms = snap.max_queue_level_ms,
                     lateness_max_ms = ?snap.lateness_ms.max,
-                    verdict = ?snap.verdict,
-                    "#768 D2b link probe"
+                    "#768 D2b link probe (verdict computed at snapshot with dropped())"
                 );
             }
         }
@@ -301,53 +333,65 @@ mod tests {
     }
 
     #[test]
-    fn classify_queue_overflow_on_enough_data_with_lateness() {
-        // enough-data fired AND buffers are well behind the consumer clock =
-        // the #768 incident signature (downstream drains slower than realtime).
+    fn classify_queue_overflow_on_drops_with_lateness() {
+        // The link actually dropped buffers AND they are well behind the
+        // consumer clock = the #768 incident signature (downstream drains
+        // slower than realtime).
         assert_eq!(classify(50, 3, 400), LinkVerdict::QueueOverflow);
     }
 
     #[test]
-    fn classify_keyframe_wait_on_discont_without_backed_up_queue() {
-        // DISCONT-flagged buffers but no sustained overflow (low/negative
-        // lateness) = forwarding gated on the next IDR, not a slow consumer.
+    fn classify_keyframe_wait_on_discont_without_drops() {
+        // DISCONT-flagged buffers but no overflow drops = forwarding gated on
+        // the next IDR, not a slow consumer.
         assert_eq!(classify(0, 5, -10), LinkVerdict::KeyframeWait);
     }
 
     #[test]
-    fn classify_startup_blip_is_not_overflow() {
-        // A brief enough-data blip with near-zero lateness must NOT be read as
-        // an overflow; with no DISCONT it is Healthy.
+    fn classify_keyframe_wait_with_dropped_but_low_lateness() {
+        // The REAL keyframe-wait signature: process_sample drops non-IDR samples
+        // while needs_keyframe is armed, so dropped()>0 — but the queue is NOT
+        // backed up (low lateness). The lateness gate keeps this KeyframeWait,
+        // NOT QueueOverflow. This is why dropped()>0 alone can't decide.
+        assert_eq!(classify(6, 3, 30), LinkVerdict::KeyframeWait);
+    }
+
+    #[test]
+    fn classify_drops_without_lateness_is_not_overflow() {
+        // A drop with near-zero lateness (a brief blip, not sustained backup)
+        // must NOT be read as an overflow; with no DISCONT it is Healthy.
         assert_eq!(classify(1, 0, 20), LinkVerdict::Healthy);
     }
 
     #[test]
     fn classify_overflow_takes_precedence_over_keyframe_wait() {
-        // Both signatures present (enough-data thrash re-arming needs_keyframe →
-        // DISCONT at the next IDR): the queue overflow is the root, so it wins.
+        // Both signatures present (overflow re-arming needs_keyframe → DISCONT
+        // at the next IDR): the queue overflow is the root, so it wins.
         assert_eq!(classify(30, 4, 450), LinkVerdict::QueueOverflow);
     }
 
     #[test]
     fn to_snapshot_empty_probe_is_healthy_with_absent_lateness() {
-        let snap = LinkProbe::default().to_snapshot();
+        let snap = LinkProbe::default().to_snapshot(0);
         assert_eq!(snap.verdict, LinkVerdict::Healthy);
-        assert_eq!(snap.enough_data_events, 0);
+        assert_eq!(snap.dropped_buffers, 0);
         assert!(snap.lateness_ms.min.is_none());
         assert!(snap.lateness_ms.max.is_none());
         assert!(snap.lateness_ms.last.is_none());
     }
 
     #[test]
-    fn to_snapshot_reflects_recorded_overflow() {
+    fn to_snapshot_reflects_overflow_from_ground_truth_dropped() {
         let probe = LinkProbe::default();
         probe.record_need_data();
-        probe.record_enough_data(510);
-        // A buffer 400 ms in the past = queue backing up.
-        probe.record_buffer(true, true, 400);
-        probe.record_buffer(false, false, 380);
-        let snap = probe.to_snapshot();
-        assert_eq!(snap.enough_data_events, 1);
+        // Buffers backing up (from the src-pad probe): late + a DISCONT at the
+        // IDR resume, with the appsrc queue near its 500 ms bound.
+        probe.record_buffer(true, true, 400, 480);
+        probe.record_buffer(false, false, 380, 510);
+        // The overflow count comes from ConsumptionLink::dropped(), threaded in
+        // at snapshot time (the appsrc enough-data signal is suppressed).
+        let snap = probe.to_snapshot(42);
+        assert_eq!(snap.dropped_buffers, 42);
         assert_eq!(snap.need_data_events, 1);
         assert_eq!(snap.discont_buffers, 1);
         assert_eq!(snap.keyframe_buffers, 1);
@@ -359,12 +403,22 @@ mod tests {
     }
 
     #[test]
+    fn to_snapshot_keyframe_wait_when_dropped_is_zero() {
+        // A pure keyframe wait: DISCONT buffers, but ConsumptionLink::dropped()
+        // is still 0 (no overflow) → KeyframeWait, never QueueOverflow.
+        let probe = LinkProbe::default();
+        probe.record_buffer(true, true, 40, 80);
+        let snap = probe.to_snapshot(0);
+        assert_eq!(snap.dropped_buffers, 0);
+        assert_eq!(snap.verdict, LinkVerdict::KeyframeWait);
+    }
+
+    #[test]
     fn snapshot_serializes_camelcase_with_verdict() {
         let probe = LinkProbe::default();
-        probe.record_enough_data(300);
-        probe.record_buffer(true, false, 450);
-        let json = serde_json::to_string(&probe.to_snapshot()).expect("serialize");
-        assert!(json.contains("enoughDataEvents"), "camelCase keys: {json}");
+        probe.record_buffer(true, false, 450, 300);
+        let json = serde_json::to_string(&probe.to_snapshot(7)).expect("serialize");
+        assert!(json.contains("droppedBuffers"), "camelCase keys: {json}");
         assert!(json.contains("discontBuffers"), "camelCase keys: {json}");
         assert!(json.contains("maxQueueLevelMs"), "camelCase keys: {json}");
         assert!(

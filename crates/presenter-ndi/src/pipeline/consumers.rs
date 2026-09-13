@@ -376,8 +376,11 @@ impl NdiPipeline {
                         session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
                         client_sample,
-                        // #768 D2b: cheap atomic reads under the lock.
-                        session.link_probe.to_snapshot(),
+                        // #768 D2b: cheap atomic reads under the lock. The
+                        // overflow count is the ground-truth ConsumptionLink
+                        // dropped() (the appsrc enough-data signal is
+                        // suppressed by StreamProducer's callback — review #1).
+                        session.link_probe.to_snapshot(session.link.dropped()),
                     )
                 })
                 .collect()
