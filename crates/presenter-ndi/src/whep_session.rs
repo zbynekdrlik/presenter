@@ -210,6 +210,15 @@ pub struct WhepSession {
     /// self-explaining (queue overflow vs keyframe wait) without physical
     /// presence. Shared (`Arc`) with the GStreamer-thread signal/probe closures.
     pub link_probe: Arc<crate::pipeline::link_probe::LinkProbe>,
+    /// Trailing-30s delivery-health window (#768 D3): a small ring of this
+    /// consumer link's cumulative `(pushed, dropped)` counters, sampled on the
+    /// `/ndi/snapshot` + `/healthz` read paths (min-2s spacing), from which the
+    /// per-session `dropRatio30s` / `pushedFps30s` and the per-pipeline
+    /// aggregate are derived. Plain `std::sync::Mutex` (no `Arc`): only ever
+    /// locked briefly while the async `sessions` lock is held (never across an
+    /// await, never from a GStreamer thread), parity with the other session
+    /// mutexes.
+    pub health_window: Mutex<crate::pipeline::health_window::HealthWindow>,
 }
 
 impl WhepSession {

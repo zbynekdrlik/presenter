@@ -65,6 +65,13 @@ pub struct PipelineDropHealth {
     pub drop_ratio: f64,
     /// Number of live WHEP consumers on this pipeline.
     pub consumers: usize,
+    /// Trailing-30s aggregate drop ratio (#768 D3) — `None` until >= 2 in-window
+    /// samples exist. The CURRENT-health signal an external watchdog reads off
+    /// `/healthz.ndi_pipelines[]`, where the cumulative `drop_ratio` is diluted
+    /// on a long-lived pipeline.
+    pub drop_ratio_30s: Option<f64>,
+    /// Trailing-30s aggregate pushed FPS (#768 D3), `None` until a window exists.
+    pub pushed_fps_30s: Option<f64>,
 }
 
 #[cfg(test)]
