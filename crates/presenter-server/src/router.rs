@@ -483,7 +483,16 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     // for 14 days). Served through a per-AppState SWR cache so tab fan-out on
     // this readiness probe never becomes a live `/models` request storm — it
     // never blocks or hangs the readiness probe.
-    let ai = ai_health::render_ai_health(&state, state.ai_health_cache()).await;
+    //
+    // #771: in validate (schema-probe) startup mode, return the SWR cache's
+    // cold placeholder WITHOUT invoking the producer — a schema-validation
+    // probe boot must make no outbound AI request (a cold hit would probe the
+    // AI backend inline). The `ai` schema is identical to a genuine cold hit.
+    let ai = if state.startup_mode().is_validate() {
+        crate::ai::health_cache::cold_placeholder()
+    } else {
+        ai_health::render_ai_health(&state, state.ai_health_cache()).await
+    };
 
     (
         StatusCode::OK,

@@ -702,6 +702,7 @@ async fn from_config_against_empty_db_leaves_libraries_empty() {
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
         sync: crate::config::SyncConfig::default(),
+        startup_mode: crate::state::StartupMode::default(),
     };
 
     let state = AppState::from_config(config).await.expect("from_config");
@@ -728,7 +729,97 @@ fn config_for_db(url: String) -> crate::config::ServerConfig {
         android: crate::config::AndroidConfig::default(),
         network: crate::config::NetworkConfig::default(),
         sync: crate::config::SyncConfig::default(),
+        startup_mode: crate::state::StartupMode::default(),
     }
+}
+
+/// Regression for #771: the schema-validation probe boot MUST NOT start any
+/// integration. The deploy "Validate database schema" step runs the release
+/// binary against a COPY of the live DB while the real service still holds the
+/// fixed Companion port (18175) — before this fix the probe took the normal
+/// boot path, tried to bind Companion, and the collision was misreported as a
+/// broken migration (Deploy run 34760844535). This asserts that in
+/// `StartupMode::Validate`, even with Companion ENABLED in config, the server
+/// never binds the Companion port, and `/healthz` still serves (migrations +
+/// DB open + readiness) with an empty `ndi_pipelines` and the cold AI
+/// placeholder (no outbound AI probe).
+#[tokio::test]
+async fn validate_startup_mode_starts_no_integrations_but_serves_healthz() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    // Reserve a free port, then release it, so `companion.port_override` names a
+    // port that is genuinely free at boot — a NORMAL boot with Companion enabled
+    // WOULD bind it; the point of the test is that a VALIDATE boot does not.
+    let companion_port = {
+        let probe = tokio::net::TcpListener::bind("0.0.0.0:0")
+            .await
+            .expect("reserve port");
+        probe.local_addr().expect("local addr").port()
+    };
+
+    let tmp = tempfile::NamedTempFile::new().expect("temp file");
+    let url = format!("sqlite://{}?mode=rwc", tmp.path().display());
+    let mut config = config_for_db(url);
+    config.companion.enabled_override = Some(true);
+    config.companion.port_override = Some(companion_port);
+    config.startup_mode = crate::state::StartupMode::Validate;
+
+    let state = AppState::from_config(config)
+        .await
+        .expect("from_config (validate)");
+
+    assert!(
+        state.startup_mode().is_validate(),
+        "state must record the validate startup mode"
+    );
+    assert!(
+        !state.companion_server_running().await,
+        "validate mode must NOT start the Companion websocket even when enabled in config"
+    );
+
+    // The Companion port the config asked for must be free — proof the probe
+    // boot never bound it (the #771 `Address already in use` collision).
+    let rebind = tokio::net::TcpListener::bind(("0.0.0.0", companion_port)).await;
+    assert!(
+        rebind.is_ok(),
+        "the Companion port must be free after a validate boot (probe must not bind it)"
+    );
+    drop(rebind);
+
+    // `/healthz` must still serve — migrations ran, the DB is open, readiness is
+    // green — with an empty NDI pipeline list and the cold AI placeholder (no
+    // outbound AI probe from a validate run).
+    let app = crate::router::build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("oneshot /healthz");
+    assert_eq!(response.status(), StatusCode::OK, "/healthz must serve");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("/healthz returns JSON");
+    assert_eq!(
+        body["ndi_pipelines"],
+        serde_json::json!([]),
+        "validate boot activates no NDI pipeline"
+    );
+    assert_eq!(
+        body["ai"]["connected"],
+        serde_json::json!(false),
+        "validate /healthz returns the cold AI placeholder, not a live probe verdict"
+    );
+    assert_eq!(
+        body["ai"]["error"], "AI status not yet available",
+        "validate /healthz reuses the SWR cold placeholder (no outbound AI request)"
+    );
 }
 
 /// Regression for issue #384: the selected stage layout MUST survive a server

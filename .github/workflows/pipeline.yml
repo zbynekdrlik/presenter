@@ -1047,22 +1047,33 @@ jobs:
           # and the shared cache must stay byte-identical to prod so the next
           # run's rsync delta stays minimal.
           cp /var/tmp/presenter-ci/prod-db-cache.db "$PROD_DB"
-          echo "Testing new binary against production database..."
+          echo "Testing new binary against production database (validate mode)..."
           chmod +x target/release/presenter-server
-          PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \
-            timeout 10 target/release/presenter-server &
+          PROD_LOG="/tmp/prod-migration-test-$$.log"
+          # #771: validate mode migrates + opens the DB + serves /healthz but
+          # starts NO integration — the probe (run on the shared self-hosted
+          # runner next to presenter-dev.service) must never bind the Companion
+          # port or duplicate the NDI pipeline on the shared VA-API encoder.
+          PRESENTER_STARTUP_MODE=validate PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \
+            timeout 10 target/release/presenter-server > "$PROD_LOG" 2>&1 &
           SERVER_PID=$!
           sleep 3
           if kill -0 $SERVER_PID 2>/dev/null; then
-            echo "✅ Migration works against production database"
+            echo "✅ Migration works against production database (validate mode — no integrations started)"
             kill $SERVER_PID 2>/dev/null || true
             wait $SERVER_PID 2>/dev/null || true
           else
-            echo "::error::New binary failed to start with PRODUCTION database — migration is broken. This would cause a production outage. Fix the migration before merging."
-            rm -f "$PROD_DB" "${PROD_DB}-wal" "${PROD_DB}-shm"
+            echo "Probe process is not alive — last 40 log lines:"
+            tail -n 40 "$PROD_LOG" 2>/dev/null || true
+            if grep -q 'SCHEMA-VALIDATION-FAILED' "$PROD_LOG"; then
+              echo "::error::New binary failed to migrate/open the PRODUCTION database — migration is broken. This would cause a production outage. Fix the migration before merging."
+            else
+              echo "::error::Schema-validate probe failed to start for a reason OTHER than a broken migration (see the last 40 log lines above). This is NOT necessarily a migration problem."
+            fi
+            rm -f "$PROD_DB" "${PROD_DB}-wal" "${PROD_DB}-shm" "$PROD_LOG"
             exit 1
           fi
-          rm -f "$PROD_DB" "${PROD_DB}-wal" "${PROD_DB}-shm"
+          rm -f "$PROD_DB" "${PROD_DB}-wal" "${PROD_DB}-shm" "$PROD_LOG"
 
       - name: Create deploy directory
         run: |
@@ -1229,23 +1240,32 @@ jobs:
             echo "No database - will be created on first start"
             exit 0
           fi
-          echo "Validating schema compatibility with dev database..."
+          echo "Validating schema compatibility with dev database (validate mode)..."
           TEST_DB="/tmp/presenter-dev-schema-test-$$.db"
+          LOG_FILE="/tmp/presenter-dev-schema-test-$$.log"
           cp "$DB_PATH" "$TEST_DB"
-          PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
-            timeout 10 /opt/presenter-dev/presenter-server &
+          # #771: validate mode — migrations + DB + /healthz, no integrations, so
+          # the probe never collides with the live presenter-dev.service.
+          PRESENTER_STARTUP_MODE=validate PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
+            timeout 10 /opt/presenter-dev/presenter-server > "$LOG_FILE" 2>&1 &
           SERVER_PID=$!
           sleep 3
           if kill -0 $SERVER_PID 2>/dev/null; then
-            echo "Schema is compatible with dev DB"
+            echo "Schema is compatible with dev DB (validate mode — no integrations started)"
             kill $SERVER_PID 2>/dev/null || true
             wait $SERVER_PID 2>/dev/null || true
           else
-            echo "::error::New binary failed to start with existing dev database — migration is broken."
-            rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
+            echo "Probe process is not alive — last 40 log lines:"
+            tail -n 40 "$LOG_FILE" 2>/dev/null || true
+            if grep -q 'SCHEMA-VALIDATION-FAILED' "$LOG_FILE"; then
+              echo "::error::New binary failed to migrate/open the existing dev database — migration is broken."
+            else
+              echo "::error::Schema-validate probe failed to start for a reason OTHER than a broken migration (see the last 40 log lines above). This is NOT necessarily a migration problem."
+            fi
+            rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm" "$LOG_FILE"
             exit 1
           fi
-          rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
+          rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm" "$LOG_FILE"
           REMOTE_SCRIPT
 
       - name: Deploy Bible files
