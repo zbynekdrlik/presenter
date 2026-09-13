@@ -156,6 +156,16 @@ pub struct PipelineSnapshot {
     /// pipeline delivery-health signal the #768 self-heal gate reads; `0.0`
     /// when no consumer has been fed yet.
     pub drop_ratio: f64,
+    /// Trailing-30s aggregate drop ratio over this pipeline's LIVE consumers
+    /// (#768 D3), folded from each session's own windowed delta. `null` until
+    /// >= 2 in-window samples exist on some session. Unlike `drop_ratio`
+    /// (cumulative, diluted on a long-lived pipeline), this reflects CURRENT
+    /// health — what an external watchdog needs to catch a mid-life episode.
+    pub drop_ratio_30s: Option<f64>,
+    /// Trailing-30s aggregate pushed FPS over this pipeline's live consumers
+    /// (#768 D3): the SUM of the consumers' windowed FPS. `null` until a window
+    /// exists.
+    pub pushed_fps_30s: Option<f64>,
     pub sessions: Vec<SessionSnapshot>,
 }
 
@@ -178,6 +188,15 @@ pub struct SessionSnapshot {
     /// (`buffers_pushed / age`). ~30 on a healthy link, ~9.5 in the #768
     /// incident. `0.0` for a just-created session.
     pub pushed_fps: f64,
+    /// Trailing-30s drop ratio for THIS consumer (#768 D3) — the CURRENT
+    /// per-link health, `null` until >= 2 in-window samples. Where `drop_ratio`
+    /// (cumulative) would still read ~0.0 after a long healthy run, this shows a
+    /// mid-life 75% episode as ~0.75. Always serialized (null, never omitted) so
+    /// the watchdog schema is stable.
+    pub drop_ratio_30s: Option<f64>,
+    /// Trailing-30s pushed FPS for THIS consumer (#768 D3), `null` until a
+    /// window exists. Always serialized.
+    pub pushed_fps_30s: Option<f64>,
     /// RTCP receiver-report round-trip time (ms) — the display's link RTT.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtcp_round_trip_ms: Option<f64>,

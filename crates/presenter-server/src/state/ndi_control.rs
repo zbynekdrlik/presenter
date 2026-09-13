@@ -136,6 +136,9 @@ impl NdiManagerHandle {
                         state,
                         drop_ratio: 0.0,
                         consumers: 0,
+                        // #768 D3: no window on the Fake (no real counters) → null.
+                        drop_ratio_30s: None,
+                        pushed_fps_30s: None,
                     },
                 )
                 .collect(),

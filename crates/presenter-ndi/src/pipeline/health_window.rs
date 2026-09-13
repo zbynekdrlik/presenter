@@ -160,6 +160,19 @@ where
     }
 }
 
+/// Cheap per-pipeline delivery totals for the `/healthz` path (#768): the
+/// cumulative counters + consumer count PLUS the trailing-30s aggregate (D3).
+/// Returned by `NdiPipeline::consumer_delivery_totals` — no network, pure
+/// counter reads, so `/healthz` stays cheap (`ai-health-endpoint.md`).
+#[derive(Debug, Clone, Copy)]
+pub struct PipelineDeliveryTotals {
+    pub pushed: u64,
+    pub dropped: u64,
+    pub consumers: usize,
+    pub drop_ratio_30s: Option<f64>,
+    pub pushed_fps_30s: Option<f64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

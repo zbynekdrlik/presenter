@@ -127,18 +127,43 @@ impl NdiPipeline {
     /// Cheap per-pipeline delivery totals for `/healthz` (#768) — summed
     /// `pushed`/`dropped` over live consumers + the consumer count, read from
     /// the StreamProducer link's atomics ONLY (NO per-session RTCP get-stats
-    /// round trip, unlike `snapshot`). Returns `(pushed, dropped, consumers)`.
-    /// `/healthz` is polled by every operator tab + the stage reload guard +
-    /// the deploy gates, so this stays the cheap path (`ai-health-endpoint.md`).
-    pub(crate) async fn consumer_delivery_totals(&self) -> (u64, u64, usize) {
+    /// round trip, unlike `snapshot`). Also samples each session's trailing-30s
+    /// window (#768 D3, cheap — one Instant compare + a bounded Vec push, no
+    /// network) and folds the per-pipeline 30s aggregate. `/healthz` is polled
+    /// by every operator tab + the stage reload guard + the deploy gates, so
+    /// this stays the cheap path (`ai-health-endpoint.md`).
+    pub(crate) async fn consumer_delivery_totals(
+        &self,
+    ) -> super::health_window::PipelineDeliveryTotals {
         let sessions = self.sessions.lock().await;
+        let now = std::time::Instant::now();
         let mut pushed = 0u64;
         let mut dropped = 0u64;
+        let mut deltas: Vec<Option<(u64, u64, f64)>> = Vec::with_capacity(sessions.len());
         for session in sessions.values() {
-            pushed = pushed.saturating_add(session.link.pushed());
-            dropped = dropped.saturating_add(session.link.dropped());
+            let p = session.link.pushed();
+            let d = session.link.dropped();
+            pushed = pushed.saturating_add(p);
+            dropped = dropped.saturating_add(d);
+            let delta = {
+                let mut w = session
+                    .health_window
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                w.record(now, p, d);
+                w.windowed_delta()
+            };
+            deltas.push(delta);
         }
-        (pushed, dropped, sessions.len())
+        let consumers = sessions.len();
+        let (drop_ratio_30s, pushed_fps_30s) = super::health_window::aggregate_windowed(deltas);
+        super::health_window::PipelineDeliveryTotals {
+            pushed,
+            dropped,
+            consumers,
+            drop_ratio_30s,
+            pushed_fps_30s,
+        }
     }
 
     pub fn state(&self) -> PipelineState {

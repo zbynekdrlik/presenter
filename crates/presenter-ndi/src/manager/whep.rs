@@ -143,12 +143,15 @@ impl NdiManager {
         let mut out = Vec::with_capacity(pipelines.len());
         for (source_id, pipeline) in pipelines {
             let state = pipeline.state();
-            let (pushed, dropped, consumers) = pipeline.consumer_delivery_totals().await;
+            let totals = pipeline.consumer_delivery_totals().await;
             out.push(crate::pipeline::health::PipelineDropHealth {
                 source_id,
                 state,
-                drop_ratio: crate::pipeline::health::drop_ratio(pushed, dropped),
-                consumers,
+                drop_ratio: crate::pipeline::health::drop_ratio(totals.pushed, totals.dropped),
+                consumers: totals.consumers,
+                // #768 D3: current-health trailing-30s aggregate for the watchdog.
+                drop_ratio_30s: totals.drop_ratio_30s,
+                pushed_fps_30s: totals.pushed_fps_30s,
             });
         }
         out
