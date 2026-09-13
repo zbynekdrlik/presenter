@@ -58,6 +58,7 @@ mod build;
 pub mod client_stats;
 mod consumers;
 pub mod health;
+pub mod health_window;
 mod ingest_timing;
 mod keyframe_throttle;
 mod lifecycle;
