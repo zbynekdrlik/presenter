@@ -1296,12 +1296,13 @@ async function killSender(proc: ChildProcess): Promise<void> {
   await once(proc, "exit").catch(() => {});
 }
 
-/** Poll /ndi/sources (up to ~40s) for a source whose name includes `needle`. */
+/** Poll /ndi/sources (up to ~30s, matching discoverSyntheticSource) for a
+ * source whose name includes `needle`. */
 async function discoverSyntheticSourceByName(
   request: APIRequestContext,
   needle: string,
 ): Promise<{ name: string } | undefined> {
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 30; i++) {
     const resp = await request.get(new URL("/ndi/sources", baseURL).toString());
     if (resp.ok()) {
       const list = await resp.json();
@@ -1321,6 +1322,12 @@ test("SOURCE interruption mid-stream keeps the fan-out healthy — H4 (#768) (sy
   page,
   request,
 }) => {
+  // This test is wall-clock-bound BY DESIGN (10s zero-consumer hold + 20s source
+  // gap + 8s resume + 30s steady-state sampling + discovery/streaming polls), not
+  // by a tight assertion. On the shared, load-sensitive dev2 runner those fixed
+  // waits + poll budgets + per-GET latencies inflate together, so give it a
+  // generous per-test budget above the 180s describe default (#768 review 🟡).
+  test.setTimeout(240_000);
   // Unique ndi-name → this test owns the source lifecycle without disturbing the
   // shared "(PRESENTER-TEST)" sender every other @synthetic-ndi test discovers.
   const ndiName = "PRESENTER-TEST-H4";
