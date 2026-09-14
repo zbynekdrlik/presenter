@@ -1106,10 +1106,13 @@ async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
     assert_eq!(link.dropped_buffers, 0);
     assert!(link.lateness_ms.max.is_none());
 
-    // Drive the src-pad-probe stats: a keyframe-gated resume (DISCONT buffers)
-    // WITHOUT an overflow (the stub link's dropped() is 0) → KeyframeWait, never
-    // QueueOverflow. This proves the verdict is gated on the ground-truth drop
-    // count, not on buffer stats alone.
+    // Drive the src-pad-probe stats: DISCONT / keyframe / lateness / queue
+    // counters surface on the snapshot. Under the #768 lane 7 WINDOW verdict, a
+    // stub link whose ground-truth dropped() stays 0 has NO drops in its
+    // trailing window → the verdict is Healthy regardless of buffer stats (the
+    // keyframe-wait / queue-overflow branches require window drops, which the
+    // stub cannot inject — those branches are covered by the pure `classify` /
+    // `to_snapshot` unit tests in `link_probe.rs`).
     let probe = pipeline.link_probe_for_test("link-1");
     probe.record_need_data();
     probe.record_buffer(true, true, 420, 510);
@@ -1124,7 +1127,8 @@ async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
     assert_eq!(link.max_queue_level_ms, 510);
     assert_eq!(link.lateness_ms.max, Some(420));
     assert_eq!(link.lateness_ms.last, Some(400));
-    assert_eq!(link.verdict, super::link_probe::LinkVerdict::KeyframeWait);
+    // No drops in the window (stub dropped() == 0) → Healthy under lane 7.
+    assert_eq!(link.verdict, super::link_probe::LinkVerdict::Healthy);
 
     let json = serde_json::to_string(&snap).expect("serialize");
     assert!(
@@ -1135,7 +1139,7 @@ async fn snapshot_link_probe_surfaces_discriminator_and_verdict() {
         "link block serializes new camelCase keys: {json}"
     );
     assert!(
-        json.contains("verdict") && json.contains("keyframeWait"),
+        json.contains("verdict") && json.contains("healthy"),
         "link verdict serializes camelCase: {json}"
     );
 }
