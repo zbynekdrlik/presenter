@@ -468,6 +468,20 @@ mod tests {
     }
 
     #[test]
+    fn classify_healthy_session_with_join_drops_is_not_overflow_768_lane7() {
+        // #768 lane 7 RED: the SNV v0.4.279 live incident. A HEALTHY session
+        // (`dropRatio30s == 0.0`) whose ONLY drops were join-time — dropped=87,
+        // discont=2, latenessMs.max=256 (the join queue backed up to ~500 ms
+        // waiting for the first IDR, so the segment-corrected lateness read
+        // ~+256 ms) — reads `QueueOverflow` under the since-join cumulative
+        // classifier, because `dropped>0 && lateness_max>250`. It MUST read
+        // `Healthy`: the recalibration keys the verdict off drops IN THE
+        // TRAILING WINDOW, not aged-out join transients. FAILS on the current
+        // cumulative classifier (returns QueueOverflow).
+        assert_eq!(classify(87, 2, 256), LinkVerdict::Healthy);
+    }
+
+    #[test]
     fn to_snapshot_empty_probe_is_healthy_with_absent_lateness() {
         let snap = LinkProbe::default().to_snapshot(0);
         assert_eq!(snap.verdict, LinkVerdict::Healthy);
