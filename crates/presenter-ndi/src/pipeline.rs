@@ -215,8 +215,11 @@ pub struct SessionSnapshot {
     /// Per-consumer-link drop DISCRIMINATOR (#768 D2b): `enough-data`/
     /// `need-data` event counts, DISCONT/keyframe buffer counts, max appsrc
     /// queue depth, buffer lateness (min/max/last ms) vs the consumer clock,
-    /// and a `verdict` classifying the drop signature (queueOverflow /
-    /// keyframeWait / healthy). Always present — the probe exists for every
+    /// and a `verdict` classifying the drop signature over the trailing 30s
+    /// window (#768 lane 7): `queueOverflow` / `keyframeWait` / `healthy` /
+    /// `unknown` (window too young, or an unrecognized drop signature). Keyed
+    /// off drops IN THE WINDOW, so an aged-out join transient reads `healthy`,
+    /// never a permanent fault. Always present — the probe exists for every
     /// consumer from join; the counters make the NEXT prod occurrence
     /// self-explaining without touching GOP / max-time / queue sizes.
     pub link: link_probe::LinkProbeSnapshot,

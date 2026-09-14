@@ -371,15 +371,47 @@ curl -s http://<host>/ndi/snapshot/<source_id> | python3 -c 'import json,sys; \
 ```
 Each `link` block carries `droppedBuffers` (== the session's `buffersDropped`, the ground-truth
 overflow count), `needDataEvents`, `discontBuffers`, `keyframeBuffers`, `maxQueueLevelMs`,
-`latenessMs:{min,max,last}` and `verdict`. Read the `verdict` to point the D2 fix WITHOUT re-doing
+`latenessMs:{min,max,last}` and `verdict`.
+
+**`verdict` is a TRAILING-30s WINDOW judgement since #768 lane 7 — NOT since-join cumulative.**
+It keys off drops IN THE TRAILING WINDOW (the lane-5 `dropRatio30s` / `HealthWindow`), so an old
+join-time drop episode that has aged out of the window reads `healthy`, never a permanent fault.
+Read it alongside `dropRatio30s` (the window's own drop ratio) to point the D2 fix WITHOUT re-doing
 the math:
-- **`queueOverflow`** — the link actually dropped buffers (`dropped()`>0) AND they fell > 250 ms
-  behind the consumer clock: downstream is draining slower than realtime (the incident signature).
-  The fix belongs on the drain side (encoder throughput / consumer sink pacing / real VA-API
-  uptime), NOT on GOP or `max-time`.
-- **`keyframeWait`** — DISCONT buffers appeared without an overflow (`dropped()`==0): forwarding was
-  IDR-gated. Points at producer keyframe cadence / re-arm behaviour, not queue overflow.
-- **`healthy`** — neither signature: this link is not the source of the drop.
+- **`healthy`** — no drops in the trailing window (`dropRatio30s == 0.0`), regardless of any
+  historical join-time drops. The normal steady state; this link is not the source of any current
+  drop. A session hours past its join with `droppedBuffers` in the tens (join drops) still reads
+  `healthy` — that is correct.
+- **`keyframeWait`** — drops in the window while the session was still pre-first-IDR
+  (`keyframeBuffers <= 1`) OR a DISCONT landed within the window: forwarding was IDR-gated (the
+  producer re-armed `needs_keyframe` and resumed at a keyframe). Points at producer keyframe cadence
+  / re-arm behaviour or a source glitch, NOT queue overflow. A fresh join whose join drops are still
+  in the window reads `keyframeWait` (or `unknown` while its discont window fills) — never
+  `queueOverflow`.
+- **`queueOverflow`** — drops in the window AFTER the first keyframe, with POSITIVELY no DISCONT in
+  the window (its discont window has >= 2 samples and did not climb), the appsrc queue near its
+  500 ms `max-time` bound (`maxQueueLevelMs >= 450`) and buffers not in the future
+  (`latenessMs >= 0`): downstream draining slower than realtime — the incident signature. The fix
+  belongs on the drain side (encoder throughput / consumer sink pacing / real VA-API uptime), NOT on
+  GOP or `max-time`. NOTE: the queue/lateness evidence is since-join cumulative, so the DISCONT
+  window is the load-bearing discriminator — the verdict is only concluded `queueOverflow` when the
+  discont window can POSITIVELY rule out a recent keyframe wait; until it can, the verdict is
+  `unknown`, so poll `/ndi/snapshot` a few times (≥ 2 reads within 30s) to let it settle.
+- **`unknown`** — the drop window is too young to judge (< 2 samples: a session in its first couple
+  of seconds, `dropRatio30s == null`, but with cumulative drops), OR drops after the first keyframe
+  whose DISCONT window is not yet established, OR drops matching no known signature (queue not full,
+  or buffers in the future). Self-heals to `healthy`/`keyframeWait`/`queueOverflow` once the windows
+  fill; poll `/ndi/snapshot` again a few seconds later.
+
+**Calibration gotcha (why lane 7 existed):** a classifier built on a WRONG measurement inherits the
+wrong thresholds. The lane-4 verdict gated `queueOverflow` on `lateness_max > 250 ms` against the
+PRE-lane-6 lateness, which read a constant ≈ −3600 s (always < 250 → everything fell through to
+`keyframeWait`). When lane 6 fixed the lateness to be segment-aware (real values), an ordinary join
+transient (~+256 ms, from the queue backing up while waiting for the first IDR) suddenly tripped the
+250 ms gate and mis-classified every healthy session as `queueOverflow`. Lane 7 recalibrated the
+verdict to the trailing WINDOW. Lesson: after fixing a probe's INPUT, recheck every threshold
+CALIBRATED on the old input — don't assume a classifier is still correct just because its own code
+didn't change.
 
 The deploy self-heal step (all 3 workflows) already prints each session's `link` block into the
 job log right before its one-shot deactivate/activate — a deploy restart reproduces the

@@ -366,12 +366,16 @@ impl NdiPipeline {
                     // #768 D3: sample the trailing window under the lock (cheap —
                     // one Instant compare + a bounded Vec push, no network) and
                     // read its delta for the 30s metrics.
+                    // One read instant for BOTH the drop window and the link's
+                    // discont window, so the #768 lane 7 verdict's "drops in
+                    // window" and "DISCONT in window" are sampled in lock-step.
+                    let now = std::time::Instant::now();
                     let windowed = {
                         let mut w = session
                             .health_window
                             .lock()
                             .unwrap_or_else(|p| p.into_inner());
-                        w.record(std::time::Instant::now(), pushed, dropped);
+                        w.record(now, pushed, dropped);
                         w.windowed_delta()
                     };
                     (
@@ -382,11 +386,13 @@ impl NdiPipeline {
                         session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
                         client_sample,
-                        // #768 D2b: cheap atomic reads under the lock. The
-                        // overflow count is the ground-truth ConsumptionLink
-                        // dropped() (the appsrc enough-data signal is
-                        // suppressed by StreamProducer's callback — review #1).
-                        session.link_probe.to_snapshot(dropped),
+                        // #768 D2b + lane 7: cheap atomic reads + the trailing-30s
+                        // WINDOW verdict. Overflow count = ground-truth dropped()
+                        // (review #1); the windowed dropped delta gates the verdict
+                        // on RECENT drops, so an aged-out join reads healthy.
+                        session
+                            .link_probe
+                            .to_snapshot(dropped, windowed.map(|(_, dd, _)| dd), now),
                         windowed,
                     )
                 })
