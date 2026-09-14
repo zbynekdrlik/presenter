@@ -4,11 +4,16 @@ import {
   type Page,
   type APIRequestContext,
 } from "@playwright/test";
+import { spawn, type ChildProcess } from "child_process";
+import { once } from "events";
+import { existsSync } from "fs";
+import path from "path";
 import {
   deriveTestConfig,
   refreshDevData,
   startTestServer,
   stopServer,
+  REPO_ROOT,
   type ServerHandle,
 } from "./support";
 
@@ -1246,5 +1251,205 @@ test("stage reports per-session client frame stats into /ndi/snapshot (synthetic
     ).toEqual([]);
   } finally {
     await cleanupSource(request, src.id);
+  }
+});
+
+// ── Test 9 (#768 H4): SOURCE-INTERRUPTION mid-stream fan-out drop guard.
+//
+// H4: between 01:47 and 06:41 on the incident Sunday the Resolume/cg-obs NDI
+// SENDER likely restarted/stalled while the presenter pipeline kept running
+// with 0 consumers. Hypothesis: the ndisrc timestamp jump / DISCONT / reconnect
+// on the source's return leaves the producer branch (encoder + StreamProducer
+// appsink) in a state where every LATER consumer join drops ~75%.
+//
+// This guard reproduces that shape with a DEDICATED synthetic sender the test
+// owns (unique ndi-name, so it never disturbs the shared lane sender): stream
+// with 0 consumers → hard-kill the sender (~20s source gap, pipeline keeps
+// running) → restart it (fresh receive-time timestamps / DISCONT) → attach 2
+// WHEP consumers → hold 30s → assert the fan-out stays healthy (dropRatio30s +
+// cumulative < 0.2). If H4 reproduces, drops persist after the join and this
+// reds; the printed per-session `link.verdict` says queueOverflow (H4) vs
+// keyframeWait (join transient). Structural analysis (comment #768 lane 6)
+// predicts a proven-negative on the synthetic path — this stays a permanent
+// guard for a real scenario either way.
+
+function ndiSenderCommand(): string {
+  const release = path.join(REPO_ROOT, "target", "release", "ndi_test_sender");
+  if (existsSync(release)) return release;
+  // Local-dev fallback when the prebuilt artifact is absent (CI always has it).
+  return "cargo run -p presenter-ndi --features test-helpers --bin ndi_test_sender";
+}
+
+/** Start a DEDICATED synthetic NDI sender under `ndiName`, isolated from the
+ * shared lane sender so this test can kill/restart it freely. */
+function startDedicatedSyntheticSender(ndiName: string): ChildProcess {
+  return spawn(
+    "bash",
+    ["-lc", `PRESENTER_NDI_TEST_NAME=${ndiName} ${ndiSenderCommand()}`],
+    { cwd: REPO_ROOT, env: { ...process.env }, stdio: "inherit" },
+  );
+}
+
+async function killSender(proc: ChildProcess): Promise<void> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return;
+  proc.kill("SIGKILL");
+  await once(proc, "exit").catch(() => {});
+}
+
+/** Poll /ndi/sources (up to ~40s) for a source whose name includes `needle`. */
+async function discoverSyntheticSourceByName(
+  request: APIRequestContext,
+  needle: string,
+): Promise<{ name: string } | undefined> {
+  for (let i = 0; i < 40; i++) {
+    const resp = await request.get(new URL("/ndi/sources", baseURL).toString());
+    if (resp.ok()) {
+      const list = await resp.json();
+      if (Array.isArray(list)) {
+        const found = list.find((s: { name: string }) =>
+          s.name.includes(needle),
+        );
+        if (found) return found;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return undefined;
+}
+
+test("SOURCE interruption mid-stream keeps the fan-out healthy — H4 (#768) (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  // Unique ndi-name → this test owns the source lifecycle without disturbing the
+  // shared "(PRESENTER-TEST)" sender every other @synthetic-ndi test discovers.
+  const ndiName = "PRESENTER-TEST-H4";
+  const needle = "(PRESENTER-TEST-H4)";
+  let sender: ChildProcess | undefined = startDedicatedSyntheticSender(ndiName);
+  let src: { id: string } | undefined;
+  try {
+    const synthetic = await discoverSyntheticSourceByName(request, needle);
+    expect(
+      synthetic,
+      `dedicated H4 synthetic source '${needle}' must appear on the network — start ndi_test_sender`,
+    ).toBeTruthy();
+
+    src = await createAndActivateSource(
+      request,
+      synthetic!.name,
+      "Synthetic-E2E-H4-SourceInterrupt",
+    );
+    await waitForPipelineStreaming(request, src.id);
+
+    // Run the producer branch with ZERO consumers before the interruption — the
+    // incident precondition (the Sunday pipeline streamed with 0 consumers).
+    await new Promise((r) => setTimeout(r, 10_000));
+
+    // INTERRUPT: hard-kill the sender (abrupt source loss), keep the server
+    // pipeline running. ndisrc goes silent without erroring, so the pipeline
+    // stays streaming with 0 consumers across the gap (ndi skill: the ~30s
+    // reconnect loop holds state=streaming while the source is silent).
+    await killSender(sender);
+    sender = undefined;
+    await new Promise((r) => setTimeout(r, 20_000)); // ~20s source gap
+
+    // RESTART with the SAME ndi-name → ndisrc reconnects by name and resumes
+    // with FRESH receive-time timestamps (a timestamp jump / DISCONT on the
+    // first post-gap buffer) — the exact H4 condition under test. No re-activate:
+    // the pipeline was never torn down; it reconnects to the source by name.
+    sender = startDedicatedSyntheticSender(ndiName);
+    await waitForPipelineStreaming(request, src.id);
+    await new Promise((r) => setTimeout(r, 8_000)); // let frames actually resume
+
+    // Attach 2 consumers to the POST-interruption pipeline and hold them.
+    await page.goto(new URL("/", baseURL).toString());
+    const held = await connectConsumersAndHold(page, src.id, 2);
+    expect(held.error, `WHEP consumers must connect — ${held.error}`).toBeFalsy();
+
+    // Sample /ndi/snapshot for ~30s (each read also warms the trailing-30s
+    // window); the FINAL sample is the steady-state signal.
+    type Snap = {
+      dropRatio?: number;
+      drop_ratio?: number;
+      dropRatio30s?: number | null;
+      drop_ratio_30s?: number | null;
+      consumerCount?: number;
+      consumer_count?: number;
+      sessions?: Array<{
+        id?: string;
+        dropRatio?: number;
+        drop_ratio?: number;
+        dropRatio30s?: number | null;
+        drop_ratio_30s?: number | null;
+        link?: unknown;
+      }>;
+    };
+    let final: Snap | undefined;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const resp = await request.get(
+        new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+      );
+      if (resp.ok()) final = (await resp.json()) as Snap;
+    }
+    expect(
+      final,
+      "/ndi/snapshot must return a body for the source",
+    ).toBeTruthy();
+
+    // PRINT (never assert) the per-link discriminator so CI logs explain WHY if
+    // this ever reds: link.verdict = queueOverflow (H4 reproduced) vs
+    // keyframeWait (join transient). Logged before the asserts so it survives a
+    // failure.
+    console.log(
+      `[e2e-evidence] #768 H4 link blocks: ${JSON.stringify(
+        (final!.sessions ?? []).map((s) => ({
+          id: s.id,
+          dropRatio30s: s.dropRatio30s ?? s.drop_ratio_30s,
+          link: s.link,
+        })),
+      )}`,
+    );
+
+    const consumers = final!.consumerCount ?? final!.consumer_count ?? 0;
+    expect(consumers, "both held consumers must be attached server-side").toBe(
+      2,
+    );
+
+    // H4 assertion: the post-interruption pipeline must NOT sustain the ~0.75
+    // drop the incident showed. Prefer the trailing-30s window (the sensitive
+    // mid-life signal); fall back to cumulative when it has not warmed. Both < 0.2.
+    const pipe30 = final!.dropRatio30s ?? final!.drop_ratio_30s;
+    if (pipe30 !== null && pipe30 !== undefined) {
+      expect(
+        pipe30,
+        `post-interruption pipeline dropRatio30s must stay healthy (<0.2); ` +
+          `H4 (source-interruption fan-out drop) would reproduce at ~0.75. Got ${pipe30}.`,
+      ).toBeLessThan(0.2);
+    }
+    const pipeCum = final!.dropRatio ?? final!.drop_ratio ?? 1;
+    expect(
+      pipeCum,
+      `post-interruption pipeline cumulative dropRatio must stay healthy (<0.2). Got ${pipeCum}.`,
+    ).toBeLessThan(0.2);
+
+    for (const [i, s] of (final!.sessions ?? []).entries()) {
+      const s30 = s.dropRatio30s ?? s.drop_ratio_30s;
+      if (s30 !== null && s30 !== undefined) {
+        expect(
+          s30,
+          `consumer ${i} dropRatio30s must stay healthy (<0.2), got ${s30}`,
+        ).toBeLessThan(0.2);
+      }
+      const sCum = s.dropRatio ?? s.drop_ratio ?? 1;
+      expect(
+        sCum,
+        `consumer ${i} cumulative dropRatio must stay healthy (<0.2), got ${sCum}`,
+      ).toBeLessThan(0.2);
+    }
+  } finally {
+    await releaseHeldConsumers(page);
+    if (src) await cleanupSource(request, src.id);
+    if (sender) await killSender(sender);
   }
 });
