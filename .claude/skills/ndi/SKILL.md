@@ -361,7 +361,8 @@ overflow count MUST be read from `ConsumptionLink::dropped()` (threaded into `to
 snapshot time), NOT from an `emit-signals` `enough-data` handler (which would stay stuck at 0 and
 make `queueOverflow` unreachable). Only `need-data` (the slot `StreamProducer` leaves free) is read
 via signal; everything else — DISCONT / keyframe counts, buffer lateness (consumer running-time −
-buffer PTS, ms), and appsrc `current-level-time` — comes from a src-pad BUFFER probe, which fires
+`segment.to_running_time(pts)`, ms — segment-aware since #768 lane 6; see the lateness-anomaly note
+below), and appsrc `current-level-time` — comes from a src-pad BUFFER probe, which fires
 regardless of callbacks. A pure `classify()` (unit-tested) turns `dropped()` + those into a
 `verdict`, surfaced per session in `GET /ndi/snapshot/{id}`:
 ```bash
@@ -397,6 +398,44 @@ the embedded program. Keep the step non-blocking (bare-echo else-branch, `if…t
 never `[ … ] && break` under `set -e`).
 - Regression guards: `tests/e2e/ndi-webrtc-synthetic.spec.ts` + `tests/e2e/ndi-latency.spec.ts`
   (glass-to-glass median ≤350ms, p95 ≤600ms; measured dev 173/190ms, CI 168/192ms)
+
+### #768 lateness anomaly — RESOLVED: it was a probe measurement bug (lane 6)
+
+The D2b `link.latenessMs` read a CONSTANT `≈ −3 599 967 ms` on every session, healthy or not, in
+both live measurements — suspicious because it is almost exactly −3600 s (1 h). It is NOT a real
+base_time skew (which would stall a sync sink for an hour); it was a MEASUREMENT bug in the probe:
+- The probe subtracted the RAW `buffer.pts()` from `current_running_time()`. A buffer PTS is a
+  SEGMENT-relative timestamp; its running-time is `segment.to_running_time(pts)`. The
+  ndisrc → StreamProducer → appsrc path presents a segment carrying a constant ~1 h base, so the raw
+  subtraction was off by that ~1 h — the −3600 s. The residual ~33 ms was the TRUE realtime lateness
+  (≈ one frame behind).
+- Proof it is (a) a measurement bug and not (b) a real skew, WITHOUT a live box: GStreamer's own
+  sinks synchronise on `segment.to_running_time(pts)`; a genuine 1 h-future running-time would hold
+  each buffer 1 h and stall. Media flowed at realtime 30 fps with no stall ⟹ the segment-applied
+  running-time is ≈ now ⟹ the offset lived only in our raw-PTS subtraction.
+- Fix (lane 6, `pipeline/link_probe.rs`): capture the active TIME segment from the sticky SEGMENT
+  event on the src-pad probe and compute `lateness = current_running_time − segment.to_running_time(pts)`.
+  Diagnostic-only — no change to media flow / drop mechanism / GOP / max-time / base_time adoption.
+  Self-verifying on the next live read: `sessions[].link.latenessMs` now reads ≈0 instead of −3600 s.
+
+### #768 H4 — source-interruption mid-pipeline (lane 6): structural prediction + e2e guard
+
+H4: the Resolume/cg-obs NDI SENDER restarts/stalls while the presenter pipeline runs with 0
+consumers; on the source's return a ndisrc timestamp jump / DISCONT could leave the producer branch
+in a state where every later consumer join drops ~75%. Code-level prediction (like lane 3's
+base_time refutation): ndisrc `timestamp-mode=receive-time` re-stamps each buffer with the CURRENT
+running-time on reconnect (never a future timestamp), and a SILENT source does NOT error the pipeline
+— the ~30 s auto-reconnect loop holds `state=streaming` while the source is silent (see the
+"pipeline built ≠ flowing" note above), so the supervisor never rebuilds on a mere source gap. So H4
+most likely does NOT reproduce on the synthetic path (same limitation lane 3 named: real ndisrc
+network jitter + hours of VA-API state on prod N100 are not reproducible by a seconds-long local
+synthetic run). Variant "sender kept running, source re-discovered" is a predicted no-op: a stable
+NDI name holds the same receiver, no timestamp jump. Guard: `ndi-webrtc-synthetic.spec.ts` Test 9
+(`@synthetic-ndi`) spawns a DEDICATED sender (unique ndi-name, isolated from the shared lane sender),
+kills it ~20 s mid-stream with 0 consumers, restarts it, attaches 2 WHEP consumers, and asserts
+`dropRatio30s`/cumulative `dropRatio` < 0.2 — printing `link.verdict` so a red is attributable
+(queueOverflow = H4 reproduced; keyframeWait = join transient). The D2 root-cause FIX stays open: it
+needs the live `verdict` reading during an ACTUAL incident (the synthetic guard cannot force it).
 
 ### Stage status-bar readouts (#479)
 
