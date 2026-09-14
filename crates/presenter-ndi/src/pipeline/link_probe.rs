@@ -120,9 +120,14 @@ pub struct VerdictInputs {
     /// Cumulative keyframe buffers forwarded. `<= 1` means the session is still
     /// pre-first-IDR (the join phase), where any drop is a keyframe wait.
     pub keyframe_buffers: u64,
-    /// A DISCONT buffer was forwarded within the trailing window (forwarding
-    /// resumed at an IDR after a gap — a keyframe wait).
-    pub discont_in_window: bool,
+    /// Whether a DISCONT buffer was forwarded within the trailing window
+    /// (forwarding resumed at an IDR after a gap — a keyframe wait). `None` means
+    /// the discont window is too young to judge (< 2 samples) — DISTINCT from
+    /// `Some(false)` ("positively no DISCONT in the window"). The distinction is
+    /// load-bearing: `QueueOverflow` requires `Some(false)` (we must POSITIVELY
+    /// rule out a recent keyframe wait), so a young window can never be
+    /// mis-read as an overflow — it falls to `Unknown` instead.
+    pub discont_in_window: Option<bool>,
     /// Max appsrc queue level (ms) seen. Near the 500 ms `max-time` bound = the
     /// queue-full evidence for an overflow.
     pub max_queue_level_ms: u64,
@@ -155,24 +160,36 @@ pub fn classify(inputs: &VerdictInputs) -> LinkVerdict {
         // a fault).
         return LinkVerdict::Healthy;
     }
-    // Drops IN the window. A keyframe wait is the benign explanation and takes
-    // precedence: forwarding is gated on the next IDR, either because the
-    // session is still pre-first-IDR (join) or a DISCONT re-armed the wait
-    // within the window (a mid-life source glitch resuming at an IDR).
-    if inputs.keyframe_buffers <= 1 || inputs.discont_in_window {
+    // Drops IN the window while still pre-first-IDR — unambiguously a keyframe
+    // wait (there is no established stream to overflow yet).
+    if inputs.keyframe_buffers <= 1 {
         return LinkVerdict::KeyframeWait;
     }
-    // Drops after the first keyframe with no recent DISCONT: a genuine overflow
-    // iff the queue was near its `max-time` bound AND buffers were not in the
-    // future (downstream draining slower than realtime — the #768 incident).
-    if inputs.max_queue_level_ms >= QUEUE_FULL_MS
-        && inputs.lateness_max_ms >= LATENESS_NOT_FUTURE_MS
-    {
-        return LinkVerdict::QueueOverflow;
+    // After the first keyframe, the DISCONT window is the discriminator. The
+    // overflow branch requires POSITIVE evidence that no DISCONT occurred in the
+    // window (`Some(false)`) — because the queue-full / lateness gates are
+    // since-join cumulative high-water marks (a join transient satisfies them
+    // forever), so `discont_in_window` is the ONLY windowed signal separating a
+    // genuine overflow from a keyframe wait. A young discont window (`None`)
+    // therefore CANNOT conclude overflow — it falls to `Unknown` and self-heals
+    // (this is the #768 lane 7 review fix: never mis-read a fresh join whose
+    // discont window is not yet established as a `QueueOverflow`).
+    match inputs.discont_in_window {
+        // A DISCONT within the window → forwarding re-gated on the next IDR.
+        Some(true) => LinkVerdict::KeyframeWait,
+        // Positively no DISCONT in the window → a genuine overflow iff the queue
+        // was near its `max-time` bound AND buffers were not in the future
+        // (downstream draining slower than realtime — the #768 incident).
+        Some(false)
+            if inputs.max_queue_level_ms >= QUEUE_FULL_MS
+                && inputs.lateness_max_ms >= LATENESS_NOT_FUTURE_MS =>
+        {
+            LinkVerdict::QueueOverflow
+        }
+        // Discont window too young to judge (`None`), or the queue was not the
+        // bottleneck / buffers in the future — an anomaly, not a named fault.
+        _ => LinkVerdict::Unknown,
     }
-    // Drops after the first keyframe that match no known signature (queue not
-    // full, or buffers in the future) — an anomaly, not a named fault.
-    LinkVerdict::Unknown
 }
 
 /// Pure lateness (ms): how far a forwarded buffer's RUNNING-TIME is behind the
@@ -241,8 +258,8 @@ impl DiscontWindow {
         if self.samples.len() < 2 {
             return None;
         }
-        let newest = self.samples.last()?.1;
-        let oldest = self.samples.first()?.1;
+        let newest = self.samples[self.samples.len() - 1].1;
+        let oldest = self.samples[0].1;
         Some(newest > oldest)
     }
 }
@@ -420,8 +437,10 @@ impl LinkProbe {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             w.record(now, discont_buffers);
-            // `None` (< 2 samples) = no window evidence yet → not a keyframe wait.
-            w.saw_discont().unwrap_or(false)
+            // Pass the raw Option through: `None` (< 2 samples) must NOT collapse
+            // to `false`, or a young window could be mis-read as an overflow
+            // (the #768 lane 7 review fix — see `classify`).
+            w.saw_discont()
         };
         // The classifier only trusts lateness once a buffer has flowed.
         let lateness_for_verdict = if total == 0 { 0 } else { lateness_max };
@@ -607,7 +626,7 @@ mod tests {
             window_dropped: Some(0),
             cumulative_dropped: 0,
             keyframe_buffers: 100,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 0,
             lateness_max_ms: 0,
         }
@@ -628,7 +647,7 @@ mod tests {
             window_dropped: Some(0),
             cumulative_dropped: 87,
             keyframe_buffers: 179,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 256,
         };
@@ -645,7 +664,7 @@ mod tests {
             window_dropped: Some(120),
             cumulative_dropped: 120,
             keyframe_buffers: 5,
-            discont_in_window: true,
+            discont_in_window: Some(true),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
         };
@@ -660,7 +679,7 @@ mod tests {
             window_dropped: Some(60),
             cumulative_dropped: 60,
             keyframe_buffers: 1,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
         };
@@ -676,7 +695,7 @@ mod tests {
             window_dropped: Some(400),
             cumulative_dropped: 5000,
             keyframe_buffers: 5000,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
         };
@@ -692,7 +711,7 @@ mod tests {
             window_dropped: Some(60),
             cumulative_dropped: 60,
             keyframe_buffers: 5000,
-            discont_in_window: true,
+            discont_in_window: Some(true),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
         };
@@ -708,7 +727,7 @@ mod tests {
             window_dropped: Some(400),
             cumulative_dropped: 5000,
             keyframe_buffers: 5000,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: -50,
         };
@@ -724,8 +743,28 @@ mod tests {
             window_dropped: Some(400),
             cumulative_dropped: 5000,
             keyframe_buffers: 5000,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 200,
+            lateness_max_ms: 300,
+        };
+        assert_eq!(classify(&inputs), LinkVerdict::Unknown);
+    }
+
+    #[test]
+    fn classify_no_overflow_when_discont_window_too_young() {
+        // #768 lane 7 review fix (🟡-1): drops in the window after the first
+        // keyframe, queue full, buffers not in the future — but the DISCONT
+        // window is not yet established (`None`). Because the queue/lateness
+        // gates are since-join maxima (a join transient satisfies them forever),
+        // concluding QueueOverflow here would reproduce the very incident this
+        // lane fixes on a fresh join. Must read Unknown (self-heals), NOT
+        // QueueOverflow.
+        let inputs = VerdictInputs {
+            window_dropped: Some(400),
+            cumulative_dropped: 400,
+            keyframe_buffers: 5,
+            discont_in_window: None,
+            max_queue_level_ms: 499,
             lateness_max_ms: 300,
         };
         assert_eq!(classify(&inputs), LinkVerdict::Unknown);
@@ -740,7 +779,7 @@ mod tests {
             window_dropped: None,
             cumulative_dropped: 57,
             keyframe_buffers: 5,
-            discont_in_window: false,
+            discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 2152,
         };

@@ -386,13 +386,10 @@ impl NdiPipeline {
                         session.created_at.elapsed().as_secs_f64(),
                         session.webrtcbin.clone(),
                         client_sample,
-                        // #768 D2b + lane 7: cheap atomic reads under the lock,
-                        // plus the trailing-30s WINDOW verdict. The overflow
-                        // count is the ground-truth ConsumptionLink dropped()
-                        // (the appsrc enough-data signal is suppressed by
-                        // StreamProducer's callback — review #1); the windowed
-                        // dropped delta gates the verdict on RECENT drops, not
-                        // since-join cumulative (an aged-out join reads healthy).
+                        // #768 D2b + lane 7: cheap atomic reads + the trailing-30s
+                        // WINDOW verdict. Overflow count = ground-truth dropped()
+                        // (review #1); the windowed dropped delta gates the verdict
+                        // on RECENT drops, so an aged-out join reads healthy.
                         session
                             .link_probe
                             .to_snapshot(dropped, windowed.map(|(_, dd, _)| dd), now),

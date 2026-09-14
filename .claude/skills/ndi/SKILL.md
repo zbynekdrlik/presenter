@@ -385,17 +385,23 @@ the math:
 - **`keyframeWait`** — drops in the window while the session was still pre-first-IDR
   (`keyframeBuffers <= 1`) OR a DISCONT landed within the window: forwarding was IDR-gated (the
   producer re-armed `needs_keyframe` and resumed at a keyframe). Points at producer keyframe cadence
-  / re-arm behaviour or a source glitch, NOT queue overflow. A fresh join reads this for its first
-  ~30s.
-- **`queueOverflow`** — drops in the window AFTER the first keyframe, with NO DISCONT in the window,
-  the appsrc queue near its 500 ms `max-time` bound (`maxQueueLevelMs >= 450`) and buffers not in
-  the future (`latenessMs >= 0`): downstream draining slower than realtime — the incident signature.
-  The fix belongs on the drain side (encoder throughput / consumer sink pacing / real VA-API uptime),
-  NOT on GOP or `max-time`.
-- **`unknown`** — the window is too young to judge (< 2 samples: a session in its first couple of
-  seconds, `dropRatio30s == null`, but with cumulative drops), OR drops after the first keyframe
-  that match no known signature (queue not full, or buffers in the future). Self-heals to `healthy`
-  once the window fills with clean samples; poll `/ndi/snapshot` again a few seconds later.
+  / re-arm behaviour or a source glitch, NOT queue overflow. A fresh join whose join drops are still
+  in the window reads `keyframeWait` (or `unknown` while its discont window fills) — never
+  `queueOverflow`.
+- **`queueOverflow`** — drops in the window AFTER the first keyframe, with POSITIVELY no DISCONT in
+  the window (its discont window has >= 2 samples and did not climb), the appsrc queue near its
+  500 ms `max-time` bound (`maxQueueLevelMs >= 450`) and buffers not in the future
+  (`latenessMs >= 0`): downstream draining slower than realtime — the incident signature. The fix
+  belongs on the drain side (encoder throughput / consumer sink pacing / real VA-API uptime), NOT on
+  GOP or `max-time`. NOTE: the queue/lateness evidence is since-join cumulative, so the DISCONT
+  window is the load-bearing discriminator — the verdict is only concluded `queueOverflow` when the
+  discont window can POSITIVELY rule out a recent keyframe wait; until it can, the verdict is
+  `unknown`, so poll `/ndi/snapshot` a few times (≥ 2 reads within 30s) to let it settle.
+- **`unknown`** — the drop window is too young to judge (< 2 samples: a session in its first couple
+  of seconds, `dropRatio30s == null`, but with cumulative drops), OR drops after the first keyframe
+  whose DISCONT window is not yet established, OR drops matching no known signature (queue not full,
+  or buffers in the future). Self-heals to `healthy`/`keyframeWait`/`queueOverflow` once the windows
+  fill; poll `/ndi/snapshot` again a few seconds later.
 
 **Calibration gotcha (why lane 7 existed):** a classifier built on a WRONG measurement inherits the
 wrong thresholds. The lane-4 verdict gated `queueOverflow` on `lateness_max > 250 ms` against the
