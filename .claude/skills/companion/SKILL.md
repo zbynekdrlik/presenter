@@ -85,6 +85,29 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   `node ops/companion/generate-profile.mjs` only to VERIFY it still renders (the
   export under `generated/` is never committed).
 
+## Feedbacks — boolean type + checkFeedbacks (#780)
+
+The 2026-09 "feedbacks never light" bug. Three rules when touching feedback
+definitions in `index.js` `_setupFeedbacks()`:
+
+- **A boolean condition needs `type:"boolean"` + `defaultStyle`, NEVER
+  `type:"advanced"`.** `@companion-module/base` ^1.13 ignores a boolean returned
+  from an `advanced` callback (an advanced callback must return a *style object*),
+  so the button silently never lights and Companion shows it as an empty "Layered
+  Styles Overrides" feedback. `countdown_running` is the correct reference shape.
+- **`checkFeedbacks()` MUST be called to re-evaluate.** Companion evaluates a
+  feedback at creation and then only when the module asks. Call it once per
+  applied `variables` message that changed ≥1 value — reuse
+  `applyVariablesMessage`'s return (0/1 changed-count, `lib/variable-batch.js`),
+  do NOT loop-call per variable (that reintroduces the #265 fan-out) — and on
+  connection-state change (`_updateVariable` on `live_ws_connected` is a
+  single-call, non-loop path, safe to fire `checkFeedbacks()` there).
+- **Match a variable's real shape.** `stream_overlays` is a comma-joined list of
+  active overlay names (`"-"` when none), so an exact `=== "verse"` match breaks
+  the moment a 2nd overlay is on. Use MEMBERSHIP (`isOverlayActive` in
+  `lib/stream.js`), case-insensitive/trimmed, exact (not substring) — not
+  whole-string equality. Pure evaluators live in `lib/stream.js` + `node --test`.
+
 ## Module version pinning — connection must survive a deploy (#733)
 
 Companion stores each connection's module version as `moduleVersionId` in the `instances`
