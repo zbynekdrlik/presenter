@@ -13,6 +13,13 @@ const {
   buildStreamPayload,
   isOverlayActive,
   isSceneActive,
+  isNameplateCommand,
+  nameplateActionOptions,
+  buildNameplateInvocation,
+  isNameplateActive,
+  nameplateChoices,
+  nameplateVariableIds,
+  nameplatePresets,
 } = require("./lib/stream");
 
 const VARIABLE_DEFINITIONS = [
@@ -82,6 +89,10 @@ const COMMANDS = [
   { id: "stream_overlay_off", label: "Stream: overlay off (by name)" },
   { id: "stream_overlay_toggle", label: "Stream: overlay toggle (by name)" },
   { id: "stream_clear", label: "Stream: clear base + all overlays" },
+  { id: "stream_nameplate_show", label: "Stream: show nameplate (menovka)" },
+  { id: "stream_nameplate_song", label: "Stream: show song nameplate" },
+  { id: "stream_nameplate_toggle", label: "Stream: toggle nameplate (menovka)" },
+  { id: "stream_nameplate_hide", label: "Stream: hide nameplate" },
 ];
 
 const STAGE_LAYOUT_CHOICES = [
@@ -100,6 +111,15 @@ class PresenterInstance extends InstanceBase {
     this.ws = null;
     this.reconnectTimer = null;
     this.variables = new Map();
+    // #779: the lower-third plate list (from the server's `nameplates` message).
+    // Drives dynamic per-plate variable defs, action dropdown choices, the
+    // active feedback's choices, and the presets.
+    this.nameplates = [];
+  }
+
+  // #779: the variable-definition id set = static defs ∪ per-plate nameplate ids.
+  _variableIds() {
+    return [...VARIABLE_DEFINITIONS, ...nameplateVariableIds(this.nameplates)];
   }
 
   getConfigFields() {
@@ -161,6 +181,7 @@ class PresenterInstance extends InstanceBase {
     this._setupVariables();
     this._setupActions();
     this._setupFeedbacks();
+    this._setupPresets();
     this._connect();
   }
 
@@ -269,11 +290,24 @@ class PresenterInstance extends InstanceBase {
         // applyVariablesMessage returns the number of setVariableValues calls
         // made (1 when ≥1 value changed, 0 otherwise). Re-evaluate feedbacks
         // ONCE per message that actually changed something — never per variable
-        // (that would reintroduce the #265 fan-out).
-        const changed = applyVariablesMessage(msg, VARIABLE_DEFINITIONS, this);
+        // (that would reintroduce the #265 fan-out). The allowlist is dynamic
+        // (#779) so the server's per-plate `nameplate_<id>_*` values are accepted.
+        const changed = applyVariablesMessage(msg, this._variableIds(), this);
         if (changed) {
           this.checkFeedbacks();
         }
+        break;
+      }
+      case "nameplates": {
+        // #779: the plate list changed — restore it, then rebuild the dynamic
+        // variable defs, action dropdown choices, the active feedback's choices,
+        // and the presets so a button can show + toggle each plate.
+        this.nameplates = Array.isArray(msg.plates) ? msg.plates : [];
+        this._setupVariables();
+        this._setupActions();
+        this._setupFeedbacks();
+        this._setupPresets();
+        this.checkFeedbacks();
         break;
       }
       case "ack":
@@ -288,7 +322,7 @@ class PresenterInstance extends InstanceBase {
   }
 
   _updateVariable(name, value) {
-    if (!VARIABLE_DEFINITIONS.includes(name)) {
+    if (!this._variableIds().includes(name)) {
       return;
     }
     const previous = this.variables.get(name);
@@ -303,11 +337,18 @@ class PresenterInstance extends InstanceBase {
   }
 
   _setupVariables() {
-    const defs = VARIABLE_DEFINITIONS.map((name) => ({
+    const defs = this._variableIds().map((name) => ({
       variableId: name,
       name,
     }));
     this.setVariableDefinitions(defs);
+  }
+
+  // #779: presets — one button per person plate + the song button. Button text
+  // is the plate's variables, the down action toggles it, and the active
+  // feedback lights it. Rebuilt whenever the plate list changes.
+  _setupPresets() {
+    this.setPresetDefinitions(nameplatePresets(this.nameplates));
   }
 
   _setupActions() {
@@ -327,6 +368,9 @@ class PresenterInstance extends InstanceBase {
   _commandOptionsFor(commandId) {
     if (isStreamCommand(commandId)) {
       return streamActionOptions(commandId);
+    }
+    if (isNameplateCommand(commandId)) {
+      return nameplateActionOptions(commandId, this.nameplates);
     }
     switch (commandId) {
       case "timer.set_countdown_target":
@@ -515,6 +559,33 @@ class PresenterInstance extends InstanceBase {
         ),
     };
 
+    // #779: lit while a given plate (a person plate id, or "song") is on air.
+    // Matches the server's `nameplate_active_id` variable exactly. The dropdown
+    // choices track the live plate list (rebuilt on each `nameplates` message).
+    feedbacks["stream_nameplate_active"] = {
+      type: "boolean",
+      name: "Stream: nameplate active (menovka on air)",
+      options: [
+        {
+          type: "dropdown",
+          id: "target",
+          label: "Menovka",
+          default: "song",
+          choices: nameplateChoices(this.nameplates, true),
+          allowCustom: true,
+        },
+      ],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0x00aa00,
+      },
+      callback: (feedback) =>
+        isNameplateActive(
+          this.variables.get("nameplate_active_id"),
+          feedback.options.target,
+        ),
+    };
+
     feedbacks["countdown_running"] = {
       type: "boolean",
       name: "Countdown running",
@@ -558,6 +629,29 @@ class PresenterInstance extends InstanceBase {
     }
 
     let payload = {};
+
+    // #779: nameplate actions resolve to their wire {command, payload} via the
+    // pure builder (which may remap show+song → stream_nameplate_song), so they
+    // send directly here rather than through the shared envelope below.
+    if (isNameplateCommand(command)) {
+      const invocation = buildNameplateInvocation(command, options);
+      if (invocation.error) {
+        this.log("error", invocation.error);
+        return;
+      }
+      this.log(
+        "info",
+        `Presenter command ${invocation.command} ${JSON.stringify(invocation.payload)}`,
+      );
+      this.ws.send(
+        JSON.stringify({
+          type: "command",
+          command: invocation.command,
+          payload: invocation.payload,
+        }),
+      );
+      return;
+    }
 
     switch (command) {
       case "timer.set_countdown_target": {

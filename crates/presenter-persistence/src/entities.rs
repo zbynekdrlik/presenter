@@ -881,6 +881,47 @@ pub mod stream_font {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod stream_nameplate {
+    use sea_orm::entity::prelude::*;
+
+    /// A lower-third "menovka" PERSON plate (#779): `primary_text` = name,
+    /// `secondary_text` = role. `output_id` FK ON DELETE CASCADE. Ordered by
+    /// `position`. The SONG plate is virtual (resolved from the live stage
+    /// snapshot) and is never a row here. No sync columns — per-instance runtime
+    /// data (same as `stream_assets`/`stream_fonts`).
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "stream_nameplates")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub output_id: i32,
+        pub primary_text: String,
+        pub secondary_text: String,
+        pub position: i32,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::stream_output::Entity",
+            from = "Column::OutputId",
+            to = "super::stream_output::Column::Id",
+            on_delete = "Cascade"
+        )]
+        Output,
+    }
+
+    impl Related<super::stream_output::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Output.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 #[cfg(test)]
 mod stream_entities_roundtrip_tests {
     //! #703: each stream entity must compile and round-trip (insert + select)

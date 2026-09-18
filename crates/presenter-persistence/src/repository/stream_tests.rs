@@ -840,3 +840,106 @@ async fn get_missing_font_is_not_found() {
     let err = repo.get_stream_font(999_999).await.unwrap_err();
     assert!(matches!(as_repo_error(&err), RepositoryError::NotFound(_)));
 }
+
+// ---- Nameplates (#779) ----------------------------------------------------
+
+#[tokio::test]
+async fn nameplate_crud_and_order() {
+    let repo = repo().await;
+    repo.create_stream_output("np-crud", "Out").await.unwrap();
+
+    let a = repo
+        .create_stream_nameplate("np-crud", "Ján Novák", "pastor")
+        .await
+        .unwrap();
+    let b = repo
+        .create_stream_nameplate("np-crud", "Eva Malá", "  ") // blank role allowed
+        .await
+        .unwrap();
+    assert_eq!(a.sort_order, 0);
+    assert_eq!(b.sort_order, 1);
+    assert_eq!(b.secondary_text, "");
+
+    let list = repo.list_stream_nameplates("np-crud").await.unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].id, a.id);
+    assert_eq!(list[1].id, b.id);
+
+    // Update texts.
+    let updated = repo
+        .update_stream_nameplate(a.id, "Ján Nový", "kazateľ")
+        .await
+        .unwrap();
+    assert_eq!(updated.primary_text, "Ján Nový");
+    assert_eq!(updated.secondary_text, "kazateľ");
+
+    // Reorder (full set, swapped).
+    repo.set_nameplate_order("np-crud", vec![b.id, a.id])
+        .await
+        .unwrap();
+    let reordered = repo.list_stream_nameplates("np-crud").await.unwrap();
+    assert_eq!(reordered[0].id, b.id);
+    assert_eq!(reordered[1].id, a.id);
+
+    // Delete.
+    repo.delete_stream_nameplate(a.id).await.unwrap();
+    let after = repo.list_stream_nameplates("np-crud").await.unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].id, b.id);
+}
+
+#[tokio::test]
+async fn nameplate_blank_primary_rejected() {
+    let repo = repo().await;
+    repo.create_stream_output("np-blank", "Out").await.unwrap();
+    let err = repo
+        .create_stream_nameplate("np-blank", "   ", "role")
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+}
+
+#[tokio::test]
+async fn nameplate_reorder_partial_set_rejected() {
+    let repo = repo().await;
+    repo.create_stream_output("np-order", "Out").await.unwrap();
+    let a = repo
+        .create_stream_nameplate("np-order", "A", "")
+        .await
+        .unwrap();
+    repo.create_stream_nameplate("np-order", "B", "")
+        .await
+        .unwrap();
+    // Only one of the two ids → 422 Invalid.
+    let err = repo
+        .set_nameplate_order("np-order", vec![a.id])
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+}
+
+#[tokio::test]
+async fn nameplate_missing_id_is_not_found() {
+    let repo = repo().await;
+    let err = repo.get_stream_nameplate(999_999).await.unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn nameplates_cascade_delete_with_output() {
+    let repo = repo().await;
+    repo.create_stream_output("np-cascade", "Out")
+        .await
+        .unwrap();
+    repo.create_stream_nameplate("np-cascade", "A", "role")
+        .await
+        .unwrap();
+    repo.create_stream_nameplate("np-cascade", "B", "role")
+        .await
+        .unwrap();
+    // Deleting the output cascades its plates (FK ON DELETE CASCADE).
+    repo.delete_stream_output("np-cascade").await.unwrap();
+    // The output is gone, so a list surfaces NotFound (no orphaned rows to read).
+    let err = repo.list_stream_nameplates("np-cascade").await.unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::NotFound(_)));
+}

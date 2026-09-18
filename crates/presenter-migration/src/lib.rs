@@ -24,6 +24,7 @@ mod m20260725_000001_add_library_sync_columns;
 mod m20260820_000001_create_stream_tables;
 mod m20260824_000001_add_stream_kind_transitions;
 mod m20260918_000001_create_stream_fonts;
+mod m20260918_000002_create_stream_nameplates;
 
 pub struct Migrator;
 
@@ -52,6 +53,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260820_000001_create_stream_tables::Migration),
             Box::new(m20260824_000001_add_stream_kind_transitions::Migration),
             Box::new(m20260918_000001_create_stream_fonts::Migration),
+            Box::new(m20260918_000002_create_stream_nameplates::Migration),
         ]
     }
 }

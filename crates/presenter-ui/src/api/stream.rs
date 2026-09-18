@@ -10,7 +10,7 @@
 //!   `GET /stream/api/outputs/{slug}/def` -> `StreamOutputDef` (JSON).
 
 use super::{get_json, ApiError};
-use presenter_core::StreamOutputDef;
+use presenter_core::{ActiveNameplate, StreamOutputDef};
 
 /// Fetch the full definition + active state of one output by slug.
 ///
@@ -19,4 +19,11 @@ use presenter_core::StreamOutputDef;
 /// only forwards a single non-empty segment.
 pub async fn get_output_def(slug: &str) -> Result<StreamOutputDef, ApiError> {
     get_json(&format!("/stream/api/outputs/{slug}/def")).await
+}
+
+/// Cold-load the lower-third plate currently on air for an output (#779).
+/// `None` = nothing on air. Drives `ElementLowerThird` on a fresh connect /
+/// reconnect (parity with the countdown/lyrics/verse cold-loads).
+pub async fn get_active_nameplate(slug: &str) -> Result<Option<ActiveNameplate>, ApiError> {
+    get_json(&format!("/stream/api/outputs/{slug}/nameplates/active")).await
 }

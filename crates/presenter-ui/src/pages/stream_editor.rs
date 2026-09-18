@@ -13,6 +13,7 @@ use leptos::prelude::*;
 use presenter_core::{LiveEvent, StreamShowState};
 
 use crate::components::stream_editor::editor_fonts::FontPanel;
+use crate::components::stream_editor::editor_nameplates::NameplatePanel;
 use crate::components::stream_editor::editor_panel::EditorPanel;
 use crate::components::stream_editor::editor_preview::EditorPreview;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
@@ -63,6 +64,9 @@ pub fn StreamEditorPage() -> impl IntoView {
         ),
         draft_element_id: RwSignal::new(None),
         fonts: RwSignal::new(Vec::new()),
+        nameplates: RwSignal::new(Vec::new()),
+        active_nameplate: RwSignal::new(None),
+        song_preview: RwSignal::new((String::new(), String::new())),
     };
 
     // Cold load.
@@ -71,6 +75,10 @@ pub fn StreamEditorPage() -> impl IntoView {
     // generated @font-face stylesheet so picker previews render in-face.
     ctx.reload_fonts();
     crate::components::stream::fonts::ensure_fonts_css_link(0);
+    // #779: load the plate list + the plate currently on air + the live song.
+    ctx.reload_nameplates();
+    ctx.reload_active_nameplate();
+    load_song_preview(ctx);
 
     // Live reflection: apply activation events directly, refetch on config bump.
     let (_ws_state, last_event) = crate::ws::use_live_websocket("stream");
@@ -104,6 +112,21 @@ pub fn StreamEditorPage() -> impl IntoView {
                     ctx.refresh();
                 }
             }
+            // #779: a plate went on/off air → update the on-air highlight directly.
+            LiveEvent::StreamNameplate { output, active } if output == DEFAULT_OUTPUT_SLUG => {
+                ctx.active_nameplate.set(active);
+            }
+            // #779: the plate list changed → refetch it.
+            LiveEvent::StreamNameplatesChanged { output } if output == DEFAULT_OUTPUT_SLUG => {
+                ctx.reload_nameplates();
+            }
+            // #779: keep the "Pieseň" row's live text current.
+            LiveEvent::Stage { snapshot } => {
+                ctx.song_preview.set((
+                    snapshot.song_name.clone().unwrap_or_default(),
+                    snapshot.library_name.clone().unwrap_or_default(),
+                ));
+            }
             _ => {}
         }
     });
@@ -128,6 +151,7 @@ pub fn StreamEditorPage() -> impl IntoView {
                         <EditorPreview ctx=ctx />
                     </section>
                 </Show>
+                <NameplatePanel ctx=ctx />
                 <FontPanel ctx=ctx />
             </main>
             <div
@@ -140,4 +164,18 @@ pub fn StreamEditorPage() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Cold-load the live song title + library for the "Pieseň" row (#779). The
+/// snapshot's `song_name`/`library_name` are layout-independent, so the selected
+/// snapshot reflects the live worship song the server resolves the plate from.
+fn load_song_preview(ctx: StreamEditorCtx) {
+    leptos::task::spawn_local(async move {
+        if let Ok(snapshot) = crate::api::stage::get_snapshot().await {
+            ctx.song_preview.set((
+                snapshot.song_name.clone().unwrap_or_default(),
+                snapshot.library_name.clone().unwrap_or_default(),
+            ));
+        }
+    });
 }

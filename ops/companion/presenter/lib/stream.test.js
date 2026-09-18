@@ -12,6 +12,15 @@ const {
   parseOverlayList,
   isOverlayActive,
   isSceneActive,
+  NAMEPLATE_COMMAND_IDS,
+  SONG_CHOICE_ID,
+  isNameplateCommand,
+  nameplateChoices,
+  nameplateActionOptions,
+  buildNameplateInvocation,
+  isNameplateActive,
+  nameplateVariableIds,
+  nameplatePresets,
 } = require("./stream");
 
 // --------------------------------------------------------------------------- //
@@ -272,5 +281,167 @@ describe("index.js feedback wiring (#780)", () => {
   test("the new stream feedbacks use the lib/stream evaluators", () => {
     assert.match(indexSource, /isOverlayActive\(/);
     assert.match(indexSource, /isSceneActive\(/);
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// #779 — lower-third nameplates: pure logic.
+// --------------------------------------------------------------------------- //
+describe("nameplate pure logic (#779)", () => {
+  const plates = [
+    { id: 3, name: "Ján Novák", role: "pastor" },
+    { id: 7, name: "Eva Malá", role: "" },
+  ];
+
+  test("the four nameplate command ids all start with 'stream_'", () => {
+    assert.deepEqual(NAMEPLATE_COMMAND_IDS, [
+      "stream_nameplate_show",
+      "stream_nameplate_song",
+      "stream_nameplate_toggle",
+      "stream_nameplate_hide",
+    ]);
+    for (const id of NAMEPLATE_COMMAND_IDS) assert.ok(id.startsWith("stream_"), id);
+    assert.ok(isNameplateCommand("stream_nameplate_show"));
+    assert.ok(!isNameplateCommand("stream_scene_set"));
+  });
+
+  test("nameplateChoices builds string ids + labels, incl. the song entry", () => {
+    const choices = nameplateChoices(plates, true);
+    assert.deepEqual(choices[0], { id: "3", label: "Ján Novák — pastor" });
+    assert.deepEqual(choices[1], { id: "7", label: "Eva Malá" }); // no role → name only
+    assert.deepEqual(choices[2], { id: SONG_CHOICE_ID, label: "Pieseň (aktuálna)" });
+    // Without song, and defensive against a non-array.
+    assert.equal(nameplateChoices(plates, false).length, 2);
+    assert.deepEqual(nameplateChoices(null, false), []);
+  });
+
+  test("nameplateActionOptions: show/toggle get a plate dropdown + output; song/hide only output", () => {
+    for (const cmd of ["stream_nameplate_show", "stream_nameplate_toggle"]) {
+      const opts = nameplateActionOptions(cmd, plates);
+      assert.equal(opts.length, 2);
+      assert.equal(opts[0].id, "plate");
+      assert.equal(opts[0].type, "dropdown");
+      assert.equal(opts[1].id, "output");
+    }
+    for (const cmd of ["stream_nameplate_song", "stream_nameplate_hide"]) {
+      const opts = nameplateActionOptions(cmd, plates);
+      assert.equal(opts.length, 1);
+      assert.equal(opts[0].id, "output");
+    }
+  });
+
+  test("buildNameplateInvocation maps person + song for show/toggle", () => {
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_show", { plate: "3", output: "stream" }),
+      { command: "stream_nameplate_show", payload: { id: 3, output: "stream" } },
+    );
+    // Show + song → the dedicated song command.
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_show", { plate: SONG_CHOICE_ID }),
+      { command: "stream_nameplate_song", payload: { output: "stream" } },
+    );
+    // Toggle + song → toggle with {song:true}.
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_toggle", { plate: SONG_CHOICE_ID }),
+      { command: "stream_nameplate_toggle", payload: { song: true, output: "stream" } },
+    );
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_toggle", { plate: "7", output: " lower-third " }),
+      { command: "stream_nameplate_toggle", payload: { id: 7, output: "lower-third" } },
+    );
+    // Song + hide pass through.
+    assert.deepEqual(buildNameplateInvocation("stream_nameplate_song", {}), {
+      command: "stream_nameplate_song",
+      payload: { output: "stream" },
+    });
+    assert.deepEqual(buildNameplateInvocation("stream_nameplate_hide", {}), {
+      command: "stream_nameplate_hide",
+      payload: { output: "stream" },
+    });
+  });
+
+  test("buildNameplateInvocation errors on an unchosen/invalid plate", () => {
+    assert.ok(buildNameplateInvocation("stream_nameplate_show", { plate: "" }).error);
+    assert.ok(buildNameplateInvocation("stream_nameplate_show", {}).error);
+    assert.ok(buildNameplateInvocation("stage.set", {}).error);
+  });
+
+  test("isNameplateActive matches an on-air id/song exactly, never idle/substring", () => {
+    assert.ok(isNameplateActive("3", "3"));
+    assert.ok(isNameplateActive("song", "song"));
+    assert.ok(!isNameplateActive("-", "3")); // idle placeholder
+    assert.ok(!isNameplateActive("", "3"));
+    assert.ok(!isNameplateActive("33", "3")); // not substring
+    assert.ok(!isNameplateActive("3", "")); // empty target
+  });
+
+  test("nameplateVariableIds = static ids + per-plate name/role", () => {
+    const ids = nameplateVariableIds(plates);
+    for (const id of [
+      "nameplate_song_name",
+      "nameplate_song_role",
+      "nameplate_active_name",
+      "nameplate_active_role",
+      "nameplate_active_id",
+      "nameplate_3_name",
+      "nameplate_3_role",
+      "nameplate_7_name",
+      "nameplate_7_role",
+    ]) {
+      assert.ok(ids.includes(id), `missing ${id}`);
+    }
+  });
+
+  test("nameplatePresets: one per plate + song, text = plate variables, toggle + active feedback", () => {
+    const presets = nameplatePresets(plates);
+    assert.ok(presets["nameplate_song"], "song preset present");
+    assert.ok(presets["nameplate_3"], "per-plate preset present");
+    const p = presets["nameplate_3"];
+    assert.equal(p.type, "button");
+    assert.match(p.style.text, /\$\(presenter:nameplate_3_name\)/);
+    assert.match(p.style.text, /\$\(presenter:nameplate_3_role\)/);
+    assert.equal(p.steps[0].down[0].actionId, "stream_nameplate_toggle");
+    assert.equal(p.steps[0].down[0].options.plate, "3");
+    assert.equal(p.feedbacks[0].feedbackId, "stream_nameplate_active");
+    assert.equal(p.feedbacks[0].options.target, "3");
+    // The song preset toggles the song entry.
+    assert.equal(presets["nameplate_song"].steps[0].down[0].options.plate, SONG_CHOICE_ID);
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// #779 — index.js wires the nameplate surface (text-parsed from source).
+// --------------------------------------------------------------------------- //
+describe("index.js wires nameplates (#779)", () => {
+  test("COMMANDS contains all four nameplate command ids", () => {
+    const commandsBlock = indexSource.match(/const COMMANDS\s*=\s*\[([\s\S]*?)\];/);
+    assert.ok(commandsBlock);
+    for (const id of NAMEPLATE_COMMAND_IDS) {
+      assert.ok(commandsBlock[1].includes(`"${id}"`), `COMMANDS missing ${id}`);
+    }
+  });
+
+  test("a nameplates message arm rebuilds defs/actions/feedbacks/presets", () => {
+    assert.match(indexSource, /case "nameplates":/);
+    assert.match(indexSource, /this\.nameplates\s*=/);
+    assert.match(indexSource, /_setupPresets\(/);
+  });
+
+  test("presets are set from nameplatePresets + the active feedback is wired", () => {
+    assert.match(indexSource, /setPresetDefinitions\(/);
+    assert.match(indexSource, /nameplatePresets\(/);
+    assert.match(indexSource, /feedbacks\[["']stream_nameplate_active["']\]/);
+    assert.match(indexSource, /isNameplateActive\(/);
+  });
+
+  test("variable defs + allowlist are dynamic (_variableIds unions per-plate ids)", () => {
+    assert.match(indexSource, /_variableIds\(/);
+    assert.match(indexSource, /nameplateVariableIds\(/);
+    // applyVariablesMessage no longer uses the static const directly.
+    assert.match(indexSource, /applyVariablesMessage\(msg, this\._variableIds\(\), this\)/);
+  });
+
+  test("nameplate actions send via buildNameplateInvocation (command may remap)", () => {
+    assert.match(indexSource, /buildNameplateInvocation\(/);
   });
 });
