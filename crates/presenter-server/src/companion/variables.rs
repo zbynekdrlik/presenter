@@ -124,10 +124,21 @@ impl CompanionVariableState {
     }
 
     /// The song plate's texts, mirrored from the live stage snapshot: primary =
-    /// song name, secondary = band/library. Empty when no worship is on stage.
+    /// song name, secondary = band/library. Uses the SAME `song_name ?? (non-empty)
+    /// presentation_name` fallback the on-air plate resolves with
+    /// (`state/stream_nameplates.rs::resolve_song_texts`) so the Companion button
+    /// label never diverges from the rendered plate. Empty when no worship is on
+    /// stage.
     pub(super) fn stage_song_texts(&self) -> (String, String) {
         match &self.stage {
-            Some(stage) => (stage.song_name.clone(), stage.band_name.clone()),
+            Some(stage) => {
+                let primary = if stage.song_name.trim().is_empty() {
+                    stage.presentation_name.clone()
+                } else {
+                    stage.song_name.clone()
+                };
+                (primary, stage.band_name.clone())
+            }
             None => (String::new(), String::new()),
         }
     }
