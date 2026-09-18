@@ -684,3 +684,58 @@ test("color element: create below a verse, reorder behind, background-color + op
 
   expect(errors, "browser console must be clean").toEqual([]);
 });
+
+// --- #776: opacity field is percent (0–100), commit-on-blur, clamps ----------
+
+test("opacity field is percent: 35 -> 0.35 persists across reload; 150 clamps to 100, no 422", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+
+  const scene = await addScene(page, "SE_Opacity776", "base");
+  await openPanel(page, scene);
+  const img = await addElement(page, scene, "image");
+
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${img}"] [data-role="stream-element-select"]`)
+    .click();
+  await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
+
+  const opacity = page.locator('[data-role="stream-image-opacity"]');
+
+  // Type 35 (percent). Commit on blur, save -> the wire stays 0..1 (0.35), no 422.
+  await opacity.fill("35");
+  await opacity.blur();
+  await expect(opacity).toHaveValue("35");
+  await page.locator('[data-role="stream-prop-save"]').click();
+  await expect
+    .poll(async () => {
+      const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === img);
+      return (el?.props as any)?.opacity as number | undefined;
+    })
+    .toBeCloseTo(0.35, 5);
+  await expect(page.locator('[data-role="stream-prop-error"]')).toHaveCount(0);
+
+  // Reload -> the field re-seeds from the stored 0.35 as the integer percent 35.
+  await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await openPanel(page, scene);
+  await page
+    .locator(`[data-role="stream-element"][data-element-id="${img}"] [data-role="stream-element-select"]`)
+    .click();
+  await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
+  await expect(page.locator('[data-role="stream-image-opacity"]')).toHaveValue("35");
+
+  // Out-of-range 150 -> clamped to 100 with an inline Slovak hint, NO server 422
+  // round-trip (the clamp is client-side, before any save).
+  const opacity2 = page.locator('[data-role="stream-image-opacity"]');
+  await opacity2.fill("150");
+  await opacity2.blur();
+  await expect(opacity2).toHaveValue("100");
+  await expect(page.locator('[data-role="stream-opacity-hint"]')).toBeVisible();
+
+  // A stray 422 would log "Failed to load resource ... 422"; console stays clean.
+  expect(errors, "browser console must be clean").toEqual([]);
+});
