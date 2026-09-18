@@ -55,9 +55,18 @@ pub fn PercentInput(
     // Re-seed the buffer whenever the draft's opacity changes externally (element
     // re-selected, save refetch) — round(opacity*100). Also clear any lingering
     // clamp hint so a stale "Rozsah 0–100 %" from a prior element never sticks.
+    //
+    // `own_commit` marks a draft write made by `commit` below: that write re-runs
+    // this effect too, and clearing the hint there would erase the clamp notice
+    // the commit just set (the hint was never visible — caught by the E2E).
+    let own_commit = StoredValue::new(false);
     Effect::new(move |_| {
         text.set(draft_pct(&draft.get()).to_string());
-        hint.set(String::new());
+        if own_commit.get_value() {
+            own_commit.set_value(false);
+        } else {
+            hint.set(String::new());
+        }
     });
 
     let commit = move || {
@@ -69,6 +78,9 @@ pub fn PercentInput(
                 } else {
                     "Rozsah 0–100 %".to_string()
                 });
+                // `update` always notifies (even for an equal value), so the effect
+                // above is guaranteed to run once and consume this flag.
+                own_commit.set_value(true);
                 draft.update(|p| with_opacity_mut(p, |o| *o = pct_to_opacity(clamped)));
                 text.set(clamped.to_string());
             }
