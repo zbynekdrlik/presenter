@@ -164,7 +164,7 @@ impl Repository {
         let mut names = BTreeSet::new();
         for element in elements {
             let uses_family = serde_json::from_str::<StreamElementProps>(&element.props)
-                .map(|props| props.font_families().iter().any(|f| *f == family))
+                .map(|props| props.font_families().contains(&family))
                 .unwrap_or(false);
             if !uses_family {
                 continue;
