@@ -73,6 +73,24 @@ pub enum LiveEvent {
         output: String,
         config_revision: u64,
     },
+    /// Lower-third nameplate ACTIVATION for one output (#779). Fired when a plate
+    /// is shown, swapped, or hidden. `active: None` = nothing on air (hide /
+    /// auto-hide). Applied inline (activation-class, like `StreamState`); it does
+    /// NOT bump `config_revision`. The resolved texts travel WITH the event so the
+    /// output page needs no lookup.
+    StreamNameplate {
+        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active: Option<crate::stream::ActiveNameplate>,
+    },
+    /// The lower-third nameplate LIST changed for one output (#779) — a plate was
+    /// added / edited / deleted / reordered. Prompts the editor + Companion to
+    /// refetch the plate list (the choices + variables + presets). Distinct from
+    /// `StreamNameplate` (which is show-state) and from `StreamConfigChanged`
+    /// (the element/scene def).
+    StreamNameplatesChanged {
+        output: String,
+    },
 }
 
 /// Messages sent from a WebSocket client to the server.
@@ -193,5 +211,60 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn stream_nameplate_active_wire_shape_and_round_trip() {
+        let event = LiveEvent::StreamNameplate {
+            output: "stream".to_string(),
+            active: Some(crate::stream::ActiveNameplate {
+                source: crate::stream::NameplateSource::Person,
+                nameplate_id: Some(7),
+                primary: "Ján Novák".to_string(),
+                secondary: "pastor".to_string(),
+                seq: 4,
+            }),
+        };
+        let v = serde_json::to_value(&event).unwrap();
+        assert_eq!(v["type"], json!("stream_nameplate"));
+        assert_eq!(v["output"], json!("stream"));
+        assert_eq!(v["active"]["source"], json!("person"));
+        assert_eq!(v["active"]["nameplateId"], json!(7));
+        assert_eq!(v["active"]["primary"], json!("Ján Novák"));
+        let back: LiveEvent = serde_json::from_value(v).unwrap();
+        assert!(matches!(
+            back,
+            LiveEvent::StreamNameplate {
+                active: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn stream_nameplate_hide_omits_active() {
+        let event = LiveEvent::StreamNameplate {
+            output: "stream".to_string(),
+            active: None,
+        };
+        let v = serde_json::to_value(&event).unwrap();
+        assert_eq!(v["type"], json!("stream_nameplate"));
+        assert!(v.get("active").is_none());
+        let back: LiveEvent = serde_json::from_value(v).unwrap();
+        assert!(matches!(
+            back,
+            LiveEvent::StreamNameplate { active: None, .. }
+        ));
+    }
+
+    #[test]
+    fn stream_nameplates_changed_wire_shape() {
+        let event = LiveEvent::StreamNameplatesChanged {
+            output: "stream".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({ "type": "stream_nameplates_changed", "output": "stream" })
+        );
     }
 }

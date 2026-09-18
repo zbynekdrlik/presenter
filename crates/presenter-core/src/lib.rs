@@ -66,12 +66,14 @@ pub use stage_display::{
     UpcomingGroup, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
 pub use stream::{
-    validate_props, validate_scene_name, validate_slug, ContentTransition, Frame, ImageFit,
-    SceneKind, Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamFont,
-    StreamOutputDef, StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError,
-    TextAlign, TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
+    validate_props, validate_scene_name, validate_slug, ActiveNameplate, AnimationPreset,
+    ContentTransition, Frame, ImageFit, Nameplate, NameplateKind, NameplateSource, SceneKind,
+    Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
+    StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
+    TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
     STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
-    STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX, STREAM_TRANSITION_MAX_MS,
+    STREAM_NAMEPLATE_AUTO_HIDE_MAX_S, STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX,
+    STREAM_TRANSITION_MAX_MS,
 };
 pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};
 pub use timer::{

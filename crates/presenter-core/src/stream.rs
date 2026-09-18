@@ -48,6 +48,10 @@ pub const STREAM_FRAME_POS_MAX_PCT: f32 = 300.0;
 /// [`StreamValidationError::NonPositiveFrameSize`]) and no larger than this.
 pub const STREAM_FRAME_SIZE_MAX_PCT: f32 = 300.0;
 
+/// Maximum auto-hide delay for a lower-third plate, in seconds (#779). `0`
+/// means "stay on air until explicitly hidden"; anything above this is a typo.
+pub const STREAM_NAMEPLATE_AUTO_HIDE_MAX_S: u32 = 120;
+
 /// A typed validation failure for a stream slug, scene name, or element props.
 /// Carries enough detail for a 422 body; the persistence layer maps it to
 /// [`crate`]-external `RepositoryError::Invalid` (#705).
@@ -86,6 +90,10 @@ pub enum StreamValidationError {
     LineHeightOutOfRange { value: f32 },
     #[error("transition duration {value}ms out of range (expected <=10000)")]
     TransitionTooLong { value: u32 },
+    #[error("{field} {value}ms out of range (expected <=10000)")]
+    AnimationDurationTooLong { field: &'static str, value: u32 },
+    #[error("auto-hide {value}s out of range (expected 0..=120)")]
+    AutoHideTooLong { value: u32 },
     #[error("unknown font family {family:?}")]
     UnknownFontFamily { family: String },
     #[error("{ref_kind} reference must be a positive id (got {value})")]
@@ -135,6 +143,51 @@ impl SceneKind {
         match value {
             "base" => Some(SceneKind::Base),
             "overlay" => Some(SceneKind::Overlay),
+            _ => None,
+        }
+    }
+}
+
+/// How a lower-third plate (#779) animates on air and off. All three are
+/// compositor-only (transform / opacity / clip-path) so the OBS browser source
+/// stays 60 fps:
+/// - `SlideLeft` — the plate slides in from the left edge and out to the left.
+/// - `SlideUp` — the plate rises in from below and drops back down on leave.
+/// - `Wipe` — a `clip-path` inset reveals the bar left→right, then hides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimationPreset {
+    SlideLeft,
+    SlideUp,
+    Wipe,
+}
+
+/// A lower-third **nameplate** (#779) — one of the short texts in the plate
+/// list, one of which is on air at a time. A `Person` plate is a persisted row
+/// (`primary` = name, `secondary` = role, e.g. "pastor"); the `Song` plate is
+/// VIRTUAL (id-less, always available) — its texts are resolved server-side from
+/// the live stage snapshot (current song title + library) at show time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameplateKind {
+    Person,
+    Song,
+}
+
+impl NameplateKind {
+    /// The stored `stream_nameplates.kind` column value.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NameplateKind::Person => "person",
+            NameplateKind::Song => "song",
+        }
+    }
+
+    /// Parse a stored `stream_nameplates.kind` value; `None` for a corrupt row.
+    pub fn from_db(value: &str) -> Option<NameplateKind> {
+        match value {
+            "person" => Some(NameplateKind::Person),
+            "song" => Some(NameplateKind::Song),
             _ => None,
         }
     }
@@ -242,6 +295,30 @@ pub enum StreamElementProps {
         opacity: f32,
         frame: Frame,
     },
+    /// An animated lower-third "menovka" (#779): a bar/stripe that slides in over
+    /// the stream, holds, and slides out, carrying two lines of text. The plate's
+    /// TEXT is NOT stored here — it comes from the runtime `active_nameplate`
+    /// state ([`ActiveNameplate`]); this element carries only the LOOK (colours,
+    /// two text styles, animation preset + timings). `bar_opacity` is the bar's
+    /// transparency (0..=1); `accent_width_pct` is the accent stripe width as a
+    /// percent of the plate; `padding_pct` insets the text; `in_ms`/`out_ms` are
+    /// the enter/leave durations (≤ 10000); `auto_hide_s` is 0 (stay until
+    /// hidden) up to [`STREAM_NAMEPLATE_AUTO_HIDE_MAX_S`]. No `content_transition`
+    /// — the enter/leave animation IS the transition.
+    LowerThird {
+        frame: Frame,
+        bar_color: String,
+        bar_opacity: f32,
+        accent_color: String,
+        accent_width_pct: f32,
+        primary_style: TextStyle,
+        secondary_style: TextStyle,
+        padding_pct: f32,
+        animation: AnimationPreset,
+        in_ms: u32,
+        out_ms: u32,
+        auto_hide_s: u32,
+    },
 }
 
 impl StreamElementProps {
@@ -254,6 +331,7 @@ impl StreamElementProps {
             StreamElementProps::Lyrics { .. } => "lyrics",
             StreamElementProps::Verse { .. } => "verse",
             StreamElementProps::Color { .. } => "color",
+            StreamElementProps::LowerThird { .. } => "lower_third",
         }
     }
 
@@ -283,6 +361,14 @@ impl StreamElementProps {
                 text_style.font_family.as_str(),
                 secondary_style.font_family.as_str(),
                 reference_style.font_family.as_str(),
+            ],
+            StreamElementProps::LowerThird {
+                primary_style,
+                secondary_style,
+                ..
+            } => vec![
+                primary_style.font_family.as_str(),
+                secondary_style.font_family.as_str(),
             ],
         }
     }
@@ -427,6 +513,47 @@ pub struct StreamFont {
     pub size_bytes: i64,
 }
 
+/// One lower-third **nameplate** (#779) in an output's plate list. A `Person`
+/// plate is a `stream_nameplates` row (`primary_text` = name, `secondary_text` =
+/// role); the virtual `Song` plate is never a row and never appears here — it is
+/// offered separately by the editor / Companion. Ordered by `sort_order`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Nameplate {
+    pub id: i64,
+    pub kind: NameplateKind,
+    pub primary_text: String,
+    pub secondary_text: String,
+    pub sort_order: i32,
+}
+
+/// Where an on-air plate's text comes from — a persisted `Person` row (by id) or
+/// the virtual `Song` plate (resolved from the live stage snapshot at show time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameplateSource {
+    Person,
+    Song,
+}
+
+/// The runtime "which plate is on air" snapshot for one output (#779). Held
+/// in-memory (NOT persisted — a restart must never pop a plate back on air) and
+/// broadcast as the payload of [`crate::live::LiveEvent::StreamNameplate`]'s
+/// `active` field. `primary`/`secondary` are RESOLVED at show time (a person row,
+/// or the current song title + library). `seq` is a monotonic generation so a
+/// newer show cancels an older auto-hide and the output keys its enter/leave
+/// layers without colliding on a re-show of the same plate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveNameplate {
+    pub source: NameplateSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nameplate_id: Option<i64>,
+    pub primary: String,
+    pub secondary: String,
+    pub seq: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Validation — pure, unit-tested, no panics.
 // ---------------------------------------------------------------------------
@@ -528,6 +655,59 @@ pub fn validate_props(
             validate_opacity(*opacity)?;
             validate_frame(frame)?;
         }
+        props @ StreamElementProps::LowerThird { .. } => {
+            validate_lower_third(props, extra_families)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate the lower-third (#779) fields — extracted so `validate_props` stays
+/// well under the function-length gate.
+fn validate_lower_third(
+    props: &StreamElementProps,
+    extra_families: &[String],
+) -> Result<(), StreamValidationError> {
+    let StreamElementProps::LowerThird {
+        frame,
+        bar_color,
+        bar_opacity,
+        accent_color,
+        accent_width_pct,
+        primary_style,
+        secondary_style,
+        padding_pct,
+        animation: _,
+        in_ms,
+        out_ms,
+        auto_hide_s,
+    } = props
+    else {
+        return Ok(());
+    };
+    validate_frame(frame)?;
+    validate_color(bar_color)?;
+    validate_opacity(*bar_opacity)?;
+    validate_color(accent_color)?;
+    validate_pct("accent_width_pct", *accent_width_pct)?;
+    validate_text_style(primary_style, extra_families)?;
+    validate_text_style(secondary_style, extra_families)?;
+    validate_pct("padding_pct", *padding_pct)?;
+    validate_animation_ms("in_ms", *in_ms)?;
+    validate_animation_ms("out_ms", *out_ms)?;
+    if *auto_hide_s > STREAM_NAMEPLATE_AUTO_HIDE_MAX_S {
+        return Err(StreamValidationError::AutoHideTooLong {
+            value: *auto_hide_s,
+        });
+    }
+    Ok(())
+}
+
+/// An enter/leave animation duration (`in_ms` / `out_ms`) must stay within the
+/// same `<=10000` bound as a content transition (#779).
+fn validate_animation_ms(field: &'static str, value: u32) -> Result<(), StreamValidationError> {
+    if value > STREAM_TRANSITION_MAX_MS {
+        return Err(StreamValidationError::AnimationDurationTooLong { field, value });
     }
     Ok(())
 }
@@ -1273,5 +1453,138 @@ mod tests {
         let parsed: StreamOutputDef = serde_json::from_value(legacy).unwrap();
         assert_eq!(parsed.base_transition_ms, None);
         assert_eq!(parsed.overlay_transition_ms, None);
+    }
+
+    // ---- Lower-third (#779) ----------------------------------------------
+
+    fn lower_third_props() -> StreamElementProps {
+        StreamElementProps::LowerThird {
+            frame: ok_frame(),
+            bar_color: "#101828".to_string(),
+            bar_opacity: 0.9,
+            accent_color: "#38bdf8".to_string(),
+            accent_width_pct: 1.5,
+            primary_style: ok_text_style(),
+            secondary_style: ok_text_style(),
+            padding_pct: 2.0,
+            animation: AnimationPreset::SlideLeft,
+            in_ms: 500,
+            out_ms: 400,
+            auto_hide_s: 8,
+        }
+    }
+
+    #[test]
+    fn lower_third_round_trips_with_snake_case_tag() {
+        let json = serde_json::to_value(lower_third_props()).expect("serialize");
+        assert_eq!(json["kind"], json!("lower_third"));
+        assert_eq!(json["animation"], json!("slide_left"));
+        let parsed: StreamElementProps = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(parsed, lower_third_props());
+        assert_eq!(parsed.kind_str(), "lower_third");
+    }
+
+    #[test]
+    fn lower_third_font_families_are_both_styles() {
+        assert_eq!(lower_third_props().font_families(), vec!["Inter", "Inter"]);
+    }
+
+    #[test]
+    fn lower_third_validates_ok() {
+        assert!(validate_props(&lower_third_props(), &[]).is_ok());
+    }
+
+    #[test]
+    fn lower_third_rejects_bad_bar_color() {
+        let mut bad = lower_third_props();
+        if let StreamElementProps::LowerThird { bar_color, .. } = &mut bad {
+            *bar_color = "not-a-color".to_string();
+        }
+        assert!(matches!(
+            validate_props(&bad, &[]),
+            Err(StreamValidationError::InvalidColor { .. })
+        ));
+    }
+
+    #[test]
+    fn lower_third_rejects_out_of_range_fields() {
+        // accent_width_pct beyond 0..=100.
+        let mut p = lower_third_props();
+        if let StreamElementProps::LowerThird {
+            accent_width_pct, ..
+        } = &mut p
+        {
+            *accent_width_pct = 150.0;
+        }
+        assert!(matches!(
+            validate_props(&p, &[]),
+            Err(StreamValidationError::PctOutOfRange { .. })
+        ));
+
+        // in_ms beyond the transition cap.
+        let mut p = lower_third_props();
+        if let StreamElementProps::LowerThird { in_ms, .. } = &mut p {
+            *in_ms = 20_000;
+        }
+        assert!(matches!(
+            validate_props(&p, &[]),
+            Err(StreamValidationError::AnimationDurationTooLong { field: "in_ms", .. })
+        ));
+
+        // auto_hide_s beyond the 120 s cap.
+        let mut p = lower_third_props();
+        if let StreamElementProps::LowerThird { auto_hide_s, .. } = &mut p {
+            *auto_hide_s = 999;
+        }
+        assert!(matches!(
+            validate_props(&p, &[]),
+            Err(StreamValidationError::AutoHideTooLong { value: 999 })
+        ));
+    }
+
+    #[test]
+    fn nameplate_kind_and_source_db_round_trip() {
+        assert_eq!(NameplateKind::Person.as_str(), "person");
+        assert_eq!(NameplateKind::Song.as_str(), "song");
+        assert_eq!(
+            NameplateKind::from_db("person"),
+            Some(NameplateKind::Person)
+        );
+        assert_eq!(NameplateKind::from_db("song"), Some(NameplateKind::Song));
+        assert_eq!(NameplateKind::from_db("junk"), None);
+    }
+
+    #[test]
+    fn nameplate_dtos_serialize_camel_case() {
+        let plate = Nameplate {
+            id: 5,
+            kind: NameplateKind::Person,
+            primary_text: "Ján Novák".to_string(),
+            secondary_text: "pastor".to_string(),
+            sort_order: 2,
+        };
+        let v = serde_json::to_value(&plate).unwrap();
+        assert_eq!(v["primaryText"], json!("Ján Novák"));
+        assert_eq!(v["secondaryText"], json!("pastor"));
+        assert_eq!(v["sortOrder"], json!(2));
+        assert_eq!(v["kind"], json!("person"));
+        let back: Nameplate = serde_json::from_value(v).unwrap();
+        assert_eq!(back, plate);
+    }
+
+    #[test]
+    fn active_nameplate_song_has_no_id() {
+        let active = ActiveNameplate {
+            source: NameplateSource::Song,
+            nameplate_id: None,
+            primary: "Ako Ťa mám".to_string(),
+            secondary: "Chvály".to_string(),
+            seq: 3,
+        };
+        let v = serde_json::to_value(&active).unwrap();
+        assert_eq!(v["source"], json!("song"));
+        assert!(v.get("nameplateId").is_none());
+        let back: ActiveNameplate = serde_json::from_value(v).unwrap();
+        assert_eq!(back, active);
     }
 }
