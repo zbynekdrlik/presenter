@@ -7,7 +7,7 @@
 //!    `StreamNameplatesChanged` (NOT `config_revision`) so the editor + Companion
 //!    refetch the list.
 //!  - SHOW-STATE (which plate is on air): `GET .../nameplates/active` (cold load)
-//!    + `PUT .../nameplates/active` (`{source:"person",id}` | `{source:"song"}` |
+//!    and `PUT .../nameplates/active` (`{source:"person",id}` | `{source:"song"}` |
 //!    `{source:null}` = hide), routed through the #779 `NameplateManager` so each
 //!    change broadcasts `StreamNameplate` + schedules auto-hide.
 //!
