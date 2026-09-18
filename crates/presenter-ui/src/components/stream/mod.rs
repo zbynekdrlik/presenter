@@ -10,15 +10,17 @@ pub mod draft_preview;
 pub mod element_color;
 pub mod element_countdown;
 pub mod element_image;
+pub mod element_lower_third;
 pub mod element_lyrics;
 pub mod element_verse;
 pub mod fonts;
+pub mod nameplate_preview;
 pub mod scene_render;
 pub mod style;
 pub mod transition;
 
 use leptos::prelude::*;
-use presenter_core::{BibleSlideOutput, StageDisplaySnapshot};
+use presenter_core::{ActiveNameplate, BibleSlideOutput, StageDisplaySnapshot};
 
 use crate::ws::stream::TimersReceipt;
 
@@ -41,4 +43,8 @@ pub struct StreamContext {
     pub now_ms: RwSignal<f64>,
     pub stage: RwSignal<Option<StageDisplaySnapshot>>,
     pub bible: RwSignal<Option<BibleSlideOutput>>,
+    /// #779: the lower-third plate currently on air (`None` = idle) — drives
+    /// `ElementLowerThird`. Fed by the `stream_nameplate` WS event + a cold-load
+    /// of `GET /stream/api/outputs/{slug}/nameplates/active`.
+    pub nameplate: RwSignal<Option<ActiveNameplate>>,
 }

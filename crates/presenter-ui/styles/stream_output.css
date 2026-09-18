@@ -185,6 +185,97 @@ body.stream {
  * belt-and-suspenders guard. */
 .stream-canvas[data-fonts-ready="false"] .stream-element--countdown,
 .stream-canvas[data-fonts-ready="false"] .stream-element--lyrics,
-.stream-canvas[data-fonts-ready="false"] .stream-element--verse {
+.stream-canvas[data-fonts-ready="false"] .stream-element--verse,
+.stream-canvas[data-fonts-ready="false"] .stream-element--lower-third {
     visibility: hidden;
+}
+
+/* LOWER THIRDS / menovky (#779): an animated plate whose TEXT comes from the
+ * runtime active-nameplate state. The `.stream-element` frame is the clip box
+ * (its `overflow:hidden` reveals a slide-in cleanly at the frame edge); the
+ * `.stream-lower-third__plate` layer fills it and animates in/out. Only
+ * transform / opacity / clip-path animate (compositor-only, no @keyframes);
+ * `transition-duration` is set inline per layer (in_ms on enter, out_ms on
+ * leave). The preset is chosen by the element's `data-animation` attribute. */
+.stream-lower-third__plate {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+    transition-property: transform, opacity, clip-path;
+    transition-timing-function: ease;
+}
+
+/* slide_left: in from / out to the left edge. */
+.stream-element--lower-third[data-animation="slide_left"] .stream-lower-third__plate--leaving {
+    transform: translateX(-110%);
+    opacity: 0;
+}
+@starting-style {
+    .stream-element--lower-third[data-animation="slide_left"] .stream-lower-third__plate {
+        transform: translateX(-110%);
+        opacity: 0;
+    }
+}
+
+/* slide_up: rise in from below / drop back down on leave. */
+.stream-element--lower-third[data-animation="slide_up"] .stream-lower-third__plate--leaving {
+    transform: translateY(120%);
+    opacity: 0;
+}
+@starting-style {
+    .stream-element--lower-third[data-animation="slide_up"] .stream-lower-third__plate {
+        transform: translateY(120%);
+        opacity: 0;
+    }
+}
+
+/* wipe: a clip-path inset reveals the bar left→right / hides it on leave. */
+.stream-element--lower-third[data-animation="wipe"] .stream-lower-third__plate--leaving {
+    clip-path: inset(0 100% 0 0);
+}
+@starting-style {
+    .stream-element--lower-third[data-animation="wipe"] .stream-lower-third__plate {
+        clip-path: inset(0 100% 0 0);
+    }
+}
+
+/* The accent stripe (its width % + colour come inline from the props). */
+.stream-lower-third__accent {
+    flex: 0 0 auto;
+    align-self: stretch;
+}
+
+/* The text column: padding % inline; the two lines stack, vertically centered. */
+.stream-lower-third__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Primary + secondary lines each carry their own TextStyle inline; a short
+ * opacity stagger (secondary lags) gives the "bar first, then text" reveal. Both
+ * fade IN via @starting-style — a compositor-only stagger, no @keyframes. */
+.stream-lower-third__primary,
+.stream-lower-third__secondary {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    opacity: 1;
+    transition: opacity 220ms ease;
+}
+.stream-lower-third__secondary {
+    transition-delay: 120ms;
+}
+@starting-style {
+    .stream-lower-third__primary,
+    .stream-lower-third__secondary {
+        opacity: 0;
+    }
 }
