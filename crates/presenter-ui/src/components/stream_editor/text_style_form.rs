@@ -115,7 +115,8 @@ pub fn TextStyleForm(
             .into_iter()
             .map(|fam| {
                 let opt_style = format!("font-family:\"{}\";", fam.replace('"', ""));
-                view! { <option value=fam.clone() style=opt_style>{fam}</option> }
+                let label = fam.clone();
+                view! { <option value=fam style=opt_style>{label}</option> }
             })
             .collect_view()
     };
