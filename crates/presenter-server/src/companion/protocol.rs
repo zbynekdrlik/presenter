@@ -211,6 +211,13 @@ pub(super) async fn initialise_variable_state(state: &AppState) -> CompanionVari
 
     variables.apply_broadcast_live(state.broadcast_live());
 
+    // #780: seed the stream scene/overlay variables from the CURRENT show state
+    // of the default output, so a freshly (re)connected module immediately
+    // reports the live base/overlays instead of `-` until the first toggle.
+    let stream_vars =
+        super::stream::resolve_current_stream_variables(state, super::stream::DEFAULT_OUTPUT).await;
+    variables.apply_stream_state(stream_vars);
+
     // #779: seed the lower-third plate list + the on-air plate for the default
     // output so the first `variables` + `nameplates` send is complete.
     let plates =

@@ -757,6 +757,45 @@ async fn apply_stream_state_event_resolves_names_and_ignores_other_events() {
     assert!(!apply_stream_state_event(&state, &mut variables, &LiveEvent::BibleCleared).await);
 }
 
+#[tokio::test]
+async fn initial_state_seeds_stream_variables_from_live_show_state() {
+    // #780: after a module (re)connect the stream variables must reflect the
+    // LIVE show state at connect — not `-` until the first toggle. This proves
+    // the connect-time seed path: read the current show state, resolve ids →
+    // names, store it in the initial variable state.
+    use super::stream::resolve_current_stream_variables;
+    let state = AppState::in_memory().await.unwrap();
+    let (base, overlay) = seed_stream(&state, "t780-init").await;
+
+    // Put a base scene + an overlay ON AIR and PERSIST it, as an operator would
+    // before the Companion module connects.
+    state
+        .stream_activate_scene("t780-init", Some(base))
+        .await
+        .unwrap();
+    state
+        .stream_set_overlay("t780-init", overlay, true)
+        .await
+        .unwrap();
+
+    // The connect-time seed reads that persisted show state and resolves names.
+    // Without the fix, connect never read the show state, so these were "-"/"-".
+    let seeded = resolve_current_stream_variables(&state, "t780-init").await;
+    assert_eq!(seeded.scene, "Chvaly");
+    assert_eq!(seeded.overlays, "Verse");
+
+    // And it lands in the outgoing variables the freshly-connected module reads.
+    let mut variables = CompanionVariableState::default();
+    variables.apply_stream_state(seeded);
+    let map: std::collections::HashMap<_, _> = variables
+        .to_variables()
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect();
+    assert_eq!(map.get("stream_scene").unwrap(), "Chvaly");
+    assert_eq!(map.get("stream_overlays").unwrap(), "Verse");
+}
+
 #[test]
 fn stream_variables_default_to_placeholders() {
     let map: std::collections::HashMap<_, _> = CompanionVariableState::default()

@@ -35,8 +35,9 @@ use std::collections::HashMap;
 use tracing::warn;
 
 /// Output slug used when a command omits `output` (matches the plugin default
-/// and the migration-seeded default output).
-const DEFAULT_OUTPUT: &str = "stream";
+/// and the migration-seeded default output). Also the output whose live show
+/// state seeds the stream variables at connect (#780).
+pub(super) const DEFAULT_OUTPUT: &str = "stream";
 
 /// Placeholder shown in `stream_scene` / `stream_overlays` when there is no
 /// active base scene / no active overlays.
@@ -423,6 +424,34 @@ pub(super) async fn resolve_stream_variables(
         overlay_names.join(", ")
     };
     StreamVariables { scene, overlays }
+}
+
+/// Seed the stream variables from an output's CURRENT show state — used at
+/// connect (and lag recovery), BEFORE any `StreamState` event arrives, so a
+/// freshly-connected module immediately reports the live scene/overlays instead
+/// of `-` until the first toggle (#780). Reads the read-through show-state cache
+/// and resolves ids → names via the SAME [`resolve_stream_variables`] the live
+/// loop uses. A failed read (e.g. the output was deleted) degrades to the
+/// cleared placeholders rather than failing the connect.
+pub(super) async fn resolve_current_stream_variables(
+    state: &AppState,
+    output: &str,
+) -> StreamVariables {
+    match state.stream_show_state(output).await {
+        Ok(show) => {
+            resolve_stream_variables(
+                state,
+                output,
+                show.active_scene_id,
+                &show.active_overlay_ids,
+            )
+            .await
+        }
+        Err(error) => {
+            warn!(%error, output, "failed to read stream show state for companion init");
+            StreamVariables::cleared()
+        }
+    }
 }
 
 /// Write the `stream_scene` / `stream_overlays` variables (delegated from

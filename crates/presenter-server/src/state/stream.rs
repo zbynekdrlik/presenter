@@ -47,7 +47,6 @@ impl StreamManager {
     /// Read-through getter: return the cached snapshot, else hydrate it from
     /// the repository (cold start / a fresh manager after a simulated restart)
     /// and cache it. The lock is never held across the repository await.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn show_state(
         &self,
         repo: &Repository,
@@ -150,9 +149,8 @@ impl AppState {
     }
 
     /// Current show-state for an output (read-through cache). Foundation for the
-    /// Companion variable text (#7) and the WASM output page (#11); consumed by
-    /// the #706 tests in this PR.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Companion variable text (#7) and the WASM output page (#11); seeds the
+    /// Companion stream variables at connect (#780).
     pub(crate) async fn stream_show_state(&self, slug: &str) -> anyhow::Result<StreamShowState> {
         self.stream.show_state(&self.repository, slug).await
     }
