@@ -22,11 +22,12 @@
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::{
-    BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamOutputDef, StreamSceneDef,
-    StreamShowState,
+    BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamElementProps, StreamOutputDef,
+    StreamSceneDef, StreamShowState,
 };
 
 use crate::api;
+use crate::components::stream::draft_preview::{install_preview_listener, StreamDraftOverride};
 use crate::components::stream::scene_render::SceneRender;
 use crate::components::stream::StreamContext;
 use crate::ws::stream::{self, StreamWsState, TimersReceipt};
@@ -128,8 +129,32 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
         crate::components::stage::wake_lock::start_wake_lock_guard();
     }
 
+    // Live draft preview (#777): ONLY on a `?preview=1` page (the editor iframe),
+    // install the origin-checked `postMessage` listener and expose the override to
+    // `scene_render` via context. A production output installs nothing and provides
+    // no context, so it renders purely from the saved def.
+    if preview {
+        let draft_override = RwSignal::new(None::<(i64, StreamElementProps)>);
+        install_preview_listener(draft_override);
+        provide_context(StreamDraftOverride(draft_override));
+    }
+
     let def = RwSignal::new(None::<StreamOutputDef>);
     let show_state = RwSignal::new(None::<StreamShowState>);
+
+    // #778: uploaded web fonts. Inject the generated `@font-face` stylesheet at
+    // runtime (kept out of index.html so operator/stage pages don't pay for it),
+    // re-bumping its `?v=` on each config revision, and gate text visibility on
+    // `fonts_ready` until the real faces are loaded (no fallback-font flash on a
+    // scene take). The link + gate logic lives in `components/stream/fonts.rs`.
+    let fonts_ready = RwSignal::new(false);
+    crate::components::stream::fonts::ensure_fonts_css_link(0);
+    crate::components::stream::fonts::spawn_font_gate(fonts_ready);
+    Effect::new(move |_| {
+        if let Some(d) = def.get() {
+            crate::components::stream::fonts::ensure_fonts_css_link(d.config_revision);
+        }
+    });
 
     // Shared reactive context for the text elements: countdown (timers + a
     // ticking now), lyrics (worship `stage` snapshot) and verse (`bible` slide).
@@ -431,6 +456,7 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             data-slug=slug_attr
             data-ws-state=ws_state_attr
             data-config-revision=config_rev_attr
+            data-fonts-ready=move || if fonts_ready.get() { "true" } else { "false" }
         >
             <For
                 each=layers_each

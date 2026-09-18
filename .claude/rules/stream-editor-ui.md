@@ -120,3 +120,50 @@ malformed-200).
 See the ui skill's view!-macro note (corrected in #714): do NOT hoist every
 `data-x=move ||` / `prop:value=move ||` / `<Show when=move ||>`; that churn is
 unnecessary. Only `<For each=…>` needs a named closure.
+
+## Live preview = a draft-override `postMessage` channel, ONE shared module (#777)
+The editor previews UNSAVED edits by pushing them into the REAL output iframe, so
+the preview IS the real renderer (fonts/transitions/timers) — never a second
+in-page render. The wire shape lives in ONE place, `components/stream/draft_preview.rs`
+(`DraftMessage {type:"presenter-stream-draft", elementId, props}`, serde of the
+existing `StreamElementProps`), shared by editor (serialize + `iframe.content_window()
+.post_message`) and output page (listen). Rules that MUST hold:
+- The output page installs the listener + provides the `StreamDraftOverride` context
+  ONLY when `?preview=1`, and verifies `event.origin == window.location.origin`.
+  A production output installs nothing → `scene_render`'s `use_context` is `None` →
+  each element's `Memo` returns stored props ONCE and never re-fires (zero cost).
+- `scene_render` resolves each element through a per-element `Memo` so ONLY the edited
+  element re-renders on a draft change; needs `StreamElementProps: PartialEq` (it is).
+- The editor pushes on EVERY draft change (Effect tracking draft + draft_element_id)
+  AND on iframe `on:load` (fresh listener). In the "live" toggle push a CLEAR (no
+  override) so an unsaved draft never leaks onto the live view (#777 review fix).
+- The draft is the SHARED `ctx.draft: RwSignal<StreamElementProps>` (+ `draft_element_id`),
+  kept a bare props signal (NOT `Option`) so `TextStyleForm`/`ImageFields`/… prop types
+  are unchanged — the form + the canvas overlay + the preview push all read/write it.
+
+## Forced-scene preview renders only a BASE scene (`scene=` param)
+`pages/stream_output.rs` applies the preview `scene=<id>` as the BASE (`forced_scene`);
+an OVERLAY scene forced via `scene=` matches no base → the iframe renders nothing for
+it. The interaction overlay still works on overlay scenes (it draws from def+draft,
+independent of the iframe), so canvas editing of an overlay scene is fine — only its
+LIVE iframe render is empty. (Enhancement candidate: force an overlay scene into
+`overlay_ids` in preview mode.)
+
+## Canvas overlay: pointer capture on the container, `page.mouse` emits real pointer events
+`components/stream_editor/canvas_overlay.rs` — set `set_pointer_capture` on the overlay
+container in pointerdown; handle `pointermove`/`pointerup` on the CONTAINER (events bubble
+from the captured child) + `keydown` for arrow-nudge; container needs `tabindex=0` +
+CSS `touch-action:none`. The iframe below is `pointer-events:none` while editing. In the
+E2E, Playwright's `page.mouse` (down/move-in-steps/up) DOES dispatch real pointer events
+in Chromium, so a real-pointer drag test works. All geometry is the pure host-tested
+`frame_math.rs` (move/resize per 8 handles, min-size, snap, clamp to core + in-canvas).
+
+## Buffered frame numeric field MUST commit on `input`, not only `change`/`blur` (#777)
+`components/stream_editor/number_field.rs` — a `<input type=number>` bound to a parsed
+signal fights the caret on intermediate text (`"-"`, `"1."`). The fix keeps a local
+String buffer for the DISPLAY (while focused) but commits the parsed+CLAMPED value on
+EVERY `on:input` — because (a) Playwright `fill()` fires `input` but NOT `change`/`blur`,
+so a change-only commit is invisible to `fill`-based tests, and (b) live two-way sync
+(field ↔ canvas) needs per-keystroke commit. Clamping on commit is what makes a save
+impossible to 422 on the frame — so a deliberate-422 E2E must use a NON-frame field
+(e.g. text `size_pct` beyond 0..=100), NOT a frame field.

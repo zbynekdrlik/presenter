@@ -63,6 +63,36 @@ A detailed reference lives in `button-reference.md`; highlights:
   - `4002` – concurrent connection limit (disconnect another Companion client first).
   Companion macros surface these via the alert button; keep them enabled.
 
+## Feedbacks for stream scenes / overlays
+
+Use these to make a button light while a stream base scene or overlay is active
+(issue #780). All feedbacks are **boolean** — set the button's *Style* under the
+feedback (or leave the module default green) and the override applies while the
+condition is true; they re-evaluate automatically whenever Presenter pushes a
+variable change or the connection state flips.
+
+| Feedback | Use it for | Option | Matches when |
+|----------|------------|--------|--------------|
+| **Stream: base scene active (by name)** (`stream_scene_active`) | The single active BASE scene | `Base scene name` | the `stream_scene` variable equals that name |
+| **Stream: overlay active (by name)** (`stream_overlay_active`) | One overlay in the active overlay set | `Overlay scene name` | that name is a MEMBER of the active overlay list |
+
+Both match **by name, case-insensitively, and exactly** (leading/trailing spaces
+are trimmed). Names are exact — an overlay named `verse` does **not** light a
+button configured for `verses`, and vice-versa.
+
+**Why not the generic `Text equals: stream_overlays` feedback?** Because
+`stream_overlays` is a comma-joined list of every active overlay (e.g.
+`verse, ucet dole`), so an exact-equals comparison against `verse` fails the
+moment a second overlay is on. Use **Stream: overlay active** instead — it tests
+membership, not whole-string equality. (`Text equals: <variable>` still works for
+single-valued variables such as `stream_scene` or `timer_countdown_state`; it is
+now a boolean feedback, so it lights correctly.)
+
+Example: a button that lights while the `verse` lower-third is on air →
+feedback **Stream: overlay active (by name)**, option `verse`. It stays lit even
+when another overlay (e.g. `ucet dole`) is active at the same time, and goes dark
+the instant `verse` is turned off.
+
 ## Validation
 
 `tests/e2e/companion-session.spec.ts` runs automatically under `npm run test:playwright`. It:

@@ -39,6 +39,11 @@ async-trait.workspace = true
 # #708: sha256 content-addressing of uploaded stream-graphics image assets
 # (same version presenter-importer already uses for its Bible digest).
 sha2 = "0.10"
+# #778: parse family/weight/italic from uploaded web fonts' name/OS-2 tables.
+# Google fontations `read-fonts` (maintained; replaces the unmaintained
+# ttf-parser flagged by RUSTSEC-2026-0192). Pure Rust, reads TTF + OTF; the
+# default `std` feature enables `NameString`'s Display-based decoding.
+read-fonts = "0.44"
 
 [features]
 default = []

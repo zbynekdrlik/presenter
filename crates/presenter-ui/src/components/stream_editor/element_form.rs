@@ -1,18 +1,23 @@
-//! Per-element property form (#714): a single working-copy draft
-//! (`RwSignal<StreamElementProps>`) seeded from the selected element, a shared
-//! Frame section, per-kind fields (image / countdown / lyrics / verse) built on
-//! the shared `TextStyleForm`, a content-transition control, and an EXPLICIT
-//! Save that PATCHes the draft. A server 422 is rendered inline
-//! (`ctx.prop_error`); the def is left unchanged. The draft re-seeds ONLY when
-//! the selected element changes, so a live def refetch never clobbers edits.
+//! Per-element property form (#714; live-preview draft #777): the property form
+//! edits the SHARED working-copy draft on the ctx (`ctx.draft`), which the canvas
+//! overlay and the preview push also read/write — so numeric fields, the on-canvas
+//! outline and the live iframe stay in lock-step with NO save round trip. The
+//! draft re-seeds ONLY when the selected element changes (and not when the overlay
+//! already seeded it), so a live def refetch or a drag never clobbers edits. The
+//! Frame section is buffered numeric fields (clamped to the legal range on commit,
+//! so a save can never 422 on the frame); per-kind fields (image / color /
+//! countdown / lyrics / verse) build on the shared `TextStyleForm`; Save is
+//! EXPLICIT (PATCHes the draft; a 422 renders inline via `ctx.prop_error`).
 
 use leptos::prelude::*;
-use presenter_core::{ContentTransition, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS};
-
-use super::props_access::{
-    default_element_props, read_frame, read_transition, split_color, with_frame_mut,
-    with_transition_mut, TsSlot,
+use presenter_core::{
+    ContentTransition, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS,
+    STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
 };
+
+use super::frame_math::MIN_SIZE_PCT;
+use super::number_field::{FrameField, FrameNumberField};
+use super::props_access::{read_transition, split_color, with_transition_mut, TsSlot};
 use super::text_style_form::TextStyleForm;
 use super::StreamEditorCtx;
 
@@ -24,13 +29,19 @@ const STREAM_TIMERS: &[(i64, &str)] = &[(1, "Odpočet do začiatku"), (2, "Časo
 /// Property form for the currently-selected element.
 #[component]
 pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
-    // One working copy; re-seeded whenever the selected element changes. def is
-    // read UNTRACKED so a live StreamConfigChanged refetch never clobbers edits.
-    let draft = RwSignal::new(default_element_props("image"));
+    // The shared working copy (ctx.draft) — the canvas overlay + preview push read
+    // and write the SAME signal. Re-seeded only when the selection changes to a
+    // DIFFERENT element than the draft already holds (so a live def refetch, or the
+    // overlay's own synchronous seed on drag-start, never clobbers edits). def is
+    // read UNTRACKED so a live StreamConfigChanged refetch never reseeds.
+    let draft = ctx.draft;
     Effect::new(move |_| {
         let Some(id) = ctx.selected_element.get() else {
             return;
         };
+        if ctx.draft_element_id.get_untracked() == Some(id) {
+            return;
+        }
         if let Some(def) = ctx.def.get_untracked() {
             if let Some(el) = def
                 .scenes
@@ -38,17 +49,17 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                 .flat_map(|s| &s.elements)
                 .find(|e| e.id == id)
             {
-                draft.set(el.props.clone());
+                ctx.seed_draft(id, el.props.clone());
             }
         }
     });
 
     let kind = move || draft.get().kind_str().to_string();
+    let dirty = move || ctx.draft_is_dirty_reactive();
 
     view! {
         <div class="stream-editor__prop-form" data-role="stream-prop-form">
             <FrameFields draft=draft />
-            <FramePreview draft=draft />
 
             <Show when=move || kind() == "image">
                 <ImageFields draft=draft ctx=ctx />
@@ -82,7 +93,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                                 .collect_view()}
                         </select>
                     </label>
-                    <TextStyleForm draft=draft ts_slot=TsSlot::CountdownStyle label="Štýl" role="countdown" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::CountdownStyle label="Štýl" role="countdown" fonts=ctx.fonts />
                 </div>
             </Show>
             <Show when=move || kind() == "lyrics">
@@ -115,8 +126,8 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         />
                         <span>"Zobraziť preklad"</span>
                     </label>
-                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsMain label="Hlavný text" role="main" />
-                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsTranslation label="Preklad" role="translation" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsMain label="Hlavný text" role="main" fonts=ctx.fonts />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsTranslation label="Preklad" role="translation" fonts=ctx.fonts />
                 </div>
             </Show>
             <Show when=move || kind() == "verse">
@@ -135,13 +146,16 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         />
                         <span>"Zobraziť druhý jazyk"</span>
                     </label>
-                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseText label="Text verša" role="text" />
-                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseSecondary label="Druhý jazyk" role="secondary" />
-                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseReference label="Odkaz" role="reference" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseText label="Text verša" role="text" fonts=ctx.fonts />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseSecondary label="Druhý jazyk" role="secondary" fonts=ctx.fonts />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseReference label="Odkaz" role="reference" fonts=ctx.fonts />
                 </div>
             </Show>
 
-            <Show when=move || kind() != "image" && kind() != "color">
+            // Content-transition control: lyrics + verse only. Image/color have
+            // no content_transition; countdown carries one in the model but ignores
+            // it (a per-tick fade flickers — #776), so the control is hidden for it.
+            <Show when=move || kind() == "lyrics" || kind() == "verse">
                 <TransitionFields draft=draft />
             </Show>
 
@@ -152,12 +166,18 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
             </Show>
 
             <div class="stream-editor__prop-actions">
+                <Show when=dirty>
+                    <span class="stream-editor__unsaved" data-role="stream-unsaved">
+                        "Neuložené zmeny"
+                    </span>
+                </Show>
                 <button
                     type="button"
                     class="stream-editor__btn stream-editor__btn--primary"
                     data-role="stream-prop-save"
+                    data-dirty=move || super::bool_attr(dirty())
                     on:click=move |_| {
-                        if let Some(id) = ctx.selected_element.get_untracked() {
+                        if let Some(id) = ctx.draft_element_id.get_untracked() {
                             ctx.save_props(id, draft.get_untracked());
                         }
                     }
@@ -170,102 +190,55 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
 }
 
 /// The shared Frame (x/y/w/h %) numeric inputs — all four kinds have a frame.
-/// X/Y allow off-canvas positions (`min="-200" max="300"`, no `min="0"` clamp) so
-/// an element can slide in from an edge or be moved up past the top (#751); W/H
-/// stay positive up to `max="300"`. Bounds mirror `presenter_core`'s
-/// `STREAM_FRAME_POS_*` / `STREAM_FRAME_SIZE_MAX_PCT`; core still rejects extremes.
+/// Each is a BUFFERED [`FrameNumberField`] (#777): typing edits a local text
+/// buffer, and the parsed value is CLAMPED to the legal range on commit, so a
+/// save can never 422 on the frame. X/Y allow off-canvas positions
+/// (`STREAM_FRAME_POS_MIN/MAX_PCT`, -200..=300) for slide-in authoring; W/H stay
+/// positive (`MIN_SIZE_PCT..=STREAM_FRAME_SIZE_MAX_PCT`). Direct manipulation on
+/// the canvas overlay writes the SAME draft, so these fields update live during a
+/// drag/resize (and vice-versa).
 #[component]
 fn FrameFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
-    let x = move || read_frame(&draft.get()).x_pct.to_string();
-    let y = move || read_frame(&draft.get()).y_pct.to_string();
-    let w = move || read_frame(&draft.get()).w_pct.to_string();
-    let h = move || read_frame(&draft.get()).h_pct.to_string();
     view! {
         <fieldset class="stream-editor__frame" data-role="stream-frame">
             <legend class="stream-editor__ts-legend">"Rám (% plátna)"</legend>
-            <label class="stream-editor__field">
-                <span>"X"</span>
-                <input type="number" step="0.1" min="-200" max="300" data-role="stream-frame-x"
-                    prop:value=x
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| with_frame_mut(p, |fr| fr.x_pct = v));
-                        }
-                    } />
-            </label>
-            <label class="stream-editor__field">
-                <span>"Y"</span>
-                <input type="number" step="0.1" min="-200" max="300" data-role="stream-frame-y"
-                    prop:value=y
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| with_frame_mut(p, |fr| fr.y_pct = v));
-                        }
-                    } />
-            </label>
-            <label class="stream-editor__field">
-                <span>"Šírka"</span>
-                <input type="number" step="0.1" min="0" max="300" data-role="stream-frame-w"
-                    prop:value=w
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| with_frame_mut(p, |fr| fr.w_pct = v));
-                        }
-                    } />
-            </label>
-            <label class="stream-editor__field">
-                <span>"Výška"</span>
-                <input type="number" step="0.1" min="0" max="300" data-role="stream-frame-h"
-                    prop:value=h
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| with_frame_mut(p, |fr| fr.h_pct = v));
-                        }
-                    } />
-            </label>
+            <FrameNumberField
+                draft=draft
+                field=FrameField::X
+                label="X"
+                role="stream-frame-x"
+                min=STREAM_FRAME_POS_MIN_PCT
+                max=STREAM_FRAME_POS_MAX_PCT
+                step=0.1
+            />
+            <FrameNumberField
+                draft=draft
+                field=FrameField::Y
+                label="Y"
+                role="stream-frame-y"
+                min=STREAM_FRAME_POS_MIN_PCT
+                max=STREAM_FRAME_POS_MAX_PCT
+                step=0.1
+            />
+            <FrameNumberField
+                draft=draft
+                field=FrameField::W
+                label="Šírka"
+                role="stream-frame-w"
+                min=MIN_SIZE_PCT
+                max=STREAM_FRAME_SIZE_MAX_PCT
+                step=0.1
+            />
+            <FrameNumberField
+                draft=draft
+                field=FrameField::H
+                label="Výška"
+                role="stream-frame-h"
+                min=MIN_SIZE_PCT
+                max=STREAM_FRAME_SIZE_MAX_PCT
+                step=0.1
+            />
         </fieldset>
-    }
-}
-
-/// Live placement preview + off-canvas guard (#751). A 16:9 canvas box (0..100%
-/// on both axes) draws the element's frame rect at `left/top/width/height` = the
-/// frame percentages; `overflow:hidden` clips off-canvas parts, so the operator
-/// sees at edit time exactly what OBS will render. When the frame is FULLY
-/// off-canvas (no intersection with the canvas) an inline warning shows — a warn,
-/// never a clamp (partial off-canvas is a legitimate slide-in design).
-#[component]
-fn FramePreview(draft: RwSignal<StreamElementProps>) -> impl IntoView {
-    let off_canvas = move || {
-        let f = read_frame(&draft.get());
-        f.x_pct >= 100.0 || f.y_pct >= 100.0 || f.x_pct + f.w_pct <= 0.0 || f.y_pct + f.h_pct <= 0.0
-    };
-    let rect_style = move || {
-        let f = read_frame(&draft.get());
-        format!(
-            "left:{}%;top:{}%;width:{}%;height:{}%;",
-            f.x_pct, f.y_pct, f.w_pct, f.h_pct
-        )
-    };
-    view! {
-        <div class="stream-editor__frame-preview" data-role="stream-frame-preview">
-            <span class="stream-editor__ts-legend">"Umiestnenie na plátne"</span>
-            <div class="stream-editor__frame-canvas" data-role="stream-frame-canvas">
-                <div
-                    class="stream-editor__frame-rect"
-                    data-role="stream-frame-rect"
-                    data-offcanvas=move || if off_canvas() { "true" } else { "false" }
-                    style=rect_style
-                ></div>
-            </div>
-            <Show when=off_canvas>
-                <p
-                    class="stream-editor__frame-warning"
-                    data-role="stream-frame-offcanvas-warning"
-                >
-                    "Prvok je úplne mimo plátna — nebude vidno"
-                </p>
-            </Show>
-        </div>
     }
 }
 
@@ -284,10 +257,6 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
             ImageFit::Stretch => "stretch",
         },
         _ => "contain",
-    };
-    let opacity = move || match draft.get() {
-        StreamElementProps::Image { opacity, .. } => opacity.to_string(),
-        _ => String::new(),
     };
     view! {
         <div class="stream-editor__kind-fields" data-role="stream-image-fields">
@@ -326,18 +295,9 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
                     <option value="stretch">"Stretch"</option>
                 </select>
             </label>
-            <label class="stream-editor__field">
-                <span>"Priehľadnosť"</span>
-                <input type="number" min="0" max="1" step="0.05" data-role="stream-image-opacity"
-                    prop:value=opacity
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| {
-                                if let StreamElementProps::Image { opacity, .. } = p { *opacity = v; }
-                            });
-                        }
-                    } />
-            </label>
+            // Opacity edited as an integer PERCENT, buffered + committed on blur
+            // (#776) — the wire stays 0..=1.
+            <super::percent_input::PercentInput draft=draft role="stream-image-opacity" />
         </div>
     }
 }
@@ -352,10 +312,6 @@ fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
         StreamElementProps::Color { color, .. } => split_color(&color).0,
         _ => "#000000".to_string(),
     };
-    let opacity = move || match draft.get() {
-        StreamElementProps::Color { opacity, .. } => opacity.to_string(),
-        _ => String::new(),
-    };
     view! {
         <div class="stream-editor__kind-fields" data-role="stream-color-fields">
             <label class="stream-editor__field">
@@ -369,24 +325,16 @@ fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
                         });
                     } />
             </label>
-            <label class="stream-editor__field">
-                <span>"Priehľadnosť"</span>
-                <input type="number" min="0" max="1" step="0.05" data-role="stream-color-opacity"
-                    prop:value=opacity
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| {
-                                if let StreamElementProps::Color { opacity, .. } = p { *opacity = v; }
-                            });
-                        }
-                    } />
-            </label>
+            // Opacity edited as an integer PERCENT, buffered + committed on blur
+            // (#776) — the wire stays 0..=1.
+            <super::percent_input::PercentInput draft=draft role="stream-color-opacity" />
         </div>
     }
 }
 
-/// Content-transition control (cut vs crossfade + duration) for the kinds that
-/// carry one (countdown / lyrics / verse).
+/// Content-transition control (cut vs crossfade + duration) for lyrics + verse.
+/// Countdown carries a `content_transition` in the model but ignores it (a
+/// per-tick fade flickers — #776), so the editor hides this control for it.
 #[component]
 fn TransitionFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
     let is_fade = move || {

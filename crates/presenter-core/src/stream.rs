@@ -22,9 +22,10 @@ use thiserror::Error;
 /// Fixed v1 font whitelist (arch §4). Custom-font upload is deferred to v2.
 pub const STREAM_FONT_FAMILIES: &[&str] = &["system-ui", "Arial", "Inter", "Bebas Neue", "Oswald"];
 
-/// Slugs that collide with the static route prefixes `/stream/api` and
-/// `/stream/assets` (arch §9) — never usable as an output slug.
-pub const RESERVED_STREAM_SLUGS: &[&str] = &["api", "assets"];
+/// Slugs that collide with the static route prefixes `/stream/api`,
+/// `/stream/assets` (arch §9), and `/stream/fonts` + `/stream/fonts.css`
+/// (#778) — never usable as an output slug.
+pub const RESERVED_STREAM_SLUGS: &[&str] = &["api", "assets", "fonts"];
 
 /// Maximum scene-name length, in characters.
 pub const STREAM_SCENE_NAME_MAX: usize = 100;
@@ -255,6 +256,36 @@ impl StreamElementProps {
             StreamElementProps::Color { .. } => "color",
         }
     }
+
+    /// The font-family names every text style of this element references (#778).
+    /// Empty for the non-text kinds (image / color). Used by the persistence
+    /// layer's guarded font-delete (409 while a family is in use) and by the
+    /// output page's font-preload set. Exhaustive match: a new element KIND with
+    /// a `TextStyle` must add its families here (see stream-graphics.md).
+    pub fn font_families(&self) -> Vec<&str> {
+        match self {
+            StreamElementProps::Image { .. } | StreamElementProps::Color { .. } => Vec::new(),
+            StreamElementProps::Countdown { style, .. } => vec![style.font_family.as_str()],
+            StreamElementProps::Lyrics {
+                main_style,
+                translation_style,
+                ..
+            } => vec![
+                main_style.font_family.as_str(),
+                translation_style.font_family.as_str(),
+            ],
+            StreamElementProps::Verse {
+                text_style,
+                secondary_style,
+                reference_style,
+                ..
+            } => vec![
+                text_style.font_family.as_str(),
+                secondary_style.font_family.as_str(),
+                reference_style.font_family.as_str(),
+            ],
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +404,29 @@ pub struct StreamAsset {
     pub height: Option<i32>,
 }
 
+/// Metadata for an uploaded, sha256-addressed web font (#778) — one row per
+/// FACE (a family+weight+italic combination). Listed by the editor's font
+/// picker, served as `@font-face` rules by `GET /stream/fonts.css`, and used to
+/// widen the allowed font-family set beyond [`STREAM_FONT_FAMILIES`].
+///
+/// `family`/`weight`/`italic` are parsed from the font file's `name`/`OS/2`
+/// tables at upload (`read-fonts`); `format` is `ttf` or `otf` (the only two
+/// browsers can `@font-face` from a raw file — woff/woff2/ttc are rejected at
+/// upload).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamFont {
+    pub id: i64,
+    pub sha256: String,
+    pub original_filename: String,
+    pub family: String,
+    pub weight: u16,
+    pub italic: bool,
+    /// On-disk container format: `"ttf"` or `"otf"`.
+    pub format: String,
+    pub size_bytes: i64,
+}
+
 // ---------------------------------------------------------------------------
 // Validation — pure, unit-tested, no panics.
 // ---------------------------------------------------------------------------
@@ -408,7 +462,15 @@ pub fn validate_scene_name(name: &str) -> Result<(), StreamValidationError> {
 
 /// Validate typed element props: percentage ranges, colors, font family,
 /// weight, line height, transition duration, and positive asset/timer refs.
-pub fn validate_props(props: &StreamElementProps) -> Result<(), StreamValidationError> {
+///
+/// `extra_families` are the family names of uploaded web fonts (#778) — the
+/// allowed font set is the built-in [`STREAM_FONT_FAMILIES`] UNION these. Core
+/// stays pure: the persistence layer loads the distinct uploaded families and
+/// passes them in (pass `&[]` when there are none / from a pure unit test).
+pub fn validate_props(
+    props: &StreamElementProps,
+    extra_families: &[String],
+) -> Result<(), StreamValidationError> {
     match props {
         StreamElementProps::Image {
             asset_id,
@@ -427,7 +489,7 @@ pub fn validate_props(props: &StreamElementProps) -> Result<(), StreamValidation
             content_transition,
         } => {
             validate_ref("timer", *timer_id)?;
-            validate_text_style(style)?;
+            validate_text_style(style, extra_families)?;
             validate_frame(frame)?;
             validate_transition(content_transition)?;
         }
@@ -438,8 +500,8 @@ pub fn validate_props(props: &StreamElementProps) -> Result<(), StreamValidation
             content_transition,
             ..
         } => {
-            validate_text_style(main_style)?;
-            validate_text_style(translation_style)?;
+            validate_text_style(main_style, extra_families)?;
+            validate_text_style(translation_style, extra_families)?;
             validate_frame(frame)?;
             validate_transition(content_transition)?;
         }
@@ -451,9 +513,9 @@ pub fn validate_props(props: &StreamElementProps) -> Result<(), StreamValidation
             content_transition,
             ..
         } => {
-            validate_text_style(text_style)?;
-            validate_text_style(secondary_style)?;
-            validate_text_style(reference_style)?;
+            validate_text_style(text_style, extra_families)?;
+            validate_text_style(secondary_style, extra_families)?;
+            validate_text_style(reference_style, extra_families)?;
             validate_frame(frame)?;
             validate_transition(content_transition)?;
         }
@@ -522,8 +584,13 @@ fn validate_opacity(value: f32) -> Result<(), StreamValidationError> {
     Ok(())
 }
 
-fn validate_text_style(style: &TextStyle) -> Result<(), StreamValidationError> {
-    if !STREAM_FONT_FAMILIES.contains(&style.font_family.as_str()) {
+fn validate_text_style(
+    style: &TextStyle,
+    extra_families: &[String],
+) -> Result<(), StreamValidationError> {
+    let family_known = STREAM_FONT_FAMILIES.contains(&style.font_family.as_str())
+        || extra_families.iter().any(|f| f == &style.font_family);
+    if !family_known {
         return Err(StreamValidationError::UnknownFontFamily {
             family: style.font_family.clone(),
         });
@@ -766,6 +833,10 @@ mod tests {
             validate_slug("assets"),
             Err(StreamValidationError::ReservedSlug { .. })
         ));
+        assert!(matches!(
+            validate_slug("fonts"),
+            Err(StreamValidationError::ReservedSlug { .. })
+        ));
     }
 
     #[test]
@@ -784,11 +855,11 @@ mod tests {
 
     #[test]
     fn valid_props_accepted() {
-        assert!(validate_props(&image_props()).is_ok());
-        assert!(validate_props(&countdown_props()).is_ok());
-        assert!(validate_props(&lyrics_props()).is_ok());
-        assert!(validate_props(&verse_props()).is_ok());
-        assert!(validate_props(&color_props()).is_ok());
+        assert!(validate_props(&image_props(), &[]).is_ok());
+        assert!(validate_props(&countdown_props(), &[]).is_ok());
+        assert!(validate_props(&lyrics_props(), &[]).is_ok());
+        assert!(validate_props(&verse_props(), &[]).is_ok());
+        assert!(validate_props(&color_props(), &[]).is_ok());
     }
 
     #[test]
@@ -825,7 +896,7 @@ mod tests {
             opacity: 1.0,
             frame: ok_frame(),
         };
-        assert!(validate_props(&props).is_ok());
+        assert!(validate_props(&props, &[]).is_ok());
     }
 
     #[test]
@@ -838,7 +909,7 @@ mod tests {
             };
             assert!(
                 matches!(
-                    validate_props(&props),
+                    validate_props(&props, &[]),
                     Err(StreamValidationError::InvalidColor { .. })
                 ),
                 "color {bad:?} should be rejected"
@@ -854,7 +925,7 @@ mod tests {
             frame: ok_frame(),
         };
         assert!(matches!(
-            validate_props(&bad_opacity),
+            validate_props(&bad_opacity, &[]),
             Err(StreamValidationError::OpacityOutOfRange { .. })
         ));
         let bad_frame = StreamElementProps::Color {
@@ -868,7 +939,7 @@ mod tests {
             },
         };
         assert!(matches!(
-            validate_props(&bad_frame),
+            validate_props(&bad_frame, &[]),
             Err(StreamValidationError::NonPositiveFrameSize { .. })
         ));
     }
@@ -899,7 +970,7 @@ mod tests {
                 h_pct: 20.0,
             });
             assert!(
-                validate_props(&props).is_ok(),
+                validate_props(&props, &[]).is_ok(),
                 "frame pos ({x},{y}) should be accepted"
             );
         }
@@ -917,7 +988,7 @@ mod tests {
                 h_pct: 10.0,
             });
             assert!(matches!(
-                validate_props(&props),
+                validate_props(&props, &[]),
                 Err(StreamValidationError::FramePosOutOfRange { .. })
             ));
         }
@@ -932,7 +1003,7 @@ mod tests {
             h_pct: 10.0,
         });
         assert!(matches!(
-            validate_props(&props),
+            validate_props(&props, &[]),
             Err(StreamValidationError::FrameSizeTooLarge { .. })
         ));
     }
@@ -943,7 +1014,7 @@ mod tests {
         let mut style = ok_text_style();
         style.size_pct = 250.0;
         assert!(matches!(
-            validate_text_style(&style),
+            validate_text_style(&style, &[]),
             Err(StreamValidationError::PctOutOfRange { .. })
         ));
     }
@@ -962,7 +1033,7 @@ mod tests {
             opacity: 1.0,
         };
         assert!(matches!(
-            validate_props(&props),
+            validate_props(&props, &[]),
             Err(StreamValidationError::NonPositiveFrameSize { .. })
         ));
     }
@@ -976,7 +1047,7 @@ mod tests {
             opacity: 1.5,
         };
         assert!(matches!(
-            validate_props(&props),
+            validate_props(&props, &[]),
             Err(StreamValidationError::OpacityOutOfRange { .. })
         ));
     }
@@ -990,7 +1061,7 @@ mod tests {
             opacity: 1.0,
         };
         assert!(matches!(
-            validate_props(&props),
+            validate_props(&props, &[]),
             Err(StreamValidationError::InvalidRef { .. })
         ));
     }
@@ -1006,7 +1077,7 @@ mod tests {
             content_transition: ContentTransition::Cut,
         };
         assert!(matches!(
-            validate_props(&props),
+            validate_props(&props, &[]),
             Err(StreamValidationError::InvalidColor { .. })
         ));
     }
@@ -1021,7 +1092,7 @@ mod tests {
             blur_px: 2.0,
             color: "#000000ff".to_string(),
         });
-        assert!(validate_text_style(&style).is_ok());
+        assert!(validate_text_style(&style, &[]).is_ok());
     }
 
     #[test]
@@ -1029,9 +1100,50 @@ mod tests {
         let mut style = ok_text_style();
         style.font_family = "Comic Sans".to_string();
         assert!(matches!(
-            validate_text_style(&style),
+            validate_text_style(&style, &[]),
             Err(StreamValidationError::UnknownFontFamily { .. })
         ));
+    }
+
+    #[test]
+    fn uploaded_family_accepted_via_extra_families() {
+        // #778: an uploaded font family (not in the built-in whitelist) is
+        // valid when passed in `extra_families`, but still rejected without it.
+        let mut style = ok_text_style();
+        style.font_family = "Brandon Grotesque".to_string();
+        assert!(
+            matches!(
+                validate_text_style(&style, &[]),
+                Err(StreamValidationError::UnknownFontFamily { .. })
+            ),
+            "uploaded family rejected when not in the extra set"
+        );
+        let extra = vec!["Brandon Grotesque".to_string()];
+        assert!(
+            validate_text_style(&style, &extra).is_ok(),
+            "uploaded family accepted when in the extra set"
+        );
+        // The union still rejects a family in NEITHER set.
+        style.font_family = "Comic Sans".to_string();
+        assert!(matches!(
+            validate_text_style(&style, &extra),
+            Err(StreamValidationError::UnknownFontFamily { .. })
+        ));
+        // A built-in stays valid even with a non-empty extra set.
+        style.font_family = "Inter".to_string();
+        assert!(validate_text_style(&style, &extra).is_ok());
+    }
+
+    #[test]
+    fn validate_props_honours_extra_families() {
+        // Full props path (not just the text-style helper): a countdown whose
+        // style uses an uploaded family validates only with the extra set.
+        let mut props = countdown_props();
+        if let StreamElementProps::Countdown { style, .. } = &mut props {
+            style.font_family = "Brandon Grotesque".to_string();
+        }
+        assert!(validate_props(&props, &[]).is_err());
+        assert!(validate_props(&props, &["Brandon Grotesque".to_string()]).is_ok());
     }
 
     #[test]
@@ -1039,13 +1151,13 @@ mod tests {
         let mut style = ok_text_style();
         style.weight = 0;
         assert!(matches!(
-            validate_text_style(&style),
+            validate_text_style(&style, &[]),
             Err(StreamValidationError::WeightOutOfRange { .. })
         ));
         let mut style = ok_text_style();
         style.line_height = 4.0;
         assert!(matches!(
-            validate_text_style(&style),
+            validate_text_style(&style, &[]),
             Err(StreamValidationError::LineHeightOutOfRange { .. })
         ));
     }
@@ -1061,7 +1173,7 @@ mod tests {
             },
         };
         assert!(matches!(
-            validate_props(&props),
+            validate_props(&props, &[]),
             Err(StreamValidationError::TransitionTooLong { .. })
         ));
     }

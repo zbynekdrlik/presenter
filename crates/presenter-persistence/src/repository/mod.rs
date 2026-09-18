@@ -22,6 +22,7 @@ mod slide_stage_layout;
 mod stage_state;
 mod stream;
 mod stream_assets;
+mod stream_fonts;
 #[cfg(test)]
 mod stream_tests;
 mod sync;
@@ -48,6 +49,7 @@ mod video_source;
 pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;
 pub use stream_assets::NewStreamAsset;
+pub use stream_fonts::NewStreamFont;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
 pub use sync_apply::{sync_should_apply, SyncApplyOutcome, PRUNE_HORIZON};
 // #584: exposed so the server crate can `downcast_ref` a repository refusal

@@ -143,6 +143,32 @@ pub fn with_frame_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut Frame)
     }
 }
 
+/// The `opacity` (0..=1) of a kind that has one (image / color); `None` for the
+/// text kinds, which express transparency through their `TextStyle` color's
+/// alpha byte instead. Used by the shared percent-input control (#776).
+pub fn read_opacity(props: &StreamElementProps) -> Option<f32> {
+    match props {
+        StreamElementProps::Image { opacity, .. } | StreamElementProps::Color { opacity, .. } => {
+            Some(*opacity)
+        }
+        StreamElementProps::Countdown { .. }
+        | StreamElementProps::Lyrics { .. }
+        | StreamElementProps::Verse { .. } => None,
+    }
+}
+
+/// Mutate the (0..=1) `opacity` in place (no-op for a kind without one).
+pub fn with_opacity_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut f32)) {
+    match props {
+        StreamElementProps::Image { opacity, .. } | StreamElementProps::Color { opacity, .. } => {
+            f(opacity)
+        }
+        StreamElementProps::Countdown { .. }
+        | StreamElementProps::Lyrics { .. }
+        | StreamElementProps::Verse { .. } => {}
+    }
+}
+
 /// Split a stored color (`#rrggbb` or `#rrggbbaa`) into the `<input type=color>`
 /// value (`#rrggbb`) + an alpha byte `0..=255` for the separate alpha field. A
 /// malformed value degrades to opaque black.

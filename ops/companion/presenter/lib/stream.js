@@ -121,10 +121,80 @@ function buildStreamPayload(commandId, options) {
   return { payload: { output } };
 }
 
+// --------------------------------------------------------------------------- //
+// Feedback evaluators (issue #780).
+//
+// The server publishes two stream variables (`crates/presenter-server/src/
+// companion/stream.rs`): `stream_overlays` is a comma-joined list of the ACTIVE
+// overlay NAMES (`overlay_names.join(", ")`), and `stream_scene` is the single
+// active base-scene NAME; both are the placeholder `"-"` when nothing is active.
+//
+// Scenes/overlays are addressed BY NAME and matched case-insensitively (the same
+// contract the actions use server-side), so the feedback evaluators mirror that:
+// trim + lowercase, exact membership/equality (NOT substring — `verse` must not
+// light for an overlay named `verses`). Pure + dependency-free, unit-tested with
+// `node --test` (`lib/stream.test.js`); `index.js` is a thin adapter.
+// --------------------------------------------------------------------------- //
+
+const PLACEHOLDER = "-";
+
+/**
+ * Split the server's comma-joined `stream_overlays` value into trimmed active
+ * overlay names. Empty segments and the `"-"` placeholder are dropped. A
+ * non-string input yields an empty list.
+ *
+ * @param {unknown} value The `stream_overlays` variable value.
+ * @returns {string[]} Active overlay names (never null/undefined entries).
+ */
+function parseOverlayList(value) {
+  if (typeof value !== "string") return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "" && entry !== PLACEHOLDER);
+}
+
+/**
+ * True when `name` is an active overlay (case-insensitive, trimmed, exact
+ * membership) in the joined `stream_overlays` value. An empty/non-string name
+ * is never active.
+ *
+ * @param {unknown} value The `stream_overlays` variable value.
+ * @param {unknown} name The overlay scene name to test.
+ * @returns {boolean}
+ */
+function isOverlayActive(value, name) {
+  if (typeof name !== "string") return false;
+  const target = name.trim().toLowerCase();
+  if (target === "") return false;
+  return parseOverlayList(value).some((entry) => entry.toLowerCase() === target);
+}
+
+/**
+ * True when `name` is the active base scene (case-insensitive, trimmed, exact
+ * equality) in the `stream_scene` value. The `"-"` placeholder, an empty value,
+ * and an empty/non-string name are never active. Substring names do not match.
+ *
+ * @param {unknown} value The `stream_scene` variable value.
+ * @param {unknown} name The base scene name to test.
+ * @returns {boolean}
+ */
+function isSceneActive(value, name) {
+  if (typeof name !== "string") return false;
+  const target = name.trim().toLowerCase();
+  if (target === "") return false;
+  const current = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (current === "" || current === PLACEHOLDER) return false;
+  return current === target;
+}
+
 module.exports = {
   DEFAULT_OUTPUT,
   STREAM_COMMAND_IDS,
   isStreamCommand,
   streamActionOptions,
   buildStreamPayload,
+  parseOverlayList,
+  isOverlayActive,
+  isSceneActive,
 };
