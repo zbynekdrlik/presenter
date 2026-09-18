@@ -67,20 +67,16 @@ pub fn SceneRender(
                     <ElementImage id=id asset_id=asset_id fit=fit frame=frame opacity=opacity z=z />
                 }
                 .into_any(),
+                // Countdown ignores `content_transition` (#776): a per-tick fade
+                // flickers, so it renders a stable text node with a hard cut. The
+                // field stays in the props enum (no wire change) but is unused here.
                 StreamElementProps::Countdown {
                     timer_id,
                     style,
                     frame,
-                    content_transition,
+                    content_transition: _,
                 } => view! {
-                    <ElementCountdown
-                        id=id
-                        timer_id=timer_id
-                        style=style
-                        frame=frame
-                        z=z
-                        content_transition=content_transition
-                    />
+                    <ElementCountdown id=id timer_id=timer_id style=style frame=frame z=z />
                 }
                 .into_any(),
                 StreamElementProps::Lyrics {

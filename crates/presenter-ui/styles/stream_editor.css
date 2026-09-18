@@ -492,6 +492,12 @@ html[data-stream-editor="true"] {
   font-size: 0.85rem;
 }
 
+/* Inline hint under a field (e.g. the opacity percent clamp notice, #776). */
+.stream-editor__field-hint {
+  color: #ffd18a;
+  font-size: 0.78rem;
+}
+
 /* ---- Placement preview + off-canvas guard (#751) ------------------------- */
 
 /* A schematic 16:9 canvas (0..100% both axes) showing where the frame sits.

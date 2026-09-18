@@ -641,7 +641,10 @@ test("color element: create below a verse, reorder behind, background-color + op
     .click();
   await page.waitForSelector('[data-role="stream-color-fields"]', { timeout: 10_000 });
   await setColorInput(page, '[data-role="stream-color-value"]', "#ff8800");
-  await page.locator('[data-role="stream-color-opacity"]').fill("0.5");
+  // Opacity is now an integer PERCENT (#776): 50% -> stored 0.5. Commit on blur.
+  const colorOpacity = page.locator('[data-role="stream-color-opacity"]');
+  await colorOpacity.fill("50");
+  await colorOpacity.blur();
   await page.locator('[data-role="stream-prop-save"]').click();
   await expect
     .poll(async () => {

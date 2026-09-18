@@ -13,10 +13,9 @@
 //! placeholder), or when `format_countdown` returns "" (> 10 s past zero).
 
 use leptos::prelude::*;
-use presenter_core::{format_countdown, ContentTransition, Frame, TextStyle, TimerState};
+use presenter_core::{format_countdown, Frame, TextStyle, TimerState};
 
 use super::style::{css_justify, frame_css, text_style_css};
-use super::transition::CrossfadeText;
 use super::StreamContext;
 
 /// Build the (static) container style from the element's `Frame` + `TextStyle`.
@@ -42,17 +41,12 @@ pub fn ElementCountdown(
     frame: Frame,
     /// `z_order` mirrored to `z-index`.
     z: i32,
-    /// How a text change (each tick, or clear) animates (#716). The editor's
-    /// recommended default is `Cut` (per-second fades look wrong); a stored
-    /// `Fade` crossfades between values. The output page honors whatever is
-    /// stored (see the ticket CONTRACT-ASSUMPTIONS re: the editor default).
-    content_transition: ContentTransition,
 ) -> impl IntoView {
     let ctx = use_context::<StreamContext>().expect("StreamContext not provided");
     let style_attr = container_style(&frame, &style, z);
 
-    // A `Memo` so the crossfade fires only on the per-second value change, not on
-    // every 250 ms `now_ms` tick that re-derives the same MM:SS string.
+    // A `Memo` so the text node updates only on the per-second value change, not
+    // on every 250 ms `now_ms` tick that re-derives the same MM:SS string.
     let text = Memo::new(move |_| {
         let Some(receipt) = ctx.timers.get() else {
             return String::new();
@@ -77,6 +71,16 @@ pub fn ElementCountdown(
         format_countdown(remaining)
     });
 
+    // A countdown MUST swap digits with NO transition — a hard cut per tick (the
+    // owner's report #776: "nema tam byt ziaden prechod zatial"). So it renders
+    // ONE stable text node (never `CrossfadeText`): a tick is an in-place text
+    // update of the SAME `<span>`, never a re-mount and never a fade. The
+    // `content_transition` field stays on `StreamElementProps::Countdown` (no
+    // wire/API/schema change) but is deliberately ignored for the countdown kind;
+    // the editor hides the content-transition control for it. Scene-level
+    // (base/overlay) transitions are unaffected. `font-variant-numeric:
+    // tabular-nums` (in `stream_output.css`) keeps the width from jittering
+    // between glyphs.
     view! {
         <div
             class="stream-element stream-element--countdown"
@@ -85,11 +89,7 @@ pub fn ElementCountdown(
             data-timer-id=timer_id.to_string()
             style=style_attr
         >
-            <CrossfadeText
-                text=text
-                transition=content_transition
-                role="stream-countdown-content"
-            />
+            <span data-role="stream-countdown-content">{move || text.get()}</span>
         </div>
     }
 }
