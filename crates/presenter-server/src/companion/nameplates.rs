@@ -21,7 +21,7 @@ pub(super) const DEFAULT_OUTPUT: &str = "stream";
 const PLACEHOLDER: &str = "-";
 
 /// One person plate in the outgoing `nameplates` message — the plugin's dropdown
-/// + preset source. `role` may be empty (a plate with only a name).
+/// and preset source. `role` may be empty (a plate with only a name).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct NameplatePlate {
     pub(super) id: i64,
