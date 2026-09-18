@@ -122,18 +122,26 @@ pub fn CrossfadeText(
                 }
             }
             Some(_) => {
-                // Cut: replace with a single instant layer (or none if empty).
-                let next = if cur.is_empty() {
-                    Vec::new()
+                // Cut: update the existing (single) layer's text IN PLACE, keeping
+                // its `seq` — the keyed `<For>` then reconciles the SAME DOM node
+                // instead of destroying + recreating it each change (#776). Empty
+                // ⇒ drop the layer (wrapper unmounts, count-0-on-clear preserved).
+                // The layer's text is read REACTIVELY by seq below, so an in-place
+                // text change on an unchanged key still reaches the DOM
+                // (#496/#693/#716 keyed-`<For>` reactive-field trap).
+                if cur.is_empty() {
+                    layers.set(Vec::new());
                 } else {
-                    vec![ContentLayer {
-                        seq: bump(),
-                        text: cur.clone(),
-                        fade: false,
-                        leaving: false,
-                    }]
-                };
-                layers.set(next);
+                    layers.update(|ls| match ls.iter_mut().find(|l| !l.leaving) {
+                        Some(l) => l.text = cur.clone(),
+                        None => ls.push(ContentLayer {
+                            seq: bump(),
+                            text: cur.clone(),
+                            fade: false,
+                            leaving: false,
+                        }),
+                    });
+                }
             }
         }
         cur
@@ -181,6 +189,16 @@ pub fn CrossfadeText(
                             }
                             c
                         };
+                        // #776: read `text` REACTIVELY by seq too — the `Cut` path
+                        // now updates a layer's text in place (same seq), and a
+                        // keyed `<For>` does not re-run children for an unchanged
+                        // key, so a captured `l.text` would go stale. `Fade`
+                        // (new seq each change) is unaffected.
+                        let text = move || {
+                            layers
+                                .with(|ls| ls.iter().find(|x| x.seq == seq).map(|x| x.text.clone()))
+                                .unwrap_or_default()
+                        };
                         let style = if fade {
                             format!("transition-duration:{fade_ms}ms;")
                         } else {
@@ -188,7 +206,7 @@ pub fn CrossfadeText(
                         };
                         view! {
                             <div class=class data-role="stream-crossfade-layer" style=style>
-                                {l.text}
+                                {text}
                             </div>
                         }
                     }

@@ -141,7 +141,10 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                 </div>
             </Show>
 
-            <Show when=move || kind() != "image" && kind() != "color">
+            // Content-transition control: lyrics + verse only. Image/color have
+            // no content_transition; countdown carries one in the model but ignores
+            // it (a per-tick fade flickers — #776), so the control is hidden for it.
+            <Show when=move || kind() == "lyrics" || kind() == "verse">
                 <TransitionFields draft=draft />
             </Show>
 
@@ -285,10 +288,6 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
         },
         _ => "contain",
     };
-    let opacity = move || match draft.get() {
-        StreamElementProps::Image { opacity, .. } => opacity.to_string(),
-        _ => String::new(),
-    };
     view! {
         <div class="stream-editor__kind-fields" data-role="stream-image-fields">
             <label class="stream-editor__field">
@@ -326,18 +325,9 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
                     <option value="stretch">"Stretch"</option>
                 </select>
             </label>
-            <label class="stream-editor__field">
-                <span>"Priehľadnosť"</span>
-                <input type="number" min="0" max="1" step="0.05" data-role="stream-image-opacity"
-                    prop:value=opacity
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| {
-                                if let StreamElementProps::Image { opacity, .. } = p { *opacity = v; }
-                            });
-                        }
-                    } />
-            </label>
+            // Opacity edited as an integer PERCENT, buffered + committed on blur
+            // (#776) — the wire stays 0..=1.
+            <super::percent_input::PercentInput draft=draft role="stream-image-opacity" />
         </div>
     }
 }
@@ -352,10 +342,6 @@ fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
         StreamElementProps::Color { color, .. } => split_color(&color).0,
         _ => "#000000".to_string(),
     };
-    let opacity = move || match draft.get() {
-        StreamElementProps::Color { opacity, .. } => opacity.to_string(),
-        _ => String::new(),
-    };
     view! {
         <div class="stream-editor__kind-fields" data-role="stream-color-fields">
             <label class="stream-editor__field">
@@ -369,24 +355,16 @@ fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
                         });
                     } />
             </label>
-            <label class="stream-editor__field">
-                <span>"Priehľadnosť"</span>
-                <input type="number" min="0" max="1" step="0.05" data-role="stream-color-opacity"
-                    prop:value=opacity
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
-                            draft.update(|p| {
-                                if let StreamElementProps::Color { opacity, .. } = p { *opacity = v; }
-                            });
-                        }
-                    } />
-            </label>
+            // Opacity edited as an integer PERCENT, buffered + committed on blur
+            // (#776) — the wire stays 0..=1.
+            <super::percent_input::PercentInput draft=draft role="stream-color-opacity" />
         </div>
     }
 }
 
-/// Content-transition control (cut vs crossfade + duration) for the kinds that
-/// carry one (countdown / lyrics / verse).
+/// Content-transition control (cut vs crossfade + duration) for lyrics + verse.
+/// Countdown carries a `content_transition` in the model but ignores it (a
+/// per-tick fade flickers — #776), so the editor hides this control for it.
 #[component]
 fn TransitionFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
     let is_fade = move || {

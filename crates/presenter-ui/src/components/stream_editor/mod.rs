@@ -17,6 +17,7 @@ pub mod editor_panel;
 pub mod editor_preview;
 pub mod editor_scenes;
 pub mod element_form;
+pub mod percent_input;
 pub mod props_access;
 pub mod text_style_form;
 

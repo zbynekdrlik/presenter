@@ -115,9 +115,13 @@ body.stream {
 }
 
 /* The countdown element is a flex box (inline style sets font, color, size,
- * alignment, shadow, and the justify/align for the frame). */
+ * alignment, shadow, and the justify/align for the frame). It renders ONE stable
+ * text node (no content crossfade — #776: a per-tick fade flickers), so
+ * `tabular-nums` keeps the digit cells a fixed width and the text does not jitter
+ * horizontally as the numbers change. */
 .stream-element--countdown {
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Lyrics + verse elements (#710): the Frame is a vertically-centered flex
