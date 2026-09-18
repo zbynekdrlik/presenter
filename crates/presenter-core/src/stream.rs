@@ -410,7 +410,7 @@ pub struct StreamAsset {
 /// widen the allowed font-family set beyond [`STREAM_FONT_FAMILIES`].
 ///
 /// `family`/`weight`/`italic` are parsed from the font file's `name`/`OS/2`
-/// tables at upload (`ttf-parser`); `format` is `ttf` or `otf` (the only two
+/// tables at upload (`read-fonts`); `format` is `ttf` or `otf` (the only two
 /// browsers can `@font-face` from a raw file — woff/woff2/ttc are rejected at
 /// upload).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

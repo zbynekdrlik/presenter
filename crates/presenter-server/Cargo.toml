@@ -40,9 +40,10 @@ async-trait.workspace = true
 # (same version presenter-importer already uses for its Bible digest).
 sha2 = "0.10"
 # #778: parse family/weight/italic from uploaded web fonts' name/OS-2 tables.
-# Pure Rust, no unsafe deps, reads TTF + OTF. `std` (default) enables
-# `Name::to_string`.
-ttf-parser = "0.25"
+# Google fontations `read-fonts` (maintained; replaces the unmaintained
+# ttf-parser flagged by RUSTSEC-2026-0192). Pure Rust, reads TTF + OTF; the
+# default `std` feature enables `NameString`'s Display-based decoding.
+read-fonts = "0.44"
 
 [features]
 default = []

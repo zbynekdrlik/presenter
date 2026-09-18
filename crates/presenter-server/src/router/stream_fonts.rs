@@ -1,5 +1,5 @@
 //! Stream-graphics font HTTP surface (#778, epic #718) — multipart upload
-//! deduped by sha256, `ttf-parser` metadata extraction, content-addressed
+//! deduped by sha256, `read-fonts` metadata extraction, content-addressed
 //! serving with immutable cache headers, guarded delete (409 while the last
 //! face of a family is referenced), and a generated `@font-face` stylesheet.
 //!

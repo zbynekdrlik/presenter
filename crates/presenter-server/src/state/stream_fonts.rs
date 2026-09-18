@@ -2,9 +2,10 @@
 //!
 //! The metadata ROW is the `stream_fonts` repository; this module owns
 //! everything AROUND it: magic-byte format detection (only raw `ttf`/`otf` — a
-//! browser cannot `@font-face` a `.ttc` collection and `ttf-parser` cannot read
+//! browser cannot `@font-face` a `.ttc` collection and the parser cannot read
 //! `woff`/`woff2`, so those are rejected 422), family/weight/italic parsing from
-//! the font's `name`/`OS/2` tables via `ttf-parser`, and content-addressed byte
+//! the font's `name`/`OS/2` tables via `read-fonts` (Google fontations), and
+//! content-addressed byte
 //! files under `<stream-assets>/fonts/<sha256>.<ext>` — a `fonts/` subdir of the
 //! image asset dir, so it inherits the deploy-survival of `stream-assets/` (the
 //! deploy `rsync --delete` is scoped to `libraries/`, never this tree).
@@ -19,6 +20,11 @@ use std::path::PathBuf;
 // on the clippy job — the #616 test-only-import class).
 #[cfg(test)]
 use std::path::Path;
+
+use read_fonts::tables::head::MacStyle;
+use read_fonts::tables::os2::SelectionFlags;
+use read_fonts::types::NameId;
+use read_fonts::{FontRef, TableProvider};
 
 use crate::state::stream_assets::{
     is_valid_sha256, read_content, remove_content, store_content_addressed, sweep_tmp_dir,
@@ -77,13 +83,25 @@ pub(crate) enum FontParseError {
 
 /// Parse family / weight / italic from a raw ttf/otf byte buffer. Family is the
 /// typographic family (name id 16) falling back to the legacy family (id 1);
-/// weight is `OS/2.usWeightClass` (clamped into the valid 1..=1000 range);
-/// italic is the `fsSelection`/`macStyle` italic bit.
+/// weight is `OS/2.usWeightClass` (clamped into the valid 1..=1000 range,
+/// defaulting to 400 when the `OS/2` table is absent); italic is the `OS/2`
+/// `fsSelection` italic bit, falling back to `head.macStyle` when there is no
+/// `OS/2` table.
 pub(crate) fn parse_font_metadata(bytes: &[u8]) -> Result<FontMeta, FontParseError> {
-    let face = ttf_parser::Face::parse(bytes, 0).map_err(|_| FontParseError::Unparseable)?;
-    let family = pick_family(&face).ok_or(FontParseError::NoFamily)?;
-    let weight = face.weight().to_number().clamp(1, 1000);
-    let italic = face.is_italic();
+    let font = FontRef::new(bytes).map_err(|_| FontParseError::Unparseable)?;
+    let family = pick_family(&font).ok_or(FontParseError::NoFamily)?;
+    let weight = font
+        .os2()
+        .map(|os2| os2.us_weight_class())
+        .unwrap_or(400)
+        .clamp(1, 1000);
+    let italic = match font.os2() {
+        Ok(os2) => os2.fs_selection().contains(SelectionFlags::ITALIC),
+        Err(_) => font
+            .head()
+            .map(|head| head.mac_style().contains(MacStyle::ITALIC))
+            .unwrap_or(false),
+    };
     Ok(FontMeta {
         family,
         weight,
@@ -92,29 +110,29 @@ pub(crate) fn parse_font_metadata(bytes: &[u8]) -> Result<FontMeta, FontParseErr
 }
 
 /// Preferred family name: typographic family (16) → legacy family (1), first
-/// non-empty Unicode name record.
-fn pick_family(face: &ttf_parser::Face) -> Option<String> {
-    name_record(face, ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
-        .or_else(|| name_record(face, ttf_parser::name_id::FAMILY))
+/// non-empty Unicode/Windows name record.
+fn pick_family(font: &FontRef) -> Option<String> {
+    name_record(font, NameId::TYPOGRAPHIC_FAMILY_NAME)
+        .or_else(|| name_record(font, NameId::FAMILY_NAME))
 }
 
-/// First non-empty Unicode name-table string for `want`. Iterated by index
-/// (`Names::len`/`get`) — the stable API surface — filtering to Unicode records
-/// (`to_string` only decodes those).
-fn name_record(face: &ttf_parser::Face, want: u16) -> Option<String> {
-    let names = face.names();
-    for i in 0..names.len() {
-        let Some(name) = names.get(i) else {
-            continue;
-        };
-        if name.name_id != want || !name.is_unicode() {
+/// First non-empty name-table string for `want`. Iterates the `name` table's
+/// records, keeping only Unicode (platform 0) / Windows (platform 3) records —
+/// the UTF-16 strings `read-fonts` decodes via `NameString`'s `Display` impl.
+fn name_record(font: &FontRef, want: NameId) -> Option<String> {
+    let name = font.name().ok()?;
+    let data = name.string_data();
+    for record in name.name_record() {
+        if record.name_id() != want || !matches!(record.platform_id(), 0 | 3) {
             continue;
         }
-        if let Some(s) = name.to_string() {
-            let trimmed = s.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+        let Ok(decoded) = record.string(data) else {
+            continue;
+        };
+        let s = decoded.to_string();
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
     None
