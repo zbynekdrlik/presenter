@@ -57,6 +57,7 @@ mod stage_state;
 pub mod startup_mode;
 mod stream;
 pub(crate) mod stream_assets;
+pub(crate) mod stream_fonts;
 pub(crate) mod sync;
 #[cfg(test)]
 mod sync_integration_breaker_tests;

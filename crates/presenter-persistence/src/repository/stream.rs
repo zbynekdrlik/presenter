@@ -321,7 +321,10 @@ impl Repository {
         scene_id: i64,
         props: StreamElementProps,
     ) -> anyhow::Result<StreamElementDef> {
-        validate_props(&props).map_err(|e| RepositoryError::Invalid(e.to_string()))?;
+        // Allowed families = built-in whitelist ∪ uploaded font families (#778).
+        let extra_families = self.distinct_font_families().await?;
+        validate_props(&props, &extra_families)
+            .map_err(|e| RepositoryError::Invalid(e.to_string()))?;
         let props_json = serde_json::to_string(&props)?;
         let txn = self.db.begin().await?;
         let scene = Self::scene_by_id(&txn, scene_id).await?;
@@ -354,7 +357,9 @@ impl Repository {
         element_id: i64,
         props: StreamElementProps,
     ) -> anyhow::Result<StreamElementDef> {
-        validate_props(&props).map_err(|e| RepositoryError::Invalid(e.to_string()))?;
+        let extra_families = self.distinct_font_families().await?;
+        validate_props(&props, &extra_families)
+            .map_err(|e| RepositoryError::Invalid(e.to_string()))?;
         let txn = self.db.begin().await?;
         let element = Self::element_by_id(&txn, element_id).await?;
         if element.kind.as_str() != props.kind_str() {

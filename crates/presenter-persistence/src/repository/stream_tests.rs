@@ -5,6 +5,7 @@
 //! asset records + guarded delete, and config_revision monotonicity.
 
 use super::stream_assets::NewStreamAsset;
+use super::stream_fonts::NewStreamFont;
 use super::{Repository, RepositoryError};
 use crate::entities::stream_element;
 use presenter_core::stream::{
@@ -684,4 +685,158 @@ async fn delete_output_cascades_scenes_and_elements() {
         as_repo_error(&el_err),
         RepositoryError::NotFound(_)
     ));
+}
+
+// ---- #778 uploaded web fonts ----------------------------------------------
+
+fn new_font(sha: &str, family: &str, weight: u16, italic: bool) -> NewStreamFont {
+    NewStreamFont {
+        sha256: sha.to_string(),
+        original_filename: format!("{family}.ttf"),
+        family: family.to_string(),
+        weight,
+        italic,
+        format: "ttf".to_string(),
+        size_bytes: 4096,
+    }
+}
+
+fn countdown_with_family(timer_id: i64, family: &str) -> StreamElementProps {
+    let mut style = text_style();
+    style.font_family = family.to_string();
+    StreamElementProps::Countdown {
+        timer_id,
+        style,
+        frame: frame(),
+        content_transition: ContentTransition::default(),
+    }
+}
+
+#[tokio::test]
+async fn insert_or_get_stream_font_dedups_by_sha256() {
+    let repo = repo().await;
+    let first = repo
+        .insert_or_get_stream_font(new_font("sha-a", "Brandon", 400, false))
+        .await
+        .unwrap();
+    // Same sha, different declared name → returns the existing row (dedup).
+    let second = repo
+        .insert_or_get_stream_font(new_font("sha-a", "Ignored", 700, true))
+        .await
+        .unwrap();
+    assert_eq!(first.id, second.id, "identical sha dedups to one row");
+    assert_eq!(
+        second.family, "Brandon",
+        "existing row is returned unchanged"
+    );
+    assert_eq!(repo.list_stream_fonts().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn distinct_font_families_unions_uploaded_faces() {
+    let repo = repo().await;
+    repo.insert_or_get_stream_font(new_font("s1", "Brandon", 400, false))
+        .await
+        .unwrap();
+    repo.insert_or_get_stream_font(new_font("s2", "Brandon", 700, false))
+        .await
+        .unwrap();
+    repo.insert_or_get_stream_font(new_font("s3", "Gotham", 400, false))
+        .await
+        .unwrap();
+    let mut fams = repo.distinct_font_families().await.unwrap();
+    fams.sort();
+    assert_eq!(fams, vec!["Brandon".to_string(), "Gotham".to_string()]);
+}
+
+#[tokio::test]
+async fn element_with_uploaded_family_rejected_until_font_uploaded() {
+    let repo = repo().await;
+    let scene = repo
+        .create_stream_scene("stream", "Base F1", SceneKind::Base)
+        .await
+        .unwrap();
+    // Before any upload, an unknown family is a 422 (core validate_props).
+    let err = repo
+        .create_stream_element(scene.id, countdown_with_family(1, "Brandon"))
+        .await
+        .unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
+    // After the face exists, the same element validates and is created.
+    repo.insert_or_get_stream_font(new_font("s-brandon", "Brandon", 400, false))
+        .await
+        .unwrap();
+    let el = repo
+        .create_stream_element(scene.id, countdown_with_family(1, "Brandon"))
+        .await
+        .unwrap();
+    assert_eq!(el.props.font_families(), vec!["Brandon"]);
+}
+
+#[tokio::test]
+async fn delete_last_in_use_font_face_is_409_naming_scene() {
+    let repo = repo().await;
+    let font = repo
+        .insert_or_get_stream_font(new_font("s-brandon", "Brandon", 400, false))
+        .await
+        .unwrap();
+    let scene = repo
+        .create_stream_scene("stream", "Uses Brandon 778", SceneKind::Base)
+        .await
+        .unwrap();
+    repo.create_stream_element(scene.id, countdown_with_family(1, "Brandon"))
+        .await
+        .unwrap();
+    // Last face of an in-use family → 409 ConflictDetail naming the scene.
+    let err = repo.delete_stream_font(font.id).await.unwrap_err();
+    match as_repo_error(&err) {
+        RepositoryError::ConflictDetail(msg) => {
+            assert!(
+                msg.contains("Uses Brandon 778"),
+                "409 names the scene: {msg}"
+            );
+            assert!(msg.contains("Brandon"), "409 names the family: {msg}");
+        }
+        other => panic!("expected ConflictDetail, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn delete_non_last_face_of_in_use_family_is_allowed() {
+    let repo = repo().await;
+    let regular = repo
+        .insert_or_get_stream_font(new_font("s-reg", "Brandon", 400, false))
+        .await
+        .unwrap();
+    repo.insert_or_get_stream_font(new_font("s-bold", "Brandon", 700, false))
+        .await
+        .unwrap();
+    let scene = repo
+        .create_stream_scene("stream", "Base F2", SceneKind::Base)
+        .await
+        .unwrap();
+    repo.create_stream_element(scene.id, countdown_with_family(1, "Brandon"))
+        .await
+        .unwrap();
+    // Another face of Brandon remains, so the family stays valid → delete OK.
+    repo.delete_stream_font(regular.id).await.unwrap();
+    assert_eq!(repo.list_stream_fonts().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn delete_unused_font_face_is_allowed() {
+    let repo = repo().await;
+    let font = repo
+        .insert_or_get_stream_font(new_font("s-unused", "Nobody", 400, false))
+        .await
+        .unwrap();
+    repo.delete_stream_font(font.id).await.unwrap();
+    assert!(repo.list_stream_fonts().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn get_missing_font_is_not_found() {
+    let repo = repo().await;
+    let err = repo.get_stream_font(999_999).await.unwrap_err();
+    assert!(matches!(as_repo_error(&err), RepositoryError::NotFound(_)));
 }

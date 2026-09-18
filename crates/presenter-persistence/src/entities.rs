@@ -850,6 +850,37 @@ pub mod stream_asset {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod stream_font {
+    use sea_orm::entity::prelude::*;
+
+    /// A sha256-addressed uploaded web font FACE (#778). One row per
+    /// family+weight+italic combination; the bytes live on disk under
+    /// `<stream-assets>/fonts/<sha256>.<ext>`. Referenced only by a font-family
+    /// NAME match in element props (no foreign key), so no relations.
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "stream_fonts")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        // UNIQUE enforced by the migration's `idx_stream_fonts_sha256_unique`.
+        pub sha256: String,
+        pub original_filename: String,
+        pub family: String,
+        // Font weight class (1..=1000); u16 in the DTO, stored as INTEGER.
+        pub weight: i32,
+        pub italic: bool,
+        // On-disk container format: "ttf" or "otf".
+        pub format: String,
+        pub size_bytes: i32,
+        pub created_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 #[cfg(test)]
 mod stream_entities_roundtrip_tests {
     //! #703: each stream entity must compile and round-trip (insert + select)
