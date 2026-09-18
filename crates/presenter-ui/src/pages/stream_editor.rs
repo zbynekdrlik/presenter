@@ -57,6 +57,10 @@ pub fn StreamEditorPage() -> impl IntoView {
         selected_scene: RwSignal::new(None),
         selected_element: RwSignal::new(None),
         prop_error: RwSignal::new(String::new()),
+        draft: RwSignal::new(
+            crate::components::stream_editor::props_access::default_element_props("image"),
+        ),
+        draft_element_id: RwSignal::new(None),
     };
 
     // Cold load.

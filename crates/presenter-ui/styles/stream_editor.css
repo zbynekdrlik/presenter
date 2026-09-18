@@ -498,49 +498,6 @@ html[data-stream-editor="true"] {
   font-size: 0.78rem;
 }
 
-/* ---- Placement preview + off-canvas guard (#751) ------------------------- */
-
-/* A schematic 16:9 canvas (0..100% both axes) showing where the frame sits.
- * overflow:hidden clips off-canvas parts, so the box matches what OBS renders. */
-.stream-editor__frame-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.stream-editor__frame-canvas {
-  position: relative;
-  width: 100%;
-  max-width: 18rem;
-  aspect-ratio: 16 / 9;
-  border: 1px solid #2a2e3a;
-  border-radius: 6px;
-  overflow: hidden;
-  background: #14161c;
-}
-
-.stream-editor__frame-rect {
-  position: absolute;
-  box-sizing: border-box;
-  background: rgba(79, 140, 255, 0.35);
-  border: 1px solid #4f8cff;
-}
-
-/* Fully off-canvas → the rect (clipped away) turns red to match the warning. */
-.stream-editor__frame-rect[data-offcanvas="true"] {
-  background: rgba(255, 154, 166, 0.3);
-  border-color: #ff9aa6;
-}
-
-.stream-editor__frame-warning {
-  margin: 0;
-  padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  background: #5a2530;
-  color: #ffd7dd;
-  font-size: 0.8rem;
-}
-
 /* ---- Preview iframe + asset picker (#715) -------------------------------- */
 
 .stream-editor__preview {
@@ -582,6 +539,96 @@ html[data-stream-editor="true"] {
   height: 100%;
   border: 0;
   background: transparent;
+}
+
+/* ---- Interaction overlay (#777) ----------------------------------------- */
+
+/* Sits ON TOP of the preview iframe, same 16:9 box → percent maps 1:1. Receives
+ * pointer + keyboard while a scene is being edited (the iframe is
+ * pointer-events:none then). */
+.stream-editor__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: none; /* pointer capture drives it; never scroll/zoom on drag */
+  outline: none;
+}
+
+/* One element's selection outline; positioned by its frame percentages. */
+.stream-editor__overlay-el {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed rgba(160, 180, 220, 0.55);
+  cursor: move;
+}
+
+.stream-editor__overlay-el[data-selected="true"] {
+  border: 1px solid #4f8cff;
+  background: rgba(79, 140, 255, 0.08);
+}
+
+/* 8 resize handles on the selected element. */
+.stream-editor__overlay-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px; /* centre on the anchor point */
+  background: #4f8cff;
+  border: 1px solid #fff;
+  border-radius: 2px;
+}
+
+.stream-editor__overlay-handle[data-handle="nw"] {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.stream-editor__overlay-handle[data-handle="n"] {
+  left: 50%;
+  top: 0;
+  cursor: ns-resize;
+}
+.stream-editor__overlay-handle[data-handle="ne"] {
+  left: 100%;
+  top: 0;
+  cursor: nesw-resize;
+}
+.stream-editor__overlay-handle[data-handle="w"] {
+  left: 0;
+  top: 50%;
+  cursor: ew-resize;
+}
+.stream-editor__overlay-handle[data-handle="e"] {
+  left: 100%;
+  top: 50%;
+  cursor: ew-resize;
+}
+.stream-editor__overlay-handle[data-handle="sw"] {
+  left: 0;
+  top: 100%;
+  cursor: nesw-resize;
+}
+.stream-editor__overlay-handle[data-handle="s"] {
+  left: 50%;
+  top: 100%;
+  cursor: ns-resize;
+}
+.stream-editor__overlay-handle[data-handle="se"] {
+  left: 100%;
+  top: 100%;
+  cursor: nwse-resize;
+}
+
+/* Unsaved-changes indicator next to the Save button. */
+.stream-editor__unsaved {
+  align-self: center;
+  margin-right: auto;
+  color: #ffd27a;
+  font-size: 0.8rem;
+}
+
+.stream-editor__btn[data-dirty="true"] {
+  box-shadow: 0 0 0 2px rgba(255, 210, 122, 0.6);
 }
 
 .stream-editor__btn[data-live="true"] {

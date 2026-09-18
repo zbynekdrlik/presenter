@@ -22,11 +22,12 @@
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::{
-    BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamOutputDef, StreamSceneDef,
-    StreamShowState,
+    BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamElementProps, StreamOutputDef,
+    StreamSceneDef, StreamShowState,
 };
 
 use crate::api;
+use crate::components::stream::draft_preview::{install_preview_listener, StreamDraftOverride};
 use crate::components::stream::scene_render::SceneRender;
 use crate::components::stream::StreamContext;
 use crate::ws::stream::{self, StreamWsState, TimersReceipt};
@@ -126,6 +127,16 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
 
     if !preview {
         crate::components::stage::wake_lock::start_wake_lock_guard();
+    }
+
+    // Live draft preview (#777): ONLY on a `?preview=1` page (the editor iframe),
+    // install the origin-checked `postMessage` listener and expose the override to
+    // `scene_render` via context. A production output installs nothing and provides
+    // no context, so it renders purely from the saved def.
+    if preview {
+        let draft_override = RwSignal::new(None::<(i64, StreamElementProps)>);
+        install_preview_listener(draft_override);
+        provide_context(StreamDraftOverride(draft_override));
     }
 
     let def = RwSignal::new(None::<StreamOutputDef>);

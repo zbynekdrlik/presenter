@@ -347,15 +347,17 @@ test("element CRUD, property edit, inline 422 and z-order", async ({ page }) => 
     })
     .toBeTruthy();
 
-  // --- Invalid value (far off-canvas, > core max 300) → inline 422, def unchanged.
-  //     NB: since #751, off-canvas positions (negative / past 100) are VALID, so
-  //     the invalid case must exceed the wide core bound (STREAM_FRAME_POS_MAX 300).
-  await page.locator('[data-role="stream-frame-x"]').fill("5000");
+  // --- Invalid value → inline 422, def unchanged. Since #777 the FRAME fields
+  //     clamp client-side (a frame can no longer 422), so the deliberate 422 now
+  //     comes from a NON-frame field: a text size_pct beyond the core 0..=100
+  //     range still fails server-side validation.
+  await page.locator(`${tsCd}[data-role="stream-ts-size"]`).fill("5000");
   await page.locator('[data-role="stream-prop-save"]').click();
   await expect(page.locator('[data-role="stream-prop-error"]')).toBeVisible({ timeout: 10_000 });
   {
     const el = (await getScene(page, scene)).elements.find((e) => String(e.id) === cd);
-    expect((el?.props as any).frame.xPct, "def unchanged after 422").toBe(12.5);
+    expect((el?.props as any).style.sizePct, "def unchanged after 422").toBe(9.5);
+    expect((el?.props as any).frame.xPct, "frame still the saved value").toBe(12.5);
   }
 
   // --- z-order: move the last element (verse) up one; def order reflects it ---
@@ -441,40 +443,30 @@ test("a config change reflects live in a second editor context", async ({
   await ctxB.close();
 });
 
-// --- #751: off-canvas frame guard + placement preview ----------------------
+// --- #777: off-canvas Y still saves via the numeric field (slide-in authoring) --
+//
+// The #751 mini placement-preview (`stream-frame-preview`/`-canvas`/`-rect`/
+// `-offcanvas-warning`) was REMOVED in #777 — the real interaction canvas
+// (`stream-editor-canvas.spec.ts`) replaces it. The numeric fields stay and still
+// allow an off-canvas position (negative Y) for a legitimate slide-in placement,
+// which must save without a 422 (the field clamps only to the core range).
 
-test("off-canvas guard: negative Y saves, warning + placement preview", async ({
-  page,
-}) => {
+test("numeric field: off-canvas Y saves without a 422", async ({ page }) => {
   const errors: string[] = [];
   attachEditorConsoleCollector(page, errors);
   await openEditor(page);
 
-  const scene = await addScene(page, "SE_OffCanvas751", "base");
+  const scene = await addScene(page, "SE_OffCanvas777", "base");
   await openPanel(page, scene);
   const img = await addElement(page, scene, "image");
 
-  // Select the image element and open its property form.
   await page
     .locator(`[data-role="stream-element"][data-element-id="${img}"] [data-role="stream-element-select"]`)
     .click();
   await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
 
-  // Placement preview is present (canvas box + the element rect).
-  await expect(page.locator('[data-role="stream-frame-preview"]')).toBeVisible();
-  await expect(page.locator('[data-role="stream-frame-canvas"]')).toBeVisible();
-  await expect(page.locator('[data-role="stream-frame-rect"]')).toBeVisible();
-
-  // Default frame (x10 y40 w80 h20) is on-canvas → no warning, rect not off-canvas.
-  await expect(page.locator('[data-role="stream-frame-offcanvas-warning"]')).toHaveCount(0);
-  await expect(page.locator('[data-role="stream-frame-rect"]')).toHaveAttribute(
-    "data-offcanvas",
-    "false",
-  );
-
-  // --- Move UP past the top edge: negative Y must SAVE (core relaxed in #751,
-  //     no min="0" editor clamp). y=-10 with h=20 still intersects the canvas,
-  //     so it is a legitimate partial-off-canvas placement (no full-off warning).
+  // Move UP past the top edge: negative Y is a valid partial-off-canvas placement
+  // (core allows -200..=300), so it saves with no inline error.
   await page.locator('[data-role="stream-frame-y"]').fill("-10");
   await page.locator('[data-role="stream-prop-save"]').click();
   await expect(page.locator('[data-role="stream-prop-error"]')).toHaveCount(0);
@@ -485,27 +477,9 @@ test("off-canvas guard: negative Y saves, warning + placement preview", async ({
     })
     .toBe(-10);
 
-  // --- Fully off-canvas (x >= 100) → the warning shows + the rect flags it.
-  //     This is client-side reactive on the draft (no save, no server request).
-  await page.locator('[data-role="stream-frame-x"]').fill("100");
-  await expect(page.locator('[data-role="stream-frame-offcanvas-warning"]')).toBeVisible({
-    timeout: 10_000,
-  });
-  await expect(page.locator('[data-role="stream-frame-rect"]')).toHaveAttribute(
-    "data-offcanvas",
-    "true",
-  );
+  // The old mini placement-preview DOM is gone.
+  await expect(page.locator('[data-role="stream-frame-preview"]')).toHaveCount(0);
 
-  // --- Back on-canvas → the warning clears (warn-only, never clamps).
-  await page.locator('[data-role="stream-frame-x"]').fill("10");
-  await expect(page.locator('[data-role="stream-frame-offcanvas-warning"]')).toHaveCount(0);
-  await expect(page.locator('[data-role="stream-frame-rect"]')).toHaveAttribute(
-    "data-offcanvas",
-    "false",
-  );
-
-  // Only tolerated noise is the preview iframe's placeholder-asset 404 (editor
-  // collector strips it); no 422 (negative Y is valid now), so console is clean.
   expect(errors, "browser console must be clean").toEqual([]);
 });
 
