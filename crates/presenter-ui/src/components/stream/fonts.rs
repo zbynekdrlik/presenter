@@ -19,6 +19,10 @@ use presenter_core::StreamFont;
 
 /// Marker attribute so the same `<link>` is reused (href updated) across bumps.
 const LINK_ROLE: &str = "stream-fonts-css";
+/// Retry cadence for the font gate while the stylesheet is still being parsed.
+const FONT_GATE_RETRY_MS: u32 = 100;
+/// 20 × 100 ms = the same 2 s the safety-net timeout uses.
+const FONT_GATE_MAX_ATTEMPTS: u32 = 20;
 
 /// Inject the generated font stylesheet link, or update its `?v=` if present.
 pub fn ensure_fonts_css_link(version: u64) {
@@ -63,13 +67,34 @@ pub fn spawn_font_gate(ready: RwSignal<bool>) {
             }
         };
         let font_set = crate::utils::window::document().fonts();
-        for font in &faces {
-            // `load` returns a Promise that resolves when the face is ready (or
-            // rejects if unavailable — ignored, the timeout still reveals).
-            let promise = font_set.load(&face_spec(font));
-            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        // The `<link>` to /stream/fonts.css is injected at mount and may not be
+        // parsed yet when this runs: `FontFaceSet.load` for a family with NO
+        // registered face resolves immediately with nothing loaded, so a single
+        // pass could reveal text before the face exists (CI: `document.fonts
+        // .check` read false right after the gate opened). Retry until every
+        // face reports loaded via `check`, bounded by the 2 s safety net below.
+        for attempt in 0..FONT_GATE_MAX_ATTEMPTS {
+            let mut all_loaded = true;
+            for font in &faces {
+                let spec = face_spec(font);
+                // `load` resolves when the face is ready (or rejects if
+                // unavailable — ignored, `check` + the timeout decide).
+                let promise = font_set.load(&spec);
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                if !font_set.check(&spec).unwrap_or(false) {
+                    all_loaded = false;
+                }
+            }
+            if all_loaded {
+                leptos::logging::log!(
+                    "stream fonts: {} face(s) preloaded (attempt {})",
+                    faces.len(),
+                    attempt + 1
+                );
+                break;
+            }
+            gloo_timers::future::TimeoutFuture::new(FONT_GATE_RETRY_MS).await;
         }
-        leptos::logging::log!("stream fonts: {} face(s) preloaded", faces.len());
         ready.set(true);
     });
 

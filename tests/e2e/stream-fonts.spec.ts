@@ -7,7 +7,12 @@
  * `font-family` starts with the family AND `document.fonts.check()` is true —
  * with a clean console. Also: an unknown family is still rejected 422.
  */
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import path from "path";
 import {
   attachConsoleErrorCollector,
@@ -57,7 +62,11 @@ test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
-  serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
+  serverHandle = await startTestServer(
+    config.port,
+    config.dbUrl,
+    config.oscPort,
+  );
 });
 
 test.afterAll(async () => {
@@ -67,7 +76,9 @@ test.afterAll(async () => {
 
 async function openEditor(page: Page): Promise<void> {
   await page.goto(`${baseURL}/ui/stream`);
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
   await page.waitForSelector(sel.editorBody, { timeout: 30_000 });
 }
 
@@ -106,9 +117,7 @@ async function activateBase(
 }
 
 async function getDef(request: APIRequestContext): Promise<any> {
-  const resp = await request.get(
-    `${baseURL}/stream/api/outputs/${SLUG}/def`,
-  );
+  const resp = await request.get(`${baseURL}/stream/api/outputs/${SLUG}/def`);
   expect(resp.ok(), `def -> ${resp.status()}`).toBeTruthy();
   return resp.json();
 }
@@ -132,9 +141,9 @@ test("upload a font via the editor, pick it, output renders in that face", async
   // The property form's font <select> now includes the uploaded family.
   const fontSelect = page.locator(sel.tsFont);
   await expect(fontSelect).toBeVisible({ timeout: 15_000 });
-  await expect(
-    fontSelect.locator(`option[value="${FAMILY}"]`),
-  ).toHaveCount(1, { timeout: 15_000 });
+  await expect(fontSelect.locator(`option[value="${FAMILY}"]`)).toHaveCount(1, {
+    timeout: 15_000,
+  });
   await fontSelect.selectOption(FAMILY);
   await page.locator(sel.propSave).click();
 
@@ -156,11 +165,14 @@ test("upload a font via the editor, pick it, output renders in that face", async
     )
     .toContain(FAMILY);
 
-  expect(editorErrors, `editor console: ${editorErrors.join(" | ")}`).toEqual([]);
+  expect(editorErrors, `editor console: ${editorErrors.join(" | ")}`).toEqual(
+    [],
+  );
 
   // Activate the scene, then open the OUTPUT page in a clean tab.
   const def = await getDef(page.request);
-  const sceneId = def.scenes.find((s: any) => s.name === sceneName)?.id as number;
+  const sceneId = def.scenes.find((s: any) => s.name === sceneName)
+    ?.id as number;
   expect(sceneId, "scene id resolved").toBeTruthy();
   await activateBase(page.request, sceneId);
 
@@ -168,15 +180,16 @@ test("upload a font via the editor, pick it, output renders in that face", async
   const output = await page.context().newPage();
   attachConsoleErrorCollector(output, outputErrors);
   await output.goto(`${baseURL}/stream/${SLUG}`);
-  await output.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await output.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
   await output.waitForSelector(sel.canvas, { timeout: 10_000 });
   await output.waitForSelector(sel.countdown, { timeout: 15_000 });
 
   // Text is revealed once the fonts settle (data-fonts-ready flips true).
-  await expect(output.locator(`${sel.canvas}[data-fonts-ready="true"]`)).toHaveCount(
-    1,
-    { timeout: 15_000 },
-  );
+  await expect(
+    output.locator(`${sel.canvas}[data-fonts-ready="true"]`),
+  ).toHaveCount(1, { timeout: 15_000 });
 
   // The countdown element's computed font-family resolves to the uploaded face.
   const fontFamily = await output
@@ -184,14 +197,25 @@ test("upload a font via the editor, pick it, output renders in that face", async
     .evaluate((el) => window.getComputedStyle(el).fontFamily);
   expect(fontFamily).toContain(FAMILY);
 
-  // And the browser has actually loaded that face.
-  const loaded = await output.evaluate(
-    (fam) => document.fonts.check(`400 1em "${fam}"`),
-    FAMILY,
-  );
-  expect(loaded, "document.fonts.check for the uploaded family").toBe(true);
+  // And the browser has actually loaded that face (poll: the face finishes
+  // loading asynchronously after the stylesheet is parsed).
+  await expect
+    .poll(
+      () =>
+        output.evaluate(
+          (fam) => document.fonts.check(`400 1em "${fam}"`),
+          FAMILY,
+        ),
+      {
+        message: "document.fonts.check for the uploaded family",
+        timeout: 10_000,
+      },
+    )
+    .toBe(true);
 
-  expect(outputErrors, `output console: ${outputErrors.join(" | ")}`).toEqual([]);
+  expect(outputErrors, `output console: ${outputErrors.join(" | ")}`).toEqual(
+    [],
+  );
   await output.close();
 });
 
