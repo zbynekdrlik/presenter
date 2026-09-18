@@ -10,6 +10,7 @@ use crate::state::AppState;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use presenter_core::stream::{SceneKind, StreamElementProps, StreamFont, TextAlign, TextStyle};
+use presenter_persistence::NewStreamFont;
 use tower::ServiceExt;
 
 const BOUNDARY: &str = "TESTBOUNDARY778";
@@ -239,7 +240,30 @@ async fn serve_missing_font_is_404() {
 #[tokio::test]
 async fn delete_unused_font_removes_row_and_file() {
     let (state, _dir) = test_state().await;
-    let font = upload(&state, "d.ttf", FIXTURE_TTF).await;
+    // Seed a font with a UNIQUE family + sha directly (NOT the shared Gruppo
+    // fixture): `AppState::in_memory()` is a process-wide `cache=shared` DB, and
+    // the guarded delete scans elements by family NAME globally — so deleting a
+    // deduped Gruppo row here would race the in-use Gruppo element the 409 test
+    // leaves behind. A unique unused family is order-independent.
+    let sha = "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899";
+    state
+        .font_store()
+        .store(sha, "ttf", b"\x00\x01\x00\x00 unused fixture bytes")
+        .await
+        .unwrap();
+    let font = state
+        .repository()
+        .insert_or_get_stream_font(NewStreamFont {
+            sha256: sha.to_string(),
+            original_filename: "Unused778.ttf".to_string(),
+            family: "UnusedFamily778".to_string(),
+            weight: 400,
+            italic: false,
+            format: "ttf".to_string(),
+            size_bytes: 21,
+        })
+        .await
+        .unwrap();
     let path = state
         .stream_assets_dir()
         .join("fonts")

@@ -13,7 +13,12 @@
 //! stored sha256 (hex WE computed) + a whitelisted ext, never client input.
 //! The sha/atomic-write primitives are REUSED from `stream_assets` (no copy).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+// `Path` is named only by the `#[cfg(test)]` `dir()` accessor + the test module,
+// so a module-level import would be `unused` in the non-test build (`-D warnings`
+// on the clippy job — the #616 test-only-import class).
+#[cfg(test)]
+use std::path::Path;
 
 use crate::state::stream_assets::{
     is_valid_sha256, read_content, remove_content, store_content_addressed, sweep_tmp_dir,
