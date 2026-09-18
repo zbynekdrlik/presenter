@@ -11,6 +11,8 @@ const {
   isStreamCommand,
   streamActionOptions,
   buildStreamPayload,
+  isOverlayActive,
+  isSceneActive,
 } = require("./lib/stream");
 
 const VARIABLE_DEFINITIONS = [
@@ -263,9 +265,17 @@ class PresenterInstance extends InstanceBase {
       case "welcome":
         this.log("debug", "Received welcome from Presenter");
         break;
-      case "variables":
-        applyVariablesMessage(msg, VARIABLE_DEFINITIONS, this);
+      case "variables": {
+        // applyVariablesMessage returns the number of setVariableValues calls
+        // made (1 when ≥1 value changed, 0 otherwise). Re-evaluate feedbacks
+        // ONCE per message that actually changed something — never per variable
+        // (that would reintroduce the #265 fan-out).
+        const changed = applyVariablesMessage(msg, VARIABLE_DEFINITIONS, this);
+        if (changed) {
+          this.checkFeedbacks();
+        }
         break;
+      }
       case "ack":
         this.log("debug", `Ack from server: ${msg.command}`);
         break;
@@ -285,6 +295,10 @@ class PresenterInstance extends InstanceBase {
     if (previous !== value) {
       this.setVariableValues({ [name]: value });
       this.variables.set(name, value);
+      // Single-variable path (only `live_ws_connected` on connect/disconnect —
+      // never a loop), so re-evaluating feedbacks here is the on-connection
+      // -state-change trigger and does not reintroduce the #265 fan-out.
+      this.checkFeedbacks();
     }
   }
 
@@ -427,7 +441,10 @@ class PresenterInstance extends InstanceBase {
 
     VARIABLE_DEFINITIONS.forEach((name) => {
       feedbacks[`text_${name}`] = {
-        type: "advanced",
+        // A boolean callback needs a boolean feedback with `defaultStyle`
+        // (#780): an "advanced" feedback must return a style object, so the
+        // boolean was silently ignored and the button never lit.
+        type: "boolean",
         name: `Text equals: ${name}`,
         options: [
           {
@@ -437,17 +454,66 @@ class PresenterInstance extends InstanceBase {
             default: "",
           },
         ],
+        defaultStyle: {
+          color: 0xffffff,
+          bgcolor: 0xff0000,
+        },
         callback: (feedback) => {
           const expected = feedback.options.value ?? "";
           const current = this.variables.get(name) ?? "";
           return current === expected;
         },
-        style: {
-          color: 0xffffff,
-          bgcolor: 0xff0000,
-        },
       };
     });
+
+    // Purpose-built boolean feedbacks for stream scenes/overlays (#780). These
+    // match how the server actually publishes state: `stream_overlays` is a
+    // comma-joined list of active overlay names, so exact equality on the whole
+    // string breaks the moment a second overlay is on — membership is correct.
+    // `stream_scene` is the single active base scene. Both are case-insensitive.
+    feedbacks["stream_overlay_active"] = {
+      type: "boolean",
+      name: "Stream: overlay active (by name)",
+      options: [
+        {
+          type: "textinput",
+          id: "scene",
+          label: "Overlay scene name (matched case-insensitively)",
+          default: "",
+        },
+      ],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0x00aa00,
+      },
+      callback: (feedback) =>
+        isOverlayActive(
+          this.variables.get("stream_overlays"),
+          feedback.options.scene,
+        ),
+    };
+
+    feedbacks["stream_scene_active"] = {
+      type: "boolean",
+      name: "Stream: base scene active (by name)",
+      options: [
+        {
+          type: "textinput",
+          id: "scene",
+          label: "Base scene name (matched case-insensitively)",
+          default: "",
+        },
+      ],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0x00aa00,
+      },
+      callback: (feedback) =>
+        isSceneActive(
+          this.variables.get("stream_scene"),
+          feedback.options.scene,
+        ),
+    };
 
     feedbacks["countdown_running"] = {
       type: "boolean",
