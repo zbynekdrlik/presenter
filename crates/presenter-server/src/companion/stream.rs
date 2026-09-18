@@ -45,12 +45,47 @@ const PLACEHOLDER: &str = "-";
 /// A parsed stream-graphics command (arch #718 §7). `scene` is a NAME, `output`
 /// a resolved slug (never empty — defaulted to [`DEFAULT_OUTPUT`]).
 pub(super) enum StreamCommand {
-    SceneSet { output: String, scene: String },
-    SceneClear { output: String },
-    OverlayOn { output: String, scene: String },
-    OverlayOff { output: String, scene: String },
-    OverlayToggle { output: String, scene: String },
-    Clear { output: String },
+    SceneSet {
+        output: String,
+        scene: String,
+    },
+    SceneClear {
+        output: String,
+    },
+    OverlayOn {
+        output: String,
+        scene: String,
+    },
+    OverlayOff {
+        output: String,
+        scene: String,
+    },
+    OverlayToggle {
+        output: String,
+        scene: String,
+    },
+    Clear {
+        output: String,
+    },
+    // #779 lower-third nameplates. A person plate is addressed by `id` (from the
+    // plugin dropdown) OR `name` (a manually-configured button).
+    NameplateShow {
+        output: String,
+        id: Option<i64>,
+        name: Option<String>,
+    },
+    NameplateSong {
+        output: String,
+    },
+    NameplateToggle {
+        output: String,
+        id: Option<i64>,
+        name: Option<String>,
+        song: bool,
+    },
+    NameplateHide {
+        output: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +99,21 @@ struct SceneOutputPayload {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OutputPayload {
+    #[serde(default)]
+    output: Option<String>,
+}
+
+/// `stream_nameplate_show` / `_toggle` payload: a person plate by `id` or `name`
+/// (+ `song` for toggle). All optional so the plugin can send whichever it has.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NameplatePayload {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    song: bool,
     #[serde(default)]
     output: Option<String>,
 }
@@ -123,9 +173,55 @@ pub(super) fn parse_stream_command(name: &str, payload: Value) -> Result<Compani
         "stream_clear" => StreamCommand::Clear {
             output: output_field(name, payload)?,
         },
+        "stream_nameplate_show" => {
+            let data = nameplate_fields(name, payload)?;
+            StreamCommand::NameplateShow {
+                output: data.output,
+                id: data.id,
+                name: data.name,
+            }
+        }
+        "stream_nameplate_song" => StreamCommand::NameplateSong {
+            output: output_field(name, payload)?,
+        },
+        "stream_nameplate_toggle" => {
+            let data = nameplate_fields(name, payload)?;
+            StreamCommand::NameplateToggle {
+                output: data.output,
+                id: data.id,
+                name: data.name,
+                song: data.song,
+            }
+        }
+        "stream_nameplate_hide" => StreamCommand::NameplateHide {
+            output: output_field(name, payload)?,
+        },
         other => return Err(format!("unknown command: {other}")),
     };
     Ok(CompanionCommand::Stream(command))
+}
+
+/// A parsed nameplate show/toggle payload with the output resolved.
+struct NameplateFields {
+    output: String,
+    id: Option<i64>,
+    name: Option<String>,
+    song: bool,
+}
+
+fn nameplate_fields(name: &str, payload: Value) -> Result<NameplateFields, String> {
+    let data: NameplatePayload =
+        serde_json::from_value(payload).map_err(|err| format!("invalid {name} payload: {err}"))?;
+    let plate_name = data
+        .name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    Ok(NameplateFields {
+        output: resolve_output(data.output),
+        id: data.id,
+        name: plate_name,
+        song: data.song,
+    })
 }
 
 fn activation_error(err: anyhow::Error) -> String {
@@ -181,8 +277,74 @@ pub(super) async fn execute_stream_command(
                 .await
                 .map_err(activation_error)?;
         }
+        StreamCommand::NameplateShow { output, id, name } => {
+            let plate_id = resolve_nameplate_id(state, &output, id, name).await?;
+            state
+                .stream_nameplate_show_person(&output, plate_id)
+                .await
+                .map_err(activation_error)?;
+        }
+        StreamCommand::NameplateSong { output } => {
+            state
+                .stream_nameplate_show_song(&output)
+                .await
+                .map_err(activation_error)?;
+        }
+        StreamCommand::NameplateToggle {
+            output,
+            id,
+            name,
+            song,
+        } => {
+            if song {
+                state
+                    .stream_nameplate_toggle_song(&output)
+                    .await
+                    .map_err(activation_error)?;
+            } else {
+                let plate_id = resolve_nameplate_id(state, &output, id, name).await?;
+                state
+                    .stream_nameplate_toggle_person(&output, plate_id)
+                    .await
+                    .map_err(activation_error)?;
+            }
+        }
+        StreamCommand::NameplateHide { output } => {
+            state
+                .stream_nameplate_hide(&output)
+                .await
+                .map_err(activation_error)?;
+        }
     }
     Ok(())
+}
+
+/// Resolve a person plate to its id from an explicit `id` or a case-insensitive
+/// NAME match against the output's plate list. A missing/unmatched plate is a
+/// non-fatal error reply.
+async fn resolve_nameplate_id(
+    state: &AppState,
+    output: &str,
+    id: Option<i64>,
+    name: Option<String>,
+) -> Result<i64, String> {
+    if let Some(id) = id {
+        return Ok(id);
+    }
+    let Some(name) = name else {
+        return Err("stream_nameplate: id or name is required".to_string());
+    };
+    let plates = state
+        .repository()
+        .list_stream_nameplates(output)
+        .await
+        .map_err(|err| format!("unknown stream output {output:?}: {err}"))?;
+    let target = name.to_lowercase();
+    plates
+        .iter()
+        .find(|p| p.primary_text.to_lowercase() == target)
+        .map(|p| p.id)
+        .ok_or_else(|| format!("unknown nameplate {name:?} in output {output:?}"))
 }
 
 /// Resolve a scene NAME to `(id, is_active)` within an output, case-insensitively
