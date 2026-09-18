@@ -15,8 +15,8 @@ use crate::entities::{stream_element, stream_font, stream_scene};
 use chrono::Utc;
 use presenter_core::stream::{StreamElementProps, StreamFont};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, NotSet, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, NotSet, PaginatorTrait,
+    QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use std::collections::BTreeSet;
 use tracing::instrument;
@@ -99,16 +99,16 @@ impl Repository {
     }
 
     /// The DISTINCT uploaded font families — the extra set unioned with the
-    /// built-in whitelist by core validation (`validate_props`).
+    /// built-in whitelist by core validation (`validate_props`). Deduped in Rust
+    /// (the font count is small; avoids a DISTINCT-projection query).
     pub async fn distinct_font_families(&self) -> anyhow::Result<Vec<String>> {
-        let families: Vec<String> = stream_font::Entity::find()
-            .select_only()
-            .column(stream_font::Column::Family)
-            .distinct()
-            .into_tuple::<String>()
+        let families: BTreeSet<String> = stream_font::Entity::find()
             .all(&self.db)
-            .await?;
-        Ok(families)
+            .await?
+            .into_iter()
+            .map(|f| f.family)
+            .collect();
+        Ok(families.into_iter().collect())
     }
 
     /// Delete a font face. Refused with a 409 (carrying the referencing scene

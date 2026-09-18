@@ -22,9 +22,10 @@ use thiserror::Error;
 /// Fixed v1 font whitelist (arch §4). Custom-font upload is deferred to v2.
 pub const STREAM_FONT_FAMILIES: &[&str] = &["system-ui", "Arial", "Inter", "Bebas Neue", "Oswald"];
 
-/// Slugs that collide with the static route prefixes `/stream/api` and
-/// `/stream/assets` (arch §9) — never usable as an output slug.
-pub const RESERVED_STREAM_SLUGS: &[&str] = &["api", "assets"];
+/// Slugs that collide with the static route prefixes `/stream/api`,
+/// `/stream/assets` (arch §9), and `/stream/fonts` + `/stream/fonts.css`
+/// (#778) — never usable as an output slug.
+pub const RESERVED_STREAM_SLUGS: &[&str] = &["api", "assets", "fonts"];
 
 /// Maximum scene-name length, in characters.
 pub const STREAM_SCENE_NAME_MAX: usize = 100;
@@ -830,6 +831,10 @@ mod tests {
         ));
         assert!(matches!(
             validate_slug("assets"),
+            Err(StreamValidationError::ReservedSlug { .. })
+        ));
+        assert!(matches!(
+            validate_slug("fonts"),
             Err(StreamValidationError::ReservedSlug { .. })
         ));
     }

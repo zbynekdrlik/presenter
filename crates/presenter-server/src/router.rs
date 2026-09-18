@@ -15,6 +15,7 @@ pub(crate) mod stage;
 mod stage_shell;
 mod stream;
 mod stream_assets;
+mod stream_fonts;
 mod stream_page;
 mod sync;
 mod tablet_pwa;
@@ -413,6 +414,11 @@ pub fn build_router(state: AppState) -> Router {
         // priority over #706+'s `/stream/{slug}` catch, and both are reserved
         // slugs — collision-free regardless of merge order.
         .merge(stream_assets::routes())
+        // #778: stream-graphics web-font upload/serve/delete/list + generated
+        // /stream/fonts.css. Static `/stream/fonts*` prefixes; matchit gives
+        // them priority over `/stream/{slug}`, and "fonts" is a reserved slug —
+        // collision-free regardless of merge order.
+        .merge(stream_fonts::routes())
         .with_state(state)
 }
 

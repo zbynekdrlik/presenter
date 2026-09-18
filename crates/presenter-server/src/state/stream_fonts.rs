@@ -238,9 +238,9 @@ mod tests {
     fn parse_font_metadata_reads_the_ofl_fixture() {
         // The committed OFL fixture font (tests/e2e/fixtures) doubles as the Rust
         // metadata-parse fixture — one licence-clean font for both test layers.
-        let bytes =
-            include_bytes!("../../../../tests/e2e/fixtures/fonts/StreamFixtureSans-Regular.ttf");
+        let bytes = include_bytes!("../../../../tests/e2e/fixtures/fonts/Gruppo-Regular.ttf");
         let meta = parse_font_metadata(bytes).expect("fixture parses");
+        assert_eq!(meta.family, "Gruppo", "fixture family parsed: {meta:?}");
         assert!(
             !meta.family.trim().is_empty(),
             "fixture has a family name: {meta:?}"
