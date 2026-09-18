@@ -16,7 +16,10 @@ use presenter_core::{Frame, TextAlign, TextStyle};
 /// missing file, so no 404 breaks the zero-console E2E gate. Used only by
 /// `text_style_css` below, so private.
 fn css_font_family(family: &str) -> String {
-    format!("\"{family}\", system-ui, sans-serif")
+    // Escape a quote/backslash so an (upload-validated, but be-safe) family name
+    // cannot break out of the quoted value (#778 defense in depth).
+    let safe = family.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{safe}\", system-ui, sans-serif")
 }
 
 /// CSS `text-align` value for a [`TextAlign`]. Used only by `text_style_css`, so

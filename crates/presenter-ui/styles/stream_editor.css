@@ -652,3 +652,49 @@ html[data-stream-editor="true"] {
   gap: 0.3rem;
   flex: 0 0 auto;
 }
+
+/* #778: web-font upload/manage panel (a top-level tool in the editor main). */
+.stream-editor__font-panel {
+    margin-top: 1rem;
+    padding: 1rem;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background: #0f172a;
+}
+.stream-editor__hint {
+    margin: 0.25rem 0 0.75rem;
+    font-size: 0.85rem;
+    color: #94a3b8;
+}
+.stream-editor__font-upload {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+}
+.stream-editor__font-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+.stream-editor__font-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    background: #111827;
+}
+.stream-editor__font-preview {
+    font-size: 1.25rem;
+    color: #e2e8f0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

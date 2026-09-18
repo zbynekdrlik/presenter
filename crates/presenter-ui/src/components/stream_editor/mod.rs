@@ -13,6 +13,7 @@
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 
 pub mod editor_assets;
+pub mod editor_fonts;
 pub mod editor_panel;
 pub mod editor_preview;
 pub mod editor_scenes;
@@ -22,8 +23,8 @@ pub mod text_style_form;
 
 use leptos::prelude::*;
 use presenter_core::{
-    SceneKind, StreamElementDef, StreamElementProps, StreamOutputDef, StreamOutputSummary,
-    StreamSceneDef, StreamShowState,
+    SceneKind, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
+    StreamOutputSummary, StreamSceneDef, StreamShowState,
 };
 use serde::Serialize;
 
@@ -114,6 +115,9 @@ pub struct StreamEditorCtx {
     /// Inline validation error for the property form — the server's 422 message
     /// (#714). Empty = no error.
     pub prop_error: RwSignal<String>,
+    /// Uploaded web-font faces (#778): the picker's extra families + the upload
+    /// panel's list. Loaded on mount and after each upload/delete.
+    pub fonts: RwSignal<Vec<StreamFont>>,
 }
 
 impl StreamEditorCtx {
@@ -423,6 +427,69 @@ impl StreamEditorCtx {
                 Err(e) => self.prop_error.set(format!("Neplatné hodnoty: {e}")),
             }
         });
+    }
+
+    // ---- Uploaded web fonts (#778) ----------------------------------------
+
+    /// Re-fetch the uploaded font faces into `fonts` (mount + after upload/delete).
+    pub fn reload_fonts(self) {
+        leptos::task::spawn_local(async move {
+            match crate::api::get_json::<Vec<StreamFont>>("/stream/api/fonts").await {
+                Ok(list) => self.fonts.set(list),
+                Err(e) => self.show_toast(&format!("Načítanie fontov zlyhalo: {e}"), "error"),
+            }
+        });
+    }
+
+    /// Delete one font face (native confirm first), then reload the list. A
+    /// server 409 (the last face of an in-use family) surfaces as a toast.
+    pub fn delete_font(self, id: i64) {
+        let confirmed = crate::utils::window::window()
+            .confirm_with_message("Zmazať tento font?")
+            .unwrap_or(false);
+        if !confirmed {
+            return;
+        }
+        leptos::task::spawn_local(async move {
+            match crate::api::delete_detail(&format!("/stream/fonts/{id}")).await {
+                Ok(()) => {
+                    self.reload_fonts();
+                    self.show_toast("Font zmazaný.", "success");
+                }
+                Err(e) => self.show_toast(&format!("Zmazanie fontu zlyhalo: {e}"), "error"),
+            }
+        });
+    }
+
+    /// The DISTINCT uploaded font families (sorted) — the picker's extra options
+    /// beyond the built-in whitelist.
+    pub fn font_families(self) -> Vec<String> {
+        let mut fams: Vec<String> = self
+            .fonts
+            .get()
+            .into_iter()
+            .map(|f| f.family)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        fams.sort();
+        fams
+    }
+
+    /// The uploaded weights available for `family` (sorted ascending) — used to
+    /// turn the weight control into a `<select>` for an uploaded family.
+    pub fn weights_for_family(self, family: &str) -> Vec<u16> {
+        let mut ws: Vec<u16> = self
+            .fonts
+            .get()
+            .into_iter()
+            .filter(|f| f.family == family)
+            .map(|f| f.weight)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        ws.sort_unstable();
+        ws
     }
 }
 

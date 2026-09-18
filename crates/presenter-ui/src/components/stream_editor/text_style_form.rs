@@ -9,8 +9,10 @@
 //! `-shadow-enable`, `-shadow-x|y|blur|color`) selected WITHIN that group, so a
 //! Verse's three groups stay distinguishable by their wrapper role.
 
+use std::collections::BTreeSet;
+
 use leptos::prelude::*;
-use presenter_core::{StreamElementProps, TextAlign, STREAM_FONT_FAMILIES};
+use presenter_core::{StreamElementProps, StreamFont, TextAlign, STREAM_FONT_FAMILIES};
 
 use super::props_access::{default_shadow, join_color, read_ts, split_color, with_ts_mut, TsSlot};
 
@@ -28,6 +30,10 @@ pub fn TextStyleForm(
     label: &'static str,
     /// Data-role discriminator for the wrapper (e.g. "main", "translation").
     role: &'static str,
+    /// Uploaded web-font faces (#778) — the picker lists their families on top
+    /// of the built-in whitelist, and an uploaded family's weight control
+    /// becomes a `<select>` of the weights actually uploaded for it.
+    fonts: RwSignal<Vec<StreamFont>>,
 ) -> impl IntoView {
     let group_role = format!("stream-ts-{role}");
 
@@ -93,11 +99,44 @@ pub fn TextStyleForm(
             .unwrap_or_else(|| "#000000".to_string())
     };
 
-    // Font <option> list from the fixed v1 whitelist.
-    let font_options = STREAM_FONT_FAMILIES
-        .iter()
-        .map(|f| view! { <option value=*f>{*f}</option> })
-        .collect_view();
+    // Font <option> list = built-in whitelist ∪ uploaded families (#778), each
+    // option rendered in its OWN face. Reactive so uploaded families appear once
+    // the async font list loads.
+    let font_options = move || {
+        let mut families: Vec<String> =
+            STREAM_FONT_FAMILIES.iter().map(|f| f.to_string()).collect();
+        let uploaded: BTreeSet<String> = fonts.get().into_iter().map(|f| f.family).collect();
+        for fam in uploaded {
+            if !families.contains(&fam) {
+                families.push(fam);
+            }
+        }
+        families
+            .into_iter()
+            .map(|fam| {
+                let opt_style = format!("font-family:\"{}\";", fam.replace('"', ""));
+                view! { <option value=fam.clone() style=opt_style>{fam}</option> }
+            })
+            .collect_view()
+    };
+
+    // True when the currently-selected family is an uploaded web font (its
+    // weight control becomes a <select> of the uploaded weights).
+    let is_uploaded_family = move || {
+        let fam = font();
+        fonts.get().iter().any(|f| f.family == fam)
+    };
+    // The uploaded weights for the selected family, ascending.
+    let uploaded_weights = move || {
+        let fam = font();
+        let ws: BTreeSet<u16> = fonts
+            .get()
+            .iter()
+            .filter(|f| f.family == fam)
+            .map(|f| f.weight)
+            .collect();
+        ws.into_iter().collect::<Vec<u16>>()
+    };
 
     view! {
         <fieldset class="stream-editor__ts-group" data-role=group_role>
@@ -162,16 +201,41 @@ pub fn TextStyleForm(
 
             <label class="stream-editor__field">
                 <span>"Hrúbka"</span>
-                <input
-                    type="number" min="1" max="1000" step="1"
-                    data-role="stream-ts-weight"
-                    prop:value=weight
-                    on:input=move |ev| {
-                        if let Ok(v) = event_target_value(&ev).parse::<u16>() {
-                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.weight = v));
-                        }
+                // #778: an uploaded family limits the weight control to the
+                // weights actually uploaded (a <select>); a built-in family
+                // keeps the free numeric input.
+                <Show
+                    when=is_uploaded_family
+                    fallback=move || view! {
+                        <input
+                            type="number" min="1" max="1000" step="1"
+                            data-role="stream-ts-weight"
+                            prop:value=weight
+                            on:input=move |ev| {
+                                if let Ok(v) = event_target_value(&ev).parse::<u16>() {
+                                    draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.weight = v));
+                                }
+                            }
+                        />
                     }
-                />
+                >
+                    <select
+                        data-role="stream-ts-weight"
+                        prop:value=weight
+                        on:change=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<u16>() {
+                                draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.weight = v));
+                            }
+                        }
+                    >
+                        {move || {
+                            uploaded_weights()
+                                .into_iter()
+                                .map(|w| view! { <option value=w.to_string()>{w.to_string()}</option> })
+                                .collect_view()
+                        }}
+                    </select>
+                </Show>
             </label>
 
             <div class="stream-editor__field stream-editor__align">

@@ -12,6 +12,7 @@
 use leptos::prelude::*;
 use presenter_core::{LiveEvent, StreamShowState};
 
+use crate::components::stream_editor::editor_fonts::FontPanel;
 use crate::components::stream_editor::editor_panel::EditorPanel;
 use crate::components::stream_editor::editor_preview::EditorPreview;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
@@ -57,10 +58,15 @@ pub fn StreamEditorPage() -> impl IntoView {
         selected_scene: RwSignal::new(None),
         selected_element: RwSignal::new(None),
         prop_error: RwSignal::new(String::new()),
+        fonts: RwSignal::new(Vec::new()),
     };
 
     // Cold load.
     ctx.refresh();
+    // #778: load uploaded fonts (the picker's extra families) and inject the
+    // generated @font-face stylesheet so picker previews render in-face.
+    ctx.reload_fonts();
+    crate::components::stream::fonts::ensure_fonts_css_link(0);
 
     // Live reflection: apply activation events directly, refetch on config bump.
     let (_ws_state, last_event) = crate::ws::use_live_websocket("stream");
@@ -118,6 +124,7 @@ pub fn StreamEditorPage() -> impl IntoView {
                         <EditorPreview ctx=ctx />
                     </section>
                 </Show>
+                <FontPanel ctx=ctx />
             </main>
             <div
                 class="stream-editor__toast"
