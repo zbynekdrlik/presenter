@@ -322,6 +322,16 @@ test.describe("Stream output transitions", () => {
         .locator('[data-role="stream-crossfade-layer"]'),
     ).toHaveCount(1, { timeout: 5_000 });
 
+    // The CUT element must also update its text — the shared Cut path now mutates
+    // the layer's text IN PLACE on an unchanged `seq`, read back reactively by seq
+    // (#776, the keyed-<For> reactive-field trap #496/#693/#716). Without a
+    // reactive read the captured text would go stale; Tier-0 can't catch that, so
+    // pin it here.
+    const cutMain = page
+      .locator(`[data-role="stream-element-lyrics"][data-element-id="${lCut}"]`)
+      .locator('[data-role="stream-lyrics-main"]');
+    await expect(cutMain).toHaveText("How Great Thou Art", { timeout: 5_000 });
+
     expect(consoleErrors).toEqual([]);
   });
 });

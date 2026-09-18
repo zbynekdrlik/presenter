@@ -53,9 +53,11 @@ pub fn PercentInput(
     let hint = RwSignal::new(String::new());
 
     // Re-seed the buffer whenever the draft's opacity changes externally (element
-    // re-selected, save refetch) — round(opacity*100).
+    // re-selected, save refetch) — round(opacity*100). Also clear any lingering
+    // clamp hint so a stale "Rozsah 0–100 %" from a prior element never sticks.
     Effect::new(move |_| {
         text.set(draft_pct(&draft.get()).to_string());
+        hint.set(String::new());
     });
 
     let commit = move || {

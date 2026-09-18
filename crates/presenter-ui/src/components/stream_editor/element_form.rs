@@ -362,8 +362,9 @@ fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
     }
 }
 
-/// Content-transition control (cut vs crossfade + duration) for the kinds that
-/// carry one (countdown / lyrics / verse).
+/// Content-transition control (cut vs crossfade + duration) for lyrics + verse.
+/// Countdown carries a `content_transition` in the model but ignores it (a
+/// per-tick fade flickers — #776), so the editor hides this control for it.
 #[component]
 fn TransitionFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
     let is_fade = move || {
