@@ -9,7 +9,8 @@
 //! shared `TextStyleForm` component works for every kind.
 
 use presenter_core::{
-    ContentTransition, Frame, ImageFit, Shadow, StreamElementProps, TextAlign, TextStyle,
+    AnimationPreset, ContentTransition, Frame, ImageFit, Shadow, StreamElementProps, TextAlign,
+    TextStyle,
 };
 
 /// Which of an element's `TextStyle` fields a `TextStyleForm` edits. Copy so it
@@ -22,6 +23,8 @@ pub enum TsSlot {
     VerseText,
     VerseSecondary,
     VerseReference,
+    LowerThirdPrimary,
+    LowerThirdSecondary,
 }
 
 /// Read the `TextStyle` at `slot` from the props (clone), or `None` if the slot
@@ -56,6 +59,15 @@ pub fn read_ts(props: &StreamElementProps, slot: TsSlot) -> Option<TextStyle> {
             },
             TsSlot::VerseReference,
         ) => Some(reference_style.clone()),
+        (StreamElementProps::LowerThird { primary_style, .. }, TsSlot::LowerThirdPrimary) => {
+            Some(primary_style.clone())
+        }
+        (
+            StreamElementProps::LowerThird {
+                secondary_style, ..
+            },
+            TsSlot::LowerThirdSecondary,
+        ) => Some(secondary_style.clone()),
         _ => None,
     }
 }
@@ -84,6 +96,15 @@ pub fn with_ts_mut(props: &mut StreamElementProps, slot: TsSlot, f: impl FnOnce(
             },
             TsSlot::VerseReference,
         ) => f(reference_style),
+        (StreamElementProps::LowerThird { primary_style, .. }, TsSlot::LowerThirdPrimary) => {
+            f(primary_style)
+        }
+        (
+            StreamElementProps::LowerThird {
+                secondary_style, ..
+            },
+            TsSlot::LowerThirdSecondary,
+        ) => f(secondary_style),
         _ => {}
     }
 }
@@ -101,7 +122,10 @@ pub fn read_transition(props: &StreamElementProps) -> Option<ContentTransition> 
         | StreamElementProps::Verse {
             content_transition, ..
         } => Some(content_transition.clone()),
-        StreamElementProps::Image { .. } | StreamElementProps::Color { .. } => None,
+        // LowerThird has no content_transition — its enter/leave IS the animation.
+        StreamElementProps::Image { .. }
+        | StreamElementProps::Color { .. }
+        | StreamElementProps::LowerThird { .. } => None,
     }
 }
 
@@ -117,7 +141,9 @@ pub fn with_transition_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut C
         | StreamElementProps::Verse {
             content_transition, ..
         } => f(content_transition),
-        StreamElementProps::Image { .. } | StreamElementProps::Color { .. } => {}
+        StreamElementProps::Image { .. }
+        | StreamElementProps::Color { .. }
+        | StreamElementProps::LowerThird { .. } => {}
     }
 }
 
@@ -128,7 +154,8 @@ pub fn read_frame(props: &StreamElementProps) -> Frame {
         | StreamElementProps::Countdown { frame, .. }
         | StreamElementProps::Lyrics { frame, .. }
         | StreamElementProps::Verse { frame, .. }
-        | StreamElementProps::Color { frame, .. } => frame.clone(),
+        | StreamElementProps::Color { frame, .. }
+        | StreamElementProps::LowerThird { frame, .. } => frame.clone(),
     }
 }
 
@@ -139,7 +166,8 @@ pub fn with_frame_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut Frame)
         | StreamElementProps::Countdown { frame, .. }
         | StreamElementProps::Lyrics { frame, .. }
         | StreamElementProps::Verse { frame, .. }
-        | StreamElementProps::Color { frame, .. } => f(frame),
+        | StreamElementProps::Color { frame, .. }
+        | StreamElementProps::LowerThird { frame, .. } => f(frame),
     }
 }
 
@@ -151,9 +179,12 @@ pub fn read_opacity(props: &StreamElementProps) -> Option<f32> {
         StreamElementProps::Image { opacity, .. } | StreamElementProps::Color { opacity, .. } => {
             Some(*opacity)
         }
+        // LowerThird's transparency control is `bar_opacity` (a distinct field),
+        // not this top-level `opacity`, so the shared PercentInput never edits it.
         StreamElementProps::Countdown { .. }
         | StreamElementProps::Lyrics { .. }
-        | StreamElementProps::Verse { .. } => None,
+        | StreamElementProps::Verse { .. }
+        | StreamElementProps::LowerThird { .. } => None,
     }
 }
 
@@ -165,7 +196,8 @@ pub fn with_opacity_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut f32)
         }
         StreamElementProps::Countdown { .. }
         | StreamElementProps::Lyrics { .. }
-        | StreamElementProps::Verse { .. } => {}
+        | StreamElementProps::Verse { .. }
+        | StreamElementProps::LowerThird { .. } => {}
     }
 }
 
@@ -263,6 +295,31 @@ pub fn default_element_props(kind: &str) -> StreamElementProps {
             color: "#000000".to_string(),
             opacity: 1.0,
             frame: default_frame(),
+        },
+        // A lower-third "menovka" (#779): a dark bar with an accent stripe in the
+        // lower third, a bold primary line + a lighter secondary line, sliding in.
+        "lower_third" => StreamElementProps::LowerThird {
+            frame: Frame {
+                x_pct: 6.0,
+                y_pct: 74.0,
+                w_pct: 46.0,
+                h_pct: 14.0,
+            },
+            bar_color: "#0f172a".to_string(),
+            bar_opacity: 0.85,
+            accent_color: "#38bdf8".to_string(),
+            accent_width_pct: 2.5,
+            primary_style: default_text_style(),
+            secondary_style: TextStyle {
+                size_pct: 4.0,
+                weight: 400,
+                ..default_text_style()
+            },
+            padding_pct: 3.0,
+            animation: AnimationPreset::SlideLeft,
+            in_ms: 500,
+            out_ms: 400,
+            auto_hide_s: 0,
         },
         // "verse" (the only remaining valid kind) + a defensive default — the
         // panel's add-buttons only ever pass the five valid kind strings.

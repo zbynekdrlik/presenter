@@ -11,7 +11,7 @@
 
 use leptos::prelude::*;
 use presenter_core::{
-    ContentTransition, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS,
+    AnimationPreset, ContentTransition, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS,
     STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
 };
 
@@ -66,6 +66,9 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
             </Show>
             <Show when=move || kind() == "color">
                 <ColorFields draft=draft />
+            </Show>
+            <Show when=move || kind() == "lower_third">
+                <LowerThirdFields draft=draft ctx=ctx />
             </Show>
             <Show when=move || kind() == "countdown">
                 <div class="stream-editor__kind-fields" data-role="stream-countdown-fields">
@@ -383,5 +386,159 @@ fn TransitionFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
                 </label>
             </Show>
         </fieldset>
+    }
+}
+
+/// Lower-third ("menovka", #779) fields: bar colour + opacity, accent colour +
+/// width, two text styles (primary/secondary), padding, the animation preset,
+/// the in/out durations, and the auto-hide seconds. The plate's TEXT is runtime
+/// state (the nameplate list), not edited here — this form styles the LOOK.
+#[component]
+fn LowerThirdFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> impl IntoView {
+    let bar_color = move || match draft.get() {
+        StreamElementProps::LowerThird { bar_color, .. } => split_color(&bar_color).0,
+        _ => "#0f172a".to_string(),
+    };
+    let bar_opacity_pct = move || match draft.get() {
+        StreamElementProps::LowerThird { bar_opacity, .. } => (bar_opacity * 100.0).round() as i64,
+        _ => 100,
+    };
+    let accent_color = move || match draft.get() {
+        StreamElementProps::LowerThird { accent_color, .. } => split_color(&accent_color).0,
+        _ => "#38bdf8".to_string(),
+    };
+    let accent_width = move || match draft.get() {
+        StreamElementProps::LowerThird {
+            accent_width_pct, ..
+        } => accent_width_pct.to_string(),
+        _ => "0".to_string(),
+    };
+    let padding = move || match draft.get() {
+        StreamElementProps::LowerThird { padding_pct, .. } => padding_pct.to_string(),
+        _ => "0".to_string(),
+    };
+    let animation = move || match draft.get() {
+        StreamElementProps::LowerThird { animation, .. } => match animation {
+            AnimationPreset::SlideLeft => "slide_left",
+            AnimationPreset::SlideUp => "slide_up",
+            AnimationPreset::Wipe => "wipe",
+        },
+        _ => "slide_left",
+    };
+    let in_ms = move || match draft.get() {
+        StreamElementProps::LowerThird { in_ms, .. } => in_ms.to_string(),
+        _ => "0".to_string(),
+    };
+    let out_ms = move || match draft.get() {
+        StreamElementProps::LowerThird { out_ms, .. } => out_ms.to_string(),
+        _ => "0".to_string(),
+    };
+    let auto_hide = move || match draft.get() {
+        StreamElementProps::LowerThird { auto_hide_s, .. } => auto_hide_s.to_string(),
+        _ => "0".to_string(),
+    };
+
+    view! {
+        <div class="stream-editor__kind-fields" data-role="stream-lower-third-fields">
+            <label class="stream-editor__field">
+                <span>"Farba pruhu"</span>
+                <input type="color" data-role="stream-lt-bar-color"
+                    prop:value=bar_color
+                    on:input=move |ev| {
+                        let rgb = event_target_value(&ev);
+                        draft.update(|p| { if let StreamElementProps::LowerThird { bar_color, .. } = p { *bar_color = rgb; } });
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Priehľadnosť pruhu (%)"</span>
+                <input type="number" min="0" max="100" step="1" data-role="stream-lt-bar-opacity"
+                    prop:value=bar_opacity_pct
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                            let o = (v / 100.0).clamp(0.0, 1.0);
+                            draft.update(|p| { if let StreamElementProps::LowerThird { bar_opacity, .. } = p { *bar_opacity = o; } });
+                        }
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Farba akcentu"</span>
+                <input type="color" data-role="stream-lt-accent-color"
+                    prop:value=accent_color
+                    on:input=move |ev| {
+                        let rgb = event_target_value(&ev);
+                        draft.update(|p| { if let StreamElementProps::LowerThird { accent_color, .. } = p { *accent_color = rgb; } });
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Šírka akcentu (%)"</span>
+                <input type="number" min="0" max="100" step="0.5" data-role="stream-lt-accent-width"
+                    prop:value=accent_width
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                            draft.update(|p| { if let StreamElementProps::LowerThird { accent_width_pct, .. } = p { *accent_width_pct = v; } });
+                        }
+                    } />
+            </label>
+            <TextStyleForm draft=draft ts_slot=TsSlot::LowerThirdPrimary label="Meno" role="primary" fonts=ctx.fonts />
+            <TextStyleForm draft=draft ts_slot=TsSlot::LowerThirdSecondary label="Pozícia" role="secondary" fonts=ctx.fonts />
+            <label class="stream-editor__field">
+                <span>"Okraj textu (%)"</span>
+                <input type="number" min="0" max="100" step="0.5" data-role="stream-lt-padding"
+                    prop:value=padding
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                            draft.update(|p| { if let StreamElementProps::LowerThird { padding_pct, .. } = p { *padding_pct = v; } });
+                        }
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Animácia"</span>
+                <select data-role="stream-lt-animation"
+                    prop:value=animation
+                    on:change=move |ev| {
+                        let a = match event_target_value(&ev).as_str() {
+                            "slide_up" => AnimationPreset::SlideUp,
+                            "wipe" => AnimationPreset::Wipe,
+                            _ => AnimationPreset::SlideLeft,
+                        };
+                        draft.update(|p| { if let StreamElementProps::LowerThird { animation, .. } = p { *animation = a; } });
+                    }
+                >
+                    <option value="slide_left">"Zľava"</option>
+                    <option value="slide_up">"Zdola"</option>
+                    <option value="wipe">"Odkrytie"</option>
+                </select>
+            </label>
+            <label class="stream-editor__field">
+                <span>"Nábeh (ms)"</span>
+                <input type="number" min="0" max="10000" step="50" data-role="stream-lt-in-ms"
+                    prop:value=in_ms
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<u32>() {
+                            draft.update(|p| { if let StreamElementProps::LowerThird { in_ms, .. } = p { *in_ms = v; } });
+                        }
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Odchod (ms)"</span>
+                <input type="number" min="0" max="10000" step="50" data-role="stream-lt-out-ms"
+                    prop:value=out_ms
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<u32>() {
+                            draft.update(|p| { if let StreamElementProps::LowerThird { out_ms, .. } = p { *out_ms = v; } });
+                        }
+                    } />
+            </label>
+            <label class="stream-editor__field">
+                <span>"Auto-skryť (s, 0 = nikdy)"</span>
+                <input type="number" min="0" max="120" step="1" data-role="stream-lt-auto-hide"
+                    prop:value=auto_hide
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<u32>() {
+                            draft.update(|p| { if let StreamElementProps::LowerThird { auto_hide_s, .. } = p { *auto_hide_s = v; } });
+                        }
+                    } />
+            </label>
+        </div>
     }
 }
