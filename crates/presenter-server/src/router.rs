@@ -16,6 +16,7 @@ mod stage_shell;
 mod stream;
 mod stream_assets;
 mod stream_fonts;
+mod stream_nameplates;
 mod stream_page;
 mod sync;
 mod tablet_pwa;
@@ -409,6 +410,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
         .merge(stream::router())
+        // #779: lower-third nameplate list + show-state (/stream/api/*). Static
+        // prefixes, collision-free with `/stream/{slug}` (reserved `api` slug).
+        .merge(stream_nameplates::router())
         // #708: stream-graphics asset upload/serve/delete/list. Static
         // `/stream/assets` + `/stream/api/assets` prefixes; matchit gives them
         // priority over #706+'s `/stream/{slug}` catch, and both are reserved

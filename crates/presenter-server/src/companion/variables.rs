@@ -60,6 +60,14 @@ impl CompanionVariableState {
                 // the WASM output page to refetch its def).
                 false
             }
+            crate::live::LiveEvent::StreamNameplate { .. }
+            | crate::live::LiveEvent::StreamNameplatesChanged { .. } => {
+                // #779: both need an async repository / stage-snapshot read to
+                // rebuild the plate list + variables, so they are handled in the
+                // companion live-loop (`stream::apply_nameplate*_event`), never
+                // this sync path.
+                false
+            }
         }
     }
 

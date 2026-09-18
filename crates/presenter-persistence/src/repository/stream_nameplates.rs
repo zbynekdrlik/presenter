@@ -106,6 +106,18 @@ impl Repository {
         ))
     }
 
+    /// The owning output's slug for a plate id — the id-addressed
+    /// update/delete handlers must broadcast `StreamNameplatesChanged` on the
+    /// owning output. A missing plate id surfaces `NotFound` (404).
+    pub async fn stream_nameplate_output_slug(&self, nameplate_id: i64) -> anyhow::Result<String> {
+        let plate = Self::nameplate_by_id(&self.db, nameplate_id).await?;
+        let output = stream_output::Entity::find_by_id(plate.output_id)
+            .one(&self.db)
+            .await?
+            .ok_or(RepositoryError::NotFound("stream output not found"))?;
+        Ok(output.slug)
+    }
+
     /// Rewrite the plate order: `ids` MUST be exactly the output's full plate set
     /// (no dupes, none missing); `position` is rewritten 0..n by list order. A
     /// partial/duplicate set is `Invalid` (422). Mirrors `set_scene_order`.

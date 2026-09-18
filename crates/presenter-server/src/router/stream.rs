@@ -226,6 +226,8 @@ pub(super) async fn delete_output(
     state.repository().delete_stream_output(&slug).await?;
     // Drop any cached show-state so a later read can't serve a stale snapshot.
     state.stream_evict_output(&slug).await;
+    // #779: drop any cached nameplate show-state for the deleted output too.
+    state.stream_nameplate_evict(&slug).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
