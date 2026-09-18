@@ -47,9 +47,15 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
     };
 
     // Mirror the shared draft into the output iframe on every change (live
-    // preview). `None` element ⇒ a clear message.
+    // preview). In "Naživo" mode the iframe must show the REAL saved output, so
+    // the override is CLEARED (never leak an unsaved draft onto the live view).
+    // `None` element ⇒ a clear message.
     Effect::new(move |_| {
-        let id = ctx.draft_element_id.get();
+        let id = if live.get() {
+            None
+        } else {
+            ctx.draft_element_id.get()
+        };
         let props = id.and(Some(ctx.draft.get()));
         push_draft(iframe_ref, serialize_message(id, props));
     });
@@ -78,7 +84,12 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
                     title="Náhľad stream scény"
                     on:load=move |_| {
                         // Re-push once the iframe (re)loads — its listener is fresh.
-                        let id = ctx.draft_element_id.get_untracked();
+                        // In live mode, push a clear (no draft override on the live view).
+                        let id = if live.get_untracked() {
+                            None
+                        } else {
+                            ctx.draft_element_id.get_untracked()
+                        };
                         let props = id.and(Some(ctx.draft.get_untracked()));
                         push_draft(iframe_ref, serialize_message(id, props));
                     }
