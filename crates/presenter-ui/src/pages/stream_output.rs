@@ -142,6 +142,20 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
     let def = RwSignal::new(None::<StreamOutputDef>);
     let show_state = RwSignal::new(None::<StreamShowState>);
 
+    // #778: uploaded web fonts. Inject the generated `@font-face` stylesheet at
+    // runtime (kept out of index.html so operator/stage pages don't pay for it),
+    // re-bumping its `?v=` on each config revision, and gate text visibility on
+    // `fonts_ready` until the real faces are loaded (no fallback-font flash on a
+    // scene take). The link + gate logic lives in `components/stream/fonts.rs`.
+    let fonts_ready = RwSignal::new(false);
+    crate::components::stream::fonts::ensure_fonts_css_link(0);
+    crate::components::stream::fonts::spawn_font_gate(fonts_ready);
+    Effect::new(move |_| {
+        if let Some(d) = def.get() {
+            crate::components::stream::fonts::ensure_fonts_css_link(d.config_revision);
+        }
+    });
+
     // Shared reactive context for the text elements: countdown (timers + a
     // ticking now), lyrics (worship `stage` snapshot) and verse (`bible` slide).
     let ctx = StreamContext {
@@ -442,6 +456,7 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
             data-slug=slug_attr
             data-ws-state=ws_state_attr
             data-config-revision=config_rev_attr
+            data-fonts-ready=move || if fonts_ready.get() { "true" } else { "false" }
         >
             <For
                 each=layers_each

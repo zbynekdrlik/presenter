@@ -212,6 +212,74 @@ fn non_zero(w: u32, h: u32) -> Option<(u32, u32)> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Generic content-addressed byte-store primitives (#778). Shared by
+// [`AssetStore`] (images) and `state::stream_fonts::FontStore` (fonts) so the
+// atomic-write / dedup / tmp-sweep logic lives in ONE place — both stores wrap
+// these plus [`is_valid_sha256`] with their own extension whitelist in
+// `path_for`. The caller passes an already-validated `final_path` (built via its
+// own guarded `path_for`), so these never join client-controlled segments.
+// ---------------------------------------------------------------------------
+
+/// Write `bytes` to `final_path` (which must sit inside `dir`) via a unique tmp
+/// file + atomic rename. Idempotent when identical content already exists at
+/// `final_path` (content-addressed dedup). Returns the final path.
+pub(crate) async fn store_content_addressed(
+    dir: &Path,
+    final_path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<PathBuf> {
+    tokio::fs::create_dir_all(dir).await?;
+    // Dedup: identical content is already on disk under this name.
+    if tokio::fs::metadata(final_path).await.is_ok() {
+        return Ok(final_path.to_path_buf());
+    }
+    let tmp = dir.join(format!(".upload-{}.tmp", uuid::Uuid::new_v4()));
+    tokio::fs::write(&tmp, bytes).await?;
+    // Atomic on the same filesystem; overwriting identical content on a
+    // concurrent-upload race is harmless (same bytes).
+    tokio::fs::rename(&tmp, final_path).await?;
+    Ok(final_path.to_path_buf())
+}
+
+/// Read the bytes at `final_path`, or `None` when the file is missing (the
+/// caller maps that to `404`).
+pub(crate) async fn read_content(final_path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    match tokio::fs::read(final_path).await {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove `final_path` (idempotent — a missing file is success).
+pub(crate) async fn remove_content(final_path: &Path) -> std::io::Result<()> {
+    match tokio::fs::remove_file(final_path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove stale `.upload-<uuid>.tmp` files left by a crash between the write and
+/// the rename in [`store_content_addressed`]. Best-effort; a missing dir is a
+/// no-op. Swept once at startup for each content store.
+pub(crate) async fn sweep_tmp_dir(dir: &Path) -> std::io::Result<()> {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".upload-") && name.ends_with(".tmp") {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+    Ok(())
+}
+
 /// The content-addressed file store over a single directory.
 #[derive(Clone)]
 pub(crate) struct AssetStore {
@@ -249,28 +317,17 @@ impl AssetStore {
 
     /// Write `bytes` content-addressed (unique tmp file + atomic rename;
     /// idempotent when identical bytes already exist). Returns the final path.
+    /// Delegates to the shared [`store_content_addressed`] primitive.
     pub(crate) async fn store(
         &self,
         sha256: &str,
         ext: &str,
         bytes: &[u8],
     ) -> std::io::Result<PathBuf> {
-        self.ensure_dir().await?;
         let final_path = self.path_for(sha256, ext).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid asset name")
         })?;
-        // Dedup: identical content is already on disk under this name.
-        if tokio::fs::metadata(&final_path).await.is_ok() {
-            return Ok(final_path);
-        }
-        let tmp = self
-            .dir
-            .join(format!(".upload-{}.tmp", uuid::Uuid::new_v4()));
-        tokio::fs::write(&tmp, bytes).await?;
-        // Atomic on the same filesystem; overwriting identical content on a
-        // concurrent-upload race is harmless (same bytes).
-        tokio::fs::rename(&tmp, &final_path).await?;
-        Ok(final_path)
+        store_content_addressed(&self.dir, &final_path, bytes).await
     }
 
     /// Read the stored bytes, or `None` when the row's file is missing / the
@@ -279,11 +336,7 @@ impl AssetStore {
         let Some(path) = self.path_for(sha256, ext) else {
             return Ok(None);
         };
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        }
+        read_content(&path).await
     }
 
     /// Remove the stored file (idempotent — a missing file is success).
@@ -291,11 +344,7 @@ impl AssetStore {
         let Some(path) = self.path_for(sha256, ext) else {
             return Ok(());
         };
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        }
+        remove_content(&path).await
     }
 
     /// Remove stale `.upload-<uuid>.tmp` files left by a crash between the write
@@ -303,21 +352,7 @@ impl AssetStore {
     /// `path_for` only accepts a bare sha256 + whitelisted ext) but would
     /// otherwise accumulate disk; swept once at startup.
     pub(crate) async fn sweep_tmp(&self) -> std::io::Result<()> {
-        let mut entries = match tokio::fs::read_dir(&self.dir).await {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e),
-        };
-        while let Some(entry) = entries.next_entry().await? {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with(".upload-") && name.ends_with(".tmp") {
-                // Best-effort: a concurrent upload's rename may already have
-                // moved it, or a permission quirk — never fail startup over it.
-                let _ = tokio::fs::remove_file(entry.path()).await;
-            }
-        }
-        Ok(())
+        sweep_tmp_dir(&self.dir).await
     }
 }
 

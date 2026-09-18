@@ -176,3 +176,15 @@ body.stream {
 .stream-crossfade__layer--leaving {
     opacity: 0;
 }
+
+/* #778: hide text elements until uploaded web fonts have loaded, so a scene
+ * take never flashes a fallback font before the real face arrives. The output
+ * page sets `data-fonts-ready="false"` on the canvas until `document.fonts`
+ * settles (bounded 2 s; see components/stream/fonts.rs). Image/color elements
+ * are unaffected. `font-display: block` in /stream/fonts.css is the native
+ * belt-and-suspenders guard. */
+.stream-canvas[data-fonts-ready="false"] .stream-element--countdown,
+.stream-canvas[data-fonts-ready="false"] .stream-element--lyrics,
+.stream-canvas[data-fonts-ready="false"] .stream-element--verse {
+    visibility: hidden;
+}

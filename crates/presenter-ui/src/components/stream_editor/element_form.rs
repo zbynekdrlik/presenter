@@ -93,7 +93,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                                 .collect_view()}
                         </select>
                     </label>
-                    <TextStyleForm draft=draft ts_slot=TsSlot::CountdownStyle label="Štýl" role="countdown" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::CountdownStyle label="Štýl" role="countdown" fonts=ctx.fonts />
                 </div>
             </Show>
             <Show when=move || kind() == "lyrics">
@@ -126,8 +126,8 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         />
                         <span>"Zobraziť preklad"</span>
                     </label>
-                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsMain label="Hlavný text" role="main" />
-                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsTranslation label="Preklad" role="translation" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsMain label="Hlavný text" role="main" fonts=ctx.fonts />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::LyricsTranslation label="Preklad" role="translation" fonts=ctx.fonts />
                 </div>
             </Show>
             <Show when=move || kind() == "verse">
@@ -146,9 +146,9 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         />
                         <span>"Zobraziť druhý jazyk"</span>
                     </label>
-                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseText label="Text verša" role="text" />
-                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseSecondary label="Druhý jazyk" role="secondary" />
-                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseReference label="Odkaz" role="reference" />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseText label="Text verša" role="text" fonts=ctx.fonts />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseSecondary label="Druhý jazyk" role="secondary" fonts=ctx.fonts />
+                    <TextStyleForm draft=draft ts_slot=TsSlot::VerseReference label="Odkaz" role="reference" fonts=ctx.fonts />
                 </div>
             </Show>
 

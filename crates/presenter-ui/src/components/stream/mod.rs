@@ -12,6 +12,7 @@ pub mod element_countdown;
 pub mod element_image;
 pub mod element_lyrics;
 pub mod element_verse;
+pub mod fonts;
 pub mod scene_render;
 pub mod style;
 pub mod transition;

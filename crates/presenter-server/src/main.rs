@@ -71,6 +71,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(?err, "failed to ensure stream-assets directory on startup");
     }
 
+    // #778: ensure the uploaded-web-font directory (a `fonts/` subdir of the
+    // asset dir) exists. Non-fatal for the same reason as the asset dir above —
+    // the upload handler also creates it on demand.
+    if let Err(err) = state.ensure_stream_fonts_dir().await {
+        tracing::warn!(?err, "failed to ensure stream-fonts directory on startup");
+    }
+
     let app = build_router(state.clone());
 
     let listener = TcpListener::bind(addr)

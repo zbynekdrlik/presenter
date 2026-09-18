@@ -67,9 +67,9 @@ pub use stage_display::{
 };
 pub use stream::{
     validate_props, validate_scene_name, validate_slug, ContentTransition, Frame, ImageFit,
-    SceneKind, Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamOutputDef,
-    StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
-    TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
+    SceneKind, Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamFont,
+    StreamOutputDef, StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError,
+    TextAlign, TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
     STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
     STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX, STREAM_TRANSITION_MAX_MS,
 };
