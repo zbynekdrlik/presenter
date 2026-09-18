@@ -169,6 +169,13 @@ mod tests {
     async fn up_is_idempotent_and_preserves_rows() {
         let db = Database::connect("sqlite::memory:").await.expect("connect");
         let manager = SchemaManager::new(&db);
+        // The insert below references `stream_outputs` (FK, enforced by SQLite on
+        // this connection) — create the parent tables first; that migration also
+        // seeds the default output with id 1.
+        crate::m20260820_000001_create_stream_tables::Migration
+            .up(&manager)
+            .await
+            .expect("stream tables up");
         Migration.up(&manager).await.expect("first up");
 
         db.execute(Statement::from_string(
