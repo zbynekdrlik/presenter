@@ -12,20 +12,25 @@
 //! request DTOs below are the write-side payloads (camelCase, matching the
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 
+pub mod canvas_overlay;
 pub mod editor_assets;
 pub mod editor_panel;
 pub mod editor_preview;
 pub mod editor_scenes;
 pub mod element_form;
+pub mod frame_math;
+pub mod number_field;
 pub mod props_access;
 pub mod text_style_form;
 
 use leptos::prelude::*;
 use presenter_core::{
-    SceneKind, StreamElementDef, StreamElementProps, StreamOutputDef, StreamOutputSummary,
+    Frame, SceneKind, StreamElementDef, StreamElementProps, StreamOutputDef, StreamOutputSummary,
     StreamSceneDef, StreamShowState,
 };
 use serde::Serialize;
+
+use self::props_access::with_frame_mut;
 
 /// The single default output authored by this v1 editor (seeded by the
 /// migration + `AppState::in_memory()`; N nameable outputs are a later PR).
@@ -114,6 +119,15 @@ pub struct StreamEditorCtx {
     /// Inline validation error for the property form — the server's 422 message
     /// (#714). Empty = no error.
     pub prop_error: RwSignal<String>,
+    /// The SINGLE working copy of the selected element's props (#777). Both the
+    /// property form and the canvas overlay read/write it, and the preview push
+    /// mirrors it into the output iframe so the preview equals the real output.
+    /// Kept as a bare props signal (not `Option`) so the property sub-forms'
+    /// `RwSignal<StreamElementProps>` prop type stays unchanged.
+    pub draft: RwSignal<StreamElementProps>,
+    /// Which element `draft` currently holds. `None` ⇒ no element selected: the
+    /// canvas draws no handles and the preview override is cleared.
+    pub draft_element_id: RwSignal<Option<i64>>,
 }
 
 impl StreamEditorCtx {
@@ -306,6 +320,7 @@ impl StreamEditorCtx {
     pub fn select_scene(self, scene_id: i64) {
         self.selected_scene.set(Some(scene_id));
         self.selected_element.set(None);
+        self.draft_element_id.set(None);
         self.prop_error.set(String::new());
     }
 
@@ -313,13 +328,84 @@ impl StreamEditorCtx {
     pub fn close_panel(self) {
         self.selected_scene.set(None);
         self.selected_element.set(None);
+        self.draft_element_id.set(None);
         self.prop_error.set(String::new());
     }
 
     /// Open an element in the property form; clears any prior inline error.
+    /// Switching away from an element with UNSAVED edits asks first (the draft is
+    /// discarded on confirm, per the design's dirty guard).
     pub fn select_element(self, element_id: i64) {
+        if let Some(current) = self.draft_element_id.get_untracked() {
+            if current != element_id && self.draft_is_dirty() {
+                let keep = crate::utils::window::window()
+                    .confirm_with_message("Zahodiť neuložené zmeny prvku?")
+                    .unwrap_or(true);
+                if !keep {
+                    return;
+                }
+            }
+        }
         self.selected_element.set(Some(element_id));
         self.prop_error.set(String::new());
+    }
+
+    /// Seed the shared draft from an element's stored props (called by the form's
+    /// selection Effect). Sets both the working copy and its element id.
+    pub fn seed_draft(self, element_id: i64, props: StreamElementProps) {
+        self.draft.set(props);
+        self.draft_element_id.set(Some(element_id));
+    }
+
+    /// Overwrite the draft's `Frame` (used by the canvas overlay + numeric fields).
+    pub fn set_draft_frame(self, frame: Frame) {
+        self.draft.update(|p| with_frame_mut(p, |fr| *fr = frame));
+    }
+
+    /// True when the draft differs from the stored props of its element — the
+    /// unsaved-changes signal (switch guard). UNTRACKED (called from handlers).
+    pub fn draft_is_dirty(self) -> bool {
+        self.draft_dirty_impl(false)
+    }
+
+    /// Reactive sibling of [`Self::draft_is_dirty`] for the Save button's
+    /// unsaved indicator (TRACKS `draft` / `draft_element_id` / `def`).
+    pub fn draft_is_dirty_reactive(self) -> bool {
+        self.draft_dirty_impl(true)
+    }
+
+    fn draft_dirty_impl(self, tracked: bool) -> bool {
+        let id = if tracked {
+            self.draft_element_id.get()
+        } else {
+            self.draft_element_id.get_untracked()
+        };
+        let Some(id) = id else {
+            return false;
+        };
+        let def = if tracked {
+            self.def.get()
+        } else {
+            self.def.get_untracked()
+        };
+        let Some(def) = def else {
+            return false;
+        };
+        let stored = def
+            .scenes
+            .iter()
+            .flat_map(|s| &s.elements)
+            .find(|e| e.id == id)
+            .map(|e| e.props.clone());
+        let draft = if tracked {
+            self.draft.get()
+        } else {
+            self.draft.get_untracked()
+        };
+        match stored {
+            Some(s) => s != draft,
+            None => false,
+        }
     }
 
     /// Create an element on a scene with the given default props, then refetch
@@ -356,6 +442,7 @@ impl StreamEditorCtx {
                 Ok(()) => {
                     if self.selected_element.get_untracked() == Some(element_id) {
                         self.selected_element.set(None);
+                        self.draft_element_id.set(None);
                     }
                     self.reload_def().await;
                     self.show_toast("Prvok zmazaný.", "success");

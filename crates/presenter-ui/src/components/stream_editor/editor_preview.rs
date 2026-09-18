@@ -1,23 +1,27 @@
-//! Live preview iframe for the selected scene (#715). Embeds the REAL output
-//! page (`/stream/{slug}?preview=1&scene=<id>`, #709's contract) in a 16:9
-//! checkerboard box so the operator sees exactly what OBS will render, WITH the
-//! transparency visible. `preview=1` excludes the connection from the stage/
-//! output counts (handled page-side, #709). A "live" toggle drops the forced
-//! `scene` param to watch the real (un-forced) output instead.
+//! Live preview iframe + interaction overlay for the selected scene (#715, #777).
 //!
-//! The output page is a PARALLEL lane (not on this tree): this component only
-//! builds the URL. The "iframe actually renders the forced scene" behavior is
-//! exercised by the E2E in integrated CI, not in this worktree.
+//! Embeds the REAL output page (`/stream/{slug}?preview=1&scene=<id>`, #709) in a
+//! 16:9 checkerboard box, so the operator sees exactly what OBS renders WITH the
+//! transparency visible. #777 makes the preview LIVE: on every draft change the
+//! editor `postMessage`s the unsaved element props into the iframe (same origin),
+//! and the output page (preview-only) renders that override — so the preview
+//! equals the output by construction, no save round trip. A [`CanvasOverlay`]
+//! sits on top for drag/resize; the iframe is `pointer-events:none` while a scene
+//! is being edited. A "live" toggle drops the forced `scene` param AND the
+//! overlay to watch the real (un-forced) output.
 
 use leptos::prelude::*;
 
+use super::canvas_overlay::CanvasOverlay;
 use super::{StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
+use crate::components::stream::draft_preview::serialize_message;
 
 /// The 16:9 preview of the selected scene (or the live output when toggled).
 #[component]
 pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
-    // false = forced selected scene; true = live (un-forced) output.
+    // false = forced selected scene (overlay editing); true = live output.
     let live = RwSignal::new(false);
+    let iframe_ref = NodeRef::<leptos::html::Iframe>::new();
 
     let src = move || {
         let base = format!("/stream/{DEFAULT_OUTPUT_SLUG}?preview=1");
@@ -30,6 +34,25 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
             }
         }
     };
+
+    // The overlay is active while editing a scene (not in live mode); the iframe
+    // then ignores pointer events so the overlay receives them.
+    let overlay_active = move || !live.get() && ctx.selected_scene.get().is_some();
+    let iframe_style = move || {
+        if overlay_active() {
+            "pointer-events:none;"
+        } else {
+            ""
+        }
+    };
+
+    // Mirror the shared draft into the output iframe on every change (live
+    // preview). `None` element ⇒ a clear message.
+    Effect::new(move |_| {
+        let id = ctx.draft_element_id.get();
+        let props = id.and(Some(ctx.draft.get()));
+        push_draft(iframe_ref, serialize_message(id, props));
+    });
 
     view! {
         <section class="stream-editor__preview" data-role="stream-preview">
@@ -49,10 +72,43 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
                 <iframe
                     class="stream-editor__preview-frame"
                     data-role="stream-preview-frame"
+                    node_ref=iframe_ref
                     src=src
+                    style=iframe_style
                     title="Náhľad stream scény"
+                    on:load=move |_| {
+                        // Re-push once the iframe (re)loads — its listener is fresh.
+                        let id = ctx.draft_element_id.get_untracked();
+                        let props = id.and(Some(ctx.draft.get_untracked()));
+                        push_draft(iframe_ref, serialize_message(id, props));
+                    }
                 ></iframe>
+                <Show when=overlay_active>
+                    <CanvasOverlay ctx=ctx />
+                </Show>
             </div>
         </section>
     }
 }
+
+/// Post a serialized draft message into the preview iframe's `contentWindow`
+/// (same-origin). No-op on the host (no browser).
+#[cfg(target_arch = "wasm32")]
+fn push_draft(iframe_ref: NodeRef<leptos::html::Iframe>, json: String) {
+    use leptos::wasm_bindgen::JsValue;
+
+    let Some(iframe) = iframe_ref.get_untracked() else {
+        return;
+    };
+    let Some(win) = iframe.content_window() else {
+        return;
+    };
+    let origin = leptos::web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_else(|| "*".to_string());
+    let _ = win.post_message(&JsValue::from_str(&json), &origin);
+}
+
+/// Host stub (see the wasm version).
+#[cfg(not(target_arch = "wasm32"))]
+fn push_draft(_iframe_ref: NodeRef<leptos::html::Iframe>, _json: String) {}
