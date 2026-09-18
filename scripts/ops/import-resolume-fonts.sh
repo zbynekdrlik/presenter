@@ -39,7 +39,10 @@ for arg in "$@"; do
 done
 [ -n "$BASE_URL" ] || usage
 
-REMOTE="newlevel@resolume.lan"
+# Host is overridable (RESOLUME_HOST) so the reachability guard below can be
+# exercised against a bogus host in a test; defaults to the church's machine.
+RESOLUME_HOST="${RESOLUME_HOST:-resolume.lan}"
+REMOTE="newlevel@${RESOLUME_HOST}"
 SECRET="${RESOLUME_SSH_SECRET:-$HOME/.secrets/resolume-ssh}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 META_READER="$SCRIPT_DIR/read-font-metadata.py"
@@ -60,6 +63,17 @@ SSH=(sshpass -f "$SECRET" ssh -o ConnectTimeout=20 -o StrictHostKeyChecking=acce
 
 echo "==> Resolume font import  (target: $BASE_URL$([ "$DRY_RUN" = 1 ] && echo '  [DRY RUN]'))"
 
+# --- Reachability guard (#778) -----------------------------------------------
+# A silent SSH timeout used to yield an empty pull that "succeeded" with 0
+# uploads (exit 0). Probe the host FIRST and fail loudly if it is unreachable.
+# `|| true` here is deliberate: it stops `set -e` from killing us before we can
+# print the friendly error; stderr is muted only because we emit a clearer line.
+echo "==> Checking SSH reachability of $REMOTE ..."
+if [ "$("${SSH[@]}" "echo OK" 2>/dev/null || true)" != "OK" ]; then
+    echo "ERROR: cannot reach $REMOTE over SSH" >&2
+    exit 1
+fi
+
 # --- Remote font source dirs (system + per-user when present) ----------------
 REMOTE_DIRS=("C:/Windows/Fonts")
 if "${SSH[@]}" 'if exist "%LOCALAPPDATA%\Microsoft\Windows\Fonts\" (echo YES)' 2>/dev/null | grep -q YES; then
@@ -77,9 +91,14 @@ for d in "${REMOTE_DIRS[@]}"; do
 done
 
 # --- Pull all non-.fon files in ONE tar stream per dir (efficient) -----------
+# stderr of ssh/tar is kept VISIBLE (no 2>/dev/null) so a transport/tar failure
+# is diagnosable. `|| true` is kept ONLY because Windows tar exits non-zero on
+# benign warnings (read-only font attributes, CRLF) yet still streams the files;
+# the real gate is the zero-candidates check further down, which turns an empty
+# pull (unreachable/empty dir) into a hard error rather than a false success.
 echo "==> Pulling fonts from ${REMOTE_DIRS[*]} ..."
 for d in "${REMOTE_DIRS[@]}"; do
-    "${SSH[@]}" "tar -cf - --exclude=*.fon -C \"$d\" ." 2>/dev/null | tar -xf - -C "$TMP" 2>/dev/null || true
+    "${SSH[@]}" "tar -cf - --exclude=*.fon -C \"$d\" ." | tar -xf - -C "$TMP" || true
 done
 
 # --- Known stock Windows 11 filenames (belt-and-suspenders on top of the -----
@@ -154,6 +173,15 @@ echo "    distinct families to upload  : ${#FAMILIES[@]}"
 if [ "${#FAMILIES[@]}" -gt 0 ]; then
     echo "    families:"
     printf '      - %s\n' "${FAMILIES[@]}"
+fi
+
+# --- Empty-pull guard (#778) -------------------------------------------------
+# Zero ttf/otf candidates means the pull produced nothing — an unreachable host
+# (past the probe race) or an empty remote listing. Never report a "0 uploaded"
+# success in that case; fail so the caller knows the import did not happen.
+if [ "$candidates" -eq 0 ]; then
+    echo "ERROR: remote pull produced no font files (host unreachable or empty listing)" >&2
+    exit 1
 fi
 
 if [ "$DRY_RUN" = 1 ]; then
