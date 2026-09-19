@@ -14,7 +14,12 @@
  *
  * Contract-shaped REST helpers mirror stream-output-content.spec.ts.
  */
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
@@ -30,7 +35,9 @@ let baseURL: string;
 const SLUG = "stream";
 const FONT = "Arial"; // web-safe, avoids a missing-woff2 404 in the zero-console gate.
 
-function textStyle(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function textStyle(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     fontFamily: FONT,
     sizePct: 6,
@@ -69,7 +76,11 @@ test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
-  serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
+  serverHandle = await startTestServer(
+    config.port,
+    config.dbUrl,
+    config.oscPort,
+  );
 });
 
 test.afterAll(async () => {
@@ -83,9 +94,12 @@ async function createScene(
   name: string,
   kind: "base" | "overlay",
 ): Promise<number> {
-  const resp = await request.post(`${baseURL}/stream/api/outputs/${SLUG}/scenes`, {
-    data: { name, kind },
-  });
+  const resp = await request.post(
+    `${baseURL}/stream/api/outputs/${SLUG}/scenes`,
+    {
+      data: { name, kind },
+    },
+  );
   expect(resp.ok(), `create scene ${name} -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
 }
@@ -95,9 +109,12 @@ async function addElement(
   sceneId: number,
   props: Record<string, unknown>,
 ): Promise<number> {
-  const resp = await request.post(`${baseURL}/stream/api/scenes/${sceneId}/elements`, {
-    data: props,
-  });
+  const resp = await request.post(
+    `${baseURL}/stream/api/scenes/${sceneId}/elements`,
+    {
+      data: props,
+    },
+  );
   expect(resp.ok(), `add element -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
 }
@@ -107,16 +124,25 @@ async function patchElement(
   elementId: number,
   props: Record<string, unknown>,
 ): Promise<void> {
-  const resp = await request.patch(`${baseURL}/stream/api/elements/${elementId}`, {
-    data: props,
-  });
+  const resp = await request.patch(
+    `${baseURL}/stream/api/elements/${elementId}`,
+    {
+      data: props,
+    },
+  );
   expect(resp.ok(), `patch element -> ${resp.status()}`).toBeTruthy();
 }
 
-async function activateBase(request: APIRequestContext, sceneId: number): Promise<void> {
-  const resp = await request.put(`${baseURL}/stream/api/outputs/${SLUG}/active-scene`, {
-    data: { sceneId },
-  });
+async function activateBase(
+  request: APIRequestContext,
+  sceneId: number,
+): Promise<void> {
+  const resp = await request.put(
+    `${baseURL}/stream/api/outputs/${SLUG}/active-scene`,
+    {
+      data: { sceneId },
+    },
+  );
   expect(resp.ok(), `activate base -> ${resp.status()}`).toBeTruthy();
 }
 
@@ -125,9 +151,12 @@ async function createNameplate(
   primaryText: string,
   secondaryText: string,
 ): Promise<number> {
-  const resp = await request.post(`${baseURL}/stream/api/outputs/${SLUG}/nameplates`, {
-    data: { primaryText, secondaryText },
-  });
+  const resp = await request.post(
+    `${baseURL}/stream/api/outputs/${SLUG}/nameplates`,
+    {
+      data: { primaryText, secondaryText },
+    },
+  );
   expect(resp.ok(), `create nameplate -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()).id as number;
 }
@@ -136,9 +165,12 @@ async function showNameplate(
   request: APIRequestContext,
   body: Record<string, unknown>,
 ): Promise<number> {
-  const resp = await request.put(`${baseURL}/stream/api/outputs/${SLUG}/nameplates/active`, {
-    data: body,
-  });
+  const resp = await request.put(
+    `${baseURL}/stream/api/outputs/${SLUG}/nameplates/active`,
+    {
+      data: body,
+    },
+  );
   return resp.status();
 }
 
@@ -188,20 +220,34 @@ async function triggerSong(
 
 async function gotoStream(page: Page): Promise<void> {
   await page.goto(`${baseURL}/stream/${SLUG}`);
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForSelector('[data-role="stream-canvas"]', { timeout: 10_000 });
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForSelector('[data-role="stream-canvas"]', {
+    timeout: 10_000,
+  });
 }
 
-const plates = (page: Page) => page.locator('[data-role="stream-lower-third-plate"]');
+const plates = (page: Page) =>
+  page.locator('[data-role="stream-lower-third-plate"]');
+// During an A→B swap the outgoing plate is still mounted (class `--leaving`)
+// while the new one animates in, so text assertions target the LIVE plate only.
+const livePlate = (page: Page) =>
+  page.locator(
+    '[data-role="stream-lower-third-plate"]:not(.stream-lower-third__plate--leaving)',
+  );
 const primary = (page: Page) =>
-  page.locator('[data-role="stream-lower-third-primary"]');
+  livePlate(page).locator('[data-role="stream-lower-third-primary"]');
 const secondary = (page: Page) =>
-  page.locator('[data-role="stream-lower-third-secondary"]');
+  livePlate(page).locator('[data-role="stream-lower-third-secondary"]');
 
 // ── Test ──────────────────────────────────────────────────────────────────────
 
 test.describe("Stream lower-third nameplates (#779)", () => {
-  test("show / swap / hide / auto-hide / song, clean console", async ({ page, request }) => {
+  test("show / swap / hide / auto-hide / song, clean console", async ({
+    page,
+    request,
+  }) => {
     const consoleErrors: string[] = [];
     attachConsoleErrorCollector(page, consoleErrors);
 
@@ -212,7 +258,9 @@ test.describe("Stream lower-third nameplates (#779)", () => {
 
     // Transparency preserved (OBS alpha).
     expect(
-      await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+      await page.evaluate(
+        () => getComputedStyle(document.body).backgroundColor,
+      ),
     ).toBe("rgba(0, 0, 0, 0)");
 
     // Idle: no plate on air.
@@ -222,19 +270,29 @@ test.describe("Stream lower-third nameplates (#779)", () => {
     const idB = await createNameplate(request, "Eva Malá", "vedúca chvál");
 
     // ── SHOW A: plate animates in with both texts + a settled identity transform.
-    expect(await showNameplate(request, { source: "person", id: idA })).toBe(200);
+    expect(await showNameplate(request, { source: "person", id: idA })).toBe(
+      200,
+    );
     await expect(plates(page)).toHaveCount(1, { timeout: 5_000 });
     await expect(primary(page)).toHaveText("Ján Novák");
     await expect(secondary(page)).toHaveText("pastor");
     // After the enter animation completes the plate rests at transform: none.
     await expect
-      .poll(async () => plates(page).first().evaluate((el) => getComputedStyle(el).transform), {
-        timeout: 3_000,
-      })
+      .poll(
+        async () =>
+          plates(page)
+            .first()
+            .evaluate((el) => getComputedStyle(el).transform),
+        {
+          timeout: 3_000,
+        },
+      )
       .toBe("none");
 
     // ── SWAP A→B: old fades out, new fades in, settles to a single plate = B.
-    expect(await showNameplate(request, { source: "person", id: idB })).toBe(200);
+    expect(await showNameplate(request, { source: "person", id: idB })).toBe(
+      200,
+    );
     await expect(primary(page)).toHaveText("Eva Malá", { timeout: 5_000 });
     await expect
       .poll(async () => plates(page).count(), { timeout: 3_000 })
@@ -246,7 +304,9 @@ test.describe("Stream lower-third nameplates (#779)", () => {
 
     // ── AUTO-HIDE: patch the element to auto_hide_s=1, show A, node auto-removes.
     await patchElement(request, elementId, lowerThirdProps({ auto_hide_s: 1 }));
-    expect(await showNameplate(request, { source: "person", id: idA })).toBe(200);
+    expect(await showNameplate(request, { source: "person", id: idA })).toBe(
+      200,
+    );
     await expect(plates(page)).toHaveCount(1, { timeout: 5_000 });
     // Server-side auto-hide fires after ~1 s and broadcasts a hide.
     await expect(plates(page)).toHaveCount(0, { timeout: 4_000 });
