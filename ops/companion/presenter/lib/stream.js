@@ -188,6 +188,232 @@ function isSceneActive(value, name) {
   return current === target;
 }
 
+// --------------------------------------------------------------------------- //
+// Lower-third nameplates (issue #779).
+//
+// The server sends a `nameplates` message ({output, plates:[{id,name,role}]}) on
+// connect and on every list change; the plugin keeps that list in module state
+// and derives from it: the show/toggle action DROPDOWN choices (incl. a virtual
+// "Pieseň"/song entry), the DYNAMIC per-plate variable definitions
+// (`nameplate_<id>_name`/`_role`), the boolean feedback `stream_nameplate_active`
+// (lit while a plate is on air, matched against `nameplate_active_id`), and the
+// PRESETS whose button text is the plate's variables. All pure + dependency-free
+// so `lib/stream.test.js` covers them with `node --test`; `index.js` wires them.
+// --------------------------------------------------------------------------- //
+
+// The four nameplate command NAMES (all `stream_`-prefixed, so the server's
+// parse_command delegation routes them to companion/stream.rs).
+const NAMEPLATE_COMMAND_IDS = [
+  "stream_nameplate_show",
+  "stream_nameplate_song",
+  "stream_nameplate_toggle",
+  "stream_nameplate_hide",
+];
+
+// The dropdown value for the virtual song plate (also the `nameplate_active_id`
+// value the server publishes while a song plate is on air).
+const SONG_CHOICE_ID = "song";
+
+// Static (non-per-plate) nameplate variable ids the plugin always defines.
+const NAMEPLATE_STATIC_VARIABLE_IDS = [
+  "nameplate_song_name",
+  "nameplate_song_role",
+  "nameplate_active_name",
+  "nameplate_active_role",
+  "nameplate_active_id",
+];
+
+function isNameplateCommand(commandId) {
+  return NAMEPLATE_COMMAND_IDS.includes(commandId);
+}
+
+function resolveOutput(output) {
+  const trimmed = typeof output === "string" ? output.trim() : "";
+  return trimmed !== "" ? trimmed : DEFAULT_OUTPUT;
+}
+
+/**
+ * Dropdown choices for a nameplate action: one per person plate plus (when
+ * `includeSong`) the virtual song entry. Ids are STRINGS (Companion dropdown
+ * ids). A non-array `plates` yields just the song entry / an empty list.
+ *
+ * @param {unknown} plates Array of `{id, name, role}` from the server.
+ * @param {boolean} includeSong Append the "Pieseň" entry.
+ * @returns {Array<{id: string, label: string}>}
+ */
+function nameplateChoices(plates, includeSong) {
+  const list = (Array.isArray(plates) ? plates : []).map((p) => ({
+    id: String(p.id),
+    label: p.role ? `${p.name} — ${p.role}` : String(p.name),
+  }));
+  if (includeSong) {
+    list.push({ id: SONG_CHOICE_ID, label: "Pieseň (aktuálna)" });
+  }
+  return list;
+}
+
+/**
+ * Companion action option fields for a nameplate command. Show/toggle get a
+ * plate dropdown (incl. song) + an output input; song/hide get only output.
+ *
+ * @param {string} commandId
+ * @param {unknown} plates The current plate list.
+ * @returns {Array<object>}
+ */
+function nameplateActionOptions(commandId, plates) {
+  if (
+    commandId === "stream_nameplate_show" ||
+    commandId === "stream_nameplate_toggle"
+  ) {
+    return [
+      {
+        type: "dropdown",
+        id: "plate",
+        label: "Menovka",
+        default: SONG_CHOICE_ID,
+        choices: nameplateChoices(plates, true),
+        allowCustom: false,
+      },
+      outputOption(),
+    ];
+  }
+  return [outputOption()];
+}
+
+/**
+ * Resolve a nameplate action's options into the wire `{command, payload}` to
+ * send, or `{error}` when a required plate is not chosen. A show/toggle whose
+ * plate is the song entry maps to the song command / a `{song:true}` toggle.
+ * Never throws.
+ *
+ * @param {string} commandId The action id.
+ * @param {object} [options] Companion action options (`plate`, `output`).
+ * @returns {{command: string, payload: object} | {error: string}}
+ */
+function buildNameplateInvocation(commandId, options) {
+  if (!isNameplateCommand(commandId)) {
+    return { error: `not a nameplate command: ${commandId}` };
+  }
+  const opts = options || {};
+  const output = resolveOutput(opts.output);
+
+  if (commandId === "stream_nameplate_song") {
+    return { command: "stream_nameplate_song", payload: { output } };
+  }
+  if (commandId === "stream_nameplate_hide") {
+    return { command: "stream_nameplate_hide", payload: { output } };
+  }
+
+  // show / toggle: read the plate dropdown value.
+  const value = opts.plate;
+  if (value === SONG_CHOICE_ID) {
+    if (commandId === "stream_nameplate_toggle") {
+      return {
+        command: "stream_nameplate_toggle",
+        payload: { song: true, output },
+      };
+    }
+    return { command: "stream_nameplate_song", payload: { output } };
+  }
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { error: `${commandId}: choose a plate` };
+  }
+  return { command: commandId, payload: { id, output } };
+}
+
+/**
+ * True when `target` (a plate id string or `"song"`) is the plate currently on
+ * air, per the server's `nameplate_active_id` variable. Idle (`"-"`/empty) or a
+ * non-string target is never active.
+ *
+ * @param {unknown} activeIdValue The `nameplate_active_id` variable value.
+ * @param {unknown} target The plate id string / `"song"` a button watches.
+ * @returns {boolean}
+ */
+function isNameplateActive(activeIdValue, target) {
+  if (typeof target !== "string" || target.trim() === "") return false;
+  const current = typeof activeIdValue === "string" ? activeIdValue.trim() : "";
+  if (current === "" || current === PLACEHOLDER) return false;
+  return current === target.trim();
+}
+
+/**
+ * The full nameplate variable-definition id list for a plate list: the static
+ * ids plus `nameplate_<id>_name`/`_role` per plate. The plugin unions this with
+ * its base defs so `setVariableDefinitions` + the `applyVariablesMessage`
+ * allowlist accept the per-plate values the server sends.
+ *
+ * @param {unknown} plates The current plate list.
+ * @returns {string[]}
+ */
+function nameplateVariableIds(plates) {
+  const ids = [...NAMEPLATE_STATIC_VARIABLE_IDS];
+  for (const p of Array.isArray(plates) ? plates : []) {
+    ids.push(`nameplate_${p.id}_name`, `nameplate_${p.id}_role`);
+  }
+  return ids;
+}
+
+/**
+ * Preset definitions for the plate list: one button per person plate plus the
+ * song button. Button text is the plate's variables (so renaming a plate in the
+ * editor updates the button); the down action toggles the plate; the active
+ * feedback lights it while on air. Shape = `CompanionButtonPresetDefinition`
+ * (@companion-module/base ^1.13).
+ *
+ * @param {unknown} plates The current plate list.
+ * @returns {Object<string, object>}
+ */
+function nameplatePresets(plates) {
+  const presets = {};
+  const preset = (target, nameVar, roleVar, label) => ({
+    type: "button",
+    category: "Menovky",
+    name: label,
+    style: {
+      text: `$(presenter:${nameVar})\\n$(presenter:${roleVar})`,
+      size: "auto",
+      color: 0xffffff,
+      bgcolor: 0x000000,
+    },
+    steps: [
+      {
+        down: [
+          {
+            actionId: "stream_nameplate_toggle",
+            options: { plate: target, output: DEFAULT_OUTPUT },
+          },
+        ],
+        up: [],
+      },
+    ],
+    feedbacks: [
+      {
+        feedbackId: "stream_nameplate_active",
+        options: { target },
+        style: { bgcolor: 0x00aa00 },
+      },
+    ],
+  });
+
+  presets["nameplate_song"] = preset(
+    SONG_CHOICE_ID,
+    "nameplate_song_name",
+    "nameplate_song_role",
+    "Menovka: Pieseň",
+  );
+  for (const p of Array.isArray(plates) ? plates : []) {
+    presets[`nameplate_${p.id}`] = preset(
+      String(p.id),
+      `nameplate_${p.id}_name`,
+      `nameplate_${p.id}_role`,
+      `Menovka: ${p.name}`,
+    );
+  }
+  return presets;
+}
+
 module.exports = {
   DEFAULT_OUTPUT,
   STREAM_COMMAND_IDS,
@@ -197,4 +423,14 @@ module.exports = {
   parseOverlayList,
   isOverlayActive,
   isSceneActive,
+  // #779 lower-third nameplates.
+  NAMEPLATE_COMMAND_IDS,
+  SONG_CHOICE_ID,
+  isNameplateCommand,
+  nameplateChoices,
+  nameplateActionOptions,
+  buildNameplateInvocation,
+  isNameplateActive,
+  nameplateVariableIds,
+  nameplatePresets,
 };

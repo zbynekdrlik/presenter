@@ -639,3 +639,212 @@ async fn scene_delete_then_gone_from_def() {
         "scene removed from def"
     );
 }
+
+// ---- Lower thirds / nameplates (#779) -------------------------------------
+
+fn lower_third_props() -> Value {
+    json!({
+        "kind": "lower_third",
+        "frame": frame(),
+        "bar_color": "#101828",
+        "bar_opacity": 0.9,
+        "accent_color": "#38bdf8",
+        "accent_width_pct": 1.5,
+        "primary_style": text_style(),
+        "secondary_style": text_style(),
+        "padding_pct": 2.0,
+        "animation": "slide_left",
+        "in_ms": 400,
+        "out_ms": 300,
+        "auto_hide_s": 0
+    })
+}
+
+#[tokio::test]
+async fn lower_third_element_round_trips_through_def() {
+    let app = app_with_output("t-lt-el").await;
+    let (status, scene) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-lt-el/scenes",
+        Some(json!({"name": "Base", "kind": "base"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let scene_id = scene["id"].as_i64().unwrap();
+    let (status, el) = req(
+        &app,
+        Method::POST,
+        &format!("/stream/api/scenes/{scene_id}/elements"),
+        Some(lower_third_props()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "lower_third create: {el:?}");
+    assert_eq!(el["props"]["kind"], json!("lower_third"));
+    assert_eq!(el["props"]["animation"], json!("slide_left"));
+}
+
+#[tokio::test]
+async fn nameplate_list_crud_and_reorder() {
+    let app = app_with_output("t-np").await;
+    let (status, a) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-np/nameplates",
+        Some(json!({"primaryText": "Ján Novák", "secondaryText": "pastor"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create plate: {a:?}");
+    let a_id = a["id"].as_i64().unwrap();
+    assert_eq!(a["primaryText"], json!("Ján Novák"));
+    assert_eq!(a["kind"], json!("person"));
+
+    let (_, b) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-np/nameplates",
+        Some(json!({"primaryText": "Eva Malá"})),
+    )
+    .await;
+    let b_id = b["id"].as_i64().unwrap();
+
+    // Update.
+    let (status, updated) = req(
+        &app,
+        Method::PATCH,
+        &format!("/stream/api/nameplates/{a_id}"),
+        Some(json!({"primaryText": "Ján Nový", "secondaryText": "kazateľ"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["primaryText"], json!("Ján Nový"));
+
+    // Reorder (full set, swapped).
+    let (status, _) = req(
+        &app,
+        Method::PUT,
+        "/stream/api/outputs/t-np/nameplates/order",
+        Some(json!({"ids": [b_id, a_id]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = req(
+        &app,
+        Method::GET,
+        "/stream/api/outputs/t-np/nameplates",
+        None,
+    )
+    .await;
+    let ids: Vec<i64> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![b_id, a_id]);
+
+    // Delete.
+    let (status, _) = req(
+        &app,
+        Method::DELETE,
+        &format!("/stream/api/nameplates/{a_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = req(
+        &app,
+        Method::GET,
+        "/stream/api/outputs/t-np/nameplates",
+        None,
+    )
+    .await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn nameplate_blank_primary_is_422() {
+    let app = app_with_output("t-np-blank").await;
+    let (status, _) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-np-blank/nameplates",
+        Some(json!({"primaryText": "   "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn nameplate_show_person_then_hide() {
+    let app = app_with_output("t-np-show").await;
+    let (_, plate) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-np-show/nameplates",
+        Some(json!({"primaryText": "Ján", "secondaryText": "pastor"})),
+    )
+    .await;
+    let id = plate["id"].as_i64().unwrap();
+
+    // Show.
+    let (status, active) = req(
+        &app,
+        Method::PUT,
+        "/stream/api/outputs/t-np-show/nameplates/active",
+        Some(json!({"source": "person", "id": id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "show person: {active:?}");
+    assert_eq!(active["source"], json!("person"));
+    assert_eq!(active["primary"], json!("Ján"));
+    assert_eq!(active["secondary"], json!("pastor"));
+
+    // Cold read.
+    let (status, cold) = req(
+        &app,
+        Method::GET,
+        "/stream/api/outputs/t-np-show/nameplates/active",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cold["nameplateId"], json!(id));
+
+    // Hide.
+    let (status, hidden) = req(
+        &app,
+        Method::PUT,
+        "/stream/api/outputs/t-np-show/nameplates/active",
+        Some(json!({"source": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hidden, Value::Null);
+}
+
+#[tokio::test]
+async fn nameplate_show_song_with_no_live_song_is_409() {
+    let app = app_with_output("t-np-song").await;
+    let (status, _) = req(
+        &app,
+        Method::PUT,
+        "/stream/api/outputs/t-np-song/nameplates/active",
+        Some(json!({"source": "song"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn nameplate_show_person_without_id_is_422() {
+    let app = app_with_output("t-np-noid").await;
+    let (status, _) = req(
+        &app,
+        Method::PUT,
+        "/stream/api/outputs/t-np-noid/nameplates/active",
+        Some(json!({"source": "person"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

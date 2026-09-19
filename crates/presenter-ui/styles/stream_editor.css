@@ -751,3 +751,89 @@ html[data-stream-editor="true"] {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* Lower-third nameplates ("Menovky") panel (#779). Output-scoped, mounted after
+ * the scenes; reuses the shared __btn / __section-title / __panel-head styles. */
+.stream-editor__nameplates {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+}
+.stream-editor__nameplate-list {
+    list-style: none;
+    margin: 0.75rem 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.stream-editor__nameplate {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    background: #111c30;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    flex-wrap: wrap;
+}
+.stream-editor__nameplate[data-active="true"] {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 1px #22c55e inset;
+}
+.stream-editor__nameplate--song {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    background: #111c30;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+}
+.stream-editor__nameplate--song[data-active="true"] {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 1px #22c55e inset;
+}
+.stream-editor__nameplate-texts {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1 1 auto;
+    min-width: 12rem;
+}
+.stream-editor__nameplate-texts input {
+    background: #0b1220;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    color: #e2e8f0;
+    padding: 0.25rem 0.5rem;
+}
+.stream-editor__nameplate-song-live {
+    color: #94a3b8;
+    font-size: 0.9rem;
+}
+.stream-editor__nameplate-actions {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+}
+.stream-editor__nameplate-add {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+}
+.stream-editor__nameplate-add input {
+    background: #0b1220;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    color: #e2e8f0;
+    padding: 0.4rem 0.6rem;
+    flex: 1 1 10rem;
+    min-width: 8rem;
+}

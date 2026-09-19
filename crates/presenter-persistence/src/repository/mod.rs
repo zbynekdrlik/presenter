@@ -23,6 +23,7 @@ mod stage_state;
 mod stream;
 mod stream_assets;
 mod stream_fonts;
+mod stream_nameplates;
 #[cfg(test)]
 mod stream_tests;
 mod sync;

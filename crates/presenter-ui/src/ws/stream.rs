@@ -21,7 +21,9 @@
 use gloo_net::websocket::{futures::WebSocket, Message};
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
-use presenter_core::{BibleSlideOutput, LiveEvent, StageDisplaySnapshot, TimersOverview};
+use presenter_core::{
+    ActiveNameplate, BibleSlideOutput, LiveEvent, StageDisplaySnapshot, TimersOverview,
+};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -61,6 +63,17 @@ pub struct ConfigChangedMsg {
     pub config_revision: u64,
 }
 
+/// Client mirror of #779's `LiveEvent::StreamNameplate` payload (wire tag
+/// `"stream_nameplate"`): the plate on air for one output (`active: None` = the
+/// plate was hidden / auto-hidden). `active` deserialises straight into the real
+/// [`ActiveNameplate`] DTO (camelCase, matching the event's wire shape).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NameplateMsg {
+    pub output: String,
+    #[serde(default)]
+    pub active: Option<ActiveNameplate>,
+}
+
 /// A `Timers` snapshot stamped with the local receipt time, so the countdown
 /// element can tick smoothly BETWEEN server pushes:
 /// `remaining = seconds_remaining - floor((now_ms - received_at_ms)/1000)`.
@@ -89,6 +102,8 @@ pub struct StreamWsHandle {
     pub timers: ReadSignal<Option<TimersReceipt>>,
     pub stage: ReadSignal<Option<StageDisplaySnapshot>>,
     pub bible: ReadSignal<Option<BibleSlideOutput>>,
+    /// #779: the latest `stream_nameplate` event (which plate is on air).
+    pub nameplate: ReadSignal<Option<NameplateMsg>>,
 }
 
 /// Signal writers threaded into the reconnecting task.
@@ -100,6 +115,7 @@ struct StreamWsSetters {
     timers: WriteSignal<Option<TimersReceipt>>,
     stage: WriteSignal<Option<StageDisplaySnapshot>>,
     bible: WriteSignal<Option<BibleSlideOutput>>,
+    nameplate: WriteSignal<Option<NameplateMsg>>,
 }
 
 /// Open the live socket for the stream output page and keep it reconnected.
@@ -110,6 +126,7 @@ pub fn use_stream_websocket() -> StreamWsHandle {
     let (timers, set_timers) = signal::<Option<TimersReceipt>>(None);
     let (stage, set_stage) = signal::<Option<StageDisplaySnapshot>>(None);
     let (bible, set_bible) = signal::<Option<BibleSlideOutput>>(None);
+    let (nameplate, set_nameplate) = signal::<Option<NameplateMsg>>(None);
 
     let setters = StreamWsSetters {
         state: set_state,
@@ -118,6 +135,7 @@ pub fn use_stream_websocket() -> StreamWsHandle {
         timers: set_timers,
         stage: set_stage,
         bible: set_bible,
+        nameplate: set_nameplate,
     };
 
     let reconnect_delay = Rc::new(RefCell::new(INITIAL_RECONNECT_MS));
@@ -144,6 +162,7 @@ pub fn use_stream_websocket() -> StreamWsHandle {
         timers,
         stage,
         bible,
+        nameplate,
     }
 }
 
@@ -256,6 +275,13 @@ fn handle_text(text: &str, setters: StreamWsSetters, last_hb: &Rc<RefCell<f64>>)
             if let Ok(msg) = serde_json::from_value::<ConfigChangedMsg>(value) {
                 *last_hb.borrow_mut() = now;
                 setters.config_changed.set(Some(msg));
+            }
+        }
+        // #779: which lower-third plate is on air (`active: None` = hidden).
+        Some("stream_nameplate") => {
+            if let Ok(msg) = serde_json::from_value::<NameplateMsg>(value) {
+                *last_hb.borrow_mut() = now;
+                setters.nameplate.set(Some(msg));
             }
         }
         Some("timers") => {

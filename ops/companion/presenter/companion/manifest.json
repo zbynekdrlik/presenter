@@ -3,7 +3,7 @@
   "name": "Presenter Companion WS",
   "shortname": "presenter",
   "description": "Control Presenter via the /companion/ws API",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "license": "MIT",
   "repository": "https://git.newleveltech/presenter",
   "bugs": "https://git.newleveltech/presenter/issues",

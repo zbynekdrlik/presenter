@@ -22,12 +22,13 @@
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::{
-    BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamElementProps, StreamOutputDef,
-    StreamSceneDef, StreamShowState,
+    ActiveNameplate, BibleSlideOutput, SceneKind, StageDisplaySnapshot, StreamElementProps,
+    StreamOutputDef, StreamSceneDef, StreamShowState,
 };
 
 use crate::api;
 use crate::components::stream::draft_preview::{install_preview_listener, StreamDraftOverride};
+use crate::components::stream::nameplate_preview::install_nameplate_preview_listener;
 use crate::components::stream::scene_render::SceneRender;
 use crate::components::stream::StreamContext;
 use crate::ws::stream::{self, StreamWsState, TimersReceipt};
@@ -163,8 +164,15 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
         now_ms: RwSignal::new(js_sys::Date::now()),
         stage: RwSignal::new(None::<StageDisplaySnapshot>),
         bible: RwSignal::new(None::<BibleSlideOutput>),
+        nameplate: RwSignal::new(None::<ActiveNameplate>),
     };
     provide_context(ctx);
+
+    // #779: in preview mode, let the editor's "Prehrať" button drive the plate
+    // via postMessage (no broadcast). A production output installs nothing.
+    if preview {
+        install_nameplate_preview_listener(ctx.nameplate);
+    }
 
     // Tick `now_ms` so the countdown re-derives its remaining time smoothly.
     {
@@ -196,6 +204,11 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 // once, not only after the next trigger — parity with timers.
                 spawn_refetch_stage(ctx.stage);
                 spawn_refetch_bible(ctx.bible);
+                // #779: recover the plate currently on air (parity with the
+                // above) — skipped in preview mode, where the editor drives it.
+                if !preview {
+                    spawn_refetch_nameplate(slug_c.clone(), ctx.nameplate);
+                }
             }
         });
     }
@@ -295,6 +308,25 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
         let ctx_bible = ctx.bible;
         Effect::new(move |_| {
             ctx_bible.set(ws_bible.get());
+        });
+    }
+
+    // #779: feed `stream_nameplate` events (which plate is on air, `active: None`
+    // = hidden) into the plate context, filtered to this output. In preview mode
+    // the editor drives `ctx.nameplate` via postMessage, so the live feed is
+    // ignored (a real broadcast must not fight the operator's Prehrať preview).
+    {
+        let ws_nameplate = ws.nameplate;
+        let ctx_nameplate = ctx.nameplate;
+        let slug_c = slug.clone();
+        Effect::new(move |_| {
+            let Some(msg) = ws_nameplate.get() else {
+                return;
+            };
+            if preview || msg.output != slug_c {
+                return;
+            }
+            ctx_nameplate.set(msg.active);
         });
     }
 
@@ -552,6 +584,16 @@ fn spawn_refetch_bible(bible: RwSignal<Option<BibleSlideOutput>>) {
     leptos::task::spawn_local(async move {
         if let Ok(output) = api::bible::get_active_slide_output().await {
             bible.set(output);
+        }
+    });
+}
+
+/// Cold-load the lower-third plate currently on air (#779) — a reconnecting OBS
+/// source recovers the live plate at once. `None` = nothing on air.
+fn spawn_refetch_nameplate(slug: String, nameplate: RwSignal<Option<ActiveNameplate>>) {
+    leptos::task::spawn_local(async move {
+        if let Ok(active) = api::stream::get_active_nameplate(&slug).await {
+            nameplate.set(active);
         }
     });
 }

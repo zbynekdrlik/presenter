@@ -211,6 +211,24 @@ pub(super) async fn initialise_variable_state(state: &AppState) -> CompanionVari
 
     variables.apply_broadcast_live(state.broadcast_live());
 
+    // #780: seed the stream scene/overlay variables from the CURRENT show state
+    // of the default output, so a freshly (re)connected module immediately
+    // reports the live base/overlays instead of `-` until the first toggle.
+    let stream_vars =
+        super::stream::resolve_current_stream_variables(state, super::stream::DEFAULT_OUTPUT).await;
+    variables.apply_stream_state(stream_vars);
+
+    // #779: seed the lower-third plate list + the on-air plate for the default
+    // output so the first `variables` + `nameplates` send is complete.
+    let plates =
+        super::nameplates::resolve_nameplates(state, super::nameplates::DEFAULT_OUTPUT).await;
+    variables.apply_nameplates(plates);
+    variables.apply_nameplate_active(
+        state
+            .stream_nameplate_active(super::nameplates::DEFAULT_OUTPUT)
+            .await,
+    );
+
     variables
 }
 
@@ -501,6 +519,64 @@ pub(super) async fn send_variables(
     .await
 }
 
+/// Send the current lower-third plate LIST (#779). Sent BEFORE the variables so
+/// the plugin defines the per-plate variables from it before their values arrive.
+pub(super) async fn send_nameplates(
+    sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+    state: &CompanionVariableState,
+) -> Result<(), CompanionSessionError> {
+    send_message(
+        sender,
+        OutgoingMessage::Nameplates {
+            output: super::nameplates::DEFAULT_OUTPUT.to_string(),
+            plates: state.nameplate_plates().to_vec(),
+        },
+    )
+    .await
+}
+
+/// Route ONE live event into the companion variable/message state and send what
+/// changed. Kept out of the select-loop so `serve_companion_socket` stays small.
+///
+/// `StreamState` + `StreamNameplatesChanged` need an async repository read, so
+/// they resolve here (not the sync `variables::apply_live_event`);
+/// `StreamNameplate` carries its resolved texts, so it applies synchronously.
+pub(super) async fn handle_live_event(
+    state: &AppState,
+    sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+    variables: &mut CompanionVariableState,
+    event: crate::live::LiveEvent,
+) -> Result<(), CompanionSessionError> {
+    use crate::live::LiveEvent;
+    if matches!(event, LiveEvent::StreamState { .. }) {
+        if super::stream::apply_stream_state_event(state, variables, &event).await {
+            send_variables(sender, variables).await?;
+        }
+        return Ok(());
+    }
+    if let LiveEvent::StreamNameplate { output, active } = &event {
+        if output == super::nameplates::DEFAULT_OUTPUT
+            && variables.apply_nameplate_active(active.clone())
+        {
+            send_variables(sender, variables).await?;
+        }
+        return Ok(());
+    }
+    if let LiveEvent::StreamNameplatesChanged { output } = &event {
+        if output == super::nameplates::DEFAULT_OUTPUT {
+            let plates = super::nameplates::resolve_nameplates(state, output).await;
+            variables.apply_nameplates(plates);
+            send_nameplates(sender, variables).await?;
+            send_variables(sender, variables).await?;
+        }
+        return Ok(());
+    }
+    if variables.apply_live_event(event) {
+        send_variables(sender, variables).await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn send_message(
     sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
     message: OutgoingMessage,
@@ -551,6 +627,13 @@ pub(super) enum OutgoingMessage {
     },
     Variables {
         values: Vec<CompanionVariable>,
+    },
+    /// #779: the output's lower-third plate LIST — sent on connect and on every
+    /// `StreamNameplatesChanged`. The plugin builds its show/toggle dropdown
+    /// choices, dynamic per-plate variable definitions, and presets from this.
+    Nameplates {
+        output: String,
+        plates: Vec<super::nameplates::NameplatePlate>,
     },
     Error {
         message: String,

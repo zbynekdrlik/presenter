@@ -15,6 +15,7 @@
 pub mod canvas_overlay;
 pub mod editor_assets;
 pub mod editor_fonts;
+pub mod editor_nameplates;
 pub mod editor_panel;
 pub mod editor_preview;
 pub mod editor_scenes;
@@ -27,8 +28,8 @@ pub mod text_style_form;
 
 use leptos::prelude::*;
 use presenter_core::{
-    Frame, SceneKind, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
-    StreamOutputSummary, StreamSceneDef, StreamShowState,
+    ActiveNameplate, Frame, Nameplate, SceneKind, StreamElementDef, StreamElementProps, StreamFont,
+    StreamOutputDef, StreamOutputSummary, StreamSceneDef, StreamShowState,
 };
 use serde::Serialize;
 
@@ -133,6 +134,15 @@ pub struct StreamEditorCtx {
     /// Uploaded web-font faces (#778): the picker's extra families + the upload
     /// panel's list. Loaded on mount and after each upload/delete.
     pub fonts: RwSignal<Vec<StreamFont>>,
+    /// #779: the output's person-plate list (the Menovky panel). Loaded on mount
+    /// and refetched on a `StreamNameplatesChanged` live event.
+    pub nameplates: RwSignal<Vec<Nameplate>>,
+    /// #779: the plate currently on air (drives the on-air highlight). Applied
+    /// directly from `StreamNameplate` events + a cold-load.
+    pub active_nameplate: RwSignal<Option<ActiveNameplate>>,
+    /// #779: the live song title + library (for the "Pieseň" row display + its
+    /// Prehrať preview). Fed by the editor page's WS `Stage` snapshot.
+    pub song_preview: RwSignal<(String, String)>,
 }
 
 impl StreamEditorCtx {

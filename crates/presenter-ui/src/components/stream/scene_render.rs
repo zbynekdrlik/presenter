@@ -33,6 +33,7 @@ use super::draft_preview::{resolve_props, StreamDraftOverride};
 use super::element_color::ElementColor;
 use super::element_countdown::ElementCountdown;
 use super::element_image::ElementImage;
+use super::element_lower_third::ElementLowerThird;
 use super::element_lyrics::ElementLyrics;
 use super::element_verse::ElementVerse;
 
@@ -106,6 +107,39 @@ fn render_element(id: i64, z: i32, props: StreamElementProps) -> AnyView {
             frame,
         } => view! {
             <ElementColor id=id color=color opacity=opacity frame=frame z=z />
+        }
+        .into_any(),
+        StreamElementProps::LowerThird {
+            frame,
+            bar_color,
+            bar_opacity,
+            accent_color,
+            accent_width_pct,
+            primary_style,
+            secondary_style,
+            padding_pct,
+            animation,
+            in_ms,
+            out_ms,
+            // The plate's TEXT + auto-hide are runtime state, not element props:
+            // auto_hide_s is applied server-side, so it is not read here.
+            auto_hide_s: _,
+        } => view! {
+            <ElementLowerThird
+                id=id
+                frame=frame
+                bar_color=bar_color
+                bar_opacity=bar_opacity
+                accent_color=accent_color
+                accent_width_pct=accent_width_pct
+                primary_style=primary_style
+                secondary_style=secondary_style
+                padding_pct=padding_pct
+                animation=animation
+                in_ms=in_ms
+                out_ms=out_ms
+                z=z
+            />
         }
         .into_any(),
     }

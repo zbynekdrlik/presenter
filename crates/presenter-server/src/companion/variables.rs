@@ -17,6 +17,10 @@ pub(super) struct CompanionVariableState {
     pub(super) broadcast_live: bool,
     pub(super) bible_slide: Option<BibleSlideOverride>,
     pub(super) stream: Option<super::stream::StreamVariables>,
+    /// #779: the output's person-plate list (drives per-plate variables).
+    pub(super) nameplates: Vec<super::nameplates::NameplatePlate>,
+    /// #779: the plate currently on air (drives `nameplate_active_*`).
+    pub(super) nameplate_active: Option<presenter_core::ActiveNameplate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +64,14 @@ impl CompanionVariableState {
                 // the WASM output page to refetch its def).
                 false
             }
+            crate::live::LiveEvent::StreamNameplate { .. }
+            | crate::live::LiveEvent::StreamNameplatesChanged { .. } => {
+                // #779: both need an async repository / stage-snapshot read to
+                // rebuild the plate list + variables, so they are handled in the
+                // companion live-loop (`stream::apply_nameplate*_event`), never
+                // this sync path.
+                false
+            }
         }
     }
 
@@ -72,6 +84,62 @@ impl CompanionVariableState {
         } else {
             self.stream = Some(vars);
             true
+        }
+    }
+
+    /// Store the plate list (#779). Returns whether it changed.
+    pub(super) fn apply_nameplates(
+        &mut self,
+        plates: Vec<super::nameplates::NameplatePlate>,
+    ) -> bool {
+        if self.nameplates == plates {
+            false
+        } else {
+            self.nameplates = plates;
+            true
+        }
+    }
+
+    /// Store the on-air plate (#779). Returns whether it changed.
+    pub(super) fn apply_nameplate_active(
+        &mut self,
+        active: Option<presenter_core::ActiveNameplate>,
+    ) -> bool {
+        if self.nameplate_active == active {
+            false
+        } else {
+            self.nameplate_active = active;
+            true
+        }
+    }
+
+    /// The plate list (for the outgoing `nameplates` message + per-plate vars).
+    pub(super) fn nameplate_plates(&self) -> &[super::nameplates::NameplatePlate] {
+        &self.nameplates
+    }
+
+    /// The on-air plate, if any (#779).
+    pub(super) fn nameplate_active(&self) -> Option<&presenter_core::ActiveNameplate> {
+        self.nameplate_active.as_ref()
+    }
+
+    /// The song plate's texts, mirrored from the live stage snapshot: primary =
+    /// song name, secondary = band/library. Uses the SAME `song_name ?? (non-empty)
+    /// presentation_name` fallback the on-air plate resolves with
+    /// (`state/stream_nameplates.rs::resolve_song_texts`) so the Companion button
+    /// label never diverges from the rendered plate. Empty when no worship is on
+    /// stage.
+    pub(super) fn stage_song_texts(&self) -> (String, String) {
+        match &self.stage {
+            Some(stage) => {
+                let primary = if stage.song_name.trim().is_empty() {
+                    stage.presentation_name.clone()
+                } else {
+                    stage.song_name.clone()
+                };
+                (primary, stage.band_name.clone())
+            }
+            None => (String::new(), String::new()),
         }
     }
 
@@ -202,6 +270,7 @@ impl CompanionVariableState {
         write_timer_variables(&mut builder, self.timers.as_ref());
         write_bible_variables(&mut builder, self.bible.as_ref(), self.bible_slide.as_ref());
         super::stream::write_stream_variables(&mut builder, self.stream.as_ref());
+        super::nameplates::write_nameplate_variables(&mut builder, self);
         builder.set(
             "broadcast_live",
             if self.broadcast_live { "true" } else { "false" }.to_string(),

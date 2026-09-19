@@ -39,6 +39,7 @@ pub fn EditorPanel(ctx: StreamEditorCtx) -> impl IntoView {
                 <AddElementButton ctx=ctx kind="countdown" label="+ Odpočet" />
                 <AddElementButton ctx=ctx kind="lyrics" label="+ Text piesne" />
                 <AddElementButton ctx=ctx kind="verse" label="+ Verš" />
+                <AddElementButton ctx=ctx kind="lower_third" label="+ Menovka" />
             </div>
 
             <ul class="stream-editor__element-list" data-role="stream-element-list">
@@ -192,6 +193,7 @@ fn kind_label_sk(kind: &str) -> &'static str {
         "countdown" => "Odpočet",
         "lyrics" => "Text piesne",
         "verse" => "Verš",
+        "lower_third" => "Menovka",
         _ => "Prvok",
     }
 }

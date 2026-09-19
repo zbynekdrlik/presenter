@@ -757,6 +757,45 @@ async fn apply_stream_state_event_resolves_names_and_ignores_other_events() {
     assert!(!apply_stream_state_event(&state, &mut variables, &LiveEvent::BibleCleared).await);
 }
 
+#[tokio::test]
+async fn initial_state_seeds_stream_variables_from_live_show_state() {
+    // #780: after a module (re)connect the stream variables must reflect the
+    // LIVE show state at connect — not `-` until the first toggle. This proves
+    // the connect-time seed path: read the current show state, resolve ids →
+    // names, store it in the initial variable state.
+    use super::stream::resolve_current_stream_variables;
+    let state = AppState::in_memory().await.unwrap();
+    let (base, overlay) = seed_stream(&state, "t780-init").await;
+
+    // Put a base scene + an overlay ON AIR and PERSIST it, as an operator would
+    // before the Companion module connects.
+    state
+        .stream_activate_scene("t780-init", Some(base))
+        .await
+        .unwrap();
+    state
+        .stream_set_overlay("t780-init", overlay, true)
+        .await
+        .unwrap();
+
+    // The connect-time seed reads that persisted show state and resolves names.
+    // Without the fix, connect never read the show state, so these were "-"/"-".
+    let seeded = resolve_current_stream_variables(&state, "t780-init").await;
+    assert_eq!(seeded.scene, "Chvaly");
+    assert_eq!(seeded.overlays, "Verse");
+
+    // And it lands in the outgoing variables the freshly-connected module reads.
+    let mut variables = CompanionVariableState::default();
+    variables.apply_stream_state(seeded);
+    let map: std::collections::HashMap<_, _> = variables
+        .to_variables()
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect();
+    assert_eq!(map.get("stream_scene").unwrap(), "Chvaly");
+    assert_eq!(map.get("stream_overlays").unwrap(), "Verse");
+}
+
 #[test]
 fn stream_variables_default_to_placeholders() {
     let map: std::collections::HashMap<_, _> = CompanionVariableState::default()
@@ -855,4 +894,160 @@ fn bible_slide_event_cleared_by_bible_cleared() {
     assert_eq!(vars.get("bible_text").unwrap(), "");
     assert_eq!(vars.get("bible_reference").unwrap(), "");
     assert_eq!(vars.get("bible_translation_code").unwrap(), "");
+}
+
+// ---- Lower-third nameplates (#779) ----------------------------------------
+
+async fn seed_nameplate(state: &AppState, slug: &str) -> i64 {
+    state
+        .repository()
+        .create_stream_output(slug, "Test")
+        .await
+        .unwrap();
+    state
+        .repository()
+        .create_stream_nameplate(slug, "Ján Novák", "pastor")
+        .await
+        .unwrap()
+        .id
+}
+
+#[test]
+fn parse_command_accepts_nameplate_commands() {
+    let cases: Vec<(&str, Value)> = vec![
+        ("stream_nameplate_show", json!({ "id": 3 })),
+        ("stream_nameplate_show", json!({ "name": "Ján" })),
+        ("stream_nameplate_song", json!({})),
+        ("stream_nameplate_toggle", json!({ "song": true })),
+        ("stream_nameplate_toggle", json!({ "id": 5 })),
+        ("stream_nameplate_hide", json!({})),
+    ];
+    for (command, payload) in &cases {
+        assert!(
+            parse_command(command, payload.clone()).is_ok(),
+            "parse_command({command}) should succeed"
+        );
+    }
+}
+
+#[tokio::test]
+async fn nameplate_show_command_activates_person() {
+    let state = AppState::in_memory().await.unwrap();
+    let id = seed_nameplate(&state, "t779-show").await;
+    expect_ack(
+        &state,
+        "stream_nameplate_show",
+        json!({ "id": id, "output": "t779-show" }),
+    )
+    .await;
+    let active = state.stream_nameplate_active("t779-show").await.unwrap();
+    assert_eq!(active.primary, "Ján Novák");
+    assert_eq!(active.secondary, "pastor");
+}
+
+#[tokio::test]
+async fn nameplate_show_by_name_matches_case_insensitively() {
+    let state = AppState::in_memory().await.unwrap();
+    seed_nameplate(&state, "t779-name").await;
+    expect_ack(
+        &state,
+        "stream_nameplate_show",
+        json!({ "name": "  ján novák  ", "output": "t779-name" }),
+    )
+    .await;
+    assert!(state.stream_nameplate_active("t779-name").await.is_some());
+}
+
+#[tokio::test]
+async fn nameplate_toggle_person_then_hide() {
+    let state = AppState::in_memory().await.unwrap();
+    let id = seed_nameplate(&state, "t779-toggle").await;
+    expect_ack(
+        &state,
+        "stream_nameplate_toggle",
+        json!({ "id": id, "output": "t779-toggle" }),
+    )
+    .await;
+    assert!(state.stream_nameplate_active("t779-toggle").await.is_some());
+    expect_ack(
+        &state,
+        "stream_nameplate_toggle",
+        json!({ "id": id, "output": "t779-toggle" }),
+    )
+    .await;
+    assert!(state.stream_nameplate_active("t779-toggle").await.is_none());
+}
+
+#[tokio::test]
+async fn nameplate_hide_command_clears() {
+    let state = AppState::in_memory().await.unwrap();
+    let id = seed_nameplate(&state, "t779-hide").await;
+    state
+        .stream_nameplate_show_person("t779-hide", id)
+        .await
+        .unwrap();
+    expect_ack(
+        &state,
+        "stream_nameplate_hide",
+        json!({ "output": "t779-hide" }),
+    )
+    .await;
+    assert!(state.stream_nameplate_active("t779-hide").await.is_none());
+}
+
+#[tokio::test]
+async fn nameplate_show_missing_id_and_name_errors() {
+    let state = AppState::in_memory().await.unwrap();
+    seed_nameplate(&state, "t779-noid").await;
+    let msg = expect_error(
+        &state,
+        "stream_nameplate_show",
+        json!({ "output": "t779-noid" }),
+    )
+    .await;
+    assert!(msg.contains("id or name"), "unexpected error: {msg}");
+}
+
+#[test]
+fn nameplate_variables_render_list_song_and_active() {
+    use super::nameplates::NameplatePlate;
+    use presenter_core::{ActiveNameplate, NameplateSource};
+
+    let mut state = CompanionVariableState::default();
+    state.apply_nameplates(vec![
+        NameplatePlate {
+            id: 3,
+            name: "Ján Novák".to_string(),
+            role: "pastor".to_string(),
+        },
+        NameplatePlate {
+            id: 7,
+            name: "Eva Malá".to_string(),
+            role: String::new(),
+        },
+    ]);
+    state.apply_nameplate_active(Some(ActiveNameplate {
+        source: NameplateSource::Person,
+        nameplate_id: Some(3),
+        primary: "Ján Novák".to_string(),
+        secondary: "pastor".to_string(),
+        seq: 1,
+    }));
+
+    let vars: std::collections::HashMap<_, _> = state
+        .to_variables()
+        .into_iter()
+        .map(|v| (v.name, v.value))
+        .collect();
+
+    assert_eq!(vars.get("nameplate_3_name").unwrap(), "Ján Novák");
+    assert_eq!(vars.get("nameplate_3_role").unwrap(), "pastor");
+    assert_eq!(vars.get("nameplate_7_name").unwrap(), "Eva Malá");
+    assert_eq!(vars.get("nameplate_7_role").unwrap(), "");
+    assert_eq!(vars.get("nameplate_active_name").unwrap(), "Ján Novák");
+    assert_eq!(vars.get("nameplate_active_role").unwrap(), "pastor");
+    assert_eq!(vars.get("nameplate_active_id").unwrap(), "3");
+    // Song variables exist (empty with no live worship) + idle active default.
+    assert!(vars.contains_key("nameplate_song_name"));
+    assert!(vars.contains_key("nameplate_song_role"));
 }

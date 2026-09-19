@@ -58,6 +58,7 @@ pub mod startup_mode;
 mod stream;
 pub(crate) mod stream_assets;
 pub(crate) mod stream_fonts;
+pub(crate) mod stream_nameplates;
 pub(crate) mod sync;
 #[cfg(test)]
 mod sync_integration_breaker_tests;
@@ -203,6 +204,10 @@ pub struct AppState {
     /// enabled->disabled transition instead of once per OSC event.
     ableset_disabled_warn_shown: Arc<AtomicBool>,
     stream: stream::StreamManager,
+    /// #779: in-memory "which lower-third plate is on air" per output, plus the
+    /// server-side auto-hide task. NOT persisted — a restart never pops a plate
+    /// back on air. Its own lock; never held across a repository await.
+    nameplates: stream_nameplates::NameplateManager,
     /// Directory holding content-addressed stream-graphics asset files (next to
     /// `presenter.db`; #708). Resolved once at construction from
     /// `PRESENTER_STREAM_ASSETS_DIR` / `PRESENTER_DB_URL` / cwd — see
@@ -377,6 +382,7 @@ impl AppState {
             ableset_ack_lock: Arc::new(tokio::sync::Mutex::new(())),
             ableset_disabled_warn_shown: Arc::new(AtomicBool::new(false)),
             stream: stream::StreamManager::new(),
+            nameplates: stream_nameplates::NameplateManager::new(),
             stream_assets_dir: stream_assets::resolve_dir(),
             startup_mode,
         };
