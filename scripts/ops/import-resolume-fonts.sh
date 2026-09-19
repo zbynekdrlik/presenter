@@ -69,7 +69,8 @@ echo "==> Resolume font import  (target: $BASE_URL$([ "$DRY_RUN" = 1 ] && echo '
 # `|| true` here is deliberate: it stops `set -e` from killing us before we can
 # print the friendly error; stderr is muted only because we emit a clearer line.
 echo "==> Checking SSH reachability of $REMOTE ..."
-if [ "$("${SSH[@]}" "echo OK" 2>/dev/null || true)" != "OK" ]; then
+# Windows OpenSSH (cmd shell) answers with CRLF — strip the \r before comparing.
+if [ "$("${SSH[@]}" "echo OK" 2>/dev/null | tr -d '\r' || true)" != "OK" ]; then
     echo "ERROR: cannot reach $REMOTE over SSH" >&2
     exit 1
 fi
