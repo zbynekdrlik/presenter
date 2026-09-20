@@ -52,6 +52,13 @@ pub const STREAM_FRAME_SIZE_MAX_PCT: f32 = 300.0;
 /// means "stay on air until explicitly hidden"; anything above this is a typo.
 pub const STREAM_NAMEPLATE_AUTO_HIDE_MAX_S: u32 = 120;
 
+/// Letter-spacing bounds for a [`TextStyle`], in `em` (#785). Negative tightens
+/// (kerns in), positive tracks out; the range is wide enough for the timer
+/// overlay's `0.08em` and any reasonable heading, bounded so a typo like `50`
+/// still fails validation.
+pub const STREAM_LETTER_SPACING_MIN_EM: f32 = -0.2;
+pub const STREAM_LETTER_SPACING_MAX_EM: f32 = 1.0;
+
 /// A typed validation failure for a stream slug, scene name, or element props.
 /// Carries enough detail for a 422 body; the persistence layer maps it to
 /// [`crate`]-external `RepositoryError::Invalid` (#705).
@@ -88,6 +95,8 @@ pub enum StreamValidationError {
     WeightOutOfRange { value: u16 },
     #[error("line height {value} out of range (expected 0.5..=3.0)")]
     LineHeightOutOfRange { value: f32 },
+    #[error("letter spacing {value}em out of range (expected -0.2..=1.0)")]
+    LetterSpacingOutOfRange { value: f32 },
     #[error("transition duration {value}ms out of range (expected <=10000)")]
     TransitionTooLong { value: u32 },
     #[error("{field} {value}ms out of range (expected <=10000)")]
@@ -216,7 +225,9 @@ pub struct Shadow {
 
 /// Typographic style for a text element. `size_pct` is a percentage of canvas
 /// height (⇒ CSS `vh`); `color` is `#rrggbb`/`#rrggbbaa`; `weight` is a CSS
-/// font weight `1..=1000`; `line_height` is a unitless multiplier `0.5..=3.0`.
+/// font weight `1..=1000`; `line_height` is a unitless multiplier `0.5..=3.0`;
+/// `letter_spacing_em` (#785) is an optional CSS `letter-spacing` in `em`
+/// (`-0.2..=1.0`; `None` = the browser default, `normal`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextStyle {
@@ -228,6 +239,26 @@ pub struct TextStyle {
     pub line_height: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
+    /// Optional CSS `letter-spacing` in `em` (#785). `None` renders no
+    /// `letter-spacing` (browser default `normal`); a serde default keeps the
+    /// wire back-compatible with pre-#785 stored props.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing_em: Option<f32>,
+}
+
+/// An optional background box drawn BEHIND a countdown's text (#785) — a
+/// semi-transparent card with padding + rounded corners so the timer reads over
+/// a busy stream. `color` is `#rrggbb`/`#rrggbbaa`; `opacity` (0..=1) multiplies
+/// the box's own transparency (independent of the text); `padding_pct` and
+/// `radius_pct` are percentages of the canvas height (⇒ CSS `vh`), so the box
+/// scales with the 16:9 output the same way `size_pct` does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextBox {
+    pub color: String,
+    pub opacity: f32,
+    pub padding_pct: f32,
+    pub radius_pct: f32,
 }
 
 /// How element CONTENT changes are animated (a lyric line change, a new verse,
@@ -266,6 +297,11 @@ pub enum StreamElementProps {
         frame: Frame,
         #[serde(default)]
         content_transition: ContentTransition,
+        /// Optional background box behind the countdown text (#785). `None` = no
+        /// box (the today's-overlay look). A serde default keeps the wire
+        /// back-compatible with pre-#785 stored countdown props.
+        #[serde(default, rename = "box", skip_serializing_if = "Option::is_none")]
+        r#box: Option<TextBox>,
     },
     Lyrics {
         show_main: bool,
@@ -614,11 +650,15 @@ pub fn validate_props(
             style,
             frame,
             content_transition,
+            r#box,
         } => {
             validate_ref("timer", *timer_id)?;
             validate_text_style(style, extra_families)?;
             validate_frame(frame)?;
             validate_transition(content_transition)?;
+            if let Some(text_box) = r#box {
+                validate_text_box(text_box)?;
+            }
         }
         StreamElementProps::Lyrics {
             main_style,
@@ -787,9 +827,28 @@ fn validate_text_style(
             value: style.line_height,
         });
     }
+    if let Some(letter_spacing) = style.letter_spacing_em {
+        if !(STREAM_LETTER_SPACING_MIN_EM..=STREAM_LETTER_SPACING_MAX_EM).contains(&letter_spacing)
+        {
+            return Err(StreamValidationError::LetterSpacingOutOfRange {
+                value: letter_spacing,
+            });
+        }
+    }
     if let Some(shadow) = &style.shadow {
         validate_color(&shadow.color)?;
     }
+    Ok(())
+}
+
+/// Validate a countdown's optional background box (#785): a valid color and the
+/// two percentages within 0..=100 (opacity 0..=1). Reuses the canonical color /
+/// opacity / percent validators — no parallel taxonomy.
+fn validate_text_box(text_box: &TextBox) -> Result<(), StreamValidationError> {
+    validate_color(&text_box.color)?;
+    validate_opacity(text_box.opacity)?;
+    validate_pct("box.padding_pct", text_box.padding_pct)?;
+    validate_pct("box.radius_pct", text_box.radius_pct)?;
     Ok(())
 }
 
@@ -837,6 +896,7 @@ mod tests {
             align: TextAlign::Center,
             line_height: 1.2,
             shadow: None,
+            letter_spacing_em: None,
         }
     }
 
@@ -864,6 +924,7 @@ mod tests {
             style: ok_text_style(),
             frame: ok_frame(),
             content_transition: ContentTransition::Cut,
+            r#box: None,
         }
     }
 
@@ -1255,6 +1316,7 @@ mod tests {
             style,
             frame: ok_frame(),
             content_transition: ContentTransition::Cut,
+            r#box: None,
         };
         assert!(matches!(
             validate_props(&props, &[]),
@@ -1351,11 +1413,159 @@ mod tests {
             content_transition: ContentTransition::Fade {
                 duration_ms: 20_000,
             },
+            r#box: None,
         };
         assert!(matches!(
             validate_props(&props, &[]),
             Err(StreamValidationError::TransitionTooLong { .. })
         ));
+    }
+
+    // ---- #785 letter spacing + countdown background box -------------------
+
+    #[test]
+    fn letter_spacing_in_range_accepted() {
+        for v in [
+            STREAM_LETTER_SPACING_MIN_EM,
+            0.0,
+            0.08,
+            STREAM_LETTER_SPACING_MAX_EM,
+        ] {
+            let mut style = ok_text_style();
+            style.letter_spacing_em = Some(v);
+            assert!(
+                validate_text_style(&style, &[]).is_ok(),
+                "letter spacing {v}em should be accepted"
+            );
+        }
+        // None (the default) is always fine.
+        assert!(validate_text_style(&ok_text_style(), &[]).is_ok());
+    }
+
+    #[test]
+    fn letter_spacing_out_of_range_rejected() {
+        for v in [-0.5, 1.5, 50.0] {
+            let mut style = ok_text_style();
+            style.letter_spacing_em = Some(v);
+            assert!(
+                matches!(
+                    validate_text_style(&style, &[]),
+                    Err(StreamValidationError::LetterSpacingOutOfRange { .. })
+                ),
+                "letter spacing {v}em should be rejected"
+            );
+        }
+    }
+
+    fn ok_text_box() -> TextBox {
+        TextBox {
+            color: "#0f172a".to_string(),
+            opacity: 0.6,
+            padding_pct: 2.0,
+            radius_pct: 1.5,
+        }
+    }
+
+    #[test]
+    fn countdown_box_validates_ok() {
+        let props = StreamElementProps::Countdown {
+            timer_id: 1,
+            style: ok_text_style(),
+            frame: ok_frame(),
+            content_transition: ContentTransition::Cut,
+            r#box: Some(ok_text_box()),
+        };
+        assert!(validate_props(&props, &[]).is_ok());
+    }
+
+    #[test]
+    fn countdown_box_bad_fields_rejected() {
+        // Bad color.
+        let mut b = ok_text_box();
+        b.color = "not-a-color".to_string();
+        let props = StreamElementProps::Countdown {
+            timer_id: 1,
+            style: ok_text_style(),
+            frame: ok_frame(),
+            content_transition: ContentTransition::Cut,
+            r#box: Some(b),
+        };
+        assert!(matches!(
+            validate_props(&props, &[]),
+            Err(StreamValidationError::InvalidColor { .. })
+        ));
+
+        // Opacity out of range.
+        let mut b = ok_text_box();
+        b.opacity = 1.5;
+        let props = StreamElementProps::Countdown {
+            timer_id: 1,
+            style: ok_text_style(),
+            frame: ok_frame(),
+            content_transition: ContentTransition::Cut,
+            r#box: Some(b),
+        };
+        assert!(matches!(
+            validate_props(&props, &[]),
+            Err(StreamValidationError::OpacityOutOfRange { .. })
+        ));
+
+        // Padding percent out of range.
+        let mut b = ok_text_box();
+        b.padding_pct = 150.0;
+        let props = StreamElementProps::Countdown {
+            timer_id: 1,
+            style: ok_text_style(),
+            frame: ok_frame(),
+            content_transition: ContentTransition::Cut,
+            r#box: Some(b),
+        };
+        assert!(matches!(
+            validate_props(&props, &[]),
+            Err(StreamValidationError::PctOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn countdown_box_wire_key_is_box_and_letter_spacing_camel() {
+        let props = StreamElementProps::Countdown {
+            timer_id: 2,
+            style: TextStyle {
+                letter_spacing_em: Some(0.08),
+                ..ok_text_style()
+            },
+            frame: ok_frame(),
+            content_transition: ContentTransition::Cut,
+            r#box: Some(ok_text_box()),
+        };
+        let v = serde_json::to_value(&props).expect("serialize");
+        // The Rust field `r#box` serialises under the wire key "box".
+        assert_eq!(v["box"]["color"], json!("#0f172a"));
+        assert_eq!(v["box"]["paddingPct"], json!(2.0));
+        assert_eq!(v["box"]["radiusPct"], json!(1.5));
+        assert_eq!(v["style"]["letterSpacingEm"], json!(0.08));
+        // Full round trip.
+        let parsed: StreamElementProps = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(parsed, props);
+    }
+
+    #[test]
+    fn countdown_omitting_box_and_letter_spacing_deserialises_to_none() {
+        // A pre-#785 countdown wire payload (no `box`, no `letterSpacingEm`) must
+        // still deserialise, defaulting both to None.
+        let wire = r##"{"kind":"countdown","timer_id":1,"style":{"fontFamily":"Inter","sizePct":8.0,"color":"#ffffff","weight":700,"align":"center","lineHeight":1.2},"frame":{"xPct":10.0,"yPct":20.0,"wPct":50.0,"hPct":30.0},"content_transition":{"mode":"cut"}}"##;
+        let parsed: StreamElementProps = serde_json::from_str(wire).expect("parse");
+        match parsed {
+            StreamElementProps::Countdown { style, r#box, .. } => {
+                assert_eq!(style.letter_spacing_em, None);
+                assert_eq!(r#box, None);
+            }
+            other => panic!("expected countdown, got {other:?}"),
+        }
+        // A serialised default-box/spacing countdown omits both keys entirely.
+        let v = serde_json::to_value(countdown_props()).unwrap();
+        assert!(v.get("box").is_none());
+        assert!(v["style"].get("letterSpacingEm").is_none());
     }
 
     // ---- #752 kind-level transition resolution ----------------------------

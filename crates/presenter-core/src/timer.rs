@@ -419,6 +419,22 @@ pub fn format_countdown(seconds_remaining: i64) -> String {
     format!("{h}h {m}m")
 }
 
+/// Format ELAPSED seconds (a count-up timer, e.g. the preach timer) as `MM:SS`,
+/// or `HH:MM:SS` once past an hour. Negative input clamps to `00:00`. This is the
+/// shared count-up sibling of [`format_countdown`], used by the stream timer
+/// overlay's preach binding (#785) and the camera-crew preach display.
+pub fn format_elapsed(seconds: i64) -> String {
+    let secs = seconds.max(0);
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,5 +794,17 @@ mod tests {
         assert_eq!(format_countdown(-10), "0");
         assert_eq!(format_countdown(-11), "");
         assert_eq!(format_countdown(-100), "");
+    }
+
+    #[test]
+    fn format_elapsed_counts_up_mm_ss_then_hh_mm_ss() {
+        assert_eq!(format_elapsed(0), "00:00");
+        assert_eq!(format_elapsed(5), "00:05");
+        assert_eq!(format_elapsed(65), "01:05");
+        assert_eq!(format_elapsed(3599), "59:59");
+        assert_eq!(format_elapsed(3600), "01:00:00");
+        assert_eq!(format_elapsed(3661), "01:01:01");
+        // Negative clamps to zero.
+        assert_eq!(format_elapsed(-5), "00:00");
     }
 }

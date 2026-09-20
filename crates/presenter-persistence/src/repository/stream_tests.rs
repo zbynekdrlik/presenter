@@ -43,6 +43,7 @@ fn text_style() -> TextStyle {
         align: TextAlign::Center,
         line_height: 1.2,
         shadow: None,
+        letter_spacing_em: None,
     }
 }
 
@@ -61,6 +62,7 @@ fn countdown(timer_id: i64) -> StreamElementProps {
         style: text_style(),
         frame: frame(),
         content_transition: ContentTransition::default(),
+        r#box: None,
     }
 }
 
@@ -709,6 +711,7 @@ fn countdown_with_family(timer_id: i64, family: &str) -> StreamElementProps {
         style,
         frame: frame(),
         content_transition: ContentTransition::default(),
+        r#box: None,
     }
 }
 

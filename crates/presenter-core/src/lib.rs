@@ -70,15 +70,15 @@ pub use stream::{
     ContentTransition, Frame, ImageFit, Nameplate, NameplateKind, NameplateSource, SceneKind,
     Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
     StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
-    TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
+    TextBox, TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
     STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
-    STREAM_NAMEPLATE_AUTO_HIDE_MAX_S, STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX,
-    STREAM_TRANSITION_MAX_MS,
+    STREAM_LETTER_SPACING_MAX_EM, STREAM_LETTER_SPACING_MIN_EM, STREAM_NAMEPLATE_AUTO_HIDE_MAX_S,
+    STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX, STREAM_TRANSITION_MAX_MS,
 };
 pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};
 pub use timer::{
-    format_countdown, CountdownTimer, CountdownTimerSnapshot, PreachTimer, PreachTimerSnapshot,
-    TimerCommand, TimerState, TimersOverview, TimersState,
+    format_countdown, format_elapsed, CountdownTimer, CountdownTimerSnapshot, PreachTimer,
+    PreachTimerSnapshot, TimerCommand, TimerState, TimersOverview, TimersState,
 };
 pub use video_source::{VideoSource, VideoSourceDraft, VideoSourceValidationError};
 
