@@ -49,6 +49,16 @@ async function timerDef(page: Page): Promise<OutputDef> {
   return (await res.json()) as OutputDef;
 }
 
+/** Set + auto-start the countdown ~2 min out so the seeded element has visible
+ *  text — the countdown renders an EMPTY (hidden) span while the timer is idle. */
+async function startCountdown(page: Page): Promise<void> {
+  const target = new Date(Date.now() + 125_000).toISOString();
+  const resp = await page.request.post(new URL("/timers/command", baseURL).toString(), {
+    data: { command: "set_countdown_target", target },
+  });
+  expect(resp.ok(), `start countdown -> ${resp.status()}`).toBeTruthy();
+}
+
 /** Ratio of computed `letter-spacing` to `font-size` on the countdown element. */
 async function letterSpacingRatio(page: Page): Promise<number> {
   const div = page.locator(countdownDiv);
@@ -66,6 +76,7 @@ test("legacy /overlays/timer redirects to /stream/timer and renders the seeded c
 }) => {
   const errors: string[] = [];
   attachConsoleErrorCollector(page, errors);
+  await startCountdown(page);
 
   await page.goto(`${baseURL}/overlays/timer`);
   // The 302 is followed by the browser → we land on the stream output page.
@@ -138,7 +149,8 @@ test("output switcher: design the timer countdown and it reflects on /stream/tim
     })
     .toBe(true);
 
-  // And it renders on the OBS output page.
+  // And it renders on the OBS output page (a running countdown gives it text).
+  await startCountdown(page);
   await page.goto(`${baseURL}/stream/timer`);
   await page.waitForSelector(countdownContent, { timeout: 15_000 });
   const ratio = await letterSpacingRatio(page);

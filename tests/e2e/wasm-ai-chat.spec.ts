@@ -672,6 +672,12 @@ test.describe("AI Chat Give-Up (agent guard #784)", () => {
     const dbUrl = config.dbUrl.replace(/\.db$/, "_giveup.db");
     await refreshDevData(dbUrl);
 
+    // The mock-integrations build binds mock-resolume on a FIXED port (8091),
+    // so two test servers cannot coexist: stop the file-level shared server
+    // first (this is the last describe in the file; nothing else needs it).
+    await stopServer(serverHandle);
+    serverHandle = undefined;
+
     const prev = process.env.PRESENTER_AI_API_URL;
     process.env.PRESENTER_AI_API_URL = `http://127.0.0.1:${mockPort}`;
     try {
