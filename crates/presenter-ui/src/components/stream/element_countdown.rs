@@ -1,21 +1,27 @@
-//! Countdown element for the stream output page (#709).
+//! Countdown element for the stream output page (#709; timer selection + box #785).
 //!
-//! Binds to Presenter's `countdown_to_start` timer (the only countdown in the
-//! timer model — there is no id-addressable registry yet, so `timer_id` is
-//! carried as data but currently forward-looking; see the ticket's
-//! CONTRACT-ASSUMPTIONS). Formats the remaining time with the SHARED
-//! `presenter_core::format_countdown` (the same formatter the stage timer uses)
-//! and ticks smoothly BETWEEN server `Timers` pushes off the page's 250 ms
-//! `now_ms` interval, anchored to the last server value at its receipt time.
+//! Binds to one of Presenter's two timers, chosen by `timer_id` (#785): `1` =
+//! `countdown_to_start` (a count-DOWN to a target), `2` = `preach_timer` (the
+//! count-UP "časomiera kázne"); any other id renders nothing. The chosen value
+//! is formatted with the SHARED core formatters (`format_countdown` for the
+//! count-down, `format_elapsed` for the count-up — the same ones the stage
+//! surfaces use) and ticks smoothly BETWEEN server `Timers` pushes off the
+//! page's 250 ms `now_ms` interval, anchored to the last server value at its
+//! receipt time.
 //!
 //! Visibility (AC "missing/inactive timer ⇒ render nothing"): renders empty when
-//! there is no snapshot, when the countdown is `Idle` (the un-started default
-//! placeholder), or when `format_countdown` returns "" (> 10 s past zero).
+//! there is no snapshot, when the chosen timer is `Idle` (the un-started default
+//! placeholder), when `timer_id` is unknown, or when `format_countdown` returns
+//! "" (> 10 s past zero).
+//!
+//! An optional background box (#785) draws a translucent card behind the text
+//! (`TextBox`) so the timer reads over a busy stream; when absent the text node
+//! is rendered directly (preserving the #709 DOM the E2E asserts on).
 
 use leptos::prelude::*;
-use presenter_core::{format_countdown, Frame, TextStyle, TimerState};
+use presenter_core::{format_countdown, format_elapsed, Frame, TextBox, TextStyle, TimerState};
 
-use super::style::{css_justify, frame_css, text_style_css};
+use super::style::{css_justify, frame_css, text_box_css, text_style_css};
 use super::StreamContext;
 
 /// Build the (static) container style from the element's `Frame` + `TextStyle`.
@@ -34,11 +40,13 @@ fn container_style(frame: &Frame, style: &TextStyle, z: i32) -> String {
 pub fn ElementCountdown(
     /// `stream_elements.id` — for E2E targeting + stable DOM identity.
     id: i64,
-    /// Forward-looking timer selector (see module docs); currently every
-    /// countdown binds to `countdown_to_start`.
+    /// Timer selector (#785): 1 = `countdown_to_start`, 2 = `preach_timer`; any
+    /// other id renders nothing.
     timer_id: i64,
     style: TextStyle,
     frame: Frame,
+    /// Optional background box behind the text (#785). `None` = no box.
+    text_box: Option<TextBox>,
     /// `z_order` mirrored to `z-index`.
     z: i32,
 ) -> impl IntoView {
@@ -52,23 +60,47 @@ pub fn ElementCountdown(
             return String::new();
         };
         let received_at_ms = receipt.received_at_ms;
-        let snap = receipt.overview.countdown_to_start;
-        // Idle = the un-started default placeholder — treat as inactive.
-        if snap.state == TimerState::Idle {
-            return String::new();
-        }
-        // Interpolate the local tick only while RUNNING — a Paused/Completed
-        // countdown holds the server's value (interpolating a paused timer would
-        // drift it downward between server pushes).
-        let remaining = if snap.state == TimerState::Running {
+        let overview = receipt.overview;
+        // Smoothly-interpolated whole seconds elapsed since the server push (only
+        // while a timer is RUNNING — a Paused/Completed timer holds its value).
+        let tick = || {
             let elapsed = ((ctx.now_ms.get() - received_at_ms) / 1000.0).floor();
-            let elapsed = if elapsed < 0.0 { 0 } else { elapsed as i64 };
-            snap.seconds_remaining - elapsed
-        } else {
-            snap.seconds_remaining
+            if elapsed < 0.0 {
+                0
+            } else {
+                elapsed as i64
+            }
         };
-        // `format_countdown` yields "" beyond 10 s past zero (cleared).
-        format_countdown(remaining)
+        match timer_id {
+            1 => {
+                let snap = overview.countdown_to_start;
+                // Idle = the un-started default placeholder — treat as inactive.
+                if snap.state == TimerState::Idle {
+                    return String::new();
+                }
+                let remaining = if snap.state == TimerState::Running {
+                    snap.seconds_remaining - tick()
+                } else {
+                    snap.seconds_remaining
+                };
+                // `format_countdown` yields "" beyond 10 s past zero (cleared).
+                format_countdown(remaining)
+            }
+            2 => {
+                let snap = overview.preach_timer;
+                if snap.state == TimerState::Idle {
+                    return String::new();
+                }
+                let elapsed = if snap.state == TimerState::Running {
+                    snap.seconds_elapsed + tick()
+                } else {
+                    snap.seconds_elapsed
+                };
+                format_elapsed(elapsed)
+            }
+            // Unknown timer id ⇒ render nothing (forward-compatible, per #785).
+            _ => String::new(),
+        }
     });
 
     // A countdown MUST swap digits with NO transition — a hard cut per tick (the
@@ -81,6 +113,28 @@ pub fn ElementCountdown(
     // (base/overlay) transitions are unaffected. `font-variant-numeric:
     // tabular-nums` (in `stream_output.css`) keeps the width from jittering
     // between glyphs.
+    let content = view! {
+        <span data-role="stream-countdown-content">{move || text.get()}</span>
+    };
+
+    // Optional background box (#785): wrap the text in a translucent card. When
+    // absent the span is rendered directly, preserving the #709 DOM. `text_box`
+    // is fixed per element mount (a draft change remounts via `scene_render`'s
+    // per-element `Memo`), so no reactivity is needed here.
+    let body = match text_box {
+        Some(text_box) => view! {
+            <div
+                class="stream-countdown-box"
+                data-role="stream-countdown-box"
+                style=text_box_css(&text_box)
+            >
+                {content}
+            </div>
+        }
+        .into_any(),
+        None => content.into_any(),
+    };
+
     view! {
         <div
             class="stream-element stream-element--countdown"
@@ -89,7 +143,7 @@ pub fn ElementCountdown(
             data-timer-id=timer_id.to_string()
             style=style_attr
         >
-            <span data-role="stream-countdown-content">{move || text.get()}</span>
+            {body}
         </div>
     }
 }
