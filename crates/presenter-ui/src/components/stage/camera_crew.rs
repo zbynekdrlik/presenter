@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 
+use presenter_core::format_elapsed;
+
 use crate::api;
 use crate::components::version_label::VersionLabel;
 use crate::state::stage::StageContext;
@@ -273,18 +275,5 @@ pub fn CameraCrew(
                 <VersionLabel />
             </div>
         </div>
-    }
-}
-
-/// Format elapsed seconds as MM:SS (or HH:MM:SS when ≥ 1 hour).
-fn format_elapsed(seconds: i64) -> String {
-    let secs = seconds.max(0);
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 {
-        format!("{h:02}:{m:02}:{s:02}")
-    } else {
-        format!("{m:02}:{s:02}")
     }
 }

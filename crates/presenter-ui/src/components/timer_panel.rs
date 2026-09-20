@@ -160,7 +160,7 @@ pub fn TimerPanel() -> impl IntoView {
 
     let on_overlay_open = move |_| {
         let window = crate::utils::window::window();
-        let _ = window.open_with_url("/overlays/timer");
+        let _ = window.open_with_url("/stream/timer");
     };
 
     let toast_message = ctx.toast_message;
@@ -170,7 +170,7 @@ pub fn TimerPanel() -> impl IntoView {
             .location()
             .origin()
             .unwrap_or_default();
-        let url = format!("{origin}/overlays/timer");
+        let url = format!("{origin}/stream/timer");
         let copied = copy_to_clipboard(&url);
         if copied {
             toast_variant.set("success".to_string());

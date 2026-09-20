@@ -248,8 +248,8 @@ test.describe("WASM Operator Timer Tests", () => {
     const newPage = await pagePromise;
     await newPage.waitForLoadState();
 
-    // Verify URL contains overlay path
-    expect(newPage.url()).toContain("/overlays/timer");
+    // Verify URL points at the stream-graphics timer output (#785)
+    expect(newPage.url()).toContain("/stream/timer");
 
     await newPage.close();
   });
@@ -318,7 +318,7 @@ test.describe("WASM Operator Timer Tests", () => {
       () => window.__execCommandSpy,
     );
     expect(spy?.command).toBe("copy");
-    expect(spy?.selectedText).toMatch(/\/overlays\/timer$/);
+    expect(spy?.selectedText).toMatch(/\/stream\/timer$/);
   });
 
   test("preach limit input sets and clears limit", async ({
@@ -528,20 +528,24 @@ test.describe("WASM Operator Timer Tests", () => {
       headers: { "Content-Type": "application/json" },
     });
 
-    // Open overlay
-    await page.goto(new URL("/overlays/timer", baseURL).toString());
-    await page.waitForSelector("#timer-value", { timeout: 10_000 });
+    // Open the timer overlay — now the stream-graphics `timer` output (#785).
+    await page.goto(new URL("/stream/timer", baseURL).toString());
+    const countdown = page.locator('[data-role="stream-countdown-content"]');
+    await countdown.waitFor({ timeout: 10_000 });
 
     // Collect displayed values over 5 seconds
     const values: string[] = [];
     for (let i = 0; i < 10; i++) {
       await page.waitForTimeout(500);
-      const text = await page.locator("#timer-value").textContent();
+      const text = await countdown.textContent();
       if (text) values.push(text);
     }
 
-    // Parse values to seconds for monotonicity check
+    // Parse values to seconds for monotonicity check. Handles every
+    // presenter_core::format_countdown shape: "Xh Ym", "MM:SS", or a bare number.
     const toSeconds = (v: string): number => {
+      const hm = v.match(/^(\d+)h (\d+)m$/);
+      if (hm) return Number(hm[1]) * 3600 + Number(hm[2]) * 60;
       const parts = v.split(":").map(Number);
       if (parts.length === 1) return parts[0];
       return parts[0] * 60 + parts[1];

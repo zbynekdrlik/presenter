@@ -108,6 +108,97 @@ async fn outputs_list_includes_seeded_stream() {
         slugs.contains(&"stream"),
         "seed output present, got {slugs:?}"
     );
+    // #785: the timer output is seeded alongside `stream`.
+    assert!(
+        slugs.contains(&"timer"),
+        "timer output seeded, got {slugs:?}"
+    );
+}
+
+#[tokio::test]
+async fn timer_output_seeded_with_active_countdown() {
+    // #785: the seed migration ran via AppState::in_memory()'s Migrator, so the
+    // `timer` output serves an active base scene with the styled countdown.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let (status, def) = req(&app, Method::GET, "/stream/api/outputs/timer/def", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(def["slug"], json!("timer"));
+    let scenes = def["scenes"].as_array().unwrap();
+    assert_eq!(scenes.len(), 1, "one seeded base scene");
+    let base = &scenes[0];
+    assert_eq!(base["kind"], json!("base"));
+    assert_eq!(base["name"], json!("Timer"));
+    // The base scene is the output's active scene.
+    assert_eq!(def["activeSceneId"], base["id"]);
+    // Exactly one countdown element carrying the #785 style fields.
+    let elements = base["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 1, "one seeded countdown element");
+    let props = &elements[0]["props"];
+    assert_eq!(props["kind"], json!("countdown"));
+    assert_eq!(props["timer_id"], json!(1));
+    assert_eq!(props["style"]["letterSpacingEm"], json!(0.08));
+    assert!(
+        props["style"]["shadow"].is_object(),
+        "seeded countdown keeps the overlay shadow"
+    );
+}
+
+#[tokio::test]
+async fn countdown_letter_spacing_and_box_create_paths() {
+    let app = app_with_output("t-ls").await;
+    let (_, base) = req(
+        &app,
+        Method::POST,
+        "/stream/api/outputs/t-ls/scenes",
+        Some(json!({"name": "Base", "kind": "base"})),
+    )
+    .await;
+    let base_id = base["id"].as_i64().unwrap();
+
+    // A valid letter spacing + background box is accepted (200).
+    let good = json!({
+        "kind": "countdown", "timer_id": 1, "frame": frame(),
+        "content_transition": {"mode": "cut"},
+        "style": {
+            "fontFamily": "Inter", "sizePct": 8.0, "color": "#ffffff",
+            "weight": 700, "align": "center", "lineHeight": 1.2, "letterSpacingEm": 0.08
+        },
+        "box": {"color": "#0f172a", "opacity": 0.6, "paddingPct": 2.0, "radiusPct": 1.5}
+    });
+    let (status, _) = req(
+        &app,
+        Method::POST,
+        &format!("/stream/api/scenes/{base_id}/elements"),
+        Some(good),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "valid letter-spacing + box accepted"
+    );
+
+    // Letter spacing out of range → 422 (core validate_props).
+    let bad = json!({
+        "kind": "countdown", "timer_id": 1, "frame": frame(),
+        "content_transition": {"mode": "cut"},
+        "style": {
+            "fontFamily": "Inter", "sizePct": 8.0, "color": "#ffffff",
+            "weight": 700, "align": "center", "lineHeight": 1.2, "letterSpacingEm": 5.0
+        }
+    });
+    let (status, _) = req(
+        &app,
+        Method::POST,
+        &format!("/stream/api/scenes/{base_id}/elements"),
+        Some(bad),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "out-of-range letter spacing rejected"
+    );
 }
 
 #[tokio::test]

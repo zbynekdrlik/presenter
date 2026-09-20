@@ -182,7 +182,7 @@ pub fn build_router(state: AppState) -> Router {
             "/ui/bible",
             get(|| async { axum::response::Redirect::permanent("/ui/operator/bible") }),
         )
-        .route("/overlays/timer", get(ui_routes::timer_overlay))
+        .route("/overlays/timer", get(ui_routes::timer_overlay_redirect))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(
             "/stage/layout",

@@ -312,6 +312,7 @@ mod tests {
             align: TextAlign::Left,
             line_height: 1.1,
             shadow: None,
+            letter_spacing_em: None,
         }
     }
 

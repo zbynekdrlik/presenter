@@ -100,9 +100,41 @@ the ONLY way to change element order. Repo `validate_order_set` is shared by sce
 
 ## Countdown `timer_id`: fixed 2-timer dropdown, conventional ids 1/2
 `TimersOverview` has exactly two timers (`countdown_to_start`, `preach_timer`) and
-NO id registry; per #709's contract `Countdown.timer_id` is forward-looking (the
-output page always binds `countdown_to_start`). The countdown form offers a fixed
-dropdown mapped 1=countdown_to_start / 2=preach_timer (passes `validate_ref > 0`).
+NO id registry. The countdown form offers a fixed dropdown mapped
+1=countdown_to_start / 2=preach_timer (passes `validate_ref > 0`). **Since #785 the
+OUTPUT renderer (`element_countdown`) HONOURS the id** (1 → count-down, 2 →
+count-up via `format_elapsed`); it is no longer forward-looking / always-
+countdown_to_start. Keep the dropdown ids at 1/2.
+
+## Output switcher — design ANY output, `ctx.output_slug` not `DEFAULT_OUTPUT_SLUG` (#785)
+The editor is no longer hard-wired to the single `stream` output. `StreamEditorCtx`
+gains `output_slug: RwSignal<String>` + `outputs: RwSignal<Vec<StreamOutputSummary>>`,
+and a new sibling module `components/stream_editor/output_paths.rs` holds:
+- the SLUG-AWARE output-scoped path builders (`def_path(slug)`, `output_path`,
+  `scenes_path`, `scenes_order_path`, `active_scene_path`, `overlay_path`,
+  `nameplates{,_order,_active}_path`) — moved OUT of `mod.rs` purely to keep it
+  under the file-size gate. The ID-scoped builders (`/stream/api/scenes/{id}`,
+  `/elements/{id}`, `/nameplates/{id}`, `scenes/{id}/elements`) stay in their
+  module — they are not output-scoped.
+- `OutputSelect` (the header `<select data-role="stream-output-select">`, options
+  from `GET /stream/api/outputs`),
+- selected-output persistence: `localStorage` (`stream-editor-output`) + the
+  `?output=` URL param (`initial_output_slug()` reads URL → storage → default on
+  load; `switch_output` writes both via `persist_output_slug` +
+  `mirror_output_to_url`).
+
+Rules that MUST hold when touching the editor:
+- EVERY output-scoped call reads `ctx.output_slug.get_untracked()` (captured at the
+  top of the method, before `spawn_local`) — grep for a bare `DEFAULT_OUTPUT_SLUG`
+  before pushing; it should survive ONLY as the default value + `initial_output_slug`'s
+  fallback.
+- The page's WS-event filters compare `output == ctx.output_slug.get_untracked()`
+  (not the constant), so a switched editor reflects the RIGHT output's live events.
+- `switch_output` resets the per-output selection/draft (`close_panel`) and
+  refetches def + nameplates + active-nameplate for the new slug. Fonts are global
+  (not per-output) — do NOT refetch them on switch.
+- `editor_preview.rs` builds the iframe `src` from `ctx.output_slug`, so the
+  preview follows the switch.
 
 ## Preview iframe + assets (#715) are RUNTIME-coupled to parallel lanes
 `editor_preview.rs` embeds `<iframe src="/stream/{slug}?preview=1&scene=<id>">`

@@ -8,7 +8,7 @@
 //! location moved), so the countdown E2E asserts (font-size in `vh`, text-shadow
 //! present) stay green.
 
-use presenter_core::{Frame, TextAlign, TextStyle};
+use presenter_core::{Frame, TextAlign, TextBox, TextStyle};
 
 /// CSS font stack for a whitelisted family. The three OFL families (Inter,
 /// Bebas Neue, Oswald) gracefully fall back until their `@font-face` woff2
@@ -63,6 +63,9 @@ pub(super) fn text_style_css(style: &TextStyle) -> String {
         css_align(style.align),
         style.line_height,
     );
+    if let Some(letter_spacing) = style.letter_spacing_em {
+        css.push_str(&format!("letter-spacing:{letter_spacing}em;"));
+    }
     if let Some(shadow) = &style.shadow {
         css.push_str(&format!(
             "text-shadow:{}px {}px {}px {};",
@@ -70,4 +73,34 @@ pub(super) fn text_style_css(style: &TextStyle) -> String {
         ));
     }
     css
+}
+
+/// Inline CSS for a countdown's optional background box (#785): a
+/// semi-transparent card with padding + rounded corners, drawn behind the timer
+/// text. The box's transparency lives in the `rgba()` BACKGROUND (its own
+/// `opacity` as the alpha), NOT a CSS `opacity` — a CSS opacity would fade the
+/// TEXT too (same reason `element_lower_third::bar_background` uses rgba).
+/// `padding_pct`/`radius_pct` are percentages of canvas height (⇒ `vh`),
+/// matching how `size_pct` scales.
+pub(super) fn text_box_css(text_box: &TextBox) -> String {
+    let (r, g, b) = hex_rgb(&text_box.color).unwrap_or((0, 0, 0));
+    let a = text_box.opacity.clamp(0.0, 1.0);
+    format!(
+        "background:rgba({r},{g},{b},{a});padding:{}vh;border-radius:{}vh;",
+        text_box.padding_pct, text_box.radius_pct
+    )
+}
+
+/// Parse the RGB bytes from a `#rrggbb` / `#rrggbbaa` colour (alpha ignored — a
+/// separate `opacity` field is the transparency control). `None` for a malformed
+/// value. Shared by `text_box_css` (#785) and `element_lower_third::bar_background`.
+pub(super) fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
 }

@@ -81,6 +81,7 @@ fn text_style(family: &str) -> TextStyle {
         align: TextAlign::Center,
         line_height: 1.2,
         shadow: None,
+        letter_spacing_em: None,
     }
 }
 
@@ -309,6 +310,7 @@ async fn delete_last_in_use_font_is_409_naming_scene() {
                     h_pct: 50.0,
                 },
                 content_transition: presenter_core::stream::ContentTransition::default(),
+                r#box: None,
             },
         )
         .await

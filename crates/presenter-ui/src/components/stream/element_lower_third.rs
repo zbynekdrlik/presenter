@@ -50,22 +50,9 @@ fn animation_token(animation: AnimationPreset) -> &'static str {
 /// instead (never fighting the animation). A malformed colour degrades to a
 /// translucent black.
 fn bar_background(hex: &str, opacity: f32) -> String {
-    let (r, g, b) = parse_rgb(hex).unwrap_or((0, 0, 0));
+    let (r, g, b) = super::style::hex_rgb(hex).unwrap_or((0, 0, 0));
     let a = opacity.clamp(0.0, 1.0);
     format!("rgba({r},{g},{b},{a})")
-}
-
-/// Parse the RGB bytes from a `#rrggbb` or `#rrggbbaa` colour (alpha ignored —
-/// `bar_opacity` is the transparency control).
-fn parse_rgb(hex: &str) -> Option<(u8, u8, u8)> {
-    let hex = hex.strip_prefix('#')?;
-    if hex.len() != 6 && hex.len() != 8 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some((r, g, b))
 }
 
 /// Mark a layer leaving (using `out_ms` for its exit transition) + schedule its

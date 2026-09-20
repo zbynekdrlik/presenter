@@ -10,7 +10,7 @@
 
 use presenter_core::{
     AnimationPreset, ContentTransition, Frame, ImageFit, Shadow, StreamElementProps, TextAlign,
-    TextStyle,
+    TextBox, TextStyle,
 };
 
 /// Which of an element's `TextStyle` fields a `TextStyleForm` edits. Copy so it
@@ -240,6 +240,7 @@ pub fn default_text_style() -> TextStyle {
         align: TextAlign::Center,
         line_height: 1.2,
         shadow: None,
+        letter_spacing_em: None,
     }
 }
 
@@ -263,6 +264,17 @@ pub fn default_shadow() -> Shadow {
     }
 }
 
+/// A default countdown background `TextBox` (#785), used when the "Pozadie"
+/// toggle is first enabled: a dark, semi-transparent rounded card.
+pub fn default_text_box() -> TextBox {
+    TextBox {
+        color: "#0f172a".to_string(),
+        opacity: 0.6,
+        padding_pct: 2.0,
+        radius_pct: 1.5,
+    }
+}
+
 /// Default props for a freshly-added element of `kind`. The image asset_id
 /// starts at 1 (a valid positive ref that passes core validation); the operator
 /// then picks a real uploaded asset via the picker (#715).
@@ -279,6 +291,7 @@ pub fn default_element_props(kind: &str) -> StreamElementProps {
             style: default_text_style(),
             frame: default_frame(),
             content_transition: ContentTransition::default(),
+            r#box: None,
         },
         "lyrics" => StreamElementProps::Lyrics {
             show_main: true,
