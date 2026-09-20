@@ -738,7 +738,7 @@ fn last_slide_validation_rule(conversation: &[ChatMessage], from_len: usize) -> 
         .filter_map(|c| serde_json::from_str::<Value>(c).ok())
         .filter(|v| v.get("error").and_then(Value::as_str) == Some("slide_validation"))
         .filter_map(|v| v.get("rule").and_then(Value::as_str).map(str::to_string))
-        .last()
+        .next_back()
 }
 
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
