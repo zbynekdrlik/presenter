@@ -91,9 +91,10 @@ pub(super) fn text_box_css(text_box: &TextBox) -> String {
     )
 }
 
-/// Parse the RGB bytes from a `#rrggbb` / `#rrggbbaa` colour (alpha ignored — the
-/// box's `opacity` is the transparency control). `None` for a malformed value.
-fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+/// Parse the RGB bytes from a `#rrggbb` / `#rrggbbaa` colour (alpha ignored — a
+/// separate `opacity` field is the transparency control). `None` for a malformed
+/// value. Shared by `text_box_css` (#785) and `element_lower_third::bar_background`.
+pub(super) fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let hex = hex.strip_prefix('#')?;
     if hex.len() != 6 && hex.len() != 8 {
         return None;
