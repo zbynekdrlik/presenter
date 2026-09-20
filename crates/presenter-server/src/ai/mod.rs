@@ -4,6 +4,7 @@
 // re-implementing them. Everything else here stays crate-private; nothing
 // else is needed outside this crate.
 pub mod agent;
+pub(crate) mod agent_guard;
 pub mod bible_validator;
 pub(crate) mod client;
 pub(crate) mod context_budget;
