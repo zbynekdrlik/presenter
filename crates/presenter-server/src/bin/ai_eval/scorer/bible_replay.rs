@@ -93,7 +93,10 @@ fn replay_create_bible_presentation(
 
     // Same order production checks in: compose, then validate each
     // composed slide, returning on the FIRST failure — matching
-    // `create_bible_presentation`'s own loop exactly.
+    // `create_bible_presentation`'s own loop exactly. The scorer measures only
+    // WHICH rule (if any) fails, so the canonical reference `validate_bible_slide`
+    // returns on success (#784, written back into the slide in production) is
+    // intentionally dropped here via `if let Err` — there is no slide to persist.
     let composed = compose_bible_items_into_slides(&items, char_limit);
     for slide in &composed {
         if let Err(err) = validate_bible_slide(&slide.main, &slide.main_reference, char_limit) {
