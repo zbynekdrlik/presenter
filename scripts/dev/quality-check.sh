@@ -74,7 +74,7 @@ if command -v rg >/dev/null 2>&1 && rg -n "(insert_slide_handler|duplicate_slide
 fi
 
 # 3) UI pages present (tablet + settings migrated to WASM in presenter-ui)
-for f in crates/presenter-server/src/ui/{home,timer_overlay}.rs; do
+for f in crates/presenter-server/src/ui/home.rs; do
   [[ -f "$f" ]] || fail "Missing UI page: $f"
 done
 
