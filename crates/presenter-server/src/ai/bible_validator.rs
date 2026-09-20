@@ -316,9 +316,110 @@ mod tests {
     }
 
     #[test]
-    fn reference_format_rejects_lowercase_code() {
-        let err = validate_bible_slide("16. Lebo tak Boh...", "Ján 3:16 (seb)", 320).unwrap_err();
-        assert_eq!(err.rule, ValidationRule::ReferenceFormatRequiresParens);
+    fn reference_format_normalizes_lowercase_code() {
+        // #784: a lowercase translation code is no longer REJECTED — it is
+        // upper-cased and written back. (Was `reference_format_rejects_lowercase_code`;
+        // the design deliberately reverses this — a lowercase code is well-formed,
+        // just non-canonical, so it normalises instead of looping the agent.)
+        assert_eq!(
+            validate_bible_slide("16. Lebo tak Boh...", "Ján 3:16 (seb)", 320).unwrap(),
+            "Ján 3:16 (SEB)"
+        );
+    }
+
+    // -- Rule 1 NORMALISATION (#784) --
+    //
+    // The PP loop (2026-09-20) was the validator REJECTING well-formed refs the
+    // composer (`state/slides/compose.rs::format_verse_range`) and Gemini
+    // actually produce: non-contiguous comma-lists, a lowercase code, a stray
+    // duplicated chapter token. They must now NORMALISE to one canonical form,
+    // not reject — while genuine garbage still fails.
+
+    #[test]
+    fn normalize_accepts_the_pp_multi_range_comma_list() {
+        // The exact string the composer emitted at PP for Daniel 10:2-3, 12-14
+        // (ROH). Already canonical → unchanged.
+        assert_eq!(
+            normalize_reference("Daniel 10:2, 3, 12, 13, 14 (ROH)").unwrap(),
+            "Daniel 10:2, 3, 12, 13, 14 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_upper_cases_a_lowercase_translation_code() {
+        assert_eq!(
+            normalize_reference("Daniel 10:2-3 (roh)").unwrap(),
+            "Daniel 10:2-3 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_merges_a_duplicated_chapter_token() {
+        // "10:12-14 10:12" — a stray re-prefixed SAME chapter, space-separated;
+        // the second chapter prefix drops and the verse joins the list.
+        assert_eq!(
+            normalize_reference("Daniel 10:12-14 10:12 (ROH)").unwrap(),
+            "Daniel 10:12-14, 12 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_collapses_stray_whitespace() {
+        assert_eq!(
+            normalize_reference("  Daniel   10:2 ,  3 ,  12  (ROH)  ").unwrap(),
+            "Daniel 10:2, 3, 12 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_is_idempotent_on_already_canonical_refs() {
+        for r in [
+            "Ján 1:1-51 (MIL)",
+            "Žalm 26:3a (ROH)",
+            "Ján 3:16 (SEB)",
+            "Ján 3:16",
+            "1. Samuelova 17:33-37 (SEB)",
+            "Numeri 13:1, 3, 5 (SEB)",
+        ] {
+            assert_eq!(normalize_reference(r).unwrap(), r, "must be idempotent: {r}");
+        }
+    }
+
+    #[test]
+    fn normalize_rejects_genuine_garbage() {
+        // No book, no chapter:verse, empty, missing colon, code without parens,
+        // a Unicode symbol in the book name — all still rejected.
+        for g in [
+            "Daniel",
+            "10:2",
+            "",
+            "Ján 3 (SEB)",
+            "Židom 4:13 SEB",
+            "Bo×k 1:1 (MIL)",
+            "Ján 3:x (SEB)",
+        ] {
+            let err = normalize_reference(g).unwrap_err();
+            assert_eq!(
+                err.rule,
+                ValidationRule::ReferenceFormatRequiresParens,
+                "must reject: {g:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_writes_back_the_normalised_reference() {
+        // validate_bible_slide now RETURNS the canonical reference so the caller
+        // (create_bible_presentation) writes it back into the slide — Resolume
+        // then gets one canonical form.
+        let normalized = validate_bible_slide("2. text\n3. text", "Daniel 10:2-3 (roh)", 320)
+            .expect("a well-formed multi-range ref must be accepted");
+        assert_eq!(normalized, "Daniel 10:2-3 (ROH)");
+    }
+
+    #[test]
+    fn validate_returns_empty_reference_for_emphasis_slide() {
+        assert_eq!(validate_bible_slide("NOVÁ ZMLUVA", "", 320).unwrap(), "");
     }
 
     #[test]
