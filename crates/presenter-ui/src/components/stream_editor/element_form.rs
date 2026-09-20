@@ -17,7 +17,9 @@ use presenter_core::{
 
 use super::frame_math::MIN_SIZE_PCT;
 use super::number_field::{FrameField, FrameNumberField};
-use super::props_access::{read_transition, split_color, with_transition_mut, TsSlot};
+use super::props_access::{
+    default_text_box, read_transition, split_color, with_transition_mut, TsSlot,
+};
 use super::text_style_form::TextStyleForm;
 use super::StreamEditorCtx;
 
@@ -97,6 +99,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                         </select>
                     </label>
                     <TextStyleForm draft=draft ts_slot=TsSlot::CountdownStyle label="Štýl" role="countdown" fonts=ctx.fonts />
+                    <CountdownBoxFields draft=draft />
                 </div>
             </Show>
             <Show when=move || kind() == "lyrics">
@@ -332,6 +335,109 @@ fn ColorFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
             // (#776) — the wire stays 0..=1.
             <super::percent_input::PercentInput draft=draft role="stream-color-opacity" />
         </div>
+    }
+}
+
+/// Countdown background-box control (#785): a toggleable translucent card behind
+/// the timer text (`Countdown.box`). Off ⇒ `None` (the today's-overlay look); on
+/// ⇒ a `TextBox` with colour, opacity %, padding % and corner-radius %. Opacity is
+/// an inline percent field (like `LowerThirdFields`' bar opacity) — the shared
+/// `PercentInput` targets an element's TOP-LEVEL `opacity`, which the countdown
+/// kind does not have, so it cannot edit the box's own opacity.
+#[component]
+fn CountdownBoxFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
+    let has_box = move || {
+        matches!(
+            draft.get(),
+            StreamElementProps::Countdown { r#box: Some(_), .. }
+        )
+    };
+    let box_color = move || match draft.get() {
+        StreamElementProps::Countdown { r#box: Some(b), .. } => split_color(&b.color).0,
+        _ => "#0f172a".to_string(),
+    };
+    let box_opacity_pct = move || match draft.get() {
+        StreamElementProps::Countdown { r#box: Some(b), .. } => (b.opacity * 100.0).round() as i64,
+        _ => 60,
+    };
+    let box_padding = move || match draft.get() {
+        StreamElementProps::Countdown { r#box: Some(b), .. } => b.padding_pct.to_string(),
+        _ => "0".to_string(),
+    };
+    let box_radius = move || match draft.get() {
+        StreamElementProps::Countdown { r#box: Some(b), .. } => b.radius_pct.to_string(),
+        _ => "0".to_string(),
+    };
+    view! {
+        <fieldset class="stream-editor__box-fields" data-role="stream-countdown-box-fields">
+            <legend class="stream-editor__ts-legend">"Pozadie"</legend>
+            <label class="stream-editor__field stream-editor__field--check">
+                <input
+                    type="checkbox"
+                    data-role="stream-countdown-box-enable"
+                    prop:checked=has_box
+                    on:change=move |ev| {
+                        let on = event_target_checked(&ev);
+                        draft.update(|p| {
+                            if let StreamElementProps::Countdown { r#box, .. } = p {
+                                *r#box = if on { Some(default_text_box()) } else { None };
+                            }
+                        });
+                    }
+                />
+                <span>"Zobraziť pozadie"</span>
+            </label>
+            <Show when=has_box>
+                <label class="stream-editor__field">
+                    <span>"Farba pozadia"</span>
+                    <input type="color" data-role="stream-countdown-box-color"
+                        prop:value=box_color
+                        on:input=move |ev| {
+                            let rgb = event_target_value(&ev);
+                            draft.update(|p| {
+                                if let StreamElementProps::Countdown { r#box: Some(b), .. } = p { b.color = rgb.clone(); }
+                            });
+                        } />
+                </label>
+                <label class="stream-editor__field">
+                    <span>"Priehľadnosť pozadia (%)"</span>
+                    <input type="number" min="0" max="100" step="1" data-role="stream-countdown-box-opacity"
+                        prop:value=box_opacity_pct
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                                let o = (v / 100.0).clamp(0.0, 1.0);
+                                draft.update(|p| {
+                                    if let StreamElementProps::Countdown { r#box: Some(b), .. } = p { b.opacity = o; }
+                                });
+                            }
+                        } />
+                </label>
+                <label class="stream-editor__field">
+                    <span>"Okraj (% výšky)"</span>
+                    <input type="number" min="0" max="100" step="0.1" data-role="stream-countdown-box-padding"
+                        prop:value=box_padding
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                                draft.update(|p| {
+                                    if let StreamElementProps::Countdown { r#box: Some(b), .. } = p { b.padding_pct = v; }
+                                });
+                            }
+                        } />
+                </label>
+                <label class="stream-editor__field">
+                    <span>"Zaoblenie (% výšky)"</span>
+                    <input type="number" min="0" max="100" step="0.1" data-role="stream-countdown-box-radius"
+                        prop:value=box_radius
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<f32>() {
+                                draft.update(|p| {
+                                    if let StreamElementProps::Countdown { r#box: Some(b), .. } = p { b.radius_pct = v; }
+                                });
+                            }
+                        } />
+                </label>
+            </Show>
+        </fieldset>
     }
 }
 
