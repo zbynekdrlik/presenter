@@ -22,6 +22,8 @@ mod slide_stage_layout;
 mod stage_state;
 mod stream;
 mod stream_assets;
+#[cfg(test)]
+mod stream_countdown_tests;
 mod stream_fonts;
 mod stream_nameplates;
 #[cfg(test)]

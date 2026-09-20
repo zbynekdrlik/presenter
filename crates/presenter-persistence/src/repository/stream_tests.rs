@@ -14,7 +14,7 @@ use presenter_core::stream::{
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::{ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, NotSet, Set};
 
-async fn repo() -> Repository {
+pub(super) async fn repo() -> Repository {
     let mut opts = ConnectOptions::new("sqlite::memory:");
     opts.max_connections(1).min_connections(1);
     let db = Database::connect(opts).await.expect("connect");
@@ -25,7 +25,7 @@ async fn repo() -> Repository {
     Repository { db }
 }
 
-fn frame() -> Frame {
+pub(super) fn frame() -> Frame {
     Frame {
         x_pct: 0.0,
         y_pct: 0.0,
@@ -34,7 +34,7 @@ fn frame() -> Frame {
     }
 }
 
-fn text_style() -> TextStyle {
+pub(super) fn text_style() -> TextStyle {
     TextStyle {
         font_family: "Inter".to_string(),
         size_pct: 8.0,
@@ -74,7 +74,7 @@ fn color(hex: &str, opacity: f32) -> StreamElementProps {
     }
 }
 
-fn as_repo_error(err: &anyhow::Error) -> &RepositoryError {
+pub(super) fn as_repo_error(err: &anyhow::Error) -> &RepositoryError {
     err.downcast_ref::<RepositoryError>()
         .unwrap_or_else(|| panic!("expected RepositoryError, got: {err:?}"))
 }
@@ -229,59 +229,6 @@ async fn color_element_round_trips_through_def() {
         .create_stream_element(scene.id, color("not-a-color", 1.0))
         .await
         .unwrap_err();
-    assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
-}
-
-#[tokio::test]
-async fn countdown_box_and_letter_spacing_round_trip_and_validate() {
-    use presenter_core::{TextBox, TextStyle};
-    let repo = repo().await;
-    let scene = repo
-        .create_stream_scene("stream", "Base", SceneKind::Base)
-        .await
-        .unwrap();
-    // A countdown with a letter-spacing style + a background box round-trips
-    // through the def-assembly path (proves the #785 fields persist + parse).
-    let props = StreamElementProps::Countdown {
-        timer_id: 2,
-        style: TextStyle {
-            letter_spacing_em: Some(0.08),
-            ..text_style()
-        },
-        frame: frame(),
-        content_transition: ContentTransition::Cut,
-        r#box: Some(TextBox {
-            color: "#0f172a".to_string(),
-            opacity: 0.6,
-            padding_pct: 2.0,
-            radius_pct: 1.5,
-        }),
-    };
-    let el = repo
-        .create_stream_element(scene.id, props.clone())
-        .await
-        .unwrap();
-    let def = repo.load_output_def("stream").await.unwrap();
-    let stored = def
-        .scenes
-        .iter()
-        .flat_map(|s| &s.elements)
-        .find(|e| e.id == el.id)
-        .expect("countdown element present in def");
-    assert_eq!(stored.props, props);
-
-    // Letter spacing out of range is rejected 422 by core validate_props.
-    let bad = StreamElementProps::Countdown {
-        timer_id: 1,
-        style: TextStyle {
-            letter_spacing_em: Some(5.0),
-            ..text_style()
-        },
-        frame: frame(),
-        content_transition: ContentTransition::Cut,
-        r#box: None,
-    };
-    let err = repo.create_stream_element(scene.id, bad).await.unwrap_err();
     assert!(matches!(as_repo_error(&err), RepositoryError::Invalid(_)));
 }
 
