@@ -109,7 +109,10 @@ async fn outputs_list_includes_seeded_stream() {
         "seed output present, got {slugs:?}"
     );
     // #785: the timer output is seeded alongside `stream`.
-    assert!(slugs.contains(&"timer"), "timer output seeded, got {slugs:?}");
+    assert!(
+        slugs.contains(&"timer"),
+        "timer output seeded, got {slugs:?}"
+    );
 }
 
 #[tokio::test]
@@ -169,7 +172,11 @@ async fn countdown_letter_spacing_and_box_create_paths() {
         Some(good),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "valid letter-spacing + box accepted");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "valid letter-spacing + box accepted"
+    );
 
     // Letter spacing out of range → 422 (core validate_props).
     let bad = json!({
