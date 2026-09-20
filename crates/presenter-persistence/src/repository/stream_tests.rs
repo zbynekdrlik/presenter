@@ -93,10 +93,11 @@ fn sample_asset(sha: &str) -> NewStreamAsset {
 #[tokio::test]
 async fn output_crud_happy_path() {
     let repo = repo().await;
-    // Seed output exists.
+    // Seeded outputs exist: `stream` (#705) and `timer` (#785 seed migration).
     let outputs = repo.list_stream_outputs().await.unwrap();
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].slug, "stream");
+    let mut slugs: Vec<&str> = outputs.iter().map(|o| o.slug.as_str()).collect();
+    slugs.sort_unstable();
+    assert_eq!(slugs, ["stream", "timer"]);
 
     let created = repo.create_stream_output("event", "Event").await.unwrap();
     assert_eq!(created.slug, "event");
@@ -118,7 +119,8 @@ async fn output_crud_happy_path() {
     assert_eq!(patched.config_revision, 2);
 
     repo.delete_stream_output("event").await.unwrap();
-    assert_eq!(repo.list_stream_outputs().await.unwrap().len(), 1);
+    // Back to the two seeded outputs.
+    assert_eq!(repo.list_stream_outputs().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
