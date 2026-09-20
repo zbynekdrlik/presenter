@@ -102,7 +102,7 @@ impl MigrationTrait for Migration {
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO stream_elements (scene_id, kind, z_order, props, created_at, updated_at) \
-                 SELECT s.id, 'countdown', 0, ?, '{SEED_TS}', '{SEED_TS}' \
+                 SELECT s.id, 'countdown', 0, ?1, '{SEED_TS}', '{SEED_TS}' \
                  FROM stream_scenes s \
                  JOIN stream_outputs o ON o.id = s.output_id \
                  WHERE o.slug = 'timer' AND s.kind = 'base' \

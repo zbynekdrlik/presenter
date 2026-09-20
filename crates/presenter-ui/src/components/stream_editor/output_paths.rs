@@ -83,23 +83,15 @@ pub(super) fn persist_output_slug(slug: &str) {
 
 /// Mirror the selected output into the `?output=` URL param (best-effort) so a
 /// reload / share reopens the same output. Uses `replace_state` (no new history
-/// entry per switch).
+/// entry per switch). The editor reads only `?output=`, so replacing the whole
+/// query with `?output=<slug>` preserves everything that matters (and the slug is
+/// `^[a-z0-9-]+`, so it needs no URL-encoding).
 pub(super) fn mirror_output_to_url(slug: &str) {
     let Some(win) = leptos::web_sys::window() else {
         return;
     };
-    let search = win.location().search().unwrap_or_default();
-    let Ok(params) = leptos::web_sys::UrlSearchParams::new_with_str(&search) else {
-        return;
-    };
-    params.set("output", slug);
-    let qs = String::from(params.to_string());
     let path = crate::utils::window::current_pathname();
-    let new_url = if qs.is_empty() {
-        path
-    } else {
-        format!("{path}?{qs}")
-    };
+    let new_url = format!("{path}?output={slug}");
     if let Ok(history) = win.history() {
         let _ = history.replace_state_with_url(
             &leptos::wasm_bindgen::JsValue::NULL,
