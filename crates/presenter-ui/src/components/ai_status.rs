@@ -33,17 +33,38 @@ pub(crate) fn is_stale(consecutive_failures: u32) -> bool {
     consecutive_failures >= STALE_AFTER_FAILURES
 }
 
-/// Which of the three states the chip is in right now. `None` covers both
-/// "the first poll hasn't answered yet" and "polling has failed twice in a
-/// row" — both are genuinely unknown, never a guessed failure state.
+/// The server (`router::ai_health::apply_last_completion_failure`) prefixes a
+/// FOLD-WINDOW last-completion transport failure with this exact text (#764).
+/// The UI distinguishes it from a probe/connectivity outage on this prefix so
+/// an operator is told "posledné volanie zlyhalo" — not "AI nedostupná" — after
+/// a single failed request while the backend is still reachable (#784). Kept in
+/// sync by the `not_connected_*` tests below.
+const LAST_CALL_FAILED_PREFIX: &str = "posledné AI volanie zlyhalo";
+
+fn is_last_call_failed(error: &str) -> bool {
+    error.starts_with(LAST_CALL_FAILED_PREFIX)
+}
+
+/// Which chip state the poll result maps to. `None` (checking) covers both
+/// "the first poll hasn't answered yet" and "polling failed twice in a row" —
+/// both genuinely unknown, never a guessed failure. A `connected:false` splits
+/// two ways (#784): a fold-window LAST-CALL failure (backend reachable, one call
+/// failed) vs a genuine probe/connectivity/budget outage.
 pub(crate) fn ai_chip_state(status: Option<&AiStatusResponse>) -> &'static str {
     match status {
         None => "checking",
-        // A confirmed backend problem carried by the flat `connected` field:
-        // unreachable endpoint, invalid model id, or a metered backend that
-        // 200s `/models` but 403s completions (exhausted budget / revoked key,
-        // #764). The concrete reason rides in `error` (see the tooltip).
-        Some(s) if !s.connected => "unavailable",
+        Some(s) if !s.connected => {
+            // #784: a fold-window last-completion failure must NOT alarm the
+            // operator as a full outage — the backend is still reachable.
+            if s.error.as_deref().is_some_and(is_last_call_failed) {
+                "last_call_failed"
+            } else {
+                // A confirmed backend problem: unreachable endpoint, invalid
+                // model id, or a metered backend that 200s `/models` but 403s
+                // completions (exhausted budget / revoked key, #764).
+                "unavailable"
+            }
+        }
         Some(_) => "ok",
     }
 }
@@ -52,19 +73,23 @@ pub(crate) fn ai_chip_state(status: Option<&AiStatusResponse>) -> &'static str {
 pub(crate) fn ai_chip_label(state: &str) -> &'static str {
     match state {
         "ok" => "AI: pripojené",
-        // The concrete reason (budget/credit/key/model/connectivity) is in the
-        // tooltip (see `AiStatusChip`).
-        "unavailable" => "AI: nedostupné",
+        // #784: one failed request while the backend is reachable — softer than
+        // a full outage. The concrete excerpt rides in the tooltip.
+        "last_call_failed" => "AI: posledné volanie zlyhalo",
+        // A confirmed outage (budget/credit/key/model/connectivity) — the
+        // concrete reason is in the tooltip (see `AiStatusChip`).
+        "unavailable" => "AI nedostupná",
         _ => "AI: kontrolujem…",
     }
 }
 
-/// Dot color: green when connected, yellow while genuinely unknown, red for a
-/// confirmed problem.
+/// Dot color: green when connected, yellow while genuinely unknown OR after a
+/// single last-call failure (attention, not a full outage — #784), red for a
+/// confirmed outage.
 pub(crate) fn ai_chip_dot(state: &str) -> &'static str {
     match state {
         "ok" => "green",
-        "checking" => "yellow",
+        "checking" | "last_call_failed" => "yellow",
         _ => "red",
     }
 }
@@ -74,6 +99,11 @@ pub(crate) fn ai_chip_dot(state: &str) -> &'static str {
 pub(crate) fn ai_chip_tooltip(state: &str) -> &'static str {
     match state {
         "ok" => "AI je pripojená. Kliknutím otvoríš AI panel.",
+        // #784: last-call failure — the concrete excerpt is appended by the
+        // component when available (see `AiStatusChip`).
+        "last_call_failed" => {
+            "Posledné AI volanie zlyhalo, ale AI je dostupná. Kliknutím otvoríš AI panel."
+        }
         // Generic fallback when the concrete `error` string is not available
         // (the component appends it when it is — see `AiStatusChip`).
         "unavailable" => "AI je nedostupná. Kliknutím otvoríš AI panel.",
@@ -154,21 +184,26 @@ pub fn AiStatusChip() -> impl IntoView {
         )
     };
     let label = move || ai_chip_label(state());
-    // #764: for the `unavailable` state, surface the concrete backend `error`
-    // (budget/credit/key/model/connectivity) in the tooltip so the operator
-    // sees WHY, not just that AI is down; every other state keeps its fixed copy.
+    // #764/#784: for a failure state, surface the concrete backend `error` in
+    // the tooltip so the operator sees WHY. `unavailable` (a confirmed outage)
+    // gets the "AI je nedostupná: …" framing; `last_call_failed` shows the
+    // server's already-Slovak "posledné AI volanie zlyhalo: …" excerpt as-is.
+    // Every other state keeps its fixed copy.
     let tooltip = move || {
         status.with(|s| {
             let st = ai_chip_state(s.as_ref());
-            if st == "unavailable" {
-                match s.as_ref().and_then(|r| r.error.as_deref()) {
-                    Some(err) if !err.is_empty() => {
-                        format!("AI je nedostupná: {err}. Kliknutím otvoríš AI panel.")
-                    }
-                    _ => ai_chip_tooltip(st).to_string(),
+            let concrete = s
+                .as_ref()
+                .and_then(|r| r.error.as_deref())
+                .filter(|e| !e.is_empty());
+            match (st, concrete) {
+                ("unavailable", Some(err)) => {
+                    format!("AI je nedostupná: {err}. Kliknutím otvoríš AI panel.")
                 }
-            } else {
-                ai_chip_tooltip(st).to_string()
+                ("last_call_failed", Some(err)) => {
+                    format!("{err}. Kliknutím otvoríš AI panel.")
+                }
+                _ => ai_chip_tooltip(st).to_string(),
             }
         })
     };
@@ -213,32 +248,48 @@ mod tests {
     }
 
     #[test]
-    fn not_connected_is_unavailable() {
-        // #764: a metered OpenRouter backend that 200s /models but 403s
-        // completions (exhausted budget) reports connected:false — the chip
-        // must surface that generically, not show "AI: pripojené".
-        let s = status(false, Some("posledné AI volanie zlyhalo: budget exceeded"));
+    fn not_connected_probe_outage_is_unavailable() {
+        // A genuine probe/connectivity/budget outage (no fold prefix) → the
+        // full-outage "AI nedostupná" state.
+        let s = status(false, Some("AI proxy unreachable"));
         assert_eq!(ai_chip_state(Some(&s)), "unavailable");
+    }
+
+    #[test]
+    fn not_connected_last_call_failure_is_its_own_state() {
+        // #784: a fold-window last-completion transport failure (backend
+        // reachable, one call failed) must be the softer `last_call_failed`
+        // state — NOT the full-outage `unavailable` that says "AI down".
+        let s = status(false, Some("posledné AI volanie zlyhalo: budget exceeded"));
+        assert_eq!(ai_chip_state(Some(&s)), "last_call_failed");
     }
 
     #[test]
     fn labels_are_slovak_and_state_specific() {
         assert_eq!(ai_chip_label("ok"), "AI: pripojené");
-        assert_eq!(ai_chip_label("unavailable"), "AI: nedostupné");
+        assert_eq!(ai_chip_label("unavailable"), "AI nedostupná");
+        assert_eq!(
+            ai_chip_label("last_call_failed"),
+            "AI: posledné volanie zlyhalo"
+        );
         assert_eq!(ai_chip_label("checking"), "AI: kontrolujem…");
     }
 
     #[test]
-    fn ok_is_green_checking_is_yellow_unavailable_is_red() {
+    fn dot_colors_by_state() {
         assert_eq!(ai_chip_dot("ok"), "green");
         assert_eq!(ai_chip_dot("checking"), "yellow");
+        // #784: a single last-call failure is attention (yellow), not a full
+        // outage (red).
+        assert_eq!(ai_chip_dot("last_call_failed"), "yellow");
         assert_eq!(ai_chip_dot("unavailable"), "red");
     }
 
     #[test]
     fn tooltip_names_the_state_and_the_click_target() {
         assert!(ai_chip_tooltip("unavailable").contains("nedostupná"));
-        for state in ["ok", "unavailable"] {
+        assert!(ai_chip_tooltip("last_call_failed").contains("zlyhalo"));
+        for state in ["ok", "unavailable", "last_call_failed"] {
             assert!(ai_chip_tooltip(state).contains("AI panel"));
         }
     }

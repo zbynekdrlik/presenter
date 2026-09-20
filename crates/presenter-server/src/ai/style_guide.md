@@ -15,6 +15,7 @@ covers essentials; load this on demand when you need specifics.
 - Single verse: "Žalm 26:1 (ROH)"
 - Verse range: "Marek 3:14-15 (SEB)"
 - Partial verse: "Žalm 26:3a (ROH)"
+- Multiple / non-contiguous verses: "Daniel 10:2-3, 12-14 (ROH)" — list ranges and single verses separated by commas within one chapter.
 
 The code in parentheses is REQUIRED. Without it, Resolume cannot display the reference correctly.
 
