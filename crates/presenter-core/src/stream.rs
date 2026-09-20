@@ -1543,7 +1543,9 @@ mod tests {
         assert_eq!(v["box"]["color"], json!("#0f172a"));
         assert_eq!(v["box"]["paddingPct"], json!(2.0));
         assert_eq!(v["box"]["radiusPct"], json!(1.5));
-        assert_eq!(v["style"]["letterSpacingEm"], json!(0.08));
+        // f32 widens to f64 on serialisation (0.08f32 = 0.0799999982…), so
+        // compare against the same widened value, not the f64 literal.
+        assert_eq!(v["style"]["letterSpacingEm"], json!(0.08_f32));
         // Full round trip.
         let parsed: StreamElementProps = serde_json::from_value(v).expect("deserialize");
         assert_eq!(parsed, props);
