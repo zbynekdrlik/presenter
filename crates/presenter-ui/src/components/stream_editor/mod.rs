@@ -22,6 +22,7 @@ pub mod editor_scenes;
 pub mod element_form;
 pub mod frame_math;
 pub mod number_field;
+pub mod output_paths;
 pub mod percent_input;
 pub mod props_access;
 pub mod text_style_form;
@@ -33,10 +34,15 @@ use presenter_core::{
 };
 use serde::Serialize;
 
+use self::output_paths::{
+    active_scene_path, def_path, output_path, overlay_path, scenes_order_path, scenes_path,
+};
 use self::props_access::with_frame_mut;
 
-/// The single default output authored by this v1 editor (seeded by the
-/// migration + `AppState::in_memory()`; N nameable outputs are a later PR).
+/// The default output slug — the editor opens this one unless a `?output=` param
+/// / `localStorage` value selects another (#785). Before #785 the editor was
+/// hard-wired to it; now it is only the DEFAULT, and every output-scoped path
+/// builder takes `StreamEditorCtx.output_slug` instead.
 pub const DEFAULT_OUTPUT_SLUG: &str = "stream";
 
 /// Toast auto-hide delay, matching the settings page's 4200 ms.
@@ -108,6 +114,12 @@ pub fn show_state_from_def(def: &StreamOutputDef) -> StreamShowState {
 /// page's `ToastHandle`.
 #[derive(Clone, Copy)]
 pub struct StreamEditorCtx {
+    /// The output currently being edited (#785). Every output-scoped path builder
+    /// reads this instead of the `DEFAULT_OUTPUT_SLUG` constant; the header
+    /// switcher changes it via [`Self::switch_output`].
+    pub output_slug: RwSignal<String>,
+    /// The list of outputs for the header switcher (`GET /stream/api/outputs`).
+    pub outputs: RwSignal<Vec<StreamOutputSummary>>,
     pub def: RwSignal<Option<StreamOutputDef>>,
     pub active: RwSignal<StreamShowState>,
     pub toast_msg: RwSignal<String>,
@@ -167,7 +179,8 @@ impl StreamEditorCtx {
     /// Used where a follow-up action must SEQUENCE after the def is present
     /// (e.g. `add_element` selecting the freshly-created element).
     async fn reload_def(self) {
-        match crate::api::get_json::<StreamOutputDef>(&def_path()).await {
+        let slug = self.output_slug.get_untracked();
+        match crate::api::get_json::<StreamOutputDef>(&def_path(&slug)).await {
             Ok(def) => {
                 self.active.set(show_state_from_def(&def));
                 self.def.set(Some(def));
@@ -176,13 +189,48 @@ impl StreamEditorCtx {
         }
     }
 
+    /// The currently-selected output slug (untracked — for use in handlers).
+    pub fn slug(self) -> String {
+        self.output_slug.get_untracked()
+    }
+
+    /// Re-fetch the output list for the header switcher (mount + after a config
+    /// change that might add/rename an output).
+    pub fn reload_outputs(self) {
+        leptos::task::spawn_local(async move {
+            match crate::api::get_json::<Vec<StreamOutputSummary>>("/stream/api/outputs").await {
+                Ok(list) => self.outputs.set(list),
+                Err(e) => self.show_toast(&format!("Načítanie výstupov zlyhalo: {e}"), "error"),
+            }
+        });
+    }
+
+    /// Switch the editor to another output (#785): persist the choice
+    /// (localStorage + `?output=`), reset the per-output editing state, and
+    /// refetch the def + nameplates for the new output. A no-op if unchanged.
+    pub fn switch_output(self, slug: String) {
+        if slug == self.output_slug.get_untracked() {
+            return;
+        }
+        self.output_slug.set(slug.clone());
+        output_paths::persist_output_slug(&slug);
+        output_paths::mirror_output_to_url(&slug);
+        // Drop the previous output's element/scene selection + draft.
+        self.close_panel();
+        // Refetch everything scoped to the new output.
+        self.refresh();
+        self.reload_nameplates();
+        self.reload_active_nameplate();
+    }
+
     /// Exclusive base activation; `None` clears the base (transparent). The
     /// returned show-state is applied directly (activation does not bump
     /// `config_revision`, so no def refetch is needed).
     pub fn activate_base(self, scene_id: Option<i64>) {
         leptos::task::spawn_local(async move {
             let req = SetActiveSceneReq { scene_id };
-            match crate::api::put_json::<_, StreamShowState>(&active_scene_path(), &req).await {
+            let path = active_scene_path(&self.output_slug.get_untracked());
+            match crate::api::put_json::<_, StreamShowState>(&path, &req).await {
                 Ok(state) => self.active.set(state),
                 Err(e) => self.show_toast(&format!("Aktivácia zlyhala: {e}"), "error"),
             }
@@ -193,7 +241,8 @@ impl StreamEditorCtx {
     pub fn toggle_overlay(self, scene_id: i64, active: bool) {
         leptos::task::spawn_local(async move {
             let req = SetOverlayReq { active };
-            match crate::api::put_json::<_, StreamShowState>(&overlay_path(scene_id), &req).await {
+            let path = overlay_path(&self.output_slug.get_untracked(), scene_id);
+            match crate::api::put_json::<_, StreamShowState>(&path, &req).await {
                 Ok(state) => self.active.set(state),
                 Err(e) => self.show_toast(&format!("Overlay zlyhal: {e}"), "error"),
             }
@@ -212,7 +261,8 @@ impl StreamEditorCtx {
                 name: trimmed,
                 kind,
             };
-            match crate::api::post_json::<_, StreamSceneDef>(&scenes_path(), &req).await {
+            let path = scenes_path(&self.output_slug.get_untracked());
+            match crate::api::post_json::<_, StreamSceneDef>(&path, &req).await {
                 Ok(_) => {
                     self.refresh();
                     self.show_toast("Scéna pridaná.", "success");
@@ -296,7 +346,8 @@ impl StreamEditorCtx {
         ids.extend(overlay);
         leptos::task::spawn_local(async move {
             let req = ReorderReq { ids };
-            match crate::api::put_no_content(&scenes_order_path(), &req).await {
+            let path = scenes_order_path(&self.output_slug.get_untracked());
+            match crate::api::put_no_content(&path, &req).await {
                 Ok(()) => self.refresh(),
                 Err(e) => self.show_toast(&format!("Zmena poradia zlyhala: {e}"), "error"),
             }
@@ -319,7 +370,8 @@ impl StreamEditorCtx {
             },
         };
         leptos::task::spawn_local(async move {
-            match crate::api::patch_json::<_, StreamOutputSummary>(&output_path(), &req).await {
+            let path = output_path(&self.output_slug.get_untracked());
+            match crate::api::patch_json::<_, StreamOutputSummary>(&path, &req).await {
                 Ok(_) => {
                     self.refresh();
                     self.show_toast("Prechod uložený.", "success");
@@ -609,31 +661,6 @@ fn kind_ids(def: &StreamOutputDef, kind: SceneKind) -> Vec<i64> {
         .filter(|s| s.kind == kind)
         .map(|s| s.id)
         .collect()
-}
-
-fn def_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/def")
-}
-
-/// The output resource itself (PATCH target for rename / transitions). #752.
-fn output_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}")
-}
-
-fn scenes_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/scenes")
-}
-
-fn scenes_order_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/scenes/order")
-}
-
-fn active_scene_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/active-scene")
-}
-
-fn overlay_path(id: i64) -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/overlays/{id}")
 }
 
 fn scene_path(id: i64) -> String {

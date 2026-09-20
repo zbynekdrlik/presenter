@@ -17,7 +17,8 @@ use crate::components::stream_editor::editor_nameplates::NameplatePanel;
 use crate::components::stream_editor::editor_panel::EditorPanel;
 use crate::components::stream_editor::editor_preview::EditorPreview;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
-use crate::components::stream_editor::{StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
+use crate::components::stream_editor::output_paths::{initial_output_slug, OutputSelect};
+use crate::components::stream_editor::StreamEditorCtx;
 use crate::components::version_label::VersionLabel;
 
 /// The `/ui/stream` operator editor page.
@@ -47,6 +48,9 @@ pub fn StreamEditorPage() -> impl IntoView {
     });
 
     let ctx = StreamEditorCtx {
+        // #785: open the output from `?output=` / localStorage / the default.
+        output_slug: RwSignal::new(initial_output_slug()),
+        outputs: RwSignal::new(Vec::new()),
         def: RwSignal::new(None),
         active: RwSignal::new(StreamShowState {
             active_scene_id: None,
@@ -71,6 +75,8 @@ pub fn StreamEditorPage() -> impl IntoView {
 
     // Cold load.
     ctx.refresh();
+    // #785: load the output list for the header switcher.
+    ctx.reload_outputs();
     // #778: load uploaded fonts (the picker's extra families) and inject the
     // generated @font-face stylesheet so picker previews render in-face.
     ctx.reload_fonts();
@@ -92,7 +98,7 @@ pub fn StreamEditorPage() -> impl IntoView {
                 active_scene_id,
                 active_overlay_ids,
                 config_revision,
-            } if output == DEFAULT_OUTPUT_SLUG => {
+            } if output == ctx.output_slug.get_untracked() => {
                 ctx.active.set(StreamShowState {
                     active_scene_id,
                     active_overlay_ids,
@@ -102,7 +108,7 @@ pub fn StreamEditorPage() -> impl IntoView {
             LiveEvent::StreamConfigChanged {
                 output,
                 config_revision,
-            } if output == DEFAULT_OUTPUT_SLUG => {
+            } if output == ctx.output_slug.get_untracked() => {
                 let current = ctx
                     .def
                     .get_untracked()
@@ -113,11 +119,15 @@ pub fn StreamEditorPage() -> impl IntoView {
                 }
             }
             // #779: a plate went on/off air → update the on-air highlight directly.
-            LiveEvent::StreamNameplate { output, active } if output == DEFAULT_OUTPUT_SLUG => {
+            LiveEvent::StreamNameplate { output, active }
+                if output == ctx.output_slug.get_untracked() =>
+            {
                 ctx.active_nameplate.set(active);
             }
             // #779: the plate list changed → refetch it.
-            LiveEvent::StreamNameplatesChanged { output } if output == DEFAULT_OUTPUT_SLUG => {
+            LiveEvent::StreamNameplatesChanged { output }
+                if output == ctx.output_slug.get_untracked() =>
+            {
                 ctx.reload_nameplates();
             }
             // #779: keep the "Pieseň" row's live text current.
@@ -139,6 +149,7 @@ pub fn StreamEditorPage() -> impl IntoView {
                     <p>"Base scény ako stĺpce, overlay scény hore. Klik na scénu ju aktivuje."</p>
                 </div>
                 <nav class="stream-editor__header-nav">
+                    <OutputSelect ctx=ctx />
                     <a href="/ui/operator" class="stream-editor__link">"← Operator"</a>
                     <span class="stream-editor__version"><VersionLabel /></span>
                 </nav>

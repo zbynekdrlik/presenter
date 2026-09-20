@@ -13,7 +13,7 @@
 use leptos::prelude::*;
 
 use super::canvas_overlay::CanvasOverlay;
-use super::{StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
+use super::StreamEditorCtx;
 use crate::components::stream::draft_preview::serialize_message;
 
 /// The 16:9 preview of the selected scene (or the live output when toggled).
@@ -24,7 +24,7 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
     let iframe_ref = NodeRef::<leptos::html::Iframe>::new();
 
     let src = move || {
-        let base = format!("/stream/{DEFAULT_OUTPUT_SLUG}?preview=1");
+        let base = format!("/stream/{}?preview=1", ctx.output_slug.get());
         if live.get() {
             base
         } else {
