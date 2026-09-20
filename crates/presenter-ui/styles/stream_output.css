@@ -124,6 +124,20 @@ body.stream {
     font-variant-numeric: tabular-nums;
 }
 
+/* Optional countdown background box (#785): a content-sized translucent card
+ * behind the timer digits. The inline style sets its `rgba()` background,
+ * `padding` (vh) and `border-radius` (vh); this rule only keeps it laid out as a
+ * single centred line box so the padding wraps the digits symmetrically. The
+ * box's transparency is baked into the rgba() background (NOT `opacity`), so the
+ * digits stay fully opaque. */
+.stream-countdown-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    line-height: 1;
+}
+
 /* Lyrics + verse elements (#710): the Frame is a vertically-centered flex
  * column (set inline in each element's container style) whose stacked text
  * lines each carry their own TextStyle inline. The line rules below only govern

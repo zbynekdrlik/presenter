@@ -68,6 +68,12 @@ pub fn TextStyleForm(
             .map(|ts| ts.line_height.to_string())
             .unwrap_or_default()
     };
+    // #785: letter spacing in `em`; `None` (empty field) = the browser default.
+    let letter_spacing = move || {
+        read_ts(&draft.get(), ts_slot)
+            .and_then(|ts| ts.letter_spacing_em.map(|v| v.to_string()))
+            .unwrap_or_default()
+    };
     let align_is = move |a: TextAlign| {
         read_ts(&draft.get(), ts_slot)
             .map(|ts| ts.align == a)
@@ -93,10 +99,19 @@ pub fn TextStyleForm(
             .and_then(|ts| ts.shadow.map(|s| s.blur_px.to_string()))
             .unwrap_or_default()
     };
+    // `<input type="color">` accepts ONLY `#rrggbb`; a `#rrggbbaa` shadow colour
+    // (the seeded timer overlay uses one, #785) logs a browser warning, so the
+    // picker gets the rgb part and the alpha rides its own field — same split
+    // as the text colour above.
     let shadow_color = move || {
         read_ts(&draft.get(), ts_slot)
-            .and_then(|ts| ts.shadow.map(|s| s.color))
+            .and_then(|ts| ts.shadow.map(|s| split_color(&s.color).0))
             .unwrap_or_else(|| "#000000".to_string())
+    };
+    let shadow_alpha = move || {
+        read_ts(&draft.get(), ts_slot)
+            .and_then(|ts| ts.shadow.map(|s| split_color(&s.color).1.to_string()))
+            .unwrap_or_else(|| "255".to_string())
     };
 
     // Font <option> list = built-in whitelist ∪ uploaded families (#778), each
@@ -277,6 +292,25 @@ pub fn TextStyleForm(
                 />
             </label>
 
+            // #785: letter spacing in `em`. Empty ⇒ None (browser default). Commits
+            // on `input` (not just change) so a Playwright `fill()` is observed.
+            <label class="stream-editor__field">
+                <span>"Rozostup písmen (em)"</span>
+                <input
+                    type="number" min="-0.2" max="1" step="0.01"
+                    data-role="stream-ts-letter-spacing"
+                    prop:value=letter_spacing
+                    on:input=move |ev| {
+                        let raw = event_target_value(&ev);
+                        if raw.trim().is_empty() {
+                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.letter_spacing_em = None));
+                        } else if let Ok(v) = raw.parse::<f32>() {
+                            draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.letter_spacing_em = Some(v)));
+                        }
+                    }
+                />
+            </label>
+
             <label class="stream-editor__field stream-editor__field--check">
                 <input
                     type="checkbox"
@@ -346,10 +380,28 @@ pub fn TextStyleForm(
                             data-role="stream-ts-shadow-color"
                             prop:value=shadow_color
                             on:input=move |ev| {
-                                let c = event_target_value(&ev);
+                                let rgb = event_target_value(&ev);
                                 draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
-                                    if let Some(s) = ts.shadow.as_mut() { s.color = c.clone(); }
+                                    if let Some(s) = ts.shadow.as_mut() {
+                                        let a = split_color(&s.color).1;
+                                        s.color = join_color(&rgb, a);
+                                    }
                                 }));
+                            }
+                        />
+                        <input
+                            type="number" min="0" max="255" step="1"
+                            data-role="stream-ts-shadow-alpha"
+                            prop:value=shadow_alpha
+                            on:input=move |ev| {
+                                if let Ok(a) = event_target_value(&ev).parse::<u8>() {
+                                    draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
+                                        if let Some(s) = ts.shadow.as_mut() {
+                                            let rgb = split_color(&s.color).0;
+                                            s.color = join_color(&rgb, a);
+                                        }
+                                    }));
+                                }
                             }
                         />
                     </label>

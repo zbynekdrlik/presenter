@@ -14,7 +14,7 @@ use presenter_core::stream::{
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::{ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, NotSet, Set};
 
-async fn repo() -> Repository {
+pub(super) async fn repo() -> Repository {
     let mut opts = ConnectOptions::new("sqlite::memory:");
     opts.max_connections(1).min_connections(1);
     let db = Database::connect(opts).await.expect("connect");
@@ -25,7 +25,7 @@ async fn repo() -> Repository {
     Repository { db }
 }
 
-fn frame() -> Frame {
+pub(super) fn frame() -> Frame {
     Frame {
         x_pct: 0.0,
         y_pct: 0.0,
@@ -34,7 +34,7 @@ fn frame() -> Frame {
     }
 }
 
-fn text_style() -> TextStyle {
+pub(super) fn text_style() -> TextStyle {
     TextStyle {
         font_family: "Inter".to_string(),
         size_pct: 8.0,
@@ -43,6 +43,7 @@ fn text_style() -> TextStyle {
         align: TextAlign::Center,
         line_height: 1.2,
         shadow: None,
+        letter_spacing_em: None,
     }
 }
 
@@ -61,6 +62,7 @@ fn countdown(timer_id: i64) -> StreamElementProps {
         style: text_style(),
         frame: frame(),
         content_transition: ContentTransition::default(),
+        r#box: None,
     }
 }
 
@@ -72,7 +74,7 @@ fn color(hex: &str, opacity: f32) -> StreamElementProps {
     }
 }
 
-fn as_repo_error(err: &anyhow::Error) -> &RepositoryError {
+pub(super) fn as_repo_error(err: &anyhow::Error) -> &RepositoryError {
     err.downcast_ref::<RepositoryError>()
         .unwrap_or_else(|| panic!("expected RepositoryError, got: {err:?}"))
 }
@@ -91,10 +93,11 @@ fn sample_asset(sha: &str) -> NewStreamAsset {
 #[tokio::test]
 async fn output_crud_happy_path() {
     let repo = repo().await;
-    // Seed output exists.
+    // Seeded outputs exist: `stream` (#705) and `timer` (#785 seed migration).
     let outputs = repo.list_stream_outputs().await.unwrap();
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].slug, "stream");
+    let mut slugs: Vec<&str> = outputs.iter().map(|o| o.slug.as_str()).collect();
+    slugs.sort_unstable();
+    assert_eq!(slugs, ["stream", "timer"]);
 
     let created = repo.create_stream_output("event", "Event").await.unwrap();
     assert_eq!(created.slug, "event");
@@ -116,7 +119,8 @@ async fn output_crud_happy_path() {
     assert_eq!(patched.config_revision, 2);
 
     repo.delete_stream_output("event").await.unwrap();
-    assert_eq!(repo.list_stream_outputs().await.unwrap().len(), 1);
+    // Back to the two seeded outputs.
+    assert_eq!(repo.list_stream_outputs().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -709,6 +713,7 @@ fn countdown_with_family(timer_id: i64, family: &str) -> StreamElementProps {
         style,
         frame: frame(),
         content_transition: ContentTransition::default(),
+        r#box: None,
     }
 }
 

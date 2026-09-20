@@ -20,12 +20,14 @@
 //!     conversation back to global state (`router/ai.rs`) and poisoning the
 //!     next operator's turn.
 
-use crate::ai::agent::run_agent;
+use crate::ai::agent::{run_agent, run_agent_with_guard};
+use crate::ai::agent_guard::AgentGuard;
 use crate::ai::context_budget::{DEFAULT_CONTEXT_BUDGET_BYTES, TRUNCATED_STUB};
 use crate::ai::{AiAgentError, AiSettings, ChatMessage};
 use crate::state::AppState;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
@@ -435,5 +437,156 @@ async fn run_agent_trims_stale_prior_turns_when_max_iterations_is_exhausted() {
         "the conversation must shrink from the untrimmed 231 messages (15 old \
          turns + the 201-message new turn) down to exactly the new turn, got {}",
         conversation.len()
+    );
+}
+
+// --- #784 agent guard: a repeated validation rejection must END the turn with
+// a Slovak give-up message after N identical strikes, and a spent wall-clock
+// budget must END it before the 120 s client timeout — instead of spinning the
+// loop for minutes (the PP incident, 2026-09-20). ---
+
+/// Always replies with a `create_bible_presentation` tool call whose verse text
+/// carries raw `##` bold markers, so EVERY round trips the `unprocessed_bold_markers`
+/// validator rule — the deterministic, always-rejected tool result that drives
+/// the consecutive-rejection / budget guards. An optional per-response delay
+/// exercises the wall-clock budget without a real 90 s wait.
+struct AlwaysRejectedBibleToolCall {
+    counter: Arc<AtomicUsize>,
+    delay: Option<Duration>,
+}
+
+impl Respond for AlwaysRejectedBibleToolCall {
+    fn respond(&self, _req: &wiremock::Request) -> ResponseTemplate {
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let args = serde_json::json!({
+            "name": "Loop",
+            "items": [{
+                "kind": "verse",
+                "number": 1,
+                "text": "##bad## text",
+                "book": "Ján",
+                "chapter": 1,
+                "translation": "SEB",
+            }],
+        })
+        .to_string();
+        let mut tmpl = ResponseTemplate::new(200).set_body_json(tool_call_body(
+            &format!("call_{n}"),
+            "create_bible_presentation",
+            &args,
+        ));
+        if let Some(delay) = self.delay {
+            tmpl = tmpl.set_delay(delay);
+        }
+        tmpl
+    }
+}
+
+#[tokio::test]
+async fn run_agent_gives_up_after_three_consecutive_identical_rejections() {
+    // The provider never converges — every tool call is rejected by the SAME
+    // validator rule. The guard must end the turn after exactly 3 provider
+    // calls with the Slovak give-up message, NOT re-ask until the client
+    // timeout (the PP loop was 24 iterations / > 4 minutes).
+    let mock_server = MockServer::start().await;
+    let counter = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(AlwaysRejectedBibleToolCall {
+            counter: counter.clone(),
+            delay: None,
+        })
+        .mount(&mock_server)
+        .await;
+
+    let state = AppState::in_memory().await.unwrap();
+    let settings = settings_for(&mock_server);
+    let mut conversation: Vec<ChatMessage> = Vec::new();
+
+    // A generous budget so the WALL-CLOCK path never fires — this test isolates
+    // the consecutive-rejection cap (3). Explicit guard → no env dependency.
+    let (response, _actions, _meta, _usage) = run_agent_with_guard(
+        "make Daniel 10:2-3, 12-14",
+        &mut conversation,
+        &state,
+        &settings,
+        None,
+        AgentGuard::new(Duration::from_secs(3600), 3),
+    )
+    .await
+    .expect("a give-up is a normal Ok response, never an error");
+
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        3,
+        "must stop after exactly 3 identical-rule rejections, got {}",
+        requests.len()
+    );
+    assert!(
+        response.contains("pravidlo: unprocessed_bold_markers"),
+        "the give-up must be the Slovak rejection message naming the rule, got: {response}"
+    );
+    assert!(
+        !response.to_lowercase().contains("failed to reach"),
+        "a give-up must never surface a transport-error string, got: {response}"
+    );
+
+    // A give-up is NOT an outage: the last-completion health must NOT be marked
+    // failed (every provider call itself succeeded), so the badge never flips.
+    assert!(
+        state
+            .ai_call_health()
+            .active_failure(crate::ai::last_error::AI_LAST_FAILURE_WINDOW)
+            .is_none(),
+        "a GaveUp turn must not record an AiCallHealth failure"
+    );
+}
+
+#[tokio::test]
+async fn run_agent_gives_up_when_the_wall_clock_budget_is_spent() {
+    // A tiny budget with a slow provider: the loop must give up with the
+    // TIME-LIMIT message well before the consecutive cap (3) or the 120 s client
+    // timeout — never a real 90 s wait, never a network error.
+    let mock_server = MockServer::start().await;
+    let counter = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(AlwaysRejectedBibleToolCall {
+            counter: counter.clone(),
+            delay: Some(Duration::from_millis(400)),
+        })
+        .mount(&mock_server)
+        .await;
+
+    let state = AppState::in_memory().await.unwrap();
+    let settings = settings_for(&mock_server);
+    let mut conversation: Vec<ChatMessage> = Vec::new();
+
+    let (response, _actions, _meta, _usage) = run_agent_with_guard(
+        "make Daniel 10:2-3, 12-14",
+        &mut conversation,
+        &state,
+        &settings,
+        None,
+        AgentGuard::new(Duration::from_millis(50), 3),
+    )
+    .await
+    .expect("a budget give-up is a normal Ok response, never an error");
+
+    let requests = mock_server.received_requests().await.unwrap();
+    assert!(
+        requests.len() <= 1,
+        "the budget must end the turn before the consecutive cap (3) — the loop \
+         made {} provider calls",
+        requests.len()
+    );
+    assert!(
+        response.contains("časovom limite"),
+        "the give-up must be the Slovak time-limit message, got: {response}"
+    );
+    assert!(
+        !response.contains("pravidlo:"),
+        "the budget path must not use the rejection-rule message, got: {response}"
     );
 }

@@ -1439,3 +1439,13 @@ across model families); the ticket itself stays open on the user's direction dec
 - Companion: `stream_nameplate_show/_song/_toggle/_hide` commands + `nameplates` message + per-plate/song/active variables + JS dropdown/feedback/presets (module 0.9.2→0.9.3).
 - UI: `element_lower_third.rs` (seq-keyed enter/leave, 3 presets) + editor `Menovky` panel (`editor_nameplates.rs`) + `LowerThirdFields` + `nameplate_preview` postMessage. Playwright `stream-nameplates.spec.ts`.
 - Playbook: "Lower thirds / nameplates" section added to `.claude/rules/stream-graphics.md`.
+
+## #785 — Timer overlay designable in the stream editor (v0.4.284)
+
+- Core (`presenter-core/stream.rs`): `TextStyle.letter_spacing_em: Option<f32>` (validated -0.2..=1.0), `TextBox` + `Countdown.box: Option<TextBox>` (serde `rename="box"`, `r#box`), `validate_text_box`; `timer.rs` gains shared `format_elapsed`. New consts `STREAM_LETTER_SPACING_MIN/MAX_EM`.
+- Seed migration `m20260920_000001_seed_timer_output` (additive, idempotent): output `timer` + active base scene "Timer" + one styled countdown (props built via typed `StreamElementProps`+serde).
+- Redirect `/overlays/timer` → 302 `/stream/timer`; deleted SSR `ui/timer_overlay.rs` + CSS + orphaned `ui/utils.rs` + `styles::TIMER_OVERLAY`; repointed timer_panel/surface_nav/home/README links.
+- Output renderer: `text_style_css` letter-spacing; `element_countdown` honours `timer_id` (1=countdown_to_start via format_countdown, 2=preach via format_elapsed) + optional `TextBox` rgba() card (`style.rs::text_box_css`); camera_crew consolidated onto core `format_elapsed`.
+- Editor output switcher: `StreamEditorCtx.output_slug`+`outputs`; new `stream_editor/output_paths.rs` (slug-aware output-scoped paths + `OutputSelect` + localStorage/`?output=` persistence); all output-scoped paths + WS filters + preview iframe use the selected slug; `text_style_form` letter-spacing field; `element_form` `CountdownBoxFields`.
+- Tests: core units (letter-spacing/box validation + wire shape), migration idempotency, persistence round-trip, router (seeded timer def + create 422), E2E `stream-timer-overlay.spec.ts` (redirect+render, switcher edit→save→/stream/timer), anti-flicker moved to `/stream/timer`.
+- Playbook: "Timer overlay as a stream output" section in `.claude/rules/stream-graphics.md`; "Output switcher" section + `timer_id` note update in `.claude/rules/stream-editor-ui.md`.

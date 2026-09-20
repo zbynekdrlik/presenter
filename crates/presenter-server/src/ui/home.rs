@@ -40,7 +40,7 @@ fn HomeDocument() -> impl IntoView {
                         <ul class="home__links">
                             <li><a href="/stage">"Stage Output"</a></li>
                             <li><a href="/ui/camera">"Camera Crew"</a></li>
-                            <li><a href="/overlays/timer">"Timer Overlay"</a></li>
+                            <li><a href="/stream/timer">"Timer Overlay"</a></li>
                         </ul>
                     </section>
                 </main>

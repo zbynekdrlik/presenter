@@ -202,10 +202,15 @@ test("upload a font via the editor, pick it, output renders in that face", async
   await expect
     .poll(
       () =>
-        output.evaluate(
-          (fam) => document.fonts.check(`400 1em "${fam}"`),
-          FAMILY,
-        ),
+        output.evaluate(async (fam) => {
+          // Force the load (idempotent) so `check` reflects a settled face.
+          try {
+            await document.fonts.load(`400 1em "${fam}"`);
+          } catch {
+            // ignored — `check` below is the assertion
+          }
+          return document.fonts.check(`400 1em "${fam}"`);
+        }, FAMILY),
       {
         message: "document.fonts.check for the uploaded family",
         timeout: 10_000,

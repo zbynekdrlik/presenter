@@ -95,7 +95,7 @@ test("connected shows the ok state and links to the AI panel", async ({ page }) 
   expect(consoleMessages).toEqual([]);
 });
 
-test("a backend outage (connected:false) shows the unavailable state with the reason in the tooltip", async ({
+test("a failed last call (fold window) shows the yellow last-call-failed state with the reason in the tooltip", async ({
   page,
 }) => {
   const consoleMessages: string[] = [];
@@ -103,6 +103,9 @@ test("a backend outage (connected:false) shows the unavailable state with the re
   // #764: a metered backend that 200s /models but 403s completions (exhausted
   // budget) reports connected:false with the reason in `error`. A well-formed
   // 200 body, so the zero-console assertion still holds.
+  // #784: the `posledné AI volanie zlyhalo:` prefix marks a FOLD-WINDOW failure
+  // (one request failed in the last 15 min) — the chip must NOT claim the AI is
+  // down; that framing is reserved for a probe failure (next test).
   await mockAiStatus(page, {
     connected: false,
     error: "posledné AI volanie zlyhalo: Workspace daily budget exceeded",
@@ -112,8 +115,8 @@ test("a backend outage (connected:false) shows the unavailable state with the re
   await page.waitForLoadState("networkidle");
 
   const chip = page.locator('[data-role="ai-status-chip"]');
-  await expect(chip).toHaveAttribute("data-state", "unavailable", { timeout: 30_000 });
-  await expect(chip).toHaveText("AI: nedostupné");
+  await expect(chip).toHaveAttribute("data-state", "last_call_failed", { timeout: 30_000 });
+  await expect(chip).toHaveText("AI: posledné volanie zlyhalo");
   await expect(chip).toHaveAttribute("title", /budget/);
 
   expect(consoleMessages).toEqual([]);

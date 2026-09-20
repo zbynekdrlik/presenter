@@ -17,8 +17,11 @@ use presenter_core::{
 };
 use serde::Serialize;
 
+use super::output_paths::{
+    nameplates_active_path, nameplates_order_path, nameplates_path, overlay_path, scenes_path,
+};
 use super::props_access::default_element_props;
-use super::{bool_attr, StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
+use super::{bool_attr, StreamEditorCtx};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,27 +39,17 @@ struct SetActiveReq {
     id: Option<i64>,
 }
 
-fn nameplates_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/nameplates")
-}
-
-fn nameplates_order_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/nameplates/order")
-}
-
+/// Plate resource path (id-scoped, so not output-scoped — stays local).
 fn nameplate_path(id: i64) -> String {
     format!("/stream/api/nameplates/{id}")
-}
-
-fn active_path() -> String {
-    format!("/stream/api/outputs/{DEFAULT_OUTPUT_SLUG}/nameplates/active")
 }
 
 impl StreamEditorCtx {
     /// Re-fetch the person-plate list (mount + on a `StreamNameplatesChanged`).
     pub fn reload_nameplates(self) {
         leptos::task::spawn_local(async move {
-            match crate::api::get_json::<Vec<Nameplate>>(&nameplates_path()).await {
+            let path = nameplates_path(&self.output_slug.get_untracked());
+            match crate::api::get_json::<Vec<Nameplate>>(&path).await {
                 Ok(list) => self.nameplates.set(list),
                 Err(e) => self.show_toast(&format!("Načítanie menoviek zlyhalo: {e}"), "error"),
             }
@@ -66,9 +59,8 @@ impl StreamEditorCtx {
     /// Cold-load the plate currently on air (mount) so the highlight is correct.
     pub fn reload_active_nameplate(self) {
         leptos::task::spawn_local(async move {
-            if let Ok(active) =
-                crate::api::get_json::<Option<ActiveNameplate>>(&active_path()).await
-            {
+            let path = nameplates_active_path(&self.output_slug.get_untracked());
+            if let Ok(active) = crate::api::get_json::<Option<ActiveNameplate>>(&path).await {
                 self.active_nameplate.set(active);
             }
         });
@@ -87,7 +79,8 @@ impl StreamEditorCtx {
                 primary_text: primary,
                 secondary_text: secondary,
             };
-            match crate::api::post_json::<_, Nameplate>(&nameplates_path(), &req).await {
+            let path = nameplates_path(&self.output_slug.get_untracked());
+            match crate::api::post_json::<_, Nameplate>(&path, &req).await {
                 Ok(_) => {
                     self.reload_nameplates();
                     self.show_toast("Menovka pridaná.", "success");
@@ -160,7 +153,8 @@ impl StreamEditorCtx {
         ids.swap(pos, target);
         leptos::task::spawn_local(async move {
             let req = super::ReorderReq { ids };
-            match crate::api::put_no_content(&nameplates_order_path(), &req).await {
+            let path = nameplates_order_path(&self.output_slug.get_untracked());
+            match crate::api::put_no_content(&path, &req).await {
                 Ok(()) => self.reload_nameplates(),
                 Err(e) => self.show_toast(&format!("Zmena poradia zlyhala: {e}"), "error"),
             }
@@ -193,7 +187,8 @@ impl StreamEditorCtx {
 
     fn set_active(self, req: SetActiveReq) {
         leptos::task::spawn_local(async move {
-            match crate::api::put_json::<_, Option<ActiveNameplate>>(&active_path(), &req).await {
+            let path = nameplates_active_path(&self.output_slug.get_untracked());
+            match crate::api::put_json::<_, Option<ActiveNameplate>>(&path, &req).await {
                 Ok(active) => self.active_nameplate.set(active),
                 Err(e) => self.show_toast(&format!("Menovku sa nepodarilo prepnúť: {e}"), "error"),
             }
@@ -204,12 +199,13 @@ impl StreamEditorCtx {
     /// activate it — the one-click layer setup when the output has none.
     pub fn create_nameplate_layer(self) {
         leptos::task::spawn_local(async move {
+            let slug = self.output_slug.get_untracked();
             let scene_req = super::CreateSceneReq {
                 name: "Menovky".to_string(),
                 kind: SceneKind::Overlay,
             };
             let scene =
-                match crate::api::post_json::<_, StreamSceneDef>(&super::scenes_path(), &scene_req)
+                match crate::api::post_json::<_, StreamSceneDef>(&scenes_path(&slug), &scene_req)
                     .await
                 {
                     Ok(scene) => scene,
@@ -230,7 +226,7 @@ impl StreamEditorCtx {
             }
             let overlay_req = super::SetOverlayReq { active: true };
             let _ = crate::api::put_json::<_, StreamShowState>(
-                &super::overlay_path(scene.id),
+                &overlay_path(&slug, scene.id),
                 &overlay_req,
             )
             .await;

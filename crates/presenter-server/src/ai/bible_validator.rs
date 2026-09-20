@@ -44,6 +44,8 @@ impl ValidationRule {
             Self::ReferenceFormatRequiresParens => {
                 "Format is \"Book Chapter:Verse(-Verse) (CODE)\" with parens \
                  around the translation code, or omit the code entirely. \
+                 Ranges and non-contiguous verses may be listed: \
+                 \"Daniel 10:2-3, 12-14 (ROH)\". \
                  Correct: \"Židom 4:13 (SEB)\" or \"Židom 4:13\"."
             }
             Self::MissingVerseNumberPrefix => {
@@ -132,29 +134,165 @@ impl ValidationError {
     }
 }
 
-// Rule 1 regex: "Book Ch:V(-V)?( (CODE))?".
-//
-// - `^[\p{L}0-9\. ]+ ` — book name + trailing space. `\p{L}` is the
-//   Unicode letter class (all alphabetic letters, including Slovak,
-//   Czech, and other scripts) plus `0-9` for numbered books like
-//   "1. Samuelova" and `\.` / space inside the name. Earlier revisions
-//   used `[A-Za-zÀ-ž]` whose range accidentally admitted `×` (U+00D7)
-//   and `÷` (U+00F7) as valid book-name characters.
-// - `\d+:\d+[a-z]?` — chapter:verse, optional partial letter ("3a").
-// - `(-\d+[a-z]?)?` — optional verse range end.
-// - `( \([A-Z]+\))?` — optional translation code in parens.
-// - `$` — anchored.
-//
-// `Regex::new(...).ok()` yields `None` only if this literal regex is
-// malformed — a programmer bug which the unit tests in this module catch
-// immediately (callers fail closed on `None`). It is effectively
-// unreachable in production because the pattern is a compile-time constant.
-static REFERENCE_RE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^[\p{L}0-9\. ]+ \d+:\d+[a-z]?(-\d+[a-z]?)?( \([A-Z]+\))?$").ok());
+// Rule 1 (reference format) is enforced by [`normalize_reference`] below (#784),
+// which ACCEPTS and canonicalises every well-formed reference the domain
+// produces (multi-range comma-lists, lowercase code, duplicated chapter) rather
+// than the old single-range/uppercase-only `REFERENCE_RE` regex that rejected
+// them and looped the agent. Its component regexes are defined just below.
 
 // Rule 2 regex: multi-line mode, match any line starting with "N. ".
-// Same fallible-init rationale as `REFERENCE_RE` above.
+//
+// `Regex::new(...).ok()` yields `None` only if this literal regex is malformed —
+// a programmer bug which the unit tests in this module catch immediately
+// (callers fail closed on `None`). It is effectively unreachable in production
+// because the pattern is a compile-time constant.
 static VERSE_PREFIX_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"(?m)^\d+\. ").ok());
+
+// --- #784 reference NORMALISATION regexes ---
+//
+// Same fallible-init + fail-closed rationale as `VERSE_PREFIX_RE`: each literal
+// is a compile-time constant caught by this module's tests; callers fall back to
+// rejecting on `None`.
+
+// Split a trailing " (CODE)" off the reference. Case-insensitive so a lowercase
+// code (`(roh)`) is captured and later upper-cased. Group 1 = the body, group 2
+// = the code letters. A code NOT wrapped in parens (`… SEB`) never matches, so
+// it stays part of the body and is rejected downstream (contract kept stable).
+static REF_CODE_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"(?i)^(.*?)\s*\(\s*([a-z]+)\s*\)\s*$").ok());
+
+// Split the body into "book" + "chapter:verse-spec" at the FIRST `\d+:` token.
+// `(.+?)` is non-greedy so the book stops at the first `<space><chapter>:`.
+static REF_BOOK_SPEC_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"^(.+?)\s+(\d+\s*:.*)$").ok());
+
+// A valid book name: Unicode letters, digits, dots, spaces only — `\p{L}` is
+// the Unicode letter class (Slovak/Czech/other scripts) plus `0-9` for numbered
+// books like "1. Samuelova"; it excludes symbols like `×` (U+00D7) / `÷`.
+static REF_BOOK_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"^[\p{L}0-9.][\p{L}0-9. ]*$").ok());
+
+// The book must contain at least one letter (rejects an all-digits "book").
+static REF_BOOK_LETTER_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\p{L}").ok());
+
+// A single verse-spec token: optional `chapter:` prefix, a verse (with optional
+// `a`/`b` partial letter), and an optional `-verse` range end.
+static REF_TOKEN_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"^(?:(\d+):)?(\d+[a-z]?)(?:-(\d+[a-z]?))?$").ok());
+
+// Collapse whitespace around `:` and `-` inside the verse spec.
+static REF_COLON_WS_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\s*:\s*").ok());
+static REF_DASH_WS_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\s*-\s*").ok());
+
+/// Canonicalise a well-formed bible reference, or reject genuinely malformed
+/// text with [`ValidationRule::ReferenceFormatRequiresParens`] (#784).
+///
+/// Accepts and normalises every reference the domain produces — including the
+/// composer's own non-contiguous comma-list output
+/// (`state/slides/compose.rs::format_verse_range`, e.g. `Numeri 13:1, 3, 5`) and
+/// the loose forms the model emitted at PP:
+///
+/// - `Daniel 10:2, 3, 12, 13, 14 (ROH)` → unchanged (already canonical)
+/// - `Daniel 10:2-3 (roh)` → `Daniel 10:2-3 (ROH)` (code upper-cased)
+/// - `Daniel 10:12-14 10:12 (ROH)` → `Daniel 10:12-14, 12 (ROH)` (dup chapter merged)
+/// - stray leading/trailing/inner whitespace collapsed
+///
+/// Canonical form: `Book C:V[a](-V[a])?(, V[a](-V[a])?)*( (CODE))?`. A verse
+/// segment that re-prefixes the SAME chapter drops its `C:`; a genuinely
+/// different chapter keeps it. Rejects: no book, no `C:V`, a non-letter book
+/// character, a code not wrapped in parens.
+pub fn normalize_reference(reference: &str) -> Result<String, ValidationError> {
+    let reject = || ValidationError::new(ValidationRule::ReferenceFormatRequiresParens, reference);
+
+    let (code_re, book_spec_re, book_re, letter_re, token_re, colon_re, dash_re) = match (
+        REF_CODE_RE.as_ref(),
+        REF_BOOK_SPEC_RE.as_ref(),
+        REF_BOOK_RE.as_ref(),
+        REF_BOOK_LETTER_RE.as_ref(),
+        REF_TOKEN_RE.as_ref(),
+        REF_COLON_WS_RE.as_ref(),
+        REF_DASH_WS_RE.as_ref(),
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f), Some(g)) => (a, b, c, d, e, f, g),
+        // A literal regex failed to compile (programmer bug, caught by tests) —
+        // fail closed rather than silently accepting.
+        _ => return Err(reject()),
+    };
+
+    let trimmed = reference.trim();
+
+    // Split off an optional trailing "(CODE)"; upper-case it.
+    let (body, code) = match code_re.captures(trimmed) {
+        Some(caps) => (
+            caps.get(1).map_or("", |m| m.as_str()).trim().to_string(),
+            Some(caps.get(2).map_or("", |m| m.as_str()).to_uppercase()),
+        ),
+        None => (trimmed.to_string(), None),
+    };
+
+    // Split "book" from "chapter:verse-spec".
+    let caps = book_spec_re.captures(&body).ok_or_else(reject)?;
+    let book = caps.get(1).map_or("", |m| m.as_str()).trim();
+    let spec = caps.get(2).map_or("", |m| m.as_str());
+
+    if !book_re.is_match(book) || !letter_re.is_match(book) {
+        return Err(reject());
+    }
+
+    // Collapse whitespace around ':' and '-', then split into verse tokens on
+    // any comma/whitespace run.
+    let spec = colon_re.replace_all(spec, ":");
+    let spec = dash_re.replace_all(&spec, "-");
+    let tokens: Vec<&str> = spec
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return Err(reject());
+    }
+
+    let mut segments: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut first_chapter: Option<u32> = None;
+    let mut cur_chapter: u32 = 0;
+
+    for (i, token) in tokens.iter().enumerate() {
+        let tc = token_re.captures(token).ok_or_else(reject)?;
+        let chapter = match tc.get(1) {
+            Some(m) => Some(m.as_str().parse::<u32>().map_err(|_| reject())?),
+            None => None,
+        };
+        // Verse (with optional partial letter) + optional range end.
+        let verse = tc.get(2).map_or("", |m| m.as_str());
+        let verse_seg = match tc.get(3) {
+            Some(end) => format!("{verse}-{}", end.as_str()),
+            None => verse.to_string(),
+        };
+
+        if i == 0 {
+            // The first token MUST anchor the chapter.
+            let ch = chapter.ok_or_else(reject)?;
+            first_chapter = Some(ch);
+            cur_chapter = ch;
+            segments.push(verse_seg);
+        } else {
+            match chapter {
+                Some(ch) if ch != cur_chapter => {
+                    cur_chapter = ch;
+                    segments.push(format!("{ch}:{verse_seg}"));
+                }
+                // Same chapter re-prefix, or no chapter → verse only.
+                _ => segments.push(verse_seg),
+            }
+        }
+    }
+
+    let chapter = first_chapter.ok_or_else(reject)?;
+    let mut result = format!("{book} {chapter}:{}", segments.join(", "));
+    if let Some(code) = code {
+        result.push_str(&format!(" ({code})"));
+    }
+    Ok(result)
+}
 
 /// True when `main` is a single whole verse on a verse slide — i.e. it has a
 /// non-empty `main_reference` (so it is a verse, not an emphasis/title slide)
@@ -182,15 +320,21 @@ fn is_lone_whole_verse(main: &str, main_reference: &str) -> bool {
 /// - If `main_reference` is empty (emphasis/title slide): `main` must be
 ///   non-empty after trimming. Rules 1 and 2 are skipped.
 /// - If `main_reference` is non-empty (verse slide):
-///   - **Rule 1 (reference format)**: `main_reference` must match
-///     `Book Ch:V(-V)?( (CODE))?`.
+///   - **Rule 1 (reference format)**: `main_reference` must NORMALISE via
+///     [`normalize_reference`] to the canonical
+///     `Book Ch:V[a](-V[a])?(, …)*( (CODE))?` form (multi-range/comma lists and
+///     a lowercase code are accepted and canonicalised, not rejected — #784).
 ///   - **Rule 2 (verse number prefix)**: `main` must contain at least one
 ///     line starting with `\d+\. `.
+///
+/// On success returns the CANONICAL reference the caller writes back into the
+/// slide (empty string for an emphasis/title slide) so Resolume gets one
+/// canonical form (#784). Every failure is a [`ValidationError`].
 pub fn validate_bible_slide(
     main: &str,
     main_reference: &str,
     character_limit: u32,
-) -> Result<(), ValidationError> {
+) -> Result<String, ValidationError> {
     // Rule 5 — length check (applies to every slide, including emphasis).
     // Cheap and common; fail fast before running any regex.
     //
@@ -230,20 +374,12 @@ pub fn validate_bible_slide(
                 main.to_string(),
             ));
         }
-        return Ok(());
+        return Ok(String::new());
     }
 
-    // Verse slide — rule 1 (reference format). If the regex literal failed to
-    // compile (programmer bug, caught by this module's tests), fail closed.
-    if !REFERENCE_RE
-        .as_ref()
-        .is_some_and(|re| re.is_match(main_reference))
-    {
-        return Err(ValidationError::new(
-            ValidationRule::ReferenceFormatRequiresParens,
-            main_reference.to_string(),
-        ));
-    }
+    // Verse slide — rule 1 (reference format): normalise to the canonical form,
+    // or reject genuinely malformed text (#784).
+    let normalized = normalize_reference(main_reference)?;
 
     // Rule 2 (verse number prefix). Fail closed if the regex is unavailable.
     if !VERSE_PREFIX_RE.as_ref().is_some_and(|re| re.is_match(main)) {
@@ -253,7 +389,7 @@ pub fn validate_bible_slide(
         ));
     }
 
-    Ok(())
+    Ok(normalized)
 }
 
 #[cfg(test)]
@@ -316,9 +452,114 @@ mod tests {
     }
 
     #[test]
-    fn reference_format_rejects_lowercase_code() {
-        let err = validate_bible_slide("16. Lebo tak Boh...", "Ján 3:16 (seb)", 320).unwrap_err();
-        assert_eq!(err.rule, ValidationRule::ReferenceFormatRequiresParens);
+    fn reference_format_normalizes_lowercase_code() {
+        // #784: a lowercase translation code is no longer REJECTED — it is
+        // upper-cased and written back. (Was `reference_format_rejects_lowercase_code`;
+        // the design deliberately reverses this — a lowercase code is well-formed,
+        // just non-canonical, so it normalises instead of looping the agent.)
+        assert_eq!(
+            validate_bible_slide("16. Lebo tak Boh...", "Ján 3:16 (seb)", 320).unwrap(),
+            "Ján 3:16 (SEB)"
+        );
+    }
+
+    // -- Rule 1 NORMALISATION (#784) --
+    //
+    // The PP loop (2026-09-20) was the validator REJECTING well-formed refs the
+    // composer (`state/slides/compose.rs::format_verse_range`) and Gemini
+    // actually produce: non-contiguous comma-lists, a lowercase code, a stray
+    // duplicated chapter token. They must now NORMALISE to one canonical form,
+    // not reject — while genuine garbage still fails.
+
+    #[test]
+    fn normalize_accepts_the_pp_multi_range_comma_list() {
+        // The exact string the composer emitted at PP for Daniel 10:2-3, 12-14
+        // (ROH). Already canonical → unchanged.
+        assert_eq!(
+            normalize_reference("Daniel 10:2, 3, 12, 13, 14 (ROH)").unwrap(),
+            "Daniel 10:2, 3, 12, 13, 14 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_upper_cases_a_lowercase_translation_code() {
+        assert_eq!(
+            normalize_reference("Daniel 10:2-3 (roh)").unwrap(),
+            "Daniel 10:2-3 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_merges_a_duplicated_chapter_token() {
+        // "10:12-14 10:12" — a stray re-prefixed SAME chapter, space-separated;
+        // the second chapter prefix drops and the verse joins the list.
+        assert_eq!(
+            normalize_reference("Daniel 10:12-14 10:12 (ROH)").unwrap(),
+            "Daniel 10:12-14, 12 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_collapses_stray_whitespace() {
+        assert_eq!(
+            normalize_reference("  Daniel   10:2 ,  3 ,  12  (ROH)  ").unwrap(),
+            "Daniel 10:2, 3, 12 (ROH)"
+        );
+    }
+
+    #[test]
+    fn normalize_is_idempotent_on_already_canonical_refs() {
+        for r in [
+            "Ján 1:1-51 (MIL)",
+            "Žalm 26:3a (ROH)",
+            "Ján 3:16 (SEB)",
+            "Ján 3:16",
+            "1. Samuelova 17:33-37 (SEB)",
+            "Numeri 13:1, 3, 5 (SEB)",
+        ] {
+            assert_eq!(
+                normalize_reference(r).unwrap(),
+                r,
+                "must be idempotent: {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_rejects_genuine_garbage() {
+        // No book, no chapter:verse, empty, missing colon, code without parens,
+        // a Unicode symbol in the book name — all still rejected.
+        for g in [
+            "Daniel",
+            "10:2",
+            "",
+            "Ján 3 (SEB)",
+            "Židom 4:13 SEB",
+            "Bo×k 1:1 (MIL)",
+            "Ján 3:x (SEB)",
+        ] {
+            let err = normalize_reference(g).unwrap_err();
+            assert_eq!(
+                err.rule,
+                ValidationRule::ReferenceFormatRequiresParens,
+                "must reject: {g:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_writes_back_the_normalised_reference() {
+        // validate_bible_slide now RETURNS the canonical reference so the caller
+        // (create_bible_presentation) writes it back into the slide — Resolume
+        // then gets one canonical form.
+        let normalized = validate_bible_slide("2. text\n3. text", "Daniel 10:2-3 (roh)", 320)
+            .expect("a well-formed multi-range ref must be accepted");
+        assert_eq!(normalized, "Daniel 10:2-3 (ROH)");
+    }
+
+    #[test]
+    fn validate_returns_empty_reference_for_emphasis_slide() {
+        assert_eq!(validate_bible_slide("NOVÁ ZMLUVA", "", 320).unwrap(), "");
     }
 
     #[test]

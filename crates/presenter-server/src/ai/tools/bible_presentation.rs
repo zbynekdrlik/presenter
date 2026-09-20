@@ -172,20 +172,24 @@ pub(super) async fn create_bible_presentation(
     };
 
     // Compose slides server-side using the configured character limit.
-    let composed: Vec<ComposedBibleSlide> =
+    let mut composed: Vec<ComposedBibleSlide> =
         compose_bible_items_into_slides(&items, default_char_limit);
 
-    // Validate each composed slide. With a correct composer this should never
-    // trip: a lone oversized verse is now accepted (kept whole, autofit shrinks
-    // it — issue #394), and the composer flushes before packing multiple verses
-    // past the limit, so a MainExceedsCharacterLimit here would signal a real
-    // packing regression rather than the expected oversized-single-verse case.
-    for (idx, slide) in composed.iter().enumerate() {
-        if let Err(mut err) =
-            validate_bible_slide(&slide.main, &slide.main_reference, default_char_limit)
-        {
-            err.got = format!("composed_slide[{idx}]: {}", err.got);
-            return Ok(validation_error_response(err));
+    // Validate each composed slide, and WRITE BACK the canonical reference
+    // `validate_bible_slide` returns (#784) so Resolume gets one canonical form
+    // and a well-formed non-contiguous passage (e.g. Daniel 10:2-3, 12-14) is
+    // NORMALISED instead of rejected — the PP loop that ended in a 120 s
+    // timeout. A remaining Err is still a genuine malformation: with a correct
+    // composer a MainExceedsCharacterLimit here signals a real packing
+    // regression (a lone oversized verse is accepted whole, autofit shrinks it —
+    // issue #394), and a bold-marker / verse-prefix failure is a real content bug.
+    for (idx, slide) in composed.iter_mut().enumerate() {
+        match validate_bible_slide(&slide.main, &slide.main_reference, default_char_limit) {
+            Ok(normalized) => slide.main_reference = normalized,
+            Err(mut err) => {
+                err.got = format!("composed_slide[{idx}]: {}", err.got);
+                return Ok(validation_error_response(err));
+            }
         }
     }
 

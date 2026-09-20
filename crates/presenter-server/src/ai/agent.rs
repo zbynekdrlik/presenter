@@ -1,3 +1,4 @@
+use super::agent_guard::{AgentGuard, AgentOutcome};
 use super::context_budget::{
     context_budget_bytes, enforce_context_budget, estimate_conversation_bytes,
 };
@@ -685,6 +686,61 @@ fn record_completion_health(
     result
 }
 
+/// Append the turn's user message to the conversation. Extracted to keep
+/// `run_agent_with_guard` under the function-length cap.
+fn push_user_message(conversation: &mut Vec<ChatMessage>, user_message: &str) {
+    conversation.push(ChatMessage {
+        role: "user".to_string(),
+        content: Some(user_message.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        preview: None,
+    });
+}
+
+/// Conclude a turn: push the assistant's final message, trim, and return.
+/// Shared by the normal text-response path and the #784 give-up paths so each
+/// is a single line at the call site (keeps `run_agent_with_guard` under the
+/// function-length cap).
+fn conclude_turn(
+    conversation: &mut Vec<ChatMessage>,
+    response_text: String,
+    actions: Vec<ToolAction>,
+    turn_metadata: Vec<TurnMetadata>,
+    usage_total: Option<TokenUsage>,
+) -> RunAgentResult {
+    conversation.push(ChatMessage {
+        role: "assistant".to_string(),
+        content: Some(response_text.clone()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        preview: None,
+    });
+    // Trim conversation to last 10 user turns, preserving tool_call/result
+    // pairs. A "turn" is user msg + subsequent assistant/tool messages.
+    trim_conversation(conversation, 10);
+    Ok((response_text, actions, turn_metadata, usage_total))
+}
+
+/// Scan the tool-result messages appended to `conversation` since `from_len` for
+/// a `slide_validation` rejection (`bible_validator::ValidationError::to_json`),
+/// returning the rule of the LAST such rejection this round — `None` when the
+/// round produced none. Drives the #784 consecutive-identical-rejection guard.
+fn last_slide_validation_rule(conversation: &[ChatMessage], from_len: usize) -> Option<String> {
+    conversation
+        .get(from_len..)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|m| m.role == "tool")
+        .filter_map(|m| m.content.as_deref())
+        .filter_map(|c| serde_json::from_str::<Value>(c).ok())
+        .filter(|v| v.get("error").and_then(Value::as_str) == Some("slide_validation"))
+        .filter_map(|v| v.get("rule").and_then(Value::as_str).map(str::to_string))
+        .next_back()
+}
+
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
@@ -696,36 +752,53 @@ pub async fn run_agent(
     settings: &AiSettings,
     progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 ) -> RunAgentResult {
+    // Production uses the env-driven per-turn guard (#784). Tests inject a small
+    // budget / threshold via `run_agent_with_guard` for deterministic coverage.
+    run_agent_with_guard(
+        user_message,
+        conversation,
+        state,
+        settings,
+        progress_tx,
+        AgentGuard::from_env(),
+    )
+    .await
+}
+
+/// [`run_agent`] with an explicit [`AgentGuard`] (see #784). The guard bounds
+/// the loop by wall-clock budget and by consecutive identical validation
+/// rejections, ending the turn with a Slovak operator message instead of
+/// spinning to the 120 s client timeout. A give-up is a normal text response,
+/// NOT an error, and records no `AiCallHealth` failure — the backend is healthy.
+pub(crate) async fn run_agent_with_guard(
+    user_message: &str,
+    conversation: &mut Vec<ChatMessage>,
+    state: &AppState,
+    settings: &AiSettings,
+    progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
+    mut guard: AgentGuard,
+) -> RunAgentResult {
     let (system_prompt, char_limit) =
         build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
     let tools = super::tools::tool_definitions();
     let mut actions = Vec::new();
     let mut turn_metadata = Vec::new();
-    // #687: running per-turn total, folded once per iteration below.
-    let mut usage_total: Option<TokenUsage> = None;
+    let mut usage_total: Option<TokenUsage> = None; // #687: per-turn total.
 
-    // Add user message to conversation
-    conversation.push(ChatMessage {
-        role: "user".to_string(),
-        content: Some(user_message.to_string()),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-        preview: None,
-    });
-
-    // Capture the user's original message for the delete-intent gate.
-    // The gate runs on every delete_* tool call during this turn.
+    push_user_message(conversation, user_message);
+    // Original message for the delete-intent gate (runs on every delete_* call).
     let original_user_message = user_message.to_string();
 
     for iteration in 0..MAX_ITERATIONS {
-        // Size-budgeted context enforcement — run on EVERY iteration, not
-        // just once at the end of a turn. Without this, a single turn that
-        // makes many tool calls resends an ever-growing conversation on
-        // every one of those calls (quadratic growth within one turn),
-        // which is the root cause of the 2026-08-09 "prompt is too long"
-        // outage (#665).
+        // #665: per-iteration size-budget enforcement (the 2026-08-09 outage).
         enforce_budget_or_refuse(conversation, iteration)?;
+
+        // #784: per-turn wall-clock budget — end with a Slovak message BEFORE
+        // the 120 s client timeout that would flip the "AI down" badge.
+        if let AgentOutcome::GaveUp { reason } = guard.check_budget() {
+            warn!(iteration, "AI agent turn budget exhausted");
+            return conclude_turn(conversation, reason, actions, turn_metadata, usage_total);
+        }
 
         let messages = build_api_messages(&system_prompt, conversation)?;
 
@@ -752,11 +825,12 @@ pub async fn run_agent(
             reasoning_content_len,
         });
 
-        // Check for tool calls
+        // Tool calls → execute, then apply the #784 rejection guard.
         if let Some(ref tool_calls) = msg.tool_calls {
             if !tool_calls.is_empty() {
                 push_assistant_tool_call_message(conversation, msg.content.clone(), tool_calls);
 
+                let before = conversation.len();
                 execute_tool_calls(
                     tool_calls,
                     conversation,
@@ -768,26 +842,33 @@ pub async fn run_agent(
                 )
                 .await;
 
+                // #784: bail out of a validation-rejection loop after N identical
+                // strikes rather than re-asking until the client timeout.
+                let rule = last_slide_validation_rule(conversation, before);
+                if let AgentOutcome::GaveUp { reason } = guard.observe_rejection(rule.as_deref()) {
+                    warn!(iteration, ?rule, "AI agent gave up: repeated rejections");
+                    return conclude_turn(
+                        conversation,
+                        reason,
+                        actions,
+                        turn_metadata,
+                        usage_total,
+                    );
+                }
+
                 continue; // Call LLM again with tool results
             }
         }
 
-        // Text response — we're done
+        // Text response — we're done.
         let response_text = msg.content.unwrap_or_default();
-        conversation.push(ChatMessage {
-            role: "assistant".to_string(),
-            content: Some(response_text.clone()),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-            preview: None,
-        });
-
-        // Trim conversation to last 10 user turns, preserving tool_call/result
-        // pairs. A "turn" is user msg + subsequent assistant/tool messages.
-        trim_conversation(conversation, 10);
-
-        return Ok((response_text, actions, turn_metadata, usage_total));
+        return conclude_turn(
+            conversation,
+            response_text,
+            actions,
+            turn_metadata,
+            usage_total,
+        );
     }
 
     // MAX_ITERATIONS exhausted without a text response. This path used to

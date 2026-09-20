@@ -57,8 +57,9 @@ fn render_element(id: i64, z: i32, props: StreamElementProps) -> AnyView {
             // Countdown ignores `content_transition` (#776): a per-tick fade
             // flickers, so it renders a stable text node with a hard cut.
             content_transition: _,
+            r#box,
         } => view! {
-            <ElementCountdown id=id timer_id=timer_id style=style frame=frame z=z />
+            <ElementCountdown id=id timer_id=timer_id style=style frame=frame text_box=r#box z=z />
         }
         .into_any(),
         StreamElementProps::Lyrics {

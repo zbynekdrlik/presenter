@@ -10,6 +10,8 @@
  */
 
 import { test, expect } from "@playwright/test";
+import http from "http";
+import type { AddressInfo } from "net";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
@@ -580,5 +582,148 @@ test.describe("AI Chat Paste Handler", () => {
     // Textarea should not contain ## markers
     const value = await textarea.inputValue();
     expect(value).not.toContain("##");
+  });
+});
+
+test.describe("AI Chat Give-Up (agent guard #784)", () => {
+  // The operator asks for a passage; a mock AI provider keeps answering with a
+  // tool call the validator rejects (raw ## markers → unprocessed_bold_markers).
+  // The #784 agent guard must END the turn after 3 identical rejections with the
+  // Slovak give-up message shown as a normal assistant bubble — never a spin to
+  // the 120 s client-timeout error the PP operator hit (2026-09-20). Needs its
+  // OWN server + isolated DB so the mock-backed AI URL never leaks into the
+  // shared server (whose default is a dead loopback endpoint).
+  let mockServer: http.Server | undefined;
+  let giveUpServer: ServerHandle | undefined;
+  let giveUpBaseURL: string;
+
+  test.beforeAll(async ({}, testInfo) => {
+    let calls = 0;
+    mockServer = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const url = req.url ?? "";
+        if (req.method === "GET" && url.includes("/models")) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              data: [{ id: "google/gemini-3.8-flash" }, { id: "test-model" }],
+            }),
+          );
+          return;
+        }
+        if (req.method === "POST" && url.includes("/chat/completions")) {
+          calls += 1;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: `call_${calls}`,
+                        type: "function",
+                        function: {
+                          name: "create_bible_presentation",
+                          arguments: JSON.stringify({
+                            name: "Loop",
+                            items: [
+                              {
+                                kind: "verse",
+                                number: 1,
+                                text: "##bad## text",
+                                book: "Ján",
+                                chapter: 1,
+                                translation: "SEB",
+                              },
+                            ],
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+            }),
+          );
+          return;
+        }
+        res.writeHead(404);
+        res.end("not found");
+      });
+    });
+    await new Promise<void>((resolve) => {
+      mockServer!.listen(0, "127.0.0.1", () => resolve());
+    });
+    const mockPort = (mockServer!.address() as AddressInfo).port;
+
+    const config = deriveTestConfig(testInfo);
+    // +50 stays inside THIS worker's 100-port block (file offsets are 0-49), so
+    // it never collides with the shared server or another file's server.
+    const port = config.port + 50;
+    giveUpBaseURL = `http://127.0.0.1:${port}`;
+    const dbUrl = config.dbUrl.replace(/\.db$/, "_giveup.db");
+    await refreshDevData(dbUrl);
+
+    // The mock-integrations build binds mock-resolume on a FIXED port (8091),
+    // so two test servers cannot coexist: stop the file-level shared server
+    // first (this is the last describe in the file; nothing else needs it).
+    await stopServer(serverHandle);
+    serverHandle = undefined;
+
+    const prev = process.env.PRESENTER_AI_API_URL;
+    process.env.PRESENTER_AI_API_URL = `http://127.0.0.1:${mockPort}`;
+    try {
+      giveUpServer = await startTestServer(port, dbUrl);
+    } finally {
+      if (prev === undefined) delete process.env.PRESENTER_AI_API_URL;
+      else process.env.PRESENTER_AI_API_URL = prev;
+    }
+  });
+
+  test.afterAll(async () => {
+    await stopServer(giveUpServer);
+    if (mockServer) {
+      await new Promise<void>((resolve) => mockServer!.close(() => resolve()));
+    }
+  });
+
+  test("operator sees the Slovak give-up message, console stays clean", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+
+    await page.goto(`${giveUpBaseURL}/ui/operator/ai`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "ai",
+      { timeout: 5_000 },
+    );
+
+    const textarea = page.locator('[data-role="ai-input"]');
+    await textarea.fill("sprav prezentáciu Daniel 10:2-3, 12-14 (ROH)");
+    await page.locator('[data-role="ai-send"]').click();
+
+    // The guard ends the turn with the Slovak give-up message as a normal
+    // assistant bubble (NOT the ai-error panel — the backend is healthy).
+    const assistantMsg = page.locator(
+      '[data-role="ai-message"][data-message-role="assistant"]',
+    );
+    await expect(assistantMsg).toContainText("Skús zadanie zjednodušiť", {
+      timeout: 30_000,
+    });
+
+    // A give-up is not an error: the error panel must never appear.
+    await expect(page.locator('[data-role="ai-error"]')).not.toBeVisible();
+
+    expect(consoleMessages).toEqual([]);
   });
 });

@@ -134,6 +134,23 @@ async function setFrame(page: Page, x: number, y: number, w: number, h: number) 
   await page.locator('[data-role="stream-frame-h"]').blur();
 }
 
+/** Wait until the SAVED def carries the given frame for `id` — a save triggers a
+ *  def refetch that re-renders the canvas overlay; clicking before it settles
+ *  races that re-render (the selection can be re-seeded under the click). */
+async function waitForSavedFrame(page: Page, sceneId: string, id: string, x: number, y: number) {
+  await expect
+    .poll(
+      async () => {
+        const scene = await getScene(page, sceneId);
+        const el = scene.elements.find((e) => String(e.id) === id);
+        const frame = (el?.props as { frame?: { xPct?: number; yPct?: number } } | undefined)?.frame;
+        return frame ? [frame.xPct, frame.yPct] : null;
+      },
+      { timeout: 10_000 },
+    )
+    .toEqual([x, y]);
+}
+
 function overlayEl(page: Page, id: string) {
   return page.locator(`[data-role="stream-overlay-element"][data-element-id="${id}"]`);
 }
@@ -271,10 +288,12 @@ test("click-to-select syncs the list; overlay works on an overlay scene + last e
   await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
   await setFrame(page, 5, 5, 20, 20);
   await page.locator(sel.save).click();
+  await waitForSavedFrame(page, scene, first, 5, 5);
 
   const last = await addElement(page, scene, "color"); // auto-selected (last)
   await setFrame(page, 60, 60, 20, 20);
   await page.locator(sel.save).click();
+  await waitForSavedFrame(page, scene, last, 60, 60);
 
   // Click the FIRST element's outline on the canvas → the list selects it.
   const fb = (await overlayEl(page, first).boundingBox())!;

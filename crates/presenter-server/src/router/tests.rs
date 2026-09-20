@@ -293,6 +293,7 @@ async fn home_route_links_match_live_routes() {
         "/ui/settings",
         "/ui/stream",
         "/stream/stream",
+        "/stream/timer",
         "/stage",
         "/overlays/timer",
     ] {
@@ -1241,7 +1242,10 @@ async fn operator_ui_endpoint_serves_wasm_shell() {
 }
 
 #[tokio::test]
-async fn timer_overlay_endpoint_renders_html() {
+async fn timer_overlay_legacy_url_redirects_to_stream_timer() {
+    // #785: the SSR overlay is gone; `/overlays/timer` now 302-redirects to the
+    // seeded `/stream/timer` stream-graphics output so existing OBS sources keep
+    // working.
     let state = AppState::in_memory().await.unwrap();
     let app = build_router(state);
     let response = app
@@ -1254,13 +1258,14 @@ async fn timer_overlay_endpoint_renders_html() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let location = response
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .expect("redirect must set a Location header")
+        .to_str()
         .unwrap();
-    let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("Presenter Timer Overlay"));
-    assert!(body.contains("timer-value"));
+    assert_eq!(location, "/stream/timer");
 }
 
 #[tokio::test]

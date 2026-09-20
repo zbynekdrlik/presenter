@@ -71,6 +71,23 @@ html[data-stream-editor="true"] {
   font-size: 0.8rem;
 }
 
+/* #785: the output switcher in the header (list from GET /stream/api/outputs). */
+.stream-editor__output-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #b8c0d0;
+}
+
+.stream-editor__output-select select {
+  background: #1b2130;
+  color: #e6eaf2;
+  border: 1px solid #333c4f;
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+}
+
 .stream-editor__main {
   flex: 1;
   padding: 1.5rem;
