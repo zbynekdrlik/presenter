@@ -73,7 +73,7 @@ const EXPECTED_TARGETS: ReadonlyArray<{ name: string; href: string }> = [
   { name: "Stage", href: "/stage" },
   { name: "Camera", href: "/ui/camera" },
   { name: "Tablet", href: "/ui/tablet" },
-  { name: "Timer", href: "/overlays/timer" },
+  { name: "Timer", href: "/stream/timer" },
 ];
 
 async function waitForOperatorReady(page: Page): Promise<void> {
