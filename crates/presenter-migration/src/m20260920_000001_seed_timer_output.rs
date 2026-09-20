@@ -214,7 +214,7 @@ mod tests {
         let el = db
             .query_one(Statement::from_string(
                 DbBackend::Sqlite,
-                "SELECT COUNT(*) AS n, MIN(kind) AS kind, MIN(props) AS props \
+                "SELECT COUNT(*) AS n, MIN(e.kind) AS kind, MIN(e.props) AS props \
                  FROM stream_elements e JOIN stream_scenes s ON s.id = e.scene_id \
                  JOIN stream_outputs o ON o.id = s.output_id WHERE o.slug='timer'"
                     .to_string(),
