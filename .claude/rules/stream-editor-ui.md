@@ -199,3 +199,42 @@ so a change-only commit is invisible to `fill`-based tests, and (b) live two-way
 (field ↔ canvas) needs per-keystroke commit. Clamping on commit is what makes a save
 impossible to 422 on the frame — so a deliberate-422 E2E must use a NON-frame field
 (e.g. text `size_pct` beyond 0..=100), NOT a frame field.
+
+## Canvas gestures = the pure `gesture.rs` state machine; a drag must never outlive the button (#787)
+`components/stream_editor/gesture.rs` (host-tested) decides everything; `canvas_overlay.rs`
+only feeds it events. Invariants that MUST hold when touching the overlay:
+- pointerdown → `Pending` (nothing moves); a drag starts only after `DRAG_THRESHOLD_PX`
+  (4 px) of travel, then applies the FULL delta since pointerdown. A click never edits the frame.
+- The gesture ends on `pointerup`, `pointercancel`, `lostpointercapture`, window `blur`, AND
+  any `pointermove` with `ev.buttons() == 0`. The last one matters most: the dirty-guard
+  `confirm()` inside pointerdown (and alt-tab / an OS gesture) can swallow the pointerup, so
+  the overlay never hears the release. Without the buttons check the element then follows
+  every plain mouse move ("stuck drag").
+- Escape during a gesture restores the frame from pointerdown; Escape when idle, or a
+  pointerdown whose target IS the overlay container (`data-role` check — do not use
+  `currentTarget` under leptos event delegation), calls `ctx.deselect_element()`, which asks
+  the same „Zahodiť neuložené zmeny prvku?" question as `select_element`.
+- The window blur listener is `window_event_listener_untyped` + `on_cleanup(handle.remove())`.
+  Do NOT `forget()` it: `WindowListenerHandle` is `Send` (the host build accepts it), and the
+  overlay remounts on every scene open, so a leaked closure would read disposed `StoredValue`s.
+- Outlines render in ascending `z_order` (`ids_bottom_to_top`), so the top-most element is
+  last in the DOM and the browser's own hit test picks it. No `elementsFromPoint` is needed.
+  A scene with a full-canvas element (e.g. the SNV timer's 0/0/100/100 image) has NO empty
+  canvas, so in that scene only Escape deselects.
+- Only the primary button (`ev.button() == 0`) selects, starts a gesture, or deselects.
+  A right-click must not drag anything.
+- Activation responses (`activate_base` / `toggle_overlay`) and `reload_def` capture the slug
+  before `spawn_local` and discard a response once the output has changed. `reload_def`
+  returns `bool`, so a follow-up such as `add_element`'s selection runs only after the def
+  was actually installed.
+- E2E: simulate a lost pointerup with `overlay.releasePointerCapture(pid)` (read the pid from
+  a capturing `pointerdown` listener) and then `mouse.up()` outside the overlay. Simulate
+  alt-tab with `window.dispatchEvent(new Event("blur"))`.
+
+## Output switch clears `def` first; `reload_def` drops a stale slug's response (#787)
+`switch_output` sets `def = None` (and resets `active`) BEFORE the refetch, so `EditorScenes`
+shows its „Načítavam…" fallback and every def-reading action (`move_scene`, …) no-ops until
+the new def lands. `reload_def` re-reads `output_slug` after the await and discards a
+response for a slug that is no longer selected. E2E: hold the page's def response with a
+`page.route` gate. `page.request` is NOT intercepted by `page.route`, so read expected ids
+through it.
