@@ -322,3 +322,259 @@ test("click-to-select syncs the list; overlay works on an overlay scene + last e
 
   expect(errors, "console clean").toEqual([]);
 });
+
+// ---- #787: no stuck drags, click != move, Escape cancels, output switch ----
+
+/** Set + save the selected element's frame and wait for the saved def (so the
+ *  overlay re-render from the save's refetch has settled before any click). */
+async function saveFrame(
+  page: Page,
+  sceneId: string,
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  await setFrame(page, x, y, w, h);
+  await page.locator(sel.save).click();
+  await waitForSavedFrame(page, sceneId, id, x, y);
+}
+
+/** The frame position the fields currently show (the live draft). */
+async function shownXY(page: Page): Promise<[number, number]> {
+  return [
+    Number(await page.locator(sel.frameX).inputValue()),
+    Number(await page.locator(sel.frameY).inputValue()),
+  ];
+}
+
+function listRow(page: Page, id: string) {
+  return page.locator(`[data-role="stream-element"][data-element-id="${id}"]`);
+}
+
+/** A scene with one colour element at 10/10 20×20, saved + selected. */
+async function sceneWithOneElement(page: Page, name: string) {
+  const scene = await addScene(page, name, "base");
+  await openPanel(page, scene);
+  const el = await addElement(page, scene, "color"); // auto-selected
+  await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
+  await saveFrame(page, scene, el, 10, 10, 20, 20);
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "true");
+  return { scene, el };
+}
+
+async function centerOf(page: Page, id: string): Promise<[number, number]> {
+  const b = (await overlayEl(page, id).boundingBox())!;
+  return [b.x + b.width / 2, b.y + b.height / 2];
+}
+
+test("#787 a click with hand jitter keeps the frame; Escape mid-drag restores the start frame", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { el } = await sceneWithOneElement(page, "SC_787_Click");
+
+  // A real-user click: press, a 2 px wobble, release. Below the drag threshold
+  // → the element is selected but its frame does NOT change.
+  const [cx, cy] = await centerOf(page, el);
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 2, cy + 1);
+  await page.mouse.up();
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "true");
+  expect(await shownXY(page)).toEqual([10, 10]);
+
+  // Start a real drag, then press Escape while the button is still down: the
+  // frame snaps back to where the drag started and the drag is over (further
+  // moves with the button held do nothing).
+  const canvas = (await page.locator(sel.overlay).boundingBox())!;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + canvas.width * 0.2, cy + canvas.height * 0.2, { steps: 8 });
+  await expect.poll(async () => (await shownXY(page))[0]).toBeGreaterThan(12);
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => shownXY(page)).toEqual([10, 10]);
+  await page.mouse.move(cx + canvas.width * 0.3, cy + canvas.height * 0.3, { steps: 6 });
+  await page.mouse.up();
+  expect(await shownXY(page)).toEqual([10, 10]);
+  // Escape during a drag cancels the drag only — the element stays selected.
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "true");
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 a drag ends when capture is lost + the button is released outside, and on window blur", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { el } = await sceneWithOneElement(page, "SC_787_Stuck");
+
+  // Remember the pointer id of the last pointerdown (read it, don't assume 1).
+  await page.evaluate(() => {
+    document.addEventListener(
+      "pointerdown",
+      (e) => ((window as unknown as { __pid: number }).__pid = e.pointerId),
+      true,
+    );
+  });
+
+  const canvas = (await page.locator(sel.overlay).boundingBox())!;
+  let [cx, cy] = await centerOf(page, el);
+
+  // Drag, then lose pointer capture (what an iframe / alt-tab / OS gesture does)
+  // and release the button OUTSIDE the overlay.
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + canvas.width * 0.1, cy, { steps: 6 });
+  await expect.poll(async () => (await shownXY(page))[0]).toBeGreaterThan(11);
+  await page.evaluate((overlaySel) => {
+    const ov = document.querySelector(overlaySel) as HTMLElement;
+    ov.releasePointerCapture((window as unknown as { __pid: number }).__pid);
+  }, sel.overlay);
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y - 30, { steps: 4 });
+  await page.mouse.up();
+  const afterRelease = await shownXY(page);
+
+  // Plain mouse moves back over the canvas (no button) must NOT move it.
+  await page.mouse.move(canvas.x + canvas.width * 0.7, canvas.y + canvas.height * 0.7, {
+    steps: 10,
+  });
+  await page.mouse.move(canvas.x + canvas.width * 0.2, canvas.y + canvas.height * 0.6, {
+    steps: 10,
+  });
+  expect(await shownXY(page)).toEqual(afterRelease);
+
+  // Window blur mid-drag (alt-tab) ends the drag too: moves with the button
+  // still held after the blur do nothing.
+  [cx, cy] = await centerOf(page, el);
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy + canvas.height * 0.1, { steps: 6 });
+  await expect
+    .poll(async () => (await shownXY(page))[1])
+    .toBeGreaterThan(afterRelease[1] + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  const afterBlur = await shownXY(page);
+  await page.mouse.move(cx + canvas.width * 0.2, cy + canvas.height * 0.2, { steps: 8 });
+  await page.mouse.up();
+  expect(await shownXY(page)).toEqual(afterBlur);
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 Escape with no drag deselects; a click on empty canvas deselects", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { el } = await sceneWithOneElement(page, "SC_787_Deselect");
+
+  // Click the element (focuses the overlay), then Escape → nothing selected.
+  const [cx, cy] = await centerOf(page, el);
+  await page.mouse.click(cx, cy);
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "true");
+  await page.keyboard.press("Escape");
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "false");
+  await expect(listRow(page, el)).toHaveAttribute("data-selected", "false");
+  await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
+
+  // Select again, then click an EMPTY spot of the canvas → deselected.
+  await page.mouse.click(cx, cy);
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "true");
+  const canvas = (await page.locator(sel.overlay).boundingBox())!;
+  await page.mouse.click(canvas.x + canvas.width * 0.8, canvas.y + canvas.height * 0.8);
+  await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "false");
+  await expect(listRow(page, el)).toHaveAttribute("data-selected", "false");
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 a full-canvas element underneath does not steal clicks meant for the element above", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+
+  const scene = await addScene(page, "SC_787_Z", "base");
+  await openPanel(page, scene);
+  // Background first (lowest z), then a small element above it.
+  const bg = await addElement(page, scene, "color");
+  await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
+  await saveFrame(page, scene, bg, 0, 0, 100, 100);
+  const top = await addElement(page, scene, "color");
+  await saveFrame(page, scene, top, 40, 40, 20, 20);
+
+  const canvas = (await page.locator(sel.overlay).boundingBox())!;
+  const [tx, ty] = await centerOf(page, top);
+
+  // Select the background by clicking beside the small element…
+  await page.mouse.click(canvas.x + canvas.width * 0.1, canvas.y + canvas.height * 0.1);
+  await expect(overlayEl(page, bg)).toHaveAttribute("data-selected", "true");
+  // …then a click on the small element selects IT, even with the full-canvas
+  // background selected underneath.
+  await page.mouse.click(tx, ty);
+  await expect(overlayEl(page, top)).toHaveAttribute("data-selected", "true");
+  await expect(listRow(page, top)).toHaveAttribute("data-selected", "true");
+  await expect(overlayEl(page, bg)).toHaveAttribute("data-selected", "false");
+  expect(await shownXY(page)).toEqual([40, 40]);
+
+  // Neither click moved anything.
+  const saved = (await getScene(page, scene)).elements;
+  const frameOf = (id: string) =>
+    (saved.find((e) => String(e.id) === id)!.props.frame as { xPct: number; yPct: number });
+  expect([frameOf(bg).xPct, frameOf(bg).yPct]).toEqual([0, 0]);
+  expect([frameOf(top).xPct, frameOf(top).yPct]).toEqual([40, 40]);
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 switching output shows loading, never the previous output's scenes", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const oldScene = await addScene(page, "SC_787_OldOutput", "base");
+
+  // The timer output's scene id (read via the API request context, which the
+  // page route below does not intercept).
+  const timerRes = await page.request.get(
+    new URL("/stream/api/outputs/timer/def", baseURL).toString(),
+  );
+  expect(timerRes.ok()).toBeTruthy();
+  const timerScene = String(((await timerRes.json()) as OutputDef).scenes[0].id);
+
+  // Hold the page's timer-def response until the test releases it, so the
+  // in-between state is observable deterministically.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/stream/api/outputs/timer/def", async (route) => {
+    await gate;
+    await route.continue();
+  });
+
+  await page.locator('[data-role="stream-output-select"]').selectOption("timer");
+
+  // While the new def is loading: a loading state, and NOT the old scenes.
+  await expect(page.locator('[data-role="stream-loading"]')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(`${sel.scene}[data-scene-id="${oldScene}"]`)).toHaveCount(0);
+
+  release();
+
+  // The timer output's own scene appears; the old output's scene stays gone.
+  await expect(page.locator(`${sel.scene}[data-scene-id="${timerScene}"]`)).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  await expect(page.locator(`${sel.scene}[data-scene-id="${oldScene}"]`)).toHaveCount(0);
+  await expect(page.locator('[data-role="stream-loading"]')).toHaveCount(0);
+
+  await page.unroute("**/stream/api/outputs/timer/def");
+  expect(errors, "console clean").toEqual([]);
+});

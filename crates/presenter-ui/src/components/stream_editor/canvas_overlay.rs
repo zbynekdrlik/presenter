@@ -10,37 +10,49 @@
 //! writes the shared `ctx.draft`, which the numeric fields and the preview push
 //! both mirror — so the preview, the fields and the outline stay in lock-step
 //! with NO save round trip.
+//!
+//! Gesture handling (#787) is the pure [`super::gesture`] state machine: a press
+//! only becomes a drag after a few px of travel (a click never moves the
+//! element), the drag ends on pointerup / pointercancel / lost capture / window
+//! blur / any move with no button held (it can never get stuck), Escape restores
+//! the frame from the drag start, and Escape when idle or a click on empty
+//! canvas deselects.
 
 use leptos::prelude::*;
-use presenter_core::{Frame, StreamElementProps};
+use presenter_core::{Frame, StreamElementDef, StreamElementProps};
+use wasm_bindgen::JsCast;
 use web_sys::{KeyboardEvent, PointerEvent};
 
 use super::frame_math::{self, Handle};
+use super::gesture::{EscapeAction, Gesture, GestureKind, MoveAction};
 use super::props_access::read_frame;
 use super::StreamEditorCtx;
 
-/// The active pointer gesture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DragMode {
-    None,
-    Move,
-    Resize(Handle),
-}
+/// The overlay container's `data-role` — a pointerdown whose target is the
+/// container itself (not an outline/handle) is a click on EMPTY canvas.
+const OVERLAY_ROLE: &str = "stream-canvas-overlay";
+
+/// `MouseEvent.button` of the primary (left / touch / pen-tip) button — only it
+/// selects or starts a gesture; a right-click must not drag an element.
+const PRIMARY_BUTTON: i16 = 0;
 
 #[component]
 pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
     let overlay_ref = NodeRef::<leptos::html::Div>::new();
-    let mode = StoredValue::new(DragMode::None);
-    let last = StoredValue::new((0.0_f64, 0.0_f64));
+    // Idle → Pending (pressed) → Dragging (moved past the threshold); every
+    // decision lives in the host-tested `gesture` module, this only feeds it.
+    let gesture = StoredValue::new(Gesture::Idle);
 
     let element_ids = move || scene_element_ids(ctx);
 
     // Shared gesture start (invoked by an outline body / a handle): remember the
-    // pointer, capture it on the overlay, focus for keyboard nudge. Captures only
-    // `Copy` values, so it copies into every child closure below.
-    let begin = move |ev: &PointerEvent, m: DragMode| {
-        mode.set_value(m);
-        last.set_value((ev.client_x() as f64, ev.client_y() as f64));
+    // pointer + the frame at the start (Escape restores it), capture the pointer
+    // on the overlay, focus for keyboard nudge/Escape. Captures only `Copy`
+    // values, so it copies into every child closure below.
+    let begin = move |ev: &PointerEvent, kind: GestureKind| {
+        let start = read_frame(&ctx.draft.get_untracked());
+        let pt = (ev.client_x() as f64, ev.client_y() as f64);
+        gesture.set_value(Gesture::begin(kind, pt, start));
         if let Some(el) = overlay_ref.get_untracked() {
             let _ = el.set_pointer_capture(ev.pointer_id());
             let _ = el.focus();
@@ -48,38 +60,53 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
         ev.prevent_default();
     };
 
-    let on_move = move |ev: PointerEvent| {
-        let m = mode.get_value();
-        if m == DragMode::None {
-            return;
-        }
-        let (cw, ch) = canvas_size(overlay_ref);
-        let (lx, ly) = last.get_value();
-        let dx = frame_math::px_to_pct_delta(ev.client_x() as f64 - lx, cw);
-        let dy = frame_math::px_to_pct_delta(ev.client_y() as f64 - ly, ch);
-        last.set_value((ev.client_x() as f64, ev.client_y() as f64));
-        let snap = !ev.shift_key();
-        let cur = read_frame(&ctx.draft.get_untracked());
-        let targets = frame_math::snap_targets(&other_element_frames(ctx));
-        let next = match m {
-            DragMode::Move => frame_math::move_by(&cur, dx, dy, snap, &targets),
-            DragMode::Resize(h) => frame_math::resize_by(&cur, h, dx, dy, snap, &targets),
-            DragMode::None => return,
-        };
-        ctx.set_draft_frame(next);
-    };
-
-    let end = move |ev: PointerEvent| {
-        if mode.get_value() == DragMode::None {
-            return;
-        }
-        mode.set_value(DragMode::None);
-        if let Some(el) = overlay_ref.get_untracked() {
+    // End any gesture (a no-op when idle). The drag must never outlive the
+    // button, so this runs on pointerup / pointercancel / lost capture.
+    let finish = move |ev: Option<&PointerEvent>, why: &str| {
+        end_gesture(gesture, why);
+        if let (Some(ev), Some(el)) = (ev, overlay_ref.get_untracked()) {
             let _ = el.release_pointer_capture(ev.pointer_id());
         }
     };
 
+    let on_move = move |ev: PointerEvent| {
+        let pt = (ev.client_x() as f64, ev.client_y() as f64);
+        let buttons = ev.buttons();
+        match gesture.try_update_value(|g| g.on_move(buttons, pt)) {
+            Some(MoveAction::Apply { kind, dx_px, dy_px }) => {
+                apply_drag(ctx, overlay_ref, kind, (dx_px, dy_px), !ev.shift_key());
+            }
+            Some(MoveAction::End) => {
+                leptos::logging::log!("stream canvas: gesture ended (move with no button held)");
+                if let Some(el) = overlay_ref.get_untracked() {
+                    let _ = el.release_pointer_capture(ev.pointer_id());
+                }
+            }
+            Some(MoveAction::None) | None => {}
+        }
+    };
+
+    // A pointerdown on EMPTY canvas (the container itself) deselects.
+    let on_canvas_down = move |ev: PointerEvent| {
+        if ev.button() != PRIMARY_BUTTON || !target_is_overlay(&ev) {
+            return;
+        }
+        // A fresh press on empty canvas never continues an earlier gesture.
+        end_gesture(gesture, "empty-canvas pointerdown");
+        if let Some(el) = overlay_ref.get_untracked() {
+            let _ = el.focus();
+        }
+        if ctx.deselect_element() {
+            leptos::logging::log!("stream canvas: empty-canvas click deselected the element");
+        }
+    };
+
     let on_key = move |ev: KeyboardEvent| {
+        if ev.key() == "Escape" {
+            ev.prevent_default();
+            on_escape(ctx, gesture);
+            return;
+        }
         if ctx.draft_element_id.get_untracked().is_none() {
             return;
         }
@@ -96,6 +123,13 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
         ctx.set_draft_frame(frame_math::nudge(&cur, dx, dy));
     };
 
+    // Alt-tab / focus leaving the window mid-drag: the pointerup may never reach
+    // us, so end the gesture. Removed on unmount (the overlay remounts on every
+    // scene open); `WindowListenerHandle` is `Send`, so `on_cleanup` accepts it
+    // in the host build too.
+    let blur = window_event_listener_untyped("blur", move |_| end_gesture(gesture, "window blur"));
+    on_cleanup(move || blur.remove());
+
     // One element's outline (+ handles when selected). Read frame + selection
     // REACTIVELY by id (keyed-`<For>` gotcha), so a drag / live def refetch never
     // leaves a captured value stale.
@@ -110,15 +144,18 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
         };
         let selected_attr = move || super::bool_attr(selected());
         let on_body_down = move |ev: PointerEvent| {
+            if ev.button() != PRIMARY_BUTTON {
+                return;
+            }
             ctx.select_element(id);
-            // Only start a move if the selection actually took (the dirty-switch
+            // Only start a gesture if the selection actually took (the dirty-switch
             // guard may decline). Seed the draft synchronously so the first
             // pointermove edits THIS element, not the previously-selected one.
             if ctx.selected_element.get_untracked() == Some(id) {
                 if ctx.draft_element_id.get_untracked() != Some(id) {
                     ctx.seed_draft(id, stored_props(ctx, id));
                 }
-                begin(&ev, DragMode::Move);
+                begin(&ev, GestureKind::Move);
             }
         };
         view! {
@@ -142,7 +179,10 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
                                     data-handle=h.as_str()
                                     on:pointerdown=move |ev: PointerEvent| {
                                         ev.stop_propagation();
-                                        begin(&ev, DragMode::Resize(h));
+                                        if ev.button() != PRIMARY_BUTTON {
+                                            return;
+                                        }
+                                        begin(&ev, GestureKind::Resize(h));
                                     }
                                 ></span>
                             }
@@ -156,17 +196,75 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
     view! {
         <div
             class="stream-editor__overlay"
-            data-role="stream-canvas-overlay"
+            data-role=OVERLAY_ROLE
             node_ref=overlay_ref
             tabindex="0"
+            on:pointerdown=on_canvas_down
             on:pointermove=on_move
-            on:pointerup=end
-            on:pointercancel=end
+            on:pointerup=move |ev: PointerEvent| finish(Some(&ev), "pointerup")
+            on:pointercancel=move |ev: PointerEvent| finish(Some(&ev), "pointercancel")
+            on:lostpointercapture=move |_: PointerEvent| finish(None, "lost pointer capture")
             on:keydown=on_key
         >
             <For each=element_ids key=|id| *id children=move |id| render_outline(id) />
         </div>
     }
+}
+
+/// End the gesture if one is active, logging why (lost capture / blur / … are
+/// exactly the paths a "stuck drag" report needs to see). Tolerates a disposed
+/// store (a late event after unmount).
+fn end_gesture(gesture: StoredValue<Gesture>, why: &str) {
+    if gesture.try_update_value(Gesture::end) == Some(true) {
+        leptos::logging::log!("stream canvas: gesture ended ({why})");
+    }
+}
+
+/// Escape: cancel a gesture (restore the frame it started from) or, when idle,
+/// deselect the element.
+fn on_escape(ctx: StreamEditorCtx, gesture: StoredValue<Gesture>) {
+    match gesture.try_update_value(Gesture::escape) {
+        Some(EscapeAction::Restore(frame)) => {
+            leptos::logging::log!("stream canvas: Escape cancelled the gesture, frame restored");
+            ctx.set_draft_frame(frame);
+        }
+        Some(EscapeAction::Deselect) => {
+            if ctx.deselect_element() {
+                leptos::logging::log!("stream canvas: Escape deselected the element");
+            }
+        }
+        None => {}
+    }
+}
+
+/// Apply one drag step (pixel delta) to the draft frame: move the body or
+/// resize one handle, snapping unless Shift is held.
+fn apply_drag(
+    ctx: StreamEditorCtx,
+    overlay_ref: NodeRef<leptos::html::Div>,
+    kind: GestureKind,
+    (dx_px, dy_px): (f64, f64),
+    snap: bool,
+) {
+    let (cw, ch) = canvas_size(overlay_ref);
+    let dx = frame_math::px_to_pct_delta(dx_px, cw);
+    let dy = frame_math::px_to_pct_delta(dy_px, ch);
+    let cur = read_frame(&ctx.draft.get_untracked());
+    let targets = frame_math::snap_targets(&other_element_frames(ctx));
+    let next = match kind {
+        GestureKind::Move => frame_math::move_by(&cur, dx, dy, snap, &targets),
+        GestureKind::Resize(h) => frame_math::resize_by(&cur, h, dx, dy, snap, &targets),
+    };
+    ctx.set_draft_frame(next);
+}
+
+/// True when the event's target is the overlay container itself (empty canvas),
+/// not an element outline or a handle inside it.
+fn target_is_overlay(ev: &PointerEvent) -> bool {
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|el| el.get_attribute("data-role"))
+        .is_some_and(|role| role == OVERLAY_ROLE)
 }
 
 /// Canvas box size in px, read live from the overlay element.
@@ -180,7 +278,7 @@ fn canvas_size(overlay_ref: NodeRef<leptos::html::Div>) -> (f64, f64) {
         .unwrap_or((0.0, 0.0))
 }
 
-/// Element ids of the selected scene, in def (z-order) order.
+/// Element ids of the selected scene, bottom-most first (see [`ids_bottom_to_top`]).
 fn scene_element_ids(ctx: StreamEditorCtx) -> Vec<i64> {
     let Some(scene_id) = ctx.selected_scene.get() else {
         return Vec::new();
@@ -191,9 +289,20 @@ fn scene_element_ids(ctx: StreamEditorCtx) -> Vec<i64> {
             d.scenes
                 .iter()
                 .find(|s| s.id == scene_id)
-                .map(|s| s.elements.iter().map(|e| e.id).collect())
+                .map(|s| ids_bottom_to_top(&s.elements))
         })
         .unwrap_or_default()
+}
+
+/// Element ids in ascending z-order (ties by id). The outlines render in this
+/// order, so the TOP-most element is LAST in the DOM and the browser's own hit
+/// test gives it the click: a full-canvas background underneath never swallows
+/// a click meant for an element above it (#787). Sorted here rather than
+/// trusting the server's order, so the contract is local.
+fn ids_bottom_to_top(elements: &[StreamElementDef]) -> Vec<i64> {
+    let mut keyed: Vec<(i32, i64)> = elements.iter().map(|e| (e.z_order, e.id)).collect();
+    keyed.sort_unstable();
+    keyed.into_iter().map(|(_, id)| id).collect()
 }
 
 /// The stored props of one element (default image props if it has vanished).
@@ -251,4 +360,30 @@ fn other_element_frames(ctx: StreamEditorCtx) -> Vec<Frame> {
                 .unwrap_or_default()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn el(id: i64, z_order: i32) -> StreamElementDef {
+        StreamElementDef {
+            id,
+            z_order,
+            props: super::super::props_access::default_element_props("color"),
+        }
+    }
+
+    #[test]
+    fn outlines_render_bottom_to_top_by_z_order() {
+        // Scrambled input: the top-most (z 5) must come out LAST.
+        let els = [el(7, 5), el(3, 0), el(9, 2)];
+        assert_eq!(ids_bottom_to_top(&els), vec![3, 9, 7]);
+    }
+
+    #[test]
+    fn equal_z_order_ties_break_by_id() {
+        let els = [el(4, 1), el(2, 1)];
+        assert_eq!(ids_bottom_to_top(&els), vec![2, 4]);
+    }
 }
