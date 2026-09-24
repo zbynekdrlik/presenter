@@ -181,7 +181,17 @@ impl StreamEditorCtx {
     /// (e.g. `add_element` selecting the freshly-created element).
     async fn reload_def(self) {
         let slug = self.output_slug.get_untracked();
-        match crate::api::get_json::<StreamOutputDef>(&def_path(&slug)).await {
+        let result = crate::api::get_json::<StreamOutputDef>(&def_path(&slug)).await;
+        // #787: the operator may have switched output while this fetch was in
+        // flight — never install (or complain about) another output's def.
+        let current = self.output_slug.get_untracked();
+        if current != slug {
+            leptos::logging::log!(
+                "stream editor: dropping def response for {slug:?} (now editing {current:?})"
+            );
+            return;
+        }
+        match result {
             Ok(def) => {
                 self.active.set(show_state_from_def(&def));
                 self.def.set(Some(def));
@@ -216,8 +226,16 @@ impl StreamEditorCtx {
         self.output_slug.set(slug.clone());
         output_paths::persist_output_slug(&slug);
         output_paths::mirror_output_to_url(&slug);
-        // Drop the previous output's element/scene selection + draft.
+        // Drop the previous output's element/scene selection + draft, and its
+        // def (#787): until the new def lands the scene list shows „Načítavam…"
+        // and nothing can act on the previous output's scenes.
         self.close_panel();
+        self.def.set(None);
+        self.active.set(StreamShowState {
+            active_scene_id: None,
+            active_overlay_ids: Vec::new(),
+            config_revision: 0,
+        });
         // Refetch everything scoped to the new output.
         self.refresh();
         self.reload_nameplates();
@@ -416,6 +434,29 @@ impl StreamEditorCtx {
         }
         self.selected_element.set(Some(element_id));
         self.prop_error.set(String::new());
+    }
+
+    /// Deselect the current element (canvas Escape / empty-canvas click, #787),
+    /// keeping the scene open. Unsaved edits ask first, like [`Self::select_element`].
+    /// Returns whether the element was actually deselected.
+    pub fn deselect_element(self) -> bool {
+        if self.selected_element.get_untracked().is_none()
+            && self.draft_element_id.get_untracked().is_none()
+        {
+            return false;
+        }
+        if self.draft_is_dirty() {
+            let discard = crate::utils::window::window()
+                .confirm_with_message("Zahodiť neuložené zmeny prvku?")
+                .unwrap_or(true);
+            if !discard {
+                return false;
+            }
+        }
+        self.selected_element.set(None);
+        self.draft_element_id.set(None);
+        self.prop_error.set(String::new());
+        true
     }
 
     /// Seed the shared draft from an element's stored props (called by the form's

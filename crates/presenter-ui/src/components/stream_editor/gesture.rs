@@ -1,4 +1,154 @@
 //! Pure pointer-gesture state machine for the stream-editor canvas overlay (#787).
+//!
+//! The overlay (`canvas_overlay.rs`) owns every web_sys event; this module holds
+//! only the decisions, so it is host-unit-testable (`cargo test --lib`):
+//!
+//! * pointerdown → [`Gesture::Pending`] remembers the pointer + the frame at the
+//!   start. Nothing moves yet, so a click with hand jitter never edits the frame.
+//! * a move of at least [`DRAG_THRESHOLD_PX`] from the origin → `Dragging`, and
+//!   the whole movement since pointerdown is applied (the threshold is not
+//!   swallowed); after that each move applies its delta from the last point.
+//! * a move reporting NO pressed button ends the gesture: the button was released
+//!   somewhere the overlay never heard about (lost capture, another window), so
+//!   the drag must never outlive the button.
+//! * Escape during a gesture hands back the start frame to restore; Escape when
+//!   idle asks the overlay to deselect.
+
+use presenter_core::Frame;
+
+use super::frame_math::Handle;
+
+/// Pointer travel (CSS px, from pointerdown) before a press becomes a drag.
+pub const DRAG_THRESHOLD_PX: f64 = 4.0;
+
+/// What a drag edits: the element body (move) or one resize handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GestureKind {
+    Move,
+    Resize(Handle),
+}
+
+/// The overlay's pointer gesture.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Gesture {
+    /// No button held on the canvas.
+    #[default]
+    Idle,
+    /// Pressed, but not yet moved past the threshold.
+    Pending {
+        kind: GestureKind,
+        origin: (f64, f64),
+        start_frame: Frame,
+    },
+    /// Moved past the threshold; `last` is the previous pointer position.
+    Dragging {
+        kind: GestureKind,
+        last: (f64, f64),
+        start_frame: Frame,
+    },
+}
+
+/// The overlay's response to a pointermove.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MoveAction {
+    /// Nothing to do (idle, or still under the threshold).
+    None,
+    /// Apply this pixel delta to the frame (move or resize per `kind`).
+    Apply {
+        kind: GestureKind,
+        dx_px: f64,
+        dy_px: f64,
+    },
+    /// The gesture just ended (no button held) — release capture, apply nothing.
+    End,
+}
+
+/// The overlay's response to Escape.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EscapeAction {
+    /// A gesture was cancelled: put this frame (the one at pointerdown) back.
+    Restore(Frame),
+    /// No gesture: deselect the element.
+    Deselect,
+}
+
+impl Gesture {
+    /// Start a gesture at pointer `pt` over an element whose frame is `start_frame`.
+    pub fn begin(kind: GestureKind, pt: (f64, f64), start_frame: Frame) -> Self {
+        Gesture::Pending {
+            kind,
+            origin: pt,
+            start_frame,
+        }
+    }
+
+    /// True while a button press on the canvas is being tracked.
+    pub fn is_active(&self) -> bool {
+        !matches!(self, Gesture::Idle)
+    }
+
+    /// Feed a pointermove: `buttons` is `MouseEvent.buttons` (0 = none held).
+    pub fn on_move(&mut self, buttons: u16, pt: (f64, f64)) -> MoveAction {
+        if !self.is_active() {
+            return MoveAction::None;
+        }
+        if buttons == 0 {
+            *self = Gesture::Idle;
+            return MoveAction::End;
+        }
+        match self {
+            Gesture::Idle => MoveAction::None,
+            Gesture::Pending {
+                kind,
+                origin,
+                start_frame,
+            } => {
+                let (dx, dy) = (pt.0 - origin.0, pt.1 - origin.1);
+                if dx.hypot(dy) < DRAG_THRESHOLD_PX {
+                    return MoveAction::None;
+                }
+                let kind = *kind;
+                *self = Gesture::Dragging {
+                    kind,
+                    last: pt,
+                    start_frame: start_frame.clone(),
+                };
+                MoveAction::Apply {
+                    kind,
+                    dx_px: dx,
+                    dy_px: dy,
+                }
+            }
+            Gesture::Dragging { kind, last, .. } => {
+                let (dx, dy) = (pt.0 - last.0, pt.1 - last.1);
+                *last = pt;
+                MoveAction::Apply {
+                    kind: *kind,
+                    dx_px: dx,
+                    dy_px: dy,
+                }
+            }
+        }
+    }
+
+    /// End the gesture (pointerup / cancel / lost capture / window blur).
+    /// Returns whether one was active.
+    pub fn end(&mut self) -> bool {
+        let was_active = self.is_active();
+        *self = Gesture::Idle;
+        was_active
+    }
+
+    /// Escape: cancel a gesture (restore its start frame) or, when idle, deselect.
+    pub fn escape(&mut self) -> EscapeAction {
+        match std::mem::take(self) {
+            Gesture::Idle => EscapeAction::Deselect,
+            Gesture::Pending { start_frame, .. } | Gesture::Dragging { start_frame, .. } => {
+                EscapeAction::Restore(start_frame)
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
