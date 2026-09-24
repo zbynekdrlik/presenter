@@ -109,6 +109,15 @@ pub fn show_state_from_def(def: &StreamOutputDef) -> StreamShowState {
     }
 }
 
+/// The show-state of an output whose def has not loaded yet (nothing active).
+pub fn empty_show_state() -> StreamShowState {
+    StreamShowState {
+        active_scene_id: None,
+        active_overlay_ids: Vec::new(),
+        config_revision: 0,
+    }
+}
+
 /// Shared editor state, threaded (by value — every field is a `Copy` signal)
 /// into each sub-component. `def` is the full configuration; `active` is the
 /// live show-state (base + overlays). The toast triple mirrors the settings
@@ -178,8 +187,10 @@ impl StreamEditorCtx {
 
     /// Awaitable core of [`Self::refresh`] — refetch the def + reseed `active`.
     /// Used where a follow-up action must SEQUENCE after the def is present
-    /// (e.g. `add_element` selecting the freshly-created element).
-    async fn reload_def(self) {
+    /// (e.g. `add_element` selecting the freshly-created element). Returns
+    /// whether a def was installed (false on a fetch error or when the operator
+    /// switched output meanwhile — the follow-up must then not run).
+    async fn reload_def(self) -> bool {
         let slug = self.output_slug.get_untracked();
         let result = crate::api::get_json::<StreamOutputDef>(&def_path(&slug)).await;
         // #787: the operator may have switched output while this fetch was in
@@ -189,14 +200,18 @@ impl StreamEditorCtx {
             leptos::logging::log!(
                 "stream editor: dropping def response for {slug:?} (now editing {current:?})"
             );
-            return;
+            return false;
         }
         match result {
             Ok(def) => {
                 self.active.set(show_state_from_def(&def));
                 self.def.set(Some(def));
+                true
             }
-            Err(e) => self.show_toast(&format!("Načítanie zlyhalo: {e}"), "error"),
+            Err(e) => {
+                self.show_toast(&format!("Načítanie zlyhalo: {e}"), "error");
+                false
+            }
         }
     }
 
@@ -231,11 +246,7 @@ impl StreamEditorCtx {
         // and nothing can act on the previous output's scenes.
         self.close_panel();
         self.def.set(None);
-        self.active.set(StreamShowState {
-            active_scene_id: None,
-            active_overlay_ids: Vec::new(),
-            config_revision: 0,
-        });
+        self.active.set(empty_show_state());
         // Refetch everything scoped to the new output.
         self.refresh();
         self.reload_nameplates();
@@ -246,11 +257,12 @@ impl StreamEditorCtx {
     /// returned show-state is applied directly (activation does not bump
     /// `config_revision`, so no def refetch is needed).
     pub fn activate_base(self, scene_id: Option<i64>) {
+        let slug = self.slug();
         leptos::task::spawn_local(async move {
             let req = SetActiveSceneReq { scene_id };
-            let path = active_scene_path(&self.output_slug.get_untracked());
+            let path = active_scene_path(&slug);
             match crate::api::put_json::<_, StreamShowState>(&path, &req).await {
-                Ok(state) => self.active.set(state),
+                Ok(state) => self.apply_active_for(&slug, state),
                 Err(e) => self.show_toast(&format!("Aktivácia zlyhala: {e}"), "error"),
             }
         });
@@ -258,14 +270,28 @@ impl StreamEditorCtx {
 
     /// Toggle one overlay on/off (independent of the base + other overlays).
     pub fn toggle_overlay(self, scene_id: i64, active: bool) {
+        let slug = self.slug();
         leptos::task::spawn_local(async move {
             let req = SetOverlayReq { active };
-            let path = overlay_path(&self.output_slug.get_untracked(), scene_id);
+            let path = overlay_path(&slug, scene_id);
             match crate::api::put_json::<_, StreamShowState>(&path, &req).await {
-                Ok(state) => self.active.set(state),
+                Ok(state) => self.apply_active_for(&slug, state),
                 Err(e) => self.show_toast(&format!("Overlay zlyhal: {e}"), "error"),
             }
         });
+    }
+
+    /// Apply an activation response only while `slug` is still the output being
+    /// edited (#787) — a late response must not paint another output's show-state.
+    fn apply_active_for(self, slug: &str, state: StreamShowState) {
+        let current = self.output_slug.get_untracked();
+        if current == slug {
+            self.active.set(state);
+        } else {
+            leptos::logging::log!(
+                "stream editor: dropping show-state for {slug:?} (now editing {current:?})"
+            );
+        }
     }
 
     /// Create a base/overlay scene, then refetch the def.
@@ -528,9 +554,12 @@ impl StreamEditorCtx {
             .await
             {
                 Ok(created) => {
-                    self.reload_def().await;
-                    self.prop_error.set(String::new());
-                    self.selected_element.set(Some(created.id));
+                    // Select it only if its def was installed (not after an
+                    // output switch mid-flight, #787).
+                    if self.reload_def().await {
+                        self.prop_error.set(String::new());
+                        self.selected_element.set(Some(created.id));
+                    }
                     self.show_toast("Prvok pridaný.", "success");
                 }
                 Err(e) => self.show_toast(&format!("Pridanie prvku zlyhalo: {e}"), "error"),

@@ -52,11 +52,7 @@ pub fn StreamEditorPage() -> impl IntoView {
         output_slug: RwSignal::new(initial_output_slug()),
         outputs: RwSignal::new(Vec::new()),
         def: RwSignal::new(None),
-        active: RwSignal::new(StreamShowState {
-            active_scene_id: None,
-            active_overlay_ids: Vec::new(),
-            config_revision: 0,
-        }),
+        active: RwSignal::new(crate::components::stream_editor::empty_show_state()),
         toast_msg: RwSignal::new(String::new()),
         toast_visible: RwSignal::new(false),
         toast_state: RwSignal::new(String::from("info")),

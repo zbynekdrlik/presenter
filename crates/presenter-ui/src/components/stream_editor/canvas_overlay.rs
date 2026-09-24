@@ -19,8 +19,8 @@
 //! canvas deselects.
 
 use leptos::prelude::*;
-use leptos::wasm_bindgen::JsCast;
 use presenter_core::{Frame, StreamElementDef, StreamElementProps};
+use wasm_bindgen::JsCast;
 use web_sys::{KeyboardEvent, PointerEvent};
 
 use super::frame_math::{self, Handle};
@@ -31,6 +31,10 @@ use super::StreamEditorCtx;
 /// The overlay container's `data-role` — a pointerdown whose target is the
 /// container itself (not an outline/handle) is a click on EMPTY canvas.
 const OVERLAY_ROLE: &str = "stream-canvas-overlay";
+
+/// `MouseEvent.button` of the primary (left / touch / pen-tip) button — only it
+/// selects or starts a gesture; a right-click must not drag an element.
+const PRIMARY_BUTTON: i16 = 0;
 
 #[component]
 pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
@@ -84,9 +88,11 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
 
     // A pointerdown on EMPTY canvas (the container itself) deselects.
     let on_canvas_down = move |ev: PointerEvent| {
-        if !target_is_overlay(&ev) {
+        if ev.button() != PRIMARY_BUTTON || !target_is_overlay(&ev) {
             return;
         }
+        // A fresh press on empty canvas never continues an earlier gesture.
+        end_gesture(gesture, "empty-canvas pointerdown");
         if let Some(el) = overlay_ref.get_untracked() {
             let _ = el.focus();
         }
@@ -138,6 +144,9 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
         };
         let selected_attr = move || super::bool_attr(selected());
         let on_body_down = move |ev: PointerEvent| {
+            if ev.button() != PRIMARY_BUTTON {
+                return;
+            }
             ctx.select_element(id);
             // Only start a gesture if the selection actually took (the dirty-switch
             // guard may decline). Seed the draft synchronously so the first
@@ -170,6 +179,9 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
                                     data-handle=h.as_str()
                                     on:pointerdown=move |ev: PointerEvent| {
                                         ev.stop_propagation();
+                                        if ev.button() != PRIMARY_BUTTON {
+                                            return;
+                                        }
                                         begin(&ev, GestureKind::Resize(h));
                                     }
                                 ></span>
