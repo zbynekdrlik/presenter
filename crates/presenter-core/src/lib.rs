@@ -80,7 +80,7 @@ pub use timer::{
     format_countdown, format_elapsed, CountdownTimer, CountdownTimerSnapshot, PreachTimer,
     PreachTimerSnapshot, TimerCommand, TimerState, TimersOverview, TimersState,
 };
-pub use video_source::{VideoSource, VideoSourceDraft, VideoSourceValidationError};
+pub use video_source::{ndi_name_parts, VideoSource, VideoSourceDraft, VideoSourceValidationError};
 
 #[cfg(test)]
 mod contract_tests;

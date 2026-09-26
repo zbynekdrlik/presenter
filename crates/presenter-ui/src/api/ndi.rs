@@ -6,7 +6,7 @@ use super::{delete, get_json, post_json, post_no_content, ApiError};
 #[serde(rename_all = "camelCase")]
 pub struct VideoSourceDto {
     pub id: String,
-    pub label: String,
+    /// #789: the NDI name (`MACHINE (Source)`) is the source's only identity.
     pub ndi_name: String,
     pub is_active: bool,
 }
@@ -37,7 +37,6 @@ pub struct VideoSourceStatusResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateVideoSourceRequest {
-    pub label: String,
     pub ndi_name: String,
 }
 
@@ -51,11 +50,10 @@ pub async fn get_video_source_status() -> Result<VideoSourceStatusResponse, ApiE
     get_json("/integrations/video-sources/status").await
 }
 
-pub async fn create_video_source(label: &str, ndi_name: &str) -> Result<VideoSourceDto, ApiError> {
+pub async fn create_video_source(ndi_name: &str) -> Result<VideoSourceDto, ApiError> {
     post_json(
         "/integrations/video-sources",
         &CreateVideoSourceRequest {
-            label: label.to_string(),
             ndi_name: ndi_name.to_string(),
         },
     )

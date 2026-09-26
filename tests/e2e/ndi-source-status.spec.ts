@@ -133,10 +133,10 @@ test("a mapped NDI name that is not on the network is reported as not found @vid
 
   // …and the operator can SEE what is actually on the air, right there — which is what
   // makes "RESOLUME-PP vs STREAM-PP" obvious instead of a two-hour investigation.
+  // #789: each discovered name is a click-to-add chip that shows the source + PC split
+  // (no parentheses in the text), carrying the full NDI name in `data-ndi-name`.
   await expect(
-    page.locator('[data-role="ndi-discovered-name"]', {
-      hasText: "(PRESENTER-TEST)",
-    }),
+    page.locator('[data-role="ndi-discovered-name"][data-ndi-name$="(PRESENTER-TEST)"]'),
   ).toBeVisible({ timeout: 30_000 });
 });
 

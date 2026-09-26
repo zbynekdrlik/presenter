@@ -64,8 +64,17 @@ AFTER the branch is already PLAYING → the new pad never forwards a buffer (con
 
 Every `deploy-dev` run intentionally replaces dev DB with prod snapshot, then DELETEs
 `video_sources` and `android_stage_displays`. **This is by design, not data loss.** To test NDI
-on dev after deploy: `POST /integrations/video-sources {"label":"dd","ndiName":"RESOLUME-SNV (SP-live)"}`
+on dev after deploy: `POST /integrations/video-sources {"ndiName":"RESOLUME-SNV (SP-live)"}`
 then activate. Audit table is `video_source` (singular).
+
+**The NDI name is a video source's ONLY identity (#789).** No `label` in the model, the API
+DTOs or the settings UI; an old body that still sends `label` is accepted and the label
+ignored (no `deny_unknown_fields`). The legacy `video_sources.label` column (NOT NULL) stays
+in the schema — the repository writes it as `ndi_name` and never reads it; `list` orders by
+`ndi_name`. Display splits `MACHINE (Source)` via `presenter_core::ndi_name_parts` (source
+bold + PC secondary); the settings card adds a source by clicking a discovered name
+(`[data-role="ndi-discovered-name"][data-ndi-name=…]`) or typing it. `LiveEvent::NdiSourceActivated`
+carries `{source_id, ndi_name}` only.
 
 ## WebRTC Testing / Debugging
 
