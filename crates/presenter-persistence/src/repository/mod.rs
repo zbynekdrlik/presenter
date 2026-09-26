@@ -48,6 +48,8 @@ mod sync_trash_tests;
 mod tests;
 mod util;
 mod video_source;
+#[cfg(test)]
+mod video_source_tests;
 
 pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;

@@ -567,3 +567,109 @@ test('resolume settings shows the static supported-clip-names reference panel (#
 
   expect(consoleMessages).toEqual([]);
 });
+
+// #789: an NDI source is added by PICKING it from what is on the network — no hand-typed
+// label. The NDI name (`MACHINE (Source)`) already says which PC sends which source, so
+// the row shows exactly those two parts.
+//
+// The default E2E lane has no NDI SDK, so the discovery half of the status poll is
+// mocked: the real server answers `GET /integrations/video-sources/status` (so the rows'
+// per-source state stays real) and the test only patches in `ndiAvailable: true` + a
+// `discovered` list. Create/list/delete go to the real server untouched.
+test('#789 add an NDI source by clicking a discovered name — no label, row shows PC + source', async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  const stamp = Date.now();
+  const machine = `E2E-PC-${stamp}`;
+  const discoveredName = `${machine} (cg-obs)`;
+  const plainName = `E2E-PLAIN-${stamp}`;
+
+  await page.route('**/integrations/video-sources/status', async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      response,
+      json: { ...body, ndiAvailable: true, discovered: [discoveredName] },
+    });
+  });
+
+  try {
+    await page.goto(new URL('/ui/settings', baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.waitForLoadState('networkidle');
+
+    // The form asks for no label at all any more.
+    await expect(page.locator('[data-role="video-source-label"]')).toHaveCount(0);
+
+    // Pick the source straight from the "on the network now" list — nothing typed.
+    const pick = page.locator(
+      `[data-role="ndi-discovered-name"][data-ndi-name="${discoveredName}"]`,
+    );
+    await expect(pick).toBeVisible({ timeout: 30_000 });
+    await expect(pick).toBeEnabled();
+    // The chip itself shows the same source + PC split.
+    await expect(pick.locator('[data-role="ndi-discovered-source"]')).toHaveText('cg-obs');
+    await expect(pick.locator('[data-role="ndi-discovered-machine"]')).toHaveText(machine);
+    await pick.click();
+    await waitForToast(page, 'Source added');
+
+    // The server stored exactly the NDI name, and returns no label.
+    const listed = await page.request.get(
+      new URL('/integrations/video-sources', baseURL).toString(),
+    );
+    expect(listed.ok()).toBeTruthy();
+    const sources = (await listed.json()) as Array<Record<string, unknown>>;
+    const created = sources.filter((s) => s.ndiName === discoveredName);
+    expect(created, `exactly one source named ${discoveredName} was created`).toHaveLength(1);
+    expect(created[0]).not.toHaveProperty('label');
+
+    // The row shows the source (bold) and the PC it comes from.
+    const row = page.locator(
+      `[data-role="video-source-row"][data-source-id="${created[0].id as string}"]`,
+    );
+    await expect(row.locator('[data-role="video-source-name"]')).toHaveText('cg-obs');
+    await expect(row.locator('[data-role="video-source-machine"]')).toHaveText(machine);
+
+    // An already-mapped name cannot be added twice — not from the list…
+    await expect(pick).toBeDisabled({ timeout: 10_000 });
+    // …and not by typing it either.
+    await page.fill('[data-role="video-source-ndi-name"]', discoveredName);
+    await page.click('[data-role="video-source-add"]');
+    await waitForToast(page, 'That NDI source is already added');
+    await expect(
+      page.locator(`[data-role="video-source-row"]`, {
+        has: page.locator('[data-role="video-source-machine"]', { hasText: machine }),
+      }),
+    ).toHaveCount(1);
+
+    // Fallback: type an NDI name that is not (yet) on the network. A name without the
+    // `MACHINE (Source)` shape shows as-is, with no PC line.
+    await page.fill('[data-role="video-source-ndi-name"]', plainName);
+    await page.click('[data-role="video-source-add"]');
+    await waitForToast(page, 'Source added');
+    const plainRow = page.locator('[data-role="video-source-row"]', {
+      has: page.locator('[data-role="video-source-name"]', { hasText: plainName }),
+    });
+    await expect(plainRow).toHaveCount(1);
+    await expect(plainRow.locator('[data-role="video-source-machine"]')).toHaveCount(0);
+    await expect(page.locator('[data-role="video-source-ndi-name"]')).toHaveValue('');
+  } finally {
+    // Clean up even when an assertion failed, so the shared server's other tests see
+    // the list they expect.
+    const after = (await (
+      await page.request.get(new URL('/integrations/video-sources', baseURL).toString())
+    ).json()) as Array<{ id: string; ndiName: string }>;
+    for (const s of after.filter((x) => x.ndiName === discoveredName || x.ndiName === plainName)) {
+      await page.request.delete(new URL(`/integrations/video-sources/${s.id}`, baseURL).toString());
+    }
+  }
+
+  expect(consoleMessages).toEqual([]);
+});

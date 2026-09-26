@@ -388,7 +388,6 @@ mod tests {
         hub.publish(LiveEvent::NdiSourceActivated {
             source_id: "src-1".into(),
             ndi_name: "TEST (PRESENTER-TEST)".into(),
-            label: "tv".into(),
         });
         drop(hub); // close the channel so the stream terminates
 

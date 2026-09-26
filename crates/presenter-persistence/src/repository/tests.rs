@@ -1422,7 +1422,7 @@ async fn activate_video_source_audits_each_deactivated_sibling() {
     // Create three video sources.
     let a = repo
         .create_video_source(
-            &VideoSourceDraft::new("Cam A", "CAM_A"),
+            &VideoSourceDraft::new("CAM_A"),
             SettingsAuditSource::HttpSetter,
             "test",
         )
@@ -1430,7 +1430,7 @@ async fn activate_video_source_audits_each_deactivated_sibling() {
         .unwrap();
     let b = repo
         .create_video_source(
-            &VideoSourceDraft::new("Cam B", "CAM_B"),
+            &VideoSourceDraft::new("CAM_B"),
             SettingsAuditSource::HttpSetter,
             "test",
         )
@@ -1438,7 +1438,7 @@ async fn activate_video_source_audits_each_deactivated_sibling() {
         .unwrap();
     let c = repo
         .create_video_source(
-            &VideoSourceDraft::new("Cam C", "CAM_C"),
+            &VideoSourceDraft::new("CAM_C"),
             SettingsAuditSource::HttpSetter,
             "test",
         )
@@ -1539,7 +1539,7 @@ async fn reactivating_already_active_source_writes_no_audit_row() {
 
     let a = repo
         .create_video_source(
-            &VideoSourceDraft::new("Cam A", "CAM_A"),
+            &VideoSourceDraft::new("CAM_A"),
             SettingsAuditSource::HttpSetter,
             "test",
         )
@@ -1547,7 +1547,7 @@ async fn reactivating_already_active_source_writes_no_audit_row() {
         .unwrap();
     let b = repo
         .create_video_source(
-            &VideoSourceDraft::new("Cam B", "CAM_B"),
+            &VideoSourceDraft::new("CAM_B"),
             SettingsAuditSource::HttpSetter,
             "test",
         )

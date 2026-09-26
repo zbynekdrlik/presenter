@@ -32,12 +32,13 @@ test("video source CRUD lifecycle", async ({ request }) => {
   // Create
   const created = await request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "Test Camera", ndiName: "CAM1 (usb)" } },
+    // #789: the NDI name is the whole identity — no label is sent or returned.
+    { data: { ndiName: "CAM1 (usb)" } },
   );
   expect(created.status()).toBe(200);
   const source = await created.json();
-  expect(source.label).toBe("Test Camera");
   expect(source.ndiName).toBe("CAM1 (usb)");
+  expect(source).not.toHaveProperty("label");
   expect(source.isActive).toBe(false);
 
   // List
@@ -52,11 +53,13 @@ test("video source CRUD lifecycle", async ({ request }) => {
   // Update
   const updated = await request.put(
     new URL(`/integrations/video-sources/${source.id}`, baseURL).toString(),
-    { data: { label: "Main Camera", ndiName: "CAM1 (usb)" } },
+    // A legacy caller that still sends a `label` keeps working; the label is ignored.
+    { data: { label: "Main Camera", ndiName: "CAM2 (usb)" } },
   );
   expect(updated.status()).toBe(200);
   const updatedSource = await updated.json();
-  expect(updatedSource.label).toBe("Main Camera");
+  expect(updatedSource.ndiName).toBe("CAM2 (usb)");
+  expect(updatedSource).not.toHaveProperty("label");
 
   // Activate
   const activated = await request.post(

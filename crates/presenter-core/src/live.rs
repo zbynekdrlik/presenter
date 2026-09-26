@@ -44,10 +44,10 @@ pub enum LiveEvent {
     BibleSlidesChanged {
         presentation_id: String,
     },
+    /// #789: the NDI name is the source's only identity — no separate label.
     NdiSourceActivated {
         source_id: String,
         ndi_name: String,
-        label: String,
     },
     NdiSourceDeactivated,
     NdiConnectionStatus {

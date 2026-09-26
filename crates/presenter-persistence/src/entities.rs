@@ -588,6 +588,9 @@ pub mod video_source {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
+        /// LEGACY (#789): the NDI name is a source's only identity. This NOT NULL
+        /// column stays in the schema (no destructive table rebuild on live
+        /// SNV/PP data); the repository writes it as `ndi_name` and never reads it.
         pub label: String,
         pub ndi_name: String,
         pub is_active: bool,

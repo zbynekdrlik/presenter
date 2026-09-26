@@ -442,9 +442,9 @@ pub(super) fn video_source_model_to_domain(
     );
     let created_at: DateTime<Utc> = model.created_at.into();
     let updated_at: DateTime<Utc> = model.updated_at.into();
+    // #789: `model.label` is a legacy column, deliberately not read.
     Ok(VideoSource::new(
         id,
-        model.label,
         model.ndi_name,
         model.is_active,
         created_at,

@@ -17,7 +17,6 @@ use uuid::Uuid;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VideoSourceDto {
     id: VideoSourceId,
-    label: String,
     ndi_name: String,
     is_active: bool,
     created_at: String,
@@ -28,7 +27,6 @@ impl VideoSourceDto {
     fn from_source(source: VideoSource) -> Self {
         Self {
             id: source.id,
-            label: source.label,
             ndi_name: source.ndi_name,
             is_active: source.is_active,
             created_at: source.created_at.to_rfc3339(),
@@ -37,11 +35,23 @@ impl VideoSourceDto {
     }
 }
 
+/// Create/rename body. #789: the NDI name is the only identity. Deliberately
+/// NOT `deny_unknown_fields` — a pre-#789 caller that still sends `label` keeps
+/// working and the label is ignored.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VideoSourceRequest {
-    label: String,
     ndi_name: String,
+}
+
+/// A blank NDI name is the CLIENT's mistake → 422, never the 500 a bare
+/// `anyhow` validation error would fall through to (#789 review).
+fn validated_draft(payload: VideoSourceRequest) -> Result<VideoSourceDraft, AppError> {
+    let draft = VideoSourceDraft::new(payload.ndi_name);
+    draft
+        .validate()
+        .map_err(|err| AppError::unprocessable(err.to_string()))?;
+    Ok(draft)
 }
 
 #[instrument(skip_all)]
@@ -108,7 +118,7 @@ pub(crate) async fn create_video_source(
     headers: HeaderMap,
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
-    let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
+    let draft = validated_draft(payload)?;
     let actor = extract_actor(&headers);
     let source = state
         .create_video_source(draft, SettingsAuditSource::HttpSetter, &actor)
@@ -123,7 +133,7 @@ pub(crate) async fn update_video_source(
     Path(id): Path<Uuid>,
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
-    let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
+    let draft = validated_draft(payload)?;
     let actor = extract_actor(&headers);
     // #633: `RepositoryError::NotFound` maps to 404 by default via the
     // centralized `From<anyhow::Error> for AppError`.
