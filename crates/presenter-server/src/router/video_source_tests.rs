@@ -139,9 +139,10 @@ async fn update_accepts_ndi_name_alone() {
 async fn create_with_blank_ndi_name_is_rejected() {
     let app = build_router(AppState::in_memory().await.unwrap());
     let (status, body) = req(&app, Method::POST, BASE, Some(json!({ "ndiName": "   " }))).await;
-    assert!(
-        status.is_client_error() || status.is_server_error(),
-        "a blank NDI name must be refused, got {status}: {body}"
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a blank NDI name is the client's mistake (422), never a 500: {body}"
     );
     let (_, list) = req(&app, Method::GET, BASE, None).await;
     assert!(
