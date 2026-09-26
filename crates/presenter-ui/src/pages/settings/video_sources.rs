@@ -207,7 +207,10 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         if adding.get_untracked() {
             return;
         }
-        if is_mapped(&ndi_name) {
+        // Untracked: a handler is not a reactive scope (`is_mapped` is the tracked read the
+        // chips' `Memo` subscribes through).
+        let already = sources.with_untracked(|list| list.iter().any(|s| s.ndi_name == ndi_name));
+        if already {
             toast.show("That NDI source is already added", "error");
             return;
         }
