@@ -191,18 +191,42 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         });
     };
 
+    // A name that is already mapped can't be added again from this card: with the NDI name
+    // as the only identity (#789), a duplicate row would be indistinguishable from the
+    // original. (The API itself still accepts one — see the ticket.)
+    let is_mapped = move |name: &str| sources.with(|list| list.iter().any(|s| s.ndi_name == name));
+    // True while an add is in flight — until the refetched list shows the new row — so a
+    // double click on a chip can't post the same name twice.
+    let adding = RwSignal::new(false);
+
     // #789: the NDI name is the whole identity — adding a source needs nothing else.
     // Both paths (a click on a discovered name, or the typed fallback) end here.
-    let create_source = move |ndi_name: String| {
+    // `clear_input`: only the typed path owns the text box; a chip click must not wipe
+    // whatever the operator is typing.
+    let create_source = move |ndi_name: String, clear_input: bool| {
+        if adding.get_untracked() {
+            return;
+        }
+        if is_mapped(&ndi_name) {
+            toast.show("That NDI source is already added", "error");
+            return;
+        }
+        adding.set(true);
         leptos::task::spawn_local(async move {
             match ndi::create_video_source(&ndi_name).await {
                 Ok(_) => {
-                    new_ndi_name.set(String::new());
-                    refresh();
+                    if clear_input {
+                        new_ndi_name.set(String::new());
+                    }
+                    if let Ok(list) = ndi::list_video_sources().await {
+                        sources.set(list);
+                    }
+                    poll_status();
                     toast.show("Source added", "success");
                 }
                 Err(err) => toast.show(&format!("Failed to add source. {err}"), "error"),
             }
+            adding.set(false);
         });
     };
 
@@ -212,11 +236,8 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             toast.show("NDI name required", "error");
             return;
         }
-        create_source(ndi_name);
+        create_source(ndi_name, true);
     };
-
-    // A discovered name that is already mapped can't be added twice from the list.
-    let is_mapped = move |name: &str| sources.with(|list| list.iter().any(|s| s.ndi_name == name));
 
     let activate = move |id: String| {
         leptos::task::spawn_local(async move {
@@ -314,7 +335,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                 data-source-id=source.id.clone()>
                                 <div class=dot_class></div>
                                 <div class="settings__source-info">
-                                    <NdiNameParts ndi_name=source.ndi_name.clone() />
+                                    <NdiNameParts ndi_name=source.ndi_name.clone() chip=false />
                                     {move || status_hint(&state_str()).map(|text| view! {
                                         <div class="settings__source-hint"
                                             data-role="video-source-hint"
@@ -387,10 +408,10 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                     <button type="button" class="settings__discovered-name"
                                         data-role="ndi-discovered-name"
                                         data-ndi-name=chip_name
-                                        prop:disabled=move || mapped.get()
+                                        prop:disabled=move || mapped.get() || adding.get()
                                         title=title
-                                        on:click=move |_| create_source(add_name.clone())>
-                                        <NdiNameParts ndi_name=name />
+                                        on:click=move |_| create_source(add_name.clone(), false)>
+                                        <NdiNameParts ndi_name=name chip=true />
                                     </button>
                                 }
                             }
@@ -432,16 +453,25 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
 
 /// One NDI name shown as its two parts (#789): the SOURCE in bold, the sending PC under
 /// it. A name without the `MACHINE (Source)` shape is shown whole, with no PC line.
+///
+/// `chip` picks the data-roles: a mapped row's parts are `video-source-name` /
+/// `video-source-machine`, a discovered chip's are `ndi-discovered-source` /
+/// `ndi-discovered-machine` — so a row locator never matches a chip.
 #[component]
-fn NdiNameParts(ndi_name: String) -> impl IntoView {
+fn NdiNameParts(ndi_name: String, chip: bool) -> impl IntoView {
     let (machine, source) = ndi_name_parts(&ndi_name);
     let machine = machine.map(str::to_string);
     let source = source.to_string();
+    let (source_role, machine_role) = if chip {
+        ("ndi-discovered-source", "ndi-discovered-machine")
+    } else {
+        ("video-source-name", "video-source-machine")
+    };
     view! {
         <span class="settings__ndi-parts">
-            <strong class="settings__source-label" data-role="video-source-name">{source}</strong>
+            <strong class="settings__source-label" data-role=source_role>{source}</strong>
             {machine.map(|pc| view! {
-                <span class="settings__source-ndi" data-role="video-source-machine">{pc}</span>
+                <span class="settings__source-ndi" data-role=machine_role>{pc}</span>
             })}
         </span>
     }

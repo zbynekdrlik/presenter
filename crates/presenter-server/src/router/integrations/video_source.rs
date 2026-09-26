@@ -44,6 +44,16 @@ pub(crate) struct VideoSourceRequest {
     ndi_name: String,
 }
 
+/// A blank NDI name is the CLIENT's mistake → 422, never the 500 a bare
+/// `anyhow` validation error would fall through to (#789 review).
+fn validated_draft(payload: VideoSourceRequest) -> Result<VideoSourceDraft, AppError> {
+    let draft = VideoSourceDraft::new(payload.ndi_name);
+    draft
+        .validate()
+        .map_err(|err| AppError::unprocessable(err.to_string()))?;
+    Ok(draft)
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn list_video_sources(
     State(state): State<AppState>,
@@ -108,7 +118,7 @@ pub(crate) async fn create_video_source(
     headers: HeaderMap,
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
-    let draft = VideoSourceDraft::new(payload.ndi_name);
+    let draft = validated_draft(payload)?;
     let actor = extract_actor(&headers);
     let source = state
         .create_video_source(draft, SettingsAuditSource::HttpSetter, &actor)
@@ -123,7 +133,7 @@ pub(crate) async fn update_video_source(
     Path(id): Path<Uuid>,
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
-    let draft = VideoSourceDraft::new(payload.ndi_name);
+    let draft = validated_draft(payload)?;
     let actor = extract_actor(&headers);
     // #633: `RepositoryError::NotFound` maps to 404 by default via the
     // centralized `From<anyhow::Error> for AppError`.

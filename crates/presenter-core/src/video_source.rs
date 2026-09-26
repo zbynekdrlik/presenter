@@ -73,20 +73,40 @@ impl VideoSourceDraft {
 /// host name carries no parentheses); the source is everything up to the
 /// closing `)` that ends the name, so `OBS-PC (Scene (1))` keeps `Scene (1)`.
 ///
-/// Any other shape — no parenthesis, nothing before it, an empty source, or
-/// text after the closing `)` — returns `(None, name)` with the whole trimmed
-/// name as the source, so a display never loses information.
+/// Any other shape — no parenthesis, nothing before it, an empty source,
+/// unbalanced parentheses inside the source, or text after the closing `)` —
+/// returns `(None, name)` with the whole trimmed name as the source, so a
+/// display never loses information.
 pub fn ndi_name_parts(name: &str) -> (Option<&str>, &str) {
     let trimmed = name.trim();
     let split = trimmed
         .strip_suffix(')')
         .and_then(|inner| inner.split_once('('))
         .map(|(machine, source)| (machine.trim(), source.trim()))
-        .filter(|(machine, source)| !machine.is_empty() && !source.is_empty());
+        .filter(|(machine, source)| {
+            !machine.is_empty() && !source.is_empty() && parens_balanced(source)
+        });
     match split {
         Some((machine, source)) => (Some(machine), source),
         None => (None, trimmed),
     }
+}
+
+/// `true` when every `(` in `text` is closed by a later `)` and no `)` comes
+/// first — so `PC (a) (b)` (source `a) (b`) is not mistaken for a split.
+fn parens_balanced(text: &str) -> bool {
+    let mut depth: usize = 0;
+    for ch in text.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => match depth.checked_sub(1) {
+                Some(next) => depth = next,
+                None => return false,
+            },
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 #[cfg(test)]
@@ -185,6 +205,9 @@ mod tests {
         // Unclosed / not at the end.
         assert_eq!(ndi_name_parts("PC (src"), (None, "PC (src"));
         assert_eq!(ndi_name_parts("PC (src) tail"), (None, "PC (src) tail"));
+        // Two parenthesised groups: the would-be source `a) (b` is unbalanced.
+        assert_eq!(ndi_name_parts("PC (a) (b)"), (None, "PC (a) (b)"));
+        assert_eq!(ndi_name_parts("PC (a (b)"), (None, "PC (a (b)"));
         assert_eq!(ndi_name_parts(""), (None, ""));
     }
 }

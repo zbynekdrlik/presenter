@@ -470,6 +470,11 @@ body.settings {
   gap: 6px;
 }
 
+/* The row's light-grey PC colour is too faint on the chip's grey background. */
+.settings__discovered-name .settings__source-ndi {
+  color: #475569;
+}
+
 .settings__form-hint {
   margin: 0 0 8px;
   font-size: 0.8rem;
