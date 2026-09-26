@@ -45,8 +45,8 @@ const selectors = {
   // Companion card.
   companionPort: '[data-role="feature-companion-port"]',
   companionStatusId: 'feature-companion-status',
-  // Video sources card (no inline status — toast-driven, aria-required only).
-  videoLabel: '[data-role="video-source-label"]',
+  // Video sources card (no inline status — toast-driven, aria-required only). #789: no
+  // Label input any more — the NDI name is the source's only identity.
   videoNdiName: '[data-role="video-source-ndi-name"]',
 };
 
@@ -111,7 +111,6 @@ test('settings required inputs carry aria-required across all cards', async ({ p
     // Companion
     selectors.companionPort,
     // Video sources (toast-driven, aria-required only)
-    selectors.videoLabel,
     selectors.videoNdiName,
   ];
 
