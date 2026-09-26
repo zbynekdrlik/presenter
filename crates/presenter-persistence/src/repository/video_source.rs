@@ -20,7 +20,9 @@ use tracing::instrument;
 impl Repository {
     pub async fn list_video_sources(&self) -> anyhow::Result<Vec<VideoSource>> {
         let models = video_source::Entity::find()
-            .order_by_asc(video_source::Column::Label)
+            // #789: the NDI name is the identity; the legacy label column is
+            // never read (it may still hold a pre-#789 hand-typed label).
+            .order_by_asc(video_source::Column::NdiName)
             .all(&self.db)
             .await?;
         models
@@ -47,10 +49,13 @@ impl Repository {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = VideoSourceId::new();
         let now = Utc::now();
+        let ndi_name = draft.ndi_name.trim().to_string();
         let model = video_source::ActiveModel {
             id: Set(id.to_string()),
-            label: Set(draft.label.trim().to_string()),
-            ndi_name: Set(draft.ndi_name.trim().to_string()),
+            // #789: legacy NOT NULL column, kept (no destructive migration) and
+            // written as the NDI name; never read back.
+            label: Set(ndi_name.clone()),
+            ndi_name: Set(ndi_name),
             is_active: Set(false),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
@@ -98,8 +103,10 @@ impl Repository {
         let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
-        model.label = Set(draft.label.trim().to_string());
-        model.ndi_name = Set(draft.ndi_name.trim().to_string());
+        let ndi_name = draft.ndi_name.trim().to_string();
+        // #789: keep the legacy label column in step with the NDI name.
+        model.label = Set(ndi_name.clone());
+        model.ndi_name = Set(ndi_name);
         model.updated_at = Set(Utc::now().into());
 
         let updated = model.update(&txn).await?;

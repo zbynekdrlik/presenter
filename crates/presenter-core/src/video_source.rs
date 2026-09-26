@@ -1,3 +1,10 @@
+//! An NDI video source mapped for the stage display.
+//!
+//! #789: the NDI name is the source's ONLY identity. An NDI name already reads
+//! `MACHINE (Source)` — the sending PC and the source on it — so a second,
+//! hand-typed label added nothing and could drift from reality. Display code
+//! splits the name with [`ndi_name_parts`].
+
 use crate::id::VideoSourceId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -5,8 +12,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VideoSourceValidationError {
-    #[error("label cannot be empty")]
-    EmptyLabel,
     #[error("NDI name cannot be empty")]
     EmptyNdiName,
 }
@@ -15,7 +20,6 @@ pub enum VideoSourceValidationError {
 #[serde(rename_all = "camelCase")]
 pub struct VideoSource {
     pub id: VideoSourceId,
-    pub label: String,
     pub ndi_name: String,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -25,7 +29,6 @@ pub struct VideoSource {
 impl VideoSource {
     pub fn new(
         id: VideoSourceId,
-        label: String,
         ndi_name: String,
         is_active: bool,
         created_at: DateTime<Utc>,
@@ -33,7 +36,6 @@ impl VideoSource {
     ) -> Self {
         Self {
             id,
-            label,
             ndi_name,
             is_active,
             created_at,
@@ -42,29 +44,48 @@ impl VideoSource {
     }
 }
 
+/// What a caller supplies to create or rename a source. Deliberately NOT
+/// `deny_unknown_fields`: a pre-#789 caller that still sends `label` keeps
+/// working, and the label is ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSourceDraft {
-    pub label: String,
     pub ndi_name: String,
 }
 
 impl VideoSourceDraft {
-    pub fn new(label: impl Into<String>, ndi_name: impl Into<String>) -> Self {
+    pub fn new(ndi_name: impl Into<String>) -> Self {
         Self {
-            label: label.into(),
             ndi_name: ndi_name.into(),
         }
     }
 
     pub fn validate(&self) -> Result<(), VideoSourceValidationError> {
-        if self.label.trim().is_empty() {
-            return Err(VideoSourceValidationError::EmptyLabel);
-        }
         if self.ndi_name.trim().is_empty() {
             return Err(VideoSourceValidationError::EmptyNdiName);
         }
         Ok(())
+    }
+}
+
+/// Split an NDI name `MACHINE (Source)` into `(Some(machine), source)` for
+/// display, both trimmed. The machine is everything before the FIRST `(` (a
+/// host name carries no parentheses); the source is everything up to the
+/// closing `)` that ends the name, so `OBS-PC (Scene (1))` keeps `Scene (1)`.
+///
+/// Any other shape — no parenthesis, nothing before it, an empty source, or
+/// text after the closing `)` — returns `(None, name)` with the whole trimmed
+/// name as the source, so a display never loses information.
+pub fn ndi_name_parts(name: &str) -> (Option<&str>, &str) {
+    let trimmed = name.trim();
+    let split = trimmed
+        .strip_suffix(')')
+        .and_then(|inner| inner.split_once('('))
+        .map(|(machine, source)| (machine.trim(), source.trim()))
+        .filter(|(machine, source)| !machine.is_empty() && !source.is_empty());
+    match split {
+        Some((machine, source)) => (Some(machine), source),
+        None => (None, trimmed),
     }
 }
 

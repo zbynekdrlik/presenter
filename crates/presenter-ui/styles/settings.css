@@ -437,12 +437,43 @@ body.settings {
   font-weight: 600;
 }
 
+/* #789: each discovered name is a one-click "add this source" chip. */
 .settings__discovered-name {
   padding: 2px 8px;
+  border: none;
   border-radius: 999px;
   background: #e2e8f0;
   color: #334155;
+  font-size: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+}
+
+.settings__discovered-name:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.settings__discovered-name:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* #789: an NDI name shown as its two parts — the source (bold) over the sending PC. */
+.settings__ndi-parts {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings__discovered-name .settings__ndi-parts {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.settings__form-hint {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: #64748b;
 }
 
 .settings__discovered-empty {

@@ -460,7 +460,6 @@ impl AppState {
         self.live_hub.publish(LiveEvent::NdiSourceActivated {
             source_id: source.id.to_string(),
             ndi_name: source.ndi_name.clone(),
-            label: source.label.clone(),
         });
         if let Some(manager) = &self.ndi_manager {
             if let Err(e) = manager
@@ -659,7 +658,7 @@ mod tests {
         state.set_ndi_handle(NdiManagerHandle::Fake(fake.clone()));
         let source = state
             .create_video_source(
-                VideoSourceDraft::new("Cam 1", "STREAM-SNV (stream)"),
+                VideoSourceDraft::new("STREAM-SNV (stream)"),
                 SettingsAuditSource::HttpSetter,
                 "test",
             )
@@ -726,7 +725,7 @@ mod tests {
         let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
         let b = state
             .create_video_source(
-                VideoSourceDraft::new("Cam 2", "STREAM-B (stream)"),
+                VideoSourceDraft::new("STREAM-B (stream)"),
                 SettingsAuditSource::HttpSetter,
                 "test",
             )
@@ -887,7 +886,7 @@ mod tests {
         let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
         let b = state
             .create_video_source(
-                VideoSourceDraft::new("Cam 2", "STREAM-B (stream)"),
+                VideoSourceDraft::new("STREAM-B (stream)"),
                 SettingsAuditSource::HttpSetter,
                 "test",
             )
@@ -1330,7 +1329,7 @@ mod tests {
         state.clear_ndi_handle();
         state
             .create_video_source(
-                VideoSourceDraft::new("Cam 1", "STREAM-SNV (stream)"),
+                VideoSourceDraft::new("STREAM-SNV (stream)"),
                 SettingsAuditSource::HttpSetter,
                 "test",
             )

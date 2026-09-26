@@ -146,7 +146,6 @@ mod tests {
         let event = LiveEvent::NdiSourceActivated {
             source_id: "test-source-id".to_string(),
             ndi_name: "CAM1 (usb)".to_string(),
-            label: "Main Camera".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains(r#""type":"ndi_source_activated""#));
