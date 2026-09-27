@@ -11,7 +11,8 @@ const DIAG_LOG_MIN_INTERVAL_S: i64 = 30;
 
 /// #732: the dimensions whose change forces an immediate diagnostics log line
 /// (`paused`, `error_code`, `cover_visible`, and `video_width==0 vs >0`), plus
-/// (#797) the displayed `layout_code`, so a layout switch logs promptly.
+/// (#797) the displayed non-empty `layout_code`, so a layout switch logs on the
+/// first diag frame that reports it instead of waiting for the 30 s floor.
 /// Everything else in the snapshot is stored/exposed but does not by itself
 /// trigger a fresh log line — the 30 s floor covers steady-state drift.
 type DiagLogKey = (
@@ -30,7 +31,7 @@ fn diag_log_key(diag: &NdiVideoDiag) -> DiagLogKey {
         diag.error_code,
         diag.cover_visible,
         diag.video_width.map(|w| w > 0),
-        diag.layout_code.clone(),
+        diag.layout_code.clone().filter(|l| !l.is_empty()),
     )
 }
 

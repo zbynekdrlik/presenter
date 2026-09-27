@@ -95,5 +95,9 @@ send failed, hub closed) + `stage_client` + `connected_ms`. Layout switches log
 **Per-display layout (#797):** the `StagePresence` frame is sent on socket open, BEFORE the layout
 resync, so it carries the `worship-snv` default. `StageConnectionTracker::record_diag` therefore
 adopts every non-empty `NdiVideoDiag.layout_code` (the DISPLAYED layout) into the connection, and
-`layout_code` is part of `DiagLogKey` so a switch logs `presenter::stage::diag` immediately — never
-read the register-time layout as the truth for `/stage/connections` or the diag log.
+the (non-empty) layout is part of `DiagLogKey` so a switch logs `presenter::stage::diag` on the
+first diag frame that reports it (next diag push / heartbeat ack — the client `DiagChangeKey` has
+no layout). Limit: the client only sends a diag while an NDI `<video>` is mounted
+(`ws/stage_diag.rs::collect_ndi_video_diag`), so the tracker holds "the last layout reported while
+an NDI video was mounted" — a switch to a non-NDI layout is NOT reflected. Never read the
+register-time layout as the truth for `/stage/connections` or the diag log.
