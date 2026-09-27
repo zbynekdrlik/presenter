@@ -21,13 +21,24 @@ use crate::state::stage::StageContext;
 pub(crate) const CAMERA_CREW_LAYOUT: &str = "camera-crew";
 
 /// True for the live events that make an in-flight reconnect resync's HTTP
-/// answer stale: a `StageLayout` or a `Stage` snapshot is NEWER than whatever
-/// the fetch will return.
-pub(crate) fn event_invalidates_resync(event: &LiveEvent) -> bool {
-    matches!(
-        event,
-        LiveEvent::Stage { .. } | LiveEvent::StageLayout { .. }
-    )
+/// answer stale: a `StageLayout`, or a `Stage` snapshot the display will
+/// actually APPLY (see [`snapshot_invalidates_resync`]) — it is newer than
+/// whatever the fetch returns.
+pub(crate) fn event_invalidates_resync(event: &LiveEvent, current_layout: &str) -> bool {
+    match event {
+        LiveEvent::StageLayout { .. } => true,
+        LiveEvent::Stage { snapshot } => {
+            snapshot_invalidates_resync(current_layout, &snapshot.layout.code)
+        }
+        _ => false,
+    }
+}
+
+/// A `Stage` snapshot voids an in-flight resync only when the display applies
+/// it — never the camera-crew snapshot (published on every broadcast, and the
+/// only one while api is selected), which `/stage` ignores.
+pub(crate) fn snapshot_invalidates_resync(current_layout: &str, snapshot_layout: &str) -> bool {
+    stage_snapshot_action(current_layout, snapshot_layout) != SnapshotAction::Ignore
 }
 
 /// Generation counter of applied layout/snapshot live events (#793). The
@@ -42,9 +53,10 @@ impl StageSyncGeneration {
         self.0.get()
     }
 
-    /// Bump the generation when `event` invalidates an in-flight resync.
-    pub(crate) fn note(&self, event: &LiveEvent) {
-        if event_invalidates_resync(event) {
+    /// Bump the generation when `event` invalidates an in-flight resync for a
+    /// display currently on `current_layout`.
+    pub(crate) fn note(&self, event: &LiveEvent, current_layout: &str) {
+        if event_invalidates_resync(event, current_layout) {
             self.0.set(self.0.get().wrapping_add(1));
         }
     }

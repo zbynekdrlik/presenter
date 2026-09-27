@@ -584,9 +584,11 @@ async fn live_websocket(
 ) -> impl IntoResponse {
     let hub = state.live_hub();
     let connections = state.stage_connections_handle();
-    // #793: X-Forwarded-For → X-Real-IP → the socket peer → "anonymous". The
-    // peer comes from `ConnectInfo` (main.rs serves with connect-info); it is
-    // optional so a router served without it (tests) still upgrades.
+    // #793: a non-loopback socket peer IS the client (its forwarding headers
+    // are ignored); only from a loopback peer (cloudflared) or with no peer is
+    // X-Forwarded-For → X-Real-IP used; else "anonymous". The peer comes from
+    // `ConnectInfo` (main.rs serves with connect-info); it is optional so a
+    // router served without it (tests) still upgrades.
     let peer = connect_info.map(|Extension(ConnectInfo(addr))| addr);
     let client_ip = integrations::extract_client_ip(&headers, peer);
     let surface = normalize_ws_surface(query.surface);

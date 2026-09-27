@@ -54,18 +54,22 @@ for another layout means "this is the active layout" → adopt it; `camera-crew`
 server ever starts publishing snapshots for non-selected layouts, this invariant breaks — update
 `stage_snapshot_action` in the same PR. `/ui/camera` stays pinned to `camera-crew`.
 
-**Server ordering invariant (load-bearing for adoption):** `publish_stage_context` holds the
-`stage_layout` READ lock from reading the selected code until the snapshot is published (enrich
-FIRST, no await under the lock), and `update_api_stage` checks + publishes under it too. A switch
-takes the write lock, so a snapshot for the previous layout can never be published after the
-switch's `StageLayout`. Any NEW `LiveEvent::Stage` publisher must follow the same rule, or a late
-stale snapshot flips every display back.
+**Server ordering invariant (load-bearing for adoption):** `switch_stage_layout` publishes
+`StageLayout` INSIDE the `stage_layout` write-lock block; every `LiveEvent::Stage` publisher reads
+the selected code and publishes under the READ lock with no await in between (build/enrich FIRST):
+`publish_stage_context`, `update_api_stage`, and the switch's own api-snapshot publish. So layout
+events are totally ordered and a snapshot for the previous layout can never follow a switch's
+`StageLayout`. Any NEW `Stage` publisher must follow the same rule, or a late stale snapshot flips
+every display back. Never await while holding the guard (tokio RwLock is write-preferring — a
+nested read behind a queued writer deadlocks).
 
 The live hub does NOT replay: anything published while a display's socket is resetting is lost.
 `pages/stage.rs::resync_stage_state` re-reads layout + snapshot + broadcast + Bible overlay on page
 load and on every `Connected` transition — the same pattern as `sync_ndi_source_state`. Its
-layout/snapshot answers are discarded when a live `Stage`/`StageLayout` event arrived while the
-fetch was in flight (`StageSyncGeneration`) — the live event is newer.
+layout/snapshot answers are discarded when a live `StageLayout` or an APPLIED `Stage` event arrived
+while the fetch was in flight (`StageSyncGeneration`) — the live event is newer. The ignored
+camera-crew snapshot must NOT count (it is published on every broadcast; with api selected it is
+the only one) or every resync would be voided.
 
 **E2E technique:** `page.routeWebSocket(/\/live\/ws/, ws => { const server = ws.connectToServer();
 server.onMessage(m => { …filter…; ws.send(m); }); })` reproduces lost frames deterministically

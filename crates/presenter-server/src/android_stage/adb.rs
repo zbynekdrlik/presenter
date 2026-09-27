@@ -150,7 +150,11 @@ pub(super) fn decide_connect(state: Option<&str>, link: &mut AdbLinkState) -> Co
         }
         // Waiting on the TV's RSA "allow debugging" prompt — a disconnect
         // would re-show it; a plain connect is harmless.
-        Some("unauthorized") | Some("authorizing") => ConnectAction::Connect,
+        // It also breaks the stale streak: only CONSECUTIVE offline cycles count.
+        Some("unauthorized") | Some("authorizing") => {
+            link.stuck_cycles = 0;
+            ConnectAction::Connect
+        }
         Some(_) => {
             link.stuck_cycles += 1;
             if link.stuck_cycles >= STALE_RECONNECT_CYCLES {

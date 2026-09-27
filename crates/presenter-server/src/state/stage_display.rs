@@ -184,7 +184,15 @@ impl AppState {
             if *guard == layout.code {
                 return Ok(layout);
             }
-            std::mem::replace(&mut *guard, layout.code.clone())
+            let previous = std::mem::replace(&mut *guard, layout.code.clone());
+            // #793: publish `StageLayout` UNDER the write lock (publish is sync)
+            // so two quick switches can never broadcast their layouts in reverse
+            // order, and every snapshot published under the read lock
+            // (`publish_stage_context`) is ordered relative to it.
+            self.live_hub.publish(LiveEvent::StageLayout {
+                code: layout.code.clone(),
+            });
+            previous
         };
         // #793: layout switches were invisible in the log, so a display seen
         // on the wrong layout could not be matched against the switch time.
@@ -221,8 +229,9 @@ impl AppState {
         self.build_stage_context().await
     }
 
-    /// Persist + broadcast a switch that has ALREADY been applied to the
-    /// in-memory RwLock. Both steps are best-effort: the switch itself
+    /// Persist + broadcast the snapshot of a switch that has ALREADY been
+    /// applied to the in-memory RwLock (its `StageLayout` event was published
+    /// under the write lock, #793). Both steps are best-effort: the switch itself
     /// already committed, so neither a persist failure nor a broadcast
     /// failure may turn an already-successful switch into a caller-visible
     /// error (#384 for persist, #631 for the snapshot broadcast).
@@ -253,9 +262,6 @@ impl AppState {
                 "failed to persist stage layout — it will reset to default on next restart"
             );
         }
-        self.live_hub.publish(LiveEvent::StageLayout {
-            code: layout.code.clone(),
-        });
         if layout.code == API_STAGE_LAYOUT_CODE {
             // Issue #281: when switching TO api, publish the stored
             // api_stage snapshot so the operator preview reflects the
@@ -265,8 +271,15 @@ impl AppState {
             // replace it with the api snapshot publish here. This publish is
             // NOT skippable — the resolution broadcast that follows on the
             // marker path also short-circuits on the api layout.
+            //
+            // #793: build first, then check + publish under the layout read
+            // lock — a later switch away from api must never be followed by
+            // this (now stale) api snapshot, which displays would adopt.
             let snapshot = self.api_stage_snapshot().await;
-            self.live_hub.publish(LiveEvent::Stage { snapshot });
+            let current = self.stage_layout.read().await;
+            if *current == API_STAGE_LAYOUT_CODE {
+                self.live_hub.publish(LiveEvent::Stage { snapshot });
+            }
         } else if needs_snapshot_broadcast {
             // #652 F1: re-derive a FRESH context here rather than reusing
             // the probe's (potentially stale) result.

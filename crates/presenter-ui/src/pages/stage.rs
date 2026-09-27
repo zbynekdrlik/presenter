@@ -195,7 +195,7 @@ pub fn StagePage() -> impl IntoView {
         let ctx = ctx.clone();
         let generation = generation.clone();
         Rc::new(move |event| {
-            generation.note(&event);
+            generation.note(&event, &ctx.layout_code.get_untracked());
             apply_stage_event(&ctx, event);
         })
     };
