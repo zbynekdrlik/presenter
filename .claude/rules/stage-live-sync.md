@@ -102,3 +102,6 @@ before building the ack snapshot) and `NdiVideoDiag.layout_code` (`record_diag`,
 `<video>` is mounted). The heartbeat carrier is what makes a switch to a non-NDI layout visible;
 don't drop it thinking diag covers it. The (non-empty) layout is also part of `DiagLogKey`, so a
 switch between NDI layouts logs `presenter::stage::diag` on the first diag frame that reports it.
+The heartbeat path logs one `stage display layout reported (#797)` from/to line per real change —
+including `worship-snv → X` right after every (re)connect, since register seeds the default; that
+line is a reconnect, not an operator switch.

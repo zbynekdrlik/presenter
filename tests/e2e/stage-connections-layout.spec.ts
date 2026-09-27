@@ -70,10 +70,10 @@ test("/stage/connections follows the displayed non-NDI layout (#797)", async ({
 
   // No NDI source: none of these layouts mounts an NDI <video>, so only the
   // heartbeat ACK can carry the displayed layout.
-  await page.request.post(
+  const deactivate = await page.request.post(
     new URL("/integrations/video-sources/deactivate", baseURL).toString(),
-    { failOnStatusCode: false },
   );
+  expect(deactivate.ok(), "deactivate NDI sources").toBe(true);
   await selectLayout(page, "preach");
 
   await page.goto(new URL("/stage", baseURL).toString());
@@ -83,6 +83,9 @@ test("/stage/connections follows the displayed non-NDI layout (#797)", async ({
   await page.waitForSelector('body[data-layout-code="preach"]', {
     timeout: 10_000,
   });
+  // Guard the isolation: with no NDI <video> there are no diag frames, so
+  // only the heartbeat carrier can make the poll below pass.
+  await expect(page.locator('video[data-role="ndi-video"]')).toHaveCount(0);
 
   // The presence frame registered the pre-resync default; the next heartbeat
   // ACK (1.5 s cadence) must replace it with the displayed layout.
