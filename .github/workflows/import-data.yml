@@ -69,8 +69,20 @@ jobs:
           fi
 
       - name: Setup SSH
+        id: ssh_setup
         run: |
           mkdir -p ~/.ssh
+          # #795: (re)write the deploy-target alias FIRST, before ssh-keyscan.
+          # ~/.ssh/config is shared by every job on this self-hosted runner; if
+          # keyscan failed before the rewrite, the PREVIOUS job's alias (another
+          # host, e.g. SNV prod) stayed in place and a later step reached it.
+          rm -f ~/.ssh/config
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+              HostName ${{ steps.env.outputs.deploy_host }}
+              User newlevel
+              IdentityFile ~/.ssh/id_deploy
+          EOF
           if [ "${{ inputs.environment }}" = "production" ]; then
             echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
           elif [ "${{ inputs.environment }}" = "pp" ]; then
@@ -80,12 +92,6 @@ jobs:
           fi
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan ${{ steps.env.outputs.deploy_host }} >> ~/.ssh/known_hosts 2>/dev/null
-          cat > ~/.ssh/config <<EOF
-          Host deploy-target
-              HostName ${{ steps.env.outputs.deploy_host }}
-              User newlevel
-              IdentityFile ~/.ssh/id_deploy
-          EOF
 
       - name: Backup database
         run: |
