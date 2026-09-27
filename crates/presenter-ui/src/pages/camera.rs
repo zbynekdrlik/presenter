@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use presenter_core::LiveEvent;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 use crate::api;
@@ -23,7 +24,12 @@ pub fn CameraPage() -> impl IntoView {
 
     // Connect stage WebSocket — same subscription as /stage clients use.
     // layout_code is pinned to "camera-crew" and never updated from events.
-    let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code);
+    // #793: events are applied directly by the socket, in arrival order.
+    let on_event: stage::StageEventHandler = {
+        let ctx = ctx.clone();
+        Rc::new(move |event| apply_camera_event(&ctx, event))
+    };
+    let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code, on_event);
 
     {
         let ws_state = ws_handle.state;
@@ -35,40 +41,6 @@ pub fn CameraPage() -> impl IntoView {
                 StageWsState::Disconnected => "disconnected",
             };
             set_global_string("__presenterStageConnectionState", state_str);
-        });
-    }
-
-    // Handle WS events. CRITICAL: do NOT update layout_code from
-    // LiveEvent::StageLayout — camera-crew is pinned.
-    {
-        let ctx = ctx.clone();
-        let last_event = ws_handle.last_event;
-        Effect::new(move |_| {
-            let Some(event) = last_event.get() else {
-                return;
-            };
-            match event {
-                LiveEvent::Stage { snapshot } if snapshot.layout.code == CAMERA_LAYOUT => {
-                    ctx.snapshot.set(Some(snapshot));
-                }
-                LiveEvent::BibleSlide { output } => {
-                    ctx.bible_overlay.set(Some(output));
-                }
-                LiveEvent::BibleCleared => {
-                    ctx.bible_overlay.set(None);
-                }
-                LiveEvent::BroadcastLive { enabled } => {
-                    ctx.broadcast_live.set(enabled);
-                }
-                LiveEvent::Timers { overview } => {
-                    ctx.snapshot.update(|snap| {
-                        if let Some(s) = snap {
-                            s.timers = overview;
-                        }
-                    });
-                }
-                _ => {}
-            }
         });
     }
 
@@ -101,4 +73,26 @@ fn set_global_string(name: &str, value: &str) {
         &JsValue::from_str(name),
         &JsValue::from_str(value),
     );
+}
+
+/// Apply one live event to the camera-crew page. CRITICAL: do NOT update
+/// layout_code from `LiveEvent::StageLayout` — camera-crew is pinned, and only
+/// camera-crew snapshots are shown.
+fn apply_camera_event(ctx: &StageContext, event: LiveEvent) {
+    match event {
+        LiveEvent::Stage { snapshot } if snapshot.layout.code == CAMERA_LAYOUT => {
+            ctx.snapshot.set(Some(snapshot));
+        }
+        LiveEvent::BibleSlide { output } => ctx.bible_overlay.set(Some(output)),
+        LiveEvent::BibleCleared => ctx.bible_overlay.set(None),
+        LiveEvent::BroadcastLive { enabled } => ctx.broadcast_live.set(enabled),
+        LiveEvent::Timers { overview } => {
+            ctx.snapshot.update(|snap| {
+                if let Some(s) = snap {
+                    s.timers = overview;
+                }
+            });
+        }
+        _ => {}
+    }
 }

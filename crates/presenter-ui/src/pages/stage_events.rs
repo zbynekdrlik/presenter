@@ -1,4 +1,118 @@
 //! Stage-page live-event application (#793).
+//!
+//! The stage WebSocket hands EVERY live event to [`apply_stage_event`]
+//! synchronously (no single latest-value slot a burst could coalesce), and a
+//! `Stage` snapshot for another selected layout switches the display to it
+//! instead of being dropped — so a lost `StageLayout` event self-heals on the
+//! next snapshot. The page additionally re-reads layout + snapshot on every WS
+//! (re)connect (`pages/stage.rs`), covering events published during a gap.
+
+use leptos::prelude::*;
+use presenter_core::{LiveEvent, StageDisplaySnapshot};
+
+use super::stage::{ndi_activation_resets_gate, set_global_string};
+use crate::state::stage::StageContext;
+
+/// The camera-crew layout: its snapshot is published on EVERY stage broadcast
+/// (for `/ui/camera`) and it is never operator-selectable, so it must never
+/// switch a `/stage` display.
+pub(crate) const CAMERA_CREW_LAYOUT: &str = "camera-crew";
+
+/// What the stage page does with an incoming `Stage` snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SnapshotAction {
+    /// Snapshot for the display's current layout — show it.
+    Apply,
+    /// Snapshot for ANOTHER layout. The server publishes only the selected
+    /// layout's snapshot (plus camera-crew; the api snapshot only while api is
+    /// selected), so this layout IS the active one — switch to it, then show it.
+    AdoptLayout,
+    /// The always-published camera-crew snapshot — not for `/stage`.
+    Ignore,
+}
+
+/// Decide how to handle a `Stage` snapshot for `snapshot_layout` while the
+/// display shows `current_layout`. No I/O.
+pub(crate) fn stage_snapshot_action(current_layout: &str, snapshot_layout: &str) -> SnapshotAction {
+    if snapshot_layout == current_layout {
+        SnapshotAction::Apply
+    } else if snapshot_layout == CAMERA_CREW_LAYOUT {
+        SnapshotAction::Ignore
+    } else {
+        SnapshotAction::AdoptLayout
+    }
+}
+
+/// Switch the display to `code` (no-op when already there) and mirror it into
+/// the `__presenterStageLayout` test global.
+pub(crate) fn apply_layout_code(ctx: &StageContext, code: &str) {
+    let current = ctx.layout_code.get_untracked();
+    if current != code {
+        leptos::logging::log!("stage layout {current} -> {code}");
+        ctx.layout_code.set(code.to_string());
+    }
+    set_global_string("__presenterStageLayout", code);
+}
+
+/// Apply a `Stage` snapshot per [`stage_snapshot_action`].
+pub(crate) fn apply_stage_snapshot(ctx: &StageContext, snapshot: StageDisplaySnapshot) {
+    match stage_snapshot_action(&ctx.layout_code.get_untracked(), &snapshot.layout.code) {
+        SnapshotAction::Apply => ctx.snapshot.set(Some(snapshot)),
+        SnapshotAction::AdoptLayout => {
+            apply_layout_code(ctx, &snapshot.layout.code);
+            ctx.snapshot.set(Some(snapshot));
+        }
+        SnapshotAction::Ignore => {}
+    }
+}
+
+/// Apply one live event to the stage page state. Called by the stage WS for
+/// every event, in arrival order.
+pub(crate) fn apply_stage_event(ctx: &StageContext, event: LiveEvent) {
+    match event {
+        LiveEvent::Stage { snapshot } => apply_stage_snapshot(ctx, snapshot),
+        LiveEvent::StageLayout { code } => apply_layout_code(ctx, &code),
+        LiveEvent::BibleSlide { output } => ctx.bible_overlay.set(Some(output)),
+        LiveEvent::BibleCleared => ctx.bible_overlay.set(None),
+        LiveEvent::BroadcastLive { enabled } => ctx.broadcast_live.set(enabled),
+        LiveEvent::Timers { overview } => {
+            ctx.snapshot.update(|snap| {
+                if let Some(s) = snap {
+                    s.timers = overview;
+                }
+            });
+        }
+        LiveEvent::NdiSourceActivated { source_id, .. } => {
+            // #757: reset the neutral-cover / frames gate ONLY when the source
+            // actually CHANGED — a same-source re-activation must leave the
+            // live frames gate alone, or `mark_frames_live` (transition-guarded
+            // on the still-`true` per-session Cell) never re-emits `true` and
+            // the video stays stuck dormant while frames flow. Mirrors the
+            // `sync_ndi_source_state` guard (`ndi_active_source_id != incoming id`).
+            let resets_gate = ndi_activation_resets_gate(
+                &source_id,
+                ctx.ndi_active_source_id.get_untracked().as_deref(),
+            );
+            ctx.ndi_active.set(true);
+            ctx.ndi_active_source_id.set(Some(source_id));
+            if resets_gate {
+                ctx.ndi_status.set("connecting".to_string());
+                // #500: a freshly-activated (new/changed) source has no frames
+                // yet — the neutral cover must show until the WHEP video decodes.
+                ctx.ndi_frames_live.set(false);
+            }
+        }
+        LiveEvent::NdiSourceDeactivated => {
+            ctx.ndi_active.set(false);
+            ctx.ndi_active_source_id.set(None);
+            ctx.ndi_status.set(String::new());
+            // #500: no source → no frames; clear the live-frames flag.
+            ctx.ndi_frames_live.set(false);
+        }
+        LiveEvent::NdiConnectionStatus { status } => ctx.ndi_status.set(status),
+        _ => {}
+    }
+}
 
 #[cfg(test)]
 mod tests {
