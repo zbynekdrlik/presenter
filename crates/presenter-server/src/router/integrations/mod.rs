@@ -43,8 +43,9 @@ pub(super) fn extract_actor(headers: &HeaderMap) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_actor;
+    use super::{extract_actor, extract_client_ip};
     use axum::http::HeaderMap;
+    use std::net::SocketAddr;
 
     #[test]
     fn extract_actor_prefers_first_x_forwarded_for_hop() {
@@ -72,5 +73,34 @@ mod tests {
         headers.insert("x-forwarded-for", "".parse().unwrap());
         headers.insert("x-real-ip", "9.9.9.9".parse().unwrap());
         assert_eq!(extract_actor(&headers), "9.9.9.9");
+    }
+
+    // #793: live WS clients were all logged as `client_ip=anonymous` (LAN TVs
+    // send no forwarding header). The socket peer is now the fallback, while a
+    // proxy header (Cloudflare tunnel → loopback peer) still wins.
+    #[test]
+    fn client_ip_falls_back_to_socket_peer_without_proxy_headers() {
+        let peer: SocketAddr = "10.77.9.33:41522".parse().unwrap();
+        assert_eq!(
+            extract_client_ip(&HeaderMap::new(), Some(peer)),
+            "10.77.9.33"
+        );
+    }
+
+    #[test]
+    fn client_ip_prefers_forwarded_header_over_tunnel_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.7".parse().unwrap());
+        let tunnel_peer: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        assert_eq!(
+            extract_client_ip(&headers, Some(tunnel_peer)),
+            "203.0.113.7",
+            "behind the Cloudflare tunnel the peer is loopback — the header is the client",
+        );
+    }
+
+    #[test]
+    fn client_ip_is_anonymous_without_header_or_peer() {
+        assert_eq!(extract_client_ip(&HeaderMap::new(), None), "anonymous");
     }
 }

@@ -407,4 +407,112 @@ mod tests {
             sink.messages.len()
         );
     }
+
+    // ── #793: the WS END REASON is logged at disconnect ─────────────────────
+    //
+    // sd2–sd4 made 30–40 stage WS resets per TV during the 2026-09-27 event and
+    // the log only said "live ws client disconnected" — no close code, no read
+    // error, no "our heartbeat write failed". These pin the classification the
+    // disconnect line now carries.
+
+    /// A sink whose every send fails (the TV's TCP stream is gone).
+    struct FailSink;
+
+    impl futures_util::Sink<Message> for FailSink {
+        type Error = String;
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn start_send(self: Pin<&mut Self>, _item: Message) -> Result<(), Self::Error> {
+            Err("broken pipe".to_string())
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn forwarder_reports_send_failure_as_end_reason() {
+        let hub = LiveHub::new();
+        let mut stream = BroadcastStream::new(hub.subscribe());
+        hub.publish(LiveEvent::NdiConnectionStatus {
+            status: "connected".into(),
+        });
+
+        let reason = forward_live_events(&mut stream, &mut FailSink).await;
+        match reason {
+            WsEndReason::SendFailed(detail) => assert!(
+                detail.contains("broken pipe"),
+                "the write error must be carried for the log: {detail}",
+            ),
+            other => panic!("a failed write must end as SendFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn forwarder_reports_hub_closed_when_the_stream_ends() {
+        let hub = LiveHub::new();
+        let mut stream = BroadcastStream::new(hub.subscribe());
+        drop(hub);
+        let mut sink = CollectSink {
+            messages: Vec::new(),
+        };
+        assert_eq!(
+            forward_live_events(&mut stream, &mut sink).await,
+            WsEndReason::HubClosed
+        );
+    }
+
+    #[test]
+    fn close_frame_carries_code_and_reason() {
+        let reason = close_frame_reason(Some(axum::extract::ws::CloseFrame {
+            code: 1001,
+            reason: "going away".into(),
+        }));
+        assert_eq!(
+            reason,
+            WsEndReason::ClientClose {
+                code: Some(1001),
+                reason: "going away".to_string(),
+            }
+        );
+        let text = reason.to_string();
+        assert!(
+            text.contains("1001") && text.contains("going away"),
+            "the log text must show the close code and reason: {text}",
+        );
+    }
+
+    #[test]
+    fn close_without_frame_is_a_codeless_client_close() {
+        assert_eq!(
+            close_frame_reason(None),
+            WsEndReason::ClientClose {
+                code: None,
+                reason: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn end_reasons_render_distinct_log_text() {
+        let texts = [
+            WsEndReason::ReadError("Connection reset without closing handshake".into()).to_string(),
+            WsEndReason::StreamEnded.to_string(),
+            WsEndReason::SendFailed("broken pipe".into()).to_string(),
+            WsEndReason::HubClosed.to_string(),
+        ];
+        assert!(texts[0].contains("read error") && texts[0].contains("Connection reset"));
+        assert!(texts[2].contains("send failed") && texts[2].contains("broken pipe"));
+        let unique: std::collections::HashSet<_> = texts.iter().collect();
+        assert_eq!(
+            unique.len(),
+            texts.len(),
+            "each end reason must be distinguishable"
+        );
+    }
 }
