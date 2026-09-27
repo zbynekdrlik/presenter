@@ -59,10 +59,24 @@ pub(crate) fn should_log_diag(
 /// ACK). Only a non-empty value replaces the stored one: the register-time
 /// value comes from the presence frame, sent before the client's layout
 /// resync, so it is the `worship-snv` default until a report arrives.
-fn adopt_layout(connection: &mut StageConnection, layout_code: Option<&str>) {
-    if let Some(layout) = layout_code.filter(|l| !l.is_empty()) {
-        connection.layout_code = layout.to_string();
+/// Returns the PREVIOUS layout when the value actually changed.
+fn adopt_layout(connection: &mut StageConnection, layout_code: Option<&str>) -> Option<String> {
+    let layout = layout_code.filter(|l| !l.is_empty())?;
+    if connection.layout_code == layout {
+        return None;
     }
+    Some(std::mem::replace(
+        &mut connection.layout_code,
+        layout.to_string(),
+    ))
+}
+
+/// Result of recording a heartbeat ACK (#797): the ack snapshot (`None` for an
+/// unknown connection) plus the previous layout when the ACK switched it.
+#[derive(Debug)]
+pub struct HeartbeatAckRecord {
+    pub snapshot: Option<StageClientSnapshot>,
+    pub layout_changed_from: Option<String>,
 }
 
 /// Result of recording a diagnostics snapshot: the updated per-connection
@@ -193,10 +207,10 @@ impl StageConnectionTracker {
 
     /// #797: adopt the layout the client reports it DISPLAYS (heartbeat ACK,
     /// sent for every layout). `None`/empty and unknown ids are no-ops.
-    pub fn set_displayed_layout(&mut self, id: Uuid, layout_code: Option<&str>) {
-        if let Some(connection) = self.connections.get_mut(&id) {
-            adopt_layout(connection, layout_code);
-        }
+    /// Returns the previous layout when the value changed.
+    pub fn set_displayed_layout(&mut self, id: Uuid, layout_code: Option<&str>) -> Option<String> {
+        let connection = self.connections.get_mut(&id)?;
+        adopt_layout(connection, layout_code)
     }
 
     /// #732: store the latest NDI `<video>` diagnostics snapshot and decide,
@@ -327,10 +341,13 @@ impl StageConnections {
         heartbeat_id: Option<Uuid>,
         layout_code: Option<&str>,
         now: DateTime<Utc>,
-    ) -> Option<StageClientSnapshot> {
+    ) -> HeartbeatAckRecord {
         let mut guard = self.inner.write().await;
-        guard.set_displayed_layout(id, layout_code);
-        guard.record_heartbeat_ack(id, heartbeat_id, now)
+        let layout_changed_from = guard.set_displayed_layout(id, layout_code);
+        HeartbeatAckRecord {
+            snapshot: guard.record_heartbeat_ack(id, heartbeat_id, now),
+            layout_changed_from,
+        }
     }
 
     pub async fn mark_disconnected(&self, id: Uuid) -> Option<StageClientSnapshot> {

@@ -1,4 +1,4 @@
-use crate::stage_connections::{DiagRecord, StageConnections};
+use crate::stage_connections::{DiagRecord, HeartbeatAckRecord, StageConnections};
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use chrono::Utc;
 use futures_util::stream::SplitStream;
@@ -281,9 +281,10 @@ async fn handle_heartbeat_ack(
     };
     let now = Utc::now();
     let heartbeat_uuid = heartbeat_id.as_ref().and_then(|v| Uuid::parse_str(v).ok());
-    let ack_snapshot = connections
+    let ack = connections
         .record_heartbeat_ack(id, heartbeat_uuid, layout_code.as_deref(), now)
         .await;
+    log_display_layout_switch(client_ip, id, &ack);
     if let Some(diag) = ndi_video {
         if let Some(record) = connections.record_diag(id, diag, now).await {
             log_stage_diag(client_ip, id, &record);
@@ -293,8 +294,25 @@ async fn handle_heartbeat_ack(
             return;
         }
     }
-    if let Some(snapshot) = ack_snapshot {
+    if let Some(snapshot) = ack.snapshot {
         hub.publish(LiveEvent::StageConnection { snapshot });
+    }
+}
+
+/// #797: one `presenter::stage::diag` INFO line when a display's heartbeat
+/// ACK reports a DIFFERENT displayed layout than the tracker held — the
+/// per-TV layout evidence for every layout, including non-NDI ones (the
+/// diag-frame log only exists while an NDI video is mounted).
+fn log_display_layout_switch(client_ip: &str, id: Uuid, ack: &HeartbeatAckRecord) {
+    if let (Some(from), Some(snapshot)) = (&ack.layout_changed_from, &ack.snapshot) {
+        info!(
+            target: "presenter::stage::diag",
+            client_ip = %client_ip,
+            id = %id,
+            from = %from,
+            to = %snapshot.layout_code,
+            "stage display layout reported (#797)"
+        );
     }
 }
 
