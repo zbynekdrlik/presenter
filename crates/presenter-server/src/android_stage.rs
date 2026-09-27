@@ -2193,4 +2193,42 @@ mod tests {
         );
         assert_eq!(runner.connect_calls(), 3, "and reconnects it");
     }
+
+    // ── #793 review: rate-limited adb logs, never re-prompt an RSA dialog ──
+
+    // Disconnecting an `unauthorized`/`authorizing` target re-shows the RSA
+    // prompt on the TV while someone may be accepting it — only a stale
+    // `offline` entry is ever dropped.
+    #[test]
+    fn unauthorized_target_is_never_disconnected() {
+        for state in ["unauthorized", "authorizing"] {
+            let mut link = AdbLinkState::default();
+            for cycle in 1..=6 {
+                assert_eq!(
+                    decide_connect(Some(state), &mut link),
+                    ConnectAction::Connect,
+                    "`{state}` cycle {cycle}: plain connect, never a disconnect",
+                );
+            }
+        }
+    }
+
+    // .claude/rules/log-flood-backoff.md: log the 1st + power-of-two milestones.
+    #[test]
+    fn adb_log_gate_is_first_plus_powers_of_two() {
+        let logged: Vec<bool> = (0..=9).map(should_log_adb_streak).collect();
+        assert_eq!(
+            logged,
+            [false, true, true, false, true, false, false, false, true, false]
+        );
+    }
+
+    // The per-cycle "package state unknown" WARN must not flood journald for a
+    // TV stuck in an adb error (~180 lines/h/TV before).
+    #[test]
+    fn unknown_package_warn_is_rate_limited() {
+        let mut link = AdbLinkState::default();
+        let logged: Vec<bool> = (0..8).map(|_| note_unknown_package(&mut link)).collect();
+        assert_eq!(logged, [true, true, false, true, false, false, false, true]);
+    }
 }

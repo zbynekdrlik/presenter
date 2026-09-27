@@ -119,4 +119,14 @@ mod tests {
     fn client_ip_is_anonymous_without_header_or_peer() {
         assert_eq!(extract_client_ip(&HeaderMap::new(), None), "anonymous");
     }
+
+    // #793 review: a LAN client must not be able to spoof its logged IP —
+    // the forwarding header is trusted only from a loopback peer (cloudflared).
+    #[test]
+    fn client_ip_ignores_forwarded_header_from_a_lan_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        let lan_peer: SocketAddr = "10.77.9.32:40000".parse().unwrap();
+        assert_eq!(extract_client_ip(&headers, Some(lan_peer)), "10.77.9.32");
+    }
 }

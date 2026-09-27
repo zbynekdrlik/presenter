@@ -116,7 +116,8 @@ pub(crate) fn apply_stage_event(ctx: &StageContext, event: LiveEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{stage_snapshot_action, SnapshotAction};
+    use super::{event_invalidates_resync, stage_snapshot_action, SnapshotAction};
+    use presenter_core::LiveEvent;
 
     // ─────────────────────────────────────────────────────────────────────
     // #793 — a `Stage` snapshot for a layout other than the display's own
@@ -155,5 +156,19 @@ mod tests {
             SnapshotAction::Ignore,
             "camera-crew is published on every broadcast, never selected",
         );
+    }
+
+    // #793 review: a reconnect resync's HTTP answer must not overwrite a
+    // NEWER live layout/snapshot event applied while the fetch was in flight.
+    #[test]
+    fn only_layout_and_stage_events_invalidate_an_in_flight_resync() {
+        assert!(event_invalidates_resync(&LiveEvent::StageLayout {
+            code: "timer".into()
+        }));
+        assert!(!event_invalidates_resync(&LiveEvent::BroadcastLive {
+            enabled: true
+        }));
+        assert!(!event_invalidates_resync(&LiveEvent::BibleCleared));
+        assert!(!event_invalidates_resync(&LiveEvent::NdiSourceDeactivated));
     }
 }
