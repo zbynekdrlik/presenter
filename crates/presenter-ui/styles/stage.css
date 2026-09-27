@@ -152,6 +152,10 @@ body.stage {
     width: 40%;
     height: 7%;
     padding: 0;
+    /* #791: centre the text in the box (it used to hug the top edge). */
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;

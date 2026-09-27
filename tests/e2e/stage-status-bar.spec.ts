@@ -225,7 +225,7 @@ test("stage clock updates every second", async ({ context }) => {
   await stagePage.close();
 });
 
-test("LIVE indicator is initially inactive with Slovak text", async ({
+test("LIVE indicator is initially inactive: OFF AIR, vertically centred in the box", async ({
   context,
 }) => {
   const stagePage = await openStageDisplay(context);
@@ -233,7 +233,31 @@ test("LIVE indicator is initially inactive with Slovak text", async ({
   const liveEl = stagePage.locator(".stage__live-pill");
   await expect(liveEl).toBeVisible();
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("OFF AIR");
+
+  // #791: the text sits in the vertical middle of the green box (it used to hug
+  // the top edge). Measure the text node's box against the pill's box.
+  await expect
+    .poll(
+      () =>
+        liveEl.evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          const text = [...el.childNodes].find(
+            (n) =>
+              n.nodeType === Node.TEXT_NODE &&
+              (n.textContent ?? "").trim() !== "",
+          );
+          if (!text) return Number.NaN;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const r = range.getBoundingClientRect();
+          const textMid = r.top + r.height / 2;
+          const boxMid = box.top + box.height / 2;
+          return Math.abs(textMid - boxMid) / box.height;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBeLessThan(0.15);
 
   await stagePage.close();
 });
@@ -245,7 +269,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
 
   const liveEl = stagePage.locator(".stage__live-pill");
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("OFF AIR");
 
   // Connect to Companion and send broadcast.set_live command
   const { socket, handshake, sendCommand } = createCompanionSocket(wsURL);
@@ -285,7 +309,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   );
 
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("OFF AIR");
 
   socket.close();
   await stagePage.close();
@@ -328,7 +352,7 @@ test("LIVE indicator can be toggled on and off via Companion", async ({
   );
 
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("OFF AIR");
 
   socket.close();
   await stagePage.close();
@@ -566,9 +590,10 @@ test("song number is hidden for presentation without number prefix", async ({
   });
 
   // Wait for slide text to appear (confirms snapshot arrived)
-  await expect(
-    stagePage.locator(".stage__slide-text").first(),
-  ).toContainText("Just a song", { timeout: 10_000 });
+  await expect(stagePage.locator(".stage__slide-text").first()).toContainText(
+    "Just a song",
+    { timeout: 10_000 },
+  );
 
   // Song number element should NOT be visible
   const songNumberEl = stagePage.locator('[data-role="song-number"]');
