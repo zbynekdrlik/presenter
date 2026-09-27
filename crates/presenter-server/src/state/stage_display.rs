@@ -179,13 +179,22 @@ impl AppState {
             .await?
             .is_some();
 
-        {
+        let previous = {
             let mut guard = self.stage_layout.write().await;
             if *guard == layout.code {
                 return Ok(layout);
             }
-            *guard = layout.code.clone();
-        }
+            std::mem::replace(&mut *guard, layout.code.clone())
+        };
+        // #793: layout switches were invisible in the log, so a display seen
+        // on the wrong layout could not be matched against the switch time.
+        tracing::info!(
+            target: "presenter::stage::layout",
+            from = %previous,
+            to = %layout.code,
+            marker = !publish_snapshots,
+            "stage layout switched"
+        );
         self.persist_and_broadcast_switch(&layout, needs_snapshot_broadcast)
             .await;
         Ok(layout)

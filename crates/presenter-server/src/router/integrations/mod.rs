@@ -9,6 +9,7 @@ pub(super) mod resolume_push_audit;
 pub(super) mod video_source;
 
 use axum::http::HeaderMap;
+use std::net::SocketAddr;
 
 /// Serde default for boolean fields that should default to `true`.
 pub(super) const fn default_true() -> bool {
@@ -20,25 +21,40 @@ pub(super) const fn default_true() -> bool {
 /// Prefers the first hop from `X-Forwarded-For`, falls back to `X-Real-IP`,
 /// and finally returns `"anonymous"` if neither header is present.
 ///
-/// Note: `ConnectInfo<SocketAddr>` wiring was dropped in the axum 0.8
-/// migration (deviation D2 in the spec), so there is no socket peer to
-/// fall back to. If the deployment relies on direct connections with no
-/// reverse proxy, configure the proxy to add `X-Forwarded-For` to recover
-/// the actor IP.
+/// Audit rows stay header-only; the live WS logs use [`extract_client_ip`],
+/// which also falls back to the socket peer (`ConnectInfo`, re-wired in
+/// `main.rs` for #793).
 pub(super) fn extract_actor(headers: &HeaderMap) -> String {
+    forwarded_client_ip(headers).unwrap_or_else(|| "anonymous".to_string())
+}
+
+/// The client IP a reverse proxy reported: the first `X-Forwarded-For` hop,
+/// else `X-Real-IP`. `None` when neither header carries a value.
+fn forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
     if let Some(value) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
         let first = value.split(',').next().unwrap_or("").trim();
         if !first.is_empty() {
-            return first.to_string();
+            return Some(first.to_string());
         }
     }
     if let Some(value) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_string();
+            return Some(trimmed.to_string());
         }
     }
-    "anonymous".to_string()
+    None
+}
+
+/// Best-effort client IP for the live WS connect/disconnect logs (#793): a
+/// proxy header wins (behind the Cloudflare tunnel the socket peer is the
+/// loopback `cloudflared`), otherwise the TCP socket peer (LAN stage TVs send
+/// no forwarding header — they were all logged as `anonymous` before), else
+/// `"anonymous"` (a server not served with connect-info, e.g. tests).
+pub(super) fn extract_client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+    forwarded_client_ip(headers)
+        .or_else(|| peer.map(|addr| addr.ip().to_string()))
+        .unwrap_or_else(|| "anonymous".to_string())
 }
 
 #[cfg(test)]

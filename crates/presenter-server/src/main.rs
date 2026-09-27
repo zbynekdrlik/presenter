@@ -118,7 +118,16 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!("PRESENTER_SKIP_MOCK_INTEGRATIONS set — skipping mock integrations");
     }
-    axum::serve(listener, app).await.context("server failure")
+    serve_with_peer_addr(listener, app).await
+}
+
+/// Serve with connect-info so the live WS logs carry the real peer IP of each
+/// stage TV (#793 — they were all `client_ip=anonymous`).
+async fn serve_with_peer_addr(listener: TcpListener, app: axum::Router) -> anyhow::Result<()> {
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, service)
+        .await
+        .context("server failure")
 }
 
 fn setup_tracing() {
