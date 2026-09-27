@@ -425,6 +425,19 @@ jobs:
           done
           echo "All workflow YAML files parse strictly."
 
+      # Regression test for #795: a deploy job must never reach a host other
+      # than its DEPLOY_HOST. The shared self-hosted runner's ~/.ssh/config
+      # kept the previous job's `Host deploy-target` (SNV) when release.yml's
+      # keyscan failed before rewriting it, and the `if: always()` Start
+      # service step then ssh'd into SNV. The checker enforces: alias written
+      # before ssh-keyscan, setup step has an `id`, and every always()/
+      # failure()/cancelled() remote step is gated on the setup's success.
+      - name: Check deploy workflow SSH safety (#795)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_check_deploy_workflows.py' -v
+          python3 scripts/ci/check_deploy_workflows.py
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
