@@ -5,6 +5,7 @@ paths:
   - "crates/presenter-ui/src/pages/stage_events.rs"
   - "crates/presenter-ui/src/pages/camera.rs"
   - "crates/presenter-server/src/live.rs"
+  - "crates/presenter-server/src/stage_connections.rs"
   - "crates/presenter-server/src/android_stage.rs"
   - "crates/presenter-server/src/android_stage/**"
   - "tests/e2e/stage-layout-sync.spec.ts"
@@ -90,3 +91,17 @@ against an in-progress `dispatch_inbound`) and logs `reason=` (`WsEndReason`: cl
 send failed, hub closed) + `stage_client` + `connected_ms`. Layout switches log
 `presenter::stage::layout` INFO `from`/`to`. Read them with
 `journalctl -u presenter | grep -E 'live ws client|stage::layout'`.
+
+**Per-display layout (#797):** the `StagePresence` frame is sent on socket open, BEFORE the layout
+resync, so it carries the `worship-snv` default — never read the register-time layout as the truth.
+The client reports the DISPLAYED layout (`body[data-layout-code]`, `ws/stage_diag.rs::displayed_layout_code`)
+on TWO carriers and the tracker adopts any non-empty value from either via one helper
+(`stage_connections.rs::adopt_layout`): `InboundMessage::StageHeartbeatAck.layout_code` (every
+heartbeat, EVERY layout — `StageConnections::record_heartbeat_ack` adopts it under the same lock
+before building the ack snapshot) and `NdiVideoDiag.layout_code` (`record_diag`, only while an NDI
+`<video>` is mounted). The heartbeat carrier is what makes a switch to a non-NDI layout visible;
+don't drop it thinking diag covers it. The (non-empty) layout is also part of `DiagLogKey`, so a
+switch between NDI layouts logs `presenter::stage::diag` on the first diag frame that reports it.
+The heartbeat path logs one `stage display layout reported (#797)` from/to line per real change —
+including `worship-snv → X` right after every (re)connect, since register seeds the default; that
+line is a reconnect, not an operator switch.

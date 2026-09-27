@@ -117,6 +117,12 @@ pub enum InboundMessage {
         /// (non-NDI layouts) so a heartbeat carries no `null` bloat.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ndi_video: Option<NdiVideoDiag>,
+        /// #797: the layout the stage page currently DISPLAYS
+        /// (`body[data-layout-code]`), sent on every heartbeat for every
+        /// layout (diag frames exist only while an NDI video is mounted).
+        /// Additive + optional — an old client omits it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layout_code: Option<String>,
     },
     /// #732 diagnostics: an out-of-band NDI `<video>` state snapshot pushed
     /// immediately on a change of paused/error/cover between heartbeats. A
