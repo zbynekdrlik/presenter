@@ -1,6 +1,7 @@
 ---
 paths:
   - "crates/presenter-ui/src/pages/stage.rs"
+  - "crates/presenter-ui/src/pages/stage_events.rs"
   - "crates/presenter-ui/src/components/stage/ndi_frame_stats.rs"
   - "crates/presenter-ui/src/components/stage/ndi_health_ticker.rs"
   - "crates/presenter-ui/src/components/stage/ndi_video.rs"
@@ -22,7 +23,7 @@ The stage "are NDI frames presenting?" state lives in TWO places that MUST stay 
 per-session Cell — creates a permanent desync. The Cell is still `true` (frames never stopped), so
 `mark_frames_live` sees no transition and NEVER re-emits `true`. The shared signal stays `false`
 forever → the video is hidden while frames flow. #757 was exactly this: the `NdiSourceActivated`
-handler in `stage.rs` unconditionally did `ndi_frames_live.set(false)` on EVERY activation, so
+handler (then in `stage.rs`, now `pages/stage_events.rs::apply_stage_event`, #793) unconditionally did `ndi_frames_live.set(false)` on EVERY activation, so
 re-activating the already-active source (operator "zapnúť NDI") stuck the stage TV black.
 
 **Rules when touching this state:**

@@ -1,7 +1,10 @@
 use leptos::prelude::*;
-use presenter_core::LiveEvent;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
+use super::stage_events::{
+    apply_layout_code, apply_stage_event, apply_stage_snapshot, StageSyncGeneration,
+};
 use crate::api;
 use crate::components::stage::{
     api_stage::ApiStage, bible_layout::BibleLayout, fulltext_layout::FulltextLayout,
@@ -183,8 +186,20 @@ pub fn StagePage() -> impl IntoView {
         getter.forget();
     }
 
-    // Connect stage WebSocket
-    let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code);
+    // Connect stage WebSocket. #793: every live event is applied directly in
+    // the WS read loop (in arrival order) — never through a single
+    // latest-value signal, where a `StageLayout` followed immediately by a
+    // `Stage` snapshot could coalesce and the layout switch be lost.
+    let generation = StageSyncGeneration::default();
+    let on_event: stage::StageEventHandler = {
+        let ctx = ctx.clone();
+        let generation = generation.clone();
+        Rc::new(move |event| {
+            generation.note(&event, &ctx.layout_code.get_untracked());
+            apply_stage_event(&ctx, event);
+        })
+    };
+    let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code, on_event);
 
     // Expose connection state for E2E tests
     {
@@ -200,99 +215,6 @@ pub fn StagePage() -> impl IntoView {
         });
     }
 
-    // Handle WebSocket events
-    {
-        let ctx = ctx.clone();
-        let last_event = ws_handle.last_event;
-        Effect::new(move |_| {
-            let Some(event) = last_event.get() else {
-                return;
-            };
-            match event {
-                // Only accept Stage snapshots matching our layout to keep
-                // API stage and normal stage independent.
-                LiveEvent::Stage { snapshot }
-                    if snapshot.layout.code == ctx.layout_code.get_untracked() =>
-                {
-                    ctx.snapshot.set(Some(snapshot));
-                }
-                LiveEvent::StageLayout { code } => {
-                    ctx.layout_code.set(code.clone());
-                    set_global_string("__presenterStageLayout", &code);
-                }
-                LiveEvent::BibleSlide { output } => {
-                    ctx.bible_overlay.set(Some(output));
-                }
-                LiveEvent::BibleCleared => {
-                    ctx.bible_overlay.set(None);
-                }
-                LiveEvent::BroadcastLive { enabled } => {
-                    ctx.broadcast_live.set(enabled);
-                }
-                LiveEvent::Timers { overview } => {
-                    ctx.snapshot.update(|snap| {
-                        if let Some(s) = snap {
-                            s.timers = overview;
-                        }
-                    });
-                }
-                LiveEvent::NdiSourceActivated { source_id, .. } => {
-                    // #757: reset the neutral-cover / frames gate ONLY when the
-                    // source actually CHANGED — a same-source re-activation must
-                    // leave the live frames gate alone, or `mark_frames_live`
-                    // (transition-guarded on the still-`true` per-session Cell)
-                    // never re-emits `true` and the video stays stuck dormant
-                    // while frames flow. Mirrors the `sync_ndi_source_state`
-                    // guard (`ndi_active_source_id != incoming id`).
-                    let resets_gate = ndi_activation_resets_gate(
-                        &source_id,
-                        ctx.ndi_active_source_id.get_untracked().as_deref(),
-                    );
-                    ctx.ndi_active.set(true);
-                    ctx.ndi_active_source_id.set(Some(source_id));
-                    if resets_gate {
-                        ctx.ndi_status.set("connecting".to_string());
-                        // #500: a freshly-activated (new/changed) source has no
-                        // frames yet — the neutral cover must show until the
-                        // WHEP video decodes.
-                        ctx.ndi_frames_live.set(false);
-                    }
-                }
-                LiveEvent::NdiSourceDeactivated => {
-                    ctx.ndi_active.set(false);
-                    ctx.ndi_active_source_id.set(None);
-                    ctx.ndi_status.set(String::new());
-                    // #500: no source → no frames; clear the live-frames flag.
-                    ctx.ndi_frames_live.set(false);
-                }
-                LiveEvent::NdiConnectionStatus { status } => {
-                    ctx.ndi_status.set(status);
-                }
-                _ => {}
-            }
-        });
-    }
-
-    // Fetch initial data
-    {
-        let ctx = ctx.clone();
-        leptos::task::spawn_local(async move {
-            if let Ok(layout_resp) = api::stage::get_layout().await {
-                ctx.layout_code.set(layout_resp.code.clone());
-                set_global_string("__presenterStageLayout", &layout_resp.code);
-            }
-            if let Ok(snapshot) = api::stage::get_snapshot().await {
-                ctx.snapshot.set(Some(snapshot));
-            }
-            if let Ok(broadcast) = api::stage::get_broadcast_live().await {
-                ctx.broadcast_live.set(broadcast.enabled);
-            }
-            if let Ok(Some(output)) = api::bible::get_active_slide_output().await {
-                ctx.bible_overlay.set(Some(output));
-            }
-        });
-    }
-
     // Sync NDI source state on page load AND on every WS (re)connect. The
     // live hub does not replay events, so an `ndi_source_activated`
     // published while this client's socket was down or zombie is LOST —
@@ -305,9 +227,16 @@ pub fn StagePage() -> impl IntoView {
         // runs on actual state TRANSITIONS (first connect + reconnects).
         let connected = Memo::new(move |_| ws_state.get() == StageWsState::Connected);
         sync_ndi_source_state(ctx.clone());
+        // Load-time fetch stays: it renders the stage even if the socket never
+        // connects. The first `Connected` re-reads (cheap, and it closes the
+        // load → connect gap).
+        resync_stage_state(ctx.clone(), generation.clone());
         Effect::new(move |_| {
             if connected.get() {
                 sync_ndi_source_state(ctx.clone());
+                // #793: a layout switch (or any stage event) published while
+                // this display's socket was down is lost — re-read it.
+                resync_stage_state(ctx.clone(), generation.clone());
             }
         });
     }
@@ -372,6 +301,37 @@ pub fn StagePage() -> impl IntoView {
     }
 }
 
+/// Re-read the stage state the live hub does not replay: the selected layout,
+/// the current snapshot (reconciled through [`apply_stage_snapshot`], so a
+/// snapshot for another layout switches the display), the broadcast-live flag
+/// and the active Bible overlay. Runs on page load and on every WS
+/// (re)connect (#793 — displays sat on a stale layout after reset bursts).
+/// A layout/snapshot answer is DISCARDED when a live `StageLayout`/`Stage`
+/// event arrived while it was in flight (`generation` moved) — the live event
+/// is newer.
+fn resync_stage_state(ctx: StageContext, generation: StageSyncGeneration) {
+    leptos::task::spawn_local(async move {
+        let before = generation.current();
+        if let Ok(layout_resp) = api::stage::get_layout().await {
+            if generation.current() == before {
+                apply_layout_code(&ctx, &layout_resp.code);
+            }
+        }
+        let before = generation.current();
+        if let Ok(snapshot) = api::stage::get_snapshot().await {
+            if generation.current() == before {
+                apply_stage_snapshot(&ctx, snapshot);
+            }
+        }
+        if let Ok(broadcast) = api::stage::get_broadcast_live().await {
+            ctx.broadcast_live.set(broadcast.enabled);
+        }
+        if let Ok(output) = api::bible::get_active_slide_output().await {
+            ctx.bible_overlay.set(output);
+        }
+    });
+}
+
 /// Fetch the currently-active video source and sync the NDI signals to it.
 ///
 /// Safe to call repeatedly: `NdiFullscreen`'s `Memo` + `Show` dedup
@@ -433,7 +393,7 @@ pub(crate) fn ndi_activation_resets_gate(incoming_id: &str, current_id: Option<&
     current_id != Some(incoming_id)
 }
 
-fn set_global_string(name: &str, value: &str) {
+pub(crate) fn set_global_string(name: &str, value: &str) {
     let _ = js_sys::Reflect::set(
         &js_sys::global(),
         &JsValue::from_str(name),

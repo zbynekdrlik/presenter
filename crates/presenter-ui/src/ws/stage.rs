@@ -27,13 +27,22 @@ pub enum StageWsState {
 #[derive(Clone)]
 pub struct StageWsHandle {
     pub state: ReadSignal<StageWsState>,
-    pub last_event: ReadSignal<Option<LiveEvent>>,
     pub latency_ms: ReadSignal<Option<f64>>,
 }
 
-pub fn use_stage_websocket(client_id: String, layout_code: RwSignal<String>) -> StageWsHandle {
+/// Handler the stage socket calls synchronously for EVERY live event, in
+/// arrival order (#793). Replaces the former single `last_event` signal: two
+/// events arriving back-to-back (a `StageLayout` then a `Stage` snapshot)
+/// could coalesce in that one slot before the page's effect ran, silently
+/// dropping the layout switch.
+pub type StageEventHandler = Rc<dyn Fn(LiveEvent)>;
+
+pub fn use_stage_websocket(
+    client_id: String,
+    layout_code: RwSignal<String>,
+    on_event: StageEventHandler,
+) -> StageWsHandle {
     let (state, set_state) = signal(StageWsState::Connecting);
-    let (last_event, set_last_event) = signal::<Option<LiveEvent>>(None);
     let (latency_ms, set_latency_ms) = signal::<Option<f64>>(None);
 
     let reconnect_delay = Rc::new(RefCell::new(INITIAL_RECONNECT_MS));
@@ -56,17 +65,13 @@ pub fn use_stage_websocket(client_id: String, layout_code: RwSignal<String>) -> 
         client_id,
         layout_code,
         set_state,
-        set_last_event,
+        on_event,
         set_latency_ms,
         reconnect_delay,
         last_heartbeat_at,
     );
 
-    StageWsHandle {
-        state,
-        last_event,
-        latency_ms,
-    }
+    StageWsHandle { state, latency_ms }
 }
 
 /// Shared holder for the write half of the socket (taken/restored around
@@ -97,7 +102,7 @@ fn spawn_stage_ws(
     client_id: String,
     layout_code: RwSignal<String>,
     set_state: WriteSignal<StageWsState>,
-    set_last_event: WriteSignal<Option<LiveEvent>>,
+    on_event: StageEventHandler,
     set_latency_ms: WriteSignal<Option<f64>>,
     reconnect_delay: Rc<RefCell<u32>>,
     last_heartbeat_at: Rc<RefCell<f64>>,
@@ -147,7 +152,7 @@ fn spawn_stage_ws(
                     &pending_diag,
                     &client_id_for_task,
                     set_state,
-                    set_last_event,
+                    &on_event,
                     set_latency_ms,
                     &last_hb,
                 )
@@ -175,7 +180,7 @@ fn spawn_stage_ws(
                 client_id,
                 layout_code,
                 set_state,
-                set_last_event,
+                on_event,
                 set_latency_ms,
                 reconnect_delay,
                 last_heartbeat_at,
@@ -200,7 +205,7 @@ async fn run_stage_read_loop(
     pending_diag: &PendingDiag,
     client_id: &str,
     set_state: WriteSignal<StageWsState>,
-    set_last_event: WriteSignal<Option<LiveEvent>>,
+    on_event: &StageEventHandler,
     set_latency_ms: WriteSignal<Option<f64>>,
     last_hb: &Rc<RefCell<f64>>,
 ) {
@@ -244,7 +249,7 @@ async fn run_stage_read_loop(
                     write,
                     client_id,
                     set_state,
-                    set_last_event,
+                    on_event,
                     set_latency_ms,
                     last_hb,
                 )
@@ -262,7 +267,7 @@ async fn handle_stage_text(
     write: &SharedWrite,
     client_id: &str,
     set_state: WriteSignal<StageWsState>,
-    set_last_event: WriteSignal<Option<LiveEvent>>,
+    on_event: &StageEventHandler,
     set_latency_ms: WriteSignal<Option<f64>>,
     last_hb: &Rc<RefCell<f64>>,
 ) {
@@ -293,7 +298,8 @@ async fn handle_stage_text(
         }
         Ok(event) => {
             *last_hb.borrow_mut() = js_sys::Date::now();
-            set_last_event.set(Some(event));
+            // #793: apply NOW, in order — never via a coalescing signal slot.
+            on_event(event);
         }
         Err(_) => {}
     }
