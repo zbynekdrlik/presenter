@@ -58,13 +58,24 @@ class Violation:
         return f"::error file={self.workflow}::[{self.job}] {self.step}: {self.message}"
 
 
+def _script(step: dict[str, Any]) -> str:
+    """The step's ``run`` script with shell comment lines blanked out.
+
+    Comments routinely MENTION ``ssh-keyscan`` / ``ssh deploy-target`` while
+    explaining the code; only executable lines may count. Blanking (not
+    deleting) keeps the relative order of what remains intact.
+    """
+    lines = str(step.get("run", "")).splitlines()
+    return "\n".join("" if line.lstrip().startswith("#") else line for line in lines)
+
+
 def _step_name(step: dict[str, Any], index: int) -> str:
     return str(step.get("name") or step.get("id") or f"step #{index + 1}")
 
 
 def _setup_violations(workflow: str, job: str, name: str, step: dict[str, Any]) -> list[Violation]:
     out: list[Violation] = []
-    script = str(step.get("run", ""))
+    script = _script(step)
     if not step.get("id"):
         out.append(Violation(workflow, job, name, "SSH setup step writing `Host deploy-target` must have an `id` so recovery steps can gate on its outcome (#795)"))
     alias_at = ALIAS_HOST_RE.search(script)
@@ -91,7 +102,7 @@ def check_job(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
         if not isinstance(step, dict):
             continue
         name = _step_name(step, index)
-        script = str(step.get("run", ""))
+        script = _script(step)
         if ALIAS_HOST_RE.search(script):
             violations.extend(_setup_violations(workflow, job, name, step))
             setup_id = str(step["id"]) if step.get("id") else None

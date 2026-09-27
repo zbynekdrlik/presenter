@@ -109,6 +109,20 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("AFTER ssh-keyscan", found[0].message)
 
+    def test_comments_mentioning_keyscan_or_alias_do_not_count(self) -> None:
+        commented = SAFE_SETUP.replace(
+            "          rm -f ~/.ssh/config\n",
+            "          # write the alias before ssh-keyscan runs\n          rm -f ~/.ssh/config\n",
+        )
+        steps = commented + """
+      - name: Local cleanup
+        if: always()
+        run: |
+          # never ssh deploy-target here
+          rm -f /tmp/pid
+"""
+        self.assertEqual(_violations(steps), [])
+
     def test_setup_without_id_is_flagged(self) -> None:
         found = _violations(SAFE_SETUP.replace("        id: ssh_setup\n", ""))
         self.assertEqual(len(found), 1)

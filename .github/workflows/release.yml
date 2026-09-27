@@ -159,8 +159,20 @@ jobs:
           path: binaries
 
       - name: Setup SSH for deployment
+        id: ssh_setup
         run: |
           mkdir -p ~/.ssh
+          # #795: (re)write the deploy-target alias FIRST, before ssh-keyscan.
+          # ~/.ssh/config is shared by every job on this self-hosted runner; if
+          # keyscan failed before the rewrite, the PREVIOUS job's alias (another
+          # host, e.g. SNV prod) stayed in place and a later step reached it.
+          rm -f ~/.ssh/config
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+              HostName ${{ env.DEPLOY_HOST }}
+              User ${{ env.DEPLOY_USER }}
+              IdentityFile ~/.ssh/id_deploy
+          EOF
           touch ~/.ssh/known_hosts
           echo "${{ secrets.DEPLOY_SSH_KEY_PP }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
@@ -188,12 +200,6 @@ jobs:
             echo "::error::ssh-keyscan failed after 5 attempts — known_hosts is empty. Cannot verify host."
             exit 1
           fi
-          cat > ~/.ssh/config <<EOF
-          Host deploy-target
-              HostName ${{ env.DEPLOY_HOST }}
-              User ${{ env.DEPLOY_USER }}
-              IdentityFile ~/.ssh/id_deploy
-          EOF
 
       - name: Create deploy directory
         run: |
@@ -451,7 +457,11 @@ jobs:
         # service then hits a later error must never leave PP DOWN — always
         # bring the service back up. The job still reports failure for the real
         # error, but PP keeps serving.
-        if: always()
+        # #795: ...but ONLY once the SSH setup succeeded. If setup failed (PP
+        # offline, keyscan failed) nothing on PP was touched, and running
+        # `ssh deploy-target` then could reach whatever host a stale alias
+        # names (it reached SNV prod in the v0.4.288 release run).
+        if: always() && steps.ssh_setup.outcome == 'success'
         run: |
           ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
 
