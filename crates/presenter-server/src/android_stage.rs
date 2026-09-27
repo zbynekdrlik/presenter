@@ -953,6 +953,13 @@ mod tests {
         /// so `adb_installed_version_code` reads `None` even though the app is
         /// present (#734).
         version_unreadable: bool,
+        /// #793: the stdout `adb devices` returns (empty by default → the
+        /// target is not listed → a plain `adb connect`).
+        devices_output: String,
+        /// #793: when `Some`, `pm path <pkg>` fails with this adb error on
+        /// stderr (non-zero exit) — the transient "device still authorizing" /
+        /// "device offline" read that used to be mistaken for "not installed".
+        pm_path_error: Option<String>,
         calls: Mutex<Vec<String>>,
     }
 
@@ -964,6 +971,8 @@ mod tests {
                 installed: true,
                 installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
                 version_unreadable: false,
+                devices_output: String::new(),
+                pm_path_error: None,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -975,6 +984,8 @@ mod tests {
                 installed: true,
                 installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
                 version_unreadable: false,
+                devices_output: String::new(),
+                pm_path_error: None,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -986,6 +997,32 @@ mod tests {
             self.installed = true;
             self.version_unreadable = true;
             self
+        }
+
+        /// Builder (#793): `adb devices` lists the test target in `state`.
+        fn devices_listing(mut self, state: &str) -> Self {
+            self.devices_output = format!("List of devices attached\n10.0.0.42:5555\t{state}\n\n");
+            self
+        }
+
+        /// Builder (#793): `pm path` fails with the given adb error.
+        fn pm_path_fails(mut self, stderr: &str) -> Self {
+            self.pm_path_error = Some(stderr.to_string());
+            self
+        }
+
+        fn disconnect_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.starts_with("disconnect "))
+                .count()
+        }
+
+        fn devices_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| *c == "devices")
+                .count()
         }
 
         fn uninstall_calls(&self) -> usize {
@@ -1098,8 +1135,16 @@ mod tests {
                 };
             }
 
+            // `adb devices` lists the connected targets and their states (#793).
+            if joined == "devices" {
+                return Ok(ok_output(&self.devices_output));
+            }
+
             // `pm path <pkg>` reports install state (`package:` line = installed).
             if joined.contains("shell pm path") {
+                if let Some(stderr) = &self.pm_path_error {
+                    return Ok(err_output(stderr));
+                }
                 return Ok(ok_output(if self.installed {
                     "package:/data/app/test/base.apk"
                 } else {
@@ -1217,8 +1262,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok(), "install + launch must succeed: {result:?}");
         assert_eq!(
             runner.install_calls(),
@@ -1248,8 +1301,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             runner.install_calls(),
@@ -1270,8 +1331,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             runner.install_calls(),
@@ -1296,8 +1365,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok(), "upgrade + launch must succeed: {result:?}");
         assert_eq!(
             runner.install_calls(),
@@ -1316,8 +1393,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             runner.install_calls(),
@@ -1392,8 +1477,16 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             runner.install_calls(),
@@ -1418,8 +1511,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
         assert!(
             runner.screen_awake_calls() >= 1,
@@ -1442,8 +1543,16 @@ mod tests {
         let config = our_app_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &some_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(
             runner.disable_user_calls(),
@@ -1513,8 +1622,16 @@ mod tests {
         let status = test_status();
 
         // force_launch=false models the periodic tick.
-        let result =
-            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            false,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(
             result.is_ok(),
             "keep-alive on a healthy display must succeed"
@@ -1552,8 +1669,16 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            false,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(
             result.is_ok(),
             "a TV stuck on the home portal must relaunch and succeed (#447)"
@@ -1579,8 +1704,16 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            false,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(
             result.is_ok(),
             "a backgrounded display must relaunch and succeed"
@@ -1606,8 +1739,16 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            false,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok());
 
         assert_eq!(runner.dumpsys_calls(), 1, "the gate is consulted on a tick");
@@ -1628,8 +1769,16 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(result.is_ok(), "a forced launch must succeed");
 
         assert_eq!(
@@ -1656,8 +1805,16 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result =
-            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, true).await;
+        let result = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            true,
+            &mut AdbLinkState::default(),
+        )
+        .await;
         assert!(
             result.is_err(),
             "a failed `adb connect` MUST abort the launch with an error",
@@ -1715,5 +1872,307 @@ mod tests {
             1,
             "LaunchNow must fire `am start` even when the browser is already foreground",
         );
+    }
+
+    // ── #793: tri-state package check + non-churning adb connect ────────────
+    //
+    // SNV event 2026-09-27: SD3's `pm path` failed with "device still
+    // authorizing"; the old bool check read that as "not installed" and ran
+    // `adb install -r` → uninstall + install, killing the running stage app
+    // mid-event (logcat `due to installPackageLI`). And `adb_connect` did
+    // `adb disconnect` + `adb connect` every 20 s per TV, itself producing
+    // those transient offline/authorizing states.
+
+    /// An `Output` with an arbitrary exit code (wait-status encoding).
+    fn exit_output(code: i32, stdout: &str, stderr: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    /// The exact adb client errors seen on the SNV TVs (#793 findings).
+    const REAL_ADB_ERRORS: [&str; 3] = [
+        "error: device still authorizing",
+        "error: device offline",
+        "error: device '10.77.9.33:5555' not found",
+    ];
+
+    #[test]
+    fn package_state_installed_from_package_line() {
+        assert_eq!(
+            parse_package_state(&ok_output(
+                "package:/data/app/~~Qx1==/sk.example.presenterstage-2/base.apk\n"
+            )),
+            PackageState::Installed,
+        );
+    }
+
+    #[test]
+    fn package_state_not_installed_on_clean_empty_exit() {
+        assert_eq!(
+            parse_package_state(&ok_output("")),
+            PackageState::NotInstalled,
+            "empty stdout + clean exit = genuinely absent",
+        );
+        // Android 11+ `pm path <absent>` exits 1 with no output at all.
+        assert_eq!(
+            parse_package_state(&exit_output(1, "", "")),
+            PackageState::NotInstalled,
+            "`pm path` of an absent package exits 1 silently — still NotInstalled",
+        );
+    }
+
+    #[test]
+    fn package_state_unknown_on_real_adb_errors() {
+        for stderr in REAL_ADB_ERRORS {
+            match parse_package_state(&err_output(stderr)) {
+                PackageState::Unknown(detail) => assert!(
+                    detail.contains(stderr),
+                    "Unknown must carry the adb error text for the log: {detail}",
+                ),
+                other => panic!("`{stderr}` must be Unknown, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn package_state_unknown_on_unexpected_exit_or_output() {
+        assert!(
+            matches!(
+                parse_package_state(&exit_output(255, "", "")),
+                PackageState::Unknown(_)
+            ),
+            "an adb-level failure exit (255) is not evidence of absence",
+        );
+        assert!(
+            matches!(
+                parse_package_state(&ok_output("Exception occurred while executing 'path'")),
+                PackageState::Unknown(_)
+            ),
+            "unexpected stdout without a `package:` line is not evidence of absence",
+        );
+    }
+
+    // #793 REGRESSION: an unreadable package state (any real adb error) must
+    // NEVER install or uninstall — it skips the cycle (error recorded, no
+    // `am start` on a flaky link).
+    #[tokio::test]
+    async fn never_installs_or_uninstalls_when_package_state_unknown() {
+        for stderr in REAL_ADB_ERRORS {
+            let runner = FakeAdbRunner::new(Foreground::OtherApp).pm_path_fails(stderr);
+            let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+            let config = our_app_display();
+            let status = test_status();
+
+            let result = connect_and_launch(
+                &runner,
+                &stage_url,
+                &some_apk(),
+                &config,
+                &status,
+                false,
+                &mut AdbLinkState::default(),
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "`{stderr}`: an unknown package state must skip this cycle",
+            );
+            assert_eq!(
+                runner.install_calls(),
+                0,
+                "`{stderr}`: must NOT install on an unknown package state (#793)",
+            );
+            assert_eq!(
+                runner.uninstall_calls(),
+                0,
+                "`{stderr}`: must NOT uninstall (kill) the running app (#793)",
+            );
+            assert_eq!(
+                runner.am_start_calls(),
+                0,
+                "`{stderr}`: a skipped cycle fires no `am start`",
+            );
+            assert_eq!(
+                status.read().await.state,
+                AndroidStageDisplayState::Error,
+                "`{stderr}`: the skipped cycle surfaces as Error on the dashboard",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_adb_devices_reads_serial_states() {
+        let out = "* daemon not running; starting now at tcp:5037\n\
+                   * daemon started successfully\n\
+                   List of devices attached\n\
+                   10.77.9.32:5555\tdevice\n\
+                   10.77.9.33:5555\toffline\n\
+                   10.77.9.34:5555\tunauthorized\n\
+                   emulator-5554          device product:sdk model:x\n\
+                   \n";
+        let map = parse_adb_devices(out);
+        assert_eq!(
+            map.get("10.77.9.32:5555").map(String::as_str),
+            Some("device")
+        );
+        assert_eq!(
+            map.get("10.77.9.33:5555").map(String::as_str),
+            Some("offline")
+        );
+        assert_eq!(
+            map.get("10.77.9.34:5555").map(String::as_str),
+            Some("unauthorized")
+        );
+        assert_eq!(map.get("emulator-5554").map(String::as_str), Some("device"));
+        assert_eq!(map.len(), 4, "header/daemon lines are not devices: {map:?}");
+    }
+
+    #[test]
+    fn connect_decision_never_touches_a_connected_target() {
+        let mut link = AdbLinkState::default();
+        for _ in 0..5 {
+            assert_eq!(
+                decide_connect(Some("device"), &mut link),
+                ConnectAction::AlreadyConnected,
+            );
+        }
+        assert_eq!(decide_connect(None, &mut link), ConnectAction::Connect);
+    }
+
+    #[test]
+    fn connect_decision_disconnects_only_after_three_stuck_cycles() {
+        let mut link = AdbLinkState::default();
+        assert_eq!(
+            decide_connect(Some("offline"), &mut link),
+            ConnectAction::Connect
+        );
+        assert_eq!(
+            decide_connect(Some("offline"), &mut link),
+            ConnectAction::Connect
+        );
+        assert_eq!(
+            decide_connect(Some("offline"), &mut link),
+            ConnectAction::Reconnect,
+            "the 3rd consecutive stuck cycle drops the stale entry",
+        );
+        // The streak restarts after the reconnect …
+        assert_eq!(
+            decide_connect(Some("unauthorized"), &mut link),
+            ConnectAction::Connect
+        );
+        assert_eq!(
+            decide_connect(Some("unauthorized"), &mut link),
+            ConnectAction::Connect
+        );
+        // … and a healthy `device` cycle in between resets it.
+        assert_eq!(
+            decide_connect(Some("device"), &mut link),
+            ConnectAction::AlreadyConnected
+        );
+        assert_eq!(
+            decide_connect(Some("offline"), &mut link),
+            ConnectAction::Connect
+        );
+        assert_eq!(
+            decide_connect(Some("offline"), &mut link),
+            ConnectAction::Connect
+        );
+    }
+
+    // #793: a target `adb devices` already lists as `device` gets NO
+    // disconnect and NO connect on the keep-alive tick.
+    #[tokio::test]
+    async fn tick_leaves_a_connected_target_alone() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage).devices_listing("device");
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+        let mut link = AdbLinkState::default();
+
+        for _ in 0..3 {
+            let result = connect_and_launch(
+                &runner,
+                &stage_url,
+                &no_apk(),
+                &config,
+                &status,
+                false,
+                &mut link,
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "healthy keep-alive must succeed: {result:?}"
+            );
+        }
+        assert_eq!(
+            runner.devices_calls(),
+            3,
+            "`adb devices` read once per cycle"
+        );
+        assert_eq!(
+            runner.connect_calls(),
+            0,
+            "a `device` target is never re-connected"
+        );
+        assert_eq!(
+            runner.disconnect_calls(),
+            0,
+            "a `device` target is never disconnected (#793 churn)",
+        );
+    }
+
+    // #793: a target stuck `offline` is plainly re-connected, and only on the
+    // 3rd consecutive stuck cycle is its stale entry disconnected first.
+    #[tokio::test]
+    async fn stuck_offline_target_disconnected_only_on_third_cycle() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage).devices_listing("offline");
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+        let mut link = AdbLinkState::default();
+
+        for _ in 0..2 {
+            let _ = connect_and_launch(
+                &runner,
+                &stage_url,
+                &no_apk(),
+                &config,
+                &status,
+                false,
+                &mut link,
+            )
+            .await;
+        }
+        assert_eq!(
+            runner.connect_calls(),
+            2,
+            "stuck target: plain connect each cycle"
+        );
+        assert_eq!(
+            runner.disconnect_calls(),
+            0,
+            "no disconnect before 3 stuck cycles"
+        );
+
+        let _ = connect_and_launch(
+            &runner,
+            &stage_url,
+            &no_apk(),
+            &config,
+            &status,
+            false,
+            &mut link,
+        )
+        .await;
+        assert_eq!(
+            runner.disconnect_calls(),
+            1,
+            "3rd stuck cycle drops the stale entry"
+        );
+        assert_eq!(runner.connect_calls(), 3, "and reconnects it");
     }
 }
