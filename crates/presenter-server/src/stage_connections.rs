@@ -618,4 +618,79 @@ mod tests {
             Some("Chrome/90 (Vestel)"),
         );
     }
+
+    // ── #797 diag frames carry the DISPLAYED layout ─────────────────
+
+    fn diag_with_layout(layout: Option<&str>) -> NdiVideoDiag {
+        NdiVideoDiag {
+            layout_code: layout.map(str::to_string),
+            ..diag(false, None, false, 1280)
+        }
+    }
+
+    #[test]
+    fn record_diag_adopts_displayed_layout_code() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        // Presence frame is sent before the client's layout resync → default.
+        tracker.register(id, "worship-snv", now);
+
+        let record = tracker
+            .record_diag(id, diag_with_layout(Some("ndi-fullscreen")), now)
+            .expect("record");
+        assert_eq!(record.snapshot.layout_code, "ndi-fullscreen");
+        assert_eq!(
+            tracker.snapshot_for(id).unwrap().layout_code,
+            "ndi-fullscreen",
+            "/stage/connections must report the displayed layout"
+        );
+    }
+
+    #[test]
+    fn record_diag_without_layout_keeps_previous_layout_code() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+
+        tracker
+            .record_diag(id, diag_with_layout(Some("ndi-fullscreen")), now)
+            .expect("record");
+        // An older client (no layout_code) or an empty value must not wipe it.
+        let record = tracker
+            .record_diag(id, diag_with_layout(None), now + Duration::seconds(1))
+            .expect("record");
+        assert_eq!(record.snapshot.layout_code, "ndi-fullscreen");
+        let record = tracker
+            .record_diag(id, diag_with_layout(Some("")), now + Duration::seconds(2))
+            .expect("record");
+        assert_eq!(record.snapshot.layout_code, "ndi-fullscreen");
+    }
+
+    #[test]
+    fn record_diag_logs_immediately_on_layout_switch() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+
+        let first = tracker
+            .record_diag(id, diag_with_layout(Some("worship-snv")), now)
+            .expect("record");
+        assert!(first.should_log);
+        // Same video state, only the layout changed, 1 s later → log now.
+        let switched = tracker
+            .record_diag(
+                id,
+                diag_with_layout(Some("ndi-fullscreen")),
+                now + Duration::seconds(1),
+            )
+            .expect("record");
+        assert!(
+            switched.should_log,
+            "a layout switch must log promptly, not wait for the 30 s floor"
+        );
+        assert_eq!(switched.snapshot.layout_code, "ndi-fullscreen");
+    }
 }
