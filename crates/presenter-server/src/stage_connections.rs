@@ -10,10 +10,17 @@ use uuid::Uuid;
 const DIAG_LOG_MIN_INTERVAL_S: i64 = 30;
 
 /// #732: the dimensions whose change forces an immediate diagnostics log line
-/// (`paused`, `error_code`, `cover_visible`, and `video_width==0 vs >0`).
+/// (`paused`, `error_code`, `cover_visible`, and `video_width==0 vs >0`), plus
+/// (#797) the displayed `layout_code`, so a layout switch logs promptly.
 /// Everything else in the snapshot is stored/exposed but does not by itself
 /// trigger a fresh log line — the 30 s floor covers steady-state drift.
-type DiagLogKey = (Option<bool>, Option<u16>, Option<bool>, Option<bool>);
+type DiagLogKey = (
+    Option<bool>,
+    Option<u16>,
+    Option<bool>,
+    Option<bool>,
+    Option<String>,
+);
 
 /// The [`DiagLogKey`] for a snapshot — `video_width` collapses to a
 /// present/absent-frame boolean (0 vs >0), matching the ticket's log rule.
@@ -23,6 +30,7 @@ fn diag_log_key(diag: &NdiVideoDiag) -> DiagLogKey {
         diag.error_code,
         diag.cover_visible,
         diag.video_width.map(|w| w > 0),
+        diag.layout_code.clone(),
     )
 }
 
@@ -175,6 +183,11 @@ impl StageConnectionTracker {
     /// #732: store the latest NDI `<video>` diagnostics snapshot and decide,
     /// via the rate-limiter, whether to emit a log line. Returns `None` when
     /// the connection is unknown (e.g. a preview client that never registered).
+    ///
+    /// #797: a non-empty `diag.layout_code` is the layout the page actually
+    /// DISPLAYS (`body[data-layout-code]`) and replaces the register-time
+    /// value, which the presence frame captures before the client's layout
+    /// resync (the `worship-snv` default). `None`/empty keeps the old value.
     pub fn record_diag(
         &mut self,
         id: Uuid,
@@ -190,6 +203,9 @@ impl StageConnectionTracker {
             now,
             Duration::seconds(DIAG_LOG_MIN_INTERVAL_S),
         );
+        if let Some(layout) = diag.layout_code.as_deref().filter(|l| !l.is_empty()) {
+            connection.layout_code = layout.to_string();
+        }
         connection.ndi_video = Some(diag);
         connection.last_diag_at = Some(now);
         if should_log {

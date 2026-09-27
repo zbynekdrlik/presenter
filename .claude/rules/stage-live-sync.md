@@ -5,6 +5,7 @@ paths:
   - "crates/presenter-ui/src/pages/stage_events.rs"
   - "crates/presenter-ui/src/pages/camera.rs"
   - "crates/presenter-server/src/live.rs"
+  - "crates/presenter-server/src/stage_connections.rs"
   - "crates/presenter-server/src/android_stage.rs"
   - "crates/presenter-server/src/android_stage/**"
   - "tests/e2e/stage-layout-sync.spec.ts"
@@ -90,3 +91,9 @@ against an in-progress `dispatch_inbound`) and logs `reason=` (`WsEndReason`: cl
 send failed, hub closed) + `stage_client` + `connected_ms`. Layout switches log
 `presenter::stage::layout` INFO `from`/`to`. Read them with
 `journalctl -u presenter | grep -E 'live ws client|stage::layout'`.
+
+**Per-display layout (#797):** the `StagePresence` frame is sent on socket open, BEFORE the layout
+resync, so it carries the `worship-snv` default. `StageConnectionTracker::record_diag` therefore
+adopts every non-empty `NdiVideoDiag.layout_code` (the DISPLAYED layout) into the connection, and
+`layout_code` is part of `DiagLogKey` so a switch logs `presenter::stage::diag` immediately — never
+read the register-time layout as the truth for `/stage/connections` or the diag log.
