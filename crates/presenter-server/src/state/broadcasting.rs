@@ -113,8 +113,14 @@ impl AppState {
     /// (#631) — same cross-module-within-`state`-tree visibility
     /// `build_stage_context` below already uses.
     pub(super) async fn publish_stage_context(&self, context: &StageContext) -> anyhow::Result<()> {
-        let code = self.stage_layout_code().await;
         let context = self.enrich_stage_context(context).await;
+        // #793: hold the layout READ lock from reading the selected code until
+        // the snapshot is published (no await in between). A switch takes the
+        // write lock, so a snapshot for the PREVIOUS layout can never be
+        // published after the switch's `StageLayout` — stage displays adopt a
+        // snapshot's layout, so a late stale one would flip them all back.
+        let layout_guard = self.stage_layout.read().await;
+        let code = layout_guard.clone();
 
         // Always publish camera-crew snapshot — its clients are pinned to /ui/camera
         // and must not be flipped by operator-side layout changes (including "api").

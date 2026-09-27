@@ -45,7 +45,10 @@ impl AppState {
         // does not affect the live preview, mirroring the existing inverse
         // gate in `broadcasting.rs::publish_stage_context` (which skips
         // non-api updates when api layout is selected).
-        if self.stage_layout_code().await == API_STAGE_LAYOUT_CODE {
+        // #793: check + publish under the layout read lock so the api snapshot
+        // can never land after a switch away from api (displays adopt it).
+        let layout = self.stage_layout.read().await;
+        if *layout == API_STAGE_LAYOUT_CODE {
             self.live_hub.publish(LiveEvent::Stage { snapshot });
         }
         Ok(())

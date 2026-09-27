@@ -25,13 +25,14 @@ mod ui_routes;
 mod wasm_ui;
 use crate::state::AppState;
 use axum::{
-    extract::{ws::WebSocketUpgrade, Query, State},
+    extract::{ws::WebSocketUpgrade, ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::Serialize;
+use std::net::SocketAddr;
 use tracing::instrument;
 use uuid::Uuid;
 // Feature modules host their own request/DTO types
@@ -578,17 +579,23 @@ async fn live_websocket(
     ws: WebSocketUpgrade,
     Query(query): Query<LiveWsQuery>,
     headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let hub = state.live_hub();
     let connections = state.stage_connections_handle();
-    // Reuse the audit actor-IP helper: X-Forwarded-For → X-Real-IP → "anonymous"
-    // (ConnectInfo<SocketAddr> was dropped in the axum 0.8 migration).
-    let client_ip = integrations::extract_actor(&headers);
+    // #793: a non-loopback socket peer IS the client (its forwarding headers
+    // are ignored); only from a loopback peer (cloudflared) or with no peer is
+    // X-Forwarded-For → X-Real-IP used; else "anonymous". The peer comes from
+    // `ConnectInfo` (main.rs serves with connect-info); it is optional so a
+    // router served without it (tests) still upgrades.
+    let peer = connect_info.map(|Extension(ConnectInfo(addr))| addr);
+    let client_ip = integrations::extract_client_ip(&headers, peer);
     let surface = normalize_ws_surface(query.surface);
     let preview = ws_is_preview(query.preview);
     ws.on_upgrade(move |socket| async move {
-        crate::live::serve_websocket(hub, connections, socket, client_ip, surface, preview).await;
+        crate::live::serve_websocket(hub, connections, socket, client_ip, peer, surface, preview)
+            .await;
     })
 }
 

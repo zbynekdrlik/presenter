@@ -10,12 +10,13 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::Output;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use presenter_core::{stage_app_install_action, StageAppInstallAction};
 
@@ -85,15 +86,153 @@ where
         .collect()
 }
 
-/// Disconnect any stale entry then `adb connect <serial>`, returning an error
-/// (without recording status) on timeout, exec failure, or a connect error.
+/// Consecutive keep-alive cycles a target may sit listed as `offline` (or in
+/// another unexpected state) before its stale adb entry is dropped with
+/// `adb disconnect` (#793). `unauthorized`/`authorizing` never count: dropping
+/// those re-shows the RSA prompt on the TV while someone may be accepting it.
+pub(super) const STALE_RECONNECT_CYCLES: u32 = 3;
+
+/// Per-display adb link memory carried across keep-alive cycles by the device
+/// worker (#793).
+#[derive(Debug, Default)]
+pub(super) struct AdbLinkState {
+    /// Consecutive cycles listed in a stale (e.g. `offline`) state.
+    stuck_cycles: u32,
+    /// Stale-entry reconnects since the target was last `device` (log gate).
+    reconnects: u32,
+    /// Consecutive cycles whose `pm path` read was [`PackageState::Unknown`]
+    /// (log gate for the skip-cycle WARN).
+    unknown_package_cycles: u32,
+}
+
+/// Rate-limit gate for a streak of repeated adb failures: log the 1st and
+/// every power-of-two milestone only (~log2(N)+1 lines instead of N) — the
+/// resolume #484 / ableset #735 pattern (`.claude/rules/log-flood-backoff.md`).
+pub(super) fn should_log_adb_streak(streak: u32) -> bool {
+    streak > 0 && streak.is_power_of_two()
+}
+
+/// Count one more cycle with an unreadable package state and report whether
+/// this one should be logged (per [`should_log_adb_streak`]).
+pub(super) fn note_unknown_package(link: &mut AdbLinkState) -> bool {
+    link.unknown_package_cycles = link.unknown_package_cycles.saturating_add(1);
+    should_log_adb_streak(link.unknown_package_cycles)
+}
+
+/// What the keep-alive does with the adb connection this cycle (#793).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConnectAction {
+    /// `adb devices` lists the target as `device` — touch nothing.
+    AlreadyConnected,
+    /// Not listed, or stuck for fewer than [`STALE_RECONNECT_CYCLES`] cycles —
+    /// plain `adb connect`, no disconnect.
+    Connect,
+    /// Stuck for [`STALE_RECONNECT_CYCLES`] consecutive cycles — drop the stale
+    /// entry (`adb disconnect`) then `adb connect`.
+    Reconnect,
+}
+
+/// Decide the connect action from the target's `adb devices` state (`None` =
+/// not listed) and advance the per-display stuck streak. No I/O.
 ///
-/// The disconnect clears stale offline entries ADB leaves after a TV power
-/// cycle, which otherwise make subsequent `-s serial` commands fail until the
-/// daemon restarts. Its result is intentionally ignored — the typical case is
-/// "not connected", a non-zero exit we don't care about.
-pub(super) async fn adb_connect(runner: &dyn AdbRunner, serial: &str) -> anyhow::Result<()> {
-    let _ = runner.run(&adb_args(["disconnect", serial])).await;
+/// Pre-#793 every cycle ran `adb disconnect` + `adb connect` for every TV,
+/// even a healthy `device` — which itself kept producing the transient
+/// offline/authorizing states that fed the reinstall kill.
+pub(super) fn decide_connect(state: Option<&str>, link: &mut AdbLinkState) -> ConnectAction {
+    match state {
+        Some("device") => {
+            link.stuck_cycles = 0;
+            ConnectAction::AlreadyConnected
+        }
+        None => {
+            link.stuck_cycles = 0;
+            ConnectAction::Connect
+        }
+        // Waiting on the TV's RSA "allow debugging" prompt — a disconnect
+        // would re-show it; a plain connect is harmless.
+        // It also breaks the stale streak: only CONSECUTIVE offline cycles count.
+        Some("unauthorized") | Some("authorizing") => {
+            link.stuck_cycles = 0;
+            ConnectAction::Connect
+        }
+        Some(_) => {
+            link.stuck_cycles += 1;
+            if link.stuck_cycles >= STALE_RECONNECT_CYCLES {
+                link.stuck_cycles = 0;
+                ConnectAction::Reconnect
+            } else {
+                ConnectAction::Connect
+            }
+        }
+    }
+}
+
+/// Parse `adb devices` output into `serial → state`. Skips the
+/// `List of devices attached` header, `* daemon …` notices and blank lines;
+/// accepts both the tab-separated plain form and the space-padded `-l` form.
+pub(super) fn parse_adb_devices(stdout: &str) -> HashMap<String, String> {
+    stdout
+        .lines()
+        .filter(|line| !line.starts_with("List of devices") && !line.starts_with('*'))
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            Some((parts.next()?.to_string(), parts.next()?.to_string()))
+        })
+        .collect()
+}
+
+/// The target's state as listed by `adb devices`, or `None` when it is not
+/// listed or the listing itself could not be read (→ a plain connect).
+async fn adb_listed_state(runner: &dyn AdbRunner, serial: &str) -> Option<String> {
+    let output = runner.run(&adb_args(["devices"])).await.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_adb_devices(&String::from_utf8_lossy(&output.stdout)).remove(serial)
+}
+
+/// Make sure `serial` is connected, touching the adb server as little as
+/// possible (#793): read `adb devices` once; a target already in state
+/// `device` is left alone; otherwise `adb connect`, preceded by
+/// `adb disconnect` ONLY when the target has been stuck in a non-`device`
+/// state for [`STALE_RECONNECT_CYCLES`] consecutive cycles (the stale offline
+/// entry adb keeps after a TV power cycle). Returns an error (without
+/// recording status) on timeout, exec failure, or a connect error.
+pub(super) async fn adb_connect(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    link: &mut AdbLinkState,
+) -> anyhow::Result<()> {
+    let listed = adb_listed_state(runner, serial).await;
+    match decide_connect(listed.as_deref(), link) {
+        ConnectAction::AlreadyConnected => {
+            if link.reconnects > 0 {
+                info!(
+                    serial,
+                    reconnects = link.reconnects,
+                    "adb target back to `device` after stale-entry reconnects (#793)"
+                );
+                link.reconnects = 0;
+            }
+            return Ok(());
+        }
+        ConnectAction::Connect => {
+            debug!(serial, state = ?listed, "adb target not connected — adb connect (#793)");
+        }
+        ConnectAction::Reconnect => {
+            link.reconnects = link.reconnects.saturating_add(1);
+            if should_log_adb_streak(link.reconnects) {
+                info!(
+                    serial,
+                    state = ?listed,
+                    cycles = STALE_RECONNECT_CYCLES,
+                    reconnects = link.reconnects,
+                    "adb target stuck — dropping the stale entry before reconnecting (#793)"
+                );
+            }
+            let _ = runner.run(&adb_args(["disconnect", serial])).await;
+        }
+    }
 
     let connect_output = match runner.run(&adb_args(["connect", serial])).await {
         Ok(output) => output,
@@ -176,17 +315,55 @@ pub(super) async fn suppress_kiosk_browsers(runner: &dyn AdbRunner, serial: &str
     }
 }
 
-/// True when `package` is installed on the device — `pm path <package>` prints a
-/// `package:` line. A missing package prints nothing (or errors) → false.
-pub(super) async fn adb_package_installed(
+/// Install state of a package as read by `pm path` (#793). `Unknown` = the
+/// read itself failed (adb error text, unexpected exit/output, timeout) and
+/// is NEVER evidence of absence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PackageState {
+    Installed,
+    NotInstalled,
+    Unknown(String),
+}
+
+/// Classify a `pm path <package>` result. No I/O.
+///
+/// - a `package:` line → [`PackageState::Installed`];
+/// - no output at all with exit 0, or exit 1 (Android 11+ `pm path` of an
+///   absent package exits 1 silently) → [`PackageState::NotInstalled`];
+/// - anything else — adb client errors on stderr (`error: device offline`,
+///   `error: device still authorizing`, `error: device '…' not found`), an
+///   adb-level exit (255, signal), unexpected stdout → [`PackageState::Unknown`].
+///
+/// Pre-#793 every adb failure collapsed into "not installed", and
+/// `ensure_app_installed` then ran install → uninstall + install, killing the
+/// running stage app mid-event (SD3, SNV 2026-09-27).
+pub(super) fn parse_package_state(output: &Output) -> PackageState {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stdout
+        .lines()
+        .any(|line| line.trim_start().starts_with("package:"))
+    {
+        return PackageState::Installed;
+    }
+    let silent = stdout.trim().is_empty() && stderr.trim().is_empty();
+    if silent && matches!(output.status.code(), Some(0) | Some(1)) {
+        return PackageState::NotInstalled;
+    }
+    PackageState::Unknown(format_command_failure(output))
+}
+
+/// Read the install state of `package` via `adb -s <serial> shell pm path`.
+/// An adb exec failure / timeout is [`PackageState::Unknown`].
+pub(super) async fn adb_package_state(
     runner: &dyn AdbRunner,
     serial: &str,
     package: &str,
-) -> bool {
+) -> PackageState {
     let args = adb_args(["-s", serial, "shell", "pm", "path", package]);
     match runner.run(&args).await {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).contains("package:"),
-        Err(_) => false,
+        Ok(output) => parse_package_state(&output),
+        Err(err) => PackageState::Unknown(format!("adb could not run: {err}")),
     }
 }
 
@@ -304,13 +481,45 @@ pub(super) fn format_command_failure(output: &Output) -> String {
 /// [`stage_app_install_action`] (#734): (re)install ONLY when genuinely absent
 /// or at a readable LOWER versionCode — an UNREADABLE code leaves it in place
 /// (never tear a healthy app down mid-event, the harm this fixes; #732 open).
+/// An UNREADABLE package state (adb error) skips the cycle with an error and
+/// never installs/uninstalls (#793).
 pub(super) async fn ensure_app_installed(
     runner: &dyn AdbRunner,
     serial: &str,
     package: &str,
     apk: &Path,
+    link: &mut AdbLinkState,
 ) -> anyhow::Result<()> {
-    let installed = adb_package_installed(runner, serial, package).await;
+    let installed = match adb_package_state(runner, serial, package).await {
+        PackageState::Installed => true,
+        PackageState::NotInstalled => false,
+        PackageState::Unknown(detail) => {
+            // #793: an unreadable state is NOT evidence of absence — never
+            // install/uninstall on it (that killed SD3's running app mid-event).
+            if note_unknown_package(link) {
+                warn!(
+                    serial,
+                    package,
+                    %detail,
+                    streak = link.unknown_package_cycles,
+                    "Presenter Stage package state unknown (adb error) — skipping this \
+                     cycle, not (re)installing (#793)"
+                );
+            }
+            return Err(anyhow!(
+                "package state unknown for {serial} (skipping cycle): {detail}"
+            ));
+        }
+    };
+    if link.unknown_package_cycles > 0 {
+        info!(
+            serial,
+            package,
+            cycles = link.unknown_package_cycles,
+            "Presenter Stage package state readable again (#793)"
+        );
+        link.unknown_package_cycles = 0;
+    }
     let version_code = if installed {
         adb_installed_version_code(runner, serial, package).await
     } else {

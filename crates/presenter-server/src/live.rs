@@ -1,9 +1,13 @@
 use crate::stage_connections::{DiagRecord, StageConnections};
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use chrono::Utc;
+use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use presenter_core::NdiVideoDiag;
 pub use presenter_core::{InboundMessage, LiveEvent};
+use std::fmt;
+use std::net::SocketAddr;
+use std::time::Instant;
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, info, warn};
@@ -34,8 +38,57 @@ impl LiveHub {
     }
 }
 
+/// Why a live WS connection ended (#793) — carried on the disconnect log line
+/// so a reset can be told apart: the client closed (with its close code), the
+/// read side failed (TCP reset, protocol error), or OUR write of a live event /
+/// heartbeat failed (the client stopped draining the socket).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WsEndReason {
+    /// The client sent a Close frame; code + reason when it carried a payload.
+    ClientClose { code: Option<u16>, reason: String },
+    /// Reading from the socket failed.
+    ReadError(String),
+    /// The read half ended without a Close frame.
+    StreamEnded,
+    /// Writing a live event (incl. the 1.5 s heartbeat) to the client failed.
+    SendFailed(String),
+    /// The live hub closed (server shutdown).
+    HubClosed,
+}
+
+impl fmt::Display for WsEndReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ClientClose {
+                code: Some(code),
+                reason,
+            } => write!(f, "client close frame (code {code}, reason {reason:?})"),
+            Self::ClientClose { code: None, .. } => write!(f, "client close (no close code)"),
+            Self::ReadError(err) => write!(f, "read error: {err}"),
+            Self::StreamEnded => write!(f, "stream ended without close frame"),
+            Self::SendFailed(err) => write!(f, "send failed: {err}"),
+            Self::HubClosed => write!(f, "live hub closed"),
+        }
+    }
+}
+
+/// Classify a client Close frame (#793).
+fn close_frame_reason(frame: Option<CloseFrame>) -> WsEndReason {
+    match frame {
+        Some(frame) => WsEndReason::ClientClose {
+            code: Some(frame.code),
+            reason: frame.reason.as_str().to_string(),
+        },
+        None => WsEndReason::ClientClose {
+            code: None,
+            reason: String::new(),
+        },
+    }
+}
+
 /// Forward live events from a broadcast stream to a WebSocket sink until the
-/// stream ends (hub dropped) or the sink errors (socket closed).
+/// stream ends (hub dropped → [`WsEndReason::HubClosed`]) or the sink errors
+/// (socket gone → [`WsEndReason::SendFailed`] with the write error, #793).
 ///
 /// A `Lagged` broadcast error (this subscriber fell more than the channel
 /// capacity behind — e.g. a TV whose TCP send buffer stalled) SKIPS the
@@ -45,7 +98,10 @@ impl LiveHub {
 /// connected, but no event (including `ndi_source_activated`) ever arrived
 /// again until a manual page reload. Matches the Lagged handling in
 /// `companion/mod.rs` and `state/mod.rs`.
-async fn forward_live_events<S>(stream: &mut BroadcastStream<LiveEvent>, sender: &mut S)
+async fn forward_live_events<S>(
+    stream: &mut BroadcastStream<LiveEvent>,
+    sender: &mut S,
+) -> WsEndReason
 where
     S: futures_util::Sink<Message> + Unpin,
     S::Error: std::fmt::Debug,
@@ -54,8 +110,8 @@ where
         match item {
             Ok(event) => match serde_json::to_string(&event) {
                 Ok(payload) => {
-                    if sender.send(Message::Text(payload.into())).await.is_err() {
-                        break;
+                    if let Err(err) = sender.send(Message::Text(payload.into())).await {
+                        return WsEndReason::SendFailed(format!("{err:?}"));
                     }
                 }
                 Err(err) => warn!(?err, "failed to serialise live event"),
@@ -65,6 +121,7 @@ where
             }
         }
     }
+    WsEndReason::HubClosed
 }
 
 /// #732: emit ONE `presenter::stage::diag` INFO line for a recorded NDI
@@ -281,50 +338,98 @@ async fn handle_stage_disconnect(
     }
 }
 
-pub async fn serve_websocket(
-    hub: LiveHub,
-    connections: StageConnections,
-    socket: WebSocket,
-    client_ip: String,
-    surface: String,
+/// Read inbound frames until the socket ends (or the forward task — our write
+/// side — ends), dispatching each parsed message, and return WHY it ended
+/// (#793). The forward task is raced ONLY against `receiver.next()` (cancel
+/// safe), never against an in-progress `dispatch_inbound`, so a stage
+/// registration can never be cancelled between `register` and recording
+/// `registered_client` (which would leave a ghost "connected" display).
+async fn read_live_messages(
+    receiver: &mut SplitStream<WebSocket>,
+    forward_handle: &mut JoinHandle<WsEndReason>,
+    hub: &LiveHub,
+    connections: &StageConnections,
+    client_ip: &str,
     preview: bool,
-) {
-    // Mirrors the companion connect/disconnect INFO logs (companion/mod.rs) but
-    // carries the client IP and surface so live (stage/operator/tablet) clients
-    // are attributable in the logs (#471).
-    info!(client_ip = %client_ip, surface = %surface, preview, "live ws client connected");
-
-    let rx = hub.subscribe();
-    let mut stream = BroadcastStream::new(rx);
-    let (mut sender, mut receiver) = socket.split();
-
-    let forward_handle: JoinHandle<()> = tokio::spawn(async move {
-        forward_live_events(&mut stream, &mut sender).await;
-    });
-
-    let mut registered_client: Option<Uuid> = None;
-
-    while let Some(Ok(msg)) = receiver.next().await {
+    registered_client: &mut Option<Uuid>,
+) -> WsEndReason {
+    loop {
+        let next = tokio::select! {
+            next = receiver.next() => next,
+            joined = &mut *forward_handle => {
+                return joined.unwrap_or_else(|err| {
+                    WsEndReason::SendFailed(format!("forward task ended: {err}"))
+                });
+            }
+        };
+        let msg = match next {
+            None => return WsEndReason::StreamEnded,
+            Some(Err(err)) => return WsEndReason::ReadError(err.to_string()),
+            Some(Ok(msg)) => msg,
+        };
         match msg {
             Message::Text(payload) => match serde_json::from_str::<InboundMessage>(&payload) {
                 Ok(inbound) => {
                     dispatch_inbound(
                         inbound,
-                        &hub,
-                        &connections,
-                        &client_ip,
+                        hub,
+                        connections,
+                        client_ip,
                         preview,
-                        &mut registered_client,
+                        registered_client,
                     )
                     .await;
                 }
                 Err(err) => warn!(?err, "failed to parse inbound live message"),
             },
-            Message::Close(_) => break,
+            Message::Close(frame) => return close_frame_reason(frame),
             Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
         }
     }
+}
 
+pub async fn serve_websocket(
+    hub: LiveHub,
+    connections: StageConnections,
+    socket: WebSocket,
+    client_ip: String,
+    peer: Option<SocketAddr>,
+    surface: String,
+    preview: bool,
+) {
+    // Mirrors the companion connect/disconnect INFO logs (companion/mod.rs) but
+    // carries the client IP and surface so live (stage/operator/tablet) clients
+    // are attributable in the logs (#471). #793: `client_ip` is the real peer
+    // IP (or the proxy-reported one); `peer` (ip:port) tells two sockets of the
+    // same TV apart.
+    let peer = peer.map_or_else(|| "-".to_string(), |addr| addr.to_string());
+    info!(client_ip = %client_ip, peer = %peer, surface = %surface, preview, "live ws client connected");
+    let connected_at = Instant::now();
+
+    let rx = hub.subscribe();
+    let mut stream = BroadcastStream::new(rx);
+    let (mut sender, mut receiver) = socket.split();
+
+    let mut forward_handle: JoinHandle<WsEndReason> =
+        tokio::spawn(async move { forward_live_events(&mut stream, &mut sender).await });
+
+    let mut registered_client: Option<Uuid> = None;
+
+    // #793: the connection ends when EITHER side ends — a failed write of an
+    // event/heartbeat now closes it promptly (previously the read loop kept a
+    // write-dead socket open) — and the reason is logged below.
+    let end_reason = read_live_messages(
+        &mut receiver,
+        &mut forward_handle,
+        &hub,
+        &connections,
+        &client_ip,
+        preview,
+        &mut registered_client,
+    )
+    .await;
+
+    let stage_client = registered_client;
     if let Some(id) = registered_client {
         if let Some(snapshot) = connections.mark_disconnected(id).await {
             hub.publish(LiveEvent::StageConnection { snapshot });
@@ -333,7 +438,15 @@ pub async fn serve_websocket(
 
     forward_handle.abort();
 
-    info!(client_ip = %client_ip, surface = %surface, "live ws client disconnected");
+    info!(
+        client_ip = %client_ip,
+        peer = %peer,
+        surface = %surface,
+        stage_client = ?stage_client,
+        reason = %end_reason,
+        connected_ms = u64::try_from(connected_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "live ws client disconnected"
+    );
 }
 
 #[cfg(test)]
@@ -405,6 +518,114 @@ mod tests {
             "events published after a broadcast lag must still be forwarded \
              (got {} messages, none with the activation)",
             sink.messages.len()
+        );
+    }
+
+    // ── #793: the WS END REASON is logged at disconnect ─────────────────────
+    //
+    // sd2–sd4 made 30–40 stage WS resets per TV during the 2026-09-27 event and
+    // the log only said "live ws client disconnected" — no close code, no read
+    // error, no "our heartbeat write failed". These pin the classification the
+    // disconnect line now carries.
+
+    /// A sink whose every send fails (the TV's TCP stream is gone).
+    struct FailSink;
+
+    impl futures_util::Sink<Message> for FailSink {
+        type Error = String;
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn start_send(self: Pin<&mut Self>, _item: Message) -> Result<(), Self::Error> {
+            Err("broken pipe".to_string())
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn forwarder_reports_send_failure_as_end_reason() {
+        let hub = LiveHub::new();
+        let mut stream = BroadcastStream::new(hub.subscribe());
+        hub.publish(LiveEvent::NdiConnectionStatus {
+            status: "connected".into(),
+        });
+
+        let reason = forward_live_events(&mut stream, &mut FailSink).await;
+        match reason {
+            WsEndReason::SendFailed(detail) => assert!(
+                detail.contains("broken pipe"),
+                "the write error must be carried for the log: {detail}",
+            ),
+            other => panic!("a failed write must end as SendFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn forwarder_reports_hub_closed_when_the_stream_ends() {
+        let hub = LiveHub::new();
+        let mut stream = BroadcastStream::new(hub.subscribe());
+        drop(hub);
+        let mut sink = CollectSink {
+            messages: Vec::new(),
+        };
+        assert_eq!(
+            forward_live_events(&mut stream, &mut sink).await,
+            WsEndReason::HubClosed
+        );
+    }
+
+    #[test]
+    fn close_frame_carries_code_and_reason() {
+        let reason = close_frame_reason(Some(axum::extract::ws::CloseFrame {
+            code: 1001,
+            reason: "going away".into(),
+        }));
+        assert_eq!(
+            reason,
+            WsEndReason::ClientClose {
+                code: Some(1001),
+                reason: "going away".to_string(),
+            }
+        );
+        let text = reason.to_string();
+        assert!(
+            text.contains("1001") && text.contains("going away"),
+            "the log text must show the close code and reason: {text}",
+        );
+    }
+
+    #[test]
+    fn close_without_frame_is_a_codeless_client_close() {
+        assert_eq!(
+            close_frame_reason(None),
+            WsEndReason::ClientClose {
+                code: None,
+                reason: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn end_reasons_render_distinct_log_text() {
+        let texts = [
+            WsEndReason::ReadError("Connection reset without closing handshake".into()).to_string(),
+            WsEndReason::StreamEnded.to_string(),
+            WsEndReason::SendFailed("broken pipe".into()).to_string(),
+            WsEndReason::HubClosed.to_string(),
+        ];
+        assert!(texts[0].contains("read error") && texts[0].contains("Connection reset"));
+        assert!(texts[2].contains("send failed") && texts[2].contains("broken pipe"));
+        let unique: std::collections::HashSet<_> = texts.iter().collect();
+        assert_eq!(
+            unique.len(),
+            texts.len(),
+            "each end reason must be distinguishable"
         );
     }
 }
