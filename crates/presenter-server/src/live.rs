@@ -190,11 +190,13 @@ async fn dispatch_inbound(
             client_id,
             heartbeat_id,
             ndi_video,
+            layout_code,
         } => {
             handle_heartbeat_ack(
                 client_id,
                 heartbeat_id,
                 ndi_video,
+                layout_code,
                 hub,
                 connections,
                 client_ip,
@@ -265,6 +267,7 @@ async fn handle_heartbeat_ack(
     client_id: String,
     heartbeat_id: Option<String>,
     ndi_video: Option<NdiVideoDiag>,
+    layout_code: Option<String>,
     hub: &LiveHub,
     connections: &StageConnections,
     client_ip: &str,
@@ -279,7 +282,7 @@ async fn handle_heartbeat_ack(
     let now = Utc::now();
     let heartbeat_uuid = heartbeat_id.as_ref().and_then(|v| Uuid::parse_str(v).ok());
     let ack_snapshot = connections
-        .record_heartbeat_ack(id, heartbeat_uuid, now)
+        .record_heartbeat_ack(id, heartbeat_uuid, layout_code.as_deref(), now)
         .await;
     if let Some(diag) = ndi_video {
         if let Some(record) = connections.record_diag(id, diag, now).await {

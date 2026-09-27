@@ -93,11 +93,12 @@ send failed, hub closed) + `stage_client` + `connected_ms`. Layout switches log
 `journalctl -u presenter | grep -E 'live ws client|stage::layout'`.
 
 **Per-display layout (#797):** the `StagePresence` frame is sent on socket open, BEFORE the layout
-resync, so it carries the `worship-snv` default. `StageConnectionTracker::record_diag` therefore
-adopts every non-empty `NdiVideoDiag.layout_code` (the DISPLAYED layout) into the connection, and
-the (non-empty) layout is part of `DiagLogKey` so a switch logs `presenter::stage::diag` on the
-first diag frame that reports it (next diag push / heartbeat ack — the client `DiagChangeKey` has
-no layout). Limit: the client only sends a diag while an NDI `<video>` is mounted
-(`ws/stage_diag.rs::collect_ndi_video_diag`), so the tracker holds "the last layout reported while
-an NDI video was mounted" — a switch to a non-NDI layout is NOT reflected. Never read the
-register-time layout as the truth for `/stage/connections` or the diag log.
+resync, so it carries the `worship-snv` default — never read the register-time layout as the truth.
+The client reports the DISPLAYED layout (`body[data-layout-code]`, `ws/stage_diag.rs::displayed_layout_code`)
+on TWO carriers and the tracker adopts any non-empty value from either via one helper
+(`stage_connections.rs::adopt_layout`): `InboundMessage::StageHeartbeatAck.layout_code` (every
+heartbeat, EVERY layout — `StageConnections::record_heartbeat_ack` adopts it under the same lock
+before building the ack snapshot) and `NdiVideoDiag.layout_code` (`record_diag`, only while an NDI
+`<video>` is mounted). The heartbeat carrier is what makes a switch to a non-NDI layout visible;
+don't drop it thinking diag covers it. The (non-empty) layout is also part of `DiagLogKey`, so a
+switch between NDI layouts logs `presenter::stage::diag` on the first diag frame that reports it.

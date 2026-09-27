@@ -55,6 +55,16 @@ pub(crate) fn should_log_diag(
     }
 }
 
+/// #797: adopt a client-reported DISPLAYED layout (diag frame or heartbeat
+/// ACK). Only a non-empty value replaces the stored one: the register-time
+/// value comes from the presence frame, sent before the client's layout
+/// resync, so it is the `worship-snv` default until a report arrives.
+fn adopt_layout(connection: &mut StageConnection, layout_code: Option<&str>) {
+    if let Some(layout) = layout_code.filter(|l| !l.is_empty()) {
+        connection.layout_code = layout.to_string();
+    }
+}
+
 /// Result of recording a diagnostics snapshot: the updated per-connection
 /// snapshot plus whether the rate-limiter says to emit a log line for it.
 #[derive(Debug)]
@@ -181,6 +191,14 @@ impl StageConnectionTracker {
         }
     }
 
+    /// #797: adopt the layout the client reports it DISPLAYS (heartbeat ACK,
+    /// sent for every layout). `None`/empty and unknown ids are no-ops.
+    pub fn set_displayed_layout(&mut self, id: Uuid, layout_code: Option<&str>) {
+        if let Some(connection) = self.connections.get_mut(&id) {
+            adopt_layout(connection, layout_code);
+        }
+    }
+
     /// #732: store the latest NDI `<video>` diagnostics snapshot and decide,
     /// via the rate-limiter, whether to emit a log line. Returns `None` when
     /// the connection is unknown (e.g. a preview client that never registered).
@@ -204,9 +222,7 @@ impl StageConnectionTracker {
             now,
             Duration::seconds(DIAG_LOG_MIN_INTERVAL_S),
         );
-        if let Some(layout) = diag.layout_code.as_deref().filter(|l| !l.is_empty()) {
-            connection.layout_code = layout.to_string();
-        }
+        adopt_layout(connection, diag.layout_code.as_deref());
         connection.ndi_video = Some(diag);
         connection.last_diag_at = Some(now);
         if should_log {
@@ -303,13 +319,17 @@ impl StageConnections {
         guard.note_heartbeat_sent(heartbeat_id, now);
     }
 
+    /// Record a heartbeat ACK; #797: first adopt the ACK's displayed layout
+    /// (under the same lock) so the returned snapshot already carries it.
     pub async fn record_heartbeat_ack(
         &self,
         id: Uuid,
         heartbeat_id: Option<Uuid>,
+        layout_code: Option<&str>,
         now: DateTime<Utc>,
     ) -> Option<StageClientSnapshot> {
         let mut guard = self.inner.write().await;
+        guard.set_displayed_layout(id, layout_code);
         guard.record_heartbeat_ack(id, heartbeat_id, now)
     }
 
