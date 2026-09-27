@@ -710,4 +710,29 @@ mod tests {
         );
         assert_eq!(switched.snapshot.layout_code, "ndi-fullscreen");
     }
+
+    #[test]
+    fn heartbeat_layout_is_adopted_on_non_ndi_layouts() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+        tracker
+            .record_diag(id, diag_with_layout(Some("ndi-fullscreen")), now)
+            .expect("record");
+
+        // Switch to a non-NDI layout: no diag frames any more, only the
+        // heartbeat ACK reports the displayed layout.
+        tracker.set_displayed_layout(id, Some("worship-snv"));
+        assert_eq!(tracker.snapshot_for(id).unwrap().layout_code, "worship-snv");
+
+        // None / empty never overwrite.
+        tracker.set_displayed_layout(id, None);
+        tracker.set_displayed_layout(id, Some(""));
+        assert_eq!(tracker.snapshot_for(id).unwrap().layout_code, "worship-snv");
+
+        // Unknown connection is a no-op (no panic, nothing registered).
+        tracker.set_displayed_layout(Uuid::new_v4(), Some("timer"));
+        assert_eq!(tracker.snapshot().len(), 1);
+    }
 }
