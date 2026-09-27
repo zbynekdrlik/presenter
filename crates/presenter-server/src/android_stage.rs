@@ -433,7 +433,7 @@ async fn connect_and_launch(
 
     let launch_pkg = launch_package(&config.launch_component);
 
-    if let Err(err) = prepare_our_stage_app(runner, &serial, launch_pkg, apk_path).await {
+    if let Err(err) = prepare_our_stage_app(runner, &serial, launch_pkg, apk_path, link).await {
         record_error(status, err.to_string()).await;
         return Err(err);
     }
@@ -500,12 +500,13 @@ async fn prepare_our_stage_app(
     serial: &str,
     launch_pkg: &str,
     apk_path: &Arc<Option<PathBuf>>,
+    link: &mut AdbLinkState,
 ) -> anyhow::Result<()> {
     if launch_pkg != DEFAULT_LAUNCH_PACKAGE {
         return Ok(());
     }
     if let Some(apk) = apk_path.as_deref() {
-        ensure_app_installed(runner, serial, launch_pkg, apk).await?;
+        ensure_app_installed(runner, serial, launch_pkg, apk, link).await?;
     }
     // #477: suppress the old per-brand kiosk browsers. The TV's own system
     // keeps resurfacing them (e.g. TCL relaunches com.tcl.browser to the
@@ -1303,7 +1304,7 @@ mod tests {
         );
         // The version check (dumpsys package) is ONLY reached when the package is
         // already present. An absent app must install directly without probing the
-        // version — asserts adb_package_installed actually gates that branch.
+        // version — asserts adb_package_state actually gates that branch.
         assert_eq!(
             runner.dumpsys_package_calls(),
             0,

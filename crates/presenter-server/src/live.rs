@@ -338,10 +338,15 @@ async fn handle_stage_disconnect(
     }
 }
 
-/// Read inbound frames until the socket ends, dispatching each parsed message,
-/// and return WHY it ended (#793).
+/// Read inbound frames until the socket ends (or the forward task — our write
+/// side — ends), dispatching each parsed message, and return WHY it ended
+/// (#793). The forward task is raced ONLY against `receiver.next()` (cancel
+/// safe), never against an in-progress `dispatch_inbound`, so a stage
+/// registration can never be cancelled between `register` and recording
+/// `registered_client` (which would leave a ghost "connected" display).
 async fn read_live_messages(
     receiver: &mut SplitStream<WebSocket>,
+    forward_handle: &mut JoinHandle<WsEndReason>,
     hub: &LiveHub,
     connections: &StageConnections,
     client_ip: &str,
@@ -349,7 +354,15 @@ async fn read_live_messages(
     registered_client: &mut Option<Uuid>,
 ) -> WsEndReason {
     loop {
-        let msg = match receiver.next().await {
+        let next = tokio::select! {
+            next = receiver.next() => next,
+            joined = &mut *forward_handle => {
+                return joined.unwrap_or_else(|err| {
+                    WsEndReason::SendFailed(format!("forward task ended: {err}"))
+                });
+            }
+        };
+        let msg = match next {
             None => return WsEndReason::StreamEnded,
             Some(Err(err)) => return WsEndReason::ReadError(err.to_string()),
             Some(Ok(msg)) => msg,
@@ -405,19 +418,16 @@ pub async fn serve_websocket(
     // #793: the connection ends when EITHER side ends — a failed write of an
     // event/heartbeat now closes it promptly (previously the read loop kept a
     // write-dead socket open) — and the reason is logged below.
-    let end_reason = tokio::select! {
-        reason = read_live_messages(
-            &mut receiver,
-            &hub,
-            &connections,
-            &client_ip,
-            preview,
-            &mut registered_client,
-        ) => reason,
-        joined = &mut forward_handle => joined.unwrap_or_else(|err| {
-            WsEndReason::SendFailed(format!("forward task ended: {err}"))
-        }),
-    };
+    let end_reason = read_live_messages(
+        &mut receiver,
+        &mut forward_handle,
+        &hub,
+        &connections,
+        &client_ip,
+        preview,
+        &mut registered_client,
+    )
+    .await;
 
     let stage_client = registered_client;
     if let Some(id) = registered_client {

@@ -8,7 +8,7 @@ use crate::components::stage::camera_crew::CameraCrew;
 use crate::state::stage::StageContext;
 use crate::ws::stage::{self, StageWsState};
 
-const CAMERA_LAYOUT: &str = "camera-crew";
+use super::stage_events::CAMERA_CREW_LAYOUT as CAMERA_LAYOUT;
 
 #[component]
 pub fn CameraPage() -> impl IntoView {

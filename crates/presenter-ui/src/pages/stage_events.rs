@@ -9,6 +9,8 @@
 
 use leptos::prelude::*;
 use presenter_core::{LiveEvent, StageDisplaySnapshot};
+use std::cell::Cell;
+use std::rc::Rc;
 
 use super::stage::{ndi_activation_resets_gate, set_global_string};
 use crate::state::stage::StageContext;
@@ -17,6 +19,36 @@ use crate::state::stage::StageContext;
 /// (for `/ui/camera`) and it is never operator-selectable, so it must never
 /// switch a `/stage` display.
 pub(crate) const CAMERA_CREW_LAYOUT: &str = "camera-crew";
+
+/// True for the live events that make an in-flight reconnect resync's HTTP
+/// answer stale: a `StageLayout` or a `Stage` snapshot is NEWER than whatever
+/// the fetch will return.
+pub(crate) fn event_invalidates_resync(event: &LiveEvent) -> bool {
+    matches!(
+        event,
+        LiveEvent::Stage { .. } | LiveEvent::StageLayout { .. }
+    )
+}
+
+/// Generation counter of applied layout/snapshot live events (#793). The
+/// reconnect resync records it before each HTTP fetch and discards the answer
+/// when it moved, so a slow fetch never overwrites a newer live event (with
+/// snapshot-driven layout adoption that would flip the display back).
+#[derive(Clone, Default)]
+pub(crate) struct StageSyncGeneration(Rc<Cell<u64>>);
+
+impl StageSyncGeneration {
+    pub(crate) fn current(&self) -> u64 {
+        self.0.get()
+    }
+
+    /// Bump the generation when `event` invalidates an in-flight resync.
+    pub(crate) fn note(&self, event: &LiveEvent) {
+        if event_invalidates_resync(event) {
+            self.0.set(self.0.get().wrapping_add(1));
+        }
+    }
+}
 
 /// What the stage page does with an incoming `Stage` snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

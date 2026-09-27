@@ -46,15 +46,20 @@ fn forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// Best-effort client IP for the live WS connect/disconnect logs (#793): a
-/// proxy header wins (behind the Cloudflare tunnel the socket peer is the
-/// loopback `cloudflared`), otherwise the TCP socket peer (LAN stage TVs send
-/// no forwarding header — they were all logged as `anonymous` before), else
-/// `"anonymous"` (a server not served with connect-info, e.g. tests).
+/// Best-effort client IP for the live WS connect/disconnect logs (#793). A
+/// non-loopback socket peer IS the client (LAN stage TVs send no forwarding
+/// header — they were all logged as `anonymous` before) and a header it sends
+/// is ignored, so a LAN client cannot spoof its logged IP. Only from a
+/// loopback peer (the Cloudflare tunnel's `cloudflared`) or with no peer at all
+/// (a server not served with connect-info, e.g. tests) is the proxy header
+/// used; else `"anonymous"`.
 pub(super) fn extract_client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
-    forwarded_client_ip(headers)
-        .or_else(|| peer.map(|addr| addr.ip().to_string()))
-        .unwrap_or_else(|| "anonymous".to_string())
+    match peer {
+        Some(addr) if !addr.ip().is_loopback() => addr.ip().to_string(),
+        _ => forwarded_client_ip(headers)
+            .or_else(|| peer.map(|addr| addr.ip().to_string()))
+            .unwrap_or_else(|| "anonymous".to_string()),
+    }
 }
 
 #[cfg(test)]

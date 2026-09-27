@@ -2,7 +2,9 @@ use leptos::prelude::*;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
-use super::stage_events::{apply_layout_code, apply_stage_event, apply_stage_snapshot};
+use super::stage_events::{
+    apply_layout_code, apply_stage_event, apply_stage_snapshot, StageSyncGeneration,
+};
 use crate::api;
 use crate::components::stage::{
     api_stage::ApiStage, bible_layout::BibleLayout, fulltext_layout::FulltextLayout,
@@ -188,9 +190,14 @@ pub fn StagePage() -> impl IntoView {
     // the WS read loop (in arrival order) — never through a single
     // latest-value signal, where a `StageLayout` followed immediately by a
     // `Stage` snapshot could coalesce and the layout switch be lost.
+    let generation = StageSyncGeneration::default();
     let on_event: stage::StageEventHandler = {
         let ctx = ctx.clone();
-        Rc::new(move |event| apply_stage_event(&ctx, event))
+        let generation = generation.clone();
+        Rc::new(move |event| {
+            generation.note(&event);
+            apply_stage_event(&ctx, event);
+        })
     };
     let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code, on_event);
 
@@ -220,13 +227,16 @@ pub fn StagePage() -> impl IntoView {
         // runs on actual state TRANSITIONS (first connect + reconnects).
         let connected = Memo::new(move |_| ws_state.get() == StageWsState::Connected);
         sync_ndi_source_state(ctx.clone());
-        resync_stage_state(ctx.clone());
+        // Load-time fetch stays: it renders the stage even if the socket never
+        // connects. The first `Connected` re-reads (cheap, and it closes the
+        // load → connect gap).
+        resync_stage_state(ctx.clone(), generation.clone());
         Effect::new(move |_| {
             if connected.get() {
                 sync_ndi_source_state(ctx.clone());
                 // #793: a layout switch (or any stage event) published while
                 // this display's socket was down is lost — re-read it.
-                resync_stage_state(ctx.clone());
+                resync_stage_state(ctx.clone(), generation.clone());
             }
         });
     }
@@ -296,13 +306,22 @@ pub fn StagePage() -> impl IntoView {
 /// snapshot for another layout switches the display), the broadcast-live flag
 /// and the active Bible overlay. Runs on page load and on every WS
 /// (re)connect (#793 — displays sat on a stale layout after reset bursts).
-fn resync_stage_state(ctx: StageContext) {
+/// A layout/snapshot answer is DISCARDED when a live `StageLayout`/`Stage`
+/// event arrived while it was in flight (`generation` moved) — the live event
+/// is newer.
+fn resync_stage_state(ctx: StageContext, generation: StageSyncGeneration) {
     leptos::task::spawn_local(async move {
+        let before = generation.current();
         if let Ok(layout_resp) = api::stage::get_layout().await {
-            apply_layout_code(&ctx, &layout_resp.code);
+            if generation.current() == before {
+                apply_layout_code(&ctx, &layout_resp.code);
+            }
         }
+        let before = generation.current();
         if let Ok(snapshot) = api::stage::get_snapshot().await {
-            apply_stage_snapshot(&ctx, snapshot);
+            if generation.current() == before {
+                apply_stage_snapshot(&ctx, snapshot);
+            }
         }
         if let Ok(broadcast) = api::stage::get_broadcast_live().await {
             ctx.broadcast_live.set(broadcast.enabled);

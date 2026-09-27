@@ -86,17 +86,37 @@ where
         .collect()
 }
 
-/// Consecutive keep-alive cycles a target may sit listed in a non-`device`
-/// state (`offline`, `unauthorized`, `authorizing`, …) before its stale adb
-/// entry is dropped with `adb disconnect` (#793).
+/// Consecutive keep-alive cycles a target may sit listed as `offline` (or in
+/// another unexpected state) before its stale adb entry is dropped with
+/// `adb disconnect` (#793). `unauthorized`/`authorizing` never count: dropping
+/// those re-shows the RSA prompt on the TV while someone may be accepting it.
 pub(super) const STALE_RECONNECT_CYCLES: u32 = 3;
 
 /// Per-display adb link memory carried across keep-alive cycles by the device
-/// worker (#793): how many consecutive cycles the target has been listed in a
-/// stuck (non-`device`) state.
+/// worker (#793).
 #[derive(Debug, Default)]
 pub(super) struct AdbLinkState {
+    /// Consecutive cycles listed in a stale (e.g. `offline`) state.
     stuck_cycles: u32,
+    /// Stale-entry reconnects since the target was last `device` (log gate).
+    reconnects: u32,
+    /// Consecutive cycles whose `pm path` read was [`PackageState::Unknown`]
+    /// (log gate for the skip-cycle WARN).
+    unknown_package_cycles: u32,
+}
+
+/// Rate-limit gate for a streak of repeated adb failures: log the 1st and
+/// every power-of-two milestone only (~log2(N)+1 lines instead of N) — the
+/// resolume #484 / ableset #735 pattern (`.claude/rules/log-flood-backoff.md`).
+pub(super) fn should_log_adb_streak(streak: u32) -> bool {
+    streak > 0 && streak.is_power_of_two()
+}
+
+/// Count one more cycle with an unreadable package state and report whether
+/// this one should be logged (per [`should_log_adb_streak`]).
+pub(super) fn note_unknown_package(link: &mut AdbLinkState) -> bool {
+    link.unknown_package_cycles = link.unknown_package_cycles.saturating_add(1);
+    should_log_adb_streak(link.unknown_package_cycles)
 }
 
 /// What the keep-alive does with the adb connection this cycle (#793).
@@ -128,6 +148,9 @@ pub(super) fn decide_connect(state: Option<&str>, link: &mut AdbLinkState) -> Co
             link.stuck_cycles = 0;
             ConnectAction::Connect
         }
+        // Waiting on the TV's RSA "allow debugging" prompt — a disconnect
+        // would re-show it; a plain connect is harmless.
+        Some("unauthorized") | Some("authorizing") => ConnectAction::Connect,
         Some(_) => {
             link.stuck_cycles += 1;
             if link.stuck_cycles >= STALE_RECONNECT_CYCLES {
@@ -178,17 +201,31 @@ pub(super) async fn adb_connect(
 ) -> anyhow::Result<()> {
     let listed = adb_listed_state(runner, serial).await;
     match decide_connect(listed.as_deref(), link) {
-        ConnectAction::AlreadyConnected => return Ok(()),
+        ConnectAction::AlreadyConnected => {
+            if link.reconnects > 0 {
+                info!(
+                    serial,
+                    reconnects = link.reconnects,
+                    "adb target back to `device` after stale-entry reconnects (#793)"
+                );
+                link.reconnects = 0;
+            }
+            return Ok(());
+        }
         ConnectAction::Connect => {
             debug!(serial, state = ?listed, "adb target not connected — adb connect (#793)");
         }
         ConnectAction::Reconnect => {
-            info!(
-                serial,
-                state = ?listed,
-                cycles = STALE_RECONNECT_CYCLES,
-                "adb target stuck — dropping the stale entry before reconnecting (#793)"
-            );
+            link.reconnects = link.reconnects.saturating_add(1);
+            if should_log_adb_streak(link.reconnects) {
+                info!(
+                    serial,
+                    state = ?listed,
+                    cycles = STALE_RECONNECT_CYCLES,
+                    reconnects = link.reconnects,
+                    "adb target stuck — dropping the stale entry before reconnecting (#793)"
+                );
+            }
             let _ = runner.run(&adb_args(["disconnect", serial])).await;
         }
     }
@@ -447,6 +484,7 @@ pub(super) async fn ensure_app_installed(
     serial: &str,
     package: &str,
     apk: &Path,
+    link: &mut AdbLinkState,
 ) -> anyhow::Result<()> {
     let installed = match adb_package_state(runner, serial, package).await {
         PackageState::Installed => true,
@@ -454,18 +492,30 @@ pub(super) async fn ensure_app_installed(
         PackageState::Unknown(detail) => {
             // #793: an unreadable state is NOT evidence of absence — never
             // install/uninstall on it (that killed SD3's running app mid-event).
-            warn!(
-                serial,
-                package,
-                %detail,
-                "Presenter Stage package state unknown (adb error) — skipping this \
-                 cycle, not (re)installing (#793)"
-            );
+            if note_unknown_package(link) {
+                warn!(
+                    serial,
+                    package,
+                    %detail,
+                    streak = link.unknown_package_cycles,
+                    "Presenter Stage package state unknown (adb error) — skipping this \
+                     cycle, not (re)installing (#793)"
+                );
+            }
             return Err(anyhow!(
                 "package state unknown for {serial} (skipping cycle): {detail}"
             ));
         }
     };
+    if link.unknown_package_cycles > 0 {
+        info!(
+            serial,
+            package,
+            cycles = link.unknown_package_cycles,
+            "Presenter Stage package state readable again (#793)"
+        );
+        link.unknown_package_cycles = 0;
+    }
     let version_code = if installed {
         adb_installed_version_code(runner, serial, package).await
     } else {
