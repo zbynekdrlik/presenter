@@ -2232,4 +2232,24 @@ mod tests {
         let logged: Vec<bool> = (0..8).map(|_| note_unknown_package(&mut link)).collect();
         assert_eq!(logged, [true, true, false, true, false, false, false, true]);
     }
+
+    // #793 re-review: an `unauthorized`/`authorizing` cycle between `offline`
+    // cycles breaks the streak — the stale-entry disconnect needs 3
+    // CONSECUTIVE `offline` cycles, never counts across an RSA prompt.
+    #[test]
+    fn rsa_prompt_cycle_resets_the_stale_streak() {
+        let mut link = AdbLinkState::default();
+        for state in ["offline", "offline", "unauthorized", "offline", "offline"] {
+            assert_eq!(
+                decide_connect(Some(state), &mut link),
+                ConnectAction::Connect,
+                "`{state}`: no disconnect across an RSA-prompt cycle",
+            );
+        }
+        assert_eq!(
+            decide_connect(Some("offline"), &mut link),
+            ConnectAction::Reconnect,
+            "3 consecutive offline cycles after the prompt → drop the stale entry",
+        );
+    }
 }

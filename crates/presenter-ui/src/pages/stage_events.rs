@@ -148,7 +148,10 @@ pub(crate) fn apply_stage_event(ctx: &StageContext, event: LiveEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{event_invalidates_resync, stage_snapshot_action, SnapshotAction};
+    use super::{
+        event_invalidates_resync, snapshot_invalidates_resync, stage_snapshot_action,
+        SnapshotAction, StageSyncGeneration,
+    };
     use presenter_core::LiveEvent;
 
     // ─────────────────────────────────────────────────────────────────────
@@ -191,16 +194,68 @@ mod tests {
     }
 
     // #793 review: a reconnect resync's HTTP answer must not overwrite a
-    // NEWER live layout/snapshot event applied while the fetch was in flight.
+    // NEWER live layout/snapshot event applied while the fetch was in flight —
+    // but only events the display actually APPLIES count: the camera-crew
+    // snapshot (published on every broadcast, the ONLY one while api is
+    // selected) is ignored by /stage and must not void the resync.
     #[test]
-    fn only_layout_and_stage_events_invalidate_an_in_flight_resync() {
-        assert!(event_invalidates_resync(&LiveEvent::StageLayout {
-            code: "timer".into()
-        }));
-        assert!(!event_invalidates_resync(&LiveEvent::BroadcastLive {
-            enabled: true
-        }));
-        assert!(!event_invalidates_resync(&LiveEvent::BibleCleared));
-        assert!(!event_invalidates_resync(&LiveEvent::NdiSourceDeactivated));
+    fn only_applied_layout_or_snapshot_events_invalidate_an_in_flight_resync() {
+        assert!(event_invalidates_resync(
+            &LiveEvent::StageLayout {
+                code: "timer".into()
+            },
+            "worship-snv"
+        ));
+        assert!(!event_invalidates_resync(
+            &LiveEvent::BroadcastLive { enabled: true },
+            "worship-snv"
+        ));
+        assert!(!event_invalidates_resync(
+            &LiveEvent::BibleCleared,
+            "worship-snv"
+        ));
+        assert!(!event_invalidates_resync(
+            &LiveEvent::NdiSourceDeactivated,
+            "worship-snv"
+        ));
+    }
+
+    #[test]
+    fn camera_crew_snapshot_does_not_invalidate_a_resync() {
+        assert!(!snapshot_invalidates_resync("worship-snv", "camera-crew"));
+        assert!(!snapshot_invalidates_resync("api", "camera-crew"));
+        assert!(snapshot_invalidates_resync("worship-snv", "worship-snv"));
+        assert!(snapshot_invalidates_resync("worship-snv", "timer"));
+    }
+
+    #[test]
+    fn generation_moves_only_on_invalidating_events() {
+        let generation = StageSyncGeneration::default();
+        assert_eq!(generation.current(), 0);
+        generation.note(&LiveEvent::BibleCleared, "worship-snv");
+        assert_eq!(
+            generation.current(),
+            0,
+            "an unrelated event keeps the resync valid"
+        );
+        generation.note(
+            &LiveEvent::StageLayout {
+                code: "timer".into(),
+            },
+            "worship-snv",
+        );
+        assert_eq!(
+            generation.current(),
+            1,
+            "a layout event voids an in-flight resync"
+        );
+        let shared = generation.clone();
+        shared.note(
+            &LiveEvent::StageLayout {
+                code: "preach".into(),
+            },
+            "timer",
+        );
+        assert_eq!(generation.current(), 2, "clones share one counter");
     }
 }
