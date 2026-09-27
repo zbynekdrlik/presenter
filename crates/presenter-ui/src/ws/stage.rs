@@ -5,7 +5,9 @@ use presenter_core::{InboundMessage, LiveEvent};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ws::stage_diag::{collect_ndi_video_diag, diag_change_key, DiagChangeKey};
+use crate::ws::stage_diag::{
+    collect_ndi_video_diag, diag_change_key, displayed_layout_code, DiagChangeKey,
+};
 
 const INITIAL_RECONNECT_MS: u32 = 1_000;
 const MAX_RECONNECT_MS: u32 = 30_000;
@@ -283,6 +285,7 @@ async fn handle_stage_text(
                 client_id: client_id.to_string(),
                 heartbeat_id: Some(id.to_string()),
                 ndi_video: collect_ndi_video_diag(),
+                layout_code: displayed_layout_code(),
             };
             if let Ok(json) = serde_json::to_string(&ack) {
                 send_via_writer(write, json).await;

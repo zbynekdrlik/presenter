@@ -154,6 +154,32 @@ mod tests {
         }
     }
 
+    /// #797: the heartbeat ACK carries the DISPLAYED layout (every layout, not
+    /// only NDI ones) and it survives a deserialize → serialize round-trip.
+    #[test]
+    fn heartbeat_ack_layout_code_roundtrips() {
+        let json = r#"{"type":"stage_heartbeat_ack","client_id":"c","heartbeat_id":"h","layout_code":"ndi-fullscreen"}"#;
+        let msg = serde_json::from_str::<InboundMessage>(json).expect("deserialize");
+        let out = serde_json::to_string(&msg).expect("serialize");
+        assert!(
+            out.contains(r#""layout_code":"ndi-fullscreen""#),
+            "layout_code must round-trip, got {out}"
+        );
+    }
+
+    /// #797 wire back-compat: an OLD ack (no layout_code) still deserializes
+    /// and a NEW ack without a layout emits no `layout_code` key (no `null`).
+    #[test]
+    fn old_heartbeat_ack_without_layout_code_roundtrips_without_key() {
+        let json = r#"{"type":"stage_heartbeat_ack","client_id":"c","heartbeat_id":"h"}"#;
+        let msg = serde_json::from_str::<InboundMessage>(json).expect("deserialize");
+        let out = serde_json::to_string(&msg).expect("serialize");
+        assert!(
+            !out.contains("layout_code"),
+            "absent layout must be omitted, got {out}"
+        );
+    }
+
     /// #732: the new `StageDiag` message round-trips with a `stage_diag` tag.
     #[test]
     fn stage_diag_message_roundtrips() {

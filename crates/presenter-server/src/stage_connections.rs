@@ -10,10 +10,18 @@ use uuid::Uuid;
 const DIAG_LOG_MIN_INTERVAL_S: i64 = 30;
 
 /// #732: the dimensions whose change forces an immediate diagnostics log line
-/// (`paused`, `error_code`, `cover_visible`, and `video_width==0 vs >0`).
+/// (`paused`, `error_code`, `cover_visible`, and `video_width==0 vs >0`), plus
+/// (#797) the displayed non-empty `layout_code`, so a layout switch logs on the
+/// first diag frame that reports it instead of waiting for the 30 s floor.
 /// Everything else in the snapshot is stored/exposed but does not by itself
 /// trigger a fresh log line — the 30 s floor covers steady-state drift.
-type DiagLogKey = (Option<bool>, Option<u16>, Option<bool>, Option<bool>);
+type DiagLogKey = (
+    Option<bool>,
+    Option<u16>,
+    Option<bool>,
+    Option<bool>,
+    Option<String>,
+);
 
 /// The [`DiagLogKey`] for a snapshot — `video_width` collapses to a
 /// present/absent-frame boolean (0 vs >0), matching the ticket's log rule.
@@ -23,6 +31,7 @@ fn diag_log_key(diag: &NdiVideoDiag) -> DiagLogKey {
         diag.error_code,
         diag.cover_visible,
         diag.video_width.map(|w| w > 0),
+        diag.layout_code.clone().filter(|l| !l.is_empty()),
     )
 }
 
@@ -44,6 +53,30 @@ pub(crate) fn should_log_diag(
             Some(at) => now.signed_duration_since(at) >= min_interval,
         },
     }
+}
+
+/// #797: adopt a client-reported DISPLAYED layout (diag frame or heartbeat
+/// ACK). Only a non-empty value replaces the stored one: the register-time
+/// value comes from the presence frame, sent before the client's layout
+/// resync, so it is the `worship-snv` default until a report arrives.
+/// Returns the PREVIOUS layout when the value actually changed.
+fn adopt_layout(connection: &mut StageConnection, layout_code: Option<&str>) -> Option<String> {
+    let layout = layout_code.filter(|l| !l.is_empty())?;
+    if connection.layout_code == layout {
+        return None;
+    }
+    Some(std::mem::replace(
+        &mut connection.layout_code,
+        layout.to_string(),
+    ))
+}
+
+/// Result of recording a heartbeat ACK (#797): the ack snapshot (`None` for an
+/// unknown connection) plus the previous layout when the ACK switched it.
+#[derive(Debug)]
+pub struct HeartbeatAckRecord {
+    pub snapshot: Option<StageClientSnapshot>,
+    pub layout_changed_from: Option<String>,
 }
 
 /// Result of recording a diagnostics snapshot: the updated per-connection
@@ -172,9 +205,22 @@ impl StageConnectionTracker {
         }
     }
 
+    /// #797: adopt the layout the client reports it DISPLAYS (heartbeat ACK,
+    /// sent for every layout). `None`/empty and unknown ids are no-ops.
+    /// Returns the previous layout when the value changed.
+    pub fn set_displayed_layout(&mut self, id: Uuid, layout_code: Option<&str>) -> Option<String> {
+        let connection = self.connections.get_mut(&id)?;
+        adopt_layout(connection, layout_code)
+    }
+
     /// #732: store the latest NDI `<video>` diagnostics snapshot and decide,
     /// via the rate-limiter, whether to emit a log line. Returns `None` when
     /// the connection is unknown (e.g. a preview client that never registered).
+    ///
+    /// #797: a non-empty `diag.layout_code` is the layout the page actually
+    /// DISPLAYS (`body[data-layout-code]`) and replaces the register-time
+    /// value, which the presence frame captures before the client's layout
+    /// resync (the `worship-snv` default). `None`/empty keeps the old value.
     pub fn record_diag(
         &mut self,
         id: Uuid,
@@ -190,6 +236,7 @@ impl StageConnectionTracker {
             now,
             Duration::seconds(DIAG_LOG_MIN_INTERVAL_S),
         );
+        adopt_layout(connection, diag.layout_code.as_deref());
         connection.ndi_video = Some(diag);
         connection.last_diag_at = Some(now);
         if should_log {
@@ -286,14 +333,21 @@ impl StageConnections {
         guard.note_heartbeat_sent(heartbeat_id, now);
     }
 
+    /// Record a heartbeat ACK; #797: first adopt the ACK's displayed layout
+    /// (under the same lock) so the returned snapshot already carries it.
     pub async fn record_heartbeat_ack(
         &self,
         id: Uuid,
         heartbeat_id: Option<Uuid>,
+        layout_code: Option<&str>,
         now: DateTime<Utc>,
-    ) -> Option<StageClientSnapshot> {
+    ) -> HeartbeatAckRecord {
         let mut guard = self.inner.write().await;
-        guard.record_heartbeat_ack(id, heartbeat_id, now)
+        let layout_changed_from = guard.set_displayed_layout(id, layout_code);
+        HeartbeatAckRecord {
+            snapshot: guard.record_heartbeat_ack(id, heartbeat_id, now),
+            layout_changed_from,
+        }
     }
 
     pub async fn mark_disconnected(&self, id: Uuid) -> Option<StageClientSnapshot> {
@@ -617,5 +671,139 @@ mod tests {
             tracker.snapshot_for(id).unwrap().user_agent.as_deref(),
             Some("Chrome/90 (Vestel)"),
         );
+    }
+
+    // ── #797 diag frames carry the DISPLAYED layout ─────────────────
+
+    fn diag_with_layout(layout: Option<&str>) -> NdiVideoDiag {
+        NdiVideoDiag {
+            layout_code: layout.map(str::to_string),
+            ..diag(false, None, false, 1280)
+        }
+    }
+
+    #[test]
+    fn record_diag_adopts_displayed_layout_code() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        // Presence frame is sent before the client's layout resync → default.
+        tracker.register(id, "worship-snv", now);
+
+        let record = tracker
+            .record_diag(id, diag_with_layout(Some("ndi-fullscreen")), now)
+            .expect("record");
+        assert_eq!(record.snapshot.layout_code, "ndi-fullscreen");
+        assert_eq!(
+            tracker.snapshot_for(id).unwrap().layout_code,
+            "ndi-fullscreen",
+            "/stage/connections must report the displayed layout"
+        );
+    }
+
+    #[test]
+    fn record_diag_without_layout_keeps_previous_layout_code() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+
+        tracker
+            .record_diag(id, diag_with_layout(Some("ndi-fullscreen")), now)
+            .expect("record");
+        // An older client (no layout_code) or an empty value must not wipe it.
+        let record = tracker
+            .record_diag(id, diag_with_layout(None), now + Duration::seconds(1))
+            .expect("record");
+        assert_eq!(record.snapshot.layout_code, "ndi-fullscreen");
+        let record = tracker
+            .record_diag(id, diag_with_layout(Some("")), now + Duration::seconds(2))
+            .expect("record");
+        assert_eq!(record.snapshot.layout_code, "ndi-fullscreen");
+    }
+
+    #[test]
+    fn record_diag_logs_immediately_on_layout_switch() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+
+        let first = tracker
+            .record_diag(id, diag_with_layout(Some("worship-snv")), now)
+            .expect("record");
+        assert!(first.should_log);
+        // Same video state, only the layout changed, 1 s later → log now.
+        let switched = tracker
+            .record_diag(
+                id,
+                diag_with_layout(Some("ndi-fullscreen")),
+                now + Duration::seconds(1),
+            )
+            .expect("record");
+        assert!(
+            switched.should_log,
+            "a layout switch must log promptly, not wait for the 30 s floor"
+        );
+        assert_eq!(switched.snapshot.layout_code, "ndi-fullscreen");
+    }
+
+    #[test]
+    fn heartbeat_layout_is_adopted_on_non_ndi_layouts() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+        tracker
+            .record_diag(id, diag_with_layout(Some("ndi-fullscreen")), now)
+            .expect("record");
+
+        // Switch to a non-NDI layout: no diag frames any more, only the
+        // heartbeat ACK reports the displayed layout.
+        tracker.set_displayed_layout(id, Some("worship-snv"));
+        assert_eq!(tracker.snapshot_for(id).unwrap().layout_code, "worship-snv");
+
+        // None / empty never overwrite.
+        tracker.set_displayed_layout(id, None);
+        tracker.set_displayed_layout(id, Some(""));
+        assert_eq!(tracker.snapshot_for(id).unwrap().layout_code, "worship-snv");
+
+        // A change reports the previous layout (for the switch log line); a
+        // repeat of the same layout is not a change.
+        assert_eq!(
+            tracker.set_displayed_layout(id, Some("preach")).as_deref(),
+            Some("worship-snv")
+        );
+        assert_eq!(tracker.set_displayed_layout(id, Some("preach")), None);
+
+        // Unknown connection is a no-op (no panic, nothing registered).
+        tracker.set_displayed_layout(Uuid::new_v4(), Some("timer"));
+        assert_eq!(tracker.snapshot().len(), 1);
+    }
+
+    /// #797: the async wrapper the WS handler calls adopts the ACK's layout
+    /// under the same lock, so the snapshot it returns (and broadcasts)
+    /// already carries it, and it reports the switch for the log line.
+    #[tokio::test]
+    async fn heartbeat_ack_wrapper_adopts_layout_before_snapshot() {
+        let connections = StageConnections::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        connections.register(id, "worship-snv", now).await;
+
+        let ack = connections
+            .record_heartbeat_ack(id, None, Some("preach"), now)
+            .await;
+        assert_eq!(ack.snapshot.expect("snapshot").layout_code, "preach");
+        assert_eq!(ack.layout_changed_from.as_deref(), Some("worship-snv"));
+
+        // Same layout again (or no layout) → no change reported, value kept.
+        let again = connections
+            .record_heartbeat_ack(id, None, Some("preach"), now)
+            .await;
+        assert_eq!(again.layout_changed_from, None);
+        let none = connections.record_heartbeat_ack(id, None, None, now).await;
+        assert_eq!(none.snapshot.expect("snapshot").layout_code, "preach");
+        assert_eq!(none.layout_changed_from, None);
     }
 }

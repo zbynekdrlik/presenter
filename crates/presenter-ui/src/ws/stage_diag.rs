@@ -101,7 +101,7 @@ fn cover_visible() -> Option<bool> {
 
 /// The stage page's active layout code from `body[data-layout-code]`
 /// (set by `pages/stage.rs`).
-fn layout_code() -> Option<String> {
+pub(crate) fn displayed_layout_code() -> Option<String> {
     leptos::web_sys::window()?
         .document()?
         .body()?
@@ -134,6 +134,6 @@ pub fn collect_ndi_video_diag() -> Option<NdiVideoDiag> {
         last_frame_age_ms,
         playback_guard_replays: global_f64(GUARD_REPLAYS_GLOBAL).map(|r| r as u32),
         cover_visible: cover_visible(),
-        layout_code: layout_code(),
+        layout_code: displayed_layout_code(),
     })
 }
