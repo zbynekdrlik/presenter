@@ -751,8 +751,42 @@ mod tests {
         tracker.set_displayed_layout(id, Some(""));
         assert_eq!(tracker.snapshot_for(id).unwrap().layout_code, "worship-snv");
 
+        // A change reports the previous layout (for the switch log line); a
+        // repeat of the same layout is not a change.
+        assert_eq!(
+            tracker.set_displayed_layout(id, Some("preach")).as_deref(),
+            Some("worship-snv")
+        );
+        assert_eq!(tracker.set_displayed_layout(id, Some("preach")), None);
+
         // Unknown connection is a no-op (no panic, nothing registered).
         tracker.set_displayed_layout(Uuid::new_v4(), Some("timer"));
         assert_eq!(tracker.snapshot().len(), 1);
+    }
+
+    /// #797: the async wrapper the WS handler calls adopts the ACK's layout
+    /// under the same lock, so the snapshot it returns (and broadcasts)
+    /// already carries it, and it reports the switch for the log line.
+    #[tokio::test]
+    async fn heartbeat_ack_wrapper_adopts_layout_before_snapshot() {
+        let connections = StageConnections::new();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        connections.register(id, "worship-snv", now).await;
+
+        let ack = connections
+            .record_heartbeat_ack(id, None, Some("preach"), now)
+            .await;
+        assert_eq!(ack.snapshot.expect("snapshot").layout_code, "preach");
+        assert_eq!(ack.layout_changed_from.as_deref(), Some("worship-snv"));
+
+        // Same layout again (or no layout) → no change reported, value kept.
+        let again = connections
+            .record_heartbeat_ack(id, None, Some("preach"), now)
+            .await;
+        assert_eq!(again.layout_changed_from, None);
+        let none = connections.record_heartbeat_ack(id, None, None, now).await;
+        assert_eq!(none.snapshot.expect("snapshot").layout_code, "preach");
+        assert_eq!(none.layout_changed_from, None);
     }
 }
