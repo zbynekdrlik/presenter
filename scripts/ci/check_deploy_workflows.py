@@ -40,10 +40,11 @@ ALIAS = "deploy-target"
 ALIAS_HOST_RE = re.compile(r"^\s*Host\s+deploy-target\s*$", re.MULTILINE)
 CONFIG_WRITE_RE = re.compile(r"cat\s+(>>?)\s*~/\.ssh/config")
 KEYSCAN_RE = re.compile(r"\bssh-keyscan\b")
-# A step "talks to deploy-target" when the alias appears as an ssh/scp/rsync
-# destination: `ssh deploy-target`, `deploy-target:/path`, or rsync `-e ssh ...
-# deploy-target:`.
-REMOTE_USE_RE = re.compile(r"(\bssh\b[^\n]*\bdeploy-target\b)|(\bdeploy-target:)")
+# A step "talks to deploy-target" when the alias appears anywhere on an
+# executable line (`ssh deploy-target`, `ssh -o X \` + `deploy-target "..."`,
+# scp/rsync `deploy-target:/path`). Deliberately broad: a false positive fails
+# loudly and is trivially gated; a false negative is the #795 incident.
+REMOTE_USE_RE = re.compile(r"\bdeploy-target\b")
 STATUS_FN_RE = re.compile(r"\b(always|failure|cancelled)\s*\(\s*\)")
 
 
@@ -63,9 +64,11 @@ def _script(step: dict[str, Any]) -> str:
 
     Comments routinely MENTION ``ssh-keyscan`` / ``ssh deploy-target`` while
     explaining the code; only executable lines may count. Blanking (not
-    deleting) keeps the relative order of what remains intact.
+    deleting) keeps the relative order of what remains intact. Backslash
+    continuations are joined first so one logical command is one line.
     """
-    lines = str(step.get("run", "")).splitlines()
+    joined = re.sub(r"\\\n", " ", str(step.get("run", "")))
+    lines = joined.splitlines()
     return "\n".join("" if line.lstrip().startswith("#") else line for line in lines)
 
 
@@ -115,9 +118,11 @@ def check_job(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
         if setup_id is None:
             violations.append(Violation(workflow, job, name, f"uses `{ALIAS}` with `if: {condition}` but no preceding SSH setup step with an `id` exists to gate on (#795)"))
             continue
-        gate = re.compile(r"steps\." + re.escape(setup_id) + r"\.outcome\s*==\s*'success'")
-        if not gate.search(condition):
-            violations.append(Violation(workflow, job, name, f"uses `{ALIAS}` with `if: {condition}` — must also require `steps.{setup_id}.outcome == 'success'` so it never runs after the SSH setup failed (#795)"))
+        gate = re.compile(r"steps\." + re.escape(setup_id) + r"""\.outcome\s*==\s*(['"])success\1""")
+        # `||` would let the status function alone satisfy the condition, so a
+        # gate OR-ed in gates nothing — require a pure `&&` conjunction.
+        if not gate.search(condition) or "||" in condition:
+            violations.append(Violation(workflow, job, name, f"uses `{ALIAS}` with `if: {condition}` — must also require `&& steps.{setup_id}.outcome == 'success'` (no `||`) so it never runs after the SSH setup failed (#795)"))
     return violations
 
 

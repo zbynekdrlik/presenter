@@ -123,6 +123,32 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
 """
         self.assertEqual(_violations(steps), [])
 
+    def test_multiline_ssh_continuation_counts_as_remote_use(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Recover
+        if: always()
+        run: |
+          ssh -o ConnectTimeout=5 \\
+            deploy-target "sudo systemctl start presenter"
+"""
+        self.assertEqual(len(_violations(steps)), 1)
+
+    def test_gate_or_ed_with_status_function_is_flagged(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Start service
+        if: always() || steps.ssh_setup.outcome == 'success'
+        run: ssh deploy-target "sudo systemctl start presenter"
+"""
+        self.assertEqual(len(_violations(steps)), 1)
+
+    def test_double_quoted_success_gate_is_accepted(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Start service
+        if: ${{ always() && steps.ssh_setup.outcome == "success" }}
+        run: ssh deploy-target "sudo systemctl start presenter"
+"""
+        self.assertEqual(_violations(steps), [])
+
     def test_setup_without_id_is_flagged(self) -> None:
         found = _violations(SAFE_SETUP.replace("        id: ssh_setup\n", ""))
         self.assertEqual(len(found), 1)
