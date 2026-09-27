@@ -50,7 +50,10 @@ pub fn StatusBar(
         if broadcast_live.get() {
             "LIVE".to_string()
         } else {
-            "VYSIELANIE JE VYPNUTE".to_string()
+            // #791: the standard broadcast term — short enough that autofit sizes it
+            // by the box HEIGHT, in line with the clock (the long Slovak phrase was
+            // width-bound and tiny).
+            "OFF AIR".to_string()
         }
     };
 
