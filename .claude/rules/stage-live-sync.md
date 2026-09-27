@@ -30,8 +30,11 @@ destructive default — make it tri-state and treat Unknown as "do nothing this 
 `adb_connect` reads `adb devices` once per cycle: a target in state `device` is left alone; a
 missing/stuck target gets a plain `adb connect`; `adb disconnect` only after
 `STALE_RECONNECT_CYCLES` (3) consecutive stuck cycles (`decide_connect` + the per-display
-`AdbLinkState` owned by `run_device_worker`). The old unconditional disconnect+connect every 20 s
-itself produced the offline/authorizing states. Also: SNV had a legacy, repo-unmanaged
+`AdbLinkState` owned by `run_device_worker`). Only `offline`/unexpected states count as stuck —
+`unauthorized`/`authorizing` never get disconnected (that re-shows the TV's RSA prompt while
+someone may be accepting it). The old unconditional disconnect+connect every 20 s itself produced
+the offline/authorizing states. Repeating adb WARN/INFO lines (unknown package state, stale
+reconnects) go through `should_log_adb_streak` (1st + powers of two) + one recovery line. Also: SNV had a legacy, repo-unmanaged
 `stage-watchdog.timer` (`/opt/presenter/stage-watchdog.sh`) fighting the same adb server — it was
 disabled on 2026-09-27 (rollback `sudo systemctl enable --now stage-watchdog.timer`); if adb flaps
 again, check `systemctl list-timers` for a second adb client first.
@@ -51,9 +54,18 @@ for another layout means "this is the active layout" → adopt it; `camera-crew`
 server ever starts publishing snapshots for non-selected layouts, this invariant breaks — update
 `stage_snapshot_action` in the same PR. `/ui/camera` stays pinned to `camera-crew`.
 
+**Server ordering invariant (load-bearing for adoption):** `publish_stage_context` holds the
+`stage_layout` READ lock from reading the selected code until the snapshot is published (enrich
+FIRST, no await under the lock), and `update_api_stage` checks + publishes under it too. A switch
+takes the write lock, so a snapshot for the previous layout can never be published after the
+switch's `StageLayout`. Any NEW `LiveEvent::Stage` publisher must follow the same rule, or a late
+stale snapshot flips every display back.
+
 The live hub does NOT replay: anything published while a display's socket is resetting is lost.
 `pages/stage.rs::resync_stage_state` re-reads layout + snapshot + broadcast + Bible overlay on page
-load and on every `Connected` transition — the same pattern as `sync_ndi_source_state`.
+load and on every `Connected` transition — the same pattern as `sync_ndi_source_state`. Its
+layout/snapshot answers are discarded when a live `Stage`/`StageLayout` event arrived while the
+fetch was in flight (`StageSyncGeneration`) — the live event is newer.
 
 **E2E technique:** `page.routeWebSocket(/\/live\/ws/, ws => { const server = ws.connectToServer();
 server.onMessage(m => { …filter…; ws.send(m); }); })` reproduces lost frames deterministically
@@ -66,9 +78,11 @@ the flag flips can still be in flight. See `tests/e2e/stage-layout-sync.spec.ts`
 `main.rs` serves with `into_make_service_with_connect_info::<SocketAddr>()`; `/live/ws` extracts
 the peer as `Option<Extension<ConnectInfo<SocketAddr>>>` (axum 0.8's `ConnectInfo` has no optional
 extractor, and tests serving `axum::serve(listener, app)` have no connect-info — a bare
-`ConnectInfo<_>` extractor would 500 them). `extract_client_ip`: X-Forwarded-For → X-Real-IP
-(Cloudflare tunnel, loopback peer) → socket peer → `anonymous`. `serve_websocket` ends when EITHER
-side ends and logs `reason=` (`WsEndReason`: client close code/reason, read error, stream ended,
+`ConnectInfo<_>` extractor would 500 them). `extract_client_ip`: a non-loopback peer IS the client
+(its forwarding headers are ignored — no spoofing); only from a loopback peer (cloudflared) or no
+peer is X-Forwarded-For → X-Real-IP used; else `anonymous`. `serve_websocket` ends when EITHER
+side ends (the write-side task is raced only against the cancel-safe `receiver.next()`, never
+against an in-progress `dispatch_inbound`) and logs `reason=` (`WsEndReason`: client close code/reason, read error, stream ended,
 send failed, hub closed) + `stage_client` + `connected_ms`. Layout switches log
 `presenter::stage::layout` INFO `from`/`to`. Read them with
 `journalctl -u presenter | grep -E 'live ws client|stage::layout'`.
