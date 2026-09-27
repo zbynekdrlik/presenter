@@ -336,6 +336,8 @@ async fn run_device_worker(
 ) -> anyhow::Result<()> {
     let mut ticker = interval(RETRY_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // #793: this display's adb link memory (stuck-cycle streak) across ticks.
+    let mut link = AdbLinkState::default();
 
     loop {
         tokio::select! {
@@ -343,7 +345,7 @@ async fn run_device_worker(
                 if config.is_enabled {
                     // Periodic keep-alive: foreground-aware (#419) — only
                     // relaunches when the browser is not already up.
-                    if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, false).await {
+                    if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, false, &mut link).await {
                         debug!(display = %config.label, ?err, "android stage display launch attempt failed");
                     }
                 } else {
@@ -354,6 +356,8 @@ async fn run_device_worker(
                 match command {
                     DeviceCommand::RefreshConfig(new_config) => {
                         config = new_config;
+                        // The host/port may have changed — start a fresh streak.
+                        link = AdbLinkState::default();
                         if !config.is_enabled {
                             mark_disabled(&status).await;
                         }
@@ -362,7 +366,7 @@ async fn run_device_worker(
                         if config.is_enabled {
                             // Explicit/forced launch (startup, config change,
                             // launch-now endpoint): always (re)launch (#419).
-                            if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, true).await {
+                            if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, true, &mut link).await {
                                 debug!(display = %config.label, ?err, "android stage display manual launch failed");
                             }
                         }
@@ -386,6 +390,7 @@ async fn connect_and_launch(
     config: &AndroidStageDisplay,
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     force_launch: bool,
+    link: &mut AdbLinkState,
 ) -> anyhow::Result<()> {
     let serial = format!("{}:{}", config.host, config.port);
 
@@ -413,7 +418,7 @@ async fn connect_and_launch(
         guard.last_error = None;
     }
 
-    if let Err(err) = adb_connect(runner, &serial).await {
+    if let Err(err) = adb_connect(runner, &serial, link).await {
         record_error(status, err.to_string()).await;
         return Err(err);
     }
@@ -428,26 +433,9 @@ async fn connect_and_launch(
 
     let launch_pkg = launch_package(&config.launch_component);
 
-    // Ensure our own Presenter Stage app is installed before we launch it, so the
-    // stage runs on ANY Android TV — including ones with no usable browser (e.g.
-    // Sharp/MediaTek, where com.tcl.browser is absent) — without a kiosk browser.
-    // Only our app ([`DEFAULT_LAUNCH_PACKAGE`]) is auto-installed; a legacy or
-    // operator-set browser package is assumed already present on the device.
-    if launch_pkg == DEFAULT_LAUNCH_PACKAGE {
-        if let Some(apk) = apk_path.as_deref() {
-            if let Err(err) = ensure_app_installed(runner, &serial, launch_pkg, apk).await {
-                record_error(status, err.to_string()).await;
-                return Err(err);
-            }
-        }
-        // #477: suppress the old per-brand kiosk browsers. The TV's own system
-        // keeps resurfacing them (e.g. TCL relaunches com.tcl.browser to the
-        // foreground), so the watchdog otherwise fights a losing battle —
-        // relaunching our app every tick while the browser flickers back. Disable
-        // them so OUR app holds. Only done when our app is the launch target, so
-        // an operator who deliberately set a browser as the launch_component is
-        // never affected.
-        suppress_kiosk_browsers(runner, &serial).await;
+    if let Err(err) = prepare_our_stage_app(runner, &serial, launch_pkg, apk_path).await {
+        record_error(status, err.to_string()).await;
+        return Err(err);
     }
 
     // #419: foreground-aware keep-alive. On the periodic tick (force_launch =
@@ -497,6 +485,36 @@ async fn connect_and_launch(
     guard.state = AndroidStageDisplayState::Running;
     guard.last_success = Some(success);
     guard.last_error = None;
+    Ok(())
+}
+
+/// Ensure our own Presenter Stage app is installed before we launch it, so the
+/// stage runs on ANY Android TV — including ones with no usable browser (e.g.
+/// Sharp/MediaTek, where com.tcl.browser is absent) — without a kiosk browser.
+/// Only our app ([`DEFAULT_LAUNCH_PACKAGE`]) is auto-installed; a legacy or
+/// operator-set browser package is assumed already present on the device. An
+/// error (install failure, or an unreadable package state — #793) aborts the
+/// cycle. No-op for any other launch package.
+async fn prepare_our_stage_app(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    launch_pkg: &str,
+    apk_path: &Arc<Option<PathBuf>>,
+) -> anyhow::Result<()> {
+    if launch_pkg != DEFAULT_LAUNCH_PACKAGE {
+        return Ok(());
+    }
+    if let Some(apk) = apk_path.as_deref() {
+        ensure_app_installed(runner, serial, launch_pkg, apk).await?;
+    }
+    // #477: suppress the old per-brand kiosk browsers. The TV's own system
+    // keeps resurfacing them (e.g. TCL relaunches com.tcl.browser to the
+    // foreground), so the watchdog otherwise fights a losing battle —
+    // relaunching our app every tick while the browser flickers back. Disable
+    // them so OUR app holds. Only done when our app is the launch target, so
+    // an operator who deliberately set a browser as the launch_component is
+    // never affected.
+    suppress_kiosk_browsers(runner, serial).await;
     Ok(())
 }
 
