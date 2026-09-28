@@ -578,3 +578,67 @@ test("#787 switching output shows loading, never the previous output's scenes", 
   await page.unroute("**/stream/api/outputs/timer/def");
   expect(errors, "console clean").toEqual([]);
 });
+
+// ---- #787 reopen: adding an element must never lose a newer local edit ----
+//
+// CI run 36428243568: `setFrame` right after a SECOND `addElement` saved x=10
+// (the default) while y=60 stuck. The first `fill` landed in the PREVIOUS
+// element's still-open form; the add's late response then selected the new
+// element and re-seeded the draft over it. A real operator typing during that
+// window lost the edit the same way (and unsaved edits were discarded with no
+// question at all).
+test("#787 adding an element: no stale form while the create is in flight; unsaved edits ask first", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_AddRace");
+
+  // Hold the page's element-create response so the in-flight window is
+  // observable deterministically.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const createPath = `**/stream/api/scenes/${scene}/elements`;
+  await page.route(createPath, async (route) => {
+    if (route.request().method() === "POST") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  // While the create is in flight the previous element is no longer selected
+  // and its form is gone — a keystroke cannot land in it.
+  await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "false");
+
+  release();
+  // Settle signal: the created element becomes the selected row.
+  const selectedRow = page.locator('[data-role="stream-element"][data-selected="true"]');
+  await expect(selectedRow).toHaveCount(1, { timeout: 15_000 });
+  const b = (await selectedRow.getAttribute("data-element-id")) as string;
+  expect(b).not.toBe(a);
+  await page.unroute(createPath);
+
+  // Every field edit lands on the NEW element; the old one is untouched.
+  await saveFrame(page, scene, b, 60, 60, 20, 20);
+  const saved = (await getScene(page, scene)).elements.find((e) => String(e.id) === a)!;
+  const aFrame = saved.props.frame as { xPct: number; yPct: number };
+  expect([aFrame.xPct, aFrame.yPct]).toEqual([10, 10]);
+
+  // Unsaved edits + "add" → the same discard question as switching elements;
+  // declining keeps the element and its edit.
+  await page.locator(sel.frameX).fill("33");
+  let asked = "";
+  page.once("dialog", (dialog) => {
+    asked = dialog.message();
+    void dialog.dismiss();
+  });
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect.poll(() => asked).toBe("Zahodiť neuložené zmeny prvku?");
+  await expect(listRow(page, b)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  expect(errors, "console clean").toEqual([]);
+});
