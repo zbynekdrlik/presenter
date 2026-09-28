@@ -62,10 +62,9 @@
        scrollHeight never counts — the text would stay at max and be clipped. */
     display: block;
     min-height: 0;
-    /* Readable on any video: soft wide shadow + a tight dark edge, no box. */
-    text-shadow:
-        0 0 0.35em rgba(0, 0, 0, 0.85),
-        0 0.04em 0.12em rgba(0, 0, 0, 0.9);
+    /* Owner pick #799 (variant B): one small soft shadow — the old wide
+       halo + dark edge read as dated at display sizes. */
+    text-shadow: 0 0.03em 0.18em rgba(0, 0, 0, 0.55);
 }
 
 .stage-api-ambient__primary {
