@@ -13,6 +13,7 @@
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 
 pub mod canvas_overlay;
+pub mod def_sync;
 pub mod editor_assets;
 pub mod editor_fonts;
 pub mod editor_nameplates;
@@ -210,6 +211,18 @@ impl StreamEditorCtx {
         }
         match result {
             Ok(def) => {
+                // #787 reopen: a refetch started before a newer write must not
+                // roll the def back; a def at least this new is already there.
+                if !self
+                    .def
+                    .with_untracked(|cur| def_sync::should_install(cur.as_ref(), &def))
+                {
+                    leptos::logging::log!(
+                        "stream editor: dropping stale def revision {} for {slug:?}",
+                        def.config_revision
+                    );
+                    return true;
+                }
                 self.active.set(show_state_from_def(&def));
                 self.def.set(Some(def));
                 true
@@ -485,30 +498,6 @@ impl StreamEditorCtx {
         true
     }
 
-    /// The dirty guard shared by every selection change: unsaved edits ask
-    /// „Zahodiť neuložené zmeny prvku?" first. Returns whether to proceed
-    /// (always true for a clean draft).
-    fn confirm_discard_draft(self) -> bool {
-        if !self.draft_is_dirty() {
-            return true;
-        }
-        crate::utils::window::window()
-            .confirm_with_message("Zahodiť neuložené zmeny prvku?")
-            .unwrap_or(true)
-    }
-
-    /// Record a new local selection intent (#787 reopen); returns its ticket.
-    fn bump_selection(self) -> u64 {
-        self.selection.try_update_value(|s| s.bump()).unwrap_or(0)
-    }
-
-    /// True when no selection change happened since `ticket` was issued.
-    fn selection_is_current(self, ticket: u64) -> bool {
-        self.selection
-            .try_with_value(|s| s.is_current(ticket))
-            .unwrap_or(false)
-    }
-
     /// Seed the shared draft from an element's stored props (called by the form's
     /// selection Effect). Sets both the working copy and its element id.
     pub fn seed_draft(self, element_id: i64, props: StreamElementProps) {
@@ -684,7 +673,15 @@ impl StreamEditorCtx {
             )
             .await
             {
-                Ok(_) => {
+                Ok(saved) => {
+                    // #787 reopen: apply the saved element locally at once, so
+                    // the draft is clean the moment the save succeeded (not only
+                    // after the refetch below lands).
+                    self.def.update(|d| {
+                        if let Some(d) = d.as_mut() {
+                            def_sync::apply_saved_element(d, &saved);
+                        }
+                    });
                     self.prop_error.set(String::new());
                     self.refresh();
                     self.show_toast("Uložené.", "success");

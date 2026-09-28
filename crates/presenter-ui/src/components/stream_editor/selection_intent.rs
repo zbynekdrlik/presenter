@@ -8,6 +8,10 @@
 //! response can never override a newer choice the operator made meanwhile.
 //! Pure + host-tested; the ctx holds it in a `StoredValue`.
 
+use leptos::prelude::*;
+
+use super::StreamEditorCtx;
+
 /// The counter. `Default` starts at 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SelectionIntent {
@@ -24,6 +28,32 @@ impl SelectionIntent {
     /// True when no newer intent was recorded since `ticket` was issued.
     pub fn is_current(&self, ticket: u64) -> bool {
         self.seq == ticket
+    }
+}
+
+impl StreamEditorCtx {
+    /// The dirty guard shared by every selection change: unsaved edits ask
+    /// „Zahodiť neuložené zmeny prvku?" first. Returns whether to proceed
+    /// (always true for a clean draft).
+    pub(super) fn confirm_discard_draft(self) -> bool {
+        if !self.draft_is_dirty() {
+            return true;
+        }
+        crate::utils::window::window()
+            .confirm_with_message("Zahodiť neuložené zmeny prvku?")
+            .unwrap_or(true)
+    }
+
+    /// Record a new local selection intent; returns its ticket.
+    pub(super) fn bump_selection(self) -> u64 {
+        self.selection.try_update_value(|s| s.bump()).unwrap_or(0)
+    }
+
+    /// True when no selection change happened since `ticket` was issued.
+    pub(super) fn selection_is_current(self, ticket: u64) -> bool {
+        self.selection
+            .try_with_value(|s| s.is_current(ticket))
+            .unwrap_or(false)
     }
 }
 
