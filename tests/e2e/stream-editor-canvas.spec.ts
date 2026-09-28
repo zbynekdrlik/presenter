@@ -120,6 +120,13 @@ async function addElement(
       return false;
     })
     .toBe(true);
+  // Settle signal (#787 reopen): the SERVER having the element is not enough —
+  // wait until the page selected it AND seeded its draft (the overlay outline's
+  // `data-selected` reads `draft_element_id`), so the next field edit lands on
+  // the new element, never on the previously-selected one.
+  await expect(overlayEl(page, newId)).toHaveAttribute("data-selected", "true", {
+    timeout: 15_000,
+  });
   return newId;
 }
 
@@ -286,14 +293,10 @@ test("click-to-select syncs the list; overlay works on an overlay scene + last e
   await openPanel(page, scene);
   const first = await addElement(page, scene, "color");
   await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
-  await setFrame(page, 5, 5, 20, 20);
-  await page.locator(sel.save).click();
-  await waitForSavedFrame(page, scene, first, 5, 5);
+  await saveFrame(page, scene, first, 5, 5, 20, 20);
 
   const last = await addElement(page, scene, "color"); // auto-selected (last)
-  await setFrame(page, 60, 60, 20, 20);
-  await page.locator(sel.save).click();
-  await waitForSavedFrame(page, scene, last, 60, 60);
+  await saveFrame(page, scene, last, 60, 60, 20, 20);
 
   // Click the FIRST element's outline on the canvas → the list selects it.
   const fb = (await overlayEl(page, first).boundingBox())!;
@@ -339,6 +342,10 @@ async function saveFrame(
   await setFrame(page, x, y, w, h);
   await page.locator(sel.save).click();
   await waitForSavedFrame(page, sceneId, id, x, y);
+  // Settle signal on the PAGE side (#787 reopen): the server having the frame
+  // is not enough — wait until the page's own def agrees with the draft, so the
+  // next action never meets the unsaved-changes question.
+  await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "false");
 }
 
 /** The frame position the fields currently show (the live draft). */
@@ -576,5 +583,117 @@ test("#787 switching output shows loading, never the previous output's scenes", 
   await expect(page.locator('[data-role="stream-loading"]')).toHaveCount(0);
 
   await page.unroute("**/stream/api/outputs/timer/def");
+  expect(errors, "console clean").toEqual([]);
+});
+
+// ---- #787 reopen: adding an element must never lose a newer local edit ----
+//
+// CI run 36428243568: `setFrame` right after a SECOND `addElement` saved x=10
+// (the default) while y=60 stuck. The first `fill` landed in the PREVIOUS
+// element's still-open form; the add's late response then selected the new
+// element and re-seeded the draft over it. A real operator typing during that
+// window lost the edit the same way (and unsaved edits were discarded with no
+// question at all).
+test("#787 adding an element: no stale form while the create is in flight; unsaved edits ask first", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_AddRace");
+
+  // Hold the page's element-create response so the in-flight window is
+  // observable deterministically.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const createPath = `**/stream/api/scenes/${scene}/elements`;
+  await page.route(createPath, async (route) => {
+    if (route.request().method() === "POST") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  // While the create is in flight the previous element is no longer selected
+  // and its form is gone — a keystroke cannot land in it.
+  await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "false");
+
+  release();
+  // Settle signal: the created element becomes the selected row.
+  const selectedRow = page.locator('[data-role="stream-element"][data-selected="true"]');
+  await expect(selectedRow).toHaveCount(1, { timeout: 15_000 });
+  const b = (await selectedRow.getAttribute("data-element-id")) as string;
+  expect(b).not.toBe(a);
+  await page.unroute(createPath);
+
+  // Every field edit lands on the NEW element; the old one is untouched.
+  await saveFrame(page, scene, b, 60, 60, 20, 20);
+  const saved = (await getScene(page, scene)).elements.find((e) => String(e.id) === a)!;
+  const aFrame = saved.props.frame as { xPct: number; yPct: number };
+  expect([aFrame.xPct, aFrame.yPct]).toEqual([10, 10]);
+
+  // Unsaved edits + "add" → the same discard question as switching elements;
+  // declining keeps the element and its edit.
+  await page.locator(sel.frameX).fill("33");
+  let asked = "";
+  page.once("dialog", (dialog) => {
+    asked = dialog.message();
+    void dialog.dismiss();
+  });
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect.poll(() => asked).toBe("Zahodiť neuložené zmeny prvku?");
+  await expect(listRow(page, b)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 picking another element while a create is in flight keeps that pick", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_AddPick");
+  const rows = page.locator('[data-role="stream-element"]');
+  await expect(rows).toHaveCount(1);
+
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const createPath = `**/stream/api/scenes/${scene}/elements`;
+  await page.route(createPath, async (route) => {
+    if (route.request().method() === "POST") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "false");
+  // The operator picks A again while the create is still held.
+  await listRow(page, a).locator('[data-role="stream-element-select"]').click();
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+
+  release();
+  // Settle signal AFTER the selection decision: add_element shows its
+  // „Prvok pridaný." toast only once it has decided whether to select the new
+  // element (the previous toast is the save's „Uložené."). A row count alone
+  // is not enough — a live-event refetch can install the def earlier.
+  await expect(page.locator('[data-role="toast"]')).toHaveText("Prvok pridaný.", {
+    timeout: 15_000,
+  });
+  await page.unroute(createPath);
+  await expect(rows).toHaveCount(2);
+  const created = page.locator(
+    `[data-role="stream-element"]:not([data-element-id="${a}"])`,
+  );
+  // The late create response did not steal the operator's newer pick.
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  await expect(created).toHaveAttribute("data-selected", "false");
+  await expect(page.locator('[data-role="stream-element"][data-selected="true"]')).toHaveCount(1);
+  await expect(overlayEl(page, a)).toHaveAttribute("data-selected", "true");
+
   expect(errors, "console clean").toEqual([]);
 });

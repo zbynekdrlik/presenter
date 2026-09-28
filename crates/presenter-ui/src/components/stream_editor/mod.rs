@@ -13,6 +13,7 @@
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 
 pub mod canvas_overlay;
+pub mod def_sync;
 pub mod editor_assets;
 pub mod editor_fonts;
 pub mod editor_nameplates;
@@ -26,6 +27,7 @@ pub mod number_field;
 pub mod output_paths;
 pub mod percent_input;
 pub mod props_access;
+pub mod selection_intent;
 pub mod text_style_form;
 
 use leptos::prelude::*;
@@ -39,6 +41,7 @@ use self::output_paths::{
     active_scene_path, def_path, output_path, overlay_path, scenes_order_path, scenes_path,
 };
 use self::props_access::with_frame_mut;
+use self::selection_intent::SelectionIntent;
 
 /// The default output slug — the editor opens this one unless a `?output=` param
 /// / `localStorage` value selects another (#785). Before #785 the editor was
@@ -165,6 +168,10 @@ pub struct StreamEditorCtx {
     /// #779: the live song title + library (for the "Pieseň" row display + its
     /// Prehrať preview). Fed by the editor page's WS `Stage` snapshot.
     pub song_preview: RwSignal<(String, String)>,
+    /// #787 reopen: monotonic local selection-intent counter. Every selection
+    /// change bumps it; an async action that selects on completion
+    /// (`add_element`) applies its selection only if its ticket is still current.
+    pub selection: StoredValue<SelectionIntent>,
 }
 
 impl StreamEditorCtx {
@@ -204,6 +211,18 @@ impl StreamEditorCtx {
         }
         match result {
             Ok(def) => {
+                // #787 reopen: a refetch started before a newer write must not
+                // roll the def back; a def at least this new is already there.
+                if !self
+                    .def
+                    .with_untracked(|cur| def_sync::should_install(cur.as_ref(), &def))
+                {
+                    leptos::logging::log!(
+                        "stream editor: dropping stale def revision {} for {slug:?}",
+                        def.config_revision
+                    );
+                    return true;
+                }
                 self.active.set(show_state_from_def(&def));
                 self.def.set(Some(def));
                 true
@@ -430,6 +449,7 @@ impl StreamEditorCtx {
 
     /// Open a scene for element authoring; clears any element selection + error.
     pub fn select_scene(self, scene_id: i64) {
+        self.bump_selection();
         self.selected_scene.set(Some(scene_id));
         self.selected_element.set(None);
         self.draft_element_id.set(None);
@@ -438,6 +458,7 @@ impl StreamEditorCtx {
 
     /// Close the element panel (no scene selected).
     pub fn close_panel(self) {
+        self.bump_selection();
         self.selected_scene.set(None);
         self.selected_element.set(None);
         self.draft_element_id.set(None);
@@ -449,15 +470,11 @@ impl StreamEditorCtx {
     /// discarded on confirm, per the design's dirty guard).
     pub fn select_element(self, element_id: i64) {
         if let Some(current) = self.draft_element_id.get_untracked() {
-            if current != element_id && self.draft_is_dirty() {
-                let keep = crate::utils::window::window()
-                    .confirm_with_message("Zahodiť neuložené zmeny prvku?")
-                    .unwrap_or(true);
-                if !keep {
-                    return;
-                }
+            if current != element_id && !self.confirm_discard_draft() {
+                return;
             }
         }
+        self.bump_selection();
         self.selected_element.set(Some(element_id));
         self.prop_error.set(String::new());
     }
@@ -471,14 +488,10 @@ impl StreamEditorCtx {
         {
             return false;
         }
-        if self.draft_is_dirty() {
-            let discard = crate::utils::window::window()
-                .confirm_with_message("Zahodiť neuložené zmeny prvku?")
-                .unwrap_or(true);
-            if !discard {
-                return false;
-            }
+        if !self.confirm_discard_draft() {
+            return false;
         }
+        self.bump_selection();
         self.selected_element.set(None);
         self.draft_element_id.set(None);
         self.prop_error.set(String::new());
@@ -545,7 +558,19 @@ impl StreamEditorCtx {
 
     /// Create an element on a scene with the given default props, then refetch
     /// the def INLINE (so the new element is present) and select it.
+    ///
+    /// #787 reopen: the current element is released FIRST (through the dirty
+    /// guard — declining keeps it and creates nothing), so no stale form stays
+    /// editable while the create is in flight, and the late response selects
+    /// the new element only if the operator made no other selection meanwhile.
     pub fn add_element(self, scene_id: i64, props: StreamElementProps) {
+        if !self.confirm_discard_draft() {
+            return;
+        }
+        let ticket = self.bump_selection();
+        self.selected_element.set(None);
+        self.draft_element_id.set(None);
+        self.prop_error.set(String::new());
         leptos::task::spawn_local(async move {
             match crate::api::post_json_detail::<StreamElementProps, StreamElementDef>(
                 &elements_path(scene_id),
@@ -555,10 +580,17 @@ impl StreamEditorCtx {
             {
                 Ok(created) => {
                     // Select it only if its def was installed (not after an
-                    // output switch mid-flight, #787).
-                    if self.reload_def().await {
+                    // output switch mid-flight, #787) and no newer local
+                    // selection happened while the create was in flight.
+                    let installed = self.reload_def().await;
+                    if installed && self.selection_is_current(ticket) {
                         self.prop_error.set(String::new());
                         self.selected_element.set(Some(created.id));
+                    } else if installed {
+                        leptos::logging::log!(
+                            "stream editor: not selecting created element {} (selection changed meanwhile)",
+                            created.id
+                        );
                     }
                     self.show_toast("Prvok pridaný.", "success");
                 }
@@ -579,6 +611,7 @@ impl StreamEditorCtx {
             match crate::api::delete(&element_path(element_id)).await {
                 Ok(()) => {
                     if self.selected_element.get_untracked() == Some(element_id) {
+                        self.bump_selection();
                         self.selected_element.set(None);
                         self.draft_element_id.set(None);
                     }
@@ -640,7 +673,15 @@ impl StreamEditorCtx {
             )
             .await
             {
-                Ok(_) => {
+                Ok(saved) => {
+                    // #787 reopen: apply the saved element locally at once, so
+                    // the draft is clean the moment the save succeeded (not only
+                    // after the refetch below lands).
+                    self.def.try_update(|d| {
+                        if let Some(d) = d.as_mut() {
+                            def_sync::apply_saved_element(d, &saved);
+                        }
+                    });
                     self.prop_error.set(String::new());
                     self.refresh();
                     self.show_toast("Uložené.", "success");

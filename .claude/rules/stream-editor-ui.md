@@ -238,3 +238,48 @@ the new def lands. `reload_def` re-reads `output_slug` after the await and disca
 response for a slug that is no longer selected. E2E: hold the page's def response with a
 `page.route` gate. `page.request` is NOT intercepted by `page.route`, so read expected ids
 through it.
+
+## A late async response must never overwrite a newer local edit — `SelectionIntent` (#787 reopen)
+This was the root cause of the first-attempt reds in `stream-editor-canvas.spec.ts:277/:498`
+(CI run 36428243568: the saved frame was `[10,60]` instead of `[60,60]`). `add_element` kept the
+PREVIOUS element selected, with its form editable, for the whole POST + `reload_def` round-trip.
+It then set `selected_element` to the new id without any check, so `element_form.rs`'s seed Effect
+re-seeded `draft` over the first field typed in between. It was NOT a def-refetch clobber and NOT
+a `switch_output` clobber. Rules:
+- An action that SELECTS something when its response lands must release the current selection
+  BEFORE it awaits. It does this through `confirm_discard_draft`, the one shared dirty guard;
+  declining aborts the action. That way no stale form is editable while the request is in flight.
+- It first captures the ticket from `bump_selection()`, and applies its selection only if
+  `selection_is_current(ticket)` still holds.
+- Every selection change bumps the counter: `select_scene`, `close_panel`, `select_element`,
+  `deselect_element`, `delete_element` of the selected element, and `add_element`. The counter is
+  the pure, host-tested `selection_intent::SelectionIntent`, held in `ctx.selection`
+  (`StoredValue`). Any NEW selection-changing path MUST bump it too.
+- E2E settle signal after adding an element: wait for `overlayEl(newId)` to have
+  `data-selected="true"`. It reads `draft_element_id`, so it means the element is selected AND
+  seeded. Never wait only for "the server def has it": `page.request` polls see the server, not
+  the page.
+- To reproduce the window, gate the page's `POST /stream/api/scenes/{id}/elements` with
+  `page.route`.
+- The local def must match the operator's own writes (`def_sync.rs`, pure + host-tested).
+  - `save_props` applies the element returned by the PATCH to `def` at once
+    (`apply_saved_element`), before its own refresh. Without that, the page keeps the OLD def
+    until the refresh lands, so the draft reads as "dirty". Any guarded action in that gap
+    (add / select) then asks about edits that are already saved, and Playwright auto-dismisses
+    the question, which silently aborts the action.
+  - `apply_saved_element` also raises the local `config_revision` by 1. The PATCH moved the
+    server to at least N+1, so a GET that started before the PATCH (still at N) can no longer
+    roll the save back. The save's own refetch (N+1) still installs, and the WS
+    `StreamConfigChanged(N+1)` no longer triggers a second refetch.
+  - `reload_def` drops a def for the same output whose `config_revision` is older than the one
+    installed (`should_install`). A different slug or output `id` always installs, which covers
+    an output that was recreated and whose revision reset to 0. `reload_def` still returns `true`
+    when it drops, because a def at least that new is already installed.
+- E2E settle signal for "the add decided its selection": the „Prvok pridaný." toast. The row
+  count is not enough, because a live-event refetch can install the def before `add_element`
+  decides.
+- E2E settle signal after a SAVE: wait for the Save button to have `data-dirty="false"`
+  (`saveFrame`). `waitForSavedFrame` alone polls the SERVER, not the page.
+- While a create is in flight nothing is selected, so Escape or an empty-canvas click is a no-op
+  and does not cancel the late auto-select. That is harmless, because nothing was visibly
+  selected. An explicit pick (`select_element`) DOES cancel it.
