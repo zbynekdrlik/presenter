@@ -142,9 +142,18 @@ test("api-ambient shows the mode-selected text over video and hides when empty",
   const primary = stage.locator('[data-role="ambient-primary"]');
   const secondary = stage.locator('[data-role="ambient-secondary"]');
 
-  // No clock / header chrome on the ambient layout.
-  await expect(stage.locator('[data-layout="api-ambient"]')).toBeVisible();
-  await expect(stage.locator(".stage__clock")).toHaveCount(0);
+  // The ambient layout keeps the bottom status bar exactly like
+  // ndi-fullscreen (owner ruling on #799): clock + connection readout,
+  // no live pill, no song number.
+  const ambient = stage.locator('[data-layout="api-ambient"]');
+  await expect(ambient).toBeVisible();
+  const clock = ambient.locator(".stage__clock");
+  const connection = ambient.locator(".stage__connection");
+  await expect(clock).toBeVisible();
+  await expect(clock).toHaveText(/\d{2}:\d{2}:\d{2}/);
+  await expect(connection).toBeVisible();
+  await expect(ambient.locator(".stage__live-pill")).toHaveCount(0);
+  await expect(ambient.locator('[data-role="song-number"]')).toHaveCount(0);
 
   // Default mode = both: original large, translation smaller below.
   await expect(lyrics).toBeVisible({ timeout: 10_000 });
@@ -165,6 +174,17 @@ test("api-ambient shows the mode-selected text over video and hides when empty",
       { timeout: 10_000 },
     )
     .toBe(true);
+  // The lyric overlay sits ABOVE the status bar — its area ends where the
+  // bar begins, it never overlaps the clock or the connection readout.
+  const lyricsBox = await lyrics.boundingBox();
+  const clockBox = await clock.boundingBox();
+  const connectionBox = await connection.boundingBox();
+  expect(lyricsBox).not.toBeNull();
+  expect(clockBox).not.toBeNull();
+  expect(connectionBox).not.toBeNull();
+  const lyricsBottom = lyricsBox!.y + lyricsBox!.height;
+  expect(lyricsBottom).toBeLessThanOrEqual(clockBox!.y + 1);
+  expect(lyricsBottom).toBeLessThanOrEqual(connectionBox!.y + 1);
   // The next line is never previewed on an ambient display.
   await expect(stage.getByText(EN_NEXT)).toHaveCount(0);
 
