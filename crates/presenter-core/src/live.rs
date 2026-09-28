@@ -40,6 +40,13 @@ pub enum LiveEvent {
     BroadcastLive {
         enabled: bool,
     },
+    /// #799: the API stage layouts' text mode changed (original /
+    /// translation / both). Operator surfaces update their picker from it;
+    /// stage displays read the mode from the republished api snapshot
+    /// (`StageDisplaySnapshot::text_mode`), so a reconnect resync covers it.
+    StageTextMode {
+        mode: crate::StageTextMode,
+    },
     /// Bible presentation slides changed (content edit, add, delete, reorder).
     BibleSlidesChanged {
         presentation_id: String,

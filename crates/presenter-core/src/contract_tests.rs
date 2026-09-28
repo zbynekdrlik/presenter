@@ -58,11 +58,67 @@ mod tests {
             playlist_entries: None,
             active_entry_index: None,
             upcoming_groups: Vec::new(),
+            text_mode: None,
         };
         let event = LiveEvent::Stage { snapshot };
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains(r#""type":"stage""#));
         let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
+    }
+
+    #[test]
+    fn live_event_stage_text_mode_wire_shape() {
+        // #799: operator surfaces match on this exact shape.
+        let event = LiveEvent::StageTextMode {
+            mode: crate::StageTextMode::Translation,
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert_eq!(json, r#"{"type":"stage_text_mode","mode":"translation"}"#);
+        let back: LiveEvent = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(
+            back,
+            LiveEvent::StageTextMode {
+                mode: crate::StageTextMode::Translation
+            }
+        ));
+    }
+
+    #[test]
+    fn stage_snapshot_text_mode_is_optional_on_the_wire() {
+        // #799: non-api snapshots omit `textMode`; an old payload without it
+        // still deserializes (None); an api snapshot carries it camelCased.
+        let mut snapshot = StageDisplaySnapshot::new(
+            StageDisplayLayout::api_ambient(),
+            Utc::now(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            TimersOverview::demo(Utc::now()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        let json = serde_json::to_string(&snapshot).expect("serialize");
+        assert!(!json.contains("textMode"), "None must be omitted: {json}");
+        let back: StageDisplaySnapshot = serde_json::from_str(&json).expect("old shape");
+        assert_eq!(back.text_mode, None);
+
+        snapshot.text_mode = Some(crate::StageTextMode::Original);
+        let json = serde_json::to_string(&snapshot).expect("serialize");
+        assert!(json.contains(r#""textMode":"original""#), "{json}");
+        let back: StageDisplaySnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.text_mode, Some(crate::StageTextMode::Original));
     }
 
     #[test]
@@ -285,6 +341,7 @@ mod tests {
             playlist_entries: None,
             active_entry_index: None,
             upcoming_groups: Vec::new(),
+            text_mode: None,
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         let result: StageDisplaySnapshot = serde_json::from_str(&json).expect("deserialize");

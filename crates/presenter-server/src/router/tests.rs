@@ -1384,8 +1384,8 @@ async fn stage_displays_endpoint_returns_builtins() {
         .unwrap();
     let payload: Vec<StageDisplayLayout> = serde_json::from_slice(&bytes).unwrap();
     // camera-crew is excluded from the operator layout picker (Issue 1 fix).
-    // Count is built_in() minus camera-crew = 8.
-    assert_eq!(payload.len(), 8);
+    // Count is built_in() minus camera-crew = 9 (api-ambient added in #799).
+    assert_eq!(payload.len(), 9);
     assert!(payload
         .iter()
         .any(|layout| layout.code == DEFAULT_STAGE_LAYOUT_CODE));
@@ -1393,6 +1393,7 @@ async fn stage_displays_endpoint_returns_builtins() {
     assert!(payload.iter().any(|layout| layout.code == "bible"));
     assert!(payload.iter().any(|layout| layout.code == "fulltext"));
     assert!(payload.iter().any(|layout| layout.code == "api"));
+    assert!(payload.iter().any(|layout| layout.code == "api-ambient"));
     assert!(
         !payload.iter().any(|layout| layout.code == "camera-crew"),
         "camera-crew must not appear in operator layout picker"

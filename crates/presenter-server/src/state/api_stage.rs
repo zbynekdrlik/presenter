@@ -2,18 +2,45 @@
 //! [`AppState`].
 //!
 //! Extracted from `state/mod.rs` (#486) to keep the central module under the
-//! file-size cap. Behaviour is unchanged — these are the same `impl AppState`
-//! methods, only relocated.
+//! file-size cap. #799 adds the optional translation lines, the `api-ambient`
+//! layout (every API-layout check goes through `is_api_stage_layout`) and the
+//! text mode stamped onto every api snapshot.
 
-use super::{ApiStageState, AppState};
+use super::AppState;
 use crate::live::LiveEvent;
 use chrono::Utc;
 use presenter_core::{
     Presentation, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, TimersOverview,
-    API_STAGE_LAYOUT_CODE,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// External API-driven stage state (`PUT /api/stage`). All fields default to
+/// empty strings when missing. The translation lines (#799) are optional, so
+/// older clients that never send them keep working unchanged.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApiStageState {
+    #[serde(default)]
+    pub(crate) current_text: String,
+    #[serde(default)]
+    pub(crate) next_text: String,
+    /// #799: translation of `current_text` (e.g. the Slovak line songplayer
+    /// sends alongside the original). Empty = no translation.
+    #[serde(default)]
+    pub(crate) current_translation: String,
+    /// #799: translation of `next_text`.
+    #[serde(default)]
+    pub(crate) next_translation: String,
+    #[serde(default)]
+    pub(crate) current_group: String,
+    #[serde(default)]
+    pub(crate) next_group: String,
+    #[serde(default)]
+    pub(crate) current_song: String,
+    #[serde(default)]
+    pub(crate) next_song: String,
+}
 
 impl AppState {
     pub(crate) async fn get_all_group_colors(&self) -> HashMap<String, String> {
@@ -40,33 +67,73 @@ impl AppState {
     pub(crate) async fn update_api_stage(&self, state: ApiStageState) -> anyhow::Result<()> {
         let snapshot = self.build_api_stage_snapshot(&state).await;
         *self.api_stage.write().await = state;
-        // Issue #281: only publish a Stage event when the operator's
-        // current layout is "api". Otherwise the api state is stored but
-        // does not affect the live preview, mirroring the existing inverse
-        // gate in `broadcasting.rs::publish_stage_context` (which skips
-        // non-api updates when api layout is selected).
-        // #793: check + publish under the layout read lock so the api snapshot
-        // can never land after a switch away from api (displays adopt it).
-        let layout = self.stage_layout.read().await;
-        if *layout == API_STAGE_LAYOUT_CODE {
-            self.live_hub.publish(LiveEvent::Stage { snapshot });
-        }
+        // Issue #281: only publish a Stage event when the operator's current
+        // layout is an API layout (`api` / `api-ambient`, #799). Otherwise the
+        // api state is stored but does not affect the live preview, mirroring
+        // the inverse gate in `broadcasting.rs::publish_stage_context`.
+        self.publish_api_snapshot(snapshot).await;
         Ok(())
     }
 
-    pub(crate) async fn api_stage_snapshot(&self) -> StageDisplaySnapshot {
-        let state = self.api_stage.read().await;
-        self.build_api_stage_snapshot(&state).await
+    /// Re-publish the stored api snapshot when an API layout is selected —
+    /// after a switch TO an API layout (#281) or a text-mode change (#799),
+    /// so displays reflect it without waiting for the next `PUT /api/stage`.
+    pub(super) async fn republish_api_snapshot(&self) {
+        let state = self.api_stage.read().await.clone();
+        let snapshot = self.build_api_stage_snapshot(&state).await;
+        self.publish_api_snapshot(snapshot).await;
+    }
+
+    /// #793: check + publish under the layout READ lock (no await in between)
+    /// so an api snapshot can never land after a switch away from the API
+    /// layouts (displays adopt a snapshot's layout). The layout + text mode
+    /// are stamped HERE, under the lock (#799), so a switch `api` <->
+    /// `api-ambient` between build and publish can never publish the other
+    /// layout's code.
+    async fn publish_api_snapshot(&self, mut snapshot: StageDisplaySnapshot) {
+        let layout = self.stage_layout.read().await;
+        if self.stamp_api_snapshot(&mut snapshot, &layout) {
+            self.live_hub.publish(LiveEvent::Stage { snapshot });
+        }
+    }
+
+    /// Stamp the current text mode onto `snapshot` and, when `code` is an API
+    /// layout, that layout. Returns whether `code` is an API layout. Sync (the
+    /// text mode is an atomic), so it is safe under the stage-layout lock.
+    fn stamp_api_snapshot(&self, snapshot: &mut StageDisplaySnapshot, code: &str) -> bool {
+        snapshot.text_mode = Some(self.stage_text_mode());
+        match StageDisplayLayout::api_layout_for(code) {
+            Some(layout) => {
+                snapshot.layout = layout;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The api snapshot as served for layout `code` (`GET /stage/snapshot`).
+    /// Callers pass an API layout code; any other code keeps the `api` layout.
+    pub(crate) async fn api_stage_snapshot_for(&self, code: &str) -> StageDisplaySnapshot {
+        let state = self.api_stage.read().await.clone();
+        let mut snapshot = self.build_api_stage_snapshot(&state).await;
+        self.stamp_api_snapshot(&mut snapshot, code);
+        snapshot
     }
 
     async fn build_api_stage_snapshot(&self, state: &ApiStageState) -> StageDisplaySnapshot {
+        // `publish_api_snapshot` / `api_stage_snapshot_for` stamp the actual
+        // selected API layout + text mode; `api` is only the build default.
         let layout = StageDisplayLayout::api();
 
         let current = self
-            .build_api_slide(&state.current_text, &state.current_group)
+            .build_api_slide(
+                &state.current_text,
+                &state.current_translation,
+                &state.current_group,
+            )
             .await;
         let next = self
-            .build_api_slide(&state.next_text, &state.next_group)
+            .build_api_slide(&state.next_text, &state.next_translation, &state.next_group)
             .await;
 
         let song_name = if state.current_song.is_empty() {
@@ -111,8 +178,13 @@ impl AppState {
         )
     }
 
-    async fn build_api_slide(&self, text: &str, group_name: &str) -> Option<StageDisplaySlide> {
-        if text.is_empty() && group_name.is_empty() {
+    async fn build_api_slide(
+        &self,
+        text: &str,
+        translation: &str,
+        group_name: &str,
+    ) -> Option<StageDisplaySlide> {
+        if text.is_empty() && translation.is_empty() && group_name.is_empty() {
             return None;
         }
         let group = if group_name.is_empty() {
@@ -127,7 +199,7 @@ impl AppState {
         };
         Some(StageDisplaySlide {
             main: text.to_string(),
-            translation: String::new(),
+            translation: translation.to_string(),
             stage: String::new(),
             group,
             group_color,
