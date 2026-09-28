@@ -17,6 +17,7 @@ use presenter_core::{
 
 use super::frame_math::MIN_SIZE_PCT;
 use super::number_field::{FrameField, FrameNumberField};
+use super::prop_error;
 use super::props_access::{
     default_text_box, read_transition, split_color, with_transition_mut, TsSlot,
 };
@@ -58,6 +59,10 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
 
     let kind = move || draft.get().kind_str().to_string();
     let dirty = move || ctx.draft_is_dirty_reactive();
+    let shown_error = move || {
+        ctx.prop_error
+            .with(|e| prop_error::message_for(e.as_ref(), ctx.selected_element.get()))
+    };
 
     view! {
         <div class="stream-editor__prop-form" data-role="stream-prop-form">
@@ -165,9 +170,11 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                 <TransitionFields draft=draft />
             </Show>
 
-            <Show when=move || !ctx.prop_error.get().is_empty()>
+            // #787 reopen: only the error of the element being edited — a late
+            // 422 from another element's save never shows here.
+            <Show when=move || shown_error().is_some()>
                 <p class="stream-editor__prop-error" data-role="stream-prop-error">
-                    {move || ctx.prop_error.get()}
+                    {move || shown_error().unwrap_or_default()}
                 </p>
             </Show>
 
