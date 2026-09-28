@@ -18,7 +18,7 @@ paths:
 
 `PUT /api/stage` (songplayer) feeds ONE stored `ApiStageState` that two layouts render:
 `api` (WorshipSnv boxes over optional NDI) and `api-ambient` (fullscreen NDI/CG video, lyric
-overlay only while text is present, no chrome). The payload carries optional
+overlay only while text is present, the bottom StatusBar kept, no header chrome). The payload carries optional
 `currentTranslation`/`nextTranslation` (serde default "" — old clients unchanged), mapped into
 `StageDisplaySlide.translation`.
 
@@ -76,3 +76,14 @@ text box overflows upward, autofit never shrinks it, and long lines get clipped.
 re-runs when the secondary line shows/hides (the box height changes on a both ↔ original switch). `api-ambient` reuses the ndi_fullscreen
 `Memo` dedup for `<NdiVideo>` (NVENC session leak otherwise) and shows NO NDI status overlays —
 black while no source is live.
+
+## `api-ambient` KEEPS the bottom StatusBar (owner ruling on #799)
+
+"Ambient" never means "strip everything": the owner reversed the original "no clock/status
+chrome" design — `ApiAmbient` takes `ws_state`/`latency_ms` from `pages/stage.rs` and renders
+`<StatusBar … hide_live=true hide_song_number=true />` with EXACTLY the `ndi-fullscreen` flags
+(clock + connection + video-latency + version; no live pill, no song number). The StatusBar's
+boxes are the shared `stage.css` ones (bottom 7% of the container) — never restyle them per
+layout. The lyric overlay is anchored `bottom: 7%` (container-relative = the bar's top edge) so
+it sits ABOVE the bar and never overlaps it; the E2E asserts overlay bottom <= clock/connection
+top. If the StatusBar height ever changes, move the overlay's `bottom` with it.
