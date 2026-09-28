@@ -438,6 +438,16 @@ jobs:
           python3 -m unittest discover -s scripts/ci -p 'test_check_deploy_workflows.py' -v
           python3 scripts/ci/check_deploy_workflows.py
 
+      # Regression test for #802: the E2E harness (startTestServer,
+      # refresh-dev-data.sh, the synthetic NDI sender) must never silently
+      # fall back to a local `cargo run` — Tier-0 compiles in CI only. A
+      # missing/stale prebuilt binary fails loudly unless
+      # PRESENTER_ALLOW_LOCAL_CARGO=1 is set explicitly.
+      - name: Check E2E harness has no silent cargo fallback (#802)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_no_local_cargo_fallback.py' -v
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
