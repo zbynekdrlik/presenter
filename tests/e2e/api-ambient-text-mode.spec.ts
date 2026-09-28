@@ -185,6 +185,39 @@ test("api-ambient shows the mode-selected text over video and hides when empty",
   const lyricsBottom = lyricsBox!.y + lyricsBox!.height;
   expect(lyricsBottom).toBeLessThanOrEqual(clockBox!.y + 1);
   expect(lyricsBottom).toBeLessThanOrEqual(connectionBox!.y + 1);
+  await expect(connection).toContainText("CONNECTED");
+
+  // The latency readouts on the right: with the NDI/CG source active the
+  // server→display video-latency readout shows too (driven by the stage's
+  // #479/#512 test hooks — the e2e lane has no NDI source), also below the
+  // overlay.
+  await stage.evaluate(() => {
+    const w = window as unknown as {
+      __presenterStageSetNdiActive?: (v: boolean) => void;
+      __presenterStageSetVideoLatency?: (v: number | null) => void;
+    };
+    w.__presenterStageSetNdiActive?.(true);
+    w.__presenterStageSetVideoLatency?.(42);
+  });
+  const videoLatency = ambient.locator(".stage__video-latency");
+  await expect(videoLatency).toBeVisible();
+  await expect(videoLatency).toContainText(/server→displej\s*·\s*42\s*ms/);
+  const videoLatencyBox = await videoLatency.boundingBox();
+  expect(videoLatencyBox).not.toBeNull();
+  expect(lyricsBottom).toBeLessThanOrEqual(videoLatencyBox!.y + 1);
+  await stage.evaluate(() => {
+    const w = window as unknown as {
+      __presenterStageSetNdiActive?: (v: boolean) => void;
+      __presenterStageSetVideoLatency?: (v: number | null) => void;
+    };
+    w.__presenterStageSetVideoLatency?.(null);
+    w.__presenterStageSetNdiActive?.(false);
+  });
+  await expect(videoLatency).toHaveCount(0);
+  // Still no song number / on-air pill on the ambient layout.
+  await expect(ambient.locator(".stage__live-pill")).toHaveCount(0);
+  await expect(ambient.locator('[data-role="song-number"]')).toHaveCount(0);
+
   // The next line is never previewed on an ambient display.
   await expect(stage.getByText(EN_NEXT)).toHaveCount(0);
 
