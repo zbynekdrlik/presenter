@@ -697,3 +697,125 @@ test("#787 picking another element while a create is in flight keeps that pick",
 
   expect(errors, "console clean").toEqual([]);
 });
+
+// ---- #787 reopen (gaps 2+3): every selection path asks before discarding ----
+//
+// Opening another scene, closing the element panel, or switching the output used
+// to drop the element draft with NO question, while picking another element /
+// Escape / adding one asked „Zahodiť neuložené zmeny prvku?". And a save's late
+// 422 rendered under whatever element was open when it landed.
+
+const DISCARD_Q = "Zahodiť neuložené zmeny prvku?";
+
+/** Arm a one-shot dialog handler; returns a getter for the message it saw. */
+function answerNextDialog(page: Page, accept: boolean): () => string {
+  let asked = "";
+  page.once("dialog", (dialog) => {
+    asked = dialog.message();
+    void (accept ? dialog.accept() : dialog.dismiss());
+  });
+  return () => asked;
+}
+
+test("#787 opening another scene, closing the panel or switching output asks before discarding edits", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const other = await addScene(page, "SC_787_GuardOther", "base");
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_Guard");
+
+  // An unsaved edit on the selected element.
+  await page.locator(sel.frameX).fill("33");
+  await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "true");
+
+  // Open another scene → asked; declining keeps the scene, element and edit.
+  let asked = answerNextDialog(page, false);
+  await page
+    .locator(`${sel.scene}[data-scene-id="${other}"] [data-role="stream-scene-edit"]`)
+    .click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  // Close the panel → asked; declining keeps the panel open with the edit.
+  asked = answerNextDialog(page, false);
+  await page.locator('[data-role="stream-panel-close"]').click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(page.locator('[data-role="stream-element-panel"]')).toHaveCount(1);
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  // Switch the output → asked; declining stays on this output, and the header
+  // select shows it again.
+  const outputSelect = page.locator('[data-role="stream-output-select"]');
+  asked = answerNextDialog(page, false);
+  await outputSelect.selectOption("timer");
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(outputSelect).toHaveValue("stream");
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  // Accepting opens the other scene; the discarded edit never reached the server.
+  asked = answerNextDialog(page, true);
+  await page
+    .locator(`${sel.scene}[data-scene-id="${other}"] [data-role="stream-scene-edit"]`)
+    .click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(listRow(page, a)).toHaveCount(0);
+  await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
+  const stored = (await getScene(page, scene)).elements.find((e) => String(e.id) === a)!;
+  expect((stored.props.frame as { xPct: number }).xPct).toBe(10);
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 a late save error shows only under the element that was saved", async ({ page }) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_LateErr");
+  const b = await addElement(page, scene, "countdown"); // auto-selected
+  const errorBox = page.locator('[data-role="stream-prop-error"]');
+
+  // Hold B's PATCH so its 422 lands after the operator moved on to A.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const patchPath = `**/stream/api/elements/${b}`;
+  await page.route(patchPath, async (route) => {
+    if (route.request().method() === "PATCH") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  // A text size beyond 0..=100 is a real server-side 422 (frames clamp locally).
+  const tsCd = '[data-role="stream-ts-countdown"] ';
+  await page.locator(`${tsCd}[data-role="stream-ts-size"]`).fill("5000");
+  await page.locator(sel.save).click();
+
+  // Pick A (discarding B's invalid draft) while B's save is still in flight.
+  const asked = answerNextDialog(page, true);
+  await listRow(page, a).locator('[data-role="stream-element-select"]').click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+
+  // Settle signal: the page logs the failed save once it has handled the 422.
+  const handled = page.waitForEvent("console", {
+    predicate: (m) => m.text().includes(`save of element ${b} failed`),
+    timeout: 15_000,
+  });
+  release();
+  await handled;
+  await page.unroute(patchPath);
+
+  // B's error is not shown under A.
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  await expect(errorBox).toHaveCount(0);
+
+  // Chrome logs every non-2xx fetch itself; strip exactly the one deliberate 422.
+  const is422 = (e: string) =>
+    /Failed to load resource: the server responded with a status of 422\b/.test(e);
+  expect(errors.filter(is422), "exactly one deliberate 422 console line").toHaveLength(1);
+  expect(errors.filter((e) => !is422(e)), "console clean apart from the 422").toEqual([]);
+});
