@@ -10,26 +10,33 @@
 //!   draft stops reading as "dirty" the moment the save succeeded — not only
 //!   after the follow-up refetch lands (a click in between would otherwise
 //!   hit the unsaved-changes question about edits that are already saved).
+//!   The local `config_revision` is raised by one with it: the PATCH bumped
+//!   the server's revision to at least that, so a GET that started BEFORE the
+//!   PATCH (same old revision) can no longer roll the applied save back, while
+//!   the save's own refetch (revision >= N+1) still installs.
 
 use presenter_core::{StreamElementDef, StreamOutputDef};
 
 /// Whether `incoming` may replace `current`. `None` (nothing loaded, or just
-/// cleared by an output switch) always accepts; a different output (slug)
-/// always accepts; the same output accepts only a revision that is not older.
+/// cleared by an output switch) always accepts; a different output (slug or
+/// row id — e.g. deleted + recreated, whose revision restarts at 0) always
+/// accepts; the same output accepts only a revision that is not older.
 pub fn should_install(current: Option<&StreamOutputDef>, incoming: &StreamOutputDef) -> bool {
     match current {
         None => true,
-        Some(cur) if cur.slug != incoming.slug => true,
+        Some(cur) if cur.slug != incoming.slug || cur.id != incoming.id => true,
         Some(cur) => incoming.config_revision >= cur.config_revision,
     }
 }
 
-/// Replace the element with `saved.id` in `def` by the server's saved copy.
-/// Returns whether the element was found.
+/// Replace the element with `saved.id` in `def` by the server's saved copy and
+/// raise `config_revision` by one (see the module docs). Returns whether the
+/// element was found; an unknown element leaves the def untouched.
 pub fn apply_saved_element(def: &mut StreamOutputDef, saved: &StreamElementDef) -> bool {
     for scene in &mut def.scenes {
         if let Some(el) = scene.elements.iter_mut().find(|e| e.id == saved.id) {
             *el = saved.clone();
+            def.config_revision = def.config_revision.saturating_add(1);
             return true;
         }
     }
@@ -97,6 +104,26 @@ mod tests {
     }
 
     #[test]
+    fn a_recreated_output_with_a_reset_revision_installs() {
+        let cur = def("stream", 7);
+        let mut recreated = def("stream", 0);
+        recreated.id = 2;
+        assert!(should_install(Some(&cur), &recreated));
+    }
+
+    #[test]
+    fn after_a_local_save_a_pre_save_refetch_is_rejected_but_the_save_refetch_installs() {
+        let mut local = def("stream", 5);
+        let mut saved = element(101);
+        with_frame_mut(&mut saved.props, |f| f.x_pct = 60.0);
+        assert!(apply_saved_element(&mut local, &saved));
+        // A GET that started before the PATCH committed still says revision 5.
+        assert!(!should_install(Some(&local), &def("stream", 5)));
+        // The save's own refetch sees the bumped server revision.
+        assert!(should_install(Some(&local), &def("stream", 6)));
+    }
+
+    #[test]
     fn a_saved_element_replaces_only_its_own_row() {
         let mut d = def("stream", 3);
         let mut saved = element(101);
@@ -104,7 +131,7 @@ mod tests {
         assert!(apply_saved_element(&mut d, &saved));
         assert_eq!(d.scenes[0].elements[1], saved);
         assert_eq!(d.scenes[0].elements[0], element(100));
-        assert_eq!(d.config_revision, 3);
+        assert_eq!(d.config_revision, 4);
     }
 
     #[test]

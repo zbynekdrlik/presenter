@@ -677,7 +677,7 @@ impl StreamEditorCtx {
                     // #787 reopen: apply the saved element locally at once, so
                     // the draft is clean the moment the save succeeded (not only
                     // after the refetch below lands).
-                    self.def.update(|d| {
+                    self.def.try_update(|d| {
                         if let Some(d) = d.as_mut() {
                             def_sync::apply_saved_element(d, &saved);
                         }
