@@ -43,17 +43,19 @@ run_binary() {
   local debug_binary="${REPO_ROOT}/target/debug/${bin_name}"
   local release_binary="${REPO_ROOT}/target/release/${bin_name}"
   local candidate=""
+  local stale_candidate=""
 
-  if [[ -x "$release_binary" ]]; then
-    candidate="$release_binary"
-  elif [[ -x "$debug_binary" ]]; then
-    candidate="$debug_binary"
-  fi
-
-  if [[ -n "$candidate" ]] && ! binary_is_stale "$candidate"; then
+  # First FRESH binary wins (release preferred); a stale release must not hide
+  # a fresh debug build.
+  for candidate in "$release_binary" "$debug_binary"; do
+    [[ -x "$candidate" ]] || continue
+    if binary_is_stale "$candidate"; then
+      stale_candidate="${stale_candidate:-$candidate}"
+      continue
+    fi
     "$candidate" "$@"
     return
-  fi
+  done
 
   if [[ "${PRESENTER_ALLOW_LOCAL_CARGO:-}" == "1" ]]; then
     echo "[refresh-dev-data] PRESENTER_ALLOW_LOCAL_CARGO=1 — compiling ${bin_name} locally (Tier-0 opt-in)" >&2
@@ -61,8 +63,8 @@ run_binary() {
     return
   fi
 
-  if [[ -n "$candidate" ]]; then
-    refuse_local_compile "$candidate is older than the importer sources (stale, #559)"
+  if [[ -n "$stale_candidate" ]]; then
+    refuse_local_compile "$stale_candidate is older than the importer sources (stale, #559)"
   fi
   refuse_local_compile "prebuilt binary '${bin_name}' not found (expected ${release_binary} or ${debug_binary})"
 }

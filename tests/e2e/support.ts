@@ -345,6 +345,8 @@ export async function startTestServer(
   const command = resolvePrebuiltCommand(REPO_ROOT, {
     bin: "presenter-server",
     pkg: "presenter-server",
+    // Same features CI's build job uses for the E2E server (opt-in compile only).
+    features: ["mock-integrations", "test-helpers"],
   });
   console.log(`[e2e] test server binary: ${command}`);
 

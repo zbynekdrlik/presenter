@@ -141,6 +141,13 @@ class RefreshDevDataNoSilentCompile(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.sandbox.cargo_calls(), [])
 
+    def test_stale_release_does_not_hide_fresh_debug(self) -> None:
+        self.sandbox.add_binaries("release", stale=True)
+        self.sandbox.add_binaries("debug", stale=False)
+        result = self.sandbox.run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.sandbox.cargo_calls(), [])
+
     def test_explicit_opt_in_compiles(self) -> None:
         result = self.sandbox.run(opt_in=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
