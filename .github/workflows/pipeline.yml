@@ -458,6 +458,10 @@ jobs:
           cache-on-failure: false
 
       - name: Run quality checks
+        # CI is where Rust compiles: opt in so the advisory clippy / check
+        # blocks run here (they skip on a Tier-0 dev box, #802).
+        env:
+          PRESENTER_ALLOW_LOCAL_CARGO: "1"
         run: ./scripts/dev/quality-check.sh --strict --against origin/${{ github.base_ref || 'main' }}
 
   # ============================================

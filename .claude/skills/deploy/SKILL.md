@@ -200,6 +200,18 @@ fallback — Tier-1/2 boxes only, never on this Tier-0 box. The guard
 `scripts/ci/test_no_local_cargo_fallback.py` (quality job) fails CI if a new ungated
 `cargo run`/`cargo build` appears in `tests/e2e/`.
 
+**Dev/ops scripts follow the same rule (#802 ROZHODNUTÉ).** `run-dev-server.sh`,
+`ingest-default-bibles.sh`, `watch-demo.sh`, `verify-and-refresh.sh`, `ai-eval/run.sh`
+(prefers a CI-built `target/release/ai_eval` from the `ai-eval-build.yml` artifact) and
+`scripts/ops/run-env.sh` test/prod exit 1 with the download recipe unless
+`PRESENTER_ALLOW_LOCAL_CARGO=1`; `quality-check.sh` SKIPS its advisory clippy / check blocks
+locally (a warning line says so) and CI's quality step sets the opt-in so they still run
+there. The shared guard is `scripts/dev/lib/local-cargo.sh` (`require_local_cargo` exits,
+`local_cargo_allowed` tests, `local_cargo_refuse` prints the recipe). Any NEW compiling cargo
+call in `scripts/dev/` or `scripts/ops/` must sit behind one of them — the guard's structural
+scan (run/build/check/clippy/test/bench/doc/rustc/install/watch, quoted text + comments
+ignored) fails CI otherwise.
+
 **If HOTFIX MODE is active** (explicit user declaration only — see below) and a genuine
 local E2E run is warranted, the mechanics CI itself uses are:
 

@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "${SCRIPT_DIR}/lib/local-cargo.sh"
+
+# Guard BEFORE wiping the DB, so a refused run leaves the data untouched (#802).
+require_local_cargo ingest-default-bibles "ingest_bibles (cargo run)" \
+  "With CI-built binaries use scripts/dev/refresh-dev-data.sh (imports libraries + Bibles)."
+
 export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://presenter_dev.db}"
 
 if [[ "$PRESENTER_DB_URL" == sqlite://* ]]; then

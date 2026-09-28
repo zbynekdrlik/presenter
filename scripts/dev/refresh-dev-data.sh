@@ -8,6 +8,9 @@ DEFAULT_LIB_ROOT="${PRESENTER_LIBRARY_ROOT:-${REPO_PARENT}/presenter-libraries}"
 export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://$REPO_ROOT/var/data/dev/presenter_dev.db}"
 ROOT_DIR="${1:-$DEFAULT_LIB_ROOT}"
 
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "${SCRIPT_DIR}/lib/local-cargo.sh"
+
 # Prebuilt binaries ONLY (#802, Tier-0: Rust compiles in CI only). CI places
 # them in target/release/ before E2E; locally, download the CI artifact. A
 # binary OLDER than the importer's source tree is a trap (#559): it silently
@@ -21,20 +24,6 @@ binary_is_stale() {
     "${REPO_ROOT}/crates/presenter-migration" \
     "${REPO_ROOT}/crates/presenter-core" \
     -name '*.rs' -newer "$binary" -print -quit 2>/dev/null | grep -q .
-}
-
-refuse_local_compile() {
-  local reason="$1"
-  cat >&2 <<EOF
-[refresh-dev-data] ERROR: ${reason}
-[refresh-dev-data] Presenter is Tier-0: Rust compiles in CI only, this script never builds locally (#802).
-[refresh-dev-data] Download the CI build artifact for your commit into target/release/:
-[refresh-dev-data]   gh run download <run-id> -n build-artifacts -D _artifacts
-[refresh-dev-data]   mkdir -p target/release && cp _artifacts/* target/release/ && chmod +x target/release/*
-[refresh-dev-data] (find <run-id> with: gh run list -w pipeline.yml -b dev -L 5)
-[refresh-dev-data] Explicit local-compile opt-in (Tier-1/2 boxes only): PRESENTER_ALLOW_LOCAL_CARGO=1
-EOF
-  exit 1
 }
 
 run_binary() {
@@ -57,16 +46,16 @@ run_binary() {
     return
   done
 
-  if [[ "${PRESENTER_ALLOW_LOCAL_CARGO:-}" == "1" ]]; then
+  if local_cargo_allowed; then
     echo "[refresh-dev-data] PRESENTER_ALLOW_LOCAL_CARGO=1 — compiling ${bin_name} locally (Tier-0 opt-in)" >&2
     cargo run -p presenter-importer --bin "$bin_name" -- "$@"
     return
   fi
 
   if [[ -n "$stale_candidate" ]]; then
-    refuse_local_compile "$stale_candidate is older than the importer sources (stale, #559)"
+    local_cargo_refuse refresh-dev-data "$stale_candidate is older than the importer sources (stale, #559)"
   fi
-  refuse_local_compile "prebuilt binary '${bin_name}' not found (expected ${release_binary} or ${debug_binary})"
+  local_cargo_refuse refresh-dev-data "prebuilt binary '${bin_name}' not found (expected ${release_binary} or ${debug_binary})"
 }
 
 if [[ "$PRESENTER_DB_URL" == sqlite://* ]]; then

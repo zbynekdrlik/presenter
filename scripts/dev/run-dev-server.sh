@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "${SCRIPT_DIR}/lib/local-cargo.sh"
+
+# Compiles and runs the server from source — Tier-0 opt-in only (#802). On this
+# box use the deployed dev service or a CI-built target/release/presenter-server.
+require_local_cargo run-dev-server "presenter-server (cargo run)" \
+  "The deployed dev instance is http://10.77.8.134:8080 (presenter-dev.service)."
+
 export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://presenter_dev.db}"
 export PRESENTER_PORT="${PRESENTER_PORT:-80}"
 

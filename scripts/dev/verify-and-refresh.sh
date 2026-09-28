@@ -6,6 +6,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "$REPO_ROOT"
 
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "$SCRIPT_DIR/lib/local-cargo.sh"
+
+# Runs `cargo test` and rebuilds the demo from source — Tier-0 opt-in only (#802).
+require_local_cargo verify "cargo test + demo rebuild" \
+  "On this box push to dev and let CI run the tests (gh run view <id> --log-failed)."
+
 if [[ $EUID -ne 0 ]]; then
   echo "[verify] This helper must be launched via sudo -E ./scripts/dev/verify-and-refresh.sh" >&2
   exit 1

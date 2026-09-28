@@ -36,6 +36,9 @@ set -euo pipefail
 # --features ai-eval, same as the acceptance-criterion invocation in #680.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "$REPO_ROOT/scripts/dev/lib/local-cargo.sh"
 CORPUS_DIR="$SCRIPT_DIR/corpus"
 GOLDEN_DIR="$SCRIPT_DIR/golden"
 TRACES_DIR="$SCRIPT_DIR/traces"
@@ -70,6 +73,21 @@ EOF
 fail() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+# Run the ai_eval binary: the CI-built one (ai-eval-build.yml artifact) when
+# present, else a local compile — Tier-0 opt-in only (#802).
+run_ai_eval() {
+  local prebuilt="$REPO_ROOT/target/release/ai_eval"
+  if [[ -x "$prebuilt" ]]; then
+    "$prebuilt" "$@"
+    return
+  fi
+  require_local_cargo ai-eval "ai_eval (--features ai-eval)" \
+    "ai_eval binary not found at $prebuilt. It is built by the ai-eval-build.yml workflow:" \
+    "  gh run download <run-id> -n ai-eval-<short-sha> -D target/release && chmod +x target/release/ai_eval" \
+    "  (find <run-id> with: gh run list -w ai-eval-build.yml -L 5)"
+  cargo run --bin ai_eval --features ai-eval -- "$@"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -132,8 +150,8 @@ stage_drive() {
   local slice_args=()
   [[ "$SLICE" == "all" ]] || slice_args=(--slice "$SLICE")
   (
-    cd "$SCRIPT_DIR/../../.." && \
-    cargo run --bin ai_eval --features ai-eval -- drive \
+    cd "$REPO_ROOT" && \
+    run_ai_eval drive \
       --candidate-url "$CANDIDATE_URL" \
       --model "$CANDIDATE_MODEL" \
       --corpus-dir "$CORPUS_DIR" \
@@ -151,8 +169,8 @@ stage_score_l1() {
   local slice_args=()
   [[ "$SLICE" == "all" ]] || slice_args=(--slice "$SLICE")
   (
-    cd "$SCRIPT_DIR/../../.." && \
-    cargo run --bin ai_eval --features ai-eval -- score-l1 \
+    cd "$REPO_ROOT" && \
+    run_ai_eval score-l1 \
       --corpus-dir "$CORPUS_DIR" \
       --traces-dir "$TRACES_DIR" \
       --report "$REPORT_DIR/results.json" \
