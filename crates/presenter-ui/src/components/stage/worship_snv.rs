@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use crate::components::stage::api_text::slide_api_lines;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
 use crate::utils::color::group_pill_style;
@@ -14,10 +15,15 @@ const CURRENT_SONG_MAX_FONT: f64 = 200.0;
 const NEXT_SONG_MAX_FONT: f64 = 200.0;
 const STAGE_SLIDE_BREAK_THRESHOLD: usize = 26;
 
+/// `api_text_mode` (#799): the `api` layout sets it so the current/next
+/// boxes show the API slide per the operator's text mode (original /
+/// translation / both joined on a new line) — same boxes, same sizes. Every
+/// other layout leaves it off and keeps the stage-text-else-main behaviour.
 #[component]
 pub fn WorshipSnv(
     ws_state: ReadSignal<StageWsState>,
     latency_ms: ReadSignal<Option<f64>>,
+    #[prop(optional)] api_text_mode: bool,
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
 
@@ -29,6 +35,14 @@ pub fn WorshipSnv(
     let next_song_ref = NodeRef::<leptos::html::Div>::new();
 
     let current_text = move || {
+        if api_text_mode {
+            let raw = ctx.snapshot.with(|snap| {
+                snap.as_ref()
+                    .map(|s| slide_api_lines(s.current.as_ref(), s.text_mode).joined())
+                    .unwrap_or_default()
+            });
+            return break_if_long(raw, STAGE_SLIDE_BREAK_THRESHOLD);
+        }
         let raw = ctx
             .snapshot
             .get()
@@ -46,6 +60,14 @@ pub fn WorshipSnv(
     };
 
     let next_text = move || {
+        if api_text_mode {
+            let raw = ctx.snapshot.with(|snap| {
+                snap.as_ref()
+                    .map(|s| slide_api_lines(s.next.as_ref(), s.text_mode).joined())
+                    .unwrap_or_default()
+            });
+            return break_if_long(raw, STAGE_SLIDE_BREAK_THRESHOLD);
+        }
         let raw = ctx
             .snapshot
             .get()

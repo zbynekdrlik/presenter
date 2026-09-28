@@ -323,6 +323,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let stage_connections = ctx.stage_connections;
     let broadcast_live = ctx.broadcast_live;
     let stage_layout_code = ctx.stage_layout_code;
+    let stage_text_mode = ctx.stage_text_mode;
     let selected_presentation_id = ctx.selected_presentation_id;
     let selected_presentation = ctx.selected_presentation;
     let slides_cache = ctx.slides_cache;
@@ -389,9 +390,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                     }
                     stage_snapshot.set(Some(snapshot));
                 }
-                LiveEvent::Timers { overview } => {
-                    timers.set(Some(overview));
-                }
+                LiveEvent::Timers { overview } => timers.set(Some(overview)),
                 LiveEvent::StageConnection { snapshot } => {
                     stage_connections.update(|conns| {
                         if let Some(existing) = conns.iter_mut().find(|c| c.id == snapshot.id) {
@@ -401,18 +400,11 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                         }
                     });
                 }
-                LiveEvent::BroadcastLive { enabled } => {
-                    broadcast_live.set(enabled);
-                }
-                LiveEvent::StageLayout { code } => {
-                    stage_layout_code.set(code);
-                }
-                LiveEvent::Bible { broadcast } => {
-                    active_bible_broadcast.set(Some(broadcast));
-                }
-                LiveEvent::BibleCleared => {
-                    active_bible_broadcast.set(None);
-                }
+                LiveEvent::BroadcastLive { enabled } => broadcast_live.set(enabled),
+                LiveEvent::StageLayout { code } => stage_layout_code.set(code),
+                LiveEvent::StageTextMode { mode } => stage_text_mode.set(mode),
+                LiveEvent::Bible { broadcast } => active_bible_broadcast.set(Some(broadcast)),
+                LiveEvent::BibleCleared => active_bible_broadcast.set(None),
                 LiveEvent::BibleSlidesChanged { .. } => {
                     bible_presentations_version.update(|v| *v += 1);
                 }
@@ -481,6 +473,14 @@ fn load_initial_data(ctx: &AppContext) {
         }
         if let Ok(resp) = crate::api::stage::get_layout().await {
             layout_code.set(resp.code);
+        }
+    });
+
+    // #799: API layouts' text mode (original / translation / both)
+    let text_mode = ctx.stage_text_mode;
+    leptos::task::spawn_local(async move {
+        if let Ok(resp) = crate::api::stage::get_text_mode().await {
+            text_mode.set(resp.mode);
         }
     });
 

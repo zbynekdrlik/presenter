@@ -6,6 +6,7 @@ use crate::api::bible as bible_api;
 use crate::components::ai_status::AiStatusChip;
 use crate::components::resolume_status::ResolumeStatusChips;
 use crate::components::stage_preview::StagePreview;
+use crate::components::stage_text_mode_picker::StageTextModePicker;
 use crate::components::surface_nav::SurfaceNav;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
@@ -393,6 +394,8 @@ pub fn Header() -> impl IntoView {
                         }).collect_view()}
                     </select>
                 </div>
+                // #799: text mode for the API layouts, only while one is selected.
+                <StageTextModePicker />
                 <StagePreview />
                 <div class="operator__mode-toggle">
                     {["live", "edit"].into_iter().map(|m| {

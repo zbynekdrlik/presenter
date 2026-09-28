@@ -1,0 +1,79 @@
+/* ===== Ambient API layout (`api-ambient`, #799) =====
+   Fullscreen NDI / CG video with the API lyric line(s) as a clean lower-third
+   overlay. The overlay fades in/out; once faded out it is `visibility: hidden`
+   so the screen is pure video (and the element reads as hidden to tests). */
+
+.stage-api-ambient {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+    overflow: hidden;
+}
+
+.stage-api-ambient__video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.stage-api-ambient__lyrics {
+    position: absolute;
+    left: 5vw;
+    right: 5vw;
+    bottom: 7vh;
+    height: 30vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 1.5vh;
+    z-index: 1;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    /* Fade out, THEN hide (visibility flips after the opacity transition). */
+    transition: opacity 450ms ease, visibility 0s linear 450ms;
+}
+
+.stage-api-ambient__lyrics[data-visible="true"] {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 450ms ease, visibility 0s linear 0s;
+}
+
+.stage-api-ambient__primary,
+.stage-api-ambient__secondary {
+    width: 100%;
+    margin: 0;
+    overflow: hidden;
+    text-align: center;
+    white-space: pre-line;
+    line-height: 1.12;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    /* Readable on any video: soft wide shadow + a tight dark edge, no box. */
+    text-shadow:
+        0 0 0.35em rgba(0, 0, 0, 0.85),
+        0 0.04em 0.12em rgba(0, 0, 0, 0.9);
+}
+
+.stage-api-ambient__primary {
+    flex: 1 1 auto;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.stage-api-ambient__secondary {
+    flex: 0 0 35%;
+    color: #f1f5f9;
+    font-weight: 500;
+    font-style: italic;
+    opacity: 0.92;
+}
+
+.stage-api-ambient__lyrics[data-both="false"] .stage-api-ambient__secondary {
+    display: none;
+}

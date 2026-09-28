@@ -52,7 +52,8 @@ pub fn ApiStage(
                 </div>
             </Show>
 
-            <WorshipSnv ws_state=ws_state latency_ms=latency_ms />
+            // #799: the boxes follow the operator's API text mode.
+            <WorshipSnv ws_state=ws_state latency_ms=latency_ms api_text_mode=true />
         </div>
     }
 }

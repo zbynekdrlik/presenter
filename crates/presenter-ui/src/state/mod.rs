@@ -7,7 +7,8 @@ pub mod tablet;
 use leptos::prelude::*;
 use presenter_core::{
     BibleBroadcast, LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult,
-    Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
+    Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, StageTextMode,
+    TimersOverview,
 };
 
 use crate::api::bible::BibleSearchHit;
@@ -50,6 +51,8 @@ pub struct AppContext {
     pub stage_snapshot: RwSignal<Option<StageDisplaySnapshot>>,
     pub stage_layout_code: RwSignal<String>,
     pub stage_layouts: RwSignal<Vec<StageDisplayLayout>>,
+    /// #799: which lyric text(s) the API stage layouts show.
+    pub stage_text_mode: RwSignal<StageTextMode>,
     pub timers: RwSignal<Option<TimersOverview>>,
     pub broadcast_live: RwSignal<bool>,
     pub context_title: RwSignal<String>,
@@ -104,6 +107,7 @@ impl AppContext {
             stage_snapshot: RwSignal::new(None),
             stage_layout_code: RwSignal::new(String::new()),
             stage_layouts: RwSignal::new(Vec::new()),
+            stage_text_mode: RwSignal::new(StageTextMode::default()),
             timers: RwSignal::new(None),
             broadcast_live: RwSignal::new(false),
             context_title: RwSignal::new("Presentations".to_string()),
