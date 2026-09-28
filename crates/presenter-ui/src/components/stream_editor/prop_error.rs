@@ -6,6 +6,10 @@
 //! is the one being edited. A late SUCCESS clears only its own element's error.
 //! Pure + host-tested; the ctx holds it in `prop_error: RwSignal<Option<PropError>>`.
 
+use leptos::prelude::*;
+
+use super::StreamEditorCtx;
+
 /// A failed save's message, bound to the element that was saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PropError {
@@ -26,6 +30,33 @@ pub fn message_for(error: Option<&PropError>, editing: Option<i64>) -> Option<St
 /// element clears it; a success of any other element leaves it alone.
 pub fn belongs_to(error: Option<&PropError>, element_id: i64) -> bool {
     error.is_some_and(|e| e.element_id == element_id)
+}
+
+impl StreamEditorCtx {
+    /// A save of `element_id` failed: remember the message FOR THAT ELEMENT, so
+    /// a late 422 never shows under an element opened meanwhile. Logs AFTER
+    /// storing it — the E2E uses the log line as its "422 handled" signal.
+    pub(super) fn set_prop_error(self, element_id: i64, err: impl std::fmt::Display) {
+        self.prop_error.set(Some(PropError {
+            element_id,
+            message: format!("Neplatné hodnoty: {err}"),
+        }));
+        let editing = self.selected_element.get_untracked();
+        leptos::logging::log!(
+            "stream editor: save of element {element_id} failed: {err} (editing {editing:?})"
+        );
+    }
+
+    /// A save of `element_id` succeeded: clear the inline error only if it
+    /// belongs to that element — another element's error stays.
+    pub(super) fn clear_prop_error_of(self, element_id: i64) {
+        if self
+            .prop_error
+            .with_untracked(|e| belongs_to(e.as_ref(), element_id))
+        {
+            self.prop_error.set(None);
+        }
+    }
 }
 
 #[cfg(test)]

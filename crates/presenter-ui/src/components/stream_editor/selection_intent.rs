@@ -15,7 +15,6 @@
 
 use leptos::prelude::*;
 
-use super::prop_error::{self, PropError};
 use super::StreamEditorCtx;
 
 /// The counter. `Default` starts at 0.
@@ -113,30 +112,6 @@ impl StreamEditorCtx {
     pub fn request_close_panel(self) {
         if self.confirm_discard_draft() {
             self.close_panel();
-        }
-    }
-
-    /// A save of `element_id` failed: remember the message FOR THAT ELEMENT, so
-    /// a late 422 never shows under an element opened meanwhile (#787 reopen).
-    pub(super) fn set_prop_error(self, element_id: i64, err: impl std::fmt::Display) {
-        let editing = self.selected_element.get_untracked();
-        leptos::logging::log!(
-            "stream editor: save of element {element_id} failed: {err} (editing {editing:?})"
-        );
-        self.prop_error.set(Some(PropError {
-            element_id,
-            message: format!("Neplatné hodnoty: {err}"),
-        }));
-    }
-
-    /// A save of `element_id` succeeded: clear the inline error only if it
-    /// belongs to that element — another element's error stays.
-    pub(super) fn clear_prop_error_of(self, element_id: i64) {
-        if self
-            .prop_error
-            .with_untracked(|e| prop_error::belongs_to(e.as_ref(), element_id))
-        {
-            self.prop_error.set(None);
         }
     }
 

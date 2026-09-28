@@ -290,7 +290,10 @@ a `switch_output` clobber. Rules:
   `confirm_discard_draft`. Guarded: `select_scene` (scene „Upraviť"), `request_close_panel`
   (the panel's „Zavrieť"), `select_element`, `deselect_element`, `add_element`, and
   `switch_output`. Declining keeps the element and its edits. A NEW UI path that drops the draft
-  MUST go through the guard, and must also bump the selection ticket.
+  MUST go through the guard, and must also bump the selection ticket. Re-clicking „Upraviť" on
+  the scene that is already open also asks, because it resets the element selection. These
+  guarded methods decide synchronously inside the click handler, and the E2E "declined, nothing
+  changed" checks rely on that.
 - `close_panel()` is the RAW reset, with no question. Call it only after the caller has already
   decided: `switch_output` after its guard, and `delete_scene` after the delete was confirmed.
   Never wire it to a button.
@@ -302,10 +305,15 @@ a `switch_output` clobber. Rules:
   (`set_prop_error`), and the form shows it only when `message_for(err, selected_element)`
   matches. A successful save clears only its own element's error (`clear_prop_error_of`), so a
   late success of A never wipes B's error.
-- `set_prop_error` logs `stream editor: save of element {id} failed: …` (console.log, which
-  `attachEditorConsoleCollector` ignores). The E2E uses that line as the settle signal for "the
-  late 422 was handled" (`page.waitForEvent("console", …)`). Without it, an assertion that
-  something is ABSENT could pass before the handler ran.
+- `set_prop_error` / `clear_prop_error_of` live in `prop_error.rs` (an `impl StreamEditorCtx`
+  block next to the pure helpers). `set_prop_error` logs
+  `stream editor: save of element {id} failed: …` AFTER storing the error. That is a console.log,
+  which `attachEditorConsoleCollector` ignores.
+- E2E for "something is ABSENT after a late response": the settle signal must be one that fires on
+  the buggy code too. Otherwise the RED fails on a timeout instead of on the real assertion. The
+  late-error test polls "the log line was seen OR an error box appeared". It then forces a render
+  flush with a positive reactive wait (fill a field, then expect `data-dirty="true"`), and only
+  after that asserts that the error box has a count of 0.
 - E2E for a real 422 on a non-frame field: a text `size_pct` of 5000 (countdown
   `[data-role="stream-ts-countdown"] [data-role="stream-ts-size"]`). Hold the PATCH with
   `page.route`. Chrome logs the non-2xx itself, so strip exactly one 422 console line.
