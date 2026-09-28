@@ -8,9 +8,15 @@ DEFAULT_LIB_ROOT="${PRESENTER_LIBRARY_ROOT:-${REPO_PARENT}/presenter-libraries}"
 export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://$REPO_ROOT/var/data/dev/presenter_dev.db}"
 ROOT_DIR="${1:-$DEFAULT_LIB_ROOT}"
 
-# Use pre-built binaries if available (CI builds them first), otherwise fall back to cargo run.
-# A pre-built binary OLDER than the importer's source tree is a trap (#559): it silently runs
-# yesterday's code against today's schema. Detect staleness and rebuild via cargo instead.
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "${SCRIPT_DIR}/lib/local-cargo.sh"
+
+# Prebuilt binaries ONLY (#802, Tier-0: Rust compiles in CI only). CI places
+# them in target/release/ before E2E; locally, download the CI artifact. A
+# binary OLDER than the importer's source tree is a trap (#559): it silently
+# runs yesterday's code against today's schema — so a stale binary is refused
+# exactly like a missing one. Compiling locally is an explicit opt-in:
+# PRESENTER_ALLOW_LOCAL_CARGO=1.
 binary_is_stale() {
   local binary="$1"
   find "${REPO_ROOT}/crates/presenter-importer" \
@@ -26,23 +32,30 @@ run_binary() {
   local debug_binary="${REPO_ROOT}/target/debug/${bin_name}"
   local release_binary="${REPO_ROOT}/target/release/${bin_name}"
   local candidate=""
+  local stale_candidate=""
 
-  if [[ -x "$release_binary" ]]; then
-    candidate="$release_binary"
-  elif [[ -x "$debug_binary" ]]; then
-    candidate="$debug_binary"
-  fi
-
-  if [[ -n "$candidate" ]] && binary_is_stale "$candidate"; then
-    echo "[refresh-dev-data] WARNING: $candidate is older than the importer sources — rebuilding via cargo run instead of trusting a stale binary" >&2
-    candidate=""
-  fi
-
-  if [[ -n "$candidate" ]]; then
+  # First FRESH binary wins (release preferred); a stale release must not hide
+  # a fresh debug build.
+  for candidate in "$release_binary" "$debug_binary"; do
+    [[ -x "$candidate" ]] || continue
+    if binary_is_stale "$candidate"; then
+      stale_candidate="${stale_candidate:-$candidate}"
+      continue
+    fi
     "$candidate" "$@"
-  else
+    return
+  done
+
+  if local_cargo_allowed; then
+    echo "[refresh-dev-data] PRESENTER_ALLOW_LOCAL_CARGO=1 — compiling ${bin_name} locally (Tier-0 opt-in)" >&2
     cargo run -p presenter-importer --bin "$bin_name" -- "$@"
+    return
   fi
+
+  if [[ -n "$stale_candidate" ]]; then
+    local_cargo_refuse refresh-dev-data "$stale_candidate is older than the importer sources (stale, #559)"
+  fi
+  local_cargo_refuse refresh-dev-data "prebuilt binary '${bin_name}' not found (expected ${release_binary} or ${debug_binary})"
 }
 
 if [[ "$PRESENTER_DB_URL" == sqlite://* ]]; then

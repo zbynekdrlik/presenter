@@ -27,6 +27,9 @@ done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "$ROOT_DIR/scripts/dev/lib/local-cargo.sh"
+
 failures=()
 warnings=()
 
@@ -242,8 +245,12 @@ if ! cargo fmt --all -- --check >/dev/null 2>&1; then
   fail "cargo fmt reported formatting changes (run: cargo fmt --all)"
 fi
 
-if ! cargo clippy -p presenter-server --tests --no-deps --quiet -- -D warnings >/dev/null 2>&1; then
-  warn "cargo clippy (presenter-server) reported warnings (advisory for this branch; will be enforced next)"
+if local_cargo_allowed; then
+  if ! cargo clippy -p presenter-server --tests --no-deps --quiet -- -D warnings >/dev/null 2>&1; then
+    warn "cargo clippy (presenter-server) reported warnings (advisory for this branch; will be enforced next)"
+  fi
+else
+  warn "clippy advisory skipped: compiles, Tier-0 runs it in CI only (#802; set PRESENTER_ALLOW_LOCAL_CARGO=1 to run)"
 fi
 
 # 9) Dependency and security checks
@@ -350,9 +357,13 @@ if [[ ! -f rust-toolchain.toml ]]; then
 fi
 
 # 14) cargo check warnings (advisory)
-check_out=$(cargo check 2>&1 || true)
-if echo "$check_out" | grep -q "warning:"; then
-  warn "cargo check reported warnings; run clippy/fixes when feasible."
+if local_cargo_allowed; then
+  check_out=$(cargo check 2>&1 || true)
+  if echo "$check_out" | grep -q "warning:"; then
+    warn "cargo check reported warnings; run clippy/fixes when feasible."
+  fi
+else
+  warn "check-warnings advisory skipped: compiles, Tier-0 runs it in CI only (#802; set PRESENTER_ALLOW_LOCAL_CARGO=1 to run)"
 fi
 
 # 15) Test integrity: no assertion-free test functions

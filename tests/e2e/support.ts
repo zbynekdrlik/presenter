@@ -5,6 +5,7 @@ import path from "path";
 import type { AddressInfo } from "net";
 import type { TestInfo } from "@playwright/test";
 import { expect, type Locator, type Page } from "@playwright/test";
+import { resolvePrebuiltCommand } from "./prebuilt-binary";
 
 /**
  * Subscribe to console events on `page` and append error/warning messages to
@@ -337,43 +338,16 @@ export async function startTestServer(
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };
 
-  // Use pre-built binary if available (CI builds binaries first), otherwise fall back to cargo run
-  const debugBinary = path.join(
-    REPO_ROOT,
-    "target",
-    "debug",
-    "presenter-server",
-  );
-  const releaseBinary = path.join(
-    REPO_ROOT,
-    "target",
-    "release",
-    "presenter-server",
-  );
-
-  // When BOTH binaries exist (local dev), pick the NEWER one by mtime — a
-  // stale target/release/ binary silently shadowing a fresh target/debug/
-  // build makes e2e runs exercise OLD code and report false verdicts. On CI
-  // only the freshly-built release binary exists, so behavior is unchanged.
-  const fs = require("fs");
-  const mtimeOf = (p: string): number => {
-    try {
-      return fs.statSync(p).mtimeMs;
-    } catch {
-      return -1;
-    }
-  };
-  const releaseMtime = mtimeOf(releaseBinary);
-  const debugMtime = mtimeOf(debugBinary);
-  let command: string;
-  if (releaseMtime >= 0 && releaseMtime >= debugMtime) {
-    command = releaseBinary;
-  } else if (debugMtime >= 0) {
-    command = debugBinary;
-  } else {
-    // Fall back to cargo run if no pre-built binary exists
-    command = `cargo run -p presenter-server`;
-  }
+  // Prebuilt binary only (#802, Tier-0): CI downloads/builds it before the
+  // E2E run; locally, `gh run download` the CI artifact. When both profiles
+  // exist the NEWER one wins so a stale target/release/ never shadows a fresh
+  // target/debug/. A missing binary throws — never a silent local compile.
+  const command = resolvePrebuiltCommand(REPO_ROOT, {
+    bin: "presenter-server",
+    pkg: "presenter-server",
+    // Same features CI's build job uses for the E2E server (opt-in compile only).
+    features: ["mock-integrations", "test-helpers"],
+  });
   console.log(`[e2e] test server binary: ${command}`);
 
   const processHandle = spawn(

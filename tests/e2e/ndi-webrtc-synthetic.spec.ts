@@ -6,8 +6,6 @@ import {
 } from "@playwright/test";
 import { spawn, type ChildProcess } from "child_process";
 import { once } from "events";
-import { existsSync } from "fs";
-import path from "path";
 import {
   deriveTestConfig,
   refreshDevData,
@@ -16,6 +14,7 @@ import {
   REPO_ROOT,
   type ServerHandle,
 } from "./support";
+import { resolvePrebuiltCommand } from "./prebuilt-binary";
 
 // ─────────────────────────────────────────────────────────────────────────
 // REQUIRED real-frame NDI→WebRTC tests (the regression guards for the
@@ -1274,10 +1273,13 @@ test("stage reports per-session client frame stats into /ndi/snapshot (synthetic
 // guard for a real scenario either way.
 
 function ndiSenderCommand(): string {
-  const release = path.join(REPO_ROOT, "target", "release", "ndi_test_sender");
-  if (existsSync(release)) return release;
-  // Local-dev fallback when the prebuilt artifact is absent (CI always has it).
-  return "cargo run -p presenter-ndi --features test-helpers --bin ndi_test_sender";
+  // Prebuilt only (#802, Tier-0): CI ships ndi_test_sender in build-artifacts;
+  // a missing binary throws with the `gh run download` recipe.
+  return resolvePrebuiltCommand(REPO_ROOT, {
+    bin: "ndi_test_sender",
+    pkg: "presenter-ndi",
+    features: ["test-helpers"],
+  });
 }
 
 /** Start a DEDICATED synthetic NDI sender under `ndiName`, isolated from the
