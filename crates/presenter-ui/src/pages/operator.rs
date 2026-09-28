@@ -95,6 +95,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         let playlists = ctx.playlists;
         let presentations = ctx.presentations;
         let selected_library_id = ctx.selected_library_id;
+        let stage_text_mode = ctx.stage_text_mode;
         let connected_before = std::cell::Cell::new(false);
         Effect::new(move || {
             let state = ws_state.get();
@@ -106,6 +107,10 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                         }
                         if let Ok(pls) = crate::api::playlists::list_playlists().await {
                             playlists.set(pls);
+                        }
+                        // #799: a StageTextMode event missed during the gap.
+                        if let Ok(resp) = crate::api::stage::get_text_mode().await {
+                            stage_text_mode.set(resp.mode);
                         }
                         if let Some(lib_id) = selected_library_id.get_untracked() {
                             if let Ok(pres) =

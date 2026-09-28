@@ -78,10 +78,18 @@ impl AppState {
     /// Re-publish the stored api snapshot when an API layout is selected —
     /// after a switch TO an API layout (#281) or a text-mode change (#799),
     /// so displays reflect it without waiting for the next `PUT /api/stage`.
+    ///
+    /// The `api_stage` READ guard is held across build + publish: a concurrent
+    /// `update_api_stage` must take the WRITE lock before publishing its new
+    /// text, so it can never publish first and then be overwritten by this
+    /// (older) snapshot. Lock order: `api_stage` (read) → group-color cache /
+    /// timers → `stage_layout` (read); no path acquires `api_stage` while
+    /// holding either of the others, so this cannot deadlock.
     pub(super) async fn republish_api_snapshot(&self) {
-        let state = self.api_stage.read().await.clone();
+        let state = self.api_stage.read().await;
         let snapshot = self.build_api_stage_snapshot(&state).await;
         self.publish_api_snapshot(snapshot).await;
+        drop(state);
     }
 
     /// #793: check + publish under the layout READ lock (no await in between)

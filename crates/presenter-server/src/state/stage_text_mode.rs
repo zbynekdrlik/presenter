@@ -17,23 +17,35 @@ use std::sync::Arc;
 /// (and the same no-audit rationale) as `STAGE_LAYOUT_KEY`.
 pub(crate) const STAGE_TEXT_MODE_KEY: &str = "feature.stage.text_mode";
 
-/// Shared, lock-free holder of the current [`StageTextMode`]. `Arc` so every
-/// `AppState` clone sees the same value.
+/// Shared holder of the current [`StageTextMode`]: a lock-free value for
+/// readers (safe under the stage-layout lock) plus a setter mutex that
+/// serializes whole mode changes. `Arc`s so every `AppState` clone shares them.
 #[derive(Clone)]
-pub(crate) struct StageTextModeCell(Arc<AtomicU8>);
+pub(crate) struct StageTextModeCell {
+    value: Arc<AtomicU8>,
+    /// Held across a whole `set_stage_text_mode` (swap, persist, event,
+    /// republish) so two concurrent operators can never leave the DB, the
+    /// in-memory value and the announced/published mode out of step. Only the
+    /// setter takes it, and nothing it then acquires is ever held while
+    /// waiting for it — no deadlock.
+    setter: Arc<tokio::sync::Mutex<()>>,
+}
 
 impl StageTextModeCell {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(AtomicU8::new(StageTextMode::default().to_u8())))
+        Self {
+            value: Arc::new(AtomicU8::new(StageTextMode::default().to_u8())),
+            setter: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 
     pub(crate) fn get(&self) -> StageTextMode {
-        StageTextMode::from_u8(self.0.load(Ordering::SeqCst))
+        StageTextMode::from_u8(self.value.load(Ordering::SeqCst))
     }
 
     /// Store `mode`, returning the previous value.
     pub(crate) fn replace(&self, mode: StageTextMode) -> StageTextMode {
-        StageTextMode::from_u8(self.0.swap(mode.to_u8(), Ordering::SeqCst))
+        StageTextMode::from_u8(self.value.swap(mode.to_u8(), Ordering::SeqCst))
     }
 }
 
@@ -73,8 +85,10 @@ impl AppState {
     /// value already changed), announce it with `LiveEvent::StageTextMode`
     /// for operator surfaces, and re-publish the api snapshot (which carries
     /// the mode) when an API layout is selected so displays switch live.
-    /// Re-selecting the current mode is a no-op.
+    /// Re-selecting the current mode is a no-op. Serialized end-to-end by the
+    /// cell's setter mutex.
     pub async fn set_stage_text_mode(&self, mode: StageTextMode) {
+        let _serialized = self.stage_text_mode.setter.lock().await;
         let previous = self.stage_text_mode.replace(mode);
         if previous == mode {
             return;

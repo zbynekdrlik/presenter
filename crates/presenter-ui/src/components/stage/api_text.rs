@@ -22,6 +22,16 @@ impl ApiLines {
         self.primary.is_empty() && self.secondary.is_none()
     }
 
+    /// Apply `f` to each line (e.g. the stage's long-line tail-break, which
+    /// skips text that already contains a newline — so it must run per line
+    /// BEFORE [`ApiLines::joined`]).
+    pub fn map_lines(self, f: impl Fn(String) -> String) -> Self {
+        Self {
+            primary: f(self.primary),
+            secondary: self.secondary.map(&f),
+        }
+    }
+
     /// Both lines in one string (secondary on its own line) — for layouts
     /// that render a single auto-fitted text box (the `api` layout's
     /// WorshipSnv boxes).
@@ -136,6 +146,15 @@ mod tests {
             assert!(select_api_lines("", "", mode).is_empty(), "{mode}");
             assert!(select_api_lines(" \n ", "", mode).is_empty(), "{mode}");
         }
+    }
+
+    #[test]
+    fn map_lines_transforms_each_line_separately() {
+        let lines = select_api_lines(EN, SK, StageTextMode::Both).map_lines(|l| l.to_uppercase());
+        assert_eq!(lines.primary, EN.to_uppercase());
+        assert_eq!(lines.secondary, Some(SK.to_uppercase()));
+        let single = select_api_lines(EN, SK, StageTextMode::Original).map_lines(|l| l + "!");
+        assert_eq!(single.joined(), format!("{EN}!"));
     }
 
     #[test]

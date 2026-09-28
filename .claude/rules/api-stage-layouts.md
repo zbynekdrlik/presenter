@@ -40,13 +40,19 @@ Displays ADOPT a snapshot's layout (`stage-live-sync.md` §3). The api snapshot 
 `text_mode` — sync, no await — before publishing. So a switch `api` <-> `api-ambient` between build
 and publish can never publish the other layout's code (it would flip every display back). Every api
 snapshot publisher goes through `publish_api_snapshot` (`update_api_stage`, `republish_api_snapshot`
-used by the switch and by a text-mode change).
+used by the switch and by a text-mode change). `republish_api_snapshot` holds the `api_stage` READ
+guard across build + publish, so a concurrent `PUT /api/stage` (which must take the WRITE lock
+first) can never publish its new text and then be overwritten by the older republish. Lock order:
+`api_stage` → group-color cache / timers → `stage_layout`; never acquire `api_stage` while holding
+one of the others.
 
 ## Text mode = persisted setting, atomic cell, carried INSIDE the api snapshot
 
 `StageTextMode` (`original` | `translation` | `both`, default `both`) lives in
 `state/stage_text_mode.rs`: an `Arc<AtomicU8>` (`StageTextModeCell`) so it can be read under the
-layout lock without a second lock; persisted in `app_settings` key `feature.stage.text_mode` (same
+layout lock without a second lock, plus a setter `tokio::sync::Mutex` that serializes a whole
+change (swap → persist → event → republish) so two operators can't leave DB / memory / displays
+out of step; persisted in `app_settings` key `feature.stage.text_mode` (same
 no-audit k/v as `feature.stage.layout`); restored in `from_config` (pure read). A change publishes
 `LiveEvent::StageTextMode` (operator pickers) AND re-publishes the api snapshot, whose
 `textMode` field is what DISPLAYS read — so the existing reconnect resync (`GET /stage/snapshot`)
@@ -60,7 +66,13 @@ covers the mode with no extra fetch. Non-api snapshots have `textMode: None` (om
 translation == `original`; `original` with only a translation sent shows nothing. `api` uses it via
 `WorshipSnv api_text_mode=true` (both → joined on a new line inside the SAME boxes — never change
 box sizes, project Always-Rule); `api-ambient` renders primary (large) + secondary (smaller, below).
-The ambient overlay keeps the last non-empty lines while fading out and ends `visibility: hidden`
-(Playwright `toBeHidden`, opacity alone reads as visible). `api-ambient` reuses the ndi_fullscreen
+`WorshipSnv` tail-breaks each line BEFORE joining (`api_box_text` → `ApiLines::map_lines`) —
+`break_if_long` skips any text that already contains a newline, so breaking the joined string would
+silently disable it in `both` mode. The ambient overlay keeps the last non-empty lines while fading
+out and ends `visibility: hidden` (Playwright `toBeHidden`, opacity alone reads as visible). Its
+text boxes MUST stay `display: block` (top-down flow): `autofit_text` detects overflow via
+`scrollHeight > clientHeight`, which never counts overflow ABOVE a box — a `flex-end`/bottom-aligned
+text box overflows upward, autofit never shrinks it, and long lines get clipped. The primary fit
+re-runs when the secondary line shows/hides (the box height changes on a both ↔ original switch). `api-ambient` reuses the ndi_fullscreen
 `Memo` dedup for `<NdiVideo>` (NVENC session leak otherwise) and shows NO NDI status overlays —
 black while no source is live.

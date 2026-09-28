@@ -23,7 +23,7 @@ pub fn StageTextModePicker() -> impl IntoView {
     let text_mode = ctx.stage_text_mode;
     let layout_code = ctx.stage_layout_code;
 
-    let on_change = move |ev| {
+    let on_change = move |ev: leptos::ev::Event| {
         let value: String = event_target_value(&ev);
         let Ok(mode) = value.parse::<StageTextMode>() else {
             return;

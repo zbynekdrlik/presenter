@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::components::stage::api_text::slide_api_lines;
+use crate::components::stage::api_text::{slide_api_lines, ApiLines};
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
 use crate::utils::color::group_pill_style;
@@ -14,6 +14,15 @@ const NEXT_GROUP_MAX_FONT: f64 = 200.0;
 const CURRENT_SONG_MAX_FONT: f64 = 200.0;
 const NEXT_SONG_MAX_FONT: f64 = 200.0;
 const STAGE_SLIDE_BREAK_THRESHOLD: usize = 26;
+
+/// #799: the API box text — each line tail-broken on its own (a joined
+/// `both` text already contains a newline, which `break_if_long` skips),
+/// then joined.
+fn api_box_text(lines: ApiLines) -> String {
+    lines
+        .map_lines(|line| break_if_long(line, STAGE_SLIDE_BREAK_THRESHOLD))
+        .joined()
+}
 
 /// `api_text_mode` (#799): the `api` layout sets it so the current/next
 /// boxes show the API slide per the operator's text mode (original /
@@ -36,12 +45,11 @@ pub fn WorshipSnv(
 
     let current_text = move || {
         if api_text_mode {
-            let raw = ctx.snapshot.with(|snap| {
+            return ctx.snapshot.with(|snap| {
                 snap.as_ref()
-                    .map(|s| slide_api_lines(s.current.as_ref(), s.text_mode).joined())
+                    .map(|s| api_box_text(slide_api_lines(s.current.as_ref(), s.text_mode)))
                     .unwrap_or_default()
             });
-            return break_if_long(raw, STAGE_SLIDE_BREAK_THRESHOLD);
         }
         let raw = ctx
             .snapshot
@@ -61,12 +69,11 @@ pub fn WorshipSnv(
 
     let next_text = move || {
         if api_text_mode {
-            let raw = ctx.snapshot.with(|snap| {
+            return ctx.snapshot.with(|snap| {
                 snap.as_ref()
-                    .map(|s| slide_api_lines(s.next.as_ref(), s.text_mode).joined())
+                    .map(|s| api_box_text(slide_api_lines(s.next.as_ref(), s.text_mode)))
                     .unwrap_or_default()
             });
-            return break_if_long(raw, STAGE_SLIDE_BREAK_THRESHOLD);
         }
         let raw = ctx
             .snapshot

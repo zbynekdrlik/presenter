@@ -187,6 +187,36 @@ test("api-ambient shows the mode-selected text over video and hides when empty",
   await expect(secondary).toHaveText(SK_CURRENT);
   await expect(secondary).toBeVisible();
 
+  // A long lyric line wraps and must be auto-fitted INTO the overlay box
+  // (shrunk below the max font, nothing clipped) — both lines.
+  const LONG_EN =
+    "And when this flesh and heart shall fail and mortal life shall cease, I shall possess within the veil a life of joy and peace";
+  const LONG_SK =
+    "A keď mi telo zlyhá raz a smrteľný sa skončí čas, za oponou ja prijmem dar, život radosti a pokoja v nás";
+  await request.put(url("/api/stage"), {
+    data: { currentText: LONG_EN, currentTranslation: LONG_SK },
+  });
+  await expect(primary).toHaveText(LONG_EN, { timeout: 10_000 });
+  for (const [box, maxPx] of [
+    [primary, 160],
+    [secondary, 90],
+  ] as const) {
+    await expect
+      .poll(
+        () =>
+          box.evaluate((el, max) => {
+            const px = parseFloat(getComputedStyle(el).fontSize);
+            return px < max && el.scrollHeight <= el.clientHeight;
+          }, maxPx),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+  }
+  await request.put(url("/api/stage"), {
+    data: { currentText: EN_CURRENT, currentTranslation: SK_CURRENT },
+  });
+  await expect(primary).toHaveText(EN_CURRENT, { timeout: 10_000 });
+
   // Empty API text → the overlay fades out and is hidden: pure video.
   const clear = await request.put(url("/api/stage"), { data: {} });
   expect(clear.status()).toBe(204);

@@ -59,7 +59,11 @@ pub fn ApiAmbient() -> impl IntoView {
 
     let primary_ref = NodeRef::<leptos::html::Div>::new();
     let secondary_ref = NodeRef::<leptos::html::Div>::new();
-    autofit_effect(primary_ref, PRIMARY_MAX_FONT, primary_text);
+    // The primary box grows/shrinks when the secondary line hides/shows (a
+    // both <-> original switch keeps the same primary text), so re-fit on
+    // either change.
+    let primary_fit_trigger = move || shown.with(|l| (l.primary.clone(), l.secondary.is_some()));
+    autofit_effect(primary_ref, PRIMARY_MAX_FONT, primary_fit_trigger);
     autofit_effect(secondary_ref, SECONDARY_MAX_FONT, secondary_text);
 
     view! {

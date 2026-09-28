@@ -15,6 +15,9 @@
 //!    - `presentation_cache`: Cached presentation data for stage display
 //!    - `stage_layout`: Selected stage display layout code
 //!      (`stage_text_mode` is an atomic, safe to read under it — #799)
+//!    - `api_stage`: PUT /api/stage state. Documented multi-lock exception
+//!      (#799): `republish_api_snapshot` holds it (read) across build +
+//!      publish — order `api_stage` → group-color cache → `stage_layout`.
 //!    - `ableset_cache`: Cached AbleSet library-to-playlist mapping
 //!    - `group_color_cache`: Cached group name → hex color mapping
 //!    - `stream`: StreamManager show-state cache (own lock; never held across a repository await)

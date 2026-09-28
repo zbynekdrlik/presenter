@@ -51,9 +51,12 @@
     text-align: center;
     white-space: pre-line;
     line-height: 1.12;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
+    /* Plain block (like .stage__slide-text): text flows top-down so any
+       overflow goes DOWN, where autofit's scrollHeight > clientHeight check
+       sees it and shrinks the font. A flex-end box overflows UPWARD, which
+       scrollHeight never counts — the text would stay at max and be clipped. */
+    display: block;
+    min-height: 0;
     /* Readable on any video: soft wide shadow + a tight dark edge, no box. */
     text-shadow:
         0 0 0.35em rgba(0, 0, 0, 0.85),
@@ -61,7 +64,7 @@
 }
 
 .stage-api-ambient__primary {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     color: #ffffff;
     font-weight: 700;
 }
