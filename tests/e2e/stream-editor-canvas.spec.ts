@@ -677,12 +677,21 @@ test("#787 picking another element while a create is in flight keeps that pick",
   await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
 
   release();
-  // Settle signal: the created element's row appears (its def is installed —
-  // the selection decision is made in the same step).
-  await expect(rows).toHaveCount(2, { timeout: 15_000 });
+  // Settle signal AFTER the selection decision: add_element shows its
+  // „Prvok pridaný." toast only once it has decided whether to select the new
+  // element (the previous toast is the save's „Uložené."). A row count alone
+  // is not enough — a live-event refetch can install the def earlier.
+  await expect(page.locator('[data-role="toast"]')).toHaveText("Prvok pridaný.", {
+    timeout: 15_000,
+  });
   await page.unroute(createPath);
+  await expect(rows).toHaveCount(2);
+  const created = page.locator(
+    `[data-role="stream-element"]:not([data-element-id="${a}"])`,
+  );
   // The late create response did not steal the operator's newer pick.
   await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  await expect(created).toHaveAttribute("data-selected", "false");
   await expect(page.locator('[data-role="stream-element"][data-selected="true"]')).toHaveCount(1);
   await expect(overlayEl(page, a)).toHaveAttribute("data-selected", "true");
 

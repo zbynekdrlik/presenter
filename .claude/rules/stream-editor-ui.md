@@ -267,8 +267,17 @@ a `switch_output` clobber. Rules:
     until the refresh lands, so the draft reads as "dirty". Any guarded action in that gap
     (add / select) then asks about edits that are already saved, and Playwright auto-dismisses
     the question, which silently aborts the action.
-  - `reload_def` drops a same-output def whose `config_revision` is older than the one installed
-    (`should_install`). It still returns `true`, because a def at least that new is already there.
+  - `apply_saved_element` also raises the local `config_revision` by 1. The PATCH moved the
+    server to at least N+1, so a GET that started before the PATCH (still at N) can no longer
+    roll the save back. The save's own refetch (N+1) still installs, and the WS
+    `StreamConfigChanged(N+1)` no longer triggers a second refetch.
+  - `reload_def` drops a def for the same output whose `config_revision` is older than the one
+    installed (`should_install`). A different slug or output `id` always installs, which covers
+    an output that was recreated and whose revision reset to 0. `reload_def` still returns `true`
+    when it drops, because a def at least that new is already installed.
+- E2E settle signal for "the add decided its selection": the „Prvok pridaný." toast. The row
+  count is not enough, because a live-event refetch can install the def before `add_element`
+  decides.
 - E2E settle signal after a SAVE: wait for the Save button to have `data-dirty="false"`
   (`saveFrame`). `waitForSavedFrame` alone polls the SERVER, not the page.
 - While a create is in flight nothing is selected, so Escape or an empty-canvas click is a no-op
