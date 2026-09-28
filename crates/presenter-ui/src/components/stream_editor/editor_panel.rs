@@ -27,7 +27,7 @@ pub fn EditorPanel(ctx: StreamEditorCtx) -> impl IntoView {
                     type="button"
                     class="stream-editor__btn stream-editor__btn--ghost"
                     data-role="stream-panel-close"
-                    on:click=move |_| ctx.close_panel()
+                    on:click=move |_| ctx.request_close_panel()
                 >
                     "Zavrieť"
                 </button>

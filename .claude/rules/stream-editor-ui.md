@@ -130,7 +130,8 @@ Rules that MUST hold when touching the editor:
   fallback.
 - The page's WS-event filters compare `output == ctx.output_slug.get_untracked()`
   (not the constant), so a switched editor reflects the RIGHT output's live events.
-- `switch_output` resets the per-output selection/draft (`close_panel`) and
+- `switch_output` asks about unsaved element edits first (#787 reopen; it returns `false`
+  when declined), then resets the per-output selection/draft (`close_panel`) and
   refetches def + nameplates + active-nameplate for the new slug. Fonts are global
   (not per-output) — do NOT refetch them on switch.
 - `editor_preview.rs` builds the iframe `src` from `ctx.output_slug`, so the
@@ -283,3 +284,39 @@ a `switch_output` clobber. Rules:
 - While a create is in flight nothing is selected, so Escape or an empty-canvas click is a no-op
   and does not cancel the late auto-select. That is harmless, because nothing was visibly
   selected. An explicit pick (`select_element`) DOES cancel it.
+
+## EVERY path that drops the element draft asks first; save errors are tagged (#787 reopen, gaps 2+3)
+- The selection-changing ctx methods live in `selection_intent.rs`, next to the one guard
+  `confirm_discard_draft`. Guarded: `select_scene` (scene „Upraviť"), `request_close_panel`
+  (the panel's „Zavrieť"), `select_element`, `deselect_element`, `add_element`, and
+  `switch_output`. Declining keeps the element and its edits. A NEW UI path that drops the draft
+  MUST go through the guard, and must also bump the selection ticket. Re-clicking „Upraviť" on
+  the scene that is already open also asks, because it resets the element selection. These
+  guarded methods decide synchronously inside the click handler, and the E2E "declined, nothing
+  changed" checks rely on that.
+- `close_panel()` is the RAW reset, with no question. Call it only after the caller has already
+  decided: `switch_output` after its guard, and `delete_scene` after the delete was confirmed.
+  Never wire it to a button.
+- A declined output switch leaves `output_slug` unchanged, so `prop:value` never re-fires and the
+  `<select>` would keep showing the rejected option. `on_output_change` (in `output_paths.rs`)
+  sets it back to `ctx.slug()` by hand.
+- `ctx.prop_error` is `RwSignal<Option<PropError>>`. `PropError { element_id, message }` is in
+  `prop_error.rs` (pure + host-tested). `save_props` tags a failed save with the element it saved
+  (`set_prop_error`), and the form shows it only when `message_for(err, selected_element)`
+  matches. A successful save clears only its own element's error (`clear_prop_error_of`), so a
+  late success of A never wipes B's error.
+- `set_prop_error` / `clear_prop_error_of` live in `prop_error.rs` (an `impl StreamEditorCtx`
+  block next to the pure helpers). `set_prop_error` logs
+  `stream editor: save of element {id} failed: …` AFTER storing the error. That is a console.log,
+  which `attachEditorConsoleCollector` ignores.
+- E2E for "something is ABSENT after a late response": the settle signal must be one that fires on
+  the buggy code too. Otherwise the RED fails on a timeout instead of on the real assertion. The
+  late-error test polls "the log line was seen OR an error box appeared". It then forces a render
+  flush with a positive reactive wait (fill a field, then expect `data-dirty="true"`), and only
+  after that asserts that the error box has a count of 0.
+- E2E for a real 422 on a non-frame field: a text `size_pct` of 5000 (countdown
+  `[data-role="stream-ts-countdown"] [data-role="stream-ts-size"]`). Hold the PATCH with
+  `page.route`. Chrome logs the non-2xx itself, so strip exactly one 422 console line.
+- Dialog handling in E2E: an un-handled `confirm()` is auto-DISMISSED by Playwright, which
+  silently aborts a guarded action. Arm `answerNextDialog(page, accept)` before every click that
+  can meet a dirty draft, and assert the question text.
