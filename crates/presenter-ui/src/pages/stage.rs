@@ -293,8 +293,10 @@ pub fn StagePage() -> impl IntoView {
                 "api" => {
                     view! { <ApiStage ws_state=ws_state latency_ms=latency_ms /> }.into_any()
                 }
-                // #799: API lyrics over fullscreen NDI/CG video, no chrome.
-                "api-ambient" => view! { <ApiAmbient /> }.into_any(),
+                // #799: API lyrics over fullscreen NDI/CG video + the status bar.
+                "api-ambient" => {
+                    view! { <ApiAmbient ws_state=ws_state latency_ms=latency_ms /> }.into_any()
+                }
                 _ => {
                     view! { <WorshipSnv ws_state=ws_state latency_ms=latency_ms /> }.into_any()
                 }

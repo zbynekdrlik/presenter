@@ -1,7 +1,10 @@
 /* ===== Ambient API layout (`api-ambient`, #799) =====
    Fullscreen NDI / CG video with the API lyric line(s) as a clean lower-third
    overlay. The overlay fades in/out; once faded out it is `visibility: hidden`
-   so the screen is pure video (and the element reads as hidden to tests). */
+   so the screen is pure video (and the element reads as hidden to tests).
+   The shared StatusBar (clock + connection, same as ndi-fullscreen) keeps its
+   own `stage.css` boxes along the bottom 7% of the container; the overlay
+   ends exactly where that bar begins so the two never overlap. */
 
 .stage-api-ambient {
     position: relative;
@@ -23,8 +26,11 @@
     position: absolute;
     left: 5vw;
     right: 5vw;
-    bottom: 7vh;
-    height: 30vh;
+    /* = the status bar height (`.stage__clock`: bottom 0, height 7% in
+       stage.css) — container-relative so the overlay's bottom edge is the
+       bar's top edge on any display size. */
+    bottom: 7%;
+    height: 30%;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
