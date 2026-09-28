@@ -162,15 +162,55 @@ build-std-mvp path, not RUSTFLAGS.
   `presenter-ui` is OUTSIDE the workspace (own `Cargo.lock`, version `0.1.x`): `cargo
   <cmd> -p presenter-ui` from root fails — run from `crates/presenter-ui/`.
 
-## Playwright E2E — how CI runs them (#461, #627: no supported local loop under Tier-0)
+## Playwright E2E — how CI runs them (#461, #627: no push-free local loop under Tier-0)
 
-**There is no supported push-free local Playwright loop on this box.** `startTestServer`
+**There is no supported push-free local Playwright loop on this box** (the push-then-download
+loop with CI artifacts below IS supported). `startTestServer`
 needs a FRESH `presenter-server`/`presenter-importer` binary built WITH the E2E feature
 flags — building one is exactly the `cargo build --release` the Tier-0 hook blocks, and a
 stale/old binary tests stale/old code, which defeats the point. Default flow: push to
 `dev`, let CI's `e2e` job build + run the specs on the self-hosted runner, read `gh run
 view <id> --log-failed` on a red run rather than trying to reproduce it with a hand-built
 binary.
+
+### Local E2E with CI-built binaries (Tier-0-safe, #802)
+
+The E2E harness NEVER compiles: `startTestServer` / the synthetic NDI sender resolve
+binaries via `tests/e2e/prebuilt-binary.ts`, and `scripts/dev/refresh-dev-data.sh`
+(every spec's `beforeAll`) uses the prebuilt importer bins. A missing binary — or, for the
+importer, one OLDER than `crates/presenter-{importer,persistence,migration,core}` sources
+(#559) — FAILS with this recipe instead of the old silent `cargo run` fallback (which ran
+inside node/`.sh`, invisible to the Tier-0 hook). To run a spec locally against a commit CI
+already built:
+
+```bash
+gh run list -w pipeline.yml -b dev -L 5              # the run for your pushed commit
+gh run download <run-id> -n build-artifacts -D _artifacts   # retention: 1 day
+mkdir -p target/release && cp _artifacts/* target/release/ && chmod +x target/release/*
+rm -rf _artifacts
+npx playwright test <spec> -g "<title>" --reporter=line --workers=1
+```
+
+The artifact carries `presenter-server` (built with `mock-integrations,test-helpers`),
+`import_propresenter`, `ingest_bibles`, `ndi_test_sender`. Download it AFTER checking out
+the matching commit — the importer staleness check compares mtimes against your working
+tree's sources, and a binary from a different commit tests different code anyway. Free port
+8091 first (step 3 below). `PRESENTER_ALLOW_LOCAL_CARGO=1` re-enables the harness compile
+fallback — Tier-1/2 boxes only, never on this Tier-0 box. The guard
+`scripts/ci/test_no_local_cargo_fallback.py` (quality job) fails CI if a new ungated
+`cargo run`/`cargo build` appears in `tests/e2e/`.
+
+**Dev/ops scripts follow the same rule (#802 ROZHODNUTÉ).** `run-dev-server.sh`,
+`ingest-default-bibles.sh`, `watch-demo.sh`, `verify-and-refresh.sh`, `ai-eval/run.sh`
+(prefers a CI-built `target/release/ai_eval` from the `ai-eval-build.yml` artifact) and
+`scripts/ops/run-env.sh` test/prod exit 1 with the download recipe unless
+`PRESENTER_ALLOW_LOCAL_CARGO=1`; `quality-check.sh` SKIPS its advisory clippy / check blocks
+locally (a warning line says so) and CI's quality step sets the opt-in so they still run
+there. The shared guard is `scripts/dev/lib/local-cargo.sh` (`require_local_cargo` exits,
+`local_cargo_allowed` tests, `local_cargo_refuse` prints the recipe). Any NEW compiling cargo
+call in `scripts/dev/` or `scripts/ops/` must sit behind one of them — the guard's structural
+scan (run/build/check/clippy/test/bench/doc/rustc/install/watch, quoted text + comments
+ignored) fails CI otherwise.
 
 **If HOTFIX MODE is active** (explicit user declaration only — see below) and a genuine
 local E2E run is warranted, the mechanics CI itself uses are:

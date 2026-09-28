@@ -5,6 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "$SCRIPT_DIR/lib/local-cargo.sh"
+
+# cargo watch recompiles the server on every change — Tier-0 opt-in only (#802).
+require_local_cargo watch-demo "presenter-server under cargo watch" \
+  "The deployed dev instance is http://10.77.8.134:8080 (presenter-dev.service)."
+
 : "${PRESENTER_DB_URL:=sqlite://$REPO_ROOT/var/data/dev/presenter_dev.db}"
 : "${PRESENTER_PORT:=80}"
 

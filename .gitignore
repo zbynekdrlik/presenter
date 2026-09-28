@@ -46,3 +46,6 @@ mutants.out.old/
 
 # Fleet-dispatched agent worktrees (isolation: "worktree") — never committed
 .claude/worktrees/
+
+# Python bytecode (scripts/ci self-tests)
+__pycache__/

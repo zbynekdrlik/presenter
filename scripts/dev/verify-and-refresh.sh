@@ -6,6 +6,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "$REPO_ROOT"
 
+# shellcheck source=scripts/dev/lib/local-cargo.sh
+source "$SCRIPT_DIR/lib/local-cargo.sh"
+
+# Runs `cargo test` and rebuilds the demo from source — Tier-0 opt-in only (#802).
+require_local_cargo verify "cargo test + demo rebuild" \
+  "On this box push to dev and let CI run the tests (gh run view <id> --log-failed)."
+
 if [[ $EUID -ne 0 ]]; then
   echo "[verify] This helper must be launched via sudo -E ./scripts/dev/verify-and-refresh.sh" >&2
   exit 1
@@ -34,7 +41,7 @@ export ADB_KEYS_DIR="${ADB_KEYS_DIR:-${ORIGINAL_HOME}/.config/presenter/adb}"
 RUN_AS_ORIGINAL() {
   local cmd=("$@")
   local quoted=$(printf '%q ' "${cmd[@]}")
-  sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" PATH="$ORIGINAL_PATH" NVM_DIR="$NVM_DIR_DEFAULT" PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" bash -lc "source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; ${quoted}"
+  sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" PATH="$ORIGINAL_PATH" NVM_DIR="$NVM_DIR_DEFAULT" PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" PRESENTER_ALLOW_LOCAL_CARGO="${PRESENTER_ALLOW_LOCAL_CARGO:-}" bash -lc "source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; ${quoted}"
 }
 
 if ! docker info >/dev/null 2>&1; then
