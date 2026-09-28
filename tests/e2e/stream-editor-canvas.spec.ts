@@ -730,6 +730,9 @@ test("#787 opening another scene, closing the panel or switching output asks bef
   await page.locator(sel.frameX).fill("33");
   await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "true");
 
+  // The "declined, nothing changed" checks below are meaningful right after the
+  // dialog because select_scene / request_close_panel / switch_output decide
+  // synchronously inside the click handler — keep them synchronous.
   // Open another scene → asked; declining keeps the scene, element and edit.
   let asked = answerNextDialog(page, false);
   await page
@@ -800,14 +803,23 @@ test("#787 a late save error shows only under the element that was saved", async
   await expect.poll(asked).toBe(DISCARD_Q);
   await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
 
-  // Settle signal: the page logs the failed save once it has handled the 422.
-  const handled = page.waitForEvent("console", {
-    predicate: (m) => m.text().includes(`save of element ${b} failed`),
-    timeout: 15_000,
+  // Settle signal: the 422 was handled — either the page logged the failed save
+  // (it logs AFTER storing the error), or an error box appeared. Accepting both
+  // keeps the check below meaningful on code that shows B's error under A.
+  let handled = false;
+  page.on("console", (m) => {
+    if (m.text().includes(`save of element ${b} failed`)) handled = true;
   });
   release();
-  await handled;
+  await expect
+    .poll(async () => handled || (await errorBox.count()) > 0, { timeout: 15_000 })
+    .toBe(true);
   await page.unroute(patchPath);
+
+  // Flush a render: a reactive edit on A that must show up in the DOM, so any
+  // error stored before it has been rendered too.
+  await page.locator(sel.frameX).fill("11");
+  await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "true");
 
   // B's error is not shown under A.
   await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
