@@ -4,7 +4,7 @@
    so the screen is pure video (and the element reads as hidden to tests).
    The shared StatusBar (clock + connection, same as ndi-fullscreen) keeps its
    own `stage.css` boxes along the bottom 7% of the container; the overlay
-   ends exactly where that bar begins so the two never overlap. */
+   ends 1vh above that bar (sub-pixel rounding can never overlap). */
 
 .stage-api-ambient {
     position: relative;
@@ -26,10 +26,9 @@
     position: absolute;
     left: 5vw;
     right: 5vw;
-    /* = the status bar height (`.stage__clock`: bottom 0, height 7% in
-       stage.css) — container-relative so the overlay's bottom edge is the
-       bar's top edge on any display size. */
-    bottom: 7%;
+    /* Leaves a 1vh gap above the 7% status bar (`.stage__clock`: bottom 0,
+       height 7% in stage.css) so sub-pixel rounding can never overlap it. */
+    bottom: calc(7% + 1vh);
     height: 30%;
     display: flex;
     flex-direction: column;

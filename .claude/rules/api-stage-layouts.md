@@ -84,6 +84,6 @@ chrome" design — `ApiAmbient` takes `ws_state`/`latency_ms` from `pages/stage.
 `<StatusBar … hide_live=true hide_song_number=true />` with EXACTLY the `ndi-fullscreen` flags
 (clock + connection + video-latency + version; no live pill, no song number). The StatusBar's
 boxes are the shared `stage.css` ones (bottom 7% of the container) — never restyle them per
-layout. The lyric overlay is anchored `bottom: 7%` (container-relative = the bar's top edge) so
+layout. The lyric overlay is anchored `bottom: calc(7% + 1vh)` (1vh gap above the bar top — an exact `7%` overlapped by 1px from sub-pixel rounding in CI) so
 it sits ABOVE the bar and never overlaps it; the E2E asserts overlay bottom <= clock/connection
 top. If the StatusBar height ever changes, move the overlay's `bottom` with it.
