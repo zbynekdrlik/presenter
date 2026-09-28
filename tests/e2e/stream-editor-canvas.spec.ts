@@ -120,6 +120,13 @@ async function addElement(
       return false;
     })
     .toBe(true);
+  // Settle signal (#787 reopen): the SERVER having the element is not enough —
+  // wait until the page selected it AND seeded its draft (the overlay outline's
+  // `data-selected` reads `draft_element_id`), so the next field edit lands on
+  // the new element, never on the previously-selected one.
+  await expect(overlayEl(page, newId)).toHaveAttribute("data-selected", "true", {
+    timeout: 15_000,
+  });
   return newId;
 }
 
