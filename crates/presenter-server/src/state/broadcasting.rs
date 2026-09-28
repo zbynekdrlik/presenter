@@ -134,10 +134,10 @@ impl AppState {
             }
         }
 
-        // The "api" layout is driven by PUT /api/stage, not by internal state.
-        // Skip normal broadcasting for the operator-selected snapshot to avoid
-        // overwriting API-pushed data.
-        if code == "api" {
+        // The API layouts (`api`, `api-ambient` #799) are driven by PUT
+        // /api/stage, not by internal state. Skip normal broadcasting for the
+        // operator-selected snapshot to avoid overwriting API-pushed data.
+        if presenter_core::is_api_stage_layout(&code) {
             return Ok(());
         }
 

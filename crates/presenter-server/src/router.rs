@@ -206,6 +206,11 @@ pub fn build_router(state: AppState) -> Router {
             get(stage::get_broadcast_live).patch(stage::set_broadcast_live),
         )
         .route("/api/stage", put(api_stage::update_api_stage))
+        // #799: which lyric text(s) the API layouts show (original/translation/both).
+        .route(
+            "/stage/text-mode",
+            get(api_stage::get_stage_text_mode).put(api_stage::set_stage_text_mode),
+        )
         .route(
             "/integrations/resolume/hosts",
             get(integrations::resolume::list_resolume_hosts)

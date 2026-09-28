@@ -1,5 +1,6 @@
 use crate::{
     slide::{ResolvedSlide, Slide as DomainSlide},
+    stage_text_mode::StageTextMode,
     PlaylistId, PresentationId, SlideId,
 };
 use chrono::{DateTime, Utc};
@@ -11,6 +12,18 @@ pub const DEFAULT_STAGE_LAYOUT_CODE: &str = "worship-snv";
 /// API-driven stage layout code. The `/api/stage` endpoint and its gate
 /// in `presenter-server` reference this code.
 pub const API_STAGE_LAYOUT_CODE: &str = "api";
+
+/// Ambient API layout (#799): the same `/api/stage` snapshot as
+/// [`API_STAGE_LAYOUT_CODE`], rendered as fullscreen NDI/CG video with a clean
+/// lyric overlay only while text is present.
+pub const API_AMBIENT_STAGE_LAYOUT_CODE: &str = "api-ambient";
+
+/// True for every layout fed by the `/api/stage` snapshot (`api`,
+/// `api-ambient`). The ONE predicate every "is this an API layout?" check
+/// must use (snapshot publish gates, broadcast skip, snapshot routing).
+pub fn is_api_stage_layout(code: &str) -> bool {
+    code == API_STAGE_LAYOUT_CODE || code == API_AMBIENT_STAGE_LAYOUT_CODE
+}
 
 /// Built-in stage display layouts exposed by the Presenter server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,6 +70,7 @@ impl StageDisplayLayout {
                 "Current slide's stage text auto-scaled across the whole screen",
             ),
             Self::api(),
+            Self::api_ambient(),
             Self::new(
                 "camera-crew",
                 "CAMERA CREW",
@@ -70,6 +84,26 @@ impl StageDisplayLayout {
     /// missing entry.
     pub fn api() -> Self {
         Self::new("api", "API", "External API-driven stage display")
+    }
+
+    /// The ambient API layout (`API_AMBIENT_STAGE_LAYOUT_CODE`, #799).
+    pub fn api_ambient() -> Self {
+        Self::new(
+            API_AMBIENT_STAGE_LAYOUT_CODE,
+            "API + CG VIDEO",
+            "Fullscreen NDI video with API lyrics overlaid only while text is present",
+        )
+    }
+
+    /// The layout an api snapshot must carry when `code` is selected:
+    /// `Some` for an API layout ([`is_api_stage_layout`]), `None` otherwise.
+    /// Infallible and synchronous, so it can run under the stage-layout lock.
+    pub fn api_layout_for(code: &str) -> Option<Self> {
+        match code {
+            API_STAGE_LAYOUT_CODE => Some(Self::api()),
+            API_AMBIENT_STAGE_LAYOUT_CODE => Some(Self::api_ambient()),
+            _ => None,
+        }
     }
 
     /// The single source of truth for which layouts the OPERATOR may select —
@@ -172,6 +206,11 @@ pub struct StageDisplaySnapshot {
     pub active_entry_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upcoming_groups: Vec<UpcomingGroup>,
+    /// Which lyric text(s) an API layout shows (#799). Set only on api
+    /// snapshots (`api` / `api-ambient`); `None` everywhere else, and absent
+    /// from the JSON then, so non-api payloads are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_mode: Option<StageTextMode>,
 }
 
 impl From<&DomainSlide> for StageDisplaySlide {
@@ -291,6 +330,7 @@ impl StageDisplaySnapshot {
             playlist_entries,
             active_entry_index: None,
             upcoming_groups,
+            text_mode: None,
         }
     }
 }
@@ -317,7 +357,7 @@ mod tests {
     #[test]
     fn built_in_layouts_cover_expected_variants() {
         let layouts = StageDisplayLayout::built_in();
-        assert_eq!(layouts.len(), 9);
+        assert_eq!(layouts.len(), 10);
         let codes: Vec<_> = layouts.iter().map(|layout| layout.code.as_str()).collect();
         assert!(codes.contains(&DEFAULT_STAGE_LAYOUT_CODE));
         assert!(codes.contains(&"worship-pp"));
@@ -327,7 +367,34 @@ mod tests {
         assert!(codes.contains(&"bible"));
         assert!(codes.contains(&"fulltext"));
         assert!(codes.contains(&"api"));
+        assert!(codes.contains(&"api-ambient"));
         assert!(codes.contains(&"camera-crew"));
+    }
+
+    #[test]
+    fn api_layout_predicate_covers_exactly_api_and_ambient() {
+        assert!(is_api_stage_layout("api"));
+        assert!(is_api_stage_layout("api-ambient"));
+        for code in ["worship-snv", "ndi-fullscreen", "camera-crew", "", "API"] {
+            assert!(
+                !is_api_stage_layout(code),
+                "{code} must not be an API layout"
+            );
+        }
+    }
+
+    #[test]
+    fn api_layout_for_maps_each_api_code_to_its_own_layout() {
+        assert_eq!(
+            StageDisplayLayout::api_layout_for("api").map(|l| l.code),
+            Some("api".to_string())
+        );
+        assert_eq!(
+            StageDisplayLayout::api_layout_for("api-ambient").map(|l| l.code),
+            Some("api-ambient".to_string())
+        );
+        assert!(StageDisplayLayout::api_layout_for("worship-snv").is_none());
+        assert!(StageDisplayLayout::find_operator_selectable("api-ambient").is_some());
     }
 }
 

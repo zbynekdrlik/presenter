@@ -1,5 +1,7 @@
-use super::{get_json, post_json, post_no_content, ApiError};
-use presenter_core::{StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot};
+use super::{get_json, post_json, post_no_content, put_json, ApiError};
+use presenter_core::{
+    StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, StageTextMode,
+};
 use serde::{Deserialize, Serialize};
 
 pub async fn get_snapshot() -> Result<StageDisplaySnapshot, ApiError> {
@@ -75,4 +77,18 @@ pub async fn set_layout(code: &str) -> Result<StageLayoutResponse, ApiError> {
 
 pub async fn get_layout() -> Result<StageLayoutResponse, ApiError> {
     get_json("/stage/layout").await
+}
+
+/// `GET`/`PUT /stage/text-mode` body (#799).
+#[derive(Serialize, Deserialize)]
+pub struct StageTextModeBody {
+    pub mode: StageTextMode,
+}
+
+pub async fn get_text_mode() -> Result<StageTextModeBody, ApiError> {
+    get_json("/stage/text-mode").await
+}
+
+pub async fn set_text_mode(mode: StageTextMode) -> Result<StageTextModeBody, ApiError> {
+    put_json("/stage/text-mode", &StageTextModeBody { mode }).await
 }

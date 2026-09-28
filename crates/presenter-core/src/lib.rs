@@ -25,6 +25,7 @@ pub mod search;
 pub mod slide;
 pub mod stage_client;
 pub mod stage_display;
+pub mod stage_text_mode;
 pub mod stream;
 pub mod sync;
 pub mod timer;
@@ -62,9 +63,11 @@ pub use search::{SearchMatchField, SearchResult, SearchResultKind};
 pub use slide::{resolve_sequence, ResolvedSlide, Slide, SlideContent, SlideGroup, SlideText};
 pub use stage_client::{NdiVideoDiag, StageClientSnapshot, StageClientStatus};
 pub use stage_display::{
-    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
-    UpcomingGroup, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
+    is_api_stage_layout, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot,
+    StagePlaylistEntry, StageState, UpcomingGroup, API_AMBIENT_STAGE_LAYOUT_CODE,
+    API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
+pub use stage_text_mode::{StageTextMode, UnknownStageTextMode};
 pub use stream::{
     validate_props, validate_scene_name, validate_slug, ActiveNameplate, AnimationPreset,
     ContentTransition, Frame, ImageFit, Nameplate, NameplateKind, NameplateSource, SceneKind,

@@ -49,8 +49,9 @@ earlier event is lost before the page effect runs. The operator/tablet `use_live
 uses that pattern — do not copy it into any display that must not miss an event.
 
 Layout reconciliation (`pages/stage_events.rs::stage_snapshot_action`): the server publishes ONLY
-the selected layout's snapshot plus the always-on `camera-crew` one (api snapshot only while api
-is selected — `broadcasting.rs::publish_stage_context`, `api_stage.rs`). So on `/stage` a snapshot
+the selected layout's snapshot plus the always-on `camera-crew` one (api snapshot only while an
+API layout — `api`/`api-ambient`, #799 — is selected, stamped with THAT layout —
+`broadcasting.rs::publish_stage_context`, `api_stage.rs`). So on `/stage` a snapshot
 for another layout means "this is the active layout" → adopt it; `camera-crew` → ignore. If the
 server ever starts publishing snapshots for non-selected layouts, this invariant breaks — update
 `stage_snapshot_action` in the same PR. `/ui/camera` stays pinned to `camera-crew`.
