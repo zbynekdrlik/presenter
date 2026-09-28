@@ -1,4 +1,6 @@
+pub mod api_ambient;
 pub mod api_stage;
+pub mod api_text;
 pub mod bible_layout;
 pub mod bible_overlay;
 pub mod camera_crew;

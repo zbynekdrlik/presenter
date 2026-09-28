@@ -44,6 +44,8 @@ impl CompanionVariableState {
             crate::live::LiveEvent::StageLayout { code } => self.set_stage_layout_code(&code),
             crate::live::LiveEvent::BiblePreferencesChanged { .. } => false,
             crate::live::LiveEvent::BroadcastLive { enabled } => self.apply_broadcast_live(enabled),
+            // #799: the API layouts' text mode drives no Companion variable.
+            crate::live::LiveEvent::StageTextMode { .. } => false,
             crate::live::LiveEvent::BibleSlidesChanged { .. } => {
                 // Bible slide changes are for tablet sync, not Companion variables.
                 false

@@ -14,6 +14,10 @@
 //!    - `bible_broadcast`: Current active Bible passage broadcast
 //!    - `presentation_cache`: Cached presentation data for stage display
 //!    - `stage_layout`: Selected stage display layout code
+//!      (`stage_text_mode` is an atomic, safe to read under it — #799)
+//!    - `api_stage`: PUT /api/stage state. Documented multi-lock exception
+//!      (#799): `republish_api_snapshot` holds it (read) across build +
+//!      publish — order `api_stage` → group-color cache → `stage_layout`.
 //!    - `ableset_cache`: Cached AbleSet library-to-playlist mapping
 //!    - `group_color_cache`: Cached group name → hex color mapping
 //!    - `stream`: StreamManager show-state cache (own lock; never held across a repository await)
@@ -27,6 +31,7 @@ pub(crate) mod ableset_ack;
 mod ableset_integration_tests;
 mod ableset_mismatch;
 mod api_stage;
+pub(crate) use api_stage::ApiStageState;
 mod background_tasks;
 pub(crate) mod bible;
 mod bible_manager;
@@ -51,6 +56,7 @@ pub mod slides;
 pub(crate) mod stage;
 pub(crate) mod stage_display;
 mod stage_state;
+mod stage_text_mode;
 // `pub` re-export below: `StartupMode` is consumed by the `main.rs` binary
 // crate (gates the post-bind Android launch) and by `ServerConfig`, so a
 // `pub fn startup_mode()` must return a `pub` type — see startup_mode.rs (#771).
@@ -110,25 +116,6 @@ pub(crate) use seed::seed_sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
 
-/// External API-driven stage state. All fields default to empty strings.
-/// Missing or null JSON fields deserialize to "".
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ApiStageState {
-    #[serde(default)]
-    pub(crate) current_text: String,
-    #[serde(default)]
-    pub(crate) next_text: String,
-    #[serde(default)]
-    pub(crate) current_group: String,
-    #[serde(default)]
-    pub(crate) next_group: String,
-    #[serde(default)]
-    pub(crate) current_song: String,
-    #[serde(default)]
-    pub(crate) next_song: String,
-}
-
 #[derive(Clone)]
 pub struct AppState {
     repository: Repository,
@@ -144,6 +131,8 @@ pub struct AppState {
     /// In-memory caches: presentation / group-color / ableset (see [`CacheManager`]).
     caches: CacheManager,
     stage_layout: Arc<RwLock<String>>,
+    /// #799: API-layout text mode (original/translation/both), lock-free.
+    stage_text_mode: stage_text_mode::StageTextModeCell,
     /// Serializes slide triggers (`update_stage_state`) so the stage-state
     /// write, the per-slide layout-marker switch (#515) and the resolution
     /// broadcast of one trigger can never interleave with another trigger's
@@ -362,6 +351,7 @@ impl AppState {
             heartbeat_config,
             caches: CacheManager::new(),
             stage_layout: Arc::new(RwLock::new(default_layout)),
+            stage_text_mode: stage_text_mode::StageTextModeCell::new(),
             stage_trigger_lock: Arc::new(tokio::sync::Mutex::new(())),
             activation_lock: Arc::new(tokio::sync::Mutex::new(())),
             osc_bridge,
@@ -452,6 +442,8 @@ impl AppState {
             let persisted = state.load_persisted_stage_layout().await;
             *state.stage_layout.write().await = persisted;
         }
+        // #799: same restore for the API layouts' text mode (pure read).
+        state.restore_stage_text_mode().await;
 
         state.ensure_demo_playlist().await?;
 

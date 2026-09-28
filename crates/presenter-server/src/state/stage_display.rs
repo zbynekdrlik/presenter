@@ -4,7 +4,7 @@ use super::stage::{build_stage_snapshot, StageContext};
 use super::AppState;
 use crate::live::LiveEvent;
 use presenter_core::{
-    StageDisplayLayout, StageDisplaySnapshot, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
+    is_api_stage_layout, StageDisplayLayout, StageDisplaySnapshot, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use thiserror::Error;
 
@@ -46,7 +46,7 @@ impl AppState {
                 // Guard against a stored code that no longer exists (e.g. a
                 // layout removed in a later release) — fall back to default
                 // rather than serve an unknown layout.
-                let known = code == API_STAGE_LAYOUT_CODE
+                let known = is_api_stage_layout(&code)
                     || StageDisplayLayout::built_in()
                         .into_iter()
                         .any(|layout| layout.code == code);
@@ -76,8 +76,9 @@ impl AppState {
         &self,
         layout_code: &str,
     ) -> anyhow::Result<Option<StageDisplaySnapshot>> {
-        if layout_code == "api" {
-            return Ok(Some(self.api_stage_snapshot().await));
+        // #799: both API layouts (`api`, `api-ambient`) serve the api snapshot.
+        if is_api_stage_layout(layout_code) {
+            return Ok(Some(self.api_stage_snapshot_for(layout_code).await));
         }
         let layout = StageDisplayLayout::built_in()
             .into_iter()
@@ -110,9 +111,6 @@ impl AppState {
             let guard = self.stage_layout.read().await;
             guard.clone()
         };
-        if code == "api" {
-            return Ok(Some(self.api_stage_snapshot().await));
-        }
         self.stage_display_snapshot(&code).await
     }
 
@@ -223,7 +221,7 @@ impl AppState {
         layout: &StageDisplayLayout,
         publish_snapshots: bool,
     ) -> anyhow::Result<Option<StageContext>> {
-        if layout.code == API_STAGE_LAYOUT_CODE || !publish_snapshots {
+        if is_api_stage_layout(&layout.code) || !publish_snapshots {
             return Ok(None);
         }
         self.build_stage_context().await
@@ -262,24 +260,17 @@ impl AppState {
                 "failed to persist stage layout — it will reset to default on next restart"
             );
         }
-        if layout.code == API_STAGE_LAYOUT_CODE {
-            // Issue #281: when switching TO api, publish the stored
-            // api_stage snapshot so the operator preview reflects the
-            // most recent PUT instead of waiting for the next one.
-            // `broadcast_stage_snapshots` short-circuits on api layout
-            // anyway (see broadcasting.rs::publish_stage_context), so we
-            // replace it with the api snapshot publish here. This publish is
-            // NOT skippable — the resolution broadcast that follows on the
-            // marker path also short-circuits on the api layout.
-            //
-            // #793: build first, then check + publish under the layout read
-            // lock — a later switch away from api must never be followed by
-            // this (now stale) api snapshot, which displays would adopt.
-            let snapshot = self.api_stage_snapshot().await;
-            let current = self.stage_layout.read().await;
-            if *current == API_STAGE_LAYOUT_CODE {
-                self.live_hub.publish(LiveEvent::Stage { snapshot });
-            }
+        if is_api_stage_layout(&layout.code) {
+            // Issue #281: when switching TO an API layout (`api` /
+            // `api-ambient`, #799), publish the stored api snapshot so the
+            // display reflects the most recent PUT instead of waiting for the
+            // next one. `broadcast_stage_snapshots` short-circuits on API
+            // layouts (broadcasting.rs::publish_stage_context), so this
+            // publish replaces it and is NOT skippable. #793: it is built
+            // first, then checked + stamped + published under the layout read
+            // lock (`republish_api_snapshot`), so a later switch away can never
+            // be followed by this now-stale snapshot.
+            self.republish_api_snapshot().await;
         } else if needs_snapshot_broadcast {
             // #652 F1: re-derive a FRESH context here rather than reusing
             // the probe's (potentially stale) result.
