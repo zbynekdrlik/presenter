@@ -13,6 +13,7 @@
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 
 pub mod canvas_overlay;
+pub mod def_sync;
 pub mod editor_assets;
 pub mod editor_fonts;
 pub mod editor_nameplates;
@@ -25,7 +26,9 @@ pub mod gesture;
 pub mod number_field;
 pub mod output_paths;
 pub mod percent_input;
+pub mod prop_error;
 pub mod props_access;
+pub mod selection_intent;
 pub mod text_style_form;
 
 use leptos::prelude::*;
@@ -38,7 +41,9 @@ use serde::Serialize;
 use self::output_paths::{
     active_scene_path, def_path, output_path, overlay_path, scenes_order_path, scenes_path,
 };
+use self::prop_error::PropError;
 use self::props_access::with_frame_mut;
+use self::selection_intent::SelectionIntent;
 
 /// The default output slug — the editor opens this one unless a `?output=` param
 /// / `localStorage` value selects another (#785). Before #785 the editor was
@@ -142,8 +147,9 @@ pub struct StreamEditorCtx {
     /// element selected (list only).
     pub selected_element: RwSignal<Option<i64>>,
     /// Inline validation error for the property form — the server's 422 message
-    /// (#714). Empty = no error.
-    pub prop_error: RwSignal<String>,
+    /// (#714), tagged with the element whose save failed (#787 reopen), so a late
+    /// error never shows under another element. `None` = no error.
+    pub prop_error: RwSignal<Option<PropError>>,
     /// The SINGLE working copy of the selected element's props (#777). Both the
     /// property form and the canvas overlay read/write it, and the preview push
     /// mirrors it into the output iframe so the preview equals the real output.
@@ -165,6 +171,10 @@ pub struct StreamEditorCtx {
     /// #779: the live song title + library (for the "Pieseň" row display + its
     /// Prehrať preview). Fed by the editor page's WS `Stage` snapshot.
     pub song_preview: RwSignal<(String, String)>,
+    /// #787 reopen: monotonic local selection-intent counter. Every selection
+    /// change bumps it; an async action that selects on completion
+    /// (`add_element`) applies its selection only if its ticket is still current.
+    pub selection: StoredValue<SelectionIntent>,
 }
 
 impl StreamEditorCtx {
@@ -204,6 +214,18 @@ impl StreamEditorCtx {
         }
         match result {
             Ok(def) => {
+                // #787 reopen: a refetch started before a newer write must not
+                // roll the def back; a def at least this new is already there.
+                if !self
+                    .def
+                    .with_untracked(|cur| def_sync::should_install(cur.as_ref(), &def))
+                {
+                    leptos::logging::log!(
+                        "stream editor: dropping stale def revision {} for {slug:?}",
+                        def.config_revision
+                    );
+                    return true;
+                }
                 self.active.set(show_state_from_def(&def));
                 self.def.set(Some(def));
                 true
@@ -234,9 +256,10 @@ impl StreamEditorCtx {
     /// Switch the editor to another output (#785): persist the choice
     /// (localStorage + `?output=`), reset the per-output editing state, and
     /// refetch the def + nameplates for the new output. A no-op if unchanged.
-    pub fn switch_output(self, slug: String) {
-        if slug == self.output_slug.get_untracked() {
-            return;
+    /// Unsaved element edits ask first (#787 reopen); returns whether it switched.
+    pub fn switch_output(self, slug: String) -> bool {
+        if slug == self.output_slug.get_untracked() || !self.confirm_discard_draft() {
+            return false;
         }
         self.output_slug.set(slug.clone());
         output_paths::persist_output_slug(&slug);
@@ -251,6 +274,7 @@ impl StreamEditorCtx {
         self.refresh();
         self.reload_nameplates();
         self.reload_active_nameplate();
+        true
     }
 
     /// Exclusive base activation; `None` clears the base (transparent). The
@@ -427,63 +451,8 @@ impl StreamEditorCtx {
     }
 
     // ---- Element authoring (#714) -----------------------------------------
-
-    /// Open a scene for element authoring; clears any element selection + error.
-    pub fn select_scene(self, scene_id: i64) {
-        self.selected_scene.set(Some(scene_id));
-        self.selected_element.set(None);
-        self.draft_element_id.set(None);
-        self.prop_error.set(String::new());
-    }
-
-    /// Close the element panel (no scene selected).
-    pub fn close_panel(self) {
-        self.selected_scene.set(None);
-        self.selected_element.set(None);
-        self.draft_element_id.set(None);
-        self.prop_error.set(String::new());
-    }
-
-    /// Open an element in the property form; clears any prior inline error.
-    /// Switching away from an element with UNSAVED edits asks first (the draft is
-    /// discarded on confirm, per the design's dirty guard).
-    pub fn select_element(self, element_id: i64) {
-        if let Some(current) = self.draft_element_id.get_untracked() {
-            if current != element_id && self.draft_is_dirty() {
-                let keep = crate::utils::window::window()
-                    .confirm_with_message("Zahodiť neuložené zmeny prvku?")
-                    .unwrap_or(true);
-                if !keep {
-                    return;
-                }
-            }
-        }
-        self.selected_element.set(Some(element_id));
-        self.prop_error.set(String::new());
-    }
-
-    /// Deselect the current element (canvas Escape / empty-canvas click, #787),
-    /// keeping the scene open. Unsaved edits ask first, like [`Self::select_element`].
-    /// Returns whether the element was actually deselected.
-    pub fn deselect_element(self) -> bool {
-        if self.selected_element.get_untracked().is_none()
-            && self.draft_element_id.get_untracked().is_none()
-        {
-            return false;
-        }
-        if self.draft_is_dirty() {
-            let discard = crate::utils::window::window()
-                .confirm_with_message("Zahodiť neuložené zmeny prvku?")
-                .unwrap_or(true);
-            if !discard {
-                return false;
-            }
-        }
-        self.selected_element.set(None);
-        self.draft_element_id.set(None);
-        self.prop_error.set(String::new());
-        true
-    }
+    // Selection changes (`select_scene`, `close_panel`, `select_element`,
+    // `deselect_element`, …) live in `selection_intent.rs`.
 
     /// Seed the shared draft from an element's stored props (called by the form's
     /// selection Effect). Sets both the working copy and its element id.
@@ -545,7 +514,19 @@ impl StreamEditorCtx {
 
     /// Create an element on a scene with the given default props, then refetch
     /// the def INLINE (so the new element is present) and select it.
+    ///
+    /// #787 reopen: the current element is released FIRST (through the dirty
+    /// guard — declining keeps it and creates nothing), so no stale form stays
+    /// editable while the create is in flight, and the late response selects
+    /// the new element only if the operator made no other selection meanwhile.
     pub fn add_element(self, scene_id: i64, props: StreamElementProps) {
+        if !self.confirm_discard_draft() {
+            return;
+        }
+        let ticket = self.bump_selection();
+        self.selected_element.set(None);
+        self.draft_element_id.set(None);
+        self.prop_error.set(None);
         leptos::task::spawn_local(async move {
             match crate::api::post_json_detail::<StreamElementProps, StreamElementDef>(
                 &elements_path(scene_id),
@@ -555,10 +536,17 @@ impl StreamEditorCtx {
             {
                 Ok(created) => {
                     // Select it only if its def was installed (not after an
-                    // output switch mid-flight, #787).
-                    if self.reload_def().await {
-                        self.prop_error.set(String::new());
+                    // output switch mid-flight, #787) and no newer local
+                    // selection happened while the create was in flight.
+                    let installed = self.reload_def().await;
+                    if installed && self.selection_is_current(ticket) {
+                        self.prop_error.set(None);
                         self.selected_element.set(Some(created.id));
+                    } else if installed {
+                        leptos::logging::log!(
+                            "stream editor: not selecting created element {} (selection changed meanwhile)",
+                            created.id
+                        );
                     }
                     self.show_toast("Prvok pridaný.", "success");
                 }
@@ -579,6 +567,7 @@ impl StreamEditorCtx {
             match crate::api::delete(&element_path(element_id)).await {
                 Ok(()) => {
                     if self.selected_element.get_untracked() == Some(element_id) {
+                        self.bump_selection();
                         self.selected_element.set(None);
                         self.draft_element_id.set(None);
                     }
@@ -640,12 +629,20 @@ impl StreamEditorCtx {
             )
             .await
             {
-                Ok(_) => {
-                    self.prop_error.set(String::new());
+                Ok(saved) => {
+                    // #787 reopen: apply the saved element locally at once, so
+                    // the draft is clean the moment the save succeeded (not only
+                    // after the refetch below lands).
+                    self.def.try_update(|d| {
+                        if let Some(d) = d.as_mut() {
+                            def_sync::apply_saved_element(d, &saved);
+                        }
+                    });
+                    self.clear_prop_error_of(element_id);
                     self.refresh();
                     self.show_toast("Uložené.", "success");
                 }
-                Err(e) => self.prop_error.set(format!("Neplatné hodnoty: {e}")),
+                Err(e) => self.set_prop_error(element_id, &e),
             }
         });
     }

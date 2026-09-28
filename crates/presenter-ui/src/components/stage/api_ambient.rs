@@ -2,8 +2,10 @@ use leptos::prelude::*;
 
 use crate::components::stage::api_text::{slide_api_lines, ApiLines};
 use crate::components::stage::ndi_video::NdiVideo;
+use crate::components::stage::status_bar::StatusBar;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
+use crate::ws::stage::StageWsState;
 
 /// Largest font the ambient overlay's lines may auto-fit to (px). The boxes
 /// are viewport-relative (see `stage_ambient.css`), so autofit shrinks from
@@ -15,11 +17,16 @@ const SECONDARY_MAX_FONT: f64 = 90.0;
 /// atmosphere surface. The active NDI source (CG song videos) always fills
 /// the screen; the current API lyric line(s) — per the operator's text mode —
 /// fade in as a clean lower-third overlay only while there is text, and fade
-/// out to pure video when the text is cleared. No clock, header or status
-/// chrome, no NDI status overlays: with nothing to show the screen is simply
-/// the video (or black while no source is live).
+/// out to pure video when the text is cleared. The bottom status bar (clock +
+/// connection readout) stays exactly as on `ndi-fullscreen` (owner ruling on
+/// #799) and the overlay sits above it; no header chrome and no NDI status
+/// overlays — with no text the screen is the video (or black while no source
+/// is live) plus the status bar.
 #[component]
-pub fn ApiAmbient() -> impl IntoView {
+pub fn ApiAmbient(
+    ws_state: ReadSignal<StageWsState>,
+    latency_ms: ReadSignal<Option<f64>>,
+) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
     let ndi_active = ctx.ndi_active;
     let ndi_active_source_id = ctx.ndi_active_source_id;
@@ -100,6 +107,9 @@ pub fn ApiAmbient() -> impl IntoView {
                     {secondary_text}
                 </div>
             </div>
+
+            // Same status bar + flags as ndi-fullscreen (owner ruling, #799).
+            <StatusBar ws_state=ws_state latency_ms=latency_ms hide_live=true hide_song_number=true />
         </div>
     }
 }

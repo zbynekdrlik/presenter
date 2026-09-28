@@ -120,6 +120,13 @@ async function addElement(
       return false;
     })
     .toBe(true);
+  // Settle signal (#787 reopen): the SERVER having the element is not enough —
+  // wait until the page selected it AND seeded its draft (the overlay outline's
+  // `data-selected` reads `draft_element_id`), so the next field edit lands on
+  // the new element, never on the previously-selected one.
+  await expect(overlayEl(page, newId)).toHaveAttribute("data-selected", "true", {
+    timeout: 15_000,
+  });
   return newId;
 }
 
@@ -286,14 +293,10 @@ test("click-to-select syncs the list; overlay works on an overlay scene + last e
   await openPanel(page, scene);
   const first = await addElement(page, scene, "color");
   await page.waitForSelector('[data-role="stream-prop-form"]', { timeout: 10_000 });
-  await setFrame(page, 5, 5, 20, 20);
-  await page.locator(sel.save).click();
-  await waitForSavedFrame(page, scene, first, 5, 5);
+  await saveFrame(page, scene, first, 5, 5, 20, 20);
 
   const last = await addElement(page, scene, "color"); // auto-selected (last)
-  await setFrame(page, 60, 60, 20, 20);
-  await page.locator(sel.save).click();
-  await waitForSavedFrame(page, scene, last, 60, 60);
+  await saveFrame(page, scene, last, 60, 60, 20, 20);
 
   // Click the FIRST element's outline on the canvas → the list selects it.
   const fb = (await overlayEl(page, first).boundingBox())!;
@@ -339,6 +342,10 @@ async function saveFrame(
   await setFrame(page, x, y, w, h);
   await page.locator(sel.save).click();
   await waitForSavedFrame(page, sceneId, id, x, y);
+  // Settle signal on the PAGE side (#787 reopen): the server having the frame
+  // is not enough — wait until the page's own def agrees with the draft, so the
+  // next action never meets the unsaved-changes question.
+  await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "false");
 }
 
 /** The frame position the fields currently show (the live draft). */
@@ -577,4 +584,250 @@ test("#787 switching output shows loading, never the previous output's scenes", 
 
   await page.unroute("**/stream/api/outputs/timer/def");
   expect(errors, "console clean").toEqual([]);
+});
+
+// ---- #787 reopen: adding an element must never lose a newer local edit ----
+//
+// CI run 36428243568: `setFrame` right after a SECOND `addElement` saved x=10
+// (the default) while y=60 stuck. The first `fill` landed in the PREVIOUS
+// element's still-open form; the add's late response then selected the new
+// element and re-seeded the draft over it. A real operator typing during that
+// window lost the edit the same way (and unsaved edits were discarded with no
+// question at all).
+test("#787 adding an element: no stale form while the create is in flight; unsaved edits ask first", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_AddRace");
+
+  // Hold the page's element-create response so the in-flight window is
+  // observable deterministically.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const createPath = `**/stream/api/scenes/${scene}/elements`;
+  await page.route(createPath, async (route) => {
+    if (route.request().method() === "POST") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  // While the create is in flight the previous element is no longer selected
+  // and its form is gone — a keystroke cannot land in it.
+  await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "false");
+
+  release();
+  // Settle signal: the created element becomes the selected row.
+  const selectedRow = page.locator('[data-role="stream-element"][data-selected="true"]');
+  await expect(selectedRow).toHaveCount(1, { timeout: 15_000 });
+  const b = (await selectedRow.getAttribute("data-element-id")) as string;
+  expect(b).not.toBe(a);
+  await page.unroute(createPath);
+
+  // Every field edit lands on the NEW element; the old one is untouched.
+  await saveFrame(page, scene, b, 60, 60, 20, 20);
+  const saved = (await getScene(page, scene)).elements.find((e) => String(e.id) === a)!;
+  const aFrame = saved.props.frame as { xPct: number; yPct: number };
+  expect([aFrame.xPct, aFrame.yPct]).toEqual([10, 10]);
+
+  // Unsaved edits + "add" → the same discard question as switching elements;
+  // declining keeps the element and its edit.
+  await page.locator(sel.frameX).fill("33");
+  let asked = "";
+  page.once("dialog", (dialog) => {
+    asked = dialog.message();
+    void dialog.dismiss();
+  });
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect.poll(() => asked).toBe("Zahodiť neuložené zmeny prvku?");
+  await expect(listRow(page, b)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 picking another element while a create is in flight keeps that pick", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_AddPick");
+  const rows = page.locator('[data-role="stream-element"]');
+  await expect(rows).toHaveCount(1);
+
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const createPath = `**/stream/api/scenes/${scene}/elements`;
+  await page.route(createPath, async (route) => {
+    if (route.request().method() === "POST") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "false");
+  // The operator picks A again while the create is still held.
+  await listRow(page, a).locator('[data-role="stream-element-select"]').click();
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+
+  release();
+  // Settle signal AFTER the selection decision: add_element shows its
+  // „Prvok pridaný." toast only once it has decided whether to select the new
+  // element (the previous toast is the save's „Uložené."). A row count alone
+  // is not enough — a live-event refetch can install the def earlier.
+  await expect(page.locator('[data-role="toast"]')).toHaveText("Prvok pridaný.", {
+    timeout: 15_000,
+  });
+  await page.unroute(createPath);
+  await expect(rows).toHaveCount(2);
+  const created = page.locator(
+    `[data-role="stream-element"]:not([data-element-id="${a}"])`,
+  );
+  // The late create response did not steal the operator's newer pick.
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  await expect(created).toHaveAttribute("data-selected", "false");
+  await expect(page.locator('[data-role="stream-element"][data-selected="true"]')).toHaveCount(1);
+  await expect(overlayEl(page, a)).toHaveAttribute("data-selected", "true");
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+// ---- #787 reopen (gaps 2+3): every selection path asks before discarding ----
+//
+// Opening another scene, closing the element panel, or switching the output used
+// to drop the element draft with NO question, while picking another element /
+// Escape / adding one asked „Zahodiť neuložené zmeny prvku?". And a save's late
+// 422 rendered under whatever element was open when it landed.
+
+const DISCARD_Q = "Zahodiť neuložené zmeny prvku?";
+
+/** Arm a one-shot dialog handler; returns a getter for the message it saw. */
+function answerNextDialog(page: Page, accept: boolean): () => string {
+  let asked = "";
+  page.once("dialog", (dialog) => {
+    asked = dialog.message();
+    void (accept ? dialog.accept() : dialog.dismiss());
+  });
+  return () => asked;
+}
+
+test("#787 opening another scene, closing the panel or switching output asks before discarding edits", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const other = await addScene(page, "SC_787_GuardOther", "base");
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_Guard");
+
+  // An unsaved edit on the selected element.
+  await page.locator(sel.frameX).fill("33");
+  await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "true");
+
+  // The "declined, nothing changed" checks below are meaningful right after the
+  // dialog because select_scene / request_close_panel / switch_output decide
+  // synchronously inside the click handler — keep them synchronous.
+  // Open another scene → asked; declining keeps the scene, element and edit.
+  let asked = answerNextDialog(page, false);
+  await page
+    .locator(`${sel.scene}[data-scene-id="${other}"] [data-role="stream-scene-edit"]`)
+    .click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  // Close the panel → asked; declining keeps the panel open with the edit.
+  asked = answerNextDialog(page, false);
+  await page.locator('[data-role="stream-panel-close"]').click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(page.locator('[data-role="stream-element-panel"]')).toHaveCount(1);
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  // Switch the output → asked; declining stays on this output, and the header
+  // select shows it again.
+  const outputSelect = page.locator('[data-role="stream-output-select"]');
+  asked = answerNextDialog(page, false);
+  await outputSelect.selectOption("timer");
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(outputSelect).toHaveValue("stream");
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  expect(await page.locator(sel.frameX).inputValue()).toBe("33");
+
+  // Accepting opens the other scene; the discarded edit never reached the server.
+  asked = answerNextDialog(page, true);
+  await page
+    .locator(`${sel.scene}[data-scene-id="${other}"] [data-role="stream-scene-edit"]`)
+    .click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(listRow(page, a)).toHaveCount(0);
+  await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
+  const stored = (await getScene(page, scene)).elements.find((e) => String(e.id) === a)!;
+  expect((stored.props.frame as { xPct: number }).xPct).toBe(10);
+
+  expect(errors, "console clean").toEqual([]);
+});
+
+test("#787 a late save error shows only under the element that was saved", async ({ page }) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  const { scene, el: a } = await sceneWithOneElement(page, "SC_787_LateErr");
+  const b = await addElement(page, scene, "countdown"); // auto-selected
+  const errorBox = page.locator('[data-role="stream-prop-error"]');
+
+  // Hold B's PATCH so its 422 lands after the operator moved on to A.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const patchPath = `**/stream/api/elements/${b}`;
+  await page.route(patchPath, async (route) => {
+    if (route.request().method() === "PATCH") {
+      await gate;
+    }
+    await route.continue();
+  });
+
+  // A text size beyond 0..=100 is a real server-side 422 (frames clamp locally).
+  const tsCd = '[data-role="stream-ts-countdown"] ';
+  await page.locator(`${tsCd}[data-role="stream-ts-size"]`).fill("5000");
+  await page.locator(sel.save).click();
+
+  // Pick A (discarding B's invalid draft) while B's save is still in flight.
+  const asked = answerNextDialog(page, true);
+  await listRow(page, a).locator('[data-role="stream-element-select"]').click();
+  await expect.poll(asked).toBe(DISCARD_Q);
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+
+  // Settle signal: the 422 was handled — either the page logged the failed save
+  // (it logs AFTER storing the error), or an error box appeared. Accepting both
+  // keeps the check below meaningful on code that shows B's error under A.
+  let handled = false;
+  page.on("console", (m) => {
+    if (m.text().includes(`save of element ${b} failed`)) handled = true;
+  });
+  release();
+  await expect
+    .poll(async () => handled || (await errorBox.count()) > 0, { timeout: 15_000 })
+    .toBe(true);
+  await page.unroute(patchPath);
+
+  // Flush a render: a reactive edit on A that must show up in the DOM, so any
+  // error stored before it has been rendered too.
+  await page.locator(sel.frameX).fill("11");
+  await expect(page.locator(sel.save)).toHaveAttribute("data-dirty", "true");
+
+  // B's error is not shown under A.
+  await expect(listRow(page, a)).toHaveAttribute("data-selected", "true");
+  await expect(errorBox).toHaveCount(0);
+
+  // Chrome logs every non-2xx fetch itself; strip exactly the one deliberate 422.
+  const is422 = (e: string) =>
+    /Failed to load resource: the server responded with a status of 422\b/.test(e);
+  expect(errors.filter(is422), "exactly one deliberate 422 console line").toHaveLength(1);
+  expect(errors.filter((e) => !is422(e)), "console clean apart from the 422").toEqual([]);
 });

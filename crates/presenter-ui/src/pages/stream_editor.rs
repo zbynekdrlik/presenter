@@ -58,7 +58,7 @@ pub fn StreamEditorPage() -> impl IntoView {
         toast_state: RwSignal::new(String::from("info")),
         selected_scene: RwSignal::new(None),
         selected_element: RwSignal::new(None),
-        prop_error: RwSignal::new(String::new()),
+        prop_error: RwSignal::new(None),
         draft: RwSignal::new(
             crate::components::stream_editor::props_access::default_element_props("image"),
         ),
@@ -67,6 +67,9 @@ pub fn StreamEditorPage() -> impl IntoView {
         nameplates: RwSignal::new(Vec::new()),
         active_nameplate: RwSignal::new(None),
         song_preview: RwSignal::new((String::new(), String::new())),
+        selection: StoredValue::new(
+            crate::components::stream_editor::selection_intent::SelectionIntent::default(),
+        ),
     };
 
     // Cold load.

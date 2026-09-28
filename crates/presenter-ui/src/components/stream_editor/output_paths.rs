@@ -131,10 +131,26 @@ pub fn OutputSelect(ctx: StreamEditorCtx) -> impl IntoView {
             <select
                 data-role="stream-output-select"
                 prop:value=move || ctx.output_slug.get()
-                on:change=move |ev| ctx.switch_output(event_target_value(&ev))
+                on:change=move |ev| on_output_change(ctx, &ev)
             >
                 {options}
             </select>
         </label>
+    }
+}
+
+/// Switch to the picked output. When the operator declines to discard unsaved
+/// element edits (#787 reopen) the slug does not change, so `prop:value` never
+/// re-fires — put the `<select>` back on the current output by hand.
+fn on_output_change(ctx: StreamEditorCtx, ev: &web_sys::Event) {
+    use wasm_bindgen::JsCast;
+    let Some(select) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+    else {
+        return;
+    };
+    if !ctx.switch_output(select.value()) {
+        select.set_value(&ctx.slug());
     }
 }
