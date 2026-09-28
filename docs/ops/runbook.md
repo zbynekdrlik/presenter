@@ -65,7 +65,7 @@ sudo ./scripts/ops/setup-systemd.sh prod          # install production + backup 
 
 The helper copies these unit templates into `/etc/systemd/system/`:
 
-- `ops/systemd/presenter@.service` – templated runtime entrypoint using `scripts/ops/run-env.sh`.
+- `ops/systemd/presenter@.service` – templated runtime entrypoint using `scripts/ops/run-env.sh`. **Legacy, Tier-1 boxes only:** `run-env.sh` compiles from source and refuses without `PRESENTER_ALLOW_LOCAL_CARGO=1` (#802) — add `Environment=PRESENTER_ALLOW_LOCAL_CARGO=1` via a unit override only on a box allowed to build. The deployed instances (`presenter.service` / `presenter-dev.service`) run CI-built binaries from `/opt` and do not use this template.
 - `ops/systemd/presenter-backup@.service` and `.timer` – nightly backups (enabled automatically for production).
 
 Re-run the script after repository updates to propagate service changes; it calls `systemctl daemon-reload` for you.

@@ -41,12 +41,19 @@ HELPER = E2E_DIR / "prebuilt-binary.ts"
 SCRIPT_DIRS = (REPO_ROOT / "scripts" / "dev", REPO_ROOT / "scripts" / "ops")
 OPT_IN = "PRESENTER_ALLOW_LOCAL_CARGO"
 CARGO_COMPILE = re.compile(r"\bcargo\s+(run|build)\b")
-# Every cargo subcommand that compiles (Tier-0 bans all of them locally).
+# Every cargo subcommand that compiles (Tier-0 bans all of them locally),
+# tolerating a toolchain / flags before it (`cargo +nightly build`,
+# `cargo --locked test`) and the `cargo-<sub>` binary spelling.
 SHELL_CARGO_COMPILE = re.compile(
-    r"\bcargo[\s-]+(run|build|check|clippy|test|bench|doc|rustc|install|watch)\b"
+    r"\bcargo(?:\s+(?:\+\S+|-{1,2}[\w=-]+))*[\s-]+"
+    r"(run|build|check|clippy|test|bench|doc|rustc|install|watch"
+    r"|nextest|llvm-cov|mutants|fix|miri|tarpaulin)\b"
 )
 QUOTED = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'")
+# A quoted string handed to a shell (`bash -lc "cargo test"`) IS code.
+SHELL_C_ARG = re.compile(r"(?:^|\s)-l?c\s+(\"(?:[^\"\\]|\\.)*\"|'[^']*')")
 SHELL_GUARDS = ("require_local_cargo", "local_cargo_allowed")
+NEGATED_GUARD = re.compile(r"!\s*(?:require_local_cargo|local_cargo_allowed)")
 GUARD_LOOKBACK = 8
 NON_CODE_SUFFIXES = {".md", ".json", ".yaml", ".yml", ".txt"}
 IMPORTER_BINS = ("import_propresenter", "ingest_bibles")
@@ -243,6 +250,15 @@ class DevOpsScriptsNoSilentCompile(SandboxCase):
         self.sandbox.add_binaries("release", stale=False, names=("ai_eval",))
         self.assert_ran_without_cargo(self._ai_eval_score())
 
+    def test_ai_eval_refuses_stale_prebuilt_binary(self) -> None:
+        self.sandbox.add_binaries("release", stale=True, names=("ai_eval",))
+        result = self._ai_eval_score()
+        self.assert_refused(result)
+        self.assertIn("older than", result.stderr)
+        # The ai-eval recipe is its own artifact, never the build-artifacts one.
+        self.assertIn("ai-eval-<short-sha>", result.stderr)
+        self.assertNotIn("-n build-artifacts", result.stderr)
+
     def test_ai_eval_compiles_with_opt_in(self) -> None:
         result = self._ai_eval_score(opt_in=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -256,9 +272,16 @@ class DevOpsScriptsNoSilentCompile(SandboxCase):
 
 def _code_part(line: str) -> str:
     """The line with quoted strings and trailing comments removed — a cargo
-    word inside a message or comment is not an invocation."""
+    word inside a message or comment is not an invocation — plus the bodies of
+    strings passed to `sh -c` / `bash -lc`, which are executed."""
+    shell_bodies = " ".join(m.group(1)[1:-1] for m in SHELL_C_ARG.finditer(line))
     stripped = QUOTED.sub('""', line)
-    return stripped.split("#", 1)[0] if not stripped.lstrip().startswith("#!") else ""
+    code = stripped.split("#", 1)[0] if not stripped.lstrip().startswith("#!") else ""
+    return f"{code} {shell_bodies}".rstrip()
+
+
+def _is_guard(code: str) -> bool:
+    return any(g in code for g in SHELL_GUARDS) and not NEGATED_GUARD.search(code)
 
 
 def ungated_shell_cargo(path: Path) -> list[str]:
@@ -276,9 +299,7 @@ def ungated_shell_cargo(path: Path) -> list[str]:
         if not SHELL_CARGO_COMPILE.search(code):
             continue
         window = lines[max(0, idx - GUARD_LOOKBACK) : idx + 1]
-        guarded = top_level_guard or any(
-            guard in _code_part(prev) for prev in window for guard in SHELL_GUARDS
-        )
+        guarded = top_level_guard or any(_is_guard(_code_part(prev)) for prev in window)
         if not guarded:
             offenders.append(f"{path.relative_to(REPO_ROOT)}:{idx + 1}: {line.strip()}")
     return offenders
@@ -329,6 +350,12 @@ class NoUngatedCargo(unittest.TestCase):
                 "if ! cargo clippy -q; then :; fi\n"
             )
             self.assertEqual(len(ungated_shell_cargo(probe)), 1)
+            probe.write_text(
+                "#!/usr/bin/env bash\ncargo +nightly build\ncargo --locked test\n"
+                'bash -lc "cargo nextest run"\n'
+                "if ! local_cargo_allowed; then echo skip; fi\ncargo check\n"
+            )
+            self.assertEqual(len(ungated_shell_cargo(probe)), 4)
             probe.write_text(
                 "#!/usr/bin/env bash\nif local_cargo_allowed; then\n  cargo check\nfi\n"
             )

@@ -14,9 +14,16 @@ local_cargo_allowed() {
   [[ "${PRESENTER_ALLOW_LOCAL_CARGO:-}" == "1" ]]
 }
 
-# local_cargo_refuse <tag> <reason> [extra hint line...] — print the recipe to
-# stderr and exit 1 (exits the whole script, or the enclosing subshell).
+# local_cargo_refuse [--own-recipe] <tag> <reason> [extra hint line...] — print
+# the recipe to stderr and exit 1 (exits the whole script, or the enclosing
+# subshell). --own-recipe: the hint lines carry the download recipe, so the
+# generic `build-artifacts` one is omitted (e.g. ai_eval ships separately).
 local_cargo_refuse() {
+  local generic_recipe=1
+  if [[ "${1:-}" == "--own-recipe" ]]; then
+    generic_recipe=0
+    shift
+  fi
   local tag="$1"
   local reason="$2"
   shift 2
@@ -27,18 +34,26 @@ local_cargo_refuse() {
     for line in "$@"; do
       echo "[${tag}] ${line}"
     done
-    echo "[${tag}] Prebuilt binaries come from CI — download the build artifact for your commit into target/release/:"
-    echo "[${tag}]   gh run download <run-id> -n build-artifacts -D _artifacts"
-    echo "[${tag}]   mkdir -p target/release && cp _artifacts/* target/release/ && chmod +x target/release/*"
-    echo "[${tag}] (find <run-id> with: gh run list -w pipeline.yml -b dev -L 5)"
+    if ((generic_recipe)); then
+      echo "[${tag}] Prebuilt binaries come from CI — download the build artifact for your commit into target/release/:"
+      echo "[${tag}]   gh run download <run-id> -n build-artifacts -D _artifacts"
+      echo "[${tag}]   mkdir -p target/release && cp _artifacts/* target/release/ && chmod +x target/release/*"
+      echo "[${tag}] (find <run-id> with: gh run list -w pipeline.yml -b dev -L 5)"
+    fi
     echo "[${tag}] Explicit local-compile opt-in (Tier-1/2 boxes only): PRESENTER_ALLOW_LOCAL_CARGO=1"
   } >&2
   exit 1
 }
 
-# require_local_cargo <tag> <what> [extra hint line...] — return 0 when opted
-# in (logging that a local compile follows), otherwise refuse and exit 1.
+# require_local_cargo [--own-recipe] <tag> <what> [extra hint line...] — return
+# 0 when opted in (logging that a local compile follows), otherwise refuse and
+# exit 1.
 require_local_cargo() {
+  local own=()
+  if [[ "${1:-}" == "--own-recipe" ]]; then
+    own=(--own-recipe)
+    shift
+  fi
   local tag="$1"
   local what="$2"
   shift 2
@@ -46,5 +61,5 @@ require_local_cargo() {
     echo "[${tag}] PRESENTER_ALLOW_LOCAL_CARGO=1 — compiling locally: ${what} (Tier-0 opt-in)" >&2
     return 0
   fi
-  local_cargo_refuse "$tag" "refusing to compile locally: ${what}" "$@"
+  local_cargo_refuse "${own[@]}" "$tag" "refusing to compile locally: ${what}" "$@"
 }

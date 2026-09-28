@@ -76,15 +76,20 @@ fail() {
 }
 
 # Run the ai_eval binary: the CI-built one (ai-eval-build.yml artifact) when
-# present, else a local compile — Tier-0 opt-in only (#802).
+# present and newer than every crate source (a stale binary scores old code,
+# #559), else a local compile — Tier-0 opt-in only (#802).
 run_ai_eval() {
   local prebuilt="$REPO_ROOT/target/release/ai_eval"
+  local problem="ai_eval binary not found at $prebuilt."
   if [[ -x "$prebuilt" ]]; then
-    "$prebuilt" "$@"
-    return
+    if ! find "$REPO_ROOT/crates" -name '*.rs' -newer "$prebuilt" -print -quit 2>/dev/null | grep -q .; then
+      "$prebuilt" "$@"
+      return
+    fi
+    problem="$prebuilt is older than the crate sources (stale, #559)."
   fi
-  require_local_cargo ai-eval "ai_eval (--features ai-eval)" \
-    "ai_eval binary not found at $prebuilt. It is built by the ai-eval-build.yml workflow:" \
+  require_local_cargo --own-recipe ai-eval "ai_eval (--features ai-eval)" \
+    "$problem It is built by the ai-eval-build.yml workflow:" \
     "  gh run download <run-id> -n ai-eval-<short-sha> -D target/release && chmod +x target/release/ai_eval" \
     "  (find <run-id> with: gh run list -w ai-eval-build.yml -L 5)"
   cargo run --bin ai_eval --features ai-eval -- "$@"
