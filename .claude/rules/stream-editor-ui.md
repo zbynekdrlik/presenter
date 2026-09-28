@@ -261,3 +261,16 @@ a `switch_output` clobber. Rules:
   the page.
 - To reproduce the window, gate the page's `POST /stream/api/scenes/{id}/elements` with
   `page.route`.
+- The local def must match the operator's own writes (`def_sync.rs`, pure + host-tested).
+  - `save_props` applies the element returned by the PATCH to `def` at once
+    (`apply_saved_element`), before its own refresh. Without that, the page keeps the OLD def
+    until the refresh lands, so the draft reads as "dirty". Any guarded action in that gap
+    (add / select) then asks about edits that are already saved, and Playwright auto-dismisses
+    the question, which silently aborts the action.
+  - `reload_def` drops a same-output def whose `config_revision` is older than the one installed
+    (`should_install`). It still returns `true`, because a def at least that new is already there.
+- E2E settle signal after a SAVE: wait for the Save button to have `data-dirty="false"`
+  (`saveFrame`). `waitForSavedFrame` alone polls the SERVER, not the page.
+- While a create is in flight nothing is selected, so Escape or an empty-canvas click is a no-op
+  and does not cancel the late auto-select. That is harmless, because nothing was visibly
+  selected. An explicit pick (`select_element`) DOES cancel it.
