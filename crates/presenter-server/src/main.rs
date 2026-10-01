@@ -78,6 +78,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(?err, "failed to ensure stream-fonts directory on startup");
     }
 
+    // #778: warm the stored fonts' browser verdicts off the request path.
+    state.spawn_stream_font_verdict_warmup();
+
     let app = build_router(state.clone());
 
     let listener = TcpListener::bind(addr)
