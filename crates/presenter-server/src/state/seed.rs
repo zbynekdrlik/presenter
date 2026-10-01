@@ -5,6 +5,10 @@ use presenter_core::{
 };
 
 #[cfg(test)]
+// async-trait's expansion marks each bodiless method `#[must_use]` while the
+// boxed future it returns is already must-use — clippy::double_must_use
+// false positive on the macro output, not on our code.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait TestBibleIngestion {
     async fn ingest_default_translations(
