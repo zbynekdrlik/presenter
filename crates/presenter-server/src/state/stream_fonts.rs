@@ -474,6 +474,7 @@ mod tests {
     #[tokio::test]
     async fn loadable_verdict_is_computed_once_per_content_sha() {
         use crate::state::stream_fonts::test_fonts::{with_os2_version, GRUPPO_TTF};
+        use std::sync::Arc;
         let tmp = tempfile::tempdir().unwrap();
         let mut state = AppState::in_memory().await.unwrap();
         state.set_stream_assets_dir(tmp.path().join("stream-assets"));
@@ -513,9 +514,10 @@ mod tests {
             !listed(state.loadable_stream_fonts().await.unwrap()),
             "the cached verdict holds for the process (no per-request re-check)"
         );
-        // Another process (fresh AppState, empty cache) evaluates the file again.
-        let mut fresh = AppState::in_memory().await.unwrap();
-        fresh.set_stream_assets_dir(tmp.path().join("stream-assets"));
+        // A fresh, empty verdict cache over the SAME database (what a new
+        // process sees) evaluates the stored bytes again.
+        let mut fresh = state.clone();
+        fresh.stream_font_verdicts = Arc::new(FontVerdictCache::default());
         assert!(
             listed(fresh.loadable_stream_fonts().await.unwrap()),
             "a fresh cache re-evaluates the stored bytes"
