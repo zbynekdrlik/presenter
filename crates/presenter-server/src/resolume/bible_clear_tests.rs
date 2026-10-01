@@ -23,10 +23,13 @@
 //! Self-contained helpers (the `latency_tests.rs` pattern) so the oversized
 //! `tests.rs` does not grow.
 
+use super::bible_clear::{clip_ids, plan_bible_clear_triggers, BibleClearTriggers};
+use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
+use super::types::ClipTarget;
 use super::{BibleUpdate, ResolumeConnectionSnapshot, CONNECT_TIMEOUT};
 use chrono::Utc;
-use presenter_core::{ResolumeHost, ResolumeHostId};
+use presenter_core::{BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -278,4 +281,150 @@ async fn clear_in_own_layer_connects_all_lanes_then_clear_last() {
         "every blanked lane clip is connected when no lane shares #bible-clear's layer"
     );
     assert_clear_after_lanes(&connects, &[BIBLE_A, REF_A, TRANS_A, TRANS_REF_A]);
+}
+
+// ── Unit pins for the layer bookkeeping + the pure planner ─────────────
+
+fn target(clip_id: i64, layer_index: usize) -> ClipTarget {
+    ClipTarget {
+        clip_id,
+        text_param_id: None,
+        transforms: Vec::new(),
+        layer_index,
+    }
+}
+
+/// The composition parse records each clip's layer position, and a clear clip
+/// never carries a text param (it is only ever triggered).
+#[test]
+fn composition_parse_records_each_clips_layer_index() {
+    let composition = serde_json::json!({ "layers": [
+        layer(reference_clips()),
+        bible_layer(),
+        layer(vec![clip(CLEAR, "#bible-clear", Some(99))]),
+    ]});
+    let mapping = ClipMapping::from_composition(&composition).expect("mapping");
+
+    assert_eq!(mapping.bible_reference_a[0].layer_index, 0);
+    assert_eq!(mapping.bible_reference_b[0].layer_index, 0);
+    assert_eq!(mapping.bible_a[0].layer_index, 1);
+    assert_eq!(mapping.bible_b[0].layer_index, 1);
+    assert_eq!(mapping.bible_clear[0].layer_index, 2);
+    assert_eq!(mapping.bible_clear[0].clip_id, CLEAR);
+    assert_eq!(mapping.bible_clear[0].text_param_id, None);
+}
+
+#[test]
+fn plan_skips_only_the_lane_clips_in_a_clear_layer() {
+    let plan = plan_bible_clear_triggers(
+        vec![
+            target(BIBLE_A, 1),
+            target(REF_A, 0),
+            target(TRANS_A, 2),
+            target(TRANS_REF_A, 3),
+        ],
+        &[target(CLEAR, 0), target(501, 3)],
+    );
+
+    assert_eq!(
+        plan,
+        BibleClearTriggers {
+            lanes: vec![target(BIBLE_A, 1), target(TRANS_A, 2)],
+            skipped: vec![target(REF_A, 0), target(TRANS_REF_A, 3)],
+            clear: vec![target(CLEAR, 0), target(501, 3)],
+        }
+    );
+}
+
+#[test]
+fn plan_without_a_clear_clip_triggers_every_lane_clip() {
+    let blanked = vec![target(BIBLE_A, 0), target(REF_A, 0)];
+    let plan = plan_bible_clear_triggers(blanked.clone(), &[]);
+
+    assert_eq!(
+        plan,
+        BibleClearTriggers {
+            lanes: blanked,
+            skipped: Vec::new(),
+            clear: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn clip_ids_lists_the_ids_in_order() {
+    assert_eq!(
+        clip_ids(&[target(REF_A, 0), target(BIBLE_A, 1)]),
+        vec![REF_A, BIBLE_A]
+    );
+    assert!(clip_ids(&[]).is_empty());
+}
+
+fn verse_update() -> BibleUpdate {
+    BibleUpdate {
+        passage: None,
+        secondary_text: None,
+        secondary_translation_code: None,
+        slide_output: Some(BibleSlideOutput {
+            main_text: "For God so loved".to_string(),
+            main_reference: "John 3:16 (KJV)".to_string(),
+            secondary_text: "Neboť Bůh tak miloval".to_string(),
+            secondary_reference: "Jan 3:16 (CEP)".to_string(),
+            triggered_at: Utc::now(),
+        }),
+    }
+}
+
+/// Whether a `PUT /parameter/by-id/{param_id}` carried `{"value": value}`.
+fn put_sent(requests: &[Request], param_id: i64, value: &str) -> bool {
+    let wanted = format!("/api/v1/parameter/by-id/{param_id}");
+    requests.iter().any(|req| {
+        req.method.as_str() == "PUT"
+            && req.url.path() == wanted
+            && serde_json::from_slice::<serde_json::Value>(&req.body)
+                .ok()
+                .and_then(|body| {
+                    body.get("value")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                })
+                .as_deref()
+                == Some(value)
+    })
+}
+
+/// The clear keeps the A/B alternation unchanged: it blanks lane A (even the
+/// skipped same-layer reference clip) and flips, so the next verse lands on
+/// lane B of both the bible and the bible-translation slots.
+#[tokio::test]
+async fn clear_flips_the_lanes_so_the_next_verse_lands_on_lane_b() {
+    let mut miesto = reference_clips();
+    miesto.push(clear_clip());
+    let (server, _log) = start_resolume(vec![
+        layer(miesto),
+        bible_layer(),
+        translation_layer(),
+        translate_reference_layer(),
+    ])
+    .await;
+    let (mut driver, status) = driver_for(&server);
+
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert!(
+        put_sent(&requests, 31, "For God so loved"),
+        "after a clear the verse goes to #bible-b"
+    );
+    assert!(
+        put_sent(&requests, 41, "Neboť Bůh tak miloval"),
+        "after a clear the secondary text goes to #bible-translate-b"
+    );
 }
