@@ -235,3 +235,14 @@ method, the same error variant the router maps, e.g. `NdiSessionError::SessionNo
 the forward you get `E0599: no method named <name> found for &NdiManagerHandle` at CI's Clippy job
 ~min in (Tier-0, no local compile) — same failure family as the E0063 / orphaned-forward traps
 above. Grep the seam before pushing: `grep -n 'fn <name>' crates/presenter-server/src/state/ndi_control.rs`.
+
+## `clippy.toml` pins `msrv = "1.85.0"` — a std API stabilised AFTER 1.85 fails `incompatible_msrv` (#778)
+
+CI builds with the latest stable toolchain, so a newer std method COMPILES — but clippy's
+`incompatible_msrv` (warn, in `clippy::all`) flags any API whose "stable since" is newer than the
+pinned msrv, and `-D warnings` turns that into a hard Clippy-job failure (Tier-0: invisible until CI).
+Real case #778: `usize::is_multiple_of` (stable 1.87) in the font browser-check — caught only by
+review. Before using a recently added std method, check its `Stable since` on doc.rust-lang.org
+against 1.85; use the older spelling instead (`x % 4 != 0`). The reverse lint
+`manual_is_multiple_of` respects the msrv, so the `%` form stays clean. Do not raise the msrv
+inside a feature PR.
