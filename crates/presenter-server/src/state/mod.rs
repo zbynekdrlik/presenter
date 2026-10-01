@@ -202,6 +202,9 @@ pub struct AppState {
     /// `PRESENTER_STREAM_ASSETS_DIR` / `PRESENTER_DB_URL` / cwd — see
     /// `state::stream_assets::resolve_dir`.
     stream_assets_dir: std::path::PathBuf,
+    /// #778: cached browser-loadability verdicts of stored fonts (by sha256),
+    /// `Arc`-shared by every clone — see `stream_fonts::FontVerdictCache`.
+    stream_font_verdicts: Arc<stream_fonts::FontVerdictCache>,
     /// #771: how this process booted. In [`StartupMode::Validate`] the
     /// constructor + `from_config` skip every integration/background task and
     /// `/healthz` skips the live AI probe. Defaults to `Normal` for every
@@ -374,6 +377,7 @@ impl AppState {
             stream: stream::StreamManager::new(),
             nameplates: stream_nameplates::NameplateManager::new(),
             stream_assets_dir: stream_assets::resolve_dir(),
+            stream_font_verdicts: Arc::new(stream_fonts::FontVerdictCache::default()),
             startup_mode,
         };
         // #771: heartbeat broadcasting is a background task — skip it in the

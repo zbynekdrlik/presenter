@@ -9,14 +9,21 @@
 //!
 //! Routes (mounted via one `.merge(routes())` in `router.rs::build_router`):
 //! - `POST   /stream/fonts`      multipart upload (field `file`) → `StreamFont`
-//! - `GET    /stream/api/fonts`  list metadata
+//! - `GET    /stream/api/fonts`  list metadata (browser-loadable faces only)
 //! - `GET    /stream/fonts/{id}` serve font bytes (immutable cache)
 //! - `DELETE /stream/fonts/{id}` delete row + file (409 while referenced)
 //! - `GET    /stream/fonts.css`  generated `@font-face` rules (no-cache + ETag)
+//!
+//! #778 reopen: a font a browser's OpenType sanitiser would refuse is rejected
+//! at upload (422), and an already-stored one is left out of the list and the
+//! stylesheet ([`AppState::loadable_stream_fonts`]) — never deleted.
 
 use super::AppError;
 use crate::state::stream_assets::sha256_hex;
-use crate::state::stream_fonts::{detect_font, parse_font_metadata, MAX_FONT_BYTES};
+use crate::state::stream_fonts::{
+    check_browser_loadable, detect_font, parse_font_metadata, DetectedFont, FontMeta,
+    MAX_FONT_BYTES,
+};
 use crate::state::AppState;
 use axum::{
     body::Body,
@@ -60,7 +67,8 @@ fn family_name_is_safe(family: &str) -> bool {
 
 /// `POST /stream/fonts` — multipart web-font upload (field `file`). Validates by
 /// MAGIC BYTES (ttf/otf only; `.ttc`/`woff`/`woff2`/garbage → 422), caps at
-/// [`MAX_FONT_BYTES`] (413), parses family/weight/italic, writes the bytes
+/// [`MAX_FONT_BYTES`] (413), refuses a font browsers would not load (422,
+/// [`check_browser_loadable`]), parses family/weight/italic, writes the bytes
 /// content-addressed (dedup), records/reuses the metadata row, returns the
 /// `StreamFont`.
 #[instrument(skip_all)]
@@ -96,23 +104,7 @@ async fn upload_font(
         ));
     }
 
-    let detected = detect_font(&data).ok_or_else(|| {
-        AppError::unprocessable(
-            "unsupported font type (only raw TTF and OTF are accepted; \
-             .ttc / woff / woff2 are not)",
-        )
-    })?;
-
-    let meta = parse_font_metadata(&data)
-        .map_err(|e| AppError::unprocessable(format!("could not read font metadata: {e}")))?;
-
-    if !family_name_is_safe(&meta.family) {
-        return Err(AppError::unprocessable(format!(
-            "font family name {:?} contains characters that are not allowed",
-            meta.family
-        )));
-    }
-
+    let (detected, meta) = validate_font_bytes(&data)?;
     let sha256 = sha256_hex(&data);
 
     // Write the bytes FIRST (idempotent on identical content), then the row.
@@ -142,10 +134,42 @@ async fn upload_font(
     Ok(Json(font))
 }
 
-/// `GET /stream/api/fonts` — all font metadata, newest first.
+/// The content checks of an upload, in order, each a `422`: container by magic
+/// bytes (ttf/otf only), browser loadability (#778 — a font every browser's
+/// OpenType sanitiser drops would never render and make each page log a
+/// console warning), readable metadata, and a CSS-safe family name.
+fn validate_font_bytes(data: &[u8]) -> Result<(DetectedFont, FontMeta), AppError> {
+    let detected = detect_font(data).ok_or_else(|| {
+        AppError::unprocessable(
+            "unsupported font type (only raw TTF and OTF are accepted; \
+             .ttc / woff / woff2 are not)",
+        )
+    })?;
+
+    check_browser_loadable(data).map_err(|defect| {
+        AppError::unprocessable(format!(
+            "browsers would refuse to load this font: {defect}. \
+             Re-export or repair the font file and upload it again."
+        ))
+    })?;
+
+    let meta = parse_font_metadata(data)
+        .map_err(|e| AppError::unprocessable(format!("could not read font metadata: {e}")))?;
+
+    if !family_name_is_safe(&meta.family) {
+        return Err(AppError::unprocessable(format!(
+            "font family name {:?} contains characters that are not allowed",
+            meta.family
+        )));
+    }
+    Ok((detected, meta))
+}
+
+/// `GET /stream/api/fonts` — metadata of every browser-loadable face, newest
+/// first (a refused or file-less face is left out — #778).
 #[instrument(skip_all)]
 async fn list_fonts(State(state): State<AppState>) -> Result<Json<Vec<StreamFont>>, AppError> {
-    Ok(Json(state.repository().list_stream_fonts().await?))
+    Ok(Json(state.loadable_stream_fonts().await?))
 }
 
 /// `GET /stream/fonts/{id}` — serve the stored font bytes with a
@@ -203,16 +227,17 @@ async fn delete_font(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /stream/fonts.css` — the generated `@font-face` rules for every uploaded
-/// face. `Cache-Control: no-cache` + an ETag over the face set so the OBS output
-/// and editor pages always revalidate but transfer nothing when unchanged (a
-/// fresh upload changes the set → a new ETag → a re-fetch).
+/// `GET /stream/fonts.css` — the generated `@font-face` rules for every
+/// browser-loadable uploaded face (#778). `Cache-Control: no-cache` + an ETag
+/// over the face set so the OBS output and editor pages always revalidate but
+/// transfer nothing when unchanged (a fresh upload changes the set → a new
+/// ETag → a re-fetch).
 #[instrument(skip_all)]
 async fn fonts_css(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let fonts = state.repository().list_stream_fonts().await?;
+    let fonts = state.loadable_stream_fonts().await?;
     let css = build_fonts_css(&fonts);
     let etag = format!("\"{}\"", &sha256_hex(css.as_bytes())[..32]);
 
