@@ -283,6 +283,39 @@ async fn clear_in_own_layer_connects_all_lanes_then_clear_last() {
     assert_clear_after_lanes(&connects, &[BIBLE_A, REF_A, TRANS_A, TRANS_REF_A]);
 }
 
+/// A failed lane-clip trigger must not swallow the clear clip. Phase 1 never
+/// holds a clip in a clear layer, so `#bible-clear` still fires, and the push
+/// still reports the lane failure (so the host's error/backoff handling runs).
+#[tokio::test]
+async fn clear_clip_still_fires_when_a_lane_clip_trigger_fails() {
+    let (server, log) = start_resolume(vec![
+        layer(reference_clips()),
+        bible_layer(),
+        translation_layer(),
+        translate_reference_layer(),
+        layer(vec![clear_clip()]),
+    ])
+    .await;
+    Mock::given(method("POST"))
+        .and(path(
+            format!("/api/v1/composition/clips/by-id/{BIBLE_A}/connect").as_str(),
+        ))
+        .respond_with(ResponseTemplate::new(500))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server);
+
+    let result = driver.handle_bible(clear_update(), &status).await;
+
+    assert!(result.is_err(), "the failed lane trigger is still reported");
+    let connects = log.lock().expect("connect log lock").clone();
+    assert!(
+        connects.iter().any(|(id, _)| *id == CLEAR),
+        "#bible-clear must still be connected after a phase-1 trigger failure"
+    );
+}
+
 // ── Unit pins for the layer bookkeeping + the pure planner ─────────────
 
 fn target(clip_id: i64, layer_index: usize) -> ClipTarget {
