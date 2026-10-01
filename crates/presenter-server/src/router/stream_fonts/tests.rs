@@ -6,6 +6,9 @@
 //! test created, never global counts.
 
 use crate::router::build_router;
+use crate::state::stream_fonts::test_fonts::{
+    with_os2_version, with_table_length, with_table_renamed,
+};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -391,4 +394,170 @@ async fn fonts_css_has_face_rule_and_etag_revalidation() {
         .await
         .unwrap();
     assert_eq!(cond.status(), StatusCode::NOT_MODIFIED);
+}
+
+// ── #778 reopen: fonts a browser's OpenType sanitiser (OTS) would refuse ──
+//
+// Font id 71 "Brigends Expanded NL" on SNV/PP declares OS/2 version 5 in a
+// 96-byte table (v5 needs 100) — read-fonts accepted it, Chrome's OTS does not
+// ("OTS parsing error: OS/2: Failed to read version 5-specific fields"), and
+// every page loading /stream/fonts.css logged the rejection. The broken bytes
+// are derived in memory from the OFL fixture (`state::stream_fonts::test_fonts`).
+
+async fn get(state: &AppState, uri: &str) -> axum::response::Response {
+    build_router(state.clone())
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+/// Seed an ALREADY-STORED face directly (row + file), bypassing the upload
+/// gate — the state SNV/PP are in for font id 71. `family` must be unique per
+/// test (shared `cache=shared` DB, family-global delete guard).
+async fn seed_stored_font(state: &AppState, family: &str, bytes: &[u8]) -> StreamFont {
+    let sha = crate::state::stream_assets::sha256_hex(bytes);
+    state.font_store().store(&sha, "ttf", bytes).await.unwrap();
+    state
+        .repository()
+        .insert_or_get_stream_font(NewStreamFont {
+            sha256: sha,
+            original_filename: format!("{family}.ttf"),
+            family: family.to_string(),
+            weight: 400,
+            italic: false,
+            format: "ttf".to_string(),
+            size_bytes: bytes.len() as i64,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn upload_font_browsers_would_refuse_is_422_with_reason() {
+    let (state, _dir) = test_state().await;
+    let cases: [(&str, Vec<u8>, &str); 3] = [
+        // The exact font-id-71 defect: OS/2 v5 in a v4-sized (96-byte) table.
+        (
+            "os2-v5-in-96-bytes",
+            with_os2_version(FIXTURE_TTF, 5),
+            "OS/2",
+        ),
+        // OS/2 cut below the 78 bytes every version needs.
+        (
+            "os2-truncated",
+            with_table_length(FIXTURE_TTF, b"OS/2", 70),
+            "OS/2",
+        ),
+        // A table OTS requires (`post`) is missing.
+        (
+            "no-post-table",
+            with_table_renamed(FIXTURE_TTF, b"post", b"pozt"),
+            "post",
+        ),
+    ];
+    for (label, bytes, names) in cases {
+        let response = build_router(state.clone())
+            .oneshot(upload_request(&format!("{label}.ttf"), "font/ttf", &bytes))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{label}: a font the browser sanitiser refuses must be rejected at upload"
+        );
+        let message = body_json(response).await["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            message.contains(names),
+            "{label}: the 422 message names the defect ({names}): {message}"
+        );
+        let sha = crate::state::stream_assets::sha256_hex(&bytes);
+        let path = state
+            .stream_assets_dir()
+            .join("fonts")
+            .join(format!("{sha}.ttf"));
+        assert!(!path.exists(), "{label}: a refused font is not stored");
+    }
+}
+
+#[tokio::test]
+async fn stored_font_browsers_refuse_is_hidden_from_list_and_css_but_kept() {
+    let (state, _dir) = test_state().await;
+    let good = upload(&state, "good.ttf", FIXTURE_TTF).await;
+    // The font-id-71 shape, plus 4 trailing bytes so its sha (and thus its
+    // dedup row) is unique to this test — trailing data is legal sfnt.
+    let mut broken_bytes = with_os2_version(FIXTURE_TTF, 5);
+    broken_bytes.extend_from_slice(&[0, 0, 0, 0]);
+    let broken = seed_stored_font(&state, "BrokenOs2Face778", &broken_bytes).await;
+
+    let list: Vec<StreamFont> =
+        serde_json::from_value(body_json(get(&state, "/stream/api/fonts").await).await).unwrap();
+    assert!(
+        list.iter().any(|f| f.id == good.id),
+        "a valid face stays listed"
+    );
+    assert!(
+        !list.iter().any(|f| f.id == broken.id),
+        "a face the browser refuses is NOT offered in the font list/picker"
+    );
+
+    let css = String::from_utf8(body_bytes(get(&state, "/stream/fonts.css").await).await).unwrap();
+    assert!(
+        css.contains(&format!("/stream/fonts/{}\")", good.id)),
+        "the valid face keeps its @font-face rule: {css}"
+    );
+    assert!(
+        !css.contains(&format!("/stream/fonts/{}\")", broken.id)),
+        "no @font-face for the refused face, so no page fetches it: {css}"
+    );
+    assert!(
+        !css.contains("BrokenOs2Face778"),
+        "the refused family is absent from fonts.css: {css}"
+    );
+
+    // Hidden, never deleted: the row and the file stay (owner-approved
+    // cleanup only), so an explicit DELETE still works.
+    state
+        .repository()
+        .get_stream_font(broken.id)
+        .await
+        .expect("the refused face's row is kept");
+    let path = state
+        .stream_assets_dir()
+        .join("fonts")
+        .join(format!("{}.ttf", broken.sha256));
+    assert!(path.exists(), "the refused face's file is kept");
+}
+
+#[tokio::test]
+async fn stored_font_with_missing_file_is_hidden_from_list_and_css() {
+    let (state, _dir) = test_state().await;
+    // A row whose bytes are gone from disk would 404 in every browser.
+    let font = state
+        .repository()
+        .insert_or_get_stream_font(NewStreamFont {
+            sha256: "bb22cc33dd44ee55ff66778899aabbccddeeff00112233445566778899aabbcc".to_string(),
+            original_filename: "MissingFile778.ttf".to_string(),
+            family: "MissingFileFamily778".to_string(),
+            weight: 400,
+            italic: false,
+            format: "ttf".to_string(),
+            size_bytes: 1,
+        })
+        .await
+        .unwrap();
+
+    let list: Vec<StreamFont> =
+        serde_json::from_value(body_json(get(&state, "/stream/api/fonts").await).await).unwrap();
+    assert!(
+        !list.iter().any(|f| f.id == font.id),
+        "a face with no file is not listed"
+    );
+    let css = String::from_utf8(body_bytes(get(&state, "/stream/fonts.css").await).await).unwrap();
+    assert!(
+        !css.contains(&format!("/stream/fonts/{}\")", font.id)),
+        "no @font-face for a face with no file: {css}"
+    );
 }

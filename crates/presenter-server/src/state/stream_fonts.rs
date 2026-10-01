@@ -31,6 +31,11 @@ use crate::state::stream_assets::{
 };
 use crate::state::AppState;
 
+/// Test-only sfnt byte surgery deriving the broken-font fixtures from the OFL
+/// fixture (#778 browser-sanitiser check) — shared by the unit + router tests.
+#[cfg(test)]
+pub(crate) mod test_fonts;
+
 /// Business cap on a single uploaded font file (5 MiB). A ttf/otf face is well
 /// under this; the route's `DefaultBodyLimit` sits a little higher (a DoS
 /// ceiling on the raw multipart body), this is the precise user-facing `413`.
