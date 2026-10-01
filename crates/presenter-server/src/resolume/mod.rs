@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod backoff_tests;
+#[cfg(test)]
+mod bible_clear_tests;
 mod clip_map;
 mod driver;
 mod error_kind;
