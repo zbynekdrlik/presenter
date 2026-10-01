@@ -8,9 +8,13 @@
 //! parse and still be refused by every browser — font id 71 on SNV/PP declared
 //! OS/2 version 5 in a 96-byte table (v5 needs 100).
 //!
-//! This is NOT a full sanitiser (deep per-table validation of glyf, cmap,
-//! GSUB… stays OTS's job). It mirrors exactly the OTS hard-fails below, each
-//! read from the OTS source:
+//! This is NOT a full sanitiser (deep per-table validation of glyf, cmap…
+//! stays OTS's job). Layout/variation tables (GDEF/GPOS/GSUB…) are
+//! deliberately NOT checked: Chrome's OTS context passes them through to
+//! HarfBuzz (`BlinkOTSContext::GetTableAction` → `TABLE_ACTION_PASSTHRU`), so
+//! the standalone `ots-sanitize` CLI rejects fonts Chrome renders fine (15 of
+//! the 397 SNV fonts vs Chrome's 1) — never tighten towards the CLI. It
+//! mirrors exactly the OTS hard-fails below, each read from the OTS source:
 //!
 //! - `ots.cc ProcessGeneric`: every table record is 4-byte aligned, starts
 //!   after the table directory and inside the file, is non-empty, ends inside
@@ -119,14 +123,16 @@ fn check_table_records(font: &FontRef, file_len: usize) -> Result<(), BrowserFon
         let start = record.offset() as usize;
         let end = start.checked_add(record.length() as usize);
         let in_file = start >= directory_end && end.is_some_and(|end| end <= file_len);
-        if !start.is_multiple_of(4) || record.length() == 0 || !in_file {
+        // `% 4`, not `is_multiple_of` (stable only since 1.87; clippy.toml
+        // pins msrv 1.85 → `incompatible_msrv` under `-D warnings`).
+        if start % 4 != 0 || record.length() == 0 || !in_file {
             return Err(BrowserFontDefect::BadTableRecord(record.tag()));
         }
         spans.push((start, start + record.length() as usize, record.tag()));
     }
-    // Sorted by (start, end), any overlap shows up between neighbours (the
-    // end breaks start ties so the reported pair is deterministic).
-    spans.sort_unstable_by_key(|&(start, end, _)| (start, end));
+    // Sorted by (start, end, tag), any overlap shows up between neighbours, and
+    // the reported pair is deterministic even for identical spans.
+    spans.sort_unstable();
     for pair in spans.windows(2) {
         let ((_, prev_end, prev_tag), (next_start, _, next_tag)) = (pair[0], pair[1]);
         if next_start < prev_end {
