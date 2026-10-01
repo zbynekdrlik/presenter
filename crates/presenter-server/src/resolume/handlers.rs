@@ -373,15 +373,11 @@ impl HostDriver {
                     )
                     .await?
                 } else {
-                    // Clear path
-                    self.handle_bible_clear(
-                        &mapping,
-                        bible_lane,
-                        bible_translation_lane,
-                        &mut to_trigger,
-                        status,
-                    )
-                    .await?
+                    // Clear path (#807, `bible_clear.rs`): triggers its own two
+                    // phases — lane clips, then `#bible-clear` — so `to_trigger`
+                    // stays empty here.
+                    self.handle_bible_clear(&mapping, bible_lane, bible_translation_lane, status)
+                        .await?
                 };
 
             if !to_trigger.is_empty() {
@@ -555,76 +551,6 @@ impl HostDriver {
             to_trigger.extend(sec_ref_targets);
         }
 
-        Ok((bible_lane_filled, bible_translation_lane_filled))
-    }
-
-    /// Handle clearing all Bible clips.
-    async fn handle_bible_clear(
-        &mut self,
-        mapping: &ClipMapping,
-        bible_lane: LaneTarget,
-        bible_translation_lane: LaneTarget,
-        to_trigger: &mut Vec<ClipTarget>,
-        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
-    ) -> anyhow::Result<(bool, bool)> {
-        let blank = String::new();
-        let bible_targets = self
-            .update_lane_text(
-                bible_lane,
-                &mapping.bible_a,
-                &mapping.bible_b,
-                Some(&blank),
-                status,
-            )
-            .await?;
-        let bible_lane_filled = !bible_targets.is_empty();
-        if bible_lane_filled {
-            to_trigger.extend(bible_targets);
-        }
-
-        // Clear bible reference clips
-        let bible_ref_targets = self
-            .update_lane_text(
-                bible_lane,
-                &mapping.bible_reference_a,
-                &mapping.bible_reference_b,
-                Some(&blank),
-                status,
-            )
-            .await?;
-        if !bible_ref_targets.is_empty() {
-            to_trigger.extend(bible_ref_targets);
-        }
-
-        let bible_translation_targets = self
-            .update_lane_text(
-                bible_translation_lane,
-                &mapping.bible_translation_a,
-                &mapping.bible_translation_b,
-                Some(&blank),
-                status,
-            )
-            .await?;
-        let bible_translation_lane_filled = !bible_translation_targets.is_empty();
-        if bible_translation_lane_filled {
-            to_trigger.extend(bible_translation_targets);
-        }
-
-        // Clear secondary translation reference clips
-        let sec_ref_targets = self
-            .update_lane_text(
-                bible_translation_lane,
-                &mapping.bible_translate_reference_a,
-                &mapping.bible_translate_reference_b,
-                Some(&blank),
-                status,
-            )
-            .await?;
-        if !sec_ref_targets.is_empty() {
-            to_trigger.extend(sec_ref_targets);
-        }
-
-        to_trigger.extend(mapping.bible_clear.iter().cloned());
         Ok((bible_lane_filled, bible_translation_lane_filled))
     }
 
