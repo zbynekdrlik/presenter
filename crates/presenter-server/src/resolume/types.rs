@@ -79,6 +79,10 @@ pub struct ClipTarget {
     pub clip_id: i64,
     pub text_param_id: Option<i64>,
     pub transforms: Vec<TextTransform>,
+    /// #807: position of the clip's layer in the composition's `layers` array.
+    /// The Bible clear path uses it to skip lane clips that share a layer with
+    /// a `#bible-clear` clip, whose `/connect` they would otherwise race.
+    pub layer_index: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
