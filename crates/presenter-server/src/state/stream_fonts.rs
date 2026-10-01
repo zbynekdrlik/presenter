@@ -13,14 +13,23 @@
 //! Path-traversal safety mirrors `stream_assets.rs`: the on-disk name is a
 //! stored sha256 (hex WE computed) + a whitelisted ext, never client input.
 //! The sha/atomic-write primitives are REUSED from `stream_assets` (no copy).
+//!
+//! Browser loadability (#778 reopen): [`check_browser_loadable`] mirrors the
+//! OTS hard-fails browsers apply to every web font. The upload refuses a font
+//! failing it, and [`AppState::loadable_stream_fonts`] hides an already-stored
+//! one from the font list + `fonts.css` (verdict cached per content sha256,
+//! nothing deleted).
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Mutex;
 // `Path` is named only by the `#[cfg(test)]` `dir()` accessor + the test module,
 // so a module-level import would be `unused` in the non-test build (`-D warnings`
 // on the clippy job — the #616 test-only-import class).
 #[cfg(test)]
 use std::path::Path;
 
+use presenter_core::stream::StreamFont;
 use read_fonts::tables::head::MacStyle;
 use read_fonts::tables::os2::SelectionFlags;
 use read_fonts::types::NameId;
@@ -30,6 +39,14 @@ use crate::state::stream_assets::{
     is_valid_sha256, read_content, remove_content, store_content_addressed, sweep_tmp_dir,
 };
 use crate::state::AppState;
+
+mod browser_check;
+pub(crate) use browser_check::check_browser_loadable;
+
+/// Test-only sfnt byte surgery deriving the broken-font fixtures from the OFL
+/// fixture (#778 browser-sanitiser check) — shared by the unit + router tests.
+#[cfg(test)]
+pub(crate) mod test_fonts;
 
 /// Business cap on a single uploaded font file (5 MiB). A ttf/otf face is well
 /// under this; the route's `DefaultBodyLimit` sits a little higher (a DoS
@@ -222,6 +239,156 @@ impl AppState {
         }
         Ok(())
     }
+
+    /// The stored faces a browser will actually load (#778 reopen): every
+    /// `stream_fonts` row minus faces whose bytes fail
+    /// [`check_browser_loadable`] or whose file is missing. Feeds BOTH
+    /// `GET /stream/api/fonts` (editor picker, font panel, output font-gate
+    /// preload) and `GET /stream/fonts.css`, so no page ever fetches a face the
+    /// browser's OpenType sanitiser refuses (the console warning SNV/PP logged
+    /// for font id 71). Nothing is deleted: the row and the file stay, and an
+    /// explicit `DELETE /stream/fonts/{id}` still works.
+    pub(crate) async fn loadable_stream_fonts(&self) -> anyhow::Result<Vec<StreamFont>> {
+        let fonts = self.repository().list_stream_fonts().await?;
+        let store = self.font_store();
+        let mut loadable = Vec::with_capacity(fonts.len());
+        for font in fonts {
+            if self.stored_font_is_loadable(&store, &font).await {
+                loadable.push(font);
+            }
+        }
+        Ok(loadable)
+    }
+
+    /// Compute every stored face's verdict now (startup warm-up), so the first
+    /// `fonts.css` / font list after a restart does not read every stored font
+    /// file inline (~72 MB / 397 files on SNV) — possibly past the output
+    /// page's 2 s font-wait. Logged; a failure only means the verdicts are
+    /// computed on the first request instead.
+    pub(crate) async fn warm_stream_font_verdicts(&self) {
+        let started = std::time::Instant::now();
+        match self.loadable_stream_fonts().await {
+            Ok(loadable) => tracing::info!(
+                loadable = loadable.len(),
+                elapsed = ?started.elapsed(),
+                "stream-font browser-loadability verdicts warmed"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "stream-font verdict warm-up failed — verdicts are computed on first request"
+            ),
+        }
+    }
+
+    /// Run [`AppState::warm_stream_font_verdicts`] in the background (startup,
+    /// off the request path). A background task, so it is skipped in validate
+    /// (schema-probe) mode like every other one (#771). `pub` because `main.rs`
+    /// is a separate crate root (a `pub(crate)` fn called only from there is
+    /// dead code to clippy).
+    pub fn spawn_stream_font_verdict_warmup(&self) {
+        if !self.startup_mode().starts_integrations() {
+            tracing::info!("validate startup mode — stream-font verdict warm-up skipped");
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move { state.warm_stream_font_verdicts().await });
+    }
+
+    /// Cached browser-loadability verdict for one stored face. The verdict is a
+    /// pure function of the bytes, which are immutable per sha256, so it is
+    /// computed once per process (and logged once when negative). A missing or
+    /// unreadable file hides the face without caching, so it reappears as soon
+    /// as the file is back.
+    async fn stored_font_is_loadable(&self, store: &FontStore, font: &StreamFont) -> bool {
+        if let Some(verdict) = self.stream_font_verdicts.get(&font.sha256) {
+            return verdict;
+        }
+        let bytes = match store.read(&font.sha256, &font.format).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                self.report_font_file_problem(font, "missing");
+                return false;
+            }
+            Err(e) => {
+                self.report_font_file_problem(font, &format!("unreadable: {e}"));
+                return false;
+            }
+        };
+        let loadable = match check_browser_loadable(&bytes) {
+            Ok(()) => true,
+            Err(defect) => {
+                tracing::warn!(
+                    font_id = font.id,
+                    family = %font.family,
+                    sha256 = %font.sha256,
+                    %defect,
+                    "stored font would be refused by the browser's OpenType sanitiser — \
+                     face hidden from fonts.css and the font list (row and file kept)"
+                );
+                false
+            }
+        };
+        self.stream_font_verdicts
+            .record(font.sha256.clone(), loadable);
+        loadable
+    }
+
+    /// Log a stored face whose file is missing/unreadable: WARN the first time
+    /// per sha256, DEBUG after. Such a face is re-checked on EVERY list/css
+    /// request (it is not cached, so it comes back with its file), and a WARN
+    /// per request would flood the journal (the #484 log-flood rule).
+    fn report_font_file_problem(&self, font: &StreamFont, problem: &str) {
+        if self.stream_font_verdicts.first_file_problem(&font.sha256) {
+            tracing::warn!(
+                font_id = font.id,
+                family = %font.family,
+                sha256 = %font.sha256,
+                problem,
+                "stored font file unavailable — face hidden from fonts.css and the \
+                 font list (warned once per font)"
+            );
+        } else {
+            tracing::debug!(
+                font_id = font.id,
+                sha256 = %font.sha256,
+                problem,
+                "stored font file still unavailable — face hidden"
+            );
+        }
+    }
+}
+
+/// Per-process cache of [`check_browser_loadable`] verdicts for STORED fonts,
+/// keyed by content sha256 (#778 reopen). One instance per `AppState`, shared
+/// by every clone through an `Arc` (the `ai_health_cache` pattern). The lock is
+/// held only for a map lookup/insert, never across an await; a poisoned lock
+/// degrades to a cache miss (the verdict is recomputed), never a panic.
+#[derive(Debug, Default)]
+pub(crate) struct FontVerdictCache {
+    verdicts: Mutex<HashMap<String, bool>>,
+    /// Shas whose missing/unreadable file was already WARN-logged.
+    file_problem_warned: Mutex<HashSet<String>>,
+}
+
+impl FontVerdictCache {
+    fn get(&self, sha256: &str) -> Option<bool> {
+        self.verdicts.lock().ok()?.get(sha256).copied()
+    }
+
+    fn record(&self, sha256: String, loadable: bool) {
+        if let Ok(mut verdicts) = self.verdicts.lock() {
+            verdicts.insert(sha256, loadable);
+        }
+    }
+
+    /// `true` only the first time a file problem is reported for `sha256` (a
+    /// poisoned lock reports `true`: an extra WARN beats a silent one).
+    fn first_file_problem(&self, sha256: &str) -> bool {
+        match self.file_problem_warned.lock() {
+            Ok(mut warned) => warned.insert(sha256.to_string()),
+            Err(_) => true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -302,5 +469,102 @@ mod tests {
         store.remove(&sha, "ttf").await.unwrap();
         assert_eq!(store.read(&sha, "ttf").await.unwrap(), None);
         store.remove(&sha, "ttf").await.unwrap(); // idempotent
+    }
+
+    #[tokio::test]
+    async fn loadable_verdict_is_computed_once_per_content_sha() {
+        use crate::state::stream_fonts::test_fonts::{with_os2_version, GRUPPO_TTF};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = AppState::in_memory().await.unwrap();
+        state.set_stream_assets_dir(tmp.path().join("stream-assets"));
+        // The font-id-71 shape + 8 trailing bytes: a sha (and dedup row) unique
+        // to this test in the process-wide shared in-memory DB.
+        let mut broken = with_os2_version(GRUPPO_TTF, 5);
+        broken.extend_from_slice(&[0; 8]);
+        let sha = crate::state::stream_assets::sha256_hex(&broken);
+        let path = state
+            .font_store()
+            .store(&sha, "ttf", &broken)
+            .await
+            .unwrap();
+        let font = state
+            .repository()
+            .insert_or_get_stream_font(presenter_persistence::NewStreamFont {
+                sha256: sha,
+                original_filename: "CachedVerdict778.ttf".to_string(),
+                family: "CachedVerdictFamily778".to_string(),
+                weight: 400,
+                italic: false,
+                format: "ttf".to_string(),
+                size_bytes: broken.len() as i64,
+            })
+            .await
+            .unwrap();
+        let listed = |fonts: Vec<StreamFont>| fonts.iter().any(|f| f.id == font.id);
+
+        assert!(
+            !listed(state.loadable_stream_fonts().await.unwrap()),
+            "a face the browser refuses is hidden"
+        );
+        // Swap valid bytes in under the same name: the verdict is a pure
+        // function of the (immutable-per-sha) content, so it is NOT re-read.
+        std::fs::write(&path, GRUPPO_TTF).unwrap();
+        assert!(
+            !listed(state.loadable_stream_fonts().await.unwrap()),
+            "the cached verdict holds for the process (no per-request re-check)"
+        );
+        // Another process (fresh AppState, empty cache) evaluates the file again.
+        let mut fresh = AppState::in_memory().await.unwrap();
+        fresh.set_stream_assets_dir(tmp.path().join("stream-assets"));
+        assert!(
+            listed(fresh.loadable_stream_fonts().await.unwrap()),
+            "a fresh cache re-evaluates the stored bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_up_caches_stored_verdicts_before_any_request() {
+        use crate::state::stream_fonts::test_fonts::{with_os2_version, GRUPPO_TTF};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = AppState::in_memory().await.unwrap();
+        state.set_stream_assets_dir(tmp.path().join("stream-assets"));
+        // The font-id-71 shape + 12 trailing bytes: unique sha in the shared DB.
+        let mut broken = with_os2_version(GRUPPO_TTF, 5);
+        broken.extend_from_slice(&[0; 12]);
+        let sha = crate::state::stream_assets::sha256_hex(&broken);
+        state
+            .font_store()
+            .store(&sha, "ttf", &broken)
+            .await
+            .unwrap();
+        state
+            .repository()
+            .insert_or_get_stream_font(presenter_persistence::NewStreamFont {
+                sha256: sha.clone(),
+                original_filename: "WarmUp778.ttf".to_string(),
+                family: "WarmUpFamily778".to_string(),
+                weight: 400,
+                italic: false,
+                format: "ttf".to_string(),
+                size_bytes: broken.len() as i64,
+            })
+            .await
+            .unwrap();
+        assert_eq!(state.stream_font_verdicts.get(&sha), None, "cold cache");
+
+        state.warm_stream_font_verdicts().await;
+        assert_eq!(
+            state.stream_font_verdicts.get(&sha),
+            Some(false),
+            "the warm-up recorded the refused face's verdict"
+        );
+    }
+
+    #[test]
+    fn file_problem_is_reported_once_per_sha() {
+        let cache = FontVerdictCache::default();
+        assert!(cache.first_file_problem("aa"), "first report warns");
+        assert!(!cache.first_file_problem("aa"), "repeat stays quiet");
+        assert!(cache.first_file_problem("bb"), "another font warns");
     }
 }
