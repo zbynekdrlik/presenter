@@ -110,15 +110,21 @@ impl HostDriver {
             .await?;
 
         let lanes_blanked = (!bible.is_empty(), !translation.is_empty());
-        let blanked = [bible, reference, translation, translate_reference].concat();
+        let blanked: Vec<ClipTarget> = [bible, reference, translation, translate_reference]
+            .into_iter()
+            .flatten()
+            .collect();
         let triggers = plan_bible_clear_triggers(blanked, &mapping.bible_clear);
         self.trigger_bible_clear(&triggers).await?;
         Ok(lanes_blanked)
     }
 
-    /// Phase 1 (lane clips), then phase 2 (`#bible-clear`). `trigger_clips`
+    /// Phase 1 (lane clips), then phase 2 (the clear clips). `trigger_clips`
     /// returns only after every connect of its batch completed, so phase 2 can
-    /// never race a phase-1 connect.
+    /// never race a phase-1 connect. Phase 2 runs even when phase 1 failed: no
+    /// phase-1 clip sits in a clear clip's layer, so firing the clear clip cannot
+    /// bring the race back, and showing it is the point of a clear. The first
+    /// error is still returned, so the host's error/backoff handling runs.
     async fn trigger_bible_clear(&mut self, triggers: &BibleClearTriggers) -> anyhow::Result<()> {
         if triggers.lanes.is_empty() && triggers.clear.is_empty() {
             return Ok(());
@@ -127,17 +133,18 @@ impl HostDriver {
         sleep(TRIGGER_DELAY).await;
 
         let phase1_start = Instant::now();
-        self.trigger_clips(&triggers.lanes).await?;
+        let phase1 = self.trigger_clips(&triggers.lanes).await;
         let t_phase1_ms = duration_ms(phase1_start.elapsed());
         debug!(
             host = %self.config.host,
             lane_clip_ids = ?clip_ids(&triggers.lanes),
             t_phase1_ms,
-            "resolume bible clear: phase 1 (lane clips) complete, triggering #bible-clear"
+            phase1_ok = phase1.is_ok(),
+            "resolume bible clear: phase 1 (lane clips) done, starting phase 2 (clear clips)"
         );
 
         let phase2_start = Instant::now();
-        self.trigger_clips(&triggers.clear).await?;
+        let phase2 = self.trigger_clips(&triggers.clear).await;
         let t_phase2_ms = duration_ms(phase2_start.elapsed());
         info!(
             host = %self.config.host,
@@ -146,8 +153,10 @@ impl HostDriver {
             clear_clip_ids = ?clip_ids(&triggers.clear),
             t_phase1_ms,
             t_phase2_ms,
-            "resolume bible clear: lane clips triggered, then #bible-clear"
+            phase1_ok = phase1.is_ok(),
+            phase2_ok = phase2.is_ok(),
+            "resolume bible clear: phase 1 lane clips, then phase 2 clear clips"
         );
-        Ok(())
+        phase1.and(phase2)
     }
 }
