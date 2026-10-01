@@ -28,6 +28,12 @@ Rules:
   so the next verse starts clean. `bible_clear.rs` does this. `plan_bible_clear_triggers`
   partitions the blanked lane clips by `ClipTarget::layer_index`. Phase 1 triggers the lane
   clips, then phase 2 triggers `#bible-clear`.
+- **Run the second phase even when the first one failed. Do NOT write `phase1?` before
+  phase 2.** A single lane-connect timeout or 404 would otherwise drop the clear clip, and
+  showing that clip is the whole point of a clear. Phase 1 never holds a clip in a clear layer,
+  so the race cannot come back. Return `phase1.and(phase2)` (the first error), so
+  `record_error` / backoff still run. Covered by
+  `clear_clip_still_fires_when_a_lane_clip_trigger_fails`.
 - **`ClipTarget::layer_index`** is the clip's position in the composition's `layers[]` array,
   recorded by `ClipMapping::from_composition`. Use it whenever trigger logic depends on the
   layer. Never infer a layer from the clip name.
@@ -39,9 +45,12 @@ Rules:
 To prove "B is sent only after A completed", mount a wiremock `Respond` impl that records
 `(clip_id, Instant::now())` at receipt and answers after a fixed `set_delay(D)`. Then assert
 `arrival(B) - max(arrival(A…)) >= D`. A correct sequential implementation cannot arrive
-earlier: the response delay sits between the two. Machine load only widens the gap. A
-concurrent batch arrives within milliseconds, so the test is deterministically RED on the
-racy code. Copy `ConnectRecorder` / `assert_clear_after_lanes` from
+earlier: the response delay sits between the two. So the GREEN side is deterministic, and
+machine load only widens the gap. A concurrent batch arrives within milliseconds, so the
+gap check is RED on racy code unless the machine stalls for at least `D`. For a RED that
+does not depend on timing at all, also assert something structural, such as the SET of
+connected clip ids. The SNV-topology test does this: the skipped same-layer clip must be
+absent. Copy `ConnectRecorder` / `assert_clear_after_lanes` from
 `resolume/bible_clear_tests.rs`. This is the sequencing counterpart of the #529
 `ArrivalRecorder` parallel-dispatch test in `tests.rs`.
 
