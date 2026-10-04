@@ -21,8 +21,10 @@ Real case: commit `956af894` (#249 / #270) shipped two renames with no migration
    legacyKey, readLegacy, toOptions)`: for each action of `actionId` where `readLegacy(options)`
    is non-null, it drops `legacyKey` and merges in `toOptions(value)`. `index.js` passes the list
    to `runEntrypoint(PresenterInstance, UPGRADE_SCRIPTS)`.
-2. **A handler fallback** in `_sendCommand` that reads the same `legacy*` reader. It covers a
-   config the upgrade has not reached yet (an import, a not-yet-restarted rig).
+2. **A handler fallback** in `_sendCommand` that shares the script's legacy check (an exported
+   `legacy*` reader; preach's handler reader also rounds to the whole seconds the server's u64
+   expects). It covers a config the upgrade has not reached yet (an import, a not-yet-restarted
+   rig).
 3. Tests in `lib/upgrade-scripts.test.js`, plus an append-only pin: a connection at
    `lastUpgradeIndex` N still gets your new script.
 
@@ -30,7 +32,10 @@ Real case: commit `956af894` (#249 / #270) shipped two renames with no migration
 runs only the scripts after it. An existing connection with no prior scripts is at -1, so it runs
 them all once. A new connection starts at the end, so it runs none.
 - Never reorder or delete an entry; already-upgraded connections would skip or re-run scripts.
-- To retire a script, replace it with `@companion-module/base`'s `EmptyUpgradeScript`.
+- To retire a script, replace it IN PLACE with an inline no-op shaped like base's
+  `EmptyUpgradeScript`: `() => ({ updatedConfig: null, updatedSecrets: null, updatedActions: [],
+  updatedFeedbacks: [] })`. Do not import base into the dependency-free lib: under the test stub
+  it resolves to `undefined`, and outside the stub CI has no base installed (MODULE_NOT_FOUND).
 
 **Contract** (`@companion-module/base` 1.13/1.14, `internal/upgrade.js`):
 - The script is `(context, {config, secrets, actions, feedbacks}) => {updatedConfig, updatedSecrets, updatedActions, updatedFeedbacks}`.
@@ -44,10 +49,12 @@ To check against the real runner (base is not in the root devDependencies):
 
 ## Testing the real `index.js` adapter without the Companion runtime
 
-`index.js` `require`s `@companion-module/base` and `ws` at load, and neither is installed for
-`npm run test:companion` (CI runs a root `npm ci`). `lib/upgrade-scripts.test.js`
-`loadPresenterModule()` therefore stubs exactly those two external modules through a
-`Module._load` hook, restored in `finally`, and then `require`s the REAL `index.js`.
+`index.js` `require`s `@companion-module/base` and `ws` at load. Base is NOT installed for
+`npm run test:companion` (CI runs only a root `npm ci`, and base is the module's own dependency).
+`ws` is a root devDependency, but it is stubbed too, so no real socket is ever involved.
+`lib/upgrade-scripts.test.js` `loadPresenterModule()` therefore stubs exactly those two external
+modules through a `Module._load` hook, restored in `finally`, and then `require`s the REAL
+`index.js`.
 - The fake `runEntrypoint` captures `(factory, upgradeScripts)`.
 - The fake `InstanceBase` records `setActionDefinitions`.
 - A test then presses the registered action callback the way Companion does, with

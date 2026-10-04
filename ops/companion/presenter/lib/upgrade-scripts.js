@@ -103,8 +103,11 @@ const upgradeLegacyLiveEnabled = optionRenameScript(
 // Handed to `runEntrypoint`. APPEND-ONLY: Companion records, per connection,
 // the index of the last script it ran (`lastUpgradeIndex`) and runs only the
 // scripts after it. Never reorder or delete an entry — retire one by
-// replacing it with base's `EmptyUpgradeScript`. A future option rename adds
-// its migration at the END of this list.
+// replacing it IN PLACE with an inline no-op of the same shape as base's
+// `EmptyUpgradeScript` (this lib stays dependency-free, so do not import it):
+// `() => ({ updatedConfig: null, updatedSecrets: null, updatedActions: [],
+// updatedFeedbacks: [] })`. A future option rename adds its migration at the
+// END of this list.
 const UPGRADE_SCRIPTS = [upgradeLegacyPreachLimitSeconds, upgradeLegacyLiveEnabled];
 
 module.exports = {
