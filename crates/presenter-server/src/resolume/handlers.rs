@@ -1,5 +1,6 @@
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
+use super::mapping_refresh::StaleIdError;
 use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
 use futures_util::{stream::FuturesUnordered, StreamExt};
@@ -754,6 +755,10 @@ fn put_text_param_future(
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            // #808: the param id is gone from Arena's composition.
+            return Err(StaleIdError::text_parameter(param_id));
+        }
         if !response.status().is_success() {
             return Err(anyhow::anyhow!(
                 "text parameter update failed with status {}",

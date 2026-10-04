@@ -53,6 +53,11 @@ pub(crate) fn port_drift_note(configured_port: u16, active_port: Option<u16>) ->
     active_port.map(|p| format!("Port drifted: {configured_port} \u{2192} {p} (auto-detected)"))
 }
 
+/// #808: shown under the missing-clips line. Presenter re-reads the Arena
+/// composition only on connect, recovery, a stale id or this button.
+pub(crate) const MISSING_CLIPS_HINT: &str =
+    "After editing clips in Arena: Settings \u{2192} Refresh mapping";
+
 /// The full tooltip text (native `title` attribute — no custom popover
 /// needed for this MVP): the host's FULL label first (the visible chip text
 /// ellipsizes past 12ch), then connection cause + retry countdown while
@@ -82,6 +87,8 @@ pub(crate) fn chip_tooltip(dto: &ResolumeConnectionStatusDto) -> String {
             "Composition missing: {}",
             dto.missing_clips.join(", ")
         ));
+        // #808: the composition is no longer re-read on a timer.
+        lines.push(MISSING_CLIPS_HINT.to_string());
     }
     lines.join("\n")
 }
@@ -287,5 +294,12 @@ mod tests {
             text.contains("Composition missing: #timer, #song-name"),
             "{text}"
         );
+        assert!(text.ends_with(MISSING_CLIPS_HINT), "{text}");
+    }
+
+    #[test]
+    fn tooltip_has_no_refresh_hint_without_missing_clips() {
+        let text = chip_tooltip(&dto("connected", None));
+        assert!(!text.contains(MISSING_CLIPS_HINT), "{text}");
     }
 }

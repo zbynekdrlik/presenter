@@ -286,3 +286,31 @@ async fn probe_never_adopts_a_non_resolume_server_on_a_nearby_port() {
         "the failure is recorded normally — the probe just found nothing to adopt"
     );
 }
+
+/// #808: adopting a drifted port forgets that `/product` identified the OLD
+/// dial target. Otherwise an Arena on the new port that lacks `/product`
+/// (404) would be failed as "the server changed".
+#[tokio::test]
+async fn adopting_a_drifted_port_forgets_the_old_product_identity() {
+    let (configured_port, drifted_port) = free_port_pair();
+    let listener = StdTcpListener::bind(("127.0.0.1", drifted_port)).expect("bind drifted port");
+    let server = MockServer::builder().listener(listener).start().await;
+    mount_arena(&server).await;
+
+    let mut driver = HostDriver::new(Client::new(), host_config(configured_port));
+    driver.product_verified = true; // `/product` identified the configured port earlier
+    let status = fresh_snapshot();
+
+    drive_until_active_port(
+        &mut driver,
+        &status,
+        Some(drifted_port),
+        "the driver must adopt the drifted port after a connect-refused probe",
+    )
+    .await;
+
+    assert!(
+        !driver.product_verified,
+        "the new dial target has not identified itself on /product yet"
+    );
+}

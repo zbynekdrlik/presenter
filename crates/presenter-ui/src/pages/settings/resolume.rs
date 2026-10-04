@@ -175,12 +175,42 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
         });
     };
 
+    // #808: the server no longer re-reads the composition on a timer, so a
+    // clip edit in Arena is picked up through this button. One refresh at a
+    // time: each one is a full composition fetch on Arena.
+    let mapping_refreshing = RwSignal::new(false);
+    let refresh_mapping = move |id: String| {
+        if mapping_refreshing.get_untracked() {
+            return;
+        }
+        mapping_refreshing.set(true);
+        leptos::task::spawn_local(async move {
+            match settings::refresh_resolume_mapping(&id).await {
+                Ok(result) if result.success => {
+                    toast.show(&mapping_refreshed_message(&result.missing_clips), "success");
+                }
+                Ok(result) => {
+                    let err = result.error.unwrap_or_else(|| "unknown error".to_string());
+                    toast.show(&format!("Mapping refresh failed: {err}"), "error");
+                }
+                Err(err) => toast.show(&format!("Mapping refresh failed: {err}"), "error"),
+            }
+            mapping_refreshing.set(false);
+            if let Ok(list) = settings::list_resolume_hosts().await {
+                hosts.set(list);
+            }
+        });
+    };
+
     view! {
         <section class="settings__card">
             <header class="settings__card-header">
                 <div>
                     <h2>"Resolume Arena Connections"</h2>
                     <p>"Define Resolume web servers Presenter should control."</p>
+                    <p data-role="resolume-mapping-hint">
+                        "Presenter reads each Arena composition when it connects. After you add, rename or delete clips in Arena, click Refresh mapping."
+                    </p>
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="host-count">
@@ -322,6 +352,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                                 }
                             } else { None };
                             let id_test = h.id.clone();
+                            let id_refresh = h.id.clone();
                             let id_edit = h.id.clone();
                             let id_delete = h.id.clone();
                             view! {
@@ -344,6 +375,11 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                                         <button type="button" class="settings__button settings__button--ghost"
                                             data-role="host-test" data-id=id_test.clone()
                                             on:click=move |_| test_host(id_test.clone())>"Test"</button>
+                                        <button type="button" class="settings__button settings__button--ghost"
+                                            data-role="host-refresh-mapping" data-id=id_refresh.clone()
+                                            title="Re-read the Arena composition after editing clips in Arena"
+                                            prop:disabled=move || mapping_refreshing.get()
+                                            on:click=move |_| refresh_mapping(id_refresh.clone())>"Refresh mapping"</button>
                                         <button type="button" class="settings__button settings__button--ghost"
                                             data-role="host-edit" data-id=id_edit.clone()
                                             on:click=move |_| start_edit(id_edit.clone())>"Edit"</button>
@@ -386,5 +422,44 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 </dl>
             </section>
         </section>
+    }
+}
+
+/// #808: the success toast after "Refresh mapping": names the clips the
+/// refreshed composition still lacks, so the operator sees at once whether an
+/// edit in Arena was picked up.
+fn mapping_refreshed_message(missing_clips: &[String]) -> String {
+    match missing_clips.len() {
+        0 => "Mapping refreshed — every clip found.".to_string(),
+        1 => format!("Mapping refreshed — 1 clip missing: {}", missing_clips[0]),
+        n => format!(
+            "Mapping refreshed — {n} clips missing: {}",
+            missing_clips.join(", ")
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mapping_refreshed_message;
+
+    #[test]
+    fn a_complete_mapping_says_every_clip_was_found() {
+        assert_eq!(
+            mapping_refreshed_message(&[]),
+            "Mapping refreshed — every clip found."
+        );
+    }
+
+    #[test]
+    fn missing_clips_are_counted_and_named() {
+        assert_eq!(
+            mapping_refreshed_message(&["#timer".to_string()]),
+            "Mapping refreshed — 1 clip missing: #timer"
+        );
+        assert_eq!(
+            mapping_refreshed_message(&["#timer".to_string(), "#song-name".to_string()]),
+            "Mapping refreshed — 2 clips missing: #timer, #song-name"
+        );
     }
 }

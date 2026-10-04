@@ -218,7 +218,9 @@ fn fetch_reason_as_str_maps_each_variant() {
     // #483: the fetch reason is logged on every composition fetch.
     assert_eq!(FetchReason::Missing.as_str(), "missing");
     assert_eq!(FetchReason::ErrorInvalidated.as_str(), "error-invalidated");
-    assert_eq!(FetchReason::BackgroundTimer.as_str(), "background-timer");
+    // #808: the periodic background-timer refresh is gone; these replaced it.
+    assert_eq!(FetchReason::StaleId.as_str(), "stale-id");
+    assert_eq!(FetchReason::Manual.as_str(), "manual");
 }
 
 #[test]

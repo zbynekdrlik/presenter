@@ -9,6 +9,9 @@ mod error_kind;
 mod handlers;
 #[cfg(test)]
 mod latency_tests;
+mod mapping_refresh;
+#[cfg(test)]
+mod mapping_refresh_tests;
 mod port_drift;
 #[cfg(test)]
 mod port_drift_integration_tests;
@@ -31,6 +34,7 @@ use tracing::error;
 use uuid::Uuid;
 
 pub(crate) use error_kind::ResolumeErrorKind;
+pub(crate) use mapping_refresh::MappingRefreshResult;
 
 use driver::{run_host_worker, HostCommand};
 
@@ -513,6 +517,8 @@ pub struct TestConnectionResult {
     pub error: Option<String>,
 }
 
+/// The settings "Test" button. #808: asks for the ~64 B `/product` info, never
+/// the whole composition (16 MB on SNV), on the port the driver dials (#564).
 pub async fn test_connection(host: &ResolumeHost) -> anyhow::Result<TestConnectionResult> {
     use std::time::Instant;
 
@@ -521,29 +527,56 @@ pub async fn test_connection(host: &ResolumeHost) -> anyhow::Result<TestConnecti
         .build()
         .map_err(|e| anyhow!("failed to build test client: {e}"))?;
 
-    let url = format!("http://{}:{}/api/v1/composition", host.host, host.port);
+    let base_url = format!("http://{}:{}/api/v1", host.host, host.dial_port());
     let start = Instant::now();
-    match client
-        .get(&url)
-        .timeout(Duration::from_secs(5))
+    let response = match client
+        .get(format!("{base_url}/product"))
+        .timeout(TEST_CONNECTION_TIMEOUT)
         .send()
         .await
     {
-        Ok(response) if response.status().is_success() => Ok(TestConnectionResult {
-            success: true,
-            latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
-            error: None,
-        }),
-        Ok(response) => Ok(TestConnectionResult {
-            success: false,
-            latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
-            error: Some(format!("HTTP {}", response.status())),
-        }),
-        Err(err) => Ok(TestConnectionResult {
-            success: false,
-            latency_ms: None,
-            error: Some(err.to_string()),
-        }),
+        Ok(response) => response,
+        Err(err) => {
+            return Ok(TestConnectionResult {
+                success: false,
+                latency_ms: None,
+                error: Some(err.to_string()),
+            })
+        }
+    };
+    let latency_ms = Some(start.elapsed().as_secs_f64() * 1000.0);
+    let status = response.status();
+    let verdict = if status == reqwest::StatusCode::NOT_FOUND {
+        // An Arena older than /product: the composition request this test
+        // always made before #808.
+        legacy_composition_check(&client, &base_url).await
+    } else if !status.is_success() {
+        Err(format!("HTTP {status}"))
+    } else {
+        match response.json::<serde_json::Value>().await {
+            Ok(body) if port_drift::is_resolume_product_body(&body) => Ok(()),
+            _ => Err("the server answered but is not Resolume Arena/Avenue".to_string()),
+        }
+    };
+    Ok(TestConnectionResult {
+        success: verdict.is_ok(),
+        latency_ms,
+        error: verdict.err(),
+    })
+}
+
+const TEST_CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn legacy_composition_check(client: &Client, base_url: &str) -> Result<(), String> {
+    match client
+        .get(format!("{base_url}/composition"))
+        .timeout(TEST_CONNECTION_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!("HTTP {}", response.status())),
+        Err(err) => Err(err.to_string()),
     }
 }
 
