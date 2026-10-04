@@ -31,10 +31,10 @@ impl ClipMapping {
             .ok_or_else(|| anyhow!("composition has no layers"))?;
 
         let mut mapping = ClipMapping::default();
-        for layer in layers {
+        for (layer_index, layer) in layers.iter().enumerate() {
             if let Some(clips) = layer.get("clips").and_then(Value::as_array) {
                 for clip in clips {
-                    ingest_clip(&mut mapping, clip);
+                    ingest_clip(&mut mapping, clip, layer_index);
                 }
             }
         }
@@ -55,7 +55,7 @@ impl ClipMapping {
     }
 }
 
-fn ingest_clip(mapping: &mut ClipMapping, clip: &Value) {
+fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, layer_index: usize) {
     let clip_id = clip.get("id").and_then(Value::as_i64);
     let Some(clip_id) = clip_id else {
         return;
@@ -78,7 +78,7 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value) {
                 continue;
             }
 
-            for destination in parse_clip_destinations(tag, clip_id, text_param) {
+            for destination in parse_clip_destinations(tag, clip_id, text_param, layer_index) {
                 match destination {
                     ClipDestination::Main(lane, target) => match lane {
                         LaneTarget::A => mapping.main_a.push(target),
@@ -145,6 +145,7 @@ fn parse_clip_destinations(
     name: &str,
     clip_id: i64,
     text_param_id: Option<i64>,
+    layer_index: usize,
 ) -> Vec<ClipDestination> {
     let mut result = Vec::new();
     if !name.starts_with('#') {
@@ -160,8 +161,71 @@ fn parse_clip_destinations(
         return result;
     }
 
+    let Some((kind, mut index)) = parse_clip_kind(&tokens) else {
+        return result;
+    };
+
+    let transforms_start;
+    let lane = match kind {
+        ClipKind::BibleClear | ClipKind::Timer | ClipKind::SongName | ClipKind::BandName => {
+            transforms_start = index;
+            None
+        }
+        _ => {
+            let token = tokens.get(index).copied();
+            let lane = match token {
+                Some("a") => Some(LaneTarget::A),
+                Some("b") => Some(LaneTarget::B),
+                _ => None,
+            };
+            if lane.is_none() {
+                return result;
+            }
+            index += 1;
+            transforms_start = index;
+            lane
+        }
+    };
+
+    let transforms = parse_transforms(&tokens[transforms_start..]);
+    // Every destination shares one target; #807 records the clip's layer so the
+    // Bible clear path can tell which lane clips share a layer with `#bible-clear`.
+    let target = ClipTarget {
+        clip_id,
+        text_param_id,
+        transforms,
+        layer_index,
+    };
+
+    let destination = match (kind, lane) {
+        (ClipKind::Main, Some(lane)) => ClipDestination::Main(lane, target),
+        (ClipKind::Translation, Some(lane)) => ClipDestination::Translation(lane, target),
+        (ClipKind::Bible, Some(lane)) => ClipDestination::Bible(lane, target),
+        (ClipKind::BibleReference, Some(lane)) => ClipDestination::BibleReference(lane, target),
+        (ClipKind::BibleTranslation, Some(lane)) => ClipDestination::BibleTranslation(lane, target),
+        (ClipKind::BibleTranslateReference, Some(lane)) => {
+            ClipDestination::BibleTranslateReference(lane, target)
+        }
+        // A clear clip is only ever triggered, never written to.
+        (ClipKind::BibleClear, _) => ClipDestination::BibleClear(ClipTarget {
+            text_param_id: None,
+            ..target
+        }),
+        (ClipKind::Timer, _) => ClipDestination::Timer(target),
+        (ClipKind::SongName, _) => ClipDestination::SongName(target),
+        (ClipKind::BandName, _) => ClipDestination::BandName(target),
+        _ => return result,
+    };
+    result.push(destination);
+    result
+}
+
+/// The clip kind named by a clip tag's leading tokens (`#bible-translate-…`),
+/// plus the index of the first token after them — the lane letter, or the
+/// first transform for lane-less kinds. `None` for an unknown tag.
+fn parse_clip_kind(tokens: &[&str]) -> Option<(ClipKind, usize)> {
     let mut index = 1;
-    let kind = match tokens[0] {
+    let kind = match *tokens.first()? {
         "#main" => ClipKind::Main,
         "#translate" | "#translation" => ClipKind::Translation,
         "#bible" => {
@@ -193,126 +257,9 @@ fn parse_clip_destinations(
             index += 1;
             ClipKind::BandName
         }
-        _ => return result,
+        _ => return None,
     };
-
-    let transforms_start;
-    let lane = match kind {
-        ClipKind::BibleClear | ClipKind::Timer | ClipKind::SongName | ClipKind::BandName => {
-            transforms_start = index;
-            None
-        }
-        _ => {
-            let token = tokens.get(index).copied();
-            let lane = match token {
-                Some("a") => Some(LaneTarget::A),
-                Some("b") => Some(LaneTarget::B),
-                _ => None,
-            };
-            if lane.is_none() {
-                return result;
-            }
-            index += 1;
-            transforms_start = index;
-            lane
-        }
-    };
-
-    let transforms = parse_transforms(&tokens[transforms_start..]);
-
-    match (kind, lane) {
-        (ClipKind::Main, Some(lane)) => {
-            result.push(ClipDestination::Main(
-                lane,
-                ClipTarget {
-                    clip_id,
-                    text_param_id,
-                    transforms,
-                },
-            ));
-        }
-        (ClipKind::Translation, Some(lane)) => {
-            result.push(ClipDestination::Translation(
-                lane,
-                ClipTarget {
-                    clip_id,
-                    text_param_id,
-                    transforms,
-                },
-            ));
-        }
-        (ClipKind::Bible, Some(lane)) => {
-            result.push(ClipDestination::Bible(
-                lane,
-                ClipTarget {
-                    clip_id,
-                    text_param_id,
-                    transforms,
-                },
-            ));
-        }
-        (ClipKind::BibleReference, Some(lane)) => {
-            result.push(ClipDestination::BibleReference(
-                lane,
-                ClipTarget {
-                    clip_id,
-                    text_param_id,
-                    transforms,
-                },
-            ));
-        }
-        (ClipKind::BibleTranslation, Some(lane)) => {
-            result.push(ClipDestination::BibleTranslation(
-                lane,
-                ClipTarget {
-                    clip_id,
-                    text_param_id,
-                    transforms: transforms.clone(),
-                },
-            ));
-        }
-        (ClipKind::BibleTranslateReference, Some(lane)) => {
-            result.push(ClipDestination::BibleTranslateReference(
-                lane,
-                ClipTarget {
-                    clip_id,
-                    text_param_id,
-                    transforms,
-                },
-            ));
-        }
-        (ClipKind::BibleClear, _) => {
-            result.push(ClipDestination::BibleClear(ClipTarget {
-                clip_id,
-                text_param_id: None,
-                transforms,
-            }));
-        }
-        (ClipKind::Timer, _) => {
-            result.push(ClipDestination::Timer(ClipTarget {
-                clip_id,
-                text_param_id,
-                transforms,
-            }));
-        }
-        (ClipKind::SongName, _) => {
-            result.push(ClipDestination::SongName(ClipTarget {
-                clip_id,
-                text_param_id,
-                transforms,
-            }));
-        }
-        (ClipKind::BandName, _) => {
-            result.push(ClipDestination::BandName(ClipTarget {
-                clip_id,
-                text_param_id,
-                transforms,
-            }));
-        }
-        _ => {}
-    }
-
-    result
+    Some((kind, index))
 }
 
 fn parse_transforms(tokens: &[&str]) -> Vec<TextTransform> {

@@ -32,6 +32,10 @@ const ADB_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// `args` is the full adb argument vector (e.g. `["-s", serial, "shell", …]`).
 /// The implementation is responsible for applying `ADB_COMMAND_TIMEOUT`.
+// async-trait's expansion marks each bodiless method `#[must_use]` while the
+// boxed future it returns is already must-use — clippy::double_must_use
+// false positive on the macro output, not on our code.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub(super) trait AdbRunner: Send + Sync {
     async fn run(&self, args: &[OsString]) -> std::io::Result<Output>;
