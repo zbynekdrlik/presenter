@@ -9,19 +9,24 @@
 //! outage (the #563b threshold invalidated the mapping), or an operator refresh.
 //!
 //! Every test runs against a local wiremock "Arena" and counts the requests it
-//! received. The backoff window is skipped by clearing `next_retry_at`, the
-//! same state change the elapsed window produces, so no test sleeps.
+//! received. The driver-level tests skip the backoff window by clearing
+//! `next_retry_at` (the same state change the elapsed window produces), so they
+//! never sleep. The endpoint test goes through the real router and host worker.
 
 use super::driver::HostDriver;
 use super::mapping_refresh::Push;
 use super::{ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate, CONNECT_TIMEOUT};
+use axum::body::Body;
+use axum::http::{Method, Request as HttpRequest, StatusCode};
 use chrono::Utc;
 use presenter_core::{ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -178,6 +183,39 @@ fn stage(main: &str, song: Option<&str>) -> Push {
 /// Let the next tick or push run as if the #484 backoff window had elapsed.
 fn backoff_elapsed(driver: &mut HostDriver) {
     driver.next_retry_at = None;
+}
+
+/// POST `uri` (with an optional JSON body) through the real router. Returns
+/// the status and the JSON reply (`Null` when the body is not JSON).
+async fn post(app: &axum::Router, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let builder = HttpRequest::builder().method(Method::POST).uri(uri);
+    let request = match body {
+        Some(json) => builder
+            .header("content-type", "application/json")
+            .body(Body::from(json.to_string())),
+        None => builder.body(Body::empty()),
+    }
+    .expect("request");
+    let response = app.clone().oneshot(request).await.expect("router response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Wait (bounded) until the mock has seen at least `n` composition GETs.
+async fn wait_for_composition_gets(server: &MockServer, n: usize) {
+    for _ in 0..100 {
+        if count(server, "GET", COMPOSITION).await >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the host worker never fetched the composition");
 }
 
 /// RED before #808: every tick re-fetched the whole composition (6 GETs here),
@@ -449,4 +487,58 @@ async fn a_disabled_host_tick_sends_nothing_and_stays_disabled() {
     let received = server.received_requests().await.expect("recording on");
     assert!(received.is_empty(), "a disabled host must not be contacted");
     assert_eq!(status.read().await.state, ResolumeConnectionState::Disabled);
+}
+
+/// RED before #808: the endpoint did not exist (404). The settings page's
+/// "Refresh mapping" button posts here — the way to pick up a composition edit
+/// now that no timer re-reads the composition. Every call must fetch it exactly
+/// once and report the clips the new mapping misses; an unknown host is a 404.
+#[tokio::test]
+async fn the_refresh_mapping_endpoint_refetches_the_composition_on_each_call() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    let state = crate::state::AppState::in_memory().await.expect("state");
+    let app = crate::router::build_router(state);
+    let addr = server.address();
+    let (created_status, created) = post(
+        &app,
+        "/integrations/resolume/hosts",
+        Some(json!({
+            "label": "Mock Arena",
+            "host": addr.ip().to_string(),
+            "port": addr.port(),
+            "isEnabled": true,
+        })),
+    )
+    .await;
+    assert_eq!(created_status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().expect("host id").to_string();
+    wait_for_composition_gets(&server, 1).await; // the worker's cold start
+    let refresh_uri = format!("/integrations/resolume/hosts/{id}/refresh-mapping");
+
+    for expected_gets in [2, 3] {
+        let (status, reply) = post(&app, &refresh_uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        assert_eq!(reply["success"], json!(true), "{reply}");
+        let missing = reply["missingClips"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            missing.contains(&json!("#main-b")),
+            "the reply lists the clips the mapping misses: {reply}"
+        );
+        assert_eq!(
+            count(&server, "GET", COMPOSITION).await,
+            expected_gets,
+            "each refresh is exactly one composition fetch"
+        );
+    }
+
+    let unknown = format!(
+        "/integrations/resolume/hosts/{}/refresh-mapping",
+        uuid::Uuid::new_v4()
+    );
+    let (status, _) = post(&app, &unknown, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
