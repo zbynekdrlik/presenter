@@ -8,6 +8,11 @@ const { version: MODULE_VERSION } = require("./package.json");
 const { normaliseCountdownTarget } = require("./lib/time");
 const { applyVariablesMessage } = require("./lib/variable-batch");
 const {
+  legacyPreachLimitSeconds,
+  legacyLiveEnabled,
+  UPGRADE_SCRIPTS,
+} = require("./lib/upgrade-scripts");
+const {
   isStreamCommand,
   streamActionOptions,
   buildStreamPayload,
@@ -688,8 +693,11 @@ class PresenterInstance extends InstanceBase {
         break;
       }
       case "timer.set_preach_limit": {
+        // #805: an action saved before #249 stores only `seconds` — honour it
+        // (the upgrade script migrates it; this covers a not-yet-upgraded config).
+        const legacySeconds = legacyPreachLimitSeconds(options);
         payload = {
-          seconds: (Number(options.minutes) || 45) * 60,
+          seconds: legacySeconds ?? (Number(options.minutes) || 45) * 60,
         };
         break;
       }
@@ -704,8 +712,11 @@ class PresenterInstance extends InstanceBase {
         break;
       }
       case "broadcast.set_live": {
+        // #805: an action saved before #270 stores only the old `enabled`
+        // checkbox — honour it (the upgrade script migrates it to `state`).
+        const legacyEnabled = legacyLiveEnabled(options);
         payload = {
-          enabled: options.state === "on",
+          enabled: legacyEnabled ?? options.state === "on",
         };
         break;
       }
@@ -735,4 +746,4 @@ class PresenterInstance extends InstanceBase {
   }
 }
 
-runEntrypoint(PresenterInstance);
+runEntrypoint(PresenterInstance, UPGRADE_SCRIPTS);
