@@ -16,10 +16,9 @@
 //!   - the operator asked for it ([`HostDriver::manual_refresh`], the
 //!     settings page's "Refresh mapping" button).
 
-use super::clip_map::ClipMapping;
+use super::clip_map::{sorted_text_param_ids, ClipMapping};
 use super::driver::{FetchReason, HostCommand, HostDriver};
 use super::port_drift::is_resolume_product_body;
-use super::types::ClipTarget;
 use super::{BibleUpdate, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate, TimerFrame};
 use anyhow::{anyhow, Context};
 use presenter_core::ResolumeHostId;
@@ -133,13 +132,6 @@ impl MappingRefreshResult {
     }
 }
 
-/// Sorted text-param ids of one clip kind, for comparing two mappings.
-fn sorted_param_ids(targets: &[ClipTarget]) -> Vec<i64> {
-    let mut ids: Vec<i64> = targets.iter().filter_map(|t| t.text_param_id).collect();
-    ids.sort_unstable();
-    ids
-}
-
 impl HostDriver {
     /// The 10 s worker tick: a `/product` liveness probe while a mapping is
     /// cached, the composition only when there is none.
@@ -188,6 +180,14 @@ impl HostDriver {
             .with_context(|| format!("liveness probe GET {url} failed"))?;
         let status = response.status();
         if status == StatusCode::NOT_FOUND {
+            if self.product_verified {
+                // This server identified as Resolume on /product before, so
+                // the 404 means it changed (Arena gone, another service on
+                // the port).
+                return Err(anyhow!(
+                    "liveness probe GET {url} answered 404 although this host identified as Resolume before"
+                ));
+            }
             // An Arena build older than the /product endpoint. This endpoint
             // already served a valid composition and the web server answered,
             // so it is up. A stale mapping still heals through a push's 404.
@@ -212,6 +212,7 @@ impl HostDriver {
                 "liveness probe GET {url} did not identify as Resolume Arena/Avenue"
             ));
         }
+        self.product_verified = true;
         debug!(host = %self.config.host, "resolume liveness probe ok");
         Ok(())
     }
@@ -221,13 +222,18 @@ impl HostDriver {
     /// `ensure_mapping` refetches (reason `stale-id`). Any other failure, or a
     /// failed retry, feeds `record_error` (#484 backoff, #563b threshold).
     pub(super) async fn dispatch_push(&mut self, push: Push, status: &Status) {
+        let fetched_before = self.last_mapping_refresh;
         let mut result = self.apply_push(&push, status).await;
         let stale_detail = match &result {
             Err(err) if is_stale_id_error(err) => Some(format!("{err:#}")),
             _ => None,
         };
         if let Some(detail) = stale_detail {
-            if self.begin_stale_refetch(&detail) {
+            if self.last_mapping_refresh != fetched_before {
+                // This push already ran on a mapping it fetched itself (cold
+                // start, recovery refetch): refetching it again cannot help.
+                self.pause_stale_refetch();
+            } else if self.begin_stale_refetch(&detail) {
                 result = self.apply_push(&push, status).await;
                 if matches!(&result, Err(err) if is_stale_id_error(err)) {
                     self.pause_stale_refetch();
@@ -272,9 +278,9 @@ impl HostDriver {
         true
     }
 
-    /// The retry on a FRESH mapping still got a 404. Pause stale-id refetches,
-    /// so a permanently bad id cannot turn every push into a full composition
-    /// fetch.
+    /// A FRESH mapping (fetched by this push or by its retry) still got a 404.
+    /// Pause stale-id refetches, so a permanently bad id cannot turn every push
+    /// into a full composition fetch.
     fn pause_stale_refetch(&mut self) {
         warn!(
             host = %self.config.host,
@@ -307,14 +313,16 @@ impl HostDriver {
 
     /// #267/#808: a payload deduped against an old param id must be re-sent
     /// when that id changed (another composition was loaded) or when there was
-    /// no mapping to compare with. An unchanged id keeps its dedup, so a
-    /// refresh never makes a clip flicker.
+    /// no mapping to compare with. The stale-id, recovery and cold paths drop
+    /// the mapping before they fetch, so they re-send the metadata once (same
+    /// text, no visible change). A manual refresh keeps the mapping until the
+    /// new one is parsed, so an unchanged id keeps its dedup there.
     pub(super) fn reset_dedup_for_changed_ids(&mut self, next: &ClipMapping) {
         let (timer, song, band) = match &self.mapping {
             Some(old) => (
                 old.timer_param_ids() != next.timer_param_ids(),
-                sorted_param_ids(&old.song_name) != sorted_param_ids(&next.song_name),
-                sorted_param_ids(&old.band_name) != sorted_param_ids(&next.band_name),
+                sorted_text_param_ids(&old.song_name) != sorted_text_param_ids(&next.song_name),
+                sorted_text_param_ids(&old.band_name) != sorted_text_param_ids(&next.band_name),
             ),
             None => (true, true, true),
         };

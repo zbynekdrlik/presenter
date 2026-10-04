@@ -115,6 +115,7 @@ impl HostDriver {
         self.endpoint = None;
         self.mapping = None;
         self.invalidation_reason = Some(FetchReason::ErrorInvalidated);
+        self.product_verified = false;
         {
             let mut guard = status.write().await;
             guard.active_port = new_active;

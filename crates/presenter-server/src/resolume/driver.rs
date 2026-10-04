@@ -155,8 +155,8 @@ pub(super) async fn run_host_worker(
     liveness_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
-            // #808: commands first, so a queued lyric line never waits behind
-            // a liveness probe. Pushes mark the host connected themselves.
+            // #808: when a command and a tick are both ready, the command (a
+            // lyric line) runs first instead of waiting behind the probe.
             biased;
             maybe_cmd = commands.recv() => {
                 match maybe_cmd {
@@ -209,6 +209,10 @@ pub(super) struct HostDriver {
     /// #808: while set and in the future, a 404 for a mapped id does NOT
     /// refetch the composition (a fresh mapping already got a 404 for it).
     pub(super) stale_refetch_paused_until: Option<Instant>,
+    /// #808: `/product` on the dialed port has identified Resolume at least
+    /// once. A later 404 there is then a failure (the server changed), not an
+    /// Arena older than the endpoint. Reset when the dial target changes.
+    pub(super) product_verified: bool,
     /// #484: when the next retry is allowed while the host is in `Error`. While
     /// `Instant::now()` is before this, pushes and the 10 s tick are skipped
     /// (exponential backoff keyed on `consecutive_failures`). `None` when the
@@ -251,6 +255,7 @@ impl HostDriver {
             last_mapping_refresh: None,
             invalidation_reason: None,
             stale_refetch_paused_until: None,
+            product_verified: false,
             next_retry_at: None,
             last_timer_payload: None,
             last_song_name_payload: None,
@@ -272,6 +277,7 @@ impl HostDriver {
         self.last_mapping_refresh = None;
         self.invalidation_reason = None;
         self.stale_refetch_paused_until = None;
+        self.product_verified = false;
         self.next_retry_at = None;
         self.last_timer_payload = None;
         self.last_song_name_payload = None;
@@ -348,7 +354,7 @@ impl HostDriver {
                 host = %self.config.host,
                 mapping_cache = "miss",
                 reason = reason.as_str(),
-                "resolume mapping cache miss — fetching composition inline"
+                "resolume mapping cache miss — fetching composition"
             );
             self.refresh_mapping_with_reason(reason).await?;
             return Ok(MappingFetchOutcome { refetched: true });
