@@ -82,6 +82,20 @@ impl KeepAliveArena {
     fn reused(&self) -> usize {
         self.counters.reused.load(SeqCst)
     }
+
+    /// An enabled Resolume host pointing at this mock.
+    fn host_config(&self) -> ResolumeHost {
+        let now = Utc::now();
+        ResolumeHost::new(
+            ResolumeHostId::new(),
+            "Keep-alive Arena".into(),
+            self.addr.ip().to_string(),
+            self.addr.port(),
+            true,
+            now,
+            now,
+        )
+    }
 }
 
 /// Answer the first request on this connection and keep the socket open. If a
@@ -178,21 +192,22 @@ fn response_for(method: &str, path: &str) -> String {
 
 /// A driver for the mock Arena on the registry's own client.
 fn driver_on_registry_client(arena: &KeepAliveArena) -> (HostDriver, Status) {
-    let now = Utc::now();
-    let config = ResolumeHost::new(
-        ResolumeHostId::new(),
-        "Keep-alive Arena".into(),
-        arena.addr.ip().to_string(),
-        arena.addr.port(),
-        true,
-        now,
-        now,
-    );
     let client = ResolumeRegistry::new().expect("registry").client;
     (
-        HostDriver::new(client, config),
+        HostDriver::new(client, arena.host_config()),
         Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled())),
     )
+}
+
+/// Retry-with-assert for the registry test, whose host worker runs on its own
+/// task. Bounded (3 s); the caller asserts the outcome.
+async fn wait_until(mut done: impl FnMut() -> bool) {
+    for _ in 0..150 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn assert_no_host_error(status: &Status, step: &str) {
@@ -210,15 +225,19 @@ async fn assert_no_host_error(status: &Status, step: &str) {
     );
 }
 
-fn stage(main: &str) -> Push {
-    Push::Stage(StageUpdate {
+fn stage_update(main: &str) -> StageUpdate {
+    StageUpdate {
         current_main: Some(main.to_string()),
         current_translation: None,
         song_name: None,
         band_name: None,
         enqueued_at: None,
         correlation_id: None,
-    })
+    }
+}
+
+fn stage(main: &str) -> Push {
+    Push::Stage(stage_update(main))
 }
 
 /// RED before the fix: the second tick's `/product` probe went out on the
@@ -274,4 +293,44 @@ async fn lyric_pushes_never_reuse_a_keep_alive_connection() {
         1 + 2 * ROUNDS,
         "the cold-start fetch, then one text PUT and one clip connect per line"
     );
+}
+
+/// The same lyric lines through `ResolumeRegistry::set_hosts` and
+/// `stage_update`. This also pins the client that `spawn_host` hands to the
+/// host worker, not only the one `ResolumeRegistry::new()` builds.
+#[tokio::test]
+async fn registry_host_workers_never_reuse_a_keep_alive_connection() {
+    let arena = KeepAliveArena::start().await;
+    let registry = ResolumeRegistry::new().expect("registry");
+    let host = arena.host_config();
+    let host_id = host.id;
+    registry.set_hosts(vec![host]).await;
+    // The worker's first tick fires at once and fetches the composition.
+    wait_until(|| arena.answered() >= 1 || arena.reused() > 0).await;
+
+    for line in 1..=ROUNDS {
+        tokio::time::sleep(IDLE_GAP).await;
+        registry
+            .stage_update(stage_update(&format!("Line {line}")))
+            .await;
+        wait_until(|| arena.answered() >= 1 + 2 * line || arena.reused() > 0).await;
+    }
+
+    assert_eq!(
+        arena.reused(),
+        0,
+        "no request may go out on a reused keep-alive connection"
+    );
+    assert_eq!(
+        arena.answered(),
+        1 + 2 * ROUNDS,
+        "the worker's cold-start fetch, then one text PUT and one clip connect per line"
+    );
+    let snapshot = registry.snapshot_for(host_id).await;
+    assert_eq!(
+        snapshot.consecutive_failures, 0,
+        "the host recorded an error: {:?}",
+        snapshot.last_error
+    );
+    assert_eq!(snapshot.state, ResolumeConnectionState::Connected);
 }
