@@ -140,6 +140,28 @@ pub async fn test_resolume_host(id: &str) -> Result<ResolumeTestResult, ApiError
     .await
 }
 
+/// #808: reply of `POST /integrations/resolume/hosts/{id}/refresh-mapping`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolumeMappingRefreshResult {
+    pub success: bool,
+    /// Expected clip names the refreshed composition lacks (e.g. `#timer`).
+    #[serde(default)]
+    pub missing_clips: Vec<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// #808: make the host's worker re-read the Arena composition now. The server
+/// no longer re-reads it on a timer, so this picks up clip edits in Arena.
+pub async fn refresh_resolume_mapping(id: &str) -> Result<ResolumeMappingRefreshResult, ApiError> {
+    post_json(
+        &format!("/integrations/resolume/hosts/{id}/refresh-mapping"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
 /// #563/#564: the operator-header chip's poll target — every field is
 /// computed SERVER-SIDE (including the two "how long" fields) so this
 /// client never parses or diffs a timestamp itself, just renders numbers.

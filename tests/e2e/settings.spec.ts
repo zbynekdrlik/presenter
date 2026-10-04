@@ -291,6 +291,64 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
   expect(consoleMessages).toEqual([]);
 });
 
+// #808: the driver must not re-read Arena's whole composition (16 MB on SNV)
+// on a timer. After the cold-start read, the 10 s ticks only probe
+// /api/v1/product; the composition is read again only when the operator clicks
+// "Refresh mapping".
+test('resolume refresh mapping re-reads the composition only on demand', async ({ page }) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+  if (!mockResolume) {
+    throw new Error('Mock Resolume server not started');
+  }
+  const mock = mockResolume;
+  const compositionGets = () => mock.requestCount('GET', '/api/v1/composition');
+  const productGets = () => mock.requestCount('GET', '/api/v1/product');
+
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+  await expect(page.locator('[data-role="resolume-mapping-hint"]')).toContainText('Refresh mapping');
+
+  const compositionBefore = compositionGets();
+  const productBefore = productGets();
+  const testLabel = `Refresh Mapping ${Date.now()}`;
+  await page.fill(selectors.labelInput, testLabel);
+  await page.fill(selectors.hostInput, '127.0.0.1');
+  await page.fill(selectors.portInput, String(mock.port));
+  await page.check(selectors.enabledCheckbox);
+  await page.click(selectors.submitButton);
+  await waitForToast(page, 'Added Resolume connection.');
+
+  await expect.poll(async () => {
+    const hosts = await getHostsViaApi(page);
+    return hosts.find((h) => h.label === testLabel)?.status.state;
+  }, { timeout: 30_000 }).toEqual('connected');
+  const hostId = (await getHostsViaApi(page)).find((h) => h.label === testLabel)?.id;
+  expect(hostId).toBeTruthy();
+
+  // Wait for at least one liveness tick: it must be a /product probe, and the
+  // composition must still have been read only once (the cold start).
+  await expect.poll(() => productGets() - productBefore, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
+  expect(compositionGets() - compositionBefore).toBe(1);
+
+  const refreshButton = page.locator(`[data-role="host-refresh-mapping"][data-id="${hostId}"]`);
+  await expect(refreshButton).toBeVisible({ timeout: 10_000 });
+  await refreshButton.click();
+  await waitForToast(page, /Mapping refreshed/);
+  expect(compositionGets() - compositionBefore).toBe(2);
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator(`[data-role="host-delete"][data-id="${hostId}"]`).click();
+  await waitForToast(page, 'Deleted Resolume connection.');
+
+  expect(consoleMessages).toEqual([]);
+});
+
 test('android stage launchers CRUD', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
   // Settings is now a Leptos WASM page (#347) — wait for the bundle to mount
