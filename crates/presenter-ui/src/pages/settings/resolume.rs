@@ -176,8 +176,14 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
     };
 
     // #808: the server no longer re-reads the composition on a timer, so a
-    // clip edit in Arena is picked up through this button.
+    // clip edit in Arena is picked up through this button. One refresh at a
+    // time: each one is a full composition fetch on Arena.
+    let mapping_refreshing = RwSignal::new(false);
     let refresh_mapping = move |id: String| {
+        if mapping_refreshing.get_untracked() {
+            return;
+        }
+        mapping_refreshing.set(true);
         leptos::task::spawn_local(async move {
             match settings::refresh_resolume_mapping(&id).await {
                 Ok(result) if result.success => {
@@ -189,6 +195,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 }
                 Err(err) => toast.show(&format!("Mapping refresh failed: {err}"), "error"),
             }
+            mapping_refreshing.set(false);
             if let Ok(list) = settings::list_resolume_hosts().await {
                 hosts.set(list);
             }
@@ -371,6 +378,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                                         <button type="button" class="settings__button settings__button--ghost"
                                             data-role="host-refresh-mapping" data-id=id_refresh.clone()
                                             title="Re-read the Arena composition after editing clips in Arena"
+                                            prop:disabled=move || mapping_refreshing.get()
                                             on:click=move |_| refresh_mapping(id_refresh.clone())>"Refresh mapping"</button>
                                         <button type="button" class="settings__button settings__button--ghost"
                                             data-role="host-edit" data-id=id_edit.clone()
