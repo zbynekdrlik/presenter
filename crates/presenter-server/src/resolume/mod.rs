@@ -8,6 +8,8 @@ mod driver;
 mod error_kind;
 mod handlers;
 #[cfg(test)]
+mod keepalive_tests;
+#[cfg(test)]
 mod latency_tests;
 mod mapping_refresh;
 #[cfg(test)]
