@@ -69,10 +69,16 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   `[...base, ...IMPORTED]` spread breaks the parse (the spread's ids are invisible
   to the regex).
 - **Pure logic goes in `lib/<area>.js`, tested without `@companion-module/base`.**
-  `index.js` `require`s the Companion runtime at load, so it can't be imported in
+  `index.js` `require`s the Companion runtime at load, so a plain `require` fails in
   `node --test`; keep new logic (payload builders, option fields) in a dependency-free
   `lib/` module (`lib/time.js`, `lib/variable-batch.js`, `lib/stream.js`) and let
-  `index.js` be a thin adapter. Tests then import the lib module directly.
+  `index.js` be a thin adapter. Tests then import the lib module directly. To test the
+  REAL adapter (wiring, handler payloads), stub `@companion-module/base` + `ws` via the
+  `Module._load` hook in `lib/upgrade-scripts.test.js` (#805, see
+  `.claude/rules/companion-upgrade-scripts.md`).
+- **Renaming/retyping an action option ⇒ append an upgrade script** to
+  `lib/upgrade-scripts.js` `UPGRADE_SCRIPTS` (append-only) + a handler fallback, or every
+  saved button silently keeps the old key (#805) — `.claude/rules/companion-upgrade-scripts.md`.
 - **Stream command family (`lib/stream.js`).** Wire command names MUST start with
   `stream_` — the server (`companion/stream.rs`, #711) delegates by that prefix; the
   Companion action id IS the wire command name. Scenes are addressed BY NAME

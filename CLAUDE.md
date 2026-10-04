@@ -27,6 +27,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|
 | NDI pipeline, WebRTC testing, cleanup | `.claude/skills/ndi/SKILL.md` |
 | Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
+| Companion action option rename ⇒ append-only upgrade script + handler fallback; testing the real `index.js` via a `Module._load` stub (#805) | `.claude/rules/companion-upgrade-scripts.md` (auto-loads on `ops/companion/presenter/**`) |
 | Runner management, GPU wedge, probe cleanup, branch-sync-after-merge | `.claude/skills/ci/SKILL.md` |
 | Local build/deploy workflow | `.claude/skills/deploy/SKILL.md` |
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
