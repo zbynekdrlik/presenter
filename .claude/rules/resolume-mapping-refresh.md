@@ -44,9 +44,12 @@ Never add a timer, a staleness check or a "periodic resync" that reads
   once. The retry's `ensure_mapping` refetches inline. A 404 on a FRESH mapping
   pauses stale refetches for 60 s (`STALE_REFETCH_COOLDOWN`). Fresh means the
   push fetched the mapping itself (`last_mapping_refresh` changed during the
-  attempt), or the retry still got a 404. Those 404s then ride the normal
-  threshold and backoff. A permanently broken id therefore costs at most about
-  one fetch per backoff window (60 s cap), never one per push.
+  attempt), or the retry still got a 404. While the pause is active those 404s
+  are ordinary failures (Error, #484 backoff). `record_error` does NOT let the
+  #563b threshold drop the mapping for them, because the mapping is known to
+  be fresh. A permanently broken id therefore costs at most one stale refetch
+  per 60 s pause, never one per push. The host may flip between probe-green
+  and push-red meanwhile, which is honest: those pushes really fail.
 - `manual`: the operator. The settings card's "Refresh mapping" button posts
   `POST /integrations/resolume/hosts/{id}/refresh-mapping`, which goes through
   `ResolumeRegistry::refresh_mapping` and `HostCommand::RefreshMapping` to

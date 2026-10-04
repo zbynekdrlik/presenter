@@ -257,15 +257,13 @@ impl HostDriver {
     /// mapping already got a 404 within [`STALE_REFETCH_COOLDOWN`]. Returns
     /// whether to retry.
     fn begin_stale_refetch(&mut self, detail: &str) -> bool {
-        if let Some(until) = self.stale_refetch_paused_until {
-            if Instant::now() < until {
-                debug!(
-                    host = %self.config.host,
-                    error = %detail,
-                    "resolume stale id while stale-id refetches are paused; counting it as a failure"
-                );
-                return false;
-            }
+        if self.stale_refetch_paused() {
+            debug!(
+                host = %self.config.host,
+                error = %detail,
+                "resolume stale id while stale-id refetches are paused; counting it as a failure"
+            );
+            return false;
         }
         warn!(
             host = %self.config.host,
@@ -276,6 +274,11 @@ impl HostDriver {
         self.last_mapping_refresh = None;
         self.invalidation_reason = Some(FetchReason::StaleId);
         true
+    }
+
+    /// True while a fresh mapping's 404 paused stale-id refetches.
+    pub(super) fn stale_refetch_paused(&self) -> bool {
+        matches!(self.stale_refetch_paused_until, Some(until) if Instant::now() < until)
     }
 
     /// A FRESH mapping (fetched by this push or by its retry) still got a 404.

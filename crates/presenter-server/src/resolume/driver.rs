@@ -1,6 +1,6 @@
 use super::clip_map::ClipMapping;
 use super::error_kind::{classify_error, ResolumeErrorKind};
-use super::mapping_refresh::{MappingRefreshResult, Push, StaleIdError};
+use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
 use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
     BibleUpdate, PortDriftEvent, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate,
@@ -199,8 +199,10 @@ pub(super) struct HostDriver {
     pub(super) lane_state: SlotState,
     pub(super) endpoint: Option<ResolvedEndpoint>,
     /// When the cached mapping was last fetched. After #483 this is no longer a
-    /// staleness trigger on the push path — it is read only to log the served
-    /// mapping's age (`mapping_age_ms`), the diagnostic the issue cares about.
+    /// staleness trigger on the push path. It is read to log the served
+    /// mapping's age (`mapping_age_ms`), and #808's `dispatch_push` compares it
+    /// before/after an attempt to tell whether that push fetched the mapping
+    /// itself (a 404 on such a fresh mapping is not a stale id).
     pub(super) last_mapping_refresh: Option<Instant>,
     /// Why the cached mapping was dropped (`record_error`'s threshold, a port
     /// drift, a stale id), so the next fetch logs that reason instead of
@@ -681,7 +683,10 @@ impl HostDriver {
         // #563b: the composition mapping cache is invalidated only once
         // failures reach CACHE_INVALIDATION_THRESHOLD — a single blip keeps
         // serving the stale-but-good mapping instead of forcing a refetch.
-        if failures >= CACHE_INVALIDATION_THRESHOLD {
+        // #808: a stale id while stale refetches are paused was just checked
+        // against a fresh mapping; dropping it would only force a refetch.
+        let fresh_mapping_404 = self.stale_refetch_paused() && is_stale_id_error(&err);
+        if failures >= CACHE_INVALIDATION_THRESHOLD && !fresh_mapping_404 {
             self.mapping = None;
             self.last_mapping_refresh = None;
             // #483/#808: the next fetch (tick or push) is the recovery
