@@ -1,5 +1,6 @@
 use super::clip_map::ClipMapping;
 use super::error_kind::{classify_error, ResolumeErrorKind};
+use super::mapping_refresh::Push;
 use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
     BibleUpdate, PortDriftEvent, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate,
@@ -145,19 +146,13 @@ pub(super) async fn run_host_worker(
             maybe_cmd = commands.recv() => {
                 match maybe_cmd {
                     Some(HostCommand::Stage(payload)) => {
-                        if let Err(err) = driver.handle_stage(payload, &status).await {
-                            driver.record_error(err, &status).await;
-                        }
+                        driver.dispatch_push(Push::Stage(payload), &status).await;
                     }
                     Some(HostCommand::Bible(payload)) => {
-                        if let Err(err) = driver.handle_bible(payload, &status).await {
-                            driver.record_error(err, &status).await;
-                        }
+                        driver.dispatch_push(Push::Bible(payload), &status).await;
                     }
                     Some(HostCommand::Timer(frame)) => {
-                        if let Err(err) = driver.handle_timer(frame, &status).await {
-                            driver.record_error(err, &status).await;
-                        }
+                        driver.dispatch_push(Push::Timer(frame), &status).await;
                     }
                     Some(HostCommand::RefreshConfig(new_config)) => {
                         host = new_config.clone();
@@ -170,24 +165,7 @@ pub(super) async fn run_host_worker(
                     }
                 }
             }
-            _ = mapping_timer.tick() => {
-                if driver.in_backoff() {
-                    // #484/#563d: a down host is in its backoff window — skip
-                    // this 10 s refresh instead of re-attempting (and
-                    // re-logging), but say for how much longer so ops reading
-                    // logs mid-incident can see the driver is still trying,
-                    // not stuck.
-                    debug!(
-                        host = %driver.config.host,
-                        next_retry_in_secs = driver.next_retry_in_secs(),
-                        "resolume host in backoff; skipping mapping refresh"
-                    );
-                } else if let Err(err) = driver.refresh_mapping().await {
-                    driver.record_error(err, &status).await;
-                } else {
-                    driver.mark_connected(&status).await;
-                }
-            }
+            _ = mapping_timer.tick() => driver.tick(&status).await,
         }
     }
     Ok(())

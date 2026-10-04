@@ -9,6 +9,7 @@ mod error_kind;
 mod handlers;
 #[cfg(test)]
 mod latency_tests;
+mod mapping_refresh;
 mod port_drift;
 #[cfg(test)]
 mod port_drift_integration_tests;
