@@ -458,11 +458,11 @@ async fn a_failing_product_probe_puts_the_host_in_error_and_backoff() {
     assert_eq!(count(&server, "GET", COMPOSITION).await, 1);
 }
 
-/// Guards the stale path itself (before #808 there was no stale refetch, so
-/// this fails there only on the refetch count): when even a FRESHLY fetched
-/// mapping still gets a 404, further 404s must not refetch the composition —
-/// otherwise every push of a broken id becomes a 16 MB fetch. They count as
-/// ordinary failures instead (#563b threshold, #484 backoff).
+/// When the push itself just fetched the mapping (cold start, or the recovery
+/// refetch after the #563b threshold), a 404 cannot be a stale id: that mapping
+/// is as fresh as it gets. Refetching it again would be a second 16 MB fetch
+/// for nothing. The push fails as an ordinary failure, and stale-id refetches
+/// pause, so the next push does not refetch either.
 #[tokio::test]
 async fn an_id_that_404s_on_a_fresh_mapping_pauses_stale_refetches() {
     let server = MockServer::start().await;
@@ -477,8 +477,36 @@ async fn an_id_that_404s_on_a_fresh_mapping_pauses_stale_refetches() {
 
     assert_eq!(
         count(&server, "GET", COMPOSITION).await,
+        1,
+        "only the cold fetch; a 404 on the mapping this push just fetched is not stale"
+    );
+    assert_eq!(count(&server, "PUT", &param(1)).await, 2, "no retry");
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Error);
+    assert_eq!(snap.consecutive_failures, 2);
+}
+
+/// A mapping fetched earlier (here: by the tick) gets one stale refetch and a
+/// retry. When the retry on the freshly fetched mapping still gets a 404, the
+/// stale-id refetches pause: the next push must not refetch the composition,
+/// otherwise every push of a broken id becomes a 16 MB fetch. Those 404s count
+/// as ordinary failures (#563b threshold, #484 backoff).
+#[tokio::test]
+async fn a_retry_that_still_404s_pauses_stale_refetches() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    mount_ok(&server, &[], &[100]).await; // param 1 always answers 404
+    let (mut driver, status) = driver_for(&server, true);
+    driver.tick(&status).await; // the mapping comes from the tick
+
+    driver.dispatch_push(stage("Line 1", None), &status).await;
+    backoff_elapsed(&mut driver);
+    driver.dispatch_push(stage("Line 2", None), &status).await;
+
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
         2,
-        "the cold fetch + one stale refetch; the second push must not refetch"
+        "the tick's fetch + one stale refetch; the second push must not refetch"
     );
     assert_eq!(count(&server, "PUT", &param(1)).await, 3);
     let snap = status.read().await.clone();
@@ -773,4 +801,124 @@ async fn a_refresh_resets_name_dedup_only_for_changed_param_ids() {
         .await;
     assert_eq!(count(&server, "PUT", &param(15)).await, 1, "song re-sent");
     assert_eq!(count(&server, "PUT", &param(16)).await, 1, "band re-sent");
+}
+
+/// Once `/product` has identified the host as Resolume, a later 404 there
+/// means the server changed (Arena gone, something else on the port). That is
+/// a failure, not "an Arena older than /product".
+#[tokio::test]
+async fn a_product_404_after_a_valid_product_answer_is_a_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(COMPOSITION))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(composition(vec![clip(100, "#main-a", 1)])),
+        )
+        .mount(&server)
+        .await;
+    // One valid answer, then the route is exhausted and wiremock answers 404.
+    Mock::given(method("GET"))
+        .and(path(PRODUCT))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "Arena", "major": 7, "minor": 13, "micro": 2, "revision": 0,
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server, true);
+
+    driver.tick(&status).await; // cold fetch
+    driver.tick(&status).await; // /product identifies Arena
+    assert_eq!(
+        status.read().await.state,
+        ResolumeConnectionState::Connected
+    );
+    driver.tick(&status).await; // /product now answers 404
+
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Error);
+    assert_eq!(snap.consecutive_failures, 1);
+    let last_error = snap.last_error.unwrap_or_default();
+    assert!(last_error.contains("404"), "{last_error}");
+}
+
+fn host_at(server: &MockServer) -> ResolumeHost {
+    let addr = server.address();
+    let now = Utc::now();
+    ResolumeHost::new(
+        ResolumeHostId::new(),
+        "Mock Arena".into(),
+        addr.ip().to_string(),
+        addr.port(),
+        true,
+        now,
+        now,
+    )
+}
+
+/// The settings "Test" button asks for the ~64 B product info, never the whole
+/// composition, and dials the port the driver dials (the #564 drift-adjusted
+/// `active_port`). Before the fix it fetched `/composition` on `port`.
+#[tokio::test]
+async fn test_connection_probes_product_on_the_dialed_port() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    // A port nothing listens on: bind an ephemeral port, then release it.
+    let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind")
+        .local_addr()
+        .expect("local addr")
+        .port();
+    let mut host = host_at(&server);
+    host.active_port = Some(host.port);
+    host.port = closed_port;
+
+    let result = super::test_connection(&host).await.expect("test result");
+
+    assert!(result.success, "{:?}", result.error);
+    assert!(result.latency_ms.is_some());
+    assert_eq!(count(&server, "GET", PRODUCT).await, 1);
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 0);
+}
+
+/// An HTTP server that is not Resolume fails the test with a clear reason.
+#[tokio::test]
+async fn test_connection_rejects_a_server_that_is_not_resolume() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(PRODUCT))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "name": "nginx" })))
+        .mount(&server)
+        .await;
+
+    let result = super::test_connection(&host_at(&server))
+        .await
+        .expect("test result");
+
+    assert!(!result.success);
+    let error = result.error.unwrap_or_default();
+    assert!(error.contains("not Resolume"), "{error}");
+}
+
+/// An Arena older than `/product` answers it with 404; the test then falls
+/// back to the composition request it always made, so such a host still tests
+/// OK.
+#[tokio::test]
+async fn test_connection_falls_back_to_the_composition_without_product() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(COMPOSITION))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(composition(vec![clip(100, "#main-a", 1)])),
+        )
+        .mount(&server)
+        .await;
+
+    let result = super::test_connection(&host_at(&server))
+        .await
+        .expect("test result");
+
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(count(&server, "GET", PRODUCT).await, 1);
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 1);
 }
