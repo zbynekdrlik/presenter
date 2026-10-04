@@ -9,8 +9,9 @@ const { normaliseCountdownTarget } = require("./lib/time");
 const { applyVariablesMessage } = require("./lib/variable-batch");
 const {
   legacyPreachLimitSeconds,
+  legacyLiveEnabled,
   UPGRADE_SCRIPTS,
-} = require("./lib/preach-limit");
+} = require("./lib/upgrade-scripts");
 const {
   isStreamCommand,
   streamActionOptions,
@@ -711,8 +712,11 @@ class PresenterInstance extends InstanceBase {
         break;
       }
       case "broadcast.set_live": {
+        // #805: an action saved before #270 stores only the old `enabled`
+        // checkbox — honour it (the upgrade script migrates it to `state`).
+        const legacyEnabled = legacyLiveEnabled(options);
         payload = {
-          enabled: options.state === "on",
+          enabled: legacyEnabled ?? options.state === "on",
         };
         break;
       }
