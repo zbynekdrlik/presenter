@@ -14,8 +14,11 @@
 //! never sleep. The endpoint test goes through the real router and host worker.
 
 use super::driver::HostDriver;
-use super::mapping_refresh::Push;
-use super::{ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate, CONNECT_TIMEOUT};
+use super::mapping_refresh::{is_stale_id_error, Push, StaleIdError};
+use super::{
+    ResolumeConnectionSnapshot, ResolumeConnectionState, ResolumeRegistry, StageUpdate,
+    CONNECT_TIMEOUT,
+};
 use axum::body::Body;
 use axum::http::{Method, Request as HttpRequest, StatusCode};
 use chrono::Utc;
@@ -175,6 +178,18 @@ fn stage(main: &str, song: Option<&str>) -> Push {
         current_translation: None,
         song_name: song.map(str::to_string),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
+    })
+}
+
+/// A stage push that also carries the song and band names.
+fn stage_with_meta(main: &str, song: &str, band: &str) -> Push {
+    Push::Stage(StageUpdate {
+        current_main: Some(main.to_string()),
+        current_translation: None,
+        song_name: Some(song.to_string()),
+        band_name: Some(band.to_string()),
         enqueued_at: None,
         correlation_id: None,
     })
@@ -541,4 +556,221 @@ async fn the_refresh_mapping_endpoint_refetches_the_composition_on_each_call() {
     );
     let (status, _) = post(&app, &unknown, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Only a 404 is a stale id. Any other push failure keeps the mapping, makes
+/// no refetch and counts as an ordinary failure (#563b threshold).
+#[tokio::test]
+async fn a_push_failing_with_500_does_not_refetch_the_composition() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    Mock::given(method("PUT"))
+        .and(path(param(1)))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server, true);
+
+    driver.dispatch_push(stage("Line 1", None), &status).await;
+
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
+        1,
+        "cold fetch only"
+    );
+    assert_eq!(count(&server, "PUT", &param(1)).await, 1, "no retry");
+    assert!(driver.mapping.is_some(), "one failure keeps the mapping");
+    assert_eq!(status.read().await.consecutive_failures, 1);
+}
+
+/// A clip trigger answered 404 is a stale id just like a text parameter: the
+/// clip was replaced in Arena (same text param, new clip id).
+#[tokio::test]
+async fn a_clip_trigger_answered_404_is_a_stale_id_too() {
+    let server = MockServer::start().await;
+    let arena = MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    // Clip 100 is never mounted: once the composition changes it answers 404.
+    mount_ok(&server, &[1], &[120]).await;
+    let (mut driver, status) = driver_for(&server, true);
+    driver.tick(&status).await; // cold fetch: clip 100
+
+    arena.swap_composition(composition(vec![clip(120, "#main-a", 1)]));
+    driver.dispatch_push(stage("Line 1", None), &status).await;
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 2);
+    assert_eq!(count(&server, "POST", &connect(100)).await, 1);
+    assert_eq!(count(&server, "POST", &connect(120)).await, 1);
+    assert_eq!(count(&server, "PUT", &param(1)).await, 2, "text re-sent");
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Connected);
+    assert_eq!(snap.consecutive_failures, 0);
+}
+
+/// The typed error survives `anyhow` context and is told apart from other
+/// failures; its message names the id and the 404.
+#[test]
+fn stale_id_errors_are_recognised_through_context_and_name_the_id() {
+    let err = StaleIdError::clip(7);
+    let message = err.to_string();
+    assert!(message.contains("clip 7"), "{message}");
+    assert!(message.contains("404"), "{message}");
+    assert!(is_stale_id_error(&err));
+    assert!(is_stale_id_error(&err.context("stage push failed")));
+    let param = StaleIdError::text_parameter(9).to_string();
+    assert!(param.contains("text parameter 9"), "{param}");
+    assert!(!is_stale_id_error(&anyhow::anyhow!(
+        "clip trigger failed with status 500 Internal Server Error"
+    )));
+}
+
+/// The operator refresh runs inside a backoff window too, and a successful
+/// fetch reconnects the host.
+#[tokio::test]
+async fn manual_refresh_runs_inside_a_backoff_window_and_reconnects() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    let (mut driver, status) = driver_for(&server, true);
+    driver.tick(&status).await; // cold fetch
+    driver.record_error(anyhow::anyhow!("blip"), &status).await;
+    assert!(driver.in_backoff());
+
+    let result = driver.manual_refresh(&status).await;
+
+    assert!(result.success, "{result:?}");
+    assert!(result.missing_clips.contains(&"#main-b".to_string()));
+    assert!(result.error.is_none(), "{result:?}");
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 2);
+    assert!(
+        !driver.in_backoff(),
+        "the successful fetch clears the backoff"
+    );
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Connected);
+    assert_eq!(snap.consecutive_failures, 0);
+}
+
+/// A failed operator refresh says why and counts as a host failure.
+#[tokio::test]
+async fn a_failed_manual_refresh_reports_the_error() {
+    let server = MockServer::start().await;
+    let arena = MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    let (mut driver, status) = driver_for(&server, true);
+    arena.set_online(false);
+
+    let result = driver.manual_refresh(&status).await;
+
+    assert!(!result.success);
+    let error = result.error.unwrap_or_default();
+    assert!(error.contains("503"), "{error}");
+    assert_eq!(status.read().await.state, ResolumeConnectionState::Error);
+}
+
+/// A disabled host is never contacted, not even on an operator refresh.
+#[tokio::test]
+async fn manual_refresh_of_a_disabled_host_fails_without_contacting_it() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![])).await;
+    let (mut driver, status) = driver_for(&server, false);
+
+    let result = driver.manual_refresh(&status).await;
+
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("disabled"));
+    let received = server.received_requests().await.expect("recording on");
+    assert!(received.is_empty());
+}
+
+/// A registry without a worker for the host refuses instead of hanging.
+#[tokio::test]
+async fn registry_refresh_without_a_worker_fails_fast() {
+    let registry = ResolumeRegistry::new().expect("registry");
+    let result = registry.refresh_mapping(ResolumeHostId::new()).await;
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("no worker"));
+}
+
+/// An Arena build older than `/product` answers it with 404. The probe counts
+/// that HTTP answer as alive instead of flapping the host into Error.
+#[tokio::test]
+async fn an_arena_without_the_product_endpoint_counts_as_alive() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(COMPOSITION))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(composition(vec![clip(100, "#main-a", 1)])),
+        )
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server, true);
+
+    driver.tick(&status).await; // cold fetch
+    driver.tick(&status).await; // /product → 404
+
+    assert_eq!(count(&server, "GET", PRODUCT).await, 1);
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 1);
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Connected);
+    assert_eq!(snap.consecutive_failures, 0);
+}
+
+/// Something that is not Resolume answering `/product` (an unrelated server
+/// took the port) is a failure, like an unparsable composition was before.
+#[tokio::test]
+async fn a_product_answer_that_is_not_resolume_is_a_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(COMPOSITION))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(composition(vec![clip(100, "#main-a", 1)])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(PRODUCT))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "name": "nginx" })))
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server, true);
+
+    driver.tick(&status).await; // cold fetch
+    driver.tick(&status).await; // the probe gets a non-Resolume body
+
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Error);
+    let last_error = snap.last_error.unwrap_or_default();
+    assert!(last_error.contains("did not identify"), "{last_error}");
+}
+
+/// #267/#808: a refresh keeps the dedup of song/band names whose param ids are
+/// unchanged (no re-send, no flicker) and resets it when the ids changed (the
+/// new composition's clips get the current names).
+#[tokio::test]
+async fn a_refresh_resets_name_dedup_only_for_changed_param_ids() {
+    let server = MockServer::start().await;
+    let lanes = [clip(100, "#main-a", 1), clip(101, "#main-b", 2)];
+    let mut first = lanes.to_vec();
+    first.extend([clip(105, "#song-name", 5), clip(106, "#band-name", 6)]);
+    let mut second = lanes.to_vec();
+    second.extend([clip(115, "#song-name", 15), clip(116, "#band-name", 16)]);
+    let arena = MockArena::start(&server, composition(first)).await;
+    mount_ok(&server, &[1, 2, 5, 6, 15, 16], &[100, 101]).await;
+    let (mut driver, status) = driver_for(&server, true);
+
+    driver
+        .dispatch_push(stage_with_meta("Line 1", "Song", "Band"), &status)
+        .await;
+    assert!(driver.manual_refresh(&status).await.success); // same ids
+    driver
+        .dispatch_push(stage_with_meta("Line 2", "Song", "Band"), &status)
+        .await;
+    assert_eq!(count(&server, "PUT", &param(5)).await, 1, "song deduped");
+    assert_eq!(count(&server, "PUT", &param(6)).await, 1, "band deduped");
+
+    arena.swap_composition(composition(second));
+    assert!(driver.manual_refresh(&status).await.success); // new ids
+    driver
+        .dispatch_push(stage_with_meta("Line 3", "Song", "Band"), &status)
+        .await;
+    assert_eq!(count(&server, "PUT", &param(15)).await, 1, "song re-sent");
+    assert_eq!(count(&server, "PUT", &param(16)).await, 1, "band re-sent");
 }

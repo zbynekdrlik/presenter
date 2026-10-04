@@ -9,7 +9,7 @@
 //! connection-refused failure and adopts (or heals back to) whichever port
 //! answers as a genuine Resolume instance.
 
-use super::driver::HostDriver;
+use super::driver::{FetchReason, HostDriver};
 use super::{PortDriftEvent, ResolumeConnectionSnapshot};
 use reqwest::Client;
 use std::{sync::Arc, time::Duration};
@@ -114,7 +114,7 @@ impl HostDriver {
         self.active_port = new_active;
         self.endpoint = None;
         self.mapping = None;
-        self.mapping_cleared_by_error = true;
+        self.invalidation_reason = Some(FetchReason::ErrorInvalidated);
         {
             let mut guard = status.write().await;
             guard.active_port = new_active;

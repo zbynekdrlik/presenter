@@ -9,7 +9,7 @@ use tracing::instrument;
 
 use super::super::AppError;
 use super::extract_actor;
-use crate::resolume::{ResolumeConnectionSnapshot, ResolumeErrorKind};
+use crate::resolume::{MappingRefreshResult, ResolumeConnectionSnapshot, ResolumeErrorKind};
 use crate::state::AppState;
 use presenter_core::{ResolumeHost, ResolumeHostDraft, ResolumeHostId};
 use presenter_persistence::SettingsAuditSource;
@@ -158,6 +158,21 @@ pub(crate) async fn test_resolume_host(
         latency_ms: result.latency_ms,
         error: result.error,
     }))
+}
+
+/// #808: the settings page's "Refresh mapping" — refetch one host's
+/// composition now, since the worker no longer re-reads it on a timer. An
+/// unknown host is a 404; a Resolume-side failure is a 200 with
+/// `success: false`, like `/test`.
+#[instrument(skip_all)]
+pub(crate) async fn refresh_resolume_mapping(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<MappingRefreshResult>, AppError> {
+    let result = state
+        .refresh_resolume_mapping(ResolumeHostId::from_uuid(id))
+        .await?;
+    Ok(Json(result))
 }
 
 /// #563d/#564: the lightweight, operator-page-facing status poll — every

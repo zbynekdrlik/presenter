@@ -116,18 +116,33 @@ impl AppState {
         &self,
         id: ResolumeHostId,
     ) -> anyhow::Result<crate::resolume::TestConnectionResult> {
-        let host = self
-            .repository
+        let host = self.resolume_host_by_id(id).await?;
+        crate::resolume::test_connection(&host).await
+    }
+
+    /// #808: operator-requested composition refetch for one host (the worker
+    /// no longer re-reads the composition on a timer). Unknown host → 404.
+    pub(crate) async fn refresh_resolume_mapping(
+        &self,
+        id: ResolumeHostId,
+    ) -> anyhow::Result<crate::resolume::MappingRefreshResult> {
+        self.resolume_host_by_id(id).await?;
+        Ok(self.resolume_registry.refresh_mapping(id).await)
+    }
+
+    async fn resolume_host_by_id(&self, id: ResolumeHostId) -> anyhow::Result<ResolumeHost> {
+        self.repository
             .list_resolume_hosts()
             .await?
             .into_iter()
             .find(|h| h.id == id)
             // #608: typed refusal (#584/#586 pattern) — the router downcasts to
             // `RepositoryError` and maps `NotFound` to 404 instead of a bare 500.
-            .ok_or(presenter_persistence::RepositoryError::NotFound(
-                "resolume host not found",
-            ))?;
-        crate::resolume::test_connection(&host).await
+            .ok_or_else(|| {
+                anyhow::Error::from(presenter_persistence::RepositoryError::NotFound(
+                    "resolume host not found",
+                ))
+            })
     }
 
     pub async fn create_resolume_host(

@@ -34,6 +34,7 @@ use tracing::error;
 use uuid::Uuid;
 
 pub(crate) use error_kind::ResolumeErrorKind;
+pub(crate) use mapping_refresh::MappingRefreshResult;
 
 use driver::{run_host_worker, HostCommand};
 

@@ -226,6 +226,10 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::resolume::test_resolume_host),
         )
         .route(
+            "/integrations/resolume/hosts/{id}/refresh-mapping",
+            post(integrations::resolume::refresh_resolume_mapping),
+        )
+        .route(
             "/integrations/resolume/status",
             get(integrations::resolume::resolume_connection_status),
         )
