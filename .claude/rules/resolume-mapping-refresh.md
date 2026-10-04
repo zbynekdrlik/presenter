@@ -108,7 +108,9 @@ a status flip, a #484 backoff window that skips pushes, and possibly a lost line
   response does NOT reproduce the bug: the FIN reaches hyper before the next
   checkout, and the pool drops the connection itself. The driver must run on
   `ResolumeRegistry::new()`'s own `client`, not a client the test builds,
-  otherwise the test pins nothing.
+  otherwise the test pins nothing. One test goes through `set_hosts` +
+  `stage_update`, so the client that `spawn_host` hands each worker is
+  pinned too.
 
 ## Worker loop
 
