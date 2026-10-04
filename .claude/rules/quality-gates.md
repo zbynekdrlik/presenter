@@ -246,3 +246,20 @@ review. Before using a recently added std method, check its `Stable since` on do
 against 1.85; use the older spelling instead (`x % 4 != 0`). The reverse lint
 `manual_is_multiple_of` respects the msrv, so the `%` form stays clean. Do not raise the msrv
 inside a feature PR.
+
+## Tier-0: `quality-check.sh` is hook-blocked — run its non-compiling parts directly (#808)
+
+`scripts/dev/quality-check.sh` sources `lib/local-cargo.sh` and contains `cargo clippy`/`cargo
+check` (guarded, but the Tier-0 hook `block-tier0-local-build.sh` refuses the whole script). Run
+the parts that do not compile, one by one, on every touched file:
+
+```bash
+cargo fmt --all -- --check && (cd crates/presenter-ui && cargo fmt --check)
+QC_TARGETS="<newline-separated touched .rs files>" python3 scripts/dev/fn_length_check.py .
+bash scripts/dev/count_prod_lines.sh <file>
+bash scripts/dev/placeholder_check.sh . && bash scripts/dev/feature_router_check.sh .
+```
+
+E2E TypeScript (CI job "TypeScript Type Check") also runs locally without compiling Rust. A
+`.claude/worktrees/agent-*` checkout has no `node_modules`; use the main checkout's:
+`node ../../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` from the worktree root.
