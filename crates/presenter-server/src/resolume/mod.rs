@@ -10,6 +10,8 @@ mod handlers;
 #[cfg(test)]
 mod latency_tests;
 mod mapping_refresh;
+#[cfg(test)]
+mod mapping_refresh_tests;
 mod port_drift;
 #[cfg(test)]
 mod port_drift_integration_tests;
