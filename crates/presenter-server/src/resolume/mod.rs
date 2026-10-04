@@ -8,6 +8,8 @@ mod driver;
 mod error_kind;
 mod handlers;
 #[cfg(test)]
+mod keepalive_tests;
+#[cfg(test)]
 mod latency_tests;
 mod mapping_refresh;
 #[cfg(test)]
@@ -214,12 +216,30 @@ struct HostEntry {
     handle: JoinHandle<()>,
 }
 
+/// The HTTP client for every Resolume request: the host workers (probe,
+/// composition, text PUTs, clip connects) and the settings "Test" button.
+///
+/// #808: it never reuses a connection (`pool_max_idle_per_host(0)`). Arena
+/// closes idle keep-alive connections at irregular times (on SNV after 2 min,
+/// then after 30 s). A pooled client then writes the next request onto a socket
+/// Arena is closing and gets `connection closed before message completed`.
+/// SNV logged 2671 of these in 2 days. Each one is an ERROR line, a status flip
+/// and a #484 backoff window that skips pushes, so a lyric line can be lost.
+/// A fresh LAN TCP connect costs well under a millisecond, which is negligible
+/// next to the #483 latency budget. Retrying on that error is not an option: a
+/// clip `connect` POST is not idempotent and would re-trigger the clip. An idle
+/// timeout cannot be tuned either, because Arena's close timing is irregular.
+fn resolume_http_client() -> anyhow::Result<Client> {
+    Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .pool_max_idle_per_host(0)
+        .build()
+        .map_err(|e| anyhow!("failed to build the Resolume HTTP client: {e}"))
+}
+
 impl ResolumeRegistry {
     pub fn new() -> anyhow::Result<Self> {
-        let client = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .build()
-            .map_err(|e| anyhow!("failed to build reqwest client: {e}"))?;
+        let client = resolume_http_client()?;
         Ok(Self {
             client,
             hosts: Arc::new(RwLock::new(HashMap::new())),
@@ -522,10 +542,7 @@ pub struct TestConnectionResult {
 pub async fn test_connection(host: &ResolumeHost) -> anyhow::Result<TestConnectionResult> {
     use std::time::Instant;
 
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|e| anyhow!("failed to build test client: {e}"))?;
+    let client = resolume_http_client()?;
 
     let base_url = format!("http://{}:{}/api/v1", host.host, host.dial_port());
     let start = Instant::now();
