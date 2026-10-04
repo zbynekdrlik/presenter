@@ -313,7 +313,7 @@ async fn registry_host_workers_never_reuse_a_keep_alive_connection() {
         registry
             .stage_update(stage_update(&format!("Line {line}")))
             .await;
-        wait_until(|| arena.answered() >= 1 + 2 * line || arena.reused() > 0).await;
+        wait_until(|| arena.answered() > 2 * line || arena.reused() > 0).await;
     }
 
     assert_eq!(
