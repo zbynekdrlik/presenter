@@ -206,6 +206,8 @@ export type ServerHandle = {
 export type MockResolumeHandle = {
   port: number;
   setOnline: (online: boolean) => void;
+  /** requests received for `method` + exact `path` (query ignored), #808 */
+  requestCount: (method: string, path: string) => number;
   close: () => Promise<void>;
 };
 
@@ -383,6 +385,9 @@ export async function stopServer(handle?: ServerHandle) {
 
 export async function startMockResolume(): Promise<MockResolumeHandle> {
   let online = true;
+  // "<METHOD> <path>" → number of requests received (online or not), so a
+  // test can prove how often the driver pulled the composition (#808).
+  const requestCounts = new Map<string, number>();
 
   const server = http.createServer((req, res) => {
     const { method, url } = req;
@@ -390,10 +395,21 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
       res.statusCode = 400;
       return res.end("bad request");
     }
+    const key = `${method} ${url.split("?")[0]}`;
+    requestCounts.set(key, (requestCounts.get(key) ?? 0) + 1);
 
     if (!online) {
       res.statusCode = 503;
       return res.end("resolume offline");
+    }
+
+    // #808: the driver's 10 s liveness probe — the real `ProductInfo` shape.
+    if (method === "GET" && url === "/api/v1/product") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({ name: "Arena", major: 7, minor: 13, micro: 2, revision: 0 }),
+      );
+      return;
     }
 
     if (method === "GET" && url.startsWith("/api/v1/composition")) {
@@ -473,6 +489,8 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
     setOnline: (value: boolean) => {
       online = value;
     },
+    requestCount: (method: string, path: string) =>
+      requestCounts.get(`${method} ${path}`) ?? 0,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((err) => {

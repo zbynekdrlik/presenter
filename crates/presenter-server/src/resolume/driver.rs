@@ -1,5 +1,6 @@
 use super::clip_map::ClipMapping;
 use super::error_kind::{classify_error, ResolumeErrorKind};
+use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
 use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
     BibleUpdate, PortDriftEvent, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate,
@@ -10,7 +11,7 @@ use chrono::Utc;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use presenter_core::ResolumeHost;
 use presenter_persistence::ResolumePushAuditEntry;
-use reqwest::{header::HOST, Client, RequestBuilder};
+use reqwest::{header::HOST, Client, RequestBuilder, StatusCode};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -19,8 +20,8 @@ use std::{
 };
 use tokio::{
     net::lookup_host,
-    sync::{mpsc, RwLock},
-    time::Instant,
+    sync::{mpsc, oneshot, RwLock},
+    time::{Instant, MissedTickBehavior},
 };
 use tracing::{debug, error};
 
@@ -28,7 +29,9 @@ use tracing::{debug, error};
 pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(35);
 #[cfg(test)]
 pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(0);
-const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+/// #808: cadence of the worker tick — a `/product` liveness probe, never a
+/// composition fetch while a mapping is cached (see `mapping_refresh.rs`).
+const LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
 /// #563a: 5 s was marginal for a large (12+ MB / 800+ clip) composition on a
 /// loaded event network — sporadic timeouts read as a full host error and,
@@ -41,14 +44,15 @@ pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Spacing before the FIRST retry after a host enters `Error` (#484).
 const BACKOFF_BASE: Duration = Duration::from_secs(1);
 /// Backoff ceiling — a persistently-down host retries at most ~once per minute
-/// instead of on every push + every 10 s mapping tick (#484).
+/// instead of on every push + every 10 s tick (#484).
 const BACKOFF_CAP: Duration = Duration::from_secs(60);
 /// #563b: the composition mapping cache is invalidated only after this many
 /// CONSECUTIVE failures — a single timeout/blip keeps serving the
 /// stale-but-good mapping instead of forcing a (potentially multi-MB) refetch
-/// storm that aggravates the very congestion causing the failures. Mirrors
-/// the push path's existing "never refetch on staleness alone" policy (#483)
-/// for the periodic background refresh too.
+/// storm that aggravates the very congestion causing the failures. #808: this
+/// invalidation is also the "host recovered" refetch trigger — the next tick or
+/// push after a long enough outage reads the composition once. A 404 for a
+/// mapped id does not wait for it (see `mapping_refresh.rs`).
 const CACHE_INVALIDATION_THRESHOLD: u32 = 3;
 /// #563h: minimum spacing between repeated "mapping missing #x clip" WARNs
 /// for the SAME clip on the SAME host — unthrottled, a per-push warning
@@ -80,17 +84,20 @@ pub(super) fn should_log_error(consecutive_failures: u32) -> bool {
     consecutive_failures > 0 && consecutive_failures.is_power_of_two()
 }
 
-/// Why `refresh_mapping` ran — logged on every composition fetch so a refetch
-/// storm (e.g. an error loop) is distinguishable from the normal 10 s
-/// background refresh (#483 logging requirement).
+/// Why the composition was fetched — logged on every fetch (#483), so a refetch
+/// storm (e.g. an error loop) is visible as such. #808: there is no timer
+/// reason any more; every fetch has one of these causes.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum FetchReason {
     /// No mapping cached yet (cold start or config change).
     Missing,
-    /// A prior push/refresh errored and invalidated the cached mapping.
+    /// Failures crossed the #563b threshold (or the port drifted) and
+    /// invalidated the mapping; this fetch is the recovery refetch.
     ErrorInvalidated,
-    /// The periodic background refresh (every `MAPPING_REFRESH_INTERVAL`).
-    BackgroundTimer,
+    /// A push got a 404 for a mapped id; this fetch precedes its retry.
+    StaleId,
+    /// The operator asked for it ("Refresh mapping").
+    Manual,
 }
 
 impl FetchReason {
@@ -98,7 +105,8 @@ impl FetchReason {
         match self {
             Self::Missing => "missing",
             Self::ErrorInvalidated => "error-invalidated",
-            Self::BackgroundTimer => "background-timer",
+            Self::StaleId => "stale-id",
+            Self::Manual => "manual",
         }
     }
 }
@@ -123,6 +131,8 @@ pub(super) enum HostCommand {
     Bible(BibleUpdate),
     Timer(TimerFrame),
     RefreshConfig(ResolumeHost),
+    /// #808: the operator's "Refresh mapping"; the worker replies when done.
+    RefreshMapping(oneshot::Sender<MappingRefreshResult>),
     Shutdown,
 }
 
@@ -139,30 +149,35 @@ pub(super) async fn run_host_worker(
     driver.port_drift_tx = port_drift_tx;
     driver.refresh_status(&status).await;
 
-    let mut mapping_timer = tokio::time::interval(MAPPING_REFRESH_INTERVAL);
+    let mut liveness_timer = tokio::time::interval(LIVENESS_INTERVAL);
+    // A long push burst must not leave a queue of missed ticks that then probe
+    // back to back.
+    liveness_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
+            // #808: when a command and a tick are both ready, the command (a
+            // lyric line) runs first instead of waiting behind the probe.
+            biased;
             maybe_cmd = commands.recv() => {
                 match maybe_cmd {
                     Some(HostCommand::Stage(payload)) => {
-                        if let Err(err) = driver.handle_stage(payload, &status).await {
-                            driver.record_error(err, &status).await;
-                        }
+                        driver.dispatch_push(Push::Stage(payload), &status).await;
                     }
                     Some(HostCommand::Bible(payload)) => {
-                        if let Err(err) = driver.handle_bible(payload, &status).await {
-                            driver.record_error(err, &status).await;
-                        }
+                        driver.dispatch_push(Push::Bible(payload), &status).await;
                     }
                     Some(HostCommand::Timer(frame)) => {
-                        if let Err(err) = driver.handle_timer(frame, &status).await {
-                            driver.record_error(err, &status).await;
-                        }
+                        driver.dispatch_push(Push::Timer(frame), &status).await;
                     }
                     Some(HostCommand::RefreshConfig(new_config)) => {
                         host = new_config.clone();
                         driver.update_config(new_config);
                         driver.refresh_status(&status).await;
+                    }
+                    Some(HostCommand::RefreshMapping(reply)) => {
+                        let result = driver.manual_refresh(&status).await;
+                        // The HTTP caller may have timed out; nobody to tell.
+                        let _ = reply.send(result);
                     }
                     Some(HostCommand::Shutdown) | None => {
                         debug!(host_id = %host.id, "resolume host worker shutting down");
@@ -170,24 +185,7 @@ pub(super) async fn run_host_worker(
                     }
                 }
             }
-            _ = mapping_timer.tick() => {
-                if driver.in_backoff() {
-                    // #484/#563d: a down host is in its backoff window — skip
-                    // this 10 s refresh instead of re-attempting (and
-                    // re-logging), but say for how much longer so ops reading
-                    // logs mid-incident can see the driver is still trying,
-                    // not stuck.
-                    debug!(
-                        host = %driver.config.host,
-                        next_retry_in_secs = driver.next_retry_in_secs(),
-                        "resolume host in backoff; skipping mapping refresh"
-                    );
-                } else if let Err(err) = driver.refresh_mapping().await {
-                    driver.record_error(err, &status).await;
-                } else {
-                    driver.mark_connected(&status).await;
-                }
-            }
+            _ = liveness_timer.tick() => driver.tick(&status).await,
         }
     }
     Ok(())
@@ -201,16 +199,26 @@ pub(super) struct HostDriver {
     pub(super) lane_state: SlotState,
     pub(super) endpoint: Option<ResolvedEndpoint>,
     /// When the cached mapping was last fetched. After #483 this is no longer a
-    /// staleness trigger on the push path — it is read only to log the served
-    /// mapping's age (`mapping_age_ms`), the diagnostic the issue cares about.
+    /// staleness trigger on the push path. It is read to log the served
+    /// mapping's age (`mapping_age_ms`), and #808's `dispatch_push` compares it
+    /// before/after an attempt to tell whether that push fetched the mapping
+    /// itself (a 404 on such a fresh mapping is not a stale id).
     pub(super) last_mapping_refresh: Option<Instant>,
-    /// True when the cache was cleared by `record_error` (vs a cold start), so
-    /// the next inline fetch is logged as `error-invalidated`, not `missing`.
-    pub(super) mapping_cleared_by_error: bool,
+    /// Why the cached mapping was dropped (`record_error`'s threshold, a port
+    /// drift, a stale id), so the next fetch logs that reason instead of
+    /// `missing`. `None` on a cold start; cleared by every successful fetch.
+    pub(super) invalidation_reason: Option<FetchReason>,
+    /// #808: while set and in the future, a 404 for a mapped id does NOT
+    /// refetch the composition (a fresh mapping already got a 404 for it).
+    pub(super) stale_refetch_paused_until: Option<Instant>,
+    /// #808: `/product` on the dialed port has identified Resolume at least
+    /// once. A later 404 there is then a failure (the server changed), not an
+    /// Arena older than the endpoint. Reset when the dial target changes.
+    pub(super) product_verified: bool,
     /// #484: when the next retry is allowed while the host is in `Error`. While
-    /// `Instant::now()` is before this, pushes and the 10 s mapping tick are
-    /// skipped (exponential backoff keyed on `consecutive_failures`). `None`
-    /// when the host is healthy.
+    /// `Instant::now()` is before this, pushes and the 10 s tick are skipped
+    /// (exponential backoff keyed on `consecutive_failures`). `None` when the
+    /// host is healthy.
     pub(super) next_retry_at: Option<Instant>,
     pub(super) last_timer_payload: Option<String>,
     pub(super) last_song_name_payload: Option<String>,
@@ -247,7 +255,9 @@ impl HostDriver {
             lane_state: SlotState::default(),
             endpoint: None,
             last_mapping_refresh: None,
-            mapping_cleared_by_error: false,
+            invalidation_reason: None,
+            stale_refetch_paused_until: None,
+            product_verified: false,
             next_retry_at: None,
             last_timer_payload: None,
             last_song_name_payload: None,
@@ -267,7 +277,9 @@ impl HostDriver {
         self.lane_state = SlotState::default();
         self.endpoint = None;
         self.last_mapping_refresh = None;
-        self.mapping_cleared_by_error = false;
+        self.invalidation_reason = None;
+        self.stale_refetch_paused_until = None;
+        self.product_verified = false;
         self.next_retry_at = None;
         self.last_timer_payload = None;
         self.last_song_name_payload = None;
@@ -277,7 +289,7 @@ impl HostDriver {
     }
 
     /// #484: true while the host is within its post-error backoff window — the
-    /// next retry is not yet due, so the worker skips this push / mapping tick.
+    /// next retry is not yet due, so the worker skips this push / tick.
     pub(super) fn in_backoff(&self) -> bool {
         matches!(self.next_retry_at, Some(at) if Instant::now() < at)
     }
@@ -328,31 +340,25 @@ impl HostDriver {
     /// Ensure a clip-mapping is available for the push path.
     ///
     /// #483: the push path is served from cache and is NEVER re-fetched inline
-    /// on staleness. The only inline fetch is when there is no mapping at all
-    /// (cold start, config change, or an error that invalidated it). The 10 s
-    /// background timer (`run_host_worker`) and on-error invalidation are the
-    /// only refresh triggers, so a lyric line is never blocked on a 300–620 ms
-    /// composition fetch.
+    /// on staleness. The only fetch here is when there is no mapping at all
+    /// (cold start, config change, or an invalidation — see
+    /// `invalidation_reason`). #808: nothing re-reads the composition on a
+    /// timer either; `mapping_refresh.rs` lists every trigger.
     pub(super) async fn ensure_mapping(&mut self) -> anyhow::Result<MappingFetchOutcome> {
         if !self.config.is_enabled {
             self.mapping = None;
             return Ok(MappingFetchOutcome { refetched: false });
         }
         if self.mapping.is_none() {
-            let reason = if self.mapping_cleared_by_error {
-                FetchReason::ErrorInvalidated
-            } else {
-                FetchReason::Missing
-            };
+            let reason = self.invalidation_reason.unwrap_or(FetchReason::Missing);
             debug!(
                 target: "presenter::resolume::timing",
                 host = %self.config.host,
                 mapping_cache = "miss",
                 reason = reason.as_str(),
-                "resolume mapping cache miss — fetching composition inline"
+                "resolume mapping cache miss — fetching composition"
             );
             self.refresh_mapping_with_reason(reason).await?;
-            self.mapping_cleared_by_error = false;
             return Ok(MappingFetchOutcome { refetched: true });
         }
 
@@ -367,12 +373,11 @@ impl HostDriver {
         Ok(MappingFetchOutcome { refetched: false })
     }
 
-    /// Periodic background refresh entry point (the `mapping_timer` tick and the
-    /// direct test calls). Inline push-path fetches go through
-    /// `refresh_mapping_with_reason` with their specific reason.
+    /// Unconditional composition fetch: the operator refresh
+    /// (`HostDriver::manual_refresh`, #808) and direct test calls. Every other
+    /// fetch goes through `ensure_mapping` with its invalidation reason.
     pub(super) async fn refresh_mapping(&mut self) -> anyhow::Result<()> {
-        self.refresh_mapping_with_reason(FetchReason::BackgroundTimer)
-            .await
+        self.refresh_mapping_with_reason(FetchReason::Manual).await
     }
 
     pub(super) async fn refresh_mapping_with_reason(
@@ -409,8 +414,8 @@ impl HostDriver {
         let clip_count = count_clips(&body);
 
         // #483: a dedicated line so "we re-fetch a huge composition" is a single
-        // grep. `reason` distinguishes a background refresh from an error- or
-        // cold-start-driven inline fetch.
+        // grep. `reason` says which trigger fetched it (#808: cold start,
+        // recovery, stale id, or the operator).
         tracing::info!(
             target: "presenter::resolume::timing",
             host = %self.config.host,
@@ -435,21 +440,12 @@ impl HostDriver {
         // threaded into this fetch.
         self.missing_clips = missing.iter().map(|token| token.to_string()).collect();
 
-        // #267: only reset dedup state when the #timer param IDs actually
-        // changed. A network blip that does not change the mapping must
-        // preserve last_timer_payload so the next equal-valued tick is
-        // skipped (no flicker).
-        let timer_param_ids_changed = self
-            .mapping
-            .as_ref()
-            .map(|old| old.timer_param_ids() != mapping.timer_param_ids())
-            .unwrap_or(true);
-        if timer_param_ids_changed {
-            self.last_timer_payload = None;
-        }
+        // #267/#808: reset a payload's dedup only when its param ids changed.
+        self.reset_dedup_for_changed_ids(&mapping);
 
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
+        self.invalidation_reason = None;
         Ok(())
     }
 
@@ -481,7 +477,10 @@ impl HostDriver {
                     .send()
                     .await
                     .with_context(|| format!("failed to trigger clip {}", clip_id))?;
-                if !response.status().is_success() {
+                if response.status() == StatusCode::NOT_FOUND {
+                    // #808: the clip id is gone from Arena's composition.
+                    Err(StaleIdError::clip(clip_id))
+                } else if !response.status().is_success() {
                     Err(anyhow!(
                         "clip trigger failed with status {}",
                         response.status()
@@ -684,11 +683,15 @@ impl HostDriver {
         // #563b: the composition mapping cache is invalidated only once
         // failures reach CACHE_INVALIDATION_THRESHOLD — a single blip keeps
         // serving the stale-but-good mapping instead of forcing a refetch.
-        if failures >= CACHE_INVALIDATION_THRESHOLD {
+        // #808: a stale id while stale refetches are paused was just checked
+        // against a fresh mapping; dropping it would only force a refetch.
+        let fresh_mapping_404 = self.stale_refetch_paused() && is_stale_id_error(&err);
+        if failures >= CACHE_INVALIDATION_THRESHOLD && !fresh_mapping_404 {
             self.mapping = None;
             self.last_mapping_refresh = None;
-            // #483: the next inline fetch is error-driven, not a cold start.
-            self.mapping_cleared_by_error = true;
+            // #483/#808: the next fetch (tick or push) is the recovery
+            // refetch, logged as error-driven, not as a cold start.
+            self.invalidation_reason = Some(FetchReason::ErrorInvalidated);
         }
         // The resolved endpoint (DNS/IP) is cheap to redo and IS reset on
         // every failure — unlike the composition, re-resolving costs a DNS

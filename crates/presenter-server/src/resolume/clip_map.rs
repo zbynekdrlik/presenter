@@ -49,10 +49,16 @@ impl ClipMapping {
     /// Returns the sorted set of `#timer` clip text-param IDs for stable
     /// equality comparison across mapping refreshes.
     pub(super) fn timer_param_ids(&self) -> Vec<i64> {
-        let mut ids: Vec<i64> = self.timer.iter().filter_map(|t| t.text_param_id).collect();
-        ids.sort_unstable();
-        ids
+        sorted_text_param_ids(&self.timer)
     }
+}
+
+/// The sorted text-param ids of one clip kind, for comparing two mappings
+/// (#267 timer dedup, #808 song/band dedup).
+pub(super) fn sorted_text_param_ids(targets: &[ClipTarget]) -> Vec<i64> {
+    let mut ids: Vec<i64> = targets.iter().filter_map(|t| t.text_param_id).collect();
+    ids.sort_unstable();
+    ids
 }
 
 fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, layer_index: usize) {
