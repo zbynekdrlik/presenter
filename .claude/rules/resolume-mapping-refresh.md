@@ -3,6 +3,7 @@ paths:
   - "crates/presenter-server/src/resolume/driver.rs"
   - "crates/presenter-server/src/resolume/mod.rs"
   - "crates/presenter-server/src/resolume/mapping_refresh*.rs"
+  - "crates/presenter-server/src/resolume/keepalive_tests.rs"
   - "crates/presenter-server/src/resolume/handlers.rs"
   - "crates/presenter-server/src/resolume/bible_clear.rs"
   - "crates/presenter-server/src/resolume/port_drift.rs"
@@ -79,6 +80,37 @@ Never add a timer, a staleness check or a "periodic resync" that reads
 - **Telemetry:** a stale retry runs `handle_stage` twice. So one push writes
   two audit rows: `error: Resolume has no … (404 Not Found) …`, then `ok`
   with `refetched=true`. That is intended: the first attempt really failed.
+
+## The HTTP client never reuses a connection
+
+Every Resolume request goes through `resolume_http_client()` (`resolume/mod.rs`):
+the host workers through `ResolumeRegistry::new`, and the settings Test button.
+It sets `pool_max_idle_per_host(0)`, so hyper-util builds no idle pool and every
+request dials a fresh TCP connection. Arena closes idle keep-alive connections
+at irregular times (on SNV after 2 min, then after 30 s). With reqwest's default
+pool, the next probe, PUT or clip connect went out on a socket Arena was already
+closing and failed with `client error (SendRequest): connection closed before
+message completed`: 2671 host errors in 2 days on SNV. Each one was an ERROR line,
+a status flip, a #484 backoff window that skips pushes, and possibly a lost line.
+
+- Never build a second Resolume `reqwest::Client` with default pooling, and
+  never re-enable the pool to save a connect. A LAN connect is sub-millisecond.
+- Do not "fix" that error with a retry. hyper-util retries only requests that
+  were never written. A request that was written may already have been
+  executed by Arena, and a clip `connect` POST is not idempotent: a retry
+  re-triggers the clip.
+- Do not tune `pool_idle_timeout` either. Arena's close timing is irregular, so
+  any timeout is a guess that still races.
+- Test shape (`resolume/keepalive_tests.rs`): a raw tokio `TcpListener` mock
+  answers the FIRST request on each connection with `Connection: keep-alive`
+  and keeps the socket open. If a second request arrives on that connection, it
+  closes the socket without answering. A mock that closes right after each
+  response does NOT reproduce the bug: the FIN reaches hyper before the next
+  checkout, and the pool drops the connection itself. The driver must run on
+  `ResolumeRegistry::new()`'s own `client`, not a client the test builds,
+  otherwise the test pins nothing. One test goes through `set_hosts` +
+  `stage_update`, so the client that `spawn_host` hands each worker is
+  pinned too.
 
 ## Worker loop
 
