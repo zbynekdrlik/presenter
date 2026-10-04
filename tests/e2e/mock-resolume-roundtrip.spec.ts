@@ -101,8 +101,8 @@ test("dev resolume calls hit the mock, not real arena", async ({
   const hostId = created.id;
 
   // POST test-connection — this causes presenter-server to call
-  // GET /api/v1/composition on 127.0.0.1:8091, which the embedded mock
-  // records in its request log.
+  // GET /api/v1/product on 127.0.0.1:8091 (#808: never the whole
+  // composition), which the embedded mock records in its request log.
   const testRes = await request.post(
     new URL(`/integrations/resolume/hosts/${hostId}/test`, baseURL).toString(),
   );

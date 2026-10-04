@@ -336,11 +336,21 @@ test('resolume refresh mapping re-reads the composition only on demand', async (
   await expect.poll(() => productGets() - productBefore, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
   expect(compositionGets() - compositionBefore).toBe(1);
 
+  // Hold the request briefly so the in-flight state is observable: one
+  // refresh at a time (each is a full composition fetch on Arena).
+  await page.route('**/integrations/resolume/hosts/*/refresh-mapping', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await route.continue();
+  });
   const refreshButton = page.locator(`[data-role="host-refresh-mapping"][data-id="${hostId}"]`);
   await expect(refreshButton).toBeVisible({ timeout: 10_000 });
+  await expect(refreshButton).toBeEnabled();
   await refreshButton.click();
+  await expect(refreshButton).toBeDisabled();
   await waitForToast(page, /Mapping refreshed/);
+  await expect(refreshButton).toBeEnabled();
   expect(compositionGets() - compositionBefore).toBe(2);
+  await page.unroute('**/integrations/resolume/hosts/*/refresh-mapping');
 
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator(`[data-role="host-delete"][data-id="${hostId}"]`).click();

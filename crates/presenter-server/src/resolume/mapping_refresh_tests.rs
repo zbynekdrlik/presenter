@@ -514,6 +514,69 @@ async fn a_retry_that_still_404s_pauses_stale_refetches() {
     assert_eq!(snap.consecutive_failures, 2);
 }
 
+/// While stale-id refetches are paused, the mapping is known to be fresh, so
+/// the #563b threshold must not drop it either. Otherwise every third failed
+/// push of a broken id would refetch the 16 MB composition anyway.
+#[tokio::test]
+async fn a_paused_stale_id_never_drops_the_fresh_mapping() {
+    let server = MockServer::start().await;
+    MockArena::start(&server, composition(vec![clip(100, "#main-a", 1)])).await;
+    mount_ok(&server, &[], &[100]).await; // param 1 always answers 404
+    let (mut driver, status) = driver_for(&server, true);
+    driver.tick(&status).await; // cold fetch
+
+    for line in ["Line 1", "Line 2", "Line 3", "Line 4"] {
+        backoff_elapsed(&mut driver);
+        driver.dispatch_push(stage(line, None), &status).await;
+    }
+
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
+        2,
+        "the tick's fetch + the one stale refetch, nothing more"
+    );
+    assert!(
+        driver.mapping.is_some(),
+        "a paused stale id keeps the fresh mapping"
+    );
+    assert_eq!(status.read().await.consecutive_failures, 4);
+}
+
+/// A config change forgets that `/product` identified the old target. An
+/// older Arena there (no `/product`, 404) still counts as alive, not as "the
+/// server changed".
+#[tokio::test]
+async fn a_config_change_forgets_the_old_product_identity() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(COMPOSITION))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(composition(vec![clip(100, "#main-a", 1)])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(PRODUCT))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "Arena", "major": 7, "minor": 13, "micro": 2, "revision": 0,
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server, true);
+    driver.tick(&status).await; // cold fetch
+    driver.tick(&status).await; // /product identifies Arena
+
+    let config = driver.config.clone();
+    driver.update_config(config); // the operator re-saved the host
+    driver.tick(&status).await; // cold fetch again
+    driver.tick(&status).await; // /product now answers 404
+
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Connected);
+    assert_eq!(snap.consecutive_failures, 0);
+}
+
 /// RED before #808: the tick on a disabled host returned `Ok` from
 /// `refresh_mapping` and called `mark_connected`, so the host showed Connected.
 /// A disabled host's tick must send nothing and leave the status alone.
