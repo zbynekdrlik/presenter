@@ -147,5 +147,15 @@ launch Companion with `--extra-module-path /opt/companion-module-dev`.
   DB write path are unit/integration-tested in `repin-presenter-connection.test.py`, run in the
   `companion-tests` CI job **by file path** (`python3 ops/companion/repin-presenter-connection.test.py`;
   the hyphenated stem can't be imported via `-m unittest`).
-- **Inspect a live connection's pin (read-only; adjust `v<major>.<minor>` per host — SNV=v5.0, PP=v4.3):**
+- **Inspect a live connection's pin (read-only). Resolve the DB dir from `/opt/companion/BUILD` — as of 2026-10-04 BOTH hosts run Companion 5.0.6 → `v5.0`; the old `v4.x` dirs are stale leftovers (reading one gives a false "upgrade didn't run" — #805):**
   `sudo python3 -c "import sqlite3,json; [print(json.loads(v).get('moduleVersionId')) for i,v in sqlite3.connect('file:/home/companion/.config/companion-nodejs/v5.0/db.sqlite?mode=ro',uri=True).execute('select id,value from instances') if json.loads(v).get('moduleId')=='presenter']"`
+- **Never press a rig button to test without reading its FULL action list first (#805 incident).**
+  The preach-limit buttons are composite: one press also switches the stage layout, resets +
+  starts the preach timer, clears the Bible and sets the stream scene. To check what a module
+  action sends, read the stored action options (DB above) or press only a single-action test
+  button; if a composite button was pressed, restore from the last `Presenter command …` lines
+  in `journalctl -u companion`.
+- **Upgrade scripts (Companion 5):** stored options are wrapped `{isExpression,value}`; Companion
+  unwraps them before calling the module's upgrade scripts (`Fu()` in main.js) and re-wraps the
+  result, so scripts see plain values. After a deploy, verify `lastUpgradeIndex` on the
+  presenter connection and `upgradeIndex` on its actions in the `v5.0` DB.
