@@ -76,9 +76,11 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   REAL adapter (wiring, handler payloads, `_handleMessage`), use the shared
   `loadPresenterModule()` in `lib/test-support.js` (stubs `@companion-module/base` + `ws`
   via a `Module._load` hook; #805/#814, see `.claude/rules/companion-upgrade-scripts.md`).
-- **Renaming/retyping an action option ⇒ append an upgrade script** to
-  `lib/upgrade-scripts.js` `UPGRADE_SCRIPTS` (append-only) + a handler fallback, or every
-  saved button silently keeps the old key (#805) — `.claude/rules/companion-upgrade-scripts.md`.
+- **Renaming an action option, or retyping it so the stored value's shape changes ⇒
+  append an upgrade script** to `lib/upgrade-scripts.js` `UPGRADE_SCRIPTS` (append-only) + a
+  handler fallback, or every saved button silently keeps the old key (#805) — a type-only change
+  that keeps the key and a string value (textinput → `allowCustom` dropdown, #814) needs none —
+  `.claude/rules/companion-upgrade-scripts.md`.
 - **Stream command family (`lib/stream.js`).** Wire command names MUST start with
   `stream_` — the server (`companion/stream.rs`, #711) delegates by that prefix; the
   Companion action id IS the wire command name. Scenes are addressed BY NAME

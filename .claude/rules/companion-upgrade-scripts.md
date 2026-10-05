@@ -11,7 +11,7 @@ action option** in `_commandOptionsFor` (`seconds` → `minutes`, a checkbox `en
 never reads that key. Nothing fails loudly: the press just sends the fallback.
 
 Changing only an option's TYPE while keeping its key AND a string value — e.g. the #814
-textinput → `dropdown` with `allowCustom: true` for `scene`/`output`/`code` — needs NO upgrade
+textinput → `dropdown` with `allowCustom: true` for `scene`/`output` — needs NO upgrade
 script: the stored string is passed through unchanged. Prove it with a legacy-value press test
 (`lib/catalog.test.js`).
 

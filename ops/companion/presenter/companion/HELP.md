@@ -39,7 +39,7 @@ The stream-graphics output exposes `stream_scene` (active base scene name, or `-
 
 ### Dropdowns load from Presenter
 
-Presenter sends the module a catalog on connect and again whenever the stream setup changes: the stage layouts, the stream outputs, and each output's base and overlay scenes. The `stage.layout`, output, scene and overlay dropdowns (and the scene/overlay feedbacks) are built from it, so a new layout, output or scene shows up without a module update or a Companion restart. Every dropdown also accepts a typed value, and existing buttons keep the value they were saved with. Before the first catalog arrives (or with an older Presenter) the module falls back to a built-in layout list.
+Presenter sends the module a catalog on connect and again whenever an output or scene is added, renamed, deleted or reordered: the stage layouts, the stream outputs, and each output's base and overlay scenes. (A deleted output leaves the list at the next change or reconnect.) The `stage.layout`, output, scene and overlay dropdowns (and the scene/overlay feedbacks) are built from it, so a new layout, output or scene shows up without a module update or a Companion restart. Every dropdown also accepts a typed value, and existing buttons keep the value they were saved with. Before the first catalog arrives (or with an older Presenter) the module falls back to a built-in layout list.
 
 ## Feedback
 

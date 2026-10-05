@@ -4,9 +4,11 @@
 //!
 //! Same push model as the #779 nameplate list: an outgoing `catalog` message
 //! sent on connect (and lag recovery) and re-sent whenever a stream CONFIG
-//! write changes its content (`LiveEvent::StreamConfigChanged` — output/scene
-//! create/rename/delete/reorder; an element-only edit re-resolves to the SAME
-//! catalog and sends nothing). Layouts are compiled in
+//! write changes its content (`LiveEvent::StreamConfigChanged` — output
+//! create/rename, scene create/rename/delete/reorder; an element-only edit
+//! re-resolves to the SAME catalog and sends nothing). Deleting an OUTPUT
+//! publishes no live event, so it drops out at the next config change or
+//! reconnect (stored values keep working via `allowCustom`). Layouts are compiled in
 //! (`StageDisplayLayout::operator_selectable`), so they only change with a
 //! deploy, which restarts the server and reconnects the module.
 //!

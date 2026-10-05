@@ -25,6 +25,12 @@ static list in `index.js`. The old hardcoded `STAGE_LAYOUT_CHOICES` never got `a
   changed. An element edit re-resolves to the same catalog, so nothing is sent.
 - The session subscribes to the live hub BEFORE its initial snapshot, so a change that lands
   during connect is never lost. The WS test in `catalog_tests.rs` relies on that ordering.
+- A NEGATIVE "nothing was sent" assertion over the real socket needs an ORDERING BARRIER, never a
+  timeout or a ping: the session handles live events one at a time in hub order, so publish a
+  marker event right after the one under test (`state.set_broadcast_live(true)`) and read frames
+  until its `variables` frame arrives — any `catalog` frame before it is the bug. Without the
+  barrier, a later DB write can be seen by the earlier event's refresh and mask a broken gate
+  (#814 review). `tokio::select!` picks branches randomly, so a ping/pong orders nothing.
 - Tests use an ISOLATED temp-file DB (`catalog_tests.rs::isolated_state`). The shared
   `AppState::in_memory()` DB would let a parallel test's new output change the catalog and race
   the "unchanged → no re-send" assertions.
