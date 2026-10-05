@@ -64,8 +64,8 @@ be wrong with no 404" below:
   result with at least one recognized clip becomes that deck's last-good
   reference, so an intentional clip removal stops being "suspect".
 - `follow-up`: a step of the follow-up schedule of a suspect mapping.
-- `lane-missing`: a stage/Bible push needed a lane the cached mapping lacks.
-  This happens once per deck.
+- `lane-missing`: a stage/Bible push needed a lane the cached mapping lacks
+  but should have (`LaneRefetch` limits it).
 - `deck-changed`: the deck check found the cached deck no longer selected.
 
 ## A fetched mapping can be wrong with no 404 (#808 regression, 2026-10-05)
@@ -90,10 +90,13 @@ a timer:
 
 - **Every fetch records `decks[].selected.value`** (`selected_deck_id`) and
   compares its destination kinds (`ClipMapping::destination_kinds`, the names
-  in the missing-clip list) with that deck's last good kinds. The last good
-  kinds are kept per deck, because decks legitimately differ.
-  - The mapping is *suspect* if it has no recognized destination at all, or
-    lacks a kind that deck's last good mapping had.
+  in the missing-clip list) with the last good kinds of that deck.
+  - The last good kinds are kept per deck, because decks legitimately differ.
+  - A body without `decks` (Arena mid-load) is judged against the deck
+    selected before (`reference_deck`). It has no deck to check
+    (`selected_deck` is `None`).
+  - The mapping is *suspect* if it lacks a kind the deck had. A deck without
+    history is suspect only if it has no recognized destination at all.
   - While a mapping is suspect, follow-up fetches run `FOLLOW_UP_DELAYS`
     apart: 2, 5, 15, 30 and 60 s, at most 5 per episode. The deadline is the
     worker's `select!` branch `follow_up_deadline`, not a timer. The schedule
@@ -103,45 +106,76 @@ a timer:
   - Only `missing`, `error-invalidated`, `stale-id`, `deck-changed` and an
     empty manual result start the schedule. `follow-up` advances it.
     `lane-missing` never restarts it.
+  - **Settling.** After the last step, a composition that did not change
+    since the previous fetch becomes the deck's reference (`Settled`, one
+    WARN). That requires recognized clips, or a listed deck without history
+    (a video deck). This stops a deck whose clips were removed on purpose,
+    or a deck with no presenter clips, from costing 5 follow-ups on every
+    visit.
+  - A deck that HAD clips and still shows none stays suspect: that is Arena
+    still loading.
+  - Residual risk: Presenter cold-starts during an Arena load that takes
+    longer than about 2 min, with a loading body that lists a deck id the
+    loaded composition keeps. That settles as "no clips" until a deck change
+    or Refresh mapping.
 - **Deck check.** `GET /composition/decks/by-id/{selected}` (~360 B,
-  `ACTION_TIMEOUT`) runs before every stage/Bible push
-  (`prepare_mapping_for_push`). It also runs on the tick, after a successful
-  `/product` probe (`follow_deck_switch`).
-  - `selected:false` or a 404 calls `invalidate_mapping(DeckChanged)`. The
-    push's own `ensure_mapping` then refetches inline (never rate-limited)
-    and the push lands on the new deck.
+  `ACTION_TIMEOUT`) runs before every stage/Bible push. It also runs on the
+  tick, after a successful `/product` probe (`follow_deck_switch`).
+  - On the push path it lives in `HostDriver::ensure_mapping_for_push`, which
+    `handle_stage` and `handle_bible` call instead of `ensure_mapping`. Its
+    time therefore counts as `t_ensure_mapping_ms`, and every fetch it does
+    sets the audit row's `refetched`.
+  - `selected:false` or a 404 calls `invalidate_mapping(DeckChanged)`.
+    `ensure_mapping` then refetches inline (never rate-limited) and the push
+    lands on the new deck.
   - If that refetch fails, the push fails like any composition fetch. It
     never writes to the old deck's ids.
-  - If the check itself fails, the push goes out on the cached mapping, with
-    a WARN at most once per 300 s.
-  - Timer frames never check the deck. A composition without `decks` gets
-    no check at all.
-- **Lane refetch.** A push that needs a destination the cached mapping lacks
-  refetches once per deck before it is applied. It does so only if the
-  deck's last good mapping had that destination, or the mapping has no
+  - If the check itself fails, the push goes out on the cached mapping. The
+    WARN comes from the #563h limiter, keyed `deck-check`, so at most once
+    per 300 s.
+  - A 404 for a deck that the fresh composition still selects is a broken
+    answer. It costs one refetch, and then that deck's 404s are ignored
+    (`contradicted_deck`, one WARN). Otherwise every push and every tick
+    would fetch the composition.
+  - Timer frames (`handle_timer`, plain `ensure_mapping`) never check the
+    deck. A composition without `decks` gets no check at all.
+- **Lane refetch** (`LaneRefetch`). When the cached mapping was not just
+  fetched, a push that needs a destination the mapping lacks refetches
+  before it is applied. It does so only if the deck's last good mapping had
+  that destination, or the deck has no history and the mapping has no
   destination at all.
   - The refetch runs before the push, not as apply-then-retry. With
     apply-then-retry, a partly mapped push would trigger its main clips
     twice and flip the lane twice.
-  - A failed refetch only logs a WARN; the push goes out on the cached
+  - **Armed** means the next such push refetches. The refetch is re-armed by
+    every follow-up step, a deck change, a complete fetch, a manual refresh
+    and a config change.
+  - **Spent** applies while the follow-ups still run, after a refetch that
+    left the lane empty. The next follow-up step re-arms it.
+  - **RetryAt** comes after a failed refetch, or after an empty refetch once
+    the follow-ups ran out. It allows the next refetch `LANE_REFETCH_RETRY`
+    (30 s) later. A slow composition fetch therefore cannot stall every line,
+    and a load longer than the schedule still lets the first line after it
+    land. Lines in the gap are skipped: that is the bound.
+  - A failed refetch only logs a WARN, and the push goes out on the cached
     mapping.
-  - If the lane is still empty afterwards, that is what the deck really
-    holds: one WARN, and nothing more until a deck change, a complete fetch,
-    a manual refresh or a config change (`lane_refetch_spent`).
 - **A host or deck that never had a kind never refetches for it.** Bridge PP
-  has no `#main` and SNV has no `#translate`. Switching to a deck that
-  legitimately lacks lyric clips is not suspect either, so it gets no
-  follow-ups.
+  has no `#main` and SNV has no `#translate`. A switch to a deck that lacks
+  lyric clips but has other presenter clips (Bible, metadata) is not suspect
+  and gets no follow-ups. A deck with no presenter clip at all runs the
+  follow-ups once, then settles.
 
 When you touch this area:
 
 - **Never treat a fetched mapping as final.** Every new fetch path must go
   through `refresh_mapping_with_reason`, so `note_fetched_mapping` sees it.
-- **Never add a push path that skips `dispatch_push`.** The deck check and
-  the lane refetch live in its `prepare_mapping_for_push`.
-- **`fetched_before` is taken BEFORE the pre-check.** A mapping the pre-check
-  fetched counts as fresh, so a 404 on it pauses stale refetches instead of
-  fetching a third time.
+- **A new stage/Bible-style push path calls `ensure_mapping_for_push`** with
+  the kinds it writes (`stage_required_kinds` / `bible_required_kinds`),
+  never the plain `ensure_mapping`.
+- **`fetched_before` (`dispatch_push`) is taken before the attempt.** Any
+  fetch inside it (cold start, recovery, deck switch, lane refetch) makes
+  the mapping fresh. A 404 on a fresh mapping pauses stale refetches instead
+  of fetching again.
 - **A new destination kind goes into `clip_map.rs`'s `destinations()` list
   only.** The missing-clip list and the kind comparison both come from it.
 - **Mocks: any mock Arena that lists `decks` must serve the deck-by-id
@@ -228,9 +262,15 @@ a queue of missed ticks that probe back to back.
   recovery fetch mid-load.
   `resolume/provisional_schedule_tests.rs` reuses `DeckArena`. It calls
   `run_follow_up` directly, the same call the worker's `select!` makes at the
-  deadline, and asserts the deadline it set (`assert_follow_up`). Only one
-  test sleeps for real: the worker-level cold-start test waits about 2 s for
-  the first follow-up.
+  deadline, and asserts the deadline it set (`assert_follow_up`). Two
+  worker-level tests sleep for real, about 2 s each, waiting for the first
+  follow-up: `a_worker_started_while_arena_loads_…` and
+  `the_worker_waits_for_the_follow_up_deadline`. Simulate an elapsed
+  `LANE_REFETCH_RETRY` by setting
+  `driver.provisional.lane_refetch = LaneRefetch::RetryAt(Instant::now())`,
+  never by sleeping. DeckArena also has `fail_compositions(n)` (the next n
+  composition GETs answer 500) and `set_lists_decks(false)` (bodies without
+  `decks`).
 - An UNMOUNTED wiremock route answers 404. That is how the tests model a stale
   id: never mount the old id's route.
 - Every mock Arena must serve `/api/v1/product`: the embedded
