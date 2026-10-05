@@ -34,12 +34,12 @@ use tokio::sync::RwLock;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-type Status = Arc<RwLock<ResolumeConnectionSnapshot>>;
+pub(super) type Status = Arc<RwLock<ResolumeConnectionSnapshot>>;
 
-const COMPOSITION: &str = "/api/v1/composition";
+pub(super) const COMPOSITION: &str = "/api/v1/composition";
 const PRODUCT: &str = "/api/v1/product";
 
-fn clip(id: i64, name: &str, param_id: i64) -> Value {
+pub(super) fn clip(id: i64, name: &str, param_id: i64) -> Value {
     json!({
         "id": id,
         "name": { "value": name },
@@ -47,11 +47,11 @@ fn clip(id: i64, name: &str, param_id: i64) -> Value {
     })
 }
 
-fn param(id: i64) -> String {
+pub(super) fn param(id: i64) -> String {
     format!("/api/v1/parameter/by-id/{id}")
 }
 
-fn connect(id: i64) -> String {
+pub(super) fn connect(id: i64) -> String {
     format!("/api/v1/composition/clips/by-id/{id}/connect")
 }
 
@@ -61,7 +61,7 @@ fn deck_path(id: i64) -> String {
 
 /// A deck with lyric clips: `#main-a` is clip `clip_base` with text param
 /// `param_base`, `#main-b` is clip `clip_base + 1` with param `param_base + 1`.
-fn lyric_deck(clip_base: i64, param_base: i64) -> Vec<Value> {
+pub(super) fn lyric_deck(clip_base: i64, param_base: i64) -> Vec<Value> {
     vec![
         clip(clip_base, "#main-a", param_base),
         clip(clip_base + 1, "#main-b", param_base + 1),
@@ -114,12 +114,16 @@ fn composition_body(state: &ArenaState) -> Value {
 /// A mock Arena with decks. Text writes and clip connects answer 200 for any
 /// id, as Resolume does for clips of a deck that is not selected.
 #[derive(Clone)]
-struct DeckArena {
+pub(super) struct DeckArena {
     state: Arc<Mutex<ArenaState>>,
 }
 
 impl DeckArena {
-    async fn start(server: &MockServer, decks: Vec<(i64, Vec<Value>)>, lists_decks: bool) -> Self {
+    pub(super) async fn start(
+        server: &MockServer,
+        decks: Vec<(i64, Vec<Value>)>,
+        lists_decks: bool,
+    ) -> Self {
         let arena = Self {
             state: Arc::new(Mutex::new(ArenaState {
                 decks,
@@ -171,11 +175,11 @@ impl DeckArena {
     }
 
     /// The Resolume operator selects another deck.
-    fn select(&self, index: usize) {
+    pub(super) fn select(&self, index: usize) {
         self.with(|state| state.selected = index);
     }
 
-    fn set_online(&self, online: bool) {
+    pub(super) fn set_online(&self, online: bool) {
         self.with(|state| state.online = online);
     }
 
@@ -190,7 +194,7 @@ impl DeckArena {
     }
 
     /// Another composition was loaded: every deck id is new.
-    fn replace_decks(&self, decks: Vec<(i64, Vec<Value>)>) {
+    pub(super) fn replace_decks(&self, decks: Vec<(i64, Vec<Value>)>) {
         self.with(|state| {
             state.decks = decks;
             state.selected = 0;
@@ -266,7 +270,7 @@ fn host_at(server: &MockServer) -> ResolumeHost {
     )
 }
 
-fn driver_for(server: &MockServer) -> (HostDriver, Status) {
+pub(super) fn driver_for(server: &MockServer) -> (HostDriver, Status) {
     let client = resolume_http_client().expect("client");
     (
         HostDriver::new(client, host_at(server)),
@@ -274,7 +278,7 @@ fn driver_for(server: &MockServer) -> (HostDriver, Status) {
     )
 }
 
-async fn count(server: &MockServer, verb: &str, route: &str) -> usize {
+pub(super) async fn count(server: &MockServer, verb: &str, route: &str) -> usize {
     server
         .received_requests()
         .await
@@ -307,7 +311,7 @@ async fn wait_until(
     }
 }
 
-fn lyric_line(main: &str, translation: Option<&str>) -> StageUpdate {
+pub(super) fn lyric_line(main: &str, translation: Option<&str>) -> StageUpdate {
     StageUpdate {
         current_main: Some(main.to_string()),
         current_translation: translation.map(str::to_string),
@@ -318,7 +322,7 @@ fn lyric_line(main: &str, translation: Option<&str>) -> StageUpdate {
     }
 }
 
-fn stage(main: &str) -> Push {
+pub(super) fn stage(main: &str) -> Push {
     Push::Stage(lyric_line(main, None))
 }
 
@@ -331,7 +335,7 @@ fn backoff_elapsed(driver: &mut HostDriver) {
 /// and comes back still loading: the next `loading_fetches` composition GETs
 /// get the tag-less loading composition. The recovery tick refetches and
 /// caches it, exactly like PP's `reason="error-invalidated" clip_count=27`.
-async fn restart_arena_mid_load(
+pub(super) async fn restart_arena_mid_load(
     arena: &DeckArena,
     driver: &mut HostDriver,
     status: &Status,

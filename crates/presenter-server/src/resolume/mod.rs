@@ -20,6 +20,8 @@ mod port_drift_integration_tests;
 mod provisional_mapping;
 #[cfg(test)]
 mod provisional_mapping_tests;
+#[cfg(test)]
+mod provisional_schedule_tests;
 mod types;
 
 use anyhow::anyhow;
