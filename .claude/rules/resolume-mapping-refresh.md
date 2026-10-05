@@ -106,10 +106,12 @@ a timer:
   - Only `missing`, `error-invalidated`, `stale-id`, `deck-changed` and an
     empty manual result start the schedule. `follow-up` advances it.
     `lane-missing` never restarts it.
-  - **Settling.** After the last step, a composition that did not change
-    since the previous fetch becomes the deck's reference (`Settled`, one
-    WARN). That requires recognized clips, or a listed deck without history
-    (a video deck). This stops a deck whose clips were removed on purpose,
+  - **Settling.** After the last step, a composition becomes the deck's
+    reference (`Settled`, one WARN) when the last two FOLLOW-UP fetches, about
+    a minute apart, saw the same kinds and the same clip count
+    (`last_follow_up`, reset whenever a schedule starts). A lane refetch in
+    between does not count. Settling also requires recognized clips, or a
+    listed deck without history (a video deck). This stops a deck whose clips were removed on purpose,
     or a deck with no presenter clips, from costing 5 follow-ups on every
     visit.
   - A deck that HAD clips and still shows none stays suspect: that is Arena
@@ -147,18 +149,24 @@ a timer:
   - The refetch runs before the push, not as apply-then-retry. With
     apply-then-retry, a partly mapped push would trigger its main clips
     twice and flip the lane twice.
-  - **Armed** means the next such push refetches. The refetch is re-armed by
-    every follow-up step, a deck change, a complete fetch, a manual refresh
-    and a config change.
-  - **Spent** applies while the follow-ups still run, after a refetch that
-    left the lane empty. The next follow-up step re-arms it.
-  - **RetryAt** comes after a failed refetch, or after an empty refetch once
-    the follow-ups ran out. It allows the next refetch `LANE_REFETCH_RETRY`
-    (30 s) later. A slow composition fetch therefore cannot stall every line,
-    and a load longer than the schedule still lets the first line after it
-    land. Lines in the gap are skipped: that is the bound.
+  - **Armed** means the next such push refetches. The refetch is re-armed in
+    `advance_follow_up` by every follow-up step, even a FAILED one, so a
+    failed last step can never leave it used up for good. A deck change, a
+    complete fetch, a manual refresh and a config change re-arm it too.
+  - **RetryAt** comes after a refetch that left the lane empty, or after a
+    failed refetch. It allows the next refetch `LANE_REFETCH_RETRY` (30 s)
+    later, or earlier if a follow-up step comes first.
+    - A slow composition fetch therefore cannot stall every line.
+    - A load longer than the schedule still lets the first line after it
+      land.
+    - Lines in the gap (at most 30 s) are skipped: that is the bound.
   - A failed refetch only logs a WARN, and the push goes out on the cached
     mapping.
+- **The per-push lane WARN is rate-limited.** `update_lane_text`'s "Resolume
+  has no clips configured for lane" / "lane missing clips" goes through the
+  #563h limiter (keys `lane-unconfigured` / `lane-half-missing`): at most
+  once per 300 s per host, DEBUG otherwise. A deck without a lane is normal,
+  and the fetch-time "mapping missing expected clips" WARN names the kinds.
 - **A host or deck that never had a kind never refetches for it.** Bridge PP
   has no `#main` and SNV has no `#translate`. A switch to a deck that lacks
   lyric clips but has other presenter clips (Bible, metadata) is not suspect
