@@ -197,6 +197,11 @@ impl DeckArena {
         self.with(|state| state.deck_check_status = Some(status));
     }
 
+    /// Deck checks answer the deck again.
+    pub(super) fn heal_deck_checks(&self) {
+        self.with(|state| state.deck_check_status = None);
+    }
+
     /// The next `fetches` composition GETs answer 500.
     pub(super) fn fail_compositions(&self, fetches: usize) {
         self.with(|state| state.failing_left = fetches);
@@ -433,10 +438,10 @@ async fn a_push_during_the_loading_window_refetches_and_lands_on_the_loaded_clip
 }
 
 /// RED before the fix (no refetch at all). While the lane stays empty after
-/// that one refetch, further pushes to the same deck refetch nothing: one
-/// lane refetch per deck, never one per push.
+/// that refetch, the next pushes refetch nothing until the next follow-up
+/// step (or the retry instant): never one refetch per push.
 #[tokio::test]
-async fn a_lane_that_stays_empty_refetches_only_once_per_deck() {
+async fn a_lane_that_stays_empty_refetches_once_until_the_next_follow_up() {
     let server = MockServer::start().await;
     let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
     let (mut driver, status) = driver_for(&server);
