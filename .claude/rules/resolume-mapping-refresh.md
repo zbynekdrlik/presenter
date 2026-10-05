@@ -3,12 +3,14 @@ paths:
   - "crates/presenter-server/src/resolume/driver.rs"
   - "crates/presenter-server/src/resolume/mod.rs"
   - "crates/presenter-server/src/resolume/mapping_refresh*.rs"
+  - "crates/presenter-server/src/resolume/provisional_*.rs"
   - "crates/presenter-server/src/resolume/keepalive_tests.rs"
   - "crates/presenter-server/src/resolume/handlers.rs"
   - "crates/presenter-server/src/resolume/bible_clear.rs"
   - "crates/presenter-server/src/resolume/port_drift.rs"
   - "crates/presenter-server/src/mock_integrations/resolume.rs"
   - "crates/presenter-ui/src/pages/settings/resolume.rs"
+  - "tests/e2e/support.ts"
 ---
 
 # Resolume composition fetches — never on a timer (#808)
@@ -33,7 +35,9 @@ means the server changed and is a failure. The settings "Test" button
 such an older Arena (404) does it fall back to a `/composition` request.
 
 Never add a timer, a staleness check or a "periodic resync" that reads
-`/composition`. The driver fetches it for exactly four reasons (`FetchReason`):
+`/composition`. The driver fetches it only for these reasons (`FetchReason`).
+The last three are the 2026-10-05 regression fix, see "A fetched mapping can
+be wrong with no 404" below:
 
 - `missing`: no mapping yet (cold start, config change).
 - `error-invalidated`: the #563b threshold (3 consecutive failures) or a port
@@ -56,7 +60,96 @@ Never add a timer, a staleness check or a "periodic resync" that reads
   `ResolumeRegistry::refresh_mapping` and `HostCommand::RefreshMapping` to
   `HostDriver::manual_refresh`. It runs inside a backoff window too. The UI
   allows one refresh at a time. This is how a clip edit in Arena reaches
-  Presenter now; the operator chip's missing-clips tooltip says so.
+  Presenter now; the operator chip's missing-clips tooltip says so. A manual
+  result with at least one recognized clip becomes that deck's last-good
+  reference, so an intentional clip removal stops being "suspect".
+- `follow-up`: a step of the follow-up schedule of a suspect mapping.
+- `lane-missing`: a stage/Bible push needed a lane the cached mapping lacks.
+  This happens once per deck.
+- `deck-changed`: the deck check found the cached deck no longer selected.
+
+## A fetched mapping can be wrong with no 404 (#808 regression, 2026-10-05)
+
+The on-demand model assumes every fetched mapping is right until a push gets
+a 404. Two cases break that assumption, and in both a push is skipped
+silently. `update_lane_text` logs `Resolume has no clips configured for lane`
+and returns `Ok`, so no request is sent, no 404 comes back, and nothing
+refetches:
+
+- **A cold or recovery fetch can hit Arena while it is still loading the
+  composition.** On PP, right after an Arena restart, the `error-invalidated`
+  fetch got 27 tag-less clips (110 KB) instead of 874. Every lyric push was
+  skipped until someone pressed "Refresh mapping".
+- **A Resolume deck switch changes every clip id.** `/composition` lists only
+  the SELECTED deck's clips (SNV: 25 decks, 1221 clips). The cached ids then
+  point at a deck that is no longer on the wall. Writes to them succeed (the
+  clips still exist), so the lines simply go nowhere.
+
+The fix lives in `provisional_mapping.rs`. It never reads the composition on
+a timer:
+
+- **Every fetch records `decks[].selected.value`** (`selected_deck_id`) and
+  compares its destination kinds (`ClipMapping::destination_kinds`, the names
+  in the missing-clip list) with that deck's last good kinds. The last good
+  kinds are kept per deck, because decks legitimately differ.
+  - The mapping is *suspect* if it has no recognized destination at all, or
+    lacks a kind that deck's last good mapping had.
+  - While a mapping is suspect, follow-up fetches run `FOLLOW_UP_DELAYS`
+    apart: 2, 5, 15, 30 and 60 s, at most 5 per episode. The deadline is the
+    worker's `select!` branch `follow_up_deadline`, not a timer. The schedule
+    stops at the first complete mapping.
+  - A step that falls due inside a #484 backoff window waits until
+    `next_retry_at`. A failed step is used up.
+  - Only `missing`, `error-invalidated`, `stale-id`, `deck-changed` and an
+    empty manual result start the schedule. `follow-up` advances it.
+    `lane-missing` never restarts it.
+- **Deck check.** `GET /composition/decks/by-id/{selected}` (~360 B,
+  `ACTION_TIMEOUT`) runs before every stage/Bible push
+  (`prepare_mapping_for_push`). It also runs on the tick, after a successful
+  `/product` probe (`follow_deck_switch`).
+  - `selected:false` or a 404 calls `invalidate_mapping(DeckChanged)`. The
+    push's own `ensure_mapping` then refetches inline (never rate-limited)
+    and the push lands on the new deck.
+  - If that refetch fails, the push fails like any composition fetch. It
+    never writes to the old deck's ids.
+  - If the check itself fails, the push goes out on the cached mapping, with
+    a WARN at most once per 300 s.
+  - Timer frames never check the deck. A composition without `decks` gets
+    no check at all.
+- **Lane refetch.** A push that needs a destination the cached mapping lacks
+  refetches once per deck before it is applied. It does so only if the
+  deck's last good mapping had that destination, or the mapping has no
+  destination at all.
+  - The refetch runs before the push, not as apply-then-retry. With
+    apply-then-retry, a partly mapped push would trigger its main clips
+    twice and flip the lane twice.
+  - A failed refetch only logs a WARN; the push goes out on the cached
+    mapping.
+  - If the lane is still empty afterwards, that is what the deck really
+    holds: one WARN, and nothing more until a deck change, a complete fetch,
+    a manual refresh or a config change (`lane_refetch_spent`).
+- **A host or deck that never had a kind never refetches for it.** Bridge PP
+  has no `#main` and SNV has no `#translate`. Switching to a deck that
+  legitimately lacks lyric clips is not suspect either, so it gets no
+  follow-ups.
+
+When you touch this area:
+
+- **Never treat a fetched mapping as final.** Every new fetch path must go
+  through `refresh_mapping_with_reason`, so `note_fetched_mapping` sees it.
+- **Never add a push path that skips `dispatch_push`.** The deck check and
+  the lane refetch live in its `prepare_mapping_for_push`.
+- **`fetched_before` is taken BEFORE the pre-check.** A mapping the pre-check
+  fetched counts as fresh, so a 404 on it pauses stale refetches instead of
+  fetching a third time.
+- **A new destination kind goes into `clip_map.rs`'s `destinations()` list
+  only.** The missing-clip list and the kind comparison both come from it.
+- **Mocks: any mock Arena that lists `decks` must serve the deck-by-id
+  route.** Otherwise every push sees a 404, that is, a "deck switch", and
+  refetches. A mock whose composition has no tagged clip looks exactly like
+  Arena mid-load and is re-read on the follow-up schedule. The embedded dev
+  mock and `startMockResolume` therefore serve one selected deck plus tagged
+  clips.
 
 ## When you add or change a push path
 
@@ -114,8 +207,9 @@ a status flip, a #484 backoff window that skips pushes, and possibly a lost line
 
 ## Worker loop
 
-`run_host_worker`'s `select!` is `biased` toward commands. When a command and
-a tick are both ready, the command runs first. A push that arrives while a
+`run_host_worker`'s `select!` is `biased`, in this order: commands, the
+follow-up deadline (a pending future when nothing is scheduled), then the
+tick. When a command and a tick are both ready, the command runs first. A push that arrives while a
 probe is in flight still waits for it, up to `LIVENESS_TIMEOUT` (5 s). The
 interval uses `MissedTickBehavior::Delay`, so a long push burst does not leave
 a queue of missed ticks that probe back to back.
@@ -126,6 +220,17 @@ a queue of missed ticks that probe back to back.
   directly against `MockArena`, a wiremock Arena with a swappable composition
   and an online flag. It counts the requests it received. Skip a backoff
   window with `driver.next_retry_at = None`, never with a sleep.
+- `resolume/provisional_mapping_tests.rs` provides `DeckArena`: several
+  decks, `select(i)`, `replace_decks` (new ids, so the old id is a 404),
+  `set_loading(n)` (the next n composition GETs return the tag-less 27-clip
+  "loading" composition) and `fail_deck_checks(status)`.
+  `restart_arena_mid_load` reproduces the PP incident: 3 failed ticks, then a
+  recovery fetch mid-load.
+  `resolume/provisional_schedule_tests.rs` reuses `DeckArena`. It calls
+  `run_follow_up` directly, the same call the worker's `select!` makes at the
+  deadline, and asserts the deadline it set (`assert_follow_up`). Only one
+  test sleeps for real: the worker-level cold-start test waits about 2 s for
+  the first follow-up.
 - An UNMOUNTED wiremock route answers 404. That is how the tests model a stale
   id: never mount the old id's route.
 - Every mock Arena must serve `/api/v1/product`: the embedded
