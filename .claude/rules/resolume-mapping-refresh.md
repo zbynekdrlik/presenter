@@ -163,12 +163,26 @@ a timer:
     failed last step can never leave it used up for good. A deck change, a
     complete fetch, a manual refresh and a config change re-arm it too.
   - **RetryAt** comes after a refetch that left the lane empty, or after a
-    failed refetch. It allows the next refetch `LANE_REFETCH_RETRY` (30 s)
+    failed refetch. It allows the next refetch `LANE_REFETCH_RETRY` (**3 s**)
     later, or earlier if a follow-up step comes first.
-    - A slow composition fetch therefore cannot stall every line.
-    - A load longer than the schedule still lets the first line after it
-      land.
-    - Lines in the gap (at most 30 s) are skipped: that is the bound.
+  - **Owner rule (2026-10-05): no text may be skipped.** The gap was 30 s,
+    and a line 5 s after an empty refetch was skipped even though Arena had
+    finished loading by then. A provisional mapping (Arena loading, or a deck
+    that never produced a complete mapping in this process) now refetches 3 s
+    after the previous lane refetch, so a line is skipped for at most 3 s.
+    Pinned by `a_push_5_s_after_an_empty_lane_refetch_refetches_and_lands`
+    and its cold-start twin.
+    - Only a deck ACCEPTED as lacking a kind stops refetching for it: its
+      follow-ups ran out on an unchanged composition (`Settled`), or its
+      last good mapping simply never had the kind. Its last-good reference
+      has no such kind, so `lane_expected` is false and it never refetches.
+    - Never raise the gap back "to save fetches". A refetch only happens on a
+      line the mapping cannot place, so it is bounded by operator clicks,
+      and only while the mapping is provisional.
+    - Accepted trade-off: if Arena's `/composition` hangs (the 15 s
+      `COMPOSITION_TIMEOUT`) while a lane is missing, such a push can wait up
+      to 15 s, at most once per 3 s. Lines for that lane could not be placed
+      anyway; the push still goes out on the cached mapping.
   - A failed refetch only logs a WARN, and the push goes out on the cached
     mapping.
 - **The per-push lane WARN is rate-limited.** `update_lane_text`'s "Resolume
