@@ -33,9 +33,13 @@ The stream-graphics output exposes `stream_scene` (active base scene name, or `-
 
 - Timer start/pause/reset
 - Set countdown duration (plain minutes or HH:MM time-of-day for the next occurrence)
-- Stage layout switcher (single `stage.layout` action with dropdown for SNV, PP, Timer, Preach)
+- Stage layout switcher (single `stage.layout` action; its dropdown lists the layouts Presenter currently offers)
 - Bible trigger & clear
-- Stream graphics: set/clear base scene, overlay on/off/toggle, and clear-all — scenes addressed by name, with an optional output slug (default `stream`)
+- Stream graphics: set/clear base scene, overlay on/off/toggle, and clear-all — scenes addressed by name, with an output (default `stream`)
+
+### Dropdowns load from Presenter
+
+Presenter sends the module a catalog on connect and again whenever an output or scene is added, renamed, deleted or reordered: the stage layouts, the stream outputs, and each output's base and overlay scenes. (A deleted output leaves the list at the next change or reconnect.) The `stage.layout`, output, scene and overlay dropdowns (and the scene/overlay feedbacks) are built from it, so a new layout, output or scene shows up without a module update or a Companion restart. Every dropdown also accepts a typed value, and existing buttons keep the value they were saved with. Before the first catalog arrives (or with an older Presenter) the module falls back to a built-in layout list.
 
 ## Feedback
 

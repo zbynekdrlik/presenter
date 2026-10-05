@@ -73,12 +73,14 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   `node --test`; keep new logic (payload builders, option fields) in a dependency-free
   `lib/` module (`lib/time.js`, `lib/variable-batch.js`, `lib/stream.js`) and let
   `index.js` be a thin adapter. Tests then import the lib module directly. To test the
-  REAL adapter (wiring, handler payloads), stub `@companion-module/base` + `ws` via the
-  `Module._load` hook in `lib/upgrade-scripts.test.js` (#805, see
-  `.claude/rules/companion-upgrade-scripts.md`).
-- **Renaming/retyping an action option ⇒ append an upgrade script** to
-  `lib/upgrade-scripts.js` `UPGRADE_SCRIPTS` (append-only) + a handler fallback, or every
-  saved button silently keeps the old key (#805) — `.claude/rules/companion-upgrade-scripts.md`.
+  REAL adapter (wiring, handler payloads, `_handleMessage`), use the shared
+  `loadPresenterModule()` in `lib/test-support.js` (stubs `@companion-module/base` + `ws`
+  via a `Module._load` hook; #805/#814, see `.claude/rules/companion-upgrade-scripts.md`).
+- **Renaming an action option, or retyping it so the stored value's shape changes ⇒
+  append an upgrade script** to `lib/upgrade-scripts.js` `UPGRADE_SCRIPTS` (append-only) + a
+  handler fallback, or every saved button silently keeps the old key (#805) — a type-only change
+  that keeps the key and a string value (textinput → `allowCustom` dropdown, #814) needs none —
+  `.claude/rules/companion-upgrade-scripts.md`.
 - **Stream command family (`lib/stream.js`).** Wire command names MUST start with
   `stream_` — the server (`companion/stream.rs`, #711) delegates by that prefix; the
   Companion action id IS the wire command name. Scenes are addressed BY NAME
@@ -90,6 +92,13 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   blueprint `ops/companion/presenter-companion-profile.json`; run
   `node ops/companion/generate-profile.mjs` only to VERIFY it still renders (the
   export under `generated/` is never committed).
+
+## Dropdown choices come from the server `catalog` push (#814)
+
+Layouts / outputs / scenes / overlays are NEVER a hardcoded list — the server pushes a
+`catalog` message and the module rebuilds its dropdowns from it. Full pattern (server
+`companion/catalog.rs`, module `lib/catalog.js`, legacy-value compatibility, tests):
+`.claude/rules/companion-catalog.md` (auto-loads on the module + server companion files).
 
 ## Feedbacks — boolean type + checkFeedbacks (#780)
 

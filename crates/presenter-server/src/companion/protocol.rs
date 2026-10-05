@@ -229,6 +229,10 @@ pub(super) async fn initialise_variable_state(state: &AppState) -> CompanionVari
             .await,
     );
 
+    // #814: seed the module catalog (stage layouts + stream outputs/scenes) so
+    // the connect-time `catalog` send gives the plugin its dropdown choices.
+    variables.apply_catalog(super::catalog::initial_catalog(state).await);
+
     variables
 }
 
@@ -535,12 +539,41 @@ pub(super) async fn send_nameplates(
     .await
 }
 
+/// Send the full per-session snapshot — the variables, the #779 nameplate list
+/// and the #814 catalog — on connect and after a lag-recovery reset.
+pub(super) async fn send_snapshot(
+    sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+    state: &CompanionVariableState,
+) -> Result<(), CompanionSessionError> {
+    send_variables(sender, state).await?;
+    send_nameplates(sender, state).await?;
+    send_catalog(sender, state).await
+}
+
+/// Send the module catalog (#814): the stage layouts + per-output stream scenes
+/// the plugin builds its `stage.layout` / `stream_*` dropdowns from.
+pub(super) async fn send_catalog(
+    sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+    state: &CompanionVariableState,
+) -> Result<(), CompanionSessionError> {
+    let catalog = state.catalog().clone();
+    send_message(
+        sender,
+        OutgoingMessage::Catalog {
+            layouts: catalog.layouts,
+            stream: catalog.stream,
+        },
+    )
+    .await
+}
+
 /// Route ONE live event into the companion variable/message state and send what
 /// changed. Kept out of the select-loop so `serve_companion_socket` stays small.
 ///
-/// `StreamState` + `StreamNameplatesChanged` need an async repository read, so
-/// they resolve here (not the sync `variables::apply_live_event`);
-/// `StreamNameplate` carries its resolved texts, so it applies synchronously.
+/// `StreamState` + `StreamNameplatesChanged` + `StreamConfigChanged` (#814, the
+/// catalog) need an async repository read, so they resolve here (not the sync
+/// `variables::apply_live_event`); `StreamNameplate` carries its resolved texts,
+/// so it applies synchronously.
 pub(super) async fn handle_live_event(
     state: &AppState,
     sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
@@ -559,6 +592,14 @@ pub(super) async fn handle_live_event(
             && variables.apply_nameplate_active(active.clone())
         {
             send_variables(sender, variables).await?;
+        }
+        return Ok(());
+    }
+    if matches!(event, LiveEvent::StreamConfigChanged { .. }) {
+        // #814: a stream config write may add/rename/remove an output or scene
+        // — re-send the catalog only when its content actually changed.
+        if super::catalog::refresh_catalog(state, variables).await {
+            send_catalog(sender, variables).await?;
         }
         return Ok(());
     }
@@ -634,6 +675,14 @@ pub(super) enum OutgoingMessage {
     Nameplates {
         output: String,
         plates: Vec<super::nameplates::NameplatePlate>,
+    },
+    /// #814: the module catalog — the operator-selectable stage layouts and,
+    /// per stream output, its base/overlay scene names. Sent on connect and
+    /// whenever a stream config change alters it; the plugin builds its
+    /// `stage.layout` / `stream_*` dropdown choices from this.
+    Catalog {
+        layouts: Vec<super::catalog::CatalogLayout>,
+        stream: Vec<super::catalog::CatalogOutput>,
     },
     Error {
         message: String,

@@ -13,8 +13,10 @@ const {
   UPGRADE_SCRIPTS,
 } = require("./lib/upgrade-scripts");
 const {
+  DEFAULT_OUTPUT,
   isStreamCommand,
   streamActionOptions,
+  sceneOption,
   buildStreamPayload,
   isOverlayActive,
   isSceneActive,
@@ -26,6 +28,13 @@ const {
   nameplateVariableIds,
   nameplatePresets,
 } = require("./lib/stream");
+const {
+  normaliseCatalog,
+  catalogEquals,
+  stageLayoutChoices,
+  streamOutputChoices,
+  streamSceneChoices,
+} = require("./lib/catalog");
 
 const VARIABLE_DEFINITIONS = [
   "stage_layout_code",
@@ -100,16 +109,6 @@ const COMMANDS = [
   { id: "stream_nameplate_hide", label: "Stream: hide nameplate" },
 ];
 
-const STAGE_LAYOUT_CHOICES = [
-  { id: "worship-snv", label: "WORSHIP SNV" },
-  { id: "worship-pp", label: "WORSHIP PP" },
-  { id: "timer", label: "TIMER" },
-  { id: "preach", label: "PREACH" },
-  { id: "ndi-fullscreen", label: "NDI FULLSCREEN" },
-  { id: "bible", label: "BIBLE" },
-  { id: "fulltext", label: "FULL TEXT" },
-];
-
 class PresenterInstance extends InstanceBase {
   constructor(internal) {
     super(internal);
@@ -120,6 +119,19 @@ class PresenterInstance extends InstanceBase {
     // Drives dynamic per-plate variable defs, action dropdown choices, the
     // active feedback's choices, and the presets.
     this.nameplates = [];
+    // #814: the server catalog (stage layouts + stream outputs/scenes), from
+    // the `catalog` message. `null` until the first one — the dropdowns then
+    // use the static fallbacks in `lib/catalog.js`.
+    this.catalog = null;
+  }
+
+  // #814: dropdown choices for the stream actions, from the catalog.
+  _streamChoices() {
+    return {
+      outputs: streamOutputChoices(this.catalog, DEFAULT_OUTPUT),
+      baseScenes: streamSceneChoices(this.catalog, "base"),
+      overlayScenes: streamSceneChoices(this.catalog, "overlay"),
+    };
   }
 
   // #779: the variable-definition id set = static defs ∪ per-plate nameplate ids.
@@ -315,6 +327,21 @@ class PresenterInstance extends InstanceBase {
         this.checkFeedbacks();
         break;
       }
+      case "catalog": {
+        // #814: layouts / outputs / scenes changed — rebuild the dropdowns of
+        // the actions + feedbacks. Skip an identical catalog (a reconnect).
+        const next = normaliseCatalog(msg);
+        if (catalogEquals(this.catalog, next)) break;
+        this.catalog = next;
+        this.log(
+          "info",
+          `Presenter catalog: ${next.layouts.length} layouts, ${next.stream.length} stream outputs`,
+        );
+        this._setupActions();
+        this._setupFeedbacks();
+        this.checkFeedbacks();
+        break;
+      }
       case "ack":
         this.log("debug", `Ack from server: ${msg.command}`);
         break;
@@ -372,10 +399,14 @@ class PresenterInstance extends InstanceBase {
 
   _commandOptionsFor(commandId) {
     if (isStreamCommand(commandId)) {
-      return streamActionOptions(commandId);
+      return streamActionOptions(commandId, this._streamChoices());
     }
     if (isNameplateCommand(commandId)) {
-      return nameplateActionOptions(commandId, this.nameplates);
+      return nameplateActionOptions(
+        commandId,
+        this.nameplates,
+        streamOutputChoices(this.catalog, DEFAULT_OUTPUT),
+      );
     }
     switch (commandId) {
       case "timer.set_countdown_target":
@@ -395,7 +426,7 @@ class PresenterInstance extends InstanceBase {
             id: "code",
             label: "Stage layout",
             default: "worship-snv",
-            choices: STAGE_LAYOUT_CHOICES,
+            choices: stageLayoutChoices(this.catalog),
             allowCustom: true,
           },
         ];
@@ -520,16 +551,17 @@ class PresenterInstance extends InstanceBase {
     // comma-joined list of active overlay names, so exact equality on the whole
     // string breaks the moment a second overlay is on — membership is correct.
     // `stream_scene` is the single active base scene. Both are case-insensitive.
+    // #814: the scene option is a catalog dropdown of the DEFAULT output's
+    // scenes (the only output these variables track), allowCustom so a stored
+    // name keeps working.
     feedbacks["stream_overlay_active"] = {
       type: "boolean",
       name: "Stream: overlay active (by name)",
       options: [
-        {
-          type: "textinput",
-          id: "scene",
-          label: "Overlay scene name (matched case-insensitively)",
-          default: "",
-        },
+        sceneOption(
+          streamSceneChoices(this.catalog, "overlay", DEFAULT_OUTPUT),
+          "Overlay scene (matched case-insensitively)",
+        ),
       ],
       defaultStyle: {
         color: 0xffffff,
@@ -546,12 +578,10 @@ class PresenterInstance extends InstanceBase {
       type: "boolean",
       name: "Stream: base scene active (by name)",
       options: [
-        {
-          type: "textinput",
-          id: "scene",
-          label: "Base scene name (matched case-insensitively)",
-          default: "",
-        },
+        sceneOption(
+          streamSceneChoices(this.catalog, "base", DEFAULT_OUTPUT),
+          "Base scene (matched case-insensitively)",
+        ),
       ],
       defaultStyle: {
         color: 0xffffff,

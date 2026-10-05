@@ -10,6 +10,11 @@ action option** in `_commandOptionsFor` (`seconds` → `minutes`, a checkbox `en
 `state`), every button saved before the change still stores only the OLD key. The new handler
 never reads that key. Nothing fails loudly: the press just sends the fallback.
 
+Changing only an option's TYPE while keeping its key AND a string value — e.g. the #814
+textinput → `dropdown` with `allowCustom: true` for `scene`/`output` — needs NO upgrade
+script: the stored string is passed through unchanged. Prove it with a legacy-value press test
+(`lib/catalog.test.js`).
+
 Real case: commit `956af894` (#249 / #270) shipped two renames with no migration.
 - Legacy preach-limit buttons sent the 45-min default (2700 s) instead of 7/5/60 min.
 - Legacy "Live ON" buttons sent `enabled: false`.
@@ -52,11 +57,15 @@ To check against the real runner (base is not in the root devDependencies):
 `index.js` `require`s `@companion-module/base` and `ws` at load. Base is NOT installed for
 `npm run test:companion` (CI runs only a root `npm ci`, and base is the module's own dependency).
 `ws` is a root devDependency, but it is stubbed too, so no real socket is ever involved.
-`lib/upgrade-scripts.test.js` `loadPresenterModule()` therefore stubs exactly those two external
-modules through a `Module._load` hook, restored in `finally`, and then `require`s the REAL
-`index.js`.
+The shared test helper `lib/test-support.js` `loadPresenterModule()` (used by
+`lib/upgrade-scripts.test.js` and `lib/catalog.test.js`) therefore stubs exactly those two
+external modules through a `Module._load` hook, restored in `finally`, and then `require`s the
+REAL `index.js`. It is not a `*.test.js` file, so it is never in the `test:companion` list.
 - The fake `runEntrypoint` captures `(factory, upgradeScripts)`.
-- The fake `InstanceBase` records `setActionDefinitions`.
+- The fake `InstanceBase` records `setActionDefinitions` / `setFeedbackDefinitions` /
+  `setPresetDefinitions` / `setVariableDefinitions`, and counts the action + feedback
+  registrations and `checkFeedbacks` calls in `instance.calls` (so a test can assert a message
+  did / did not re-register definitions).
 - A test then presses the registered action callback the way Companion does, with
   `instance.ws = {readyState: 1, send}`, and asserts on the sent JSON.
 

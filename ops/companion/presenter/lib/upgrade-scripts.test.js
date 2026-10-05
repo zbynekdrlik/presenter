@@ -9,58 +9,15 @@
 //
 // The real `index.js` adapter is loaded here with the Companion host runtime
 // (`@companion-module/base`) and the socket library (`ws`) replaced by minimal
-// stand-ins, so the test drives exactly what Companion drives: the upgrade
-// scripts handed to `runEntrypoint`, and the registered action callback.
+// stand-ins (`lib/test-support.js`), so the test drives exactly what Companion
+// drives: the upgrade scripts handed to `runEntrypoint`, and the registered
+// action callback.
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
-const Module = require("node:module");
-const path = require("node:path");
+const { WS_OPEN, loadPresenterModule } = require("./test-support");
 
 const ACTION_ID = "timer.set_preach_limit";
 const LIVE_ACTION_ID = "broadcast.set_live";
-const WS_OPEN = 1;
-
-function loadPresenterModule() {
-  let entry = null;
-
-  // Stand-in for the Companion host: records action definitions and swallows
-  // logs, like the real InstanceBase does for a connection.
-  class FakeInstanceBase {
-    constructor(_internal) {
-      this.actionDefinitions = {};
-    }
-    log() {}
-    setActionDefinitions(defs) {
-      this.actionDefinitions = defs;
-    }
-  }
-
-  const fakeBase = {
-    InstanceBase: FakeInstanceBase,
-    InstanceStatus: {},
-    runEntrypoint: (factory, upgradeScripts) => {
-      entry = { factory, upgradeScripts };
-    },
-  };
-  const fakeWs = { OPEN: WS_OPEN };
-
-  const originalLoad = Module._load;
-  Module._load = function (request, parent, isMain) {
-    if (request === "@companion-module/base") return fakeBase;
-    if (request === "ws") return fakeWs;
-    return originalLoad.call(this, request, parent, isMain);
-  };
-  const indexPath = path.resolve(__dirname, "..", "index.js");
-  try {
-    delete require.cache[indexPath];
-    require(indexPath);
-  } finally {
-    Module._load = originalLoad;
-  }
-
-  assert.ok(entry, "index.js must call runEntrypoint");
-  return entry;
-}
 
 const presenter = loadPresenterModule();
 
