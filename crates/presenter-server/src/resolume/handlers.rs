@@ -1,6 +1,7 @@
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
 use super::mapping_refresh::StaleIdError;
+use super::provisional_mapping::{bible_required_kinds, stage_required_kinds};
 use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
 use futures_util::{stream::FuturesUnordered, StreamExt};
@@ -10,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Per-step timings collected while applying a stage update, fed into the
 /// `presenter::resolume::timing` log line.
@@ -133,7 +134,10 @@ impl HostDriver {
         // a cold/invalidated cache (NOT on staleness anymore). Capture the
         // elapsed mapping time even if the fetch errors (the COMPOSITION_TIMEOUT
         // spike is the failure we most want recorded) BEFORE propagating.
-        let fetch = self.ensure_mapping().await;
+        // #808 regression: the deck check and a lane refetch count here too.
+        let fetch = self
+            .ensure_mapping_for_push(&stage_required_kinds(update))
+            .await;
         metrics.t_ensure_mapping_ms = elapsed_ms(mapping_start);
         let fetch = fetch?;
         metrics.refetched = fetch.refetched;
@@ -342,7 +346,8 @@ impl HostDriver {
         if self.in_backoff() {
             return Ok(());
         }
-        self.ensure_mapping().await?;
+        self.ensure_mapping_for_push(&bible_required_kinds(&update))
+            .await?;
         if let Some(mapping) = self.mapping.clone() {
             let bible_lane = self.lane_state.current(SlotKind::Bible);
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);
@@ -626,20 +631,24 @@ impl HostDriver {
     ) -> anyhow::Result<Vec<ClipTarget>> {
         let (primary, alternate) = super::types::select_lane_targets(lane, lane_a, lane_b);
         if primary.is_empty() {
-            if !alternate.is_empty() {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    lane = %lane.label(),
-                    "Resolume lane missing clips; skipping update"
-                );
+            let (key, message) = if alternate.is_empty() {
+                (
+                    "lane-unconfigured",
+                    "Resolume has no clips configured for lane",
+                )
             } else {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    lane = %lane.label(),
-                    "Resolume has no clips configured for lane"
-                );
+                (
+                    "lane-half-missing",
+                    "Resolume lane missing clips; skipping update",
+                )
+            };
+            // #808: a deck without this lane (Bridge PP has no #main) is
+            // normal, so one WARN per 300 s per host (#563h limiter); the
+            // fetch-time "mapping missing expected clips" WARN names the kinds.
+            if self.should_warn_missing_clip(key) {
+                warn!(host = %self.config.host, port = self.config.port, lane = %lane.label(), missing = ?self.missing_clips, "{message}");
+            } else {
+                debug!(host = %self.config.host, port = self.config.port, lane = %lane.label(), missing = ?self.missing_clips, "{message}");
             }
             return Ok(Vec::new());
         }
