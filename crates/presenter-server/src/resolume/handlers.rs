@@ -646,9 +646,9 @@ impl HostDriver {
             // normal, so one WARN per 300 s per host (#563h limiter); the
             // fetch-time "mapping missing expected clips" WARN names the kinds.
             if self.should_warn_missing_clip(key) {
-                warn!(host = %self.config.host, port = self.config.port, lane = %lane.label(), "{message}");
+                warn!(host = %self.config.host, port = self.config.port, lane = %lane.label(), missing = ?self.missing_clips, "{message}");
             } else {
-                debug!(host = %self.config.host, port = self.config.port, lane = %lane.label(), "{message}");
+                debug!(host = %self.config.host, port = self.config.port, lane = %lane.label(), missing = ?self.missing_clips, "{message}");
             }
             return Ok(Vec::new());
         }

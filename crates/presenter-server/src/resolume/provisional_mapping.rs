@@ -55,10 +55,10 @@ pub(super) const FOLLOW_UP_DELAYS: [Duration; 5] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
 ];
-/// While a mapping stays suspect after its follow-ups (Arena still loading),
-/// a push that needs a missing lane may refetch again after this long. Also
-/// the pause after a failed lane refetch, so a slow composition fetch cannot
-/// stall every line.
+/// After a lane refetch that left the lane empty, or failed, the next one
+/// may run this long later (sooner when a follow-up step re-arms it). Caps
+/// the gap for a line during a long Arena load, and keeps a slow composition
+/// fetch from stalling every line.
 pub(super) const LANE_REFETCH_RETRY: Duration = Duration::from_secs(30);
 
 /// The selected deck of a composition; `None` when it lists no decks.
@@ -161,6 +161,10 @@ impl ProvisionalMapping {
         reason: FetchReason,
         now: Instant,
     ) -> FetchVerdict {
+        // A body without decks right after bodies with decks is Arena
+        // mid-load: suspect even with every kind, so the follow-ups bring the
+        // deck list (and with it the deck check) back.
+        let deckless_after_decks = deck.is_none() && self.reference_deck.is_some();
         let reference = deck.or(self.reference_deck);
         if reference != self.reference_deck {
             self.lane_refetch = LaneRefetch::Armed;
@@ -186,11 +190,12 @@ impl ProvisionalMapping {
         }
         let (lacking, has_history) = self.lacking_vs_history(reference, &kinds);
         let no_destinations = kinds.is_empty();
-        let suspect = if has_history {
-            !lacking.is_empty()
-        } else {
-            no_destinations
-        };
+        let suspect = deckless_after_decks
+            || if has_history {
+                !lacking.is_empty()
+            } else {
+                no_destinations
+            };
         if !suspect {
             self.last_good.insert(reference, kinds);
             self.lane_refetch = LaneRefetch::Armed;
@@ -454,6 +459,7 @@ impl HostDriver {
                 deck = ?deck,
                 reason = reason.as_str(),
                 no_destinations,
+                no_deck_list = deck.is_none(),
                 lacking = ?lacking,
                 next_step = next.step + 1,
                 of = FOLLOW_UP_DELAYS.len(),
@@ -609,8 +615,8 @@ impl HostDriver {
                 host = %self.config.host,
                 deck = ?self.provisional.selected_deck,
                 still_missing = ?still_missing,
-                lane_refetch = ?self.provisional.lane_refetch,
-                "resolume composition still lacks these clips after a fresh fetch (Arena may still be loading); such lines are skipped until it is complete"
+                retry_secs = LANE_REFETCH_RETRY.as_secs(),
+                "resolume composition still lacks these clips after a fresh fetch (Arena may still be loading); such lines are skipped until the next refetch (at most retry_secs, or the next follow-up step)"
             );
         }
         true
