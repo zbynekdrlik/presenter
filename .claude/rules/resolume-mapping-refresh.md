@@ -123,6 +123,13 @@ a timer:
     longer than about 2 min, with a loading body that lists a deck id the
     loaded composition keeps. That settles as "no clips" until a deck change
     or Refresh mapping.
+  - Residual risk: a cold-start body taken mid-load that already carries SOME
+    recognized tags is accepted as complete. The deck has no history to
+    compare with, so no follow-ups run and `lane_expected` is false for the
+    missing lanes. Lines for those lanes are skipped until a deck change, a
+    stale id, a recovery or Refresh mapping. Without per-deck history there
+    is nothing to tell "partly loaded" from "this deck has only these
+    clips".
 - **Deck check.** `GET /composition/decks/by-id/{selected}` (~360 B,
   `ACTION_TIMEOUT`) runs before every stage/Bible push. It also runs on the
   tick, after a successful `/product` probe (`follow_deck_switch`).
@@ -179,10 +186,26 @@ a timer:
     - Never raise the gap back "to save fetches". A refetch only happens on a
       line the mapping cannot place, so it is bounded by operator clicks,
       and only while the mapping is provisional.
-    - Accepted trade-off: if Arena's `/composition` hangs (the 15 s
-      `COMPOSITION_TIMEOUT`) while a lane is missing, such a push can wait up
-      to 15 s, at most once per 3 s. Lines for that lane could not be placed
-      anyway; the push still goes out on the cached mapping.
+    - **The one exception is a TIMED-OUT lane refetch** (a hanging
+      `/composition`, i.e. host trouble): the next one waits
+      `LANE_REFETCH_AFTER_TIMEOUT` (30 s, `lane_refetch_retry_after`).
+      - The host worker is serial, and the spend runs after the 15 s
+        `COMPOSITION_TIMEOUT`. A 3 s gap would block it 15 s out of every
+        18 s.
+      - Every queued line would wait behind it: placeable lanes, Bible,
+        timer frames. Once the 16-slot command channel is full, `try_send`
+        drops updates, which skips exactly the text this rule protects.
+      - Fast failures (refused, reset, a 5xx) keep the 3 s gap.
+      - A failed refetch never blocks the push; it goes out on the cached
+        mapping.
+    - **Logs stay bounded at a 3 s refetch rate.**
+      - The lane-refetch WARNs ("still lacks these clips",
+        "lane refetch failed") go through the #563h limiter, keys
+        `lane-refetch` / `lane-refetch-failed`: at most one WARN per 300 s
+        per host, DEBUG otherwise.
+      - The fetch-time "mapping missing expected clips" WARN fires only when
+        the missing list changed since the previous fetch
+        (`log_missing_clips`).
   - A failed refetch only logs a WARN, and the push goes out on the cached
     mapping.
 - **The per-push lane WARN is rate-limited.** `update_lane_text`'s "Resolume
