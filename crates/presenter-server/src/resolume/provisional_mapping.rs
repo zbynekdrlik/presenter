@@ -318,7 +318,7 @@ impl ProvisionalMapping {
     /// (Arena loading at a cold start).
     fn lane_expected(&self, kind: &str, mapping_has_destinations: bool) -> bool {
         match self.last_good.get(&self.reference_deck) {
-            Some(good) => good.iter().any(|had| *had == kind),
+            Some(good) => good.contains(&kind),
             None => !mapping_has_destinations,
         }
     }
