@@ -1,6 +1,7 @@
 use super::clip_map::ClipMapping;
 use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
+use super::provisional_mapping::{follow_up_deadline, selected_deck_id, ProvisionalMapping};
 use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
     BibleUpdate, PortDriftEvent, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate,
@@ -98,6 +99,15 @@ pub(super) enum FetchReason {
     StaleId,
     /// The operator asked for it ("Refresh mapping").
     Manual,
+    /// A step of the follow-up schedule of a suspect mapping: Arena may
+    /// still have been loading the composition (`provisional_mapping.rs`).
+    FollowUp,
+    /// A stage/Bible push needed a lane the cached mapping lacks: one refetch
+    /// per deck, before the push is applied.
+    LaneMissing,
+    /// The selected deck changed (the deck check answered `selected:false`
+    /// or 404), so every cached clip id belongs to another deck.
+    DeckChanged,
 }
 
 impl FetchReason {
@@ -107,6 +117,9 @@ impl FetchReason {
             Self::ErrorInvalidated => "error-invalidated",
             Self::StaleId => "stale-id",
             Self::Manual => "manual",
+            Self::FollowUp => "follow-up",
+            Self::LaneMissing => "lane-missing",
+            Self::DeckChanged => "deck-changed",
         }
     }
 }
@@ -185,6 +198,10 @@ pub(super) async fn run_host_worker(
                     }
                 }
             }
+            // #808 regression: a suspect mapping's next follow-up fetch.
+            // Event-driven: a deadline only while one is scheduled, never a
+            // timer that reads the composition.
+            _ = follow_up_deadline(driver.follow_up_due()) => driver.run_follow_up(&status).await,
             _ = liveness_timer.tick() => driver.tick(&status).await,
         }
     }
@@ -243,6 +260,10 @@ pub(super) struct HostDriver {
     /// by clip name — rate-limits the per-push warning to
     /// `MISSING_CLIP_WARN_INTERVAL`.
     pub(super) missing_clip_last_warn: HashMap<&'static str, Instant>,
+    /// #808 regression: the selected deck, each deck's last good destination
+    /// kinds, the follow-up schedule of a suspect mapping and the per-deck
+    /// lane refetch (`provisional_mapping.rs`). In memory only.
+    pub(super) provisional: ProvisionalMapping,
 }
 
 impl HostDriver {
@@ -267,6 +288,7 @@ impl HostDriver {
             port_drift_tx: None,
             missing_clips: Vec::new(),
             missing_clip_last_warn: HashMap::new(),
+            provisional: ProvisionalMapping::default(),
         }
     }
 
@@ -286,6 +308,16 @@ impl HostDriver {
         self.last_band_name_payload = None;
         self.missing_clips = Vec::new();
         self.missing_clip_last_warn.clear();
+        // Another host or port may be another Arena: forget its decks.
+        self.provisional = ProvisionalMapping::default();
+    }
+
+    /// Drop the cached mapping so the next push or tick refetches it, logged
+    /// with `reason`.
+    pub(super) fn invalidate_mapping(&mut self, reason: FetchReason) {
+        self.mapping = None;
+        self.last_mapping_refresh = None;
+        self.invalidation_reason = Some(reason);
     }
 
     /// #484: true while the host is within its post-error backoff window — the
@@ -410,12 +442,14 @@ impl HostDriver {
         let body: serde_json::Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid composition JSON from {}", url))?;
         let mapping = ClipMapping::from_composition(&body)?;
+        let deck = selected_deck_id(&body);
         let parse_ms = duration_ms(parse_start.elapsed());
         let clip_count = count_clips(&body);
 
         // #483: a dedicated line so "we re-fetch a huge composition" is a single
         // grep. `reason` says which trigger fetched it (#808: cold start,
-        // recovery, stale id, or the operator).
+        // recovery, stale id, the operator, a follow-up of a suspect mapping,
+        // a missing lane, or a deck switch).
         tracing::info!(
             target: "presenter::resolume::timing",
             host = %self.config.host,
@@ -424,6 +458,7 @@ impl HostDriver {
             fetch_ms,
             parse_ms,
             clip_count,
+            deck = ?deck,
             "resolume composition fetched"
         );
 
@@ -443,9 +478,13 @@ impl HostDriver {
         // #267/#808: reset a payload's dedup only when its param ids changed.
         self.reset_dedup_for_changed_ids(&mapping);
 
+        let kinds = mapping.destination_kinds();
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
         self.invalidation_reason = None;
+        // #808 regression: compare with the deck's last good mapping; a
+        // suspect one (Arena still loading) gets follow-up fetches.
+        self.note_fetched_mapping(deck, kinds, reason);
         Ok(())
     }
 
@@ -687,11 +726,9 @@ impl HostDriver {
         // against a fresh mapping; dropping it would only force a refetch.
         let fresh_mapping_404 = self.stale_refetch_paused() && is_stale_id_error(&err);
         if failures >= CACHE_INVALIDATION_THRESHOLD && !fresh_mapping_404 {
-            self.mapping = None;
-            self.last_mapping_refresh = None;
             // #483/#808: the next fetch (tick or push) is the recovery
             // refetch, logged as error-driven, not as a cold start.
-            self.invalidation_reason = Some(FetchReason::ErrorInvalidated);
+            self.invalidate_mapping(FetchReason::ErrorInvalidated);
         }
         // The resolved endpoint (DNS/IP) is cheap to redo and IS reset on
         // every failure — unlike the composition, re-resolving costs a DNS

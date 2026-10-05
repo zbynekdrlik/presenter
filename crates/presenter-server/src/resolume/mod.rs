@@ -17,6 +17,7 @@ mod mapping_refresh_tests;
 mod port_drift;
 #[cfg(test)]
 mod port_drift_integration_tests;
+mod provisional_mapping;
 #[cfg(test)]
 mod provisional_mapping_tests;
 mod types;
