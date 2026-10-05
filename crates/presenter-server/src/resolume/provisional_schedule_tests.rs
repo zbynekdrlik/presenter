@@ -201,7 +201,7 @@ async fn a_complete_fetch_rearms_the_lane_refetch() {
     driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
     assert!(matches!(
         driver.provisional.lane_refetch,
-        LaneRefetch::RetryAt(_)
+        LaneRefetch::RetryAt(at) if at > tokio::time::Instant::now()
     ));
 
     driver.run_follow_up(&status).await; // loaded
@@ -577,7 +577,7 @@ async fn each_follow_up_step_rearms_the_lane_refetch() {
     driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
     assert!(matches!(
         driver.provisional.lane_refetch,
-        LaneRefetch::RetryAt(_)
+        LaneRefetch::RetryAt(at) if at > tokio::time::Instant::now()
     ));
 
     driver.run_follow_up(&status).await; // still loading
@@ -606,7 +606,7 @@ async fn an_empty_composition_after_the_follow_ups_is_rechecked_on_pushes() {
     driver.dispatch_push(stage("Line 1"), &status).await; // refetches, still loading
     assert!(matches!(
         driver.provisional.lane_refetch,
-        LaneRefetch::RetryAt(_)
+        LaneRefetch::RetryAt(at) if at > tokio::time::Instant::now()
     ));
     driver.dispatch_push(stage("Line 2"), &status).await; // within the retry: none
     let fetches = count(&server, "GET", COMPOSITION).await;
@@ -638,7 +638,7 @@ async fn a_failed_lane_refetch_waits_before_the_next_one() {
     driver.dispatch_push(stage("Line 1"), &status).await; // the refetch fails
     assert!(matches!(
         driver.provisional.lane_refetch,
-        LaneRefetch::RetryAt(_)
+        LaneRefetch::RetryAt(at) if at > tokio::time::Instant::now()
     ));
     driver.dispatch_push(stage("Line 2"), &status).await; // within the retry: none
     assert_eq!(count(&server, "GET", COMPOSITION).await, 3);
@@ -782,5 +782,31 @@ async fn a_fetch_selecting_another_deck_clears_a_contradicted_deck() {
         count(&server, "PUT", &param(22)).await,
         1,
         "deck 2's lane B"
+    );
+}
+
+/// A body without `decks` right after bodies with decks is Arena mid-load,
+/// even when it has every kind: it is suspect, so the follow-ups bring the
+/// deck list (and with it the deck check) back. Before, it counted as
+/// complete and the deck check stayed off until an unrelated fetch.
+#[tokio::test]
+async fn a_complete_body_without_decks_follows_up_until_the_deck_list_is_back() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], true).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch, deck 1
+    arena.set_lists_decks(false);
+    driver.invalidate_mapping(FetchReason::ErrorInvalidated);
+    driver.tick(&status).await; // every kind, but no deck list
+
+    assert_follow_up(&driver, 0);
+    arena.set_lists_decks(true);
+    driver.run_follow_up(&status).await;
+
+    assert_eq!(driver.provisional.follow_up, None);
+    assert_eq!(
+        driver.provisional.selected_deck,
+        Some(1),
+        "deck check is back"
     );
 }
