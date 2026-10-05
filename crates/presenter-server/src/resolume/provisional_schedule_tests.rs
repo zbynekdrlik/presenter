@@ -11,8 +11,8 @@ use super::provisional_mapping::{
     push_required_kinds, selected_deck_id, ProvisionalMapping, FOLLOW_UP_DELAYS,
 };
 use super::provisional_mapping_tests::{
-    clip, connect, count, driver_for, host_at, lyric_deck, lyric_line, param,
-    restart_arena_mid_load, stage, wait_until, DeckArena, COMPOSITION,
+    backoff_elapsed, clip, connect, count, deck_path, driver_for, host_at, lyric_deck, lyric_line,
+    param, restart_arena_mid_load, stage, wait_until, DeckArena, COMPOSITION,
 };
 use super::{BibleUpdate, ResolumeConnectionState, ResolumeRegistry, TimerFrame};
 use chrono::Utc;
@@ -360,4 +360,211 @@ fn deck_check_warnings_are_rate_limited() {
     assert!(!provisional.should_warn_deck_check(now + Duration::from_secs(299)));
     assert!(provisional.should_warn_deck_check(now + Duration::from_secs(300)));
     assert!(!provisional.should_warn_deck_check(now + Duration::from_secs(301)));
+}
+
+fn lyric_with_translation() -> Vec<serde_json::Value> {
+    let mut clips = lyric_deck(100, 1);
+    clips.push(clip(110, "#translate-a", 11));
+    clips.push(clip(111, "#translate-b", 12));
+    clips
+}
+
+/// A composition that did not change over the follow-ups (here: translation
+/// clips removed on purpose, no Refresh mapping) is what the deck holds now.
+/// It becomes the deck's reference, so translated lines stop refetching.
+#[tokio::test]
+async fn a_composition_unchanged_over_the_follow_ups_settles_as_the_decks_content() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_with_translation())], true).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch: lyrics + translation
+    arena.replace_decks(vec![(1, lyric_deck(100, 1))]); // translation removed
+    driver.invalidate_mapping(FetchReason::ErrorInvalidated);
+    driver.tick(&status).await; // recovery refetch: suspect
+    for _ in 0..FOLLOW_UP_DELAYS.len() {
+        driver.run_follow_up(&status).await;
+    }
+
+    assert_eq!(driver.provisional.follow_up, None);
+    assert_eq!(
+        driver.provisional.last_good.get(&Some(1)),
+        Some(&MAIN_KINDS.to_vec())
+    );
+    let fetches = count(&server, "GET", COMPOSITION).await;
+    assert_eq!(fetches, 2 + FOLLOW_UP_DELAYS.len());
+    driver
+        .dispatch_push(Push::Stage(lyric_line("Line 1", Some("Preklad"))), &status)
+        .await;
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
+        fetches,
+        "no lane refetch"
+    );
+    assert_eq!(count(&server, "PUT", &param(1)).await, 1);
+}
+
+/// A listed deck with no presenter clip at all (a video deck), seen for the
+/// first time: once the follow-ups found the same composition it is known to
+/// hold none, and lyric lines on it refetch nothing.
+#[tokio::test]
+async fn a_listed_deck_without_presenter_clips_settles_after_the_follow_ups() {
+    let server = MockServer::start().await;
+    let video = vec![json!({ "id": 800, "name": { "value": "Intro video" } })];
+    DeckArena::start(&server, vec![(5, video)], true).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch: no recognized clip, suspect
+    assert_follow_up(&driver, 0);
+    for _ in 0..FOLLOW_UP_DELAYS.len() {
+        driver.run_follow_up(&status).await;
+    }
+
+    assert_eq!(
+        driver.provisional.last_good.get(&Some(5)),
+        Some(&Vec::new())
+    );
+    let fetches = count(&server, "GET", COMPOSITION).await;
+    assert_eq!(fetches, 1 + FOLLOW_UP_DELAYS.len());
+    for n in 0..3 {
+        driver
+            .dispatch_push(stage(&format!("Line {n}")), &status)
+            .await;
+    }
+    assert_eq!(count(&server, "GET", COMPOSITION).await, fetches);
+}
+
+/// A lane refetch that fails (Arena busy) never blocks the line: it goes out
+/// on the cached mapping, and the next lane refetch waits `LANE_REFETCH_RETRY`.
+#[tokio::test]
+async fn a_failed_lane_refetch_still_pushes_on_the_cached_mapping() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_with_translation())], true).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch: lyrics + translation
+    arena.replace_decks(vec![(1, lyric_deck(100, 1))]); // partly loaded: no translation yet
+    driver.invalidate_mapping(FetchReason::ErrorInvalidated);
+    driver.tick(&status).await; // recovery refetch: suspect
+    arena.fail_compositions(1);
+
+    driver
+        .dispatch_push(Push::Stage(lyric_line("Line 1", Some("Preklad"))), &status)
+        .await;
+
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
+        3,
+        "the lane refetch was tried"
+    );
+    assert_eq!(
+        count(&server, "PUT", &param(1)).await,
+        1,
+        "the line still went out"
+    );
+    assert_eq!(
+        status.read().await.state,
+        ResolumeConnectionState::Connected
+    );
+}
+
+/// After a deck switch the old deck's ids are never used: when the refetch
+/// fails, the line fails (host error, backoff) and nothing is written to the
+/// deck that left the wall. The next line refetches and lands on the new deck.
+#[tokio::test]
+async fn a_deck_switch_whose_refetch_fails_writes_nothing_to_the_old_deck() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(
+        &server,
+        vec![(1, lyric_deck(100, 1)), (2, lyric_deck(200, 21))],
+        true,
+    )
+    .await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch, deck 1
+    driver.dispatch_push(stage("Line 1"), &status).await; // lane A of deck 1
+
+    arena.select(1);
+    arena.fail_compositions(1);
+    driver.dispatch_push(stage("Line 2"), &status).await;
+
+    assert_eq!(
+        count(&server, "PUT", &param(2)).await,
+        0,
+        "nothing for deck 1's lane B"
+    );
+    assert_eq!(count(&server, "PUT", &param(22)).await, 0);
+    let snap = status.read().await.clone();
+    assert_eq!(snap.state, ResolumeConnectionState::Error);
+    assert_eq!(snap.consecutive_failures, 1);
+
+    backoff_elapsed(&mut driver);
+    driver.dispatch_push(stage("Line 3"), &status).await;
+    assert_eq!(
+        count(&server, "PUT", &param(22)).await,
+        1,
+        "deck 2's lane B"
+    );
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 3);
+}
+
+/// A deck check that answers 404 for the deck a fresh composition still
+/// selects (a broken answer) costs one refetch, then its 404s are ignored:
+/// no composition fetch on every push and tick.
+#[tokio::test]
+async fn a_deck_called_gone_that_the_composition_still_selects_costs_one_refetch() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], true).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch, deck 1
+    arena.fail_deck_checks(404);
+
+    for line in ["Line 1", "Line 2", "Line 3"] {
+        driver.dispatch_push(stage(line), &status).await;
+        driver.tick(&status).await;
+    }
+
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
+        2,
+        "the cold fetch + one deck refetch"
+    );
+    assert_eq!(count(&server, "GET", &deck_path(1)).await, 6);
+    assert_eq!(
+        count(&server, "PUT", &param(1)).await + count(&server, "PUT", &param(2)).await,
+        3,
+        "every line landed"
+    );
+}
+
+/// A body without `decks` (Arena mid-load) is judged against the deck that
+/// was selected before, so a partly loaded one is suspect, not "complete".
+#[tokio::test]
+async fn a_body_without_decks_is_judged_against_the_deck_selected_before() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_with_translation())], true).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch, deck 1: lyrics + translation
+    arena.set_lists_decks(false);
+    arena.replace_decks(vec![(1, lyric_deck(100, 1))]); // partly loaded, no deck list
+    driver.invalidate_mapping(FetchReason::ErrorInvalidated);
+    driver.tick(&status).await;
+
+    assert_follow_up(&driver, 0);
+}
+
+/// The lane refetch is part of the push's mapping step: its audit row says
+/// `refetched` (and its time counts as `t_ensure_mapping_ms`, not queue wait).
+#[tokio::test]
+async fn a_lane_refetch_is_audited_as_refetched() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    let (audit_tx, mut audit_rx) = tokio::sync::mpsc::channel(8);
+    driver.audit_tx = Some(audit_tx);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 1).await;
+
+    driver.dispatch_push(stage("Line 1"), &status).await;
+
+    let row = audit_rx.try_recv().expect("an audit row for the push");
+    assert!(row.refetched, "the lane refetch is in the audit row");
+    assert_eq!(row.outcome, "ok");
 }

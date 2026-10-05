@@ -55,7 +55,7 @@ pub(super) fn connect(id: i64) -> String {
     format!("/api/v1/composition/clips/by-id/{id}/connect")
 }
 
-fn deck_path(id: i64) -> String {
+pub(super) fn deck_path(id: i64) -> String {
     format!("/api/v1/composition/decks/by-id/{id}")
 }
 
@@ -89,6 +89,8 @@ struct ArenaState {
     online: bool,
     /// When set, deck checks answer this status instead of the deck.
     deck_check_status: Option<u16>,
+    /// Composition GETs still answered with a 500.
+    failing_left: usize,
 }
 
 fn deck_json(state: &ArenaState, index: usize) -> Value {
@@ -132,6 +134,7 @@ impl DeckArena {
                 loading_left: 0,
                 online: true,
                 deck_check_status: None,
+                failing_left: 0,
             })),
         };
         let routes = [
@@ -171,7 +174,8 @@ impl DeckArena {
 
     fn with<R>(&self, change: impl FnOnce(&mut ArenaState) -> R) -> R {
         let mut guard = self.state.lock().expect("arena lock");
-        change(&mut *guard)
+        let state: &mut ArenaState = &mut guard;
+        change(state)
     }
 
     /// The Resolume operator selects another deck.
@@ -189,8 +193,18 @@ impl DeckArena {
         self.with(|state| state.loading_left = fetches);
     }
 
-    fn fail_deck_checks(&self, status: u16) {
+    pub(super) fn fail_deck_checks(&self, status: u16) {
         self.with(|state| state.deck_check_status = Some(status));
+    }
+
+    /// The next `fetches` composition GETs answer 500.
+    pub(super) fn fail_compositions(&self, fetches: usize) {
+        self.with(|state| state.failing_left = fetches);
+    }
+
+    /// Whether `/composition` lists `decks` from now on.
+    pub(super) fn set_lists_decks(&self, lists_decks: bool) {
+        self.with(|state| state.lists_decks = lists_decks);
     }
 
     /// Another composition was loaded: every deck id is new.
@@ -225,6 +239,10 @@ impl Respond for ArenaRoute {
                 "name": "Arena", "major": 7, "minor": 13, "micro": 2, "revision": 0,
             })),
             Route::Composition => {
+                if state.failing_left > 0 {
+                    state.failing_left -= 1;
+                    return ResponseTemplate::new(500);
+                }
                 if state.loading_left > 0 {
                     state.loading_left -= 1;
                     return ResponseTemplate::new(200).set_body_json(loading_composition());
@@ -327,7 +345,7 @@ pub(super) fn stage(main: &str) -> Push {
 }
 
 /// Let the next tick or push run as if the #484 backoff window had elapsed.
-fn backoff_elapsed(driver: &mut HostDriver) {
+pub(super) fn backoff_elapsed(driver: &mut HostDriver) {
     driver.next_retry_at = None;
 }
 
