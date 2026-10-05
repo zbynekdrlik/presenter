@@ -815,9 +815,13 @@ async fn a_complete_body_without_decks_follows_up_until_the_deck_list_is_back() 
 /// sleeping: shift its retry instant back by `by` (the same idea as
 /// `backoff_elapsed`). The gate is the only clock on this path.
 fn lane_retry_elapsed(driver: &mut HostDriver, by: Duration) {
-    if let LaneRefetch::RetryAt(at) = driver.provisional.lane_refetch {
-        driver.provisional.lane_refetch = LaneRefetch::RetryAt(at - by);
-    }
+    let LaneRefetch::RetryAt(at) = driver.provisional.lane_refetch else {
+        panic!(
+            "expected a used lane refetch, got {:?}",
+            driver.provisional.lane_refetch
+        );
+    };
+    driver.provisional.lane_refetch = LaneRefetch::RetryAt(at - by);
 }
 
 /// Owner rule (2026-10-05): no text may be skipped. While Arena is still
@@ -891,5 +895,39 @@ async fn a_push_1_s_after_an_empty_lane_refetch_does_not_refetch() {
         count(&server, "GET", COMPOSITION).await,
         3,
         "cold fetch, recovery fetch, one lane refetch"
+    );
+}
+
+/// The owner rule's number, pinned: a provisional mapping refetches a missing
+/// lane 3 s after the previous lane refetch, never later.
+#[test]
+fn the_provisional_lane_refetch_gap_is_3_seconds() {
+    assert_eq!(LANE_REFETCH_RETRY, Duration::from_secs(3));
+}
+
+/// With a refetch every 3 s, one WARN per refetch would flood the log during
+/// a long load. The "still lacks these clips" WARN goes through the #563h
+/// limiter (key `lane-refetch`): the second one within 300 s is not a WARN.
+#[tokio::test]
+async fn lane_refetch_warnings_go_through_the_missing_clip_limiter() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 100).await;
+    driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
+    let first = *driver
+        .missing_clip_last_warn
+        .get("lane-refetch")
+        .expect("the still-missing WARN went through the limiter");
+
+    lane_retry_elapsed(&mut driver, Duration::from_secs(5));
+    driver.dispatch_push(stage("Line 2"), &status).await; // refetch again, still loading
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 4);
+    assert_eq!(
+        driver.missing_clip_last_warn.get("lane-refetch"),
+        Some(&first),
+        "the second WARN within 300 s is rate-limited"
     );
 }
