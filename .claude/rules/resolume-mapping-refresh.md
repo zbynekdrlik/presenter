@@ -94,7 +94,9 @@ a timer:
   - The last good kinds are kept per deck, because decks legitimately differ.
   - A body without `decks` (Arena mid-load) is judged against the deck
     selected before (`reference_deck`). It has no deck to check
-    (`selected_deck` is `None`).
+    (`selected_deck` is `None`). After bodies with decks, such a body is
+    suspect even when it has every kind (`deckless_after_decks`): the
+    follow-ups bring the deck list, and so the deck check, back.
   - The mapping is *suspect* if it lacks a kind the deck had. A deck without
     history is suspect only if it has no recognized destination at all.
   - While a mapping is suspect, follow-up fetches run `FOLLOW_UP_DELAYS`
@@ -109,7 +111,8 @@ a timer:
   - **Settling.** After the last step, a composition becomes the deck's
     reference (`Settled`, one WARN) when the last two FOLLOW-UP fetches, about
     a minute apart, saw the same kinds and the same clip count
-    (`last_follow_up`, reset whenever a schedule starts). A lane refetch in
+    (`last_follow_up`). That record resets when a schedule starts, on a
+    complete or adopted fetch, and on a deck change. A lane refetch in
     between does not count. Settling also requires recognized clips, or a
     listed deck without history (a video deck). This stops a deck whose clips were removed on purpose,
     or a deck with no presenter clips, from costing 5 follow-ups on every
@@ -141,6 +144,12 @@ a timer:
     would fetch the composition.
   - Timer frames (`handle_timer`, plain `ensure_mapping`) never check the
     deck. A composition without `decks` gets no check at all.
+  - Residual risk, deliberately not guarded: Arena answering `selected:false`
+    for the deck its own fresh composition selects would refetch on every
+    push and tick. Treating such an answer as "contradicted" (as the 404
+    case does) would also swallow a real A→B→A switch race, and then lines
+    would go to a deck that is off the wall. A 404 is unambiguous (the id
+    does not exist), a `selected:false` is not.
 - **Lane refetch** (`LaneRefetch`). When the cached mapping was not just
   fetched, a push that needs a destination the mapping lacks refetches
   before it is applied. It does so only if the deck's last good mapping had
