@@ -810,3 +810,86 @@ async fn a_complete_body_without_decks_follows_up_until_the_deck_list_is_back() 
         "deck check is back"
     );
 }
+
+/// Simulate `by` of wall time passing for the lane-refetch gate, without
+/// sleeping: shift its retry instant back by `by` (the same idea as
+/// `backoff_elapsed`). The gate is the only clock on this path.
+fn lane_retry_elapsed(driver: &mut HostDriver, by: Duration) {
+    if let LaneRefetch::RetryAt(at) = driver.provisional.lane_refetch {
+        driver.provisional.lane_refetch = LaneRefetch::RetryAt(at - by);
+    }
+}
+
+/// Owner rule (2026-10-05): no text may be skipped. While Arena is still
+/// loading (the follow-ups are still running), a line that arrives 5 s after
+/// the previous empty lane refetch refetches again and lands once the load
+/// completed. RED with the 30 s limit: that line was skipped.
+#[tokio::test]
+async fn a_push_5_s_after_an_empty_lane_refetch_refetches_and_lands() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 2).await;
+    driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 3);
+    assert!(
+        driver.provisional.follow_up.is_some(),
+        "the follow-ups still run: the mapping is provisional"
+    );
+
+    arena.set_loading(0); // Arena finished loading
+    lane_retry_elapsed(&mut driver, Duration::from_secs(5));
+    driver.dispatch_push(stage("Line 2"), &status).await;
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 4);
+    assert_eq!(
+        count(&server, "PUT", &param(1)).await,
+        1,
+        "line 2 landed on lane A"
+    );
+    assert_eq!(count(&server, "POST", &connect(100)).await, 1);
+}
+
+/// The same for a deck that never produced a complete mapping in this process
+/// (Presenter started while Arena was loading): 5 s after the previous empty
+/// lane refetch, the next line refetches and lands.
+#[tokio::test]
+async fn a_push_5_s_after_an_empty_refetch_at_a_cold_start_lands() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], true).await;
+    arena.set_loading(2);
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch mid-load
+    driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 2);
+
+    arena.set_loading(0); // Arena finished loading
+    lane_retry_elapsed(&mut driver, Duration::from_secs(5));
+    driver.dispatch_push(stage("Line 2"), &status).await;
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 3);
+    assert_eq!(count(&server, "PUT", &param(1)).await, 1, "line 2 landed");
+    assert_eq!(count(&server, "POST", &connect(100)).await, 1);
+}
+
+/// The gap still bounds the refetches: a line 1 s after the previous empty
+/// lane refetch does not fetch the composition again.
+#[tokio::test]
+async fn a_push_1_s_after_an_empty_lane_refetch_does_not_refetch() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 100).await;
+    driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
+
+    lane_retry_elapsed(&mut driver, Duration::from_secs(1));
+    driver.dispatch_push(stage("Line 2"), &status).await;
+
+    assert_eq!(
+        count(&server, "GET", COMPOSITION).await,
+        3,
+        "cold fetch, recovery fetch, one lane refetch"
+    );
+}
