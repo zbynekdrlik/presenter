@@ -224,26 +224,43 @@ async fn refresh_catalog_resends_only_when_outputs_or_scenes_change() {
     assert_eq!(scenes_of(&stored, "t814-refresh")[0].0, "Chvály");
 }
 
-/// Read frames until the next `catalog` message (other message types — welcome,
-/// variables, nameplates — are skipped).
-async fn next_catalog(ws: &mut ClientWs) -> Value {
+/// The next JSON text frame from the companion socket (non-text frames skipped).
+async fn next_frame(ws: &mut ClientWs) -> Value {
     loop {
         let frame = timeout(Duration::from_secs(10), ws.next())
             .await
-            .expect("timed out waiting for a catalog message")
+            .expect("timed out waiting for a companion frame")
             .expect("companion socket closed")
             .expect("companion socket error");
         if let WsMessage::Text(text) = frame {
-            let value: Value = serde_json::from_str(text.as_str()).expect("JSON frame");
-            if value["type"] == "catalog" {
-                return value;
-            }
+            return serde_json::from_str(text.as_str()).expect("JSON frame");
         }
     }
 }
 
+/// Read frames until the next `catalog` message (other message types — welcome,
+/// variables, nameplates — are skipped).
+async fn next_catalog(ws: &mut ClientWs) -> Value {
+    loop {
+        let frame = next_frame(ws).await;
+        if frame["type"] == "catalog" {
+            return frame;
+        }
+    }
+}
+
+/// The `broadcast_live` value carried by a `variables` frame, if any.
+fn broadcast_live_value(frame: &Value) -> Option<&str> {
+    frame["values"]
+        .as_array()?
+        .iter()
+        .find(|var| var["name"] == "broadcast_live")?["value"]
+        .as_str()
+}
+
 // The real `/companion/ws` session: the catalog arrives on connect, a
-// catalog-neutral config write sends NOTHING, and a scene add re-sends it.
+// catalog-neutral config write sends NOTHING (proved with an ordering barrier),
+// and a scene add re-sends it.
 // Multi-thread runtime: a real axum server + a real WS client run concurrently
 // (same reason as `router/tests.rs::live_ws_connection_registers_stage_presence`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -280,24 +297,39 @@ async fn companion_socket_sends_catalog_on_connect_and_resends_on_config_change(
         pairs(&[("Chvaly", "base"), ("Verse", "overlay")]),
     );
 
-    // The session subscribes to the live hub BEFORE its initial snapshot, so
-    // both notifies below reach it. The first is catalog-neutral (a scene
-    // transition) and must send nothing; the second adds a scene. The NEXT
-    // catalog frame must therefore already carry "Logo" — had the neutral write
-    // re-sent, that frame would be the unchanged catalog instead.
+    // A catalog-neutral config write (a scene transition — like an element
+    // edit): it bumps config_revision and fires StreamConfigChanged, but the
+    // re-resolved catalog is identical, so the session must send NO catalog.
     state
         .repository()
         .set_stream_scene_transition(base, Some(250))
         .await
         .unwrap();
     state.stream_config_write_notify("t814-ws").await.unwrap();
+    // Ordering barrier: the session subscribed to the live hub before its
+    // initial snapshot and handles live events one at a time in hub order, so
+    // the `variables` frame for this broadcast toggle arrives only AFTER the
+    // notify above was fully handled. Any `catalog` frame before it means the
+    // neutral write re-sent — the change gate in `handle_live_event` is broken.
+    state.set_broadcast_live(true);
+    loop {
+        let frame = next_frame(&mut ws).await;
+        assert_ne!(
+            frame["type"], "catalog",
+            "a catalog-neutral config write must send no catalog: {frame}"
+        );
+        if frame["type"] == "variables" && broadcast_live_value(&frame) == Some("true") {
+            break;
+        }
+    }
+
+    // A new overlay scene → the catalog is re-sent, carrying it.
     state
         .repository()
         .create_stream_scene("t814-ws", "Logo", SceneKind::Overlay)
         .await
         .unwrap();
     state.stream_config_write_notify("t814-ws").await.unwrap();
-
     let second = next_catalog(&mut ws).await;
     assert_eq!(
         scenes_of(&second, "t814-ws"),
