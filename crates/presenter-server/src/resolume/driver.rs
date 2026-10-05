@@ -465,13 +465,7 @@ impl HostDriver {
         );
 
         let missing = mapping.missing_tokens().to_vec();
-        if !missing.is_empty() {
-            tracing::warn!(
-                host = %self.config.host,
-                missing = ?missing,
-                "Resolume mapping missing expected clips"
-            );
-        }
+        self.log_missing_clips(&missing);
         // #563g/#564: cache so a status read (and the operator-page tooltip)
         // reflects the current composition's gaps without needing `status`
         // threaded into this fetch.
@@ -488,6 +482,33 @@ impl HostDriver {
         // suspect one (Arena still loading) gets follow-up fetches.
         self.note_fetched_mapping(deck, kinds, clip_count, reason);
         Ok(())
+    }
+
+    /// The fetch-time "mapping missing expected clips" WARN. #808: follow-ups
+    /// and lane refetches can re-read an unchanged composition every few
+    /// seconds, so it is a WARN only when the gaps changed, DEBUG otherwise.
+    fn log_missing_clips(&self, missing: &[&'static str]) {
+        if missing.is_empty() {
+            return;
+        }
+        let changed = self
+            .missing_clips
+            .iter()
+            .map(String::as_str)
+            .ne(missing.iter().copied());
+        if changed {
+            tracing::warn!(
+                host = %self.config.host,
+                missing = ?missing,
+                "Resolume mapping missing expected clips"
+            );
+        } else {
+            debug!(
+                host = %self.config.host,
+                missing = ?missing,
+                "Resolume mapping missing expected clips (unchanged)"
+            );
+        }
     }
 
     pub(super) async fn trigger_clips(&mut self, targets: &[ClipTarget]) -> anyhow::Result<()> {

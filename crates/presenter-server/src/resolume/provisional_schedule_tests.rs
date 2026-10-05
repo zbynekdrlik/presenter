@@ -8,8 +8,8 @@ use super::clip_map::{ClipMapping, MAIN_KINDS, TRANSLATION_KINDS};
 use super::driver::{FetchReason, HostDriver};
 use super::mapping_refresh::Push;
 use super::provisional_mapping::{
-    bible_required_kinds, selected_deck_id, stage_required_kinds, LaneRefetch, FOLLOW_UP_DELAYS,
-    LANE_REFETCH_RETRY,
+    bible_required_kinds, lane_refetch_retry_after, selected_deck_id, stage_required_kinds,
+    LaneRefetch, FOLLOW_UP_DELAYS, LANE_REFETCH_AFTER_TIMEOUT, LANE_REFETCH_RETRY,
 };
 use super::provisional_mapping_tests::{
     backoff_elapsed, clip, connect, count, deck_path, driver_for, host_at, lyric_deck, lyric_line,
@@ -930,4 +930,29 @@ async fn lane_refetch_warnings_go_through_the_missing_clip_limiter() {
         Some(&first),
         "the second WARN within 300 s is rate-limited"
     );
+}
+
+/// A lane refetch that timed out (a hanging `/composition`, host trouble)
+/// waits 30 s, so it cannot block the serial host worker 15 s of every 18 s;
+/// a fast failure (refused, a 5xx) keeps the 3 s gap.
+#[test]
+fn a_timed_out_lane_refetch_waits_30_s_a_fast_failure_3_s() {
+    let timeout = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "operation timed out",
+    ))
+    .context("failed to fetch composition");
+    assert_eq!(
+        lane_refetch_retry_after(&timeout),
+        LANE_REFETCH_AFTER_TIMEOUT
+    );
+    assert_eq!(LANE_REFETCH_AFTER_TIMEOUT, Duration::from_secs(30));
+    let refused = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "connection refused",
+    ));
+    assert_eq!(lane_refetch_retry_after(&refused), LANE_REFETCH_RETRY);
+    let status =
+        anyhow::anyhow!("composition request failed with status 500 Internal Server Error");
+    assert_eq!(lane_refetch_retry_after(&status), LANE_REFETCH_RETRY);
 }

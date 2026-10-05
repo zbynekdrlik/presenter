@@ -37,6 +37,7 @@
 
 use super::clip_map::{BIBLE_CLEAR_KIND, BIBLE_LANE_KINDS, MAIN_KINDS, TRANSLATION_KINDS};
 use super::driver::{duration_ms, FetchReason, HostDriver, MappingFetchOutcome, ACTION_TIMEOUT};
+use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate};
 use anyhow::{anyhow, Context};
 use reqwest::StatusCode;
@@ -65,6 +66,22 @@ pub(super) const FOLLOW_UP_DELAYS: [Duration; 5] = [
 /// this long. Only a deck accepted as lacking a kind stops refetching for it
 /// (its last-good reference has no such kind, so it never refetches).
 pub(super) const LANE_REFETCH_RETRY: Duration = Duration::from_secs(3);
+/// After a lane refetch that TIMED OUT (`COMPOSITION_TIMEOUT`, 15 s): a
+/// hanging `/composition` is host trouble, the exception the owner rule
+/// allows. Retrying every 3 s would block the serial host worker 15 s of
+/// every 18 s, and every queued line (placeable lanes, Bible, timer frames)
+/// would wait behind it until the 16-slot command channel drops updates.
+pub(super) const LANE_REFETCH_AFTER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long after a failed lane refetch the next one may run: 30 s after a
+/// timeout, [`LANE_REFETCH_RETRY`] after any fast failure (refused, reset, a
+/// 5xx).
+pub(super) fn lane_refetch_retry_after(err: &anyhow::Error) -> Duration {
+    match classify_error(err) {
+        ResolumeErrorKind::Timeout => LANE_REFETCH_AFTER_TIMEOUT,
+        _ => LANE_REFETCH_RETRY,
+    }
+}
 
 /// The selected deck of a composition; `None` when it lists no decks.
 pub(super) type DeckKey = Option<i64>;
@@ -604,27 +621,47 @@ impl HostDriver {
             .refresh_mapping_with_reason(FetchReason::LaneMissing)
             .await
         {
-            self.provisional.spend_lane_refetch(Instant::now());
-            warn!(
-                host = %self.config.host,
-                error = %format!("{err:#}"),
-                retry_secs = LANE_REFETCH_RETRY.as_secs(),
-                "resolume lane refetch failed; pushing with the cached mapping"
-            );
+            let retry = lane_refetch_retry_after(&err);
+            self.provisional.lane_refetch = LaneRefetch::RetryAt(Instant::now() + retry);
+            self.log_lane_refetch_failed(&err, retry);
             return false;
         }
         let still_missing = self.lanes_to_refetch_for(required);
         if !still_missing.is_empty() {
             self.provisional.spend_lane_refetch(Instant::now());
-            warn!(
-                host = %self.config.host,
-                deck = ?self.provisional.selected_deck,
-                still_missing = ?still_missing,
-                retry_secs = LANE_REFETCH_RETRY.as_secs(),
-                "resolume composition still lacks these clips after a fresh fetch (Arena may still be loading); such lines are skipped until the next refetch (at most retry_secs, or the next follow-up step)"
-            );
+            self.log_lane_still_missing(&still_missing);
         }
         true
+    }
+
+    /// One WARN per 300 s per host (#563h limiter), DEBUG otherwise: with a
+    /// refetch every 3 s during a long load the WARN would flood the log.
+    fn log_lane_still_missing(&mut self, still_missing: &[&'static str]) {
+        let warn_now = self.should_warn_missing_clip("lane-refetch");
+        let host = &self.config.host;
+        let deck = self.provisional.selected_deck;
+        let retry_secs = LANE_REFETCH_RETRY.as_secs();
+        let message = "resolume composition still lacks these clips after a fresh fetch (Arena may still be loading); such lines are skipped until the next refetch (at most retry_secs, or the next follow-up step)";
+        if warn_now {
+            warn!(%host, deck = ?deck, still_missing = ?still_missing, retry_secs, "{message}");
+        } else {
+            debug!(%host, deck = ?deck, still_missing = ?still_missing, retry_secs, "{message}");
+        }
+    }
+
+    /// A failed lane refetch: the push goes out on the cached mapping. WARN at
+    /// most once per 300 s per host (#563h limiter), DEBUG otherwise.
+    fn log_lane_refetch_failed(&mut self, err: &anyhow::Error, retry: Duration) {
+        let warn_now = self.should_warn_missing_clip("lane-refetch-failed");
+        let host = &self.config.host;
+        let error = format!("{err:#}");
+        let retry_secs = retry.as_secs();
+        let message = "resolume lane refetch failed; pushing with the cached mapping";
+        if warn_now {
+            warn!(%host, %error, retry_secs, "{message}");
+        } else {
+            debug!(%host, %error, retry_secs, "{message}");
+        }
     }
 
     /// `GET /composition/decks/by-id/{selected}`. Any failure keeps the cached
