@@ -27,7 +27,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|
 | NDI pipeline, WebRTC testing, cleanup | `.claude/skills/ndi/SKILL.md` |
 | Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
-| Companion action option rename ⇒ append-only upgrade script + handler fallback; testing the real `index.js` via a `Module._load` stub (#805) | `.claude/rules/companion-upgrade-scripts.md` (auto-loads on `ops/companion/presenter/**`) |
+| Companion action option rename ⇒ append-only upgrade script + handler fallback; testing the real `index.js` via `lib/test-support.js` (#805) | `.claude/rules/companion-upgrade-scripts.md` (auto-loads on `ops/companion/presenter/**`) |
+| Companion dropdown choices (layouts, stream outputs/scenes/overlays) = the server `catalog` push, never a hardcoded list (#814): `companion/catalog.rs` snapshot + change-gated re-send on `StreamConfigChanged`, `lib/catalog.js` builders, same option ids + `allowCustom` so saved buttons keep working | `.claude/rules/companion-catalog.md` (auto-loads on `ops/companion/presenter/**`, `crates/presenter-server/src/companion/**`) |
 | Runner management, GPU wedge, probe cleanup, branch-sync-after-merge | `.claude/skills/ci/SKILL.md` |
 | Local build/deploy workflow | `.claude/skills/deploy/SKILL.md` |
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
