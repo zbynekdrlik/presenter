@@ -7,12 +7,14 @@
 use super::clip_map::{ClipMapping, MAIN_KINDS, TRANSLATION_KINDS};
 use super::driver::{FetchReason, HostDriver};
 use super::mapping_refresh::Push;
-use super::provisional_mapping::{push_required_kinds, selected_deck_id, FOLLOW_UP_DELAYS};
-use super::provisional_mapping_tests::{
-    clip, connect, count, driver_for, lyric_deck, lyric_line, param, restart_arena_mid_load, stage,
-    DeckArena, COMPOSITION,
+use super::provisional_mapping::{
+    push_required_kinds, selected_deck_id, ProvisionalMapping, FOLLOW_UP_DELAYS,
 };
-use super::{BibleUpdate, ResolumeConnectionState, TimerFrame};
+use super::provisional_mapping_tests::{
+    clip, connect, count, driver_for, host_at, lyric_deck, lyric_line, param,
+    restart_arena_mid_load, stage, wait_until, DeckArena, COMPOSITION,
+};
+use super::{BibleUpdate, ResolumeConnectionState, ResolumeRegistry, TimerFrame};
 use chrono::Utc;
 use presenter_core::BibleSlideOutput;
 use serde_json::json;
@@ -306,4 +308,56 @@ fn destination_kinds_name_the_clips_the_mapping_has() {
         16,
         "every kind is either present or missing"
     );
+}
+
+/// Presenter (re)starts while Arena is still loading: there is no last good
+/// mapping yet, but a cached mapping with no recognized clip at all is
+/// suspect, so the first line refetches once and lands.
+#[tokio::test]
+async fn a_push_after_a_cold_fetch_mid_load_refetches_and_lands() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], true).await;
+    arena.set_loading(1);
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch mid-load
+    assert_follow_up(&driver, 0);
+
+    driver.dispatch_push(stage("Line 1"), &status).await;
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 2);
+    assert_eq!(count(&server, "PUT", &param(1)).await, 1);
+    assert_eq!(count(&server, "POST", &connect(100)).await, 1);
+    assert_eq!(driver.provisional.follow_up, None);
+}
+
+/// The worker's follow-up branch really waits for its deadline: the first
+/// follow-up fetch comes about 2 s after the suspect fetch, never at once.
+#[tokio::test]
+async fn the_worker_waits_for_the_follow_up_deadline() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], true).await;
+    arena.set_loading(1);
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.set_hosts(vec![host_at(&server)]).await;
+
+    wait_until(&server, "GET", COMPOSITION, 1, Duration::from_secs(5)).await;
+    let suspect_fetch_seen = tokio::time::Instant::now();
+    wait_until(&server, "GET", COMPOSITION, 2, Duration::from_secs(10)).await;
+    let waited = suspect_fetch_seen.elapsed();
+
+    assert!(
+        waited >= Duration::from_millis(1500),
+        "the first follow-up came {waited:?} after the suspect fetch"
+    );
+}
+
+/// A deck check that keeps failing warns at most once per 300 s per host.
+#[test]
+fn deck_check_warnings_are_rate_limited() {
+    let mut provisional = ProvisionalMapping::default();
+    let now = tokio::time::Instant::now();
+    assert!(provisional.should_warn_deck_check(now));
+    assert!(!provisional.should_warn_deck_check(now + Duration::from_secs(299)));
+    assert!(provisional.should_warn_deck_check(now + Duration::from_secs(300)));
+    assert!(!provisional.should_warn_deck_check(now + Duration::from_secs(301)));
 }

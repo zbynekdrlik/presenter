@@ -185,7 +185,7 @@ impl DeckArena {
 
     /// Arena is loading: the next `fetches` composition GETs get the
     /// tag-less loading composition.
-    fn set_loading(&self, fetches: usize) {
+    pub(super) fn set_loading(&self, fetches: usize) {
         self.with(|state| state.loading_left = fetches);
     }
 
@@ -256,7 +256,7 @@ impl Respond for ArenaRoute {
     }
 }
 
-fn host_at(server: &MockServer) -> ResolumeHost {
+pub(super) fn host_at(server: &MockServer) -> ResolumeHost {
     let addr = server.address();
     let now = Utc::now();
     ResolumeHost::new(
@@ -290,7 +290,7 @@ pub(super) async fn count(server: &MockServer, verb: &str, route: &str) -> usize
 
 /// Bounded retry-with-assert: wait until the mock saw at least `at_least`
 /// `verb route` requests.
-async fn wait_until(
+pub(super) async fn wait_until(
     server: &MockServer,
     verb: &str,
     route: &str,

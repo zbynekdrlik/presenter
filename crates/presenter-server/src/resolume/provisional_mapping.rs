@@ -201,7 +201,9 @@ impl ProvisionalMapping {
                 .is_some_and(|good| good.iter().any(|had| *had == kind))
     }
 
-    fn should_warn_deck_check(&mut self, now: Instant) -> bool {
+    /// Whether a failed deck check logs at WARN now: at most once per
+    /// [`DECK_CHECK_WARN_INTERVAL`] per host, DEBUG otherwise.
+    pub(super) fn should_warn_deck_check(&mut self, now: Instant) -> bool {
         let due = match self.last_deck_check_warn {
             Some(last) => now.duration_since(last) >= DECK_CHECK_WARN_INTERVAL,
             None => true,
@@ -374,14 +376,14 @@ impl HostDriver {
             return;
         }
         if self.in_backoff() {
-            // A down host: try this step again when its backoff window ends.
-            let retry_at = self
-                .next_retry_at
-                .unwrap_or_else(|| Instant::now() + FOLLOW_UP_DELAYS[0]);
-            self.provisional.follow_up = Some(FollowUp {
-                due: retry_at,
-                ..follow_up
-            });
+            // A down host: try this step again when its backoff window ends
+            // (`in_backoff` means `next_retry_at` is set and in the future).
+            if let Some(retry_at) = self.next_retry_at {
+                self.provisional.follow_up = Some(FollowUp {
+                    due: retry_at,
+                    ..follow_up
+                });
+            }
             return;
         }
         info!(
