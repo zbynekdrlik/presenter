@@ -17,6 +17,8 @@ mod mapping_refresh_tests;
 mod port_drift;
 #[cfg(test)]
 mod port_drift_integration_tests;
+#[cfg(test)]
+mod provisional_mapping_tests;
 mod types;
 
 use anyhow::anyhow;
