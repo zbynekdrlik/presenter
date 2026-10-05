@@ -228,11 +228,10 @@ impl HostDriver {
     /// `ensure_mapping` refetches (reason `stale-id`). Any other failure, or a
     /// failed retry, feeds `record_error` (#484 backoff, #563b threshold).
     pub(super) async fn dispatch_push(&mut self, push: Push, status: &Status) {
-        // Taken before the pre-check, so a mapping it fetched counts as one
-        // this push fetched itself (a 404 on it is not a stale id).
+        // Any fetch during the attempt (cold, recovery, deck switch, lane
+        // refetch in `ensure_mapping_for_push`) makes the mapping one this
+        // push fetched itself: a 404 on it is not a stale id.
         let fetched_before = self.last_mapping_refresh;
-        // #808 regression: the deck check and the one lane refetch per deck.
-        self.prepare_mapping_for_push(&push).await;
         let mut result = self.apply_push(&push, status).await;
         let stale_detail = match &result {
             Err(err) if is_stale_id_error(err) => Some(format!("{err:#}")),

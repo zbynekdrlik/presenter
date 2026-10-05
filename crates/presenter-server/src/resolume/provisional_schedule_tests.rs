@@ -8,13 +8,13 @@ use super::clip_map::{ClipMapping, MAIN_KINDS, TRANSLATION_KINDS};
 use super::driver::{FetchReason, HostDriver};
 use super::mapping_refresh::Push;
 use super::provisional_mapping::{
-    push_required_kinds, selected_deck_id, ProvisionalMapping, FOLLOW_UP_DELAYS,
+    bible_required_kinds, selected_deck_id, stage_required_kinds, LaneRefetch, FOLLOW_UP_DELAYS,
 };
 use super::provisional_mapping_tests::{
     backoff_elapsed, clip, connect, count, deck_path, driver_for, host_at, lyric_deck, lyric_line,
     param, restart_arena_mid_load, stage, wait_until, DeckArena, COMPOSITION,
 };
-use super::{BibleUpdate, ResolumeConnectionState, ResolumeRegistry, TimerFrame};
+use super::{BibleUpdate, ResolumeConnectionState, ResolumeRegistry};
 use chrono::Utc;
 use presenter_core::BibleSlideOutput;
 use serde_json::json;
@@ -198,11 +198,11 @@ async fn a_complete_fetch_rearms_the_lane_refetch() {
     driver.tick(&status).await; // cold fetch
     restart_arena_mid_load(&arena, &mut driver, &status, 2).await;
     driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
-    assert!(driver.provisional.lane_refetch_spent);
+    assert_eq!(driver.provisional.lane_refetch, LaneRefetch::Spent);
 
     driver.run_follow_up(&status).await; // loaded
 
-    assert!(!driver.provisional.lane_refetch_spent);
+    assert_eq!(driver.provisional.lane_refetch, LaneRefetch::Armed);
     assert_eq!(driver.provisional.follow_up, None);
 }
 
@@ -229,14 +229,18 @@ async fn a_switch_to_a_deck_without_lyric_clips_schedules_no_follow_ups() {
     assert_eq!(count(&server, "GET", COMPOSITION).await, 2);
 }
 
-fn verse() -> Push {
-    Push::Bible(BibleUpdate::from_slide_output(Some(BibleSlideOutput {
+fn verse_update() -> BibleUpdate {
+    BibleUpdate::from_slide_output(Some(BibleSlideOutput {
         main_text: "For God so loved".to_string(),
         main_reference: "John 3:16 (KJV)".to_string(),
         secondary_text: String::new(),
         secondary_reference: String::new(),
         triggered_at: Utc::now(),
-    })))
+    }))
+}
+
+fn verse() -> Push {
+    Push::Bible(verse_update())
 }
 
 /// A Bible verse in the loading window refetches like a lyric line does.
@@ -264,18 +268,17 @@ async fn a_bible_push_in_the_loading_window_refetches_and_lands() {
 
 #[test]
 fn a_push_needs_the_lanes_it_writes() {
-    assert_eq!(push_required_kinds(&stage("Line")), MAIN_KINDS.to_vec());
-    let translated = Push::Stage(lyric_line("Line", Some("Preklad")));
+    let line = lyric_line("Line", None);
+    assert_eq!(stage_required_kinds(&line), MAIN_KINDS.to_vec());
+    let translated = lyric_line("Line", Some("Preklad"));
     let mut both = MAIN_KINDS.to_vec();
     both.extend(TRANSLATION_KINDS);
-    assert_eq!(push_required_kinds(&translated), both);
-    let verse_kinds = push_required_kinds(&verse());
+    assert_eq!(stage_required_kinds(&translated), both);
+    let verse_kinds = bible_required_kinds(&verse_update());
     assert!(verse_kinds.contains(&"#bible-a") && verse_kinds.contains(&"#bible-reference-b"));
     assert!(!verse_kinds.contains(&"#bible-clear"));
-    let clear = Push::Bible(BibleUpdate::from_slide_output(None));
-    assert!(push_required_kinds(&clear).contains(&"#bible-clear"));
-    let timer = Push::Timer(TimerFrame::new("00:01".into()));
-    assert!(push_required_kinds(&timer).is_empty());
+    let clear = BibleUpdate::from_slide_output(None);
+    assert!(bible_required_kinds(&clear).contains(&"#bible-clear"));
 }
 
 #[test]
@@ -349,17 +352,6 @@ async fn the_worker_waits_for_the_follow_up_deadline() {
         waited >= Duration::from_millis(1500),
         "the first follow-up came {waited:?} after the suspect fetch"
     );
-}
-
-/// A deck check that keeps failing warns at most once per 300 s per host.
-#[test]
-fn deck_check_warnings_are_rate_limited() {
-    let mut provisional = ProvisionalMapping::default();
-    let now = tokio::time::Instant::now();
-    assert!(provisional.should_warn_deck_check(now));
-    assert!(!provisional.should_warn_deck_check(now + Duration::from_secs(299)));
-    assert!(provisional.should_warn_deck_check(now + Duration::from_secs(300)));
-    assert!(!provisional.should_warn_deck_check(now + Duration::from_secs(301)));
 }
 
 fn lyric_with_translation() -> Vec<serde_json::Value> {
@@ -567,4 +559,86 @@ async fn a_lane_refetch_is_audited_as_refetched() {
     let row = audit_rx.try_recv().expect("an audit row for the push");
     assert!(row.refetched, "the lane refetch is in the audit row");
     assert_eq!(row.outcome, "ok");
+}
+
+/// Each follow-up step re-arms the lane refetch, so a line after a step that
+/// still found Arena loading can refetch again.
+#[tokio::test]
+async fn each_follow_up_step_rearms_the_lane_refetch() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 3).await;
+    driver.dispatch_push(stage("Line 1"), &status).await; // lane refetch, still loading
+    assert_eq!(driver.provisional.lane_refetch, LaneRefetch::Spent);
+
+    driver.run_follow_up(&status).await; // still loading
+    assert_eq!(driver.provisional.lane_refetch, LaneRefetch::Armed);
+    driver.dispatch_push(stage("Line 2"), &status).await; // refetches again: loaded
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 5);
+    assert_eq!(count(&server, "PUT", &param(1)).await, 1);
+}
+
+/// A deck that had lyric clips and still shows none after every follow-up is
+/// Arena still loading: a line refetches at most every `LANE_REFETCH_RETRY`,
+/// and the first one after the load lands. Never dropped for good.
+#[tokio::test]
+async fn an_empty_composition_after_the_follow_ups_is_rechecked_on_pushes() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 100).await;
+    for _ in 0..FOLLOW_UP_DELAYS.len() {
+        driver.run_follow_up(&status).await;
+    }
+    assert_eq!(driver.provisional.follow_up, None, "the follow-ups ran out");
+
+    driver.dispatch_push(stage("Line 1"), &status).await; // refetches, still loading
+    assert!(matches!(
+        driver.provisional.lane_refetch,
+        LaneRefetch::RetryAt(_)
+    ));
+    driver.dispatch_push(stage("Line 2"), &status).await; // within the retry: none
+    let fetches = count(&server, "GET", COMPOSITION).await;
+    assert_eq!(fetches, 2 + FOLLOW_UP_DELAYS.len() + 1);
+
+    arena.set_loading(0); // Arena finished loading
+    driver.provisional.lane_refetch = LaneRefetch::RetryAt(tokio::time::Instant::now());
+    driver.dispatch_push(stage("Line 3"), &status).await;
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, fetches + 1);
+    assert_eq!(
+        count(&server, "PUT", &param(1)).await,
+        1,
+        "line 3 landed on lane A"
+    );
+}
+
+/// After a failed lane refetch the next one waits `LANE_REFETCH_RETRY`, so a
+/// slow composition fetch cannot stall every line; then it is tried again.
+#[tokio::test]
+async fn a_failed_lane_refetch_waits_before_the_next_one() {
+    let server = MockServer::start().await;
+    let arena = DeckArena::start(&server, vec![(1, lyric_deck(100, 1))], false).await;
+    let (mut driver, status) = driver_for(&server);
+    driver.tick(&status).await; // cold fetch
+    restart_arena_mid_load(&arena, &mut driver, &status, 1).await;
+    arena.fail_compositions(1);
+
+    driver.dispatch_push(stage("Line 1"), &status).await; // the refetch fails
+    assert!(matches!(
+        driver.provisional.lane_refetch,
+        LaneRefetch::RetryAt(_)
+    ));
+    driver.dispatch_push(stage("Line 2"), &status).await; // within the retry: none
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 3);
+
+    driver.provisional.lane_refetch = LaneRefetch::RetryAt(tokio::time::Instant::now());
+    driver.dispatch_push(stage("Line 3"), &status).await;
+
+    assert_eq!(count(&server, "GET", COMPOSITION).await, 4);
+    assert_eq!(count(&server, "PUT", &param(1)).await, 1, "line 3 landed");
 }

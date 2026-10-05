@@ -1,6 +1,7 @@
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
 use super::mapping_refresh::StaleIdError;
+use super::provisional_mapping::{bible_required_kinds, stage_required_kinds};
 use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
 use futures_util::{stream::FuturesUnordered, StreamExt};
@@ -133,7 +134,10 @@ impl HostDriver {
         // a cold/invalidated cache (NOT on staleness anymore). Capture the
         // elapsed mapping time even if the fetch errors (the COMPOSITION_TIMEOUT
         // spike is the failure we most want recorded) BEFORE propagating.
-        let fetch = self.ensure_mapping().await;
+        // #808 regression: the deck check and a lane refetch count here too.
+        let fetch = self
+            .ensure_mapping_for_push(&stage_required_kinds(update))
+            .await;
         metrics.t_ensure_mapping_ms = elapsed_ms(mapping_start);
         let fetch = fetch?;
         metrics.refetched = fetch.refetched;
@@ -342,7 +346,8 @@ impl HostDriver {
         if self.in_backoff() {
             return Ok(());
         }
-        self.ensure_mapping().await?;
+        self.ensure_mapping_for_push(&bible_required_kinds(&update))
+            .await?;
         if let Some(mapping) = self.mapping.clone() {
             let bible_lane = self.lane_state.current(SlotKind::Bible);
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);
