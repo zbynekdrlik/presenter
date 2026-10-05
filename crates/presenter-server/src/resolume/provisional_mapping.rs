@@ -25,11 +25,13 @@
 //!   `GET /composition/decks/by-id/{id}` (~360 B). `selected:false` or 404
 //!   drops the mapping: the push refetches it inline (never rate-limited) and
 //!   lands on the new deck. A failed check never blocks the push.
-//! - A push that needs a lane the cached mapping lacks but should have
-//!   refetches before it is applied. Every follow-up step (failed or not)
-//!   re-arms it; after a refetch that left the lane empty, or a failed one,
-//!   the next waits at most [`LANE_REFETCH_RETRY`]. A deck that legitimately
-//!   lacks the lane never refetches for it.
+//! - A push that needs a lane the cached mapping lacks but should have (the
+//!   mapping is provisional: Arena loading, or a deck that never produced a
+//!   complete mapping) refetches before it is applied. Every follow-up step
+//!   (failed or not) re-arms it; after a refetch that left the lane empty, or
+//!   a failed one, the next waits only [`LANE_REFETCH_RETRY`] (3 s): no text
+//!   is skipped for longer. A deck accepted as lacking the lane never
+//!   refetches for it.
 //! - A host or deck that never had a kind (Bridge PP has no `#main`, SNV no
 //!   `#translate`) never refetches for it.
 
@@ -55,11 +57,14 @@ pub(super) const FOLLOW_UP_DELAYS: [Duration; 5] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
 ];
-/// After a lane refetch that left the lane empty, or failed, the next one
-/// may run this long later (sooner when a follow-up step re-arms it). Caps
-/// the gap for a line during a long Arena load, and keeps a slow composition
-/// fetch from stalling every line.
-pub(super) const LANE_REFETCH_RETRY: Duration = Duration::from_secs(30);
+/// Owner rule (2026-10-05): no text may be skipped. While the mapping is
+/// provisional (Arena loading, or a deck that never produced a complete
+/// mapping in this process), a push that needs a missing lane refetches when
+/// the previous lane refetch, empty or failed, finished at least this long
+/// ago (a follow-up step re-arms it sooner). A line is skipped for at most
+/// this long. Only a deck accepted as lacking a kind stops refetching for it
+/// (its last-good reference has no such kind, so it never refetches).
+pub(super) const LANE_REFETCH_RETRY: Duration = Duration::from_secs(3);
 
 /// The selected deck of a composition; `None` when it lists no decks.
 pub(super) type DeckKey = Option<i64>;
