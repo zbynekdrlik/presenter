@@ -102,8 +102,9 @@ pub(super) enum FetchReason {
     /// A step of the follow-up schedule of a suspect mapping: Arena may
     /// still have been loading the composition (`provisional_mapping.rs`).
     FollowUp,
-    /// A stage/Bible push needed a lane the cached mapping lacks: one refetch
-    /// per deck, before the push is applied.
+    /// A stage/Bible push needed a lane the cached mapping lacks but should
+    /// have; the refetch runs before the push is applied (`LaneRefetch`
+    /// limits it).
     LaneMissing,
     /// The selected deck changed (the deck check answered `selected:false`
     /// or 404), so every cached clip id belongs to another deck.
@@ -131,8 +132,9 @@ pub(super) fn duration_ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
-/// Result of `ensure_mapping`: whether the call had to fetch the composition
-/// inline (true only on a cold/invalidated cache) — recorded in the push audit.
+/// Result of `ensure_mapping` / `ensure_mapping_for_push`: whether the call
+/// fetched the composition inline (a cold or invalidated cache, a deck switch,
+/// or a lane refetch) — recorded in the push audit.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct MappingFetchOutcome {
     pub refetched: bool,
@@ -261,8 +263,8 @@ pub(super) struct HostDriver {
     /// `MISSING_CLIP_WARN_INTERVAL`.
     pub(super) missing_clip_last_warn: HashMap<&'static str, Instant>,
     /// #808 regression: the selected deck, each deck's last good destination
-    /// kinds, the follow-up schedule of a suspect mapping and the per-deck
-    /// lane refetch (`provisional_mapping.rs`). In memory only.
+    /// kinds, the follow-up schedule of a suspect mapping and the lane
+    /// refetch state (`provisional_mapping.rs`). In memory only.
     pub(super) provisional: ProvisionalMapping,
 }
 
@@ -484,7 +486,7 @@ impl HostDriver {
         self.invalidation_reason = None;
         // #808 regression: compare with the deck's last good mapping; a
         // suspect one (Arena still loading) gets follow-up fetches.
-        self.note_fetched_mapping(deck, kinds, reason);
+        self.note_fetched_mapping(deck, kinds, clip_count, reason);
         Ok(())
     }
 

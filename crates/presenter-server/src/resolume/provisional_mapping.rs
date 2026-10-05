@@ -18,18 +18,18 @@
 //!   kind the deck had, or with no recognized destination for a deck without
 //!   history, is *suspect*: up to five follow-up fetches run
 //!   [`FOLLOW_UP_DELAYS`] apart and stop the moment it is complete again. If
-//!   the last two of them saw the same composition, it is what the deck holds
-//!   and becomes its reference.
+//!   the last two follow-ups saw the same composition (kinds and clip count),
+//!   it is what the deck holds and becomes its reference.
 //! - Before every stage/Bible push ([`HostDriver::ensure_mapping_for_push`]),
 //!   and on the 10 s tick after the `/product` probe, a deck check
 //!   `GET /composition/decks/by-id/{id}` (~360 B). `selected:false` or 404
 //!   drops the mapping: the push refetches it inline (never rate-limited) and
 //!   lands on the new deck. A failed check never blocks the push.
 //! - A push that needs a lane the cached mapping lacks but should have
-//!   refetches before it is applied: once per follow-up step while the
-//!   schedule runs, then at most every [`LANE_REFETCH_RETRY`] while the
-//!   mapping stays suspect. A deck that legitimately lacks the lane never
-//!   refetches for it.
+//!   refetches before it is applied. Every follow-up step (failed or not)
+//!   re-arms it; after a refetch that left the lane empty, or a failed one,
+//!   the next waits at most [`LANE_REFETCH_RETRY`]. A deck that legitimately
+//!   lacks the lane never refetches for it.
 //! - A host or deck that never had a kind (Bridge PP has no `#main`, SNV no
 //!   `#translate`) never refetches for it.
 
@@ -86,13 +86,12 @@ pub(super) enum ScheduleChange {
 /// Whether a push that needs a missing lane may refetch the composition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum LaneRefetch {
+    /// The next such push refetches. Re-armed by every follow-up step (even
+    /// a failed one), a deck change, a complete fetch and an operator refresh.
     #[default]
     Armed,
-    /// Used up until the next follow-up step, a deck change, a complete
-    /// fetch or an operator refresh.
-    Spent,
-    /// Allowed again from this instant (the follow-ups ran out, or the last
-    /// lane refetch failed).
+    /// Used: allowed again from this instant, [`LANE_REFETCH_RETRY`] after
+    /// the last lane refetch (a follow-up step due sooner re-arms it then).
     RetryAt(Instant),
 }
 
@@ -100,7 +99,6 @@ impl LaneRefetch {
     fn allowed(self, now: Instant) -> bool {
         match self {
             Self::Armed => true,
-            Self::Spent => false,
             Self::RetryAt(at) => now >= at,
         }
     }
@@ -113,8 +111,9 @@ pub(super) enum FetchVerdict {
     Complete { follow_ups_stopped: bool },
     /// An operator refresh: its kinds are the deck's reference from now on.
     Adopted,
-    /// The follow-ups ran out and the last two saw the same composition: it
-    /// is what the deck holds now (e.g. clips removed on purpose).
+    /// The follow-ups ran out and the last two saw the same composition
+    /// (kinds and clip count): it is what the deck holds now (e.g. clips
+    /// removed on purpose).
     Settled { lacking: Vec<&'static str> },
     /// Arena may still be loading. `lacking` lists the kinds the deck's last
     /// good mapping had; `no_destinations` means no recognized clip at all.
@@ -136,9 +135,10 @@ pub(super) struct ProvisionalMapping {
     pub(super) reference_deck: DeckKey,
     /// Destination kinds of each deck's last complete (or settled) mapping.
     pub(super) last_good: HashMap<DeckKey, Vec<&'static str>>,
-    /// The previous fetch's kinds: an unchanged composition is settled, a
-    /// changing one is still loading.
-    previous_kinds: Option<Vec<&'static str>>,
+    /// Kinds and clip count of the previous follow-up of the running
+    /// schedule: the same composition at the last two follow-ups (about a
+    /// minute apart) is settled, a changing one is still loading.
+    last_follow_up: Option<(Vec<&'static str>, usize)>,
     /// The next follow-up fetch while the cached mapping is suspect.
     pub(super) follow_up: Option<FollowUp>,
     pub(super) lane_refetch: LaneRefetch,
@@ -151,42 +151,40 @@ pub(super) struct ProvisionalMapping {
 }
 
 impl ProvisionalMapping {
-    /// Record a fetched mapping of `deck` with these destination `kinds`.
+    /// Record a fetched mapping of `deck` with these destination `kinds`
+    /// and `clip_count` clips in all.
     pub(super) fn note_fetch(
         &mut self,
         deck: DeckKey,
         kinds: Vec<&'static str>,
+        clip_count: usize,
         reason: FetchReason,
         now: Instant,
     ) -> FetchVerdict {
         let reference = deck.or(self.reference_deck);
         if reference != self.reference_deck {
             self.lane_refetch = LaneRefetch::Armed;
-            self.previous_kinds = None;
+            self.last_follow_up = None;
         }
         self.track_deck_contradiction(deck, reason);
         self.selected_deck = deck;
         self.reference_deck = reference;
-        let previous_kinds = self.previous_kinds.replace(kinds.clone());
+        let previous_follow_up = if matches!(reason, FetchReason::FollowUp) {
+            self.last_follow_up.replace((kinds.clone(), clip_count))
+        } else {
+            None
+        };
         if matches!(reason, FetchReason::Manual) && !kinds.is_empty() {
             // Refresh mapping is how an intentional clip edit reaches
             // Presenter, so the operator's result becomes the reference.
             self.last_good.insert(reference, kinds);
             self.follow_up = None;
+            self.last_follow_up = None;
             self.lane_refetch = LaneRefetch::Armed;
             self.contradicted_deck = None;
             return FetchVerdict::Adopted;
         }
-        let (lacking, has_history) = match self.last_good.get(&reference) {
-            Some(good) => (
-                good.iter()
-                    .copied()
-                    .filter(|kind| !kinds.contains(kind))
-                    .collect::<Vec<_>>(),
-                true,
-            ),
-            None => (Vec::new(), false),
-        };
+        let (lacking, has_history) = self.lacking_vs_history(reference, &kinds);
         let no_destinations = kinds.is_empty();
         let suspect = if has_history {
             !lacking.is_empty()
@@ -196,31 +194,23 @@ impl ProvisionalMapping {
         if !suspect {
             self.last_good.insert(reference, kinds);
             self.lane_refetch = LaneRefetch::Armed;
+            self.last_follow_up = None;
             let follow_ups_stopped = self.follow_up.take().is_some();
             return FetchVerdict::Complete { follow_ups_stopped };
         }
         let schedule = match reason {
-            FetchReason::FollowUp => {
-                // Every step re-arms the lane refetch for the next push.
-                self.lane_refetch = LaneRefetch::Armed;
-                self.advance_follow_up(now)
-            }
+            FetchReason::FollowUp => self.advance_follow_up(now),
             FetchReason::LaneMissing => ScheduleChange::Unchanged,
             FetchReason::Missing
             | FetchReason::ErrorInvalidated
             | FetchReason::StaleId
             | FetchReason::Manual
-            | FetchReason::DeckChanged => {
-                self.follow_up = Some(FollowUp {
-                    step: 0,
-                    due: now + FOLLOW_UP_DELAYS[0],
-                });
-                ScheduleChange::Started
-            }
+            | FetchReason::DeckChanged => self.start_follow_ups(now),
         };
-        if schedule == ScheduleChange::Exhausted
-            && settles(deck, has_history, &kinds, previous_kinds.as_deref())
-        {
+        let stable = previous_follow_up
+            .as_ref()
+            .is_some_and(|(previous, count)| *previous == kinds && *count == clip_count);
+        if schedule == ScheduleChange::Exhausted && settles(deck, has_history, &kinds, stable) {
             self.last_good.insert(reference, kinds);
             return FetchVerdict::Settled { lacking };
         }
@@ -229,6 +219,36 @@ impl ProvisionalMapping {
             no_destinations,
             schedule,
         }
+    }
+
+    /// The kinds the `reference` deck's last good mapping had that `kinds`
+    /// lacks, and whether that deck has a history at all.
+    fn lacking_vs_history(
+        &self,
+        reference: DeckKey,
+        kinds: &[&'static str],
+    ) -> (Vec<&'static str>, bool) {
+        match self.last_good.get(&reference) {
+            Some(good) => (
+                good.iter()
+                    .copied()
+                    .filter(|kind| !kinds.contains(kind))
+                    .collect(),
+                true,
+            ),
+            None => (Vec::new(), false),
+        }
+    }
+
+    /// A suspect fetch (other than a follow-up or a lane refetch) starts the
+    /// schedule over.
+    fn start_follow_ups(&mut self, now: Instant) -> ScheduleChange {
+        self.follow_up = Some(FollowUp {
+            step: 0,
+            due: now + FOLLOW_UP_DELAYS[0],
+        });
+        self.last_follow_up = None;
+        ScheduleChange::Started
     }
 
     /// A deck-changed refetch that still selects the deck the check called
@@ -243,8 +263,10 @@ impl ProvisionalMapping {
     }
 
     /// Move past the current follow-up step: schedule the next one, or end
-    /// the schedule after the last.
+    /// the schedule after the last. Every step, failed or not, re-arms the
+    /// lane refetch for the next push.
     pub(super) fn advance_follow_up(&mut self, now: Instant) -> ScheduleChange {
+        self.lane_refetch = LaneRefetch::Armed;
         let next_step = self
             .follow_up
             .map_or(FOLLOW_UP_DELAYS.len(), |follow_up| follow_up.step + 1);
@@ -274,29 +296,21 @@ impl ProvisionalMapping {
         }
     }
 
-    /// A lane refetch left a lane this push should have missing: wait for the
-    /// next follow-up step, or [`LANE_REFETCH_RETRY`] once they ran out.
+    /// A lane refetch left a lane this push should have missing (or failed):
+    /// the next one waits [`LANE_REFETCH_RETRY`]. A follow-up step due sooner
+    /// re-arms it at that step (`advance_follow_up`).
     fn spend_lane_refetch(&mut self, now: Instant) {
-        self.lane_refetch = if self.follow_up.is_some() {
-            LaneRefetch::Spent
-        } else {
-            LaneRefetch::RetryAt(now + LANE_REFETCH_RETRY)
-        };
+        self.lane_refetch = LaneRefetch::RetryAt(now + LANE_REFETCH_RETRY);
     }
 }
 
-/// After the last follow-up: the composition is what the deck holds when it
-/// did not change since the previous fetch, and it has recognized clips or is
-/// a listed deck with no history (a deck without presenter clips, such as a
-/// video deck). A deck that had clips and still shows none keeps being
-/// re-checked on pushes: that is Arena still loading.
-fn settles(
-    deck: DeckKey,
-    has_history: bool,
-    kinds: &[&'static str],
-    previous: Option<&[&'static str]>,
-) -> bool {
-    previous == Some(kinds) && (!kinds.is_empty() || (deck.is_some() && !has_history))
+/// After the last follow-up: the composition is what the deck holds when the
+/// last two follow-ups saw the same one (`stable`), and it has recognized
+/// clips or is a listed deck with no history (a deck without presenter clips,
+/// such as a video deck). A deck that had clips and still shows none keeps
+/// being re-checked on pushes: that is Arena still loading.
+fn settles(deck: DeckKey, has_history: bool, kinds: &[&'static str], stable: bool) -> bool {
+    stable && (!kinds.is_empty() || (deck.is_some() && !has_history))
 }
 
 /// The id of the deck a `/composition` body marks selected.
@@ -377,12 +391,13 @@ impl HostDriver {
         &mut self,
         deck: DeckKey,
         kinds: Vec<&'static str>,
+        clip_count: usize,
         reason: FetchReason,
     ) {
         let contradicted_before = self.provisional.contradicted_deck;
         let verdict = self
             .provisional
-            .note_fetch(deck, kinds, reason, Instant::now());
+            .note_fetch(deck, kinds, clip_count, reason, Instant::now());
         let host = &self.config.host;
         if let Some(deck_id) = self.provisional.contradicted_deck {
             if contradicted_before != Some(deck_id) {
@@ -578,8 +593,7 @@ impl HostDriver {
             .refresh_mapping_with_reason(FetchReason::LaneMissing)
             .await
         {
-            self.provisional.lane_refetch =
-                LaneRefetch::RetryAt(Instant::now() + LANE_REFETCH_RETRY);
+            self.provisional.spend_lane_refetch(Instant::now());
             warn!(
                 host = %self.config.host,
                 error = %format!("{err:#}"),

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Per-step timings collected while applying a stage update, fed into the
 /// `presenter::resolume::timing` log line.
@@ -631,20 +631,24 @@ impl HostDriver {
     ) -> anyhow::Result<Vec<ClipTarget>> {
         let (primary, alternate) = super::types::select_lane_targets(lane, lane_a, lane_b);
         if primary.is_empty() {
-            if !alternate.is_empty() {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    lane = %lane.label(),
-                    "Resolume lane missing clips; skipping update"
-                );
+            let (key, message) = if alternate.is_empty() {
+                (
+                    "lane-unconfigured",
+                    "Resolume has no clips configured for lane",
+                )
             } else {
-                warn!(
-                    host = %self.config.host,
-                    port = self.config.port,
-                    lane = %lane.label(),
-                    "Resolume has no clips configured for lane"
-                );
+                (
+                    "lane-half-missing",
+                    "Resolume lane missing clips; skipping update",
+                )
+            };
+            // #808: a deck without this lane (Bridge PP has no #main) is
+            // normal, so one WARN per 300 s per host (#563h limiter); the
+            // fetch-time "mapping missing expected clips" WARN names the kinds.
+            if self.should_warn_missing_clip(key) {
+                warn!(host = %self.config.host, port = self.config.port, lane = %lane.label(), "{message}");
+            } else {
+                debug!(host = %self.config.host, port = self.config.port, lane = %lane.label(), "{message}");
             }
             return Ok(Vec::new());
         }
