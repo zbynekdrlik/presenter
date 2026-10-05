@@ -1,4 +1,5 @@
 use crate::state::AppState;
+mod catalog;
 mod nameplates;
 mod protocol;
 mod stream;
@@ -49,6 +50,11 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
 
     let sender = Arc::new(Mutex::new(raw_sender));
     let mut receiver = raw_receiver;
+    // Subscribe BEFORE the initial snapshot (#814): a change landing between the
+    // snapshot read and the subscribe would otherwise be lost until the next one
+    // (a stale catalog / variable). Events buffered meanwhile re-apply as diffs
+    // after the initial sends — an unchanged value sends nothing.
+    let mut live_rx = state.live_hub().subscribe();
     let mut variables = initialise_variable_state(&state).await;
 
     if let Err(err) = send_message(
@@ -64,19 +70,13 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
         return;
     }
 
-    if let Err(err) = send_variables(&sender, &variables).await {
-        warn!(?err, "failed to send initial companion variables");
+    // The variables, the #779 lower-third plate LIST (plate dropdown, per-plate
+    // variable definitions, presets) and the #814 catalog (layout / scene /
+    // overlay / output dropdowns).
+    if let Err(err) = send_snapshot(&sender, &variables).await {
+        warn!(?err, "failed to send initial companion snapshot");
         return;
     }
-
-    // #779: send the lower-third plate LIST so the plugin can build its dropdown
-    // choices, dynamic per-plate variable definitions, and presets.
-    if let Err(err) = send_nameplates(&sender, &variables).await {
-        warn!(?err, "failed to send initial companion nameplates");
-        return;
-    }
-
-    let mut live_rx = state.live_hub().subscribe();
 
     loop {
         tokio::select! {
@@ -98,9 +98,10 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
             event = live_rx.recv() => {
                 match event {
                     Ok(live_event) => {
-                        // `StreamState` + the #779 nameplate events need an async
-                        // repository read, so they are resolved in `handle_live_event`
-                        // (not the sync `apply_live_event`); it sends what changed.
+                        // `StreamState`, the #779 nameplate events and the #814
+                        // catalog (`StreamConfigChanged`) need an async repository
+                        // read, so they are resolved in `handle_live_event` (not the
+                        // sync `apply_live_event`); it sends what changed.
                         if let Err(err) = handle_live_event(&state, &sender, &mut variables, live_event).await {
                             warn!(?err, "failed to handle companion live event");
                             break;
@@ -109,12 +110,8 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
                     Err(RecvError::Lagged(skipped)) => {
                         warn!(skipped, "companion client lagged; resetting variable state");
                         variables = initialise_variable_state(&state).await;
-                        if let Err(err) = send_variables(&sender, &variables).await {
-                            warn!(?err, "failed to send variables after lag recovery");
-                            break;
-                        }
-                        if let Err(err) = send_nameplates(&sender, &variables).await {
-                            warn!(?err, "failed to send nameplates after lag recovery");
+                        if let Err(err) = send_snapshot(&sender, &variables).await {
+                            warn!(?err, "failed to send companion snapshot after lag recovery");
                             break;
                         }
                     }
@@ -146,5 +143,7 @@ async fn websocket_entry(ws: WebSocketUpgrade, State(state): State<AppState>) ->
         serve_companion_socket(state, socket).await;
     })
 }
+#[cfg(test)]
+mod catalog_tests;
 #[cfg(test)]
 mod tests;

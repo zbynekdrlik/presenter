@@ -21,6 +21,9 @@ pub(super) struct CompanionVariableState {
     pub(super) nameplates: Vec<super::nameplates::NameplatePlate>,
     /// #779: the plate currently on air (drives `nameplate_active_*`).
     pub(super) nameplate_active: Option<presenter_core::ActiveNameplate>,
+    /// #814: the module catalog (stage layouts + stream outputs/scenes) last
+    /// sent to this session — kept so a re-send happens only on a real change.
+    catalog: super::catalog::CompanionCatalog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +65,9 @@ impl CompanionVariableState {
                 // variables, but resolving scene ids → names needs an async
                 // repository read, so it is handled in the companion live-loop
                 // (`stream::apply_stream_state_event`), never this sync path.
-                // `StreamConfigChanged` drives no Companion variable (it prompts
-                // the WASM output page to refetch its def).
+                // `StreamConfigChanged` drives no Companion variable — the live
+                // loop handles it (`protocol::handle_live_event`) by re-resolving
+                // the #814 module catalog; this arm stays only for exhaustiveness.
                 false
             }
             crate::live::LiveEvent::StreamNameplate { .. }
@@ -113,6 +117,22 @@ impl CompanionVariableState {
             self.nameplate_active = active;
             true
         }
+    }
+
+    /// Store the module catalog (#814). Returns whether its content changed
+    /// (→ the caller re-sends the `catalog` message).
+    pub(super) fn apply_catalog(&mut self, catalog: super::catalog::CompanionCatalog) -> bool {
+        if self.catalog == catalog {
+            false
+        } else {
+            self.catalog = catalog;
+            true
+        }
+    }
+
+    /// The module catalog (for the outgoing `catalog` message, #814).
+    pub(super) fn catalog(&self) -> &super::catalog::CompanionCatalog {
+        &self.catalog
     }
 
     /// The plate list (for the outgoing `nameplates` message + per-plate vars).

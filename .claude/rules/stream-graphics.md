@@ -101,6 +101,16 @@ own uniquely-slugged output** (`s706-<name>` / `t-<name>`) and operates on THAT 
 `LiveHub` is NOT shared, so hub-subscription assertions (`live_hub().subscribe()` + `try_recv`) are
 safe as-is.
 
+When a server test MUST assert across ALL outputs (a global list, or "unchanged → nothing sent"),
+a unique slug is not enough — a parallel test's new output changes the result. Build a fully
+isolated `AppState` over a temp-file SQLite DB instead:
+`presenter_persistence::Repository::connect(&DatabaseSettings::new(format!("sqlite://{}?mode=rwc",
+tempdir.join("x.db").display())))` + `AppState::new(repo, None, <companion_enabled>, 18_175,
+ResolumeRegistry::new()?, AndroidStageRegistry::new(), OscBridge::new(&OscConfig::default()),
+AbleSetBridge::new())`, keeping the `TempDir` alive (reference: `companion/catalog_tests.rs::
+isolated_state`, #814). Plain `sqlite::memory:` without `cache=shared` does NOT work here (each pooled
+connection gets its own empty, un-migrated DB).
+
 ## Stream API is SLUG-addressed; show state lives in `/def` + the outputs list (no `/show` route)
 Output-scoped routes take the output SLUG, not the numeric id: `/stream/api/outputs/{slug}/scenes`,
 `.../active-scene` (PUT, body `{"sceneId":N}`), `.../overlays/{scene_id}` (PUT), `.../clear` (POST),

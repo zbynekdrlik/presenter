@@ -53,39 +53,75 @@ function isStreamCommand(commandId) {
   return STREAM_COMMAND_IDS.includes(commandId);
 }
 
-function outputOption() {
+// #814: `output` and `scene` are DROPDOWNS fed by the server catalog
+// (`lib/catalog.js`), with `allowCustom: true` and the SAME option ids the old
+// text inputs had — a saved button's stored string keeps resolving (even one
+// not in the current catalog), so no upgrade script is needed.
+
+/**
+ * The `output` option: a dropdown of the catalog's outputs (slug ids), default
+ * `"stream"`. Without choices (no catalog yet) it offers the default output.
+ *
+ * @param {Array<{id: string, label: string}>} [choices]
+ * @returns {object}
+ */
+function outputOption(choices) {
+  const list =
+    Array.isArray(choices) && choices.length > 0
+      ? choices
+      : [{ id: DEFAULT_OUTPUT, label: DEFAULT_OUTPUT }];
   return {
-    type: "textinput",
+    type: "dropdown",
     id: "output",
-    label: "Output slug (default: stream)",
+    label: "Output (default: stream)",
     default: DEFAULT_OUTPUT,
-    placeholder: DEFAULT_OUTPUT,
+    choices: list,
+    allowCustom: true,
   };
 }
 
-function sceneOption() {
+/**
+ * The `scene` option: a dropdown of scene NAMES (the server matches them
+ * case-insensitively), defaulting to the first choice. Empty before a catalog —
+ * a typed (custom) name still works.
+ *
+ * @param {Array<{id: string, label: string}>} [choices]
+ * @param {string} [label]
+ * @returns {object}
+ */
+function sceneOption(choices, label) {
+  const list = Array.isArray(choices) ? choices : [];
   return {
-    type: "textinput",
+    type: "dropdown",
     id: "scene",
-    label: "Scene name (matched case-insensitively)",
-    default: "",
+    label: label || "Scene (matched case-insensitively)",
+    default: list.length > 0 ? list[0].id : "",
+    choices: list,
+    allowCustom: true,
   };
 }
 
 /**
  * Companion action option fields for a stream command.
- * Scene-required commands get a `scene` + `output` input; the clear commands
- * get only an `output` input.
+ * Scene-required commands get a `scene` + `output` dropdown — base scenes for
+ * `stream_scene_set`, overlay scenes for the overlay actions; the clear
+ * commands get only an `output` dropdown.
  *
  * @param {string} commandId
+ * @param {{outputs?: Array<object>, baseScenes?: Array<object>, overlayScenes?: Array<object>}} [choices]
+ *   Dropdown choices from the catalog (`lib/catalog.js`); omitted → fallbacks.
  * @returns {Array<object>} option-field definitions (empty for non-stream ids)
  */
-function streamActionOptions(commandId) {
+function streamActionOptions(commandId, choices) {
   if (!isStreamCommand(commandId)) return [];
-  if (SCENE_REQUIRED.has(commandId)) {
-    return [sceneOption(), outputOption()];
+  const c = choices || {};
+  if (commandId === "stream_scene_set") {
+    return [sceneOption(c.baseScenes, "Base scene"), outputOption(c.outputs)];
   }
-  return [outputOption()];
+  if (SCENE_REQUIRED.has(commandId)) {
+    return [sceneOption(c.overlayScenes, "Overlay scene"), outputOption(c.outputs)];
+  }
+  return [outputOption(c.outputs)];
 }
 
 /**
@@ -254,13 +290,14 @@ function nameplateChoices(plates, includeSong) {
 
 /**
  * Companion action option fields for a nameplate command. Show/toggle get a
- * plate dropdown (incl. song) + an output input; song/hide get only output.
+ * plate dropdown (incl. song) + an output dropdown; song/hide get only output.
  *
  * @param {string} commandId
  * @param {unknown} plates The current plate list.
+ * @param {Array<{id: string, label: string}>} [outputChoices] Catalog outputs (#814).
  * @returns {Array<object>}
  */
-function nameplateActionOptions(commandId, plates) {
+function nameplateActionOptions(commandId, plates, outputChoices) {
   if (
     commandId === "stream_nameplate_show" ||
     commandId === "stream_nameplate_toggle"
@@ -274,10 +311,10 @@ function nameplateActionOptions(commandId, plates) {
         choices: nameplateChoices(plates, true),
         allowCustom: false,
       },
-      outputOption(),
+      outputOption(outputChoices),
     ];
   }
-  return [outputOption()];
+  return [outputOption(outputChoices)];
 }
 
 /**
@@ -419,6 +456,7 @@ module.exports = {
   STREAM_COMMAND_IDS,
   isStreamCommand,
   streamActionOptions,
+  sceneOption,
   buildStreamPayload,
   parseOverlayList,
   isOverlayActive,
