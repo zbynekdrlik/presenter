@@ -14,7 +14,9 @@
 //!   - a push got a 404 for a mapped id ([`StaleIdError`]): invalidate,
 //!     refetch, retry that push once ([`HostDriver::dispatch_push`]);
 //!   - the operator asked for it ([`HostDriver::manual_refresh`], the
-//!     settings page's "Refresh mapping" button).
+//!     settings page's "Refresh mapping" button);
+//!   - the mapping looks incomplete (Arena still loading), a push needs a lane
+//!     it lacks, or the operator switched decks: `provisional_mapping.rs`.
 
 use super::clip_map::{sorted_text_param_ids, ClipMapping};
 use super::driver::{FetchReason, HostCommand, HostDriver};
@@ -134,7 +136,8 @@ impl MappingRefreshResult {
 
 impl HostDriver {
     /// The 10 s worker tick: a `/product` liveness probe while a mapping is
-    /// cached, the composition only when there is none.
+    /// cached, then the deck check (a switched deck is refetched now); the
+    /// composition only when there is no mapping.
     pub(super) async fn tick(&mut self, status: &Status) {
         if !self.config.is_enabled {
             return;
@@ -152,7 +155,10 @@ impl HostDriver {
             return;
         }
         let result = if self.mapping.is_some() {
-            self.probe_liveness().await
+            match self.probe_liveness().await {
+                Ok(()) => self.follow_deck_switch().await,
+                Err(err) => Err(err),
+            }
         } else {
             // Cold start, config change, port drift, or the #563b threshold
             // invalidated the mapping during an outage. Arena may have
@@ -222,6 +228,9 @@ impl HostDriver {
     /// `ensure_mapping` refetches (reason `stale-id`). Any other failure, or a
     /// failed retry, feeds `record_error` (#484 backoff, #563b threshold).
     pub(super) async fn dispatch_push(&mut self, push: Push, status: &Status) {
+        // Any fetch during the attempt (cold, recovery, deck switch, lane
+        // refetch in `ensure_mapping_for_push`) makes the mapping one this
+        // push fetched itself: a 404 on it is not a stale id.
         let fetched_before = self.last_mapping_refresh;
         let mut result = self.apply_push(&push, status).await;
         let stale_detail = match &result {
@@ -270,9 +279,7 @@ impl HostDriver {
             error = %detail,
             "resolume rejected a mapped id (404); refetching the composition and retrying the push once"
         );
-        self.mapping = None;
-        self.last_mapping_refresh = None;
-        self.invalidation_reason = Some(FetchReason::StaleId);
+        self.invalidate_mapping(FetchReason::StaleId);
         true
     }
 

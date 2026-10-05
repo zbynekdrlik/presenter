@@ -385,6 +385,13 @@ export async function stopServer(handle?: ServerHandle) {
 
 export async function startMockResolume(): Promise<MockResolumeHandle> {
   let online = true;
+  // #808: the composition lists one selected deck, like a real Arena.
+  const MOCK_DECK_ID = 1;
+  const mockDeck = {
+    id: MOCK_DECK_ID,
+    name: { value: "Mock Deck" },
+    selected: { value: true },
+  };
   // "<METHOD> <path>" → number of requests received (online or not), so a
   // test can prove how often the driver pulled the composition (#808).
   const requestCounts = new Map<string, number>();
@@ -412,9 +419,27 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
       return;
     }
 
+    // #808: the driver's deck check before every lyric/Bible push. The one
+    // mock deck is always selected; any other id is a 404, as on Arena. It
+    // must come before the prefix-matched composition route below.
+    const deckCheck =
+      method === "GET"
+        ? /^\/api\/v1\/composition\/decks\/by-id\/(\d+)$/.exec(url)
+        : null;
+    if (deckCheck) {
+      if (Number(deckCheck[1]) !== MOCK_DECK_ID) {
+        res.statusCode = 404;
+        return res.end("not found");
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(mockDeck));
+      return;
+    }
+
     if (method === "GET" && url.startsWith("/api/v1/composition")) {
       res.writeHead(200, { "content-type": "application/json" });
       const body = {
+        decks: [mockDeck],
         layers: [
           {
             clips: [

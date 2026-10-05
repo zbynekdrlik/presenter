@@ -2,6 +2,25 @@ use super::types::{ClipTarget, LaneTarget, TextTransform};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
+/// The lyric lanes a stage push writes, named as in the missing-clip list.
+pub(super) const MAIN_KINDS: [&str; 2] = ["#main-a", "#main-b"];
+/// The translation lanes a stage push writes.
+pub(super) const TRANSLATION_KINDS: [&str; 2] = ["#translate-a", "#translate-b"];
+/// Every Bible lane a Bible push writes: verse, reference and their
+/// translations.
+pub(super) const BIBLE_LANE_KINDS: [&str; 8] = [
+    "#bible-a",
+    "#bible-b",
+    "#bible-reference-a",
+    "#bible-reference-b",
+    "#bible-translate-a",
+    "#bible-translate-b",
+    "#bible-translate-reference-a",
+    "#bible-translate-reference-b",
+];
+/// The clip a Bible clear triggers.
+pub(super) const BIBLE_CLEAR_KIND: &str = "#bible-clear";
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ClipMapping {
     pub main_a: Vec<ClipTarget>,
@@ -44,6 +63,46 @@ impl ClipMapping {
 
     pub fn missing_tokens(&self) -> &[&'static str] {
         &self.missing_tokens
+    }
+
+    /// The destination kinds this mapping has clips for (#808: compared
+    /// between fetches to spot a composition fetched while Arena was still
+    /// loading it).
+    pub(super) fn destination_kinds(&self) -> Vec<&'static str> {
+        self.destinations()
+            .into_iter()
+            .filter(|(_, clips)| !clips.is_empty())
+            .map(|(kind, _)| kind)
+            .collect()
+    }
+
+    /// Every recognized destination kind with its clips, in the order of the
+    /// missing-clip list. The one place that names the kinds.
+    fn destinations(&self) -> [(&'static str, &[ClipTarget]); 16] {
+        [
+            (MAIN_KINDS[0], self.main_a.as_slice()),
+            (MAIN_KINDS[1], self.main_b.as_slice()),
+            (TRANSLATION_KINDS[0], self.translation_a.as_slice()),
+            (TRANSLATION_KINDS[1], self.translation_b.as_slice()),
+            (BIBLE_LANE_KINDS[0], self.bible_a.as_slice()),
+            (BIBLE_LANE_KINDS[1], self.bible_b.as_slice()),
+            (BIBLE_LANE_KINDS[2], self.bible_reference_a.as_slice()),
+            (BIBLE_LANE_KINDS[3], self.bible_reference_b.as_slice()),
+            (BIBLE_LANE_KINDS[4], self.bible_translation_a.as_slice()),
+            (BIBLE_LANE_KINDS[5], self.bible_translation_b.as_slice()),
+            (
+                BIBLE_LANE_KINDS[6],
+                self.bible_translate_reference_a.as_slice(),
+            ),
+            (
+                BIBLE_LANE_KINDS[7],
+                self.bible_translate_reference_b.as_slice(),
+            ),
+            (BIBLE_CLEAR_KIND, self.bible_clear.as_slice()),
+            ("#timer", self.timer.as_slice()),
+            ("#song-name", self.song_name.as_slice()),
+            ("#band-name", self.band_name.as_slice()),
+        ]
     }
 
     /// Returns the sorted set of `#timer` clip text-param IDs for stable
@@ -287,56 +346,12 @@ fn parse_transforms(tokens: &[&str]) -> Vec<TextTransform> {
 }
 
 fn compute_missing_tokens(mapping: &ClipMapping) -> Vec<&'static str> {
-    let mut missing = Vec::new();
-    if mapping.main_a.is_empty() {
-        missing.push("#main-a");
-    }
-    if mapping.main_b.is_empty() {
-        missing.push("#main-b");
-    }
-    if mapping.translation_a.is_empty() {
-        missing.push("#translate-a");
-    }
-    if mapping.translation_b.is_empty() {
-        missing.push("#translate-b");
-    }
-    if mapping.bible_a.is_empty() {
-        missing.push("#bible-a");
-    }
-    if mapping.bible_b.is_empty() {
-        missing.push("#bible-b");
-    }
-    if mapping.bible_reference_a.is_empty() {
-        missing.push("#bible-reference-a");
-    }
-    if mapping.bible_reference_b.is_empty() {
-        missing.push("#bible-reference-b");
-    }
-    if mapping.bible_translation_a.is_empty() {
-        missing.push("#bible-translate-a");
-    }
-    if mapping.bible_translation_b.is_empty() {
-        missing.push("#bible-translate-b");
-    }
-    if mapping.bible_translate_reference_a.is_empty() {
-        missing.push("#bible-translate-reference-a");
-    }
-    if mapping.bible_translate_reference_b.is_empty() {
-        missing.push("#bible-translate-reference-b");
-    }
-    if mapping.bible_clear.is_empty() {
-        missing.push("#bible-clear");
-    }
-    if mapping.timer.is_empty() {
-        missing.push("#timer");
-    }
-    if mapping.song_name.is_empty() {
-        missing.push("#song-name");
-    }
-    if mapping.band_name.is_empty() {
-        missing.push("#band-name");
-    }
-    missing
+    mapping
+        .destinations()
+        .into_iter()
+        .filter(|(_, clips)| clips.is_empty())
+        .map(|(kind, _)| kind)
+        .collect()
 }
 
 fn extract_text_param_id(clip: &Value) -> Option<i64> {
