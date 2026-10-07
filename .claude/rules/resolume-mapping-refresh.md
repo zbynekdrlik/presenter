@@ -33,6 +33,9 @@ endpoint has no such route. Once it has answered (`product_verified`), a 404
 means the server changed and is a failure. The settings "Test" button
 (`resolume::test_connection`) probes `/product` too, on `dial_port()`. Only on
 such an older Arena (404) does it fall back to a `/composition` request.
+Before the probe, even inside a backoff window, the tick re-checks the dial
+port against the #813 port claims (`drop_sibling_port`: one lock, no network;
+`.claude/rules/resolume-port-drift.md`).
 
 Never add a timer, a staleness check or a "periodic resync" that reads
 `/composition`. The driver fetches it only for these reasons (`FetchReason`).
