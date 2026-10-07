@@ -501,8 +501,12 @@ body.in-iframe.settings .settings__card {
   flex-direction: column;
   gap: 8px;
 }
+/* `flex-wrap: wrap` + the info column's `min-width: 0`: on a phone the status badge
+   and the buttons wrap under the name instead of holding a ~510 px one-line row
+   (a not-found row made the standalone page 589 px wide on a 320 px phone, #819). */
 .settings__source-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 12px;
@@ -520,7 +524,12 @@ body.in-iframe.settings .settings__card {
   background: #22c55e;
 }
 .settings__source-info {
-  flex: 1;
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.settings__source-item .settings__status {
+  white-space: normal;
 }
 .settings__source-label {
   font-weight: 600;
