@@ -164,7 +164,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                         <span>"Enable Ableton automation"</span>
                     </label>
                 </div>
-                <div class="settings__form-row">
+                <div class="settings__form-row settings__form-row--port-middle">
                     <label>
                         <span>"AbleSet Host"</span>
                         <input type="text" data-role="ableset-host" required

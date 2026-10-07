@@ -429,7 +429,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                 <p class="settings__form-hint">
                     "Click a source under “On the network now” to add it, or type its NDI name."
                 </p>
-                <div class="settings__form-row">
+                <div class="settings__ndi-field">
                     <label>"NDI Source"</label>
                     <div class="settings__ndi-select">
                         <input type="text" placeholder="CAM1 (usb)" class="settings__input"

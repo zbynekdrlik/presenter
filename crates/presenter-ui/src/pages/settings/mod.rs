@@ -17,8 +17,11 @@ use crate::components::version_label::VersionLabel;
 mod ableton;
 mod android;
 mod companion;
+mod host_editor;
+mod list_sync;
 mod preferences;
 mod resolume;
+mod row_status;
 mod trash;
 mod video_sources;
 
