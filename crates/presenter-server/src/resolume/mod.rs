@@ -17,6 +17,8 @@ mod mapping_refresh_tests;
 mod port_claims;
 mod port_drift;
 #[cfg(test)]
+mod port_drift_claim_tests;
+#[cfg(test)]
 mod port_drift_integration_tests;
 #[cfg(test)]
 mod port_drift_sibling_tests;
