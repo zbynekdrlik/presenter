@@ -18,6 +18,7 @@ mod ableton;
 mod android;
 mod companion;
 mod host_editor;
+mod list_card;
 mod list_sync;
 mod preferences;
 mod resolume;
@@ -147,7 +148,7 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
                     </div>
                     <nav class="settings__header-nav">
                         <a href="/" class="settings__link">"← Back to hub"</a>
-                        <span class="settings__version"><VersionLabel /></span>
+                        <VersionLabel />
                     </nav>
                 </header>
             })}

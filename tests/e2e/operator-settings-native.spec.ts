@@ -53,6 +53,61 @@ async function gotoOperatorSettings(page: Page): Promise<void> {
   await expect(page.locator(".operator__header")).toHaveCount(1);
 }
 
+type Rect = { left: number; right: number; top: number; bottom: number; height: number; middle: number };
+
+/**
+ * The standalone header's "← Back to hub" link and version label, measured in ONE
+ * layout pass after the web font has loaded: two separate `boundingBox()` calls can
+ * straddle the Inter swap (`font-display: swap`) and mix two layouts. Also the title
+ * block's and the nav's rects (for the title–nav gap), the header's content-box
+ * right edge and top / bottom padding, and the widths of `.settings-layout` — the
+ * page's real scroll container (`overflow-y: auto`), which absorbs any overflow, so
+ * the document itself never scrolls sideways.
+ */
+async function headerNavLayout(page: Page): Promise<{
+  title: Rect;
+  nav: Rect;
+  link: Rect;
+  version: Rect;
+  headerContentRight: number;
+  headerPaddingTop: number;
+  headerPaddingBottom: number;
+  scrollWidth: number;
+  clientWidth: number;
+}> {
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const rect = (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) throw new Error(`${selector} not found`);
+      const r = el.getBoundingClientRect();
+      return {
+        left: r.left,
+        right: r.right,
+        top: r.top,
+        bottom: r.bottom,
+        height: r.height,
+        middle: r.top + r.height / 2,
+      };
+    };
+    const header = document.querySelector(".settings__header");
+    const layout = document.querySelector(".settings-layout");
+    if (!header || !layout) throw new Error("settings header / layout not found");
+    return {
+      title: rect(".settings__header-title"),
+      nav: rect(".settings__header-nav"),
+      link: rect(".settings__header-nav .settings__link"),
+      version: rect('.settings__header-nav [data-testid="version"]'),
+      headerContentRight:
+        header.getBoundingClientRect().right - parseFloat(getComputedStyle(header).paddingRight),
+      headerPaddingTop: parseFloat(getComputedStyle(header).paddingTop),
+      headerPaddingBottom: parseFloat(getComputedStyle(header).paddingBottom),
+      scrollWidth: layout.scrollWidth,
+      clientWidth: layout.clientWidth,
+    };
+  });
+}
+
 test("operator Settings is a native panel, not an iframe, with a single header", async ({
   page,
 }) => {
@@ -124,6 +179,8 @@ test("operator Settings content scrolls to the last card within the panel", asyn
 test("standalone /ui/settings keeps its own header and scrolls", async ({
   page,
 }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
   await page.goto(new URL("/ui/settings", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
@@ -132,10 +189,48 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   // Standalone page DOES show its own header (no operator chrome around it).
   await expect(page.locator(".settings__header")).toHaveCount(1);
 
+  // #819 round 2: "← Back to hub" and the version label sit on one row with a
+  // gap. With no layout rule on the nav they rendered glued together
+  // ("← Back to hubv0.4.x", 0 px apart).
+  const version = page.locator('.settings__header-nav [data-testid="version"]');
+  await expect(version).toHaveText(/^v\d+\.\d+\.\d+/);
+  const desktop = await headerNavLayout(page);
+  expect(desktop.version.left - desktop.link.right).toBeGreaterThanOrEqual(12);
+  expect(Math.abs(desktop.version.middle - desktop.link.middle)).toBeLessThanOrEqual(2);
+
+  // On a phone the version wraps under the link. Each stays one line (the link was
+  // squeezed to one word per line), both stay inside the header's padding, and the
+  // page does not scroll sideways (the NDI name input made it 404 px wide).
+  const viewport = page.viewportSize();
+  await page.setViewportSize({ width: 360, height: 720 });
+  const phone = await headerNavLayout(page);
+  expect(phone.link.height).toBeLessThanOrEqual(desktop.link.height + 1);
+  expect(phone.version.height).toBeLessThanOrEqual(desktop.version.height + 1);
+  expect(phone.version.top).toBeGreaterThanOrEqual(phone.link.bottom);
+  expect(phone.link.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
+  expect(phone.version.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
+  // The title and the nav keep a gap (they touched, 0 px apart).
+  expect(phone.nav.left - phone.title.right).toBeGreaterThanOrEqual(16);
+  // Only the side padding shrinks on a phone; the top / bottom padding stays.
+  expect(phone.headerPaddingTop).toBe(desktop.headerPaddingTop);
+  expect(phone.headerPaddingBottom).toBe(desktop.headerPaddingBottom);
+  expect(phone.scrollWidth).toBeLessThanOrEqual(phone.clientWidth);
+
+  // The narrowest phone: the nav still ends inside the header padding (it ate
+  // into it with the 40 px side padding) and the page still fits.
+  await page.setViewportSize({ width: 320, height: 720 });
+  const smallest = await headerNavLayout(page);
+  expect(smallest.link.right).toBeLessThanOrEqual(smallest.headerContentRight + 0.5);
+  expect(smallest.version.right).toBeLessThanOrEqual(smallest.headerContentRight + 0.5);
+  expect(smallest.scrollWidth).toBeLessThanOrEqual(smallest.clientWidth);
+  if (viewport) await page.setViewportSize(viewport);
+
   const cards = page.locator(".settings__main .settings__card");
   const count = await cards.count();
   expect(count).toBeGreaterThan(0);
   const lastCard = cards.nth(count - 1);
   await lastCard.scrollIntoViewIfNeeded();
   await expect(lastCard).toBeInViewport();
+
+  expect(errors).toEqual([]);
 });

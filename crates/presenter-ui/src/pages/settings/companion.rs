@@ -56,18 +56,18 @@ pub fn CompanionCard() -> impl IntoView {
     };
 
     view! {
-        <section class="settings__card settings__card--feature">
+        <section class="settings__card">
             <header class="settings__card-header">
                 <div><h2>"Companion"</h2></div>
             </header>
             <form
-                class="settings__form settings__form--compact"
+                class="settings__form"
                 data-role="feature-companion-form"
                 autocomplete="off"
                 on:submit=on_submit
             >
-                <div class="settings__form-row settings__form-row--compact settings__form-row--inline">
-                    <label class="settings__form-checkbox settings__form-checkbox--inline">
+                <div class="settings__form-row settings__form-row--inline">
+                    <label class="settings__form-checkbox">
                         <input
                             type="checkbox"
                             data-role="feature-companion-toggle"
@@ -103,7 +103,7 @@ pub fn CompanionCard() -> impl IntoView {
                     </label>
                     <button
                         type="submit"
-                        class="settings__button settings__button--primary settings__button--compact"
+                        class="settings__button settings__button--primary"
                         data-role="feature-submit"
                         prop:disabled=move || busy.get()
                     >"Save"</button>

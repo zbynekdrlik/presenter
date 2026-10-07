@@ -109,6 +109,30 @@ the timer dies with the page navigation (there is no client-side router).
 Reminder: this crate is **excluded from the workspace** — `cargo test -p presenter-ui` fails.
 Run `cd crates/presenter-ui && cargo test --lib`.
 
+## Moving focus after a signal change: gate on "enabled", defer the `focus()` (#819)
+
+`Effect` and render effects (the DOM updates of `view!`) are all async tasks woken
+by the signals they read (reactive_graph 0.1.8). A newly woken `Effect` is NOT
+ordered against the render effects that the same change queued. So when an Effect
+calls `el.focus()`, the button may still be `disabled`, which makes `focus()` a
+silent no-op, or the element that held focus may still be in the DOM.
+
+- Gate the Effect on the same state that drives the button's `disabled` prop, and
+  read that state tracked, so the Effect re-runs when it unlocks. Consume a
+  one-shot "focus me" request only once the button is unlocked.
+- Defer the call itself, and make any "is focus still free?" check INSIDE the
+  deferred task:
+  `leptos::task::spawn_local(async move { if focus_is_free() { let _ = el.focus(); } })`
+  (`focus()` returns a `Result`; `spawn_local` needs a `()` future). The task
+  queues behind the render effects already woken, so the DOM is current: the
+  editor that held focus is gone and focus has fallen back to `<body>`. Checked
+  before `spawn_local`, the Cancel button or Label field may still hold focus, and
+  focus would never come back on Cancel / Escape. `focus_is_free` is the
+  reference's "active element is `<body>`" check.
+- Reference: `pages/settings/host_editor.rs` `focus_on_close`, with its
+  `.claude/rules/settings-ui.md` entry. E2E: a row deleted elsewhere while its own
+  save is in flight still lands focus on "+ Add".
+
 ## The toast `<div>` is ALWAYS mounted — assert visibility via `data-visible`, not DOM presence (#558 W1)
 
 `components/toast.rs` renders `<div data-role="toast" data-visible=… class:operator__toast--visible=…>`
