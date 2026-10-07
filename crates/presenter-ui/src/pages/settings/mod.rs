@@ -148,7 +148,7 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
                     </div>
                     <nav class="settings__header-nav">
                         <a href="/" class="settings__link">"← Back to hub"</a>
-                        <span><VersionLabel /></span>
+                        <VersionLabel />
                     </nav>
                 </header>
             })}

@@ -257,8 +257,9 @@
 
 /* Secondary row text — the aside on the address line (latency, launch package)
    and the meta lines under it. #cbd5e1 at 0.8rem is 7.0:1 on the row background
-   #334155 (8.6:1 on a disabled row); the former #94a3b8 at 0.75rem was 4.0:1, under
-   the 4.5:1 minimum (#819). Smaller than the address line, never fainter than this. */
+   #334155 (8.6:1 on a disabled row); the former #94a3b8 (0.75rem on the muted
+   line) was 4.0:1, under the 4.5:1 minimum (#819). Smaller than the address line,
+   never fainter than this. */
 .settings__list-aside {
   color: #cbd5e1;
   font-size: 0.8rem;

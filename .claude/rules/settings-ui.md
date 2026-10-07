@@ -75,7 +75,8 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
     landing after the save's reload is dropped instead of reverting the row.
   - It calls `forget_missing`. When the open editor's row was deleted elsewhere,
     the editor closes, the toast `CardText.removed_elsewhere` ("This connection
-    was removed elsewhere.") says why, and focus goes to "+ Add".
+    was removed elsewhere.") says why, and focus goes to "+ Add" (once the save
+    settles, if one of that row is in flight).
 - Save flow (`ListCard::save`): `begin_save` (no editor / busy / invalid → `None`),
   `mark_saving`, request, reload the list, THEN `finish_save`. It re-enables Save
   last (a held Enter must not POST twice) and closes only if the open-generation
@@ -104,9 +105,13 @@ Focus:
 - On close, focus returns to the row's Edit button or to "+ Add" via
   `focus_on_close`, but only when it fell back to `<body>`: the save's close is
   async, and the operator may already be typing elsewhere.
-- Keep the order inside `close` / `forget_missing`: change `editing` first, set
-  `focus_return` second. Effects run in wake order, so the editor is gone and
-  "+ Add" is enabled again before the focus Effect runs.
+- `focus_on_close` takes the request only while `trigger_lock(target)` is `None`
+  (a disabled button ignores `focus()`). The lock is tracked, so the Effect re-runs
+  when a save settles: a row deleted elsewhere mid-save gets "+ Add" focused then.
+- It defers `el.focus()` with `spawn_local`, so the focus runs after the render
+  effects the same change already queued (the button's `disabled`, the editor's
+  removal). A newly woken Effect is NOT ordered against them. Keep both the gate
+  and the deferral; neither is redundant.
 
 ## Row `<For>` key: id + the fields the row shows or edits — never status, never `updated_at`
 
@@ -126,8 +131,12 @@ by `CardItem::key`) with unit tests for this.
   pass.
 - Hold the save's PUT the same way (`route.continue()` after the checks) to assert
   the `saving` locks.
-- Always fulfil or continue with the REAL 2xx answer. A mocked non-2xx logs
-  `Failed to load resource` and breaks the zero-console assertion (ui skill #598).
+- Fulfil or continue with the REAL answer, never a mocked non-2xx: Chrome logs
+  `Failed to load resource` for it and the zero-console assertion fails (ui skill
+  #598). When a real non-2xx IS the behaviour under test (the mid-save delete spec:
+  the held PUT reaches a server without the row and gets a 404), keep it and
+  count-assert exactly that one `Failed to load resource … 404\b` line, then
+  `toEqual([])` on the rest (ui skill #718).
 - Delete through `page.request`, which is not routed and does not log to the console.
 
 ## Checking layout on Tier-0 (no local WASM build)
