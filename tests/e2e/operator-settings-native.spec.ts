@@ -58,10 +58,11 @@ type Rect = { left: number; right: number; top: number; bottom: number; height: 
 /**
  * The standalone header's "← Back to hub" link and version label, measured in ONE
  * layout pass after the web font has loaded: two separate `boundingBox()` calls can
- * straddle the Inter swap (`font-display: swap`) and mix two layouts. Also the
- * header's content-box right edge, and the widths of `.settings-layout` — the page's
- * real scroll container (`overflow-y: auto`), which absorbs any overflow, so the
- * document itself never scrolls sideways.
+ * straddle the Inter swap (`font-display: swap`) and mix two layouts. Also the title
+ * block's and the nav's rects (for the title–nav gap), the header's content-box
+ * right edge and top padding, and the widths of `.settings-layout` — the page's real
+ * scroll container (`overflow-y: auto`), which absorbs any overflow, so the document
+ * itself never scrolls sideways.
  */
 async function headerNavLayout(page: Page): Promise<{
   title: Rect;
@@ -69,6 +70,7 @@ async function headerNavLayout(page: Page): Promise<{
   link: Rect;
   version: Rect;
   headerContentRight: number;
+  headerPaddingTop: number;
   scrollWidth: number;
   clientWidth: number;
 }> {
@@ -97,6 +99,7 @@ async function headerNavLayout(page: Page): Promise<{
       version: rect('.settings__header-nav [data-testid="version"]'),
       headerContentRight:
         header.getBoundingClientRect().right - parseFloat(getComputedStyle(header).paddingRight),
+      headerPaddingTop: parseFloat(getComputedStyle(header).paddingTop),
       scrollWidth: layout.scrollWidth,
       clientWidth: layout.clientWidth,
     };
@@ -206,6 +209,8 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   expect(phone.version.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
   // The title and the nav keep a gap (they touched, 0 px apart).
   expect(phone.nav.left - phone.title.right).toBeGreaterThanOrEqual(16);
+  // Only the side padding shrinks on a phone; the top / bottom padding stays.
+  expect(phone.headerPaddingTop).toBe(desktop.headerPaddingTop);
   expect(phone.scrollWidth).toBeLessThanOrEqual(phone.clientWidth);
 
   // The narrowest phone: the nav still ends inside the header padding (it ate
