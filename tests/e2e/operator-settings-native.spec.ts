@@ -124,6 +124,8 @@ test("operator Settings content scrolls to the last card within the panel", asyn
 test("standalone /ui/settings keeps its own header and scrolls", async ({
   page,
 }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
   await page.goto(new URL("/ui/settings", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
@@ -132,10 +134,27 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   // Standalone page DOES show its own header (no operator chrome around it).
   await expect(page.locator(".settings__header")).toHaveCount(1);
 
+  // #819 round 2: "← Back to hub" and the version label sit on one row with a
+  // gap. With no layout rule on the nav they rendered glued together
+  // ("← Back to hubv0.4.x", 0 px apart).
+  const version = page.locator('.settings__header-nav [data-testid="version"]');
+  await expect(version).toHaveText(/^v\d+\.\d+\.\d+/);
+  const linkBox = await page
+    .locator(".settings__header-nav .settings__link")
+    .boundingBox();
+  const versionBox = await version.boundingBox();
+  expect(linkBox).not.toBeNull();
+  expect(versionBox).not.toBeNull();
+  expect(versionBox!.x - (linkBox!.x + linkBox!.width)).toBeGreaterThanOrEqual(12);
+  const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+  expect(Math.abs(middle(versionBox!) - middle(linkBox!))).toBeLessThanOrEqual(2);
+
   const cards = page.locator(".settings__main .settings__card");
   const count = await cards.count();
   expect(count).toBeGreaterThan(0);
   const lastCard = cards.nth(count - 1);
   await lastCard.scrollIntoViewIfNeeded();
   await expect(lastCard).toBeInViewport();
+
+  expect(errors).toEqual([]);
 });
