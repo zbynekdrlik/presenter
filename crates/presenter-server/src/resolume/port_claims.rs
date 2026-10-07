@@ -22,12 +22,13 @@
 //! - A persisted active port is only a seed. [`PortClaims::rebuild`] keeps
 //!   it only while no other host on the machine owns that port.
 //! - Two hosts are on the same machine when their host strings match, or
-//!   when both resolved to the same IP (`resolume-pp.lan` vs `10.77.8.201`).
+//!   when they resolved to a shared IP (`resolume-pp.lan` vs `10.77.8.201`).
 
 use presenter_core::{ResolumeHost, ResolumeHostId};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tracing::debug;
 
 /// Ports owned by sibling hosts: port -> label of the sibling that owns it
 /// (for the logs).
@@ -49,23 +50,24 @@ struct PortClaim {
 struct Address {
     /// The host string, trimmed and lowercased ([`host_key`]).
     key: String,
-    /// The IP the host string resolves to: parsed at once from an IP
+    /// The IPs the host string resolves to: parsed at once from an IP
     /// literal, recorded by the host's worker for a hostname
-    /// ([`PortClaims::record_resolved_ip`]). `None` until then.
-    ip: Option<IpAddr>,
+    /// ([`PortClaims::record_resolved_ip`], every address of the lookup, so
+    /// a machine with several IPs matches on any of them). Empty until then.
+    ips: BTreeSet<IpAddr>,
 }
 
 impl Address {
     fn of(host: &str) -> Self {
         Self {
             key: host_key(host),
-            ip: host.trim().parse().ok(),
+            ips: host.trim().parse::<IpAddr>().into_iter().collect(),
         }
     }
 
-    /// The same machine: the same host string, or the same resolved IP.
+    /// The same machine: the same host string, or a shared resolved IP.
     fn same_machine(&self, other: &Self) -> bool {
-        self.key == other.key || (self.ip.is_some() && self.ip == other.ip)
+        self.key == other.key || !self.ips.is_disjoint(&other.ips)
     }
 }
 
@@ -198,19 +200,29 @@ impl PortClaims {
         }
     }
 
-    /// Record the IP host `id` resolved `host` to (`resolve_endpoint`), so a
-    /// sibling that names the same machine differently is matched by IP from
-    /// now on. Ignored while the table holds another host string for `id`
-    /// (a worker that resolved its old config before it applied
+    /// Record every IP host `id` resolved `host` to (`resolve_endpoint`), so
+    /// a sibling that names the same machine differently is matched by IP
+    /// from now on. All of them, not only the one dialed: a machine with
+    /// several IPs (wired and Wi-Fi) must match a sibling named by either,
+    /// whatever order the lookup returns them in. Replaces the previous
+    /// set. Ignored while the table holds another host string for `id` (a
+    /// worker that resolved its old config before it applied
     /// `RefreshConfig`).
-    pub(super) fn record_resolved_ip(&self, id: ResolumeHostId, host: &str, ip: IpAddr) {
+    pub(super) fn record_resolved_ip(&self, id: ResolumeHostId, host: &str, ips: BTreeSet<IpAddr>) {
         let key = host_key(host);
-        if let Some(claim) = self
-            .write()
-            .get_mut(&id)
-            .filter(|claim| claim.address.key == key)
-        {
-            claim.address.ip = Some(ip);
+        let mut table = self.write();
+        let Some(claim) = table.get_mut(&id).filter(|claim| claim.address.key == key) else {
+            return;
+        };
+        if claim.address.ips != ips {
+            debug!(
+                host_id = %id,
+                host = %host,
+                from = ?claim.address.ips,
+                to = ?ips,
+                "resolume host resolved; hosts sharing an IP count as one machine"
+            );
+            claim.address.ips = ips;
         }
     }
 
@@ -227,13 +239,13 @@ impl PortClaims {
     }
 }
 
-/// `host`'s address. It keeps the IP that the host's worker resolved
+/// `host`'s address. It keeps the IPs that the host's worker resolved
 /// earlier, when `previous` (the host's claim so far) has the same host
-/// string.
+/// string (an IP literal's own IP is already in the set).
 fn address_of(previous: Option<&PortClaim>, host: &str) -> Address {
     let mut address = Address::of(host);
     if let Some(claim) = previous.filter(|claim| claim.address.key == address.key) {
-        address.ip = address.ip.or(claim.address.ip);
+        address.ips.extend(claim.address.ips.iter().copied());
     }
     address
 }
@@ -624,7 +636,7 @@ mod tests {
             .sibling_ports(bridge.id, "resolume-pp.lan", 8090)
             .is_empty());
 
-        claims.record_resolved_ip(bridge.id, "Resolume-PP.lan ", ip("10.77.8.201"));
+        claims.record_resolved_ip(bridge.id, "Resolume-PP.lan ", ips(&["10.77.8.201"]));
 
         assert_eq!(
             ports(&claims.sibling_ports(bridge.id, "resolume-pp.lan", 8090)),
@@ -646,17 +658,17 @@ mod tests {
         let songs = host("arena songs", "arena-pc.lan", 8091);
         let claims = claims_of(&[bridge.clone(), songs.clone()]);
 
-        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ip("10.77.8.201"));
+        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ips(&["10.77.8.201"]));
         assert!(claims
             .sibling_ports(bridge.id, "resolume-pp.lan", 8090)
             .is_empty());
 
-        claims.record_resolved_ip(songs.id, "arena-pc.lan", ip("10.77.8.202"));
+        claims.record_resolved_ip(songs.id, "arena-pc.lan", ips(&["10.77.8.202"]));
         assert!(claims
             .sibling_ports(bridge.id, "resolume-pp.lan", 8090)
             .is_empty());
 
-        claims.record_resolved_ip(songs.id, "arena-pc.lan", ip("10.77.8.201"));
+        claims.record_resolved_ip(songs.id, "arena-pc.lan", ips(&["10.77.8.201"]));
         assert_eq!(
             ports(&claims.sibling_ports(bridge.id, "resolume-pp.lan", 8090)),
             vec![8091]
@@ -668,7 +680,7 @@ mod tests {
         let bridge = host("arena bridge", "resolume-pp.lan", 8090);
         let songs = host("arena songs", "10.77.8.201", 8091);
         let claims = claims_of(&[bridge.clone(), songs.clone()]);
-        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ip("10.77.8.201"));
+        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ips(&["10.77.8.201"]));
 
         // A port edit (RefreshConfig): same host string, the IP stays.
         let mut moved = bridge.clone();
@@ -696,7 +708,7 @@ mod tests {
 
         // The worker resolved its previous host before applying the new
         // config.
-        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ip("10.77.8.201"));
+        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ips(&["10.77.8.201"]));
 
         assert!(claims
             .sibling_ports(bridge.id, "other-pc.lan", 8090)
@@ -715,7 +727,30 @@ mod tests {
         assert!(!claims.contains(songs.id));
     }
 
-    fn ip(text: &str) -> IpAddr {
-        text.parse().expect("an IP literal")
+    #[test]
+    fn a_machine_with_several_ips_matches_a_sibling_named_by_any_of_them() {
+        // The Arena PC is on wired and Wi-Fi; its name resolves to both, in
+        // whatever order. The sibling is named by the Wi-Fi IP.
+        let bridge = host("arena bridge", "resolume-pp.lan", 8090);
+        let songs = host("arena songs", "10.77.9.201", 8091);
+        let claims = claims_of(&[bridge.clone(), songs]);
+
+        claims.record_resolved_ip(
+            bridge.id,
+            "resolume-pp.lan",
+            ips(&["10.77.8.201", "10.77.9.201"]),
+        );
+
+        assert_eq!(
+            ports(&claims.sibling_ports(bridge.id, "resolume-pp.lan", 8090)),
+            vec![8091]
+        );
+    }
+
+    fn ips(texts: &[&str]) -> BTreeSet<IpAddr> {
+        texts
+            .iter()
+            .map(|text| text.parse().expect("an IP literal"))
+            .collect()
     }
 }

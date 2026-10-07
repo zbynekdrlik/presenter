@@ -7,6 +7,7 @@ paths:
   - "crates/presenter-server/src/resolume/port_claims.rs"
   - "crates/presenter-server/src/resolume/mod.rs"
   - "crates/presenter-server/src/resolume/driver.rs"
+  - "crates/presenter-server/src/resolume/mapping_refresh.rs"
 ---
 
 # Resolume port drift — never onto a port another host on the same machine owns (#813); tests use verified-free consecutive ports
@@ -26,16 +27,26 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   IP), configured port, active port, enabled flag. `ResolumeRegistry::set_hosts`
   rebuilds it BEFORE any worker spawns or gets `RefreshConfig`; every worker
   holds a clone.
-- **Same machine** = the same `host_key`, OR both claims carry a resolved IP
-  and the IPs are equal (`resolume-pp.lan` vs `10.77.8.201`, `localhost` vs
+- **Same machine** = the same `host_key`, OR the two claims' resolved IP sets
+  share an IP (`resolume-pp.lan` vs `10.77.8.201`, `localhost` vs
   `127.0.0.1`, `::1` vs `0:0:0:0:0:0:0:1`). An IP literal's IP is parsed at
-  rebuild. A hostname's IP is recorded by its worker in `resolve_endpoint`
-  (`record_resolved_ip`, ignored when the table already holds a newer host
-  string for that id). `apply_dial_config` resolves once before the start-up
-  check, so the IP is known before it. A refreshed host keeps its IP while its
-  host string is unchanged. A hostname that has not resolved yet (DNS down)
-  matches by string only until it does. Another address (even another
-  loopback IP) is never the same machine.
+  rebuild. A hostname's IPs are recorded by its worker in `resolve_endpoint`
+  (`record_resolved_ip`). It records EVERY address of the lookup, not just
+  the one dialed, so a PC with wired + Wi-Fi IPs in DNS matches a sibling
+  named by either IP. Recording only the first address would make the tick
+  check flip-flop whenever the lookup order changes. The record replaces the
+  previous set, is ignored when the table already holds a newer host string
+  for that id, and a change is logged at DEBUG. `apply_dial_config` resolves
+  once before the start-up check (`learn_resolved_ip`, bounded by
+  `RESOLVE_AT_CONFIG_TIMEOUT` = 3 s, so a disabled host's worker never sits on
+  an unreachable DNS server). A refreshed host keeps its IPs while its host
+  string is unchanged. Until a hostname host has resolved, it matches by
+  string only. A SIBLING's IP can therefore arrive after this host's start-up
+  check or probe. That is why every 10 s liveness tick re-runs the sibling
+  check on the dial port (`HostDriver::tick` -> `drop_sibling_port`, one lock,
+  no network). A port that turns out to belong to a late-resolving sibling is
+  dropped within one tick. Another address (even another loopback IP) is never
+  the same machine.
 - **Sibling** = another host on the same machine, ENABLED OR NOT. It owns its
   configured port: disabling a host in presenter does not stop its Arena, and
   PP disables idle hosts. Only an ENABLED sibling also owns its active port. A
@@ -74,8 +85,10 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   `set_hosts` sends to every host whose own dial target did not change (a
   sibling was added, re-pointed, enabled or removed). `RefreshConfig` alone
   would never reach those hosts, and it drops the mapping. The same check also
-  runs at worker start and after `RefreshConfig`; there it catches a seed that
-  becomes a sibling's port only once the host's IP has resolved.
+  runs at worker start and after `RefreshConfig`, where it catches a seed that
+  becomes a sibling's port only once the host's IP has resolved. It runs on
+  every enabled liveness tick too, which catches a sibling that resolved
+  late.
   `notify_siblings_changed` uses `try_send` and falls back to a spawned
   `send` on a full queue: `set_hosts` holds the hosts lock every push needs,
   so it must never wait on a busy worker for this.
@@ -92,6 +105,18 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   never refused), so the two hosts can end up swapped. Neither is a
   regression from #564. A tie-breaker (e.g. prefer the host whose own
   configured port is refused) would be a separate decision.
+- **Residual risk of the disabled-sibling rule** (owner design, round 2):
+  - A disabled host's ACTIVE port is ignored, so the Arena of a host that
+    drifted and was then disabled is not protected. Disabling the host does
+    not stop that Arena.
+  - A stale disabled host still owns its configured port. If an old,
+    disabled duplicate on the same machine is configured on the port that a
+    live host's Arena legitimately drifts to, that drift is blocked. After a
+    deploy it also drops the live host's correct seed, so the host stays
+    down. The only explanation is the power-of-two "skipped ports owned by
+    another host" WARN, which names the disabled host.
+  - **Operational rule:** delete an obsolete Resolume host on the same
+    machine; do not just disable it.
 - **Operational rule — two Arenas on one PC: keep their webserver ports MORE
   than `PORT_DRIFT_PROBE_RANGE` (5) apart** (PP since 2026-10-07: Arena-Bridge
   8090, Songs Arena 8100). Then neither drift window reaches the other Arena
@@ -107,7 +132,13 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   - `port_claims.rs` unit-tests the table rules: disabled siblings, seed
     collisions, resolved-IP matching, `contains`.
   - `port_drift_claim_tests.rs` drives `claim_dial_port` on a `HostDriver`
-    that shares a table (lost race, heal-back).
+    that shares a table (lost race, heal-back). The lost-race test gives the
+    loser a prior claim, so "table unchanged" is visible.
+  - A clear that may wait for the next liveness tick (a late-resolving
+    sibling) is waited for with `TICK_BOUND` (25 s), not `WAIT_BOUND`.
+  - The three registry tests that name a host `localhost` need
+    `127.0.0.1 localhost` in /etc/hosts, so that `localhost` shares an IP with
+    the `127.0.0.1` sibling. The ubuntu-latest CI runners have that line.
   - `port_drift_sibling_tests.rs` drives the real registry + workers
     (`set_hosts`, `snapshot_for`, an in-memory `Repository` for the persisted
     clear). Passing `repo.list_resolume_hosts()` to `set_hosts` is safe in

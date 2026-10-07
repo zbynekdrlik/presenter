@@ -219,7 +219,7 @@ pub struct ResolumeRegistry {
     port_drift_tx: Arc<OnceLock<mpsc::Sender<PortDriftEvent>>>,
     /// #813: which ports each host owns, rebuilt by `set_hosts` and shared
     /// with every host worker, so a port-drift probe never adopts another
-    /// host's Arena on the same address (`port_claims.rs`).
+    /// host's Arena on the same machine (`port_claims.rs`).
     port_claims: PortClaims,
 }
 
