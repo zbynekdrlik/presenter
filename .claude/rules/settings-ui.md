@@ -24,8 +24,16 @@ field layout gets its OWN class (Video Sources: `.settings__ndi-field`), never a
 override of the shared one.
 
 A class in the markup needs a rule, and a rule needs markup: when you delete a CSS
-modifier, grep `src/pages/settings/` for it and drop it there too (round 2 removed
-the dead `settings__form-checkbox--inline` / `--block` and `.settings__form-header p`).
+rule, grep `src/pages/settings/` for its class and drop it there too, and never add
+a class without CSS. Round 2 removed every CSS-less settings class
+(`settings__form-checkbox--inline` / `--block`, `--compact` forms / rows / button,
+`settings__card--feature` / `--ableton`, `settings__card-sub`,
+`settings__form--ableset`, the bare `settings__form-control`, `settings__host-port`,
+`settings__version`) and the rules without markup (`.settings__form-header p`; the
+pre-WASM `.settings__form--osc` / `__osc-status` / `__status-line` in operator.css).
+No spec selects any of them. The status / badge / source-dot modifiers are built in
+code (`format!("settings__status--{}")`, string literals) — grep for the stem
+before calling one dead.
 
 List rows, status badges and the inline editor live in `settings_lists.css` (split
 so neither file passes 800 lines). Both files must stay listed in
@@ -37,9 +45,10 @@ status state needs its `.settings__status--<state>` colour there.
 The row background is `#334155`. Secondary text (`.settings__list-aside`,
 `.settings__list-meta--muted`) and the row's ghost buttons are `#cbd5e1` at
 0.8rem or more (7.0:1). The old `#94a3b8` is only 4.0:1 there. A disabled row is
-dimmed with a darker dashed card (`#263346`), never with `opacity`: opacity faded
-every colour in the row, warnings and badges included, below 4.5:1. Before adding
-a colour to a row, compute its ratio against `#334155` and `#263346`.
+dimmed with a darker dashed card (`#263346`), never with `opacity`: the old 0.75
+faded the secondary text (3.0:1), the warning (3.9:1) and the status badges
+(3.6–4.5:1) below 4.5:1, while only the label stayed readable. Before adding a
+colour to a row, compute its ratio against `#334155` and `#263346`.
 
 ## Resolume / Android lists: `list_card::ListCard` + `host_editor::ListEditor`
 
@@ -60,7 +69,8 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
   (`resolume-form-status`, `android-form-status`) stay unique ONLY because one
   editor per card is open. Keep it that way, or the #459 aria-describedby specs
   break.
-- Every list fetch goes through `ListCard::fetch`. Never call `items.set` directly.
+- Every list fetch goes through `ListCard::fetch`, the only writer of the private
+  `items` signal; cards read it through `items()` (a `ReadSignal`).
   - It is numbered by `list_sync::ResponseOrder`, so a poll sent before a save and
     landing after the save's reload is dropped instead of reverting the row.
   - It calls `forget_missing`. When the open editor's row was deleted elsewhere,

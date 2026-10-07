@@ -110,8 +110,9 @@ fn draft_values<T: CardItem>(item: &T) -> DraftValues {
 
 /// A list card's state. `Copy` (signals and a `'static` reference only).
 pub(super) struct ListCard<T: CardItem> {
-    /// The last applied list; the card header counts it.
-    pub(super) items: RwSignal<Vec<T>>,
+    /// The last applied list. Written only by [`Self::fetch`]; cards read it through
+    /// [`Self::items`].
+    items: RwSignal<Vec<T>>,
     editor: ListEditor,
     order: ResponseOrder,
     toast: ToastHandle,
@@ -145,10 +146,15 @@ impl<T: CardItem> ListCard<T> {
         leptos::task::spawn_local(self.fetch());
     }
 
+    /// The list as last applied, read-only (the card header counts it): only
+    /// [`Self::fetch`] writes it, so no card can bypass the response order.
+    pub(super) fn items(self) -> ReadSignal<Vec<T>> {
+        self.items.read_only()
+    }
+
     /// Every list fetch goes through here (poll, save, delete, a card's own Test):
     /// numbered, so a slow older response never overwrites a newer one, and an editor
-    /// left open on an item deleted elsewhere closes, saying so. Never set `items`
-    /// directly.
+    /// left open on an item deleted elsewhere closes, saying so.
     pub(super) async fn fetch(self) {
         let seq = self.order.begin();
         let Ok(list) = T::list().await else {
@@ -365,7 +371,7 @@ impl<T: CardItem> ListCard<T> {
                     <p class="settings__list-line">
                         <span class="settings__host-addr">
                             <code>{host}</code>
-                            <span class="settings__host-port">{port}</span>
+                            {port}
                         </span>
                         {parts.line}
                     </p>

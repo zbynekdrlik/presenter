@@ -10,13 +10,14 @@
 //! (fetch / save / delete / rows) is `list_card`. The draft lives at CARD level,
 //! outside the keyed `<For>` rows, so the 5 s status poll can never reset what the
 //! operator is typing. Its guards ([`trigger_lock`], round 2):
-//! - one save at a time; while it is in flight no editor opens, closes or switches
-//!   (every Edit and "+ Add" is disabled, Escape and Cancel are ignored);
+//! - one save at a time; while it is in flight no editor opens or switches and the
+//!   operator cannot close it (every Edit and "+ Add" is disabled, Escape and Cancel
+//!   are ignored) — only a row deleted elsewhere still closes its editor;
 //! - unsaved changes lock the other triggers until they are saved or cancelled;
 //! - a save that finishes late never closes a newer editor ([`save_is_current`]);
 //! - only a real open focuses the Label field, never a remount ([`takes_focus`]);
 //! - focus returns to the button that opened the editor, or to "+ Add" when the
-//!   row was deleted elsewhere.
+//!   row was deleted elsewhere — once that button is unlocked ([`focus_on_close`]).
 
 use leptos::prelude::*;
 
@@ -233,8 +234,9 @@ impl ConnectionDraft {
 /// Why a row's Edit button, or "+ Add …", cannot open the editor right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TriggerLock {
-    /// A save is in flight: nothing opens, closes or switches until it settles, so
-    /// its late result can never land on another editor.
+    /// A save is in flight: no editor opens or switches (and Cancel / Escape cannot
+    /// close it) until the save settles, so its late result can never land on another
+    /// editor. Only a row deleted elsewhere still closes its editor meanwhile.
     Saving,
     /// The open editor has unsaved changes: save or cancel them first, instead of one
     /// click throwing them away.
@@ -525,17 +527,30 @@ fn save_is_current(ticket: &SaveTicket, generation: u64, editing: &EditTarget) -
 
 /// Give `button` focus when the editor for `target` closes, so a keyboard user lands
 /// back on the Edit / "+ Add" button they started from instead of on `<body>`.
+///
+/// The request is taken only once the button is unlocked: a disabled button ignores
+/// `focus()`, and a row deleted elsewhere during a save closes its editor while
+/// "+ Add" is still locked (`Saving`). The Effect tracks the lock, so it re-runs when
+/// the save settles. The focus itself runs one task later, after the render effects
+/// already queued by the same change (the button's own `disabled`, the editor's
+/// removal) — a newly woken Effect is not ordered against them otherwise.
 pub(super) fn focus_on_close(
     editor: ListEditor,
     button: NodeRef<leptos::html::Button>,
     target: EditTarget,
 ) {
     Effect::new(move || {
-        if let Some(el) = button.get() {
-            if editor.take_focus_return(&target) && focus_is_free() {
+        let Some(el) = button.get() else {
+            return;
+        };
+        if editor.trigger_lock(&target).is_some() || !editor.take_focus_return(&target) {
+            return;
+        }
+        leptos::task::spawn_local(async move {
+            if focus_is_free() {
                 let _ = el.focus();
             }
-        }
+        });
     });
 }
 

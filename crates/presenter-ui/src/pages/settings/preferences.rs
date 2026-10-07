@@ -31,11 +31,11 @@ pub fn PreferencesCard() -> impl IntoView {
             <header class="settings__card-header">
                 <div>
                     <h2>"Preferences"</h2>
-                    <p class="settings__card-sub">"Operator-side settings stored in your browser."</p>
+                    <p>"Operator-side settings stored in your browser."</p>
                 </div>
             </header>
-            <form class="settings__form settings__form--compact" autocomplete="off" on:submit=|ev| ev.prevent_default()>
-                <div class="settings__form-row settings__form-row--compact settings__form-row--inline">
+            <form class="settings__form" autocomplete="off" on:submit=|ev| ev.prevent_default()>
+                <div class="settings__form-row settings__form-row--inline">
                     <label class="settings__form-control--tiny">
                         <span>"Line limit (chars per line)"</span>
                         <input

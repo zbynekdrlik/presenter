@@ -220,7 +220,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             .into_any(),
         }
     };
-    let hosts = card.items;
+    let hosts = card.items();
 
     view! {
         <section class="settings__card">
@@ -234,7 +234,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="host-count">
-                        {move || hosts.get().len().to_string()}
+                        {move || hosts.with(Vec::len).to_string()}
                     </span>
                     <span class="settings__badge-label">"Hosts"</span>
                 </div>

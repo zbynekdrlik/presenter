@@ -26,9 +26,9 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
-/* A disabled item: a darker, dashed card. Not `opacity` — that faded every text
-   colour in the row below 4.5:1 (#819); a darker background only raises the
-   contrast of the row's light text. */
+/* A disabled item: a darker, dashed card. Not `opacity` — 0.75 faded the
+   secondary text, the warning and the status badges below 4.5:1 (#819); a darker
+   background only raises the contrast of the row's light text. */
 .settings__list-item[data-enabled="false"] {
   background: #263346;
   border-style: dashed;

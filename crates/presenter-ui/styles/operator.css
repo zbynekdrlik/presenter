@@ -2314,21 +2314,6 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 .operator__presentation-item[data-type="separator"] span {
   opacity: 0.85;
 }
-.settings__form--osc {
-  margin-bottom: 1.5rem;
-}
-
-.settings__osc-status {
-  border-top: 1px solid var(--operator-border);
-  padding-top: 1rem;
-}
-
-.settings__status-line {
-  display: flex;
-  align-items: center;
-  margin-bottom: 0.75rem;
-}
-
 .settings__status-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

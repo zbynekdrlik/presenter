@@ -201,7 +201,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
             .into_any(),
         }
     };
-    let displays = card.items;
+    let displays = card.items();
 
     view! {
         <section class="settings__card">
@@ -212,7 +212,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="android-count">
-                        {move || displays.get().len().to_string()}
+                        {move || displays.with(Vec::len).to_string()}
                     </span>
                     <span class="settings__badge-label">"Displays"</span>
                 </div>
