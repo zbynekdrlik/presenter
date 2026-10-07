@@ -4,7 +4,8 @@
 //! Kept in its own file (self-contained helpers) so the test is independent of
 //! the larger `tests.rs` fixtures.
 
-use super::driver::{count_clips, duration_ms, FetchReason, HostDriver};
+use super::clip_map::count_clips;
+use super::driver::{duration_ms, FetchReason, HostDriver};
 use super::{
     flush_perceived, PerceivedAgg, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate,
     CONNECT_TIMEOUT,
