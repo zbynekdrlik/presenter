@@ -42,13 +42,17 @@ async fn a_port_a_sibling_claimed_after_the_probe_read_the_table_is_not_taken() 
     let claims = PortClaims::default();
     claims.rebuild([&songs, &bridge], |_| false);
     let driver = driver_with(&claims, bridge.clone());
+    // The bridge dials 8093 (an earlier drift) and its Arena moves again.
+    assert!(driver.claim_dial_port(Some(8093)));
     // Both hosts are down and one Arena answers on 8092, inside both probe
     // windows. The songs worker claims it first.
     assert_eq!(claims.try_claim(songs.id, ADDRESS, 8089, 8092), Ok(()));
 
     assert!(!driver.claim_dial_port(Some(8092)));
 
-    assert_eq!(claims.active_port_of(bridge.id), None);
+    // Nothing changed: the bridge still holds 8093 (not released), the songs
+    // host 8092.
+    assert_eq!(claims.active_port_of(bridge.id), Some(8093));
     assert_eq!(claims.active_port_of(songs.id), Some(8092));
 }
 
