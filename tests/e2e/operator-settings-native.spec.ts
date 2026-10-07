@@ -64,6 +64,8 @@ type Rect = { left: number; right: number; top: number; bottom: number; height: 
  * document itself never scrolls sideways.
  */
 async function headerNavLayout(page: Page): Promise<{
+  title: Rect;
+  nav: Rect;
   link: Rect;
   version: Rect;
   headerContentRight: number;
@@ -89,6 +91,8 @@ async function headerNavLayout(page: Page): Promise<{
     const layout = document.querySelector(".settings-layout");
     if (!header || !layout) throw new Error("settings header / layout not found");
     return {
+      title: rect(".settings__header-title"),
+      nav: rect(".settings__header-nav"),
       link: rect(".settings__header-nav .settings__link"),
       version: rect('.settings__header-nav [data-testid="version"]'),
       headerContentRight:
@@ -200,7 +204,17 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   expect(phone.version.top).toBeGreaterThanOrEqual(phone.link.bottom);
   expect(phone.link.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
   expect(phone.version.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
+  // The title and the nav keep a gap (they touched, 0 px apart).
+  expect(phone.nav.left - phone.title.right).toBeGreaterThanOrEqual(16);
   expect(phone.scrollWidth).toBeLessThanOrEqual(phone.clientWidth);
+
+  // The narrowest phone: the nav still ends inside the header padding (it ate
+  // into it with the 40 px side padding) and the page still fits.
+  await page.setViewportSize({ width: 320, height: 720 });
+  const smallest = await headerNavLayout(page);
+  expect(smallest.link.right).toBeLessThanOrEqual(smallest.headerContentRight + 0.5);
+  expect(smallest.version.right).toBeLessThanOrEqual(smallest.headerContentRight + 0.5);
+  expect(smallest.scrollWidth).toBeLessThanOrEqual(smallest.clientWidth);
   if (viewport) await page.setViewportSize(viewport);
 
   const cards = page.locator(".settings__main .settings__card");
