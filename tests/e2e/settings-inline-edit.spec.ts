@@ -198,17 +198,21 @@ test('#819 Resolume: Edit opens in the clicked row, Cancel restores, Save persis
     await expect(rowB.locator('[data-role="host-editor"]')).toHaveCount(0);
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(1);
 
-    // Cancel restores: the typed change is dropped, row and server keep the old label.
+    // Cancel restores: the typed change is dropped, row and server keep the old label,
+    // and focus goes back to the row's Edit button.
+    const editA = page.locator(`[data-role="host-edit"][data-id="${a.id}"]`);
     await page.fill('[data-role="host-label"]', `${a.label}Discarded`);
     await page.click('[data-role="host-cancel"]');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
     await expect(rowA.locator('.settings__host-label')).toHaveText(a.label);
+    await expect(editA).toBeFocused();
     expect((await resolumeHost(page, a.id)).label).toBe(a.label);
     // Re-opening shows the stored value, not the discarded draft; Escape cancels too.
-    await page.locator(`[data-role="host-edit"][data-id="${a.id}"]`).click();
+    await editA.click();
     await expect(page.locator('[data-role="host-label"]')).toHaveValue(a.label);
     await page.press('[data-role="host-label"]', 'Escape');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
+    await expect(editA).toBeFocused();
 
     // Save persists — read back through the API, and the row shows it.
     await page.locator(`[data-role="host-edit"][data-id="${a.id}"]`).click();
@@ -218,6 +222,7 @@ test('#819 Resolume: Edit opens in the clicked row, Cancel restores, Save persis
     await page.click('[data-role="host-submit"]');
     await waitForToast(page, 'Updated Resolume connection.');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
+    await expect(editA).toBeFocused();
     await expect(rowA.locator('.settings__host-label')).toHaveText(savedLabel);
     await expect(rowA.locator('.settings__host-addr')).toHaveText(/arena-a\.invalid\s*:8095/);
     const saved = await resolumeHost(page, a.id);
@@ -435,6 +440,8 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     await newItem.locator('[data-role="android-label"]').fill(`${addedLabel}Cancelled`);
     await page.click('[data-role="android-cancel"]');
     await expect(page.locator('[data-role="android-new-item"]')).toHaveCount(0);
+    // Focus goes back to "+ Add display".
+    await expect(page.locator('[data-role="android-add"]')).toBeFocused();
     expect(await listVia<AndroidDisplay>(page, ANDROID_DISPLAYS)).toHaveLength(before);
 
     // …and Save creates it.
@@ -476,43 +483,43 @@ test('#819 compact layout: no form row taller than its content, Companion card u
     launchComponent: 'com.tcl.browser',
     isEnabled: false,
   });
-  await page.setViewportSize({ width: 1600, height: 1000 });
-  await gotoOperatorSettings(page);
-  const panel = page.locator('[data-view-panel="settings"]');
-
-  // Was ~720 px for one checkbox and one port field.
-  const companion = panel.locator('.settings__card', {
-    has: page.locator('[data-role="feature-companion-form"]'),
-  });
-  const companionBox = await companion.boundingBox();
-  expect(companionBox).not.toBeNull();
-  expect(companionBox!.height).toBeLessThan(300);
-
-  // Measure with both inline editors open, so their rows are covered too.
-  await page.click('[data-role="host-add"]');
-  await expect(page.locator('[data-role="host-editor"]')).toBeVisible();
-  await page.click('[data-role="android-add"]');
-  await expect(page.locator('[data-role="android-editor"]')).toBeVisible();
-
-  const labels = await panel
-    .locator('.settings__form-row label')
-    .evaluateAll((els) =>
-      els.map((el) => ({
-        text: (el.textContent ?? '').trim().slice(0, 40),
-        height: Math.round(el.getBoundingClientRect().height),
-      })),
-    );
-  // Companion, Preferences, Ableton and both editors: well over a dozen fields.
-  expect(labels.length).toBeGreaterThan(12);
-  // A caption + an input is ~60 px; the bug made every one of them 220+ px.
-  expect(labels.filter((l) => l.height > 90)).toEqual([]);
-
-  // A list row is compact too: title, host:port + badge, two small muted lines
-  // (was title + seven separate meta lines).
   try {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await gotoOperatorSettings(page);
+    const panel = page.locator('[data-view-panel="settings"]');
+
+    // Was ~720 px for one checkbox and one port field.
+    const companion = panel.locator('.settings__card', {
+      has: page.locator('[data-role="feature-companion-form"]'),
+    });
+    const companionBox = await companion.boundingBox();
+    expect(companionBox).not.toBeNull();
+    expect(companionBox!.height).toBeLessThan(300);
+
+    // A list row is compact too: title, host:port + badge, two small muted lines
+    // (was title + seven separate meta lines).
     const rowBox = await androidRow(page, display.id).boundingBox();
     expect(rowBox).not.toBeNull();
     expect(rowBox!.height).toBeLessThan(160);
+
+    // Measure with both inline editors open, so their rows are covered too.
+    await page.click('[data-role="host-add"]');
+    await expect(page.locator('[data-role="host-editor"]')).toBeVisible();
+    await page.click('[data-role="android-add"]');
+    await expect(page.locator('[data-role="android-editor"]')).toBeVisible();
+
+    const labels = await panel
+      .locator('.settings__form-row label')
+      .evaluateAll((els) =>
+        els.map((el) => ({
+          text: (el.textContent ?? '').trim().slice(0, 40),
+          height: Math.round(el.getBoundingClientRect().height),
+        })),
+      );
+    // Companion, Preferences, Ableton and both editors: well over a dozen fields.
+    expect(labels.length).toBeGreaterThan(12);
+    // A caption + an input is ~60 px; the bug made every one of them 220+ px.
+    expect(labels.filter((l) => l.height > 90)).toEqual([]);
   } finally {
     await deleteVia(page, `${ANDROID_DISPLAYS}/${display.id}`);
   }

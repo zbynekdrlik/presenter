@@ -7,9 +7,11 @@
 //! list. One editor per card is open at a time ([`EditTarget`]): opening another one
 //! discards the first one's unsaved changes.
 //!
-//! The draft ([`ConnectionDraft`]) lives at CARD level, outside the keyed `<For>`
-//! rows, so neither the 5 s status poll nor a row rebuilt by an edit from another
-//! tab can reset what the operator is typing.
+//! [`ListEditor`] is the card's whole editor state and save flow, so both cards share
+//! the same guards: the draft lives at CARD level, outside the keyed `<For>` rows (the
+//! 5 s status poll can never reset what the operator is typing); one save at a time;
+//! a save that finishes late never closes a newer editor; focus returns to the button
+//! that opened the editor.
 
 use leptos::prelude::*;
 
@@ -42,6 +44,14 @@ impl EditTarget {
         match self {
             Self::Item(id) => Some(id),
             Self::Closed | Self::New => None,
+        }
+    }
+
+    /// `true` when this is an item that is not among the listed `ids` any more.
+    pub(super) fn is_item_missing<'a>(&self, mut ids: impl Iterator<Item = &'a str>) -> bool {
+        match self {
+            Self::Item(id) => !ids.any(|listed| listed == id),
+            Self::Closed | Self::New => false,
         }
     }
 }
@@ -113,7 +123,7 @@ impl Default for ConnectionDraft {
 
 impl ConnectionDraft {
     /// Fill the editor with an item's current values.
-    pub(super) fn load(self, label: &str, host: &str, port: u16, enabled: bool) {
+    fn load(self, label: &str, host: &str, port: u16, enabled: bool) {
         self.label.set(label.to_string());
         self.host.set(host.to_string());
         self.port.set(port.to_string());
@@ -121,12 +131,7 @@ impl ConnectionDraft {
         self.clear_message();
     }
 
-    /// An empty editor for a new item.
-    pub(super) fn reset(self, default_port: u16) {
-        self.load("", "", default_port, true);
-    }
-
-    pub(super) fn validated(self) -> Result<ConnectionFields, &'static str> {
+    fn validated(self) -> Result<ConnectionFields, &'static str> {
         validate_connection(
             &self.label.get_untracked(),
             &self.host.get_untracked(),
@@ -139,9 +144,176 @@ impl ConnectionDraft {
         self.message.set(message.to_string());
     }
 
-    pub(super) fn clear_message(self) {
+    fn clear_message(self) {
         self.show("idle", "");
     }
+}
+
+/// One card's inline-editor state: which item the single editor is open on, its
+/// draft, and where focus goes back to when it closes. `Copy` (signals only).
+#[derive(Clone, Copy)]
+pub(super) struct ListEditor {
+    pub(super) editing: RwSignal<EditTarget>,
+    pub(super) draft: ConnectionDraft,
+    /// Bumped on every open: a save that finishes after the operator re-opened an
+    /// editor (even on the same row) must not close or overwrite that newer editor.
+    generation: RwSignal<u64>,
+    /// The item whose Edit button (or the "+ Add" button, for `New`) takes focus back
+    /// when its editor closes.
+    focus_return: RwSignal<Option<EditTarget>>,
+}
+
+impl Default for ListEditor {
+    fn default() -> Self {
+        Self {
+            editing: RwSignal::new(EditTarget::Closed),
+            draft: ConnectionDraft::default(),
+            generation: RwSignal::new(0),
+            focus_return: RwSignal::new(None),
+        }
+    }
+}
+
+/// What a save in flight was started from.
+pub(super) struct SaveTicket {
+    target: EditTarget,
+    generation: u64,
+}
+
+impl SaveTicket {
+    /// The id the save updates; `None` creates a new item.
+    pub(super) fn updating(&self) -> Option<String> {
+        self.target.item_id().map(str::to_string)
+    }
+}
+
+impl ListEditor {
+    /// Open the empty "+ Add …" editor.
+    pub(super) fn open_new(self, default_port: u16) {
+        self.draft.load("", "", default_port, true);
+        self.open(EditTarget::New);
+    }
+
+    /// Open the editor on an existing row, filled with its values.
+    pub(super) fn open_item(self, id: String, label: &str, host: &str, port: u16, enabled: bool) {
+        self.draft.load(label, host, port, enabled);
+        self.open(EditTarget::Item(id));
+    }
+
+    fn open(self, target: EditTarget) {
+        self.generation.update(|g| *g += 1);
+        self.editing.set(target);
+    }
+
+    /// Close the editor (Cancel, Escape, a successful save); focus goes back to the
+    /// button that opened it.
+    pub(super) fn close(self) {
+        let closed = self.editing.get_untracked();
+        self.discard();
+        if closed != EditTarget::Closed {
+            self.focus_return.set(Some(closed));
+        }
+    }
+
+    /// Close without moving focus — the item it was open on is gone.
+    fn discard(self) {
+        self.editing.set(EditTarget::Closed);
+        self.draft.clear_message();
+    }
+
+    /// The row being edited was deleted from this card.
+    pub(super) fn discard_if_open_on(self, id: &str) {
+        if self.editing.with_untracked(|t| t.is_item(id)) {
+            self.discard();
+        }
+    }
+
+    /// Every list refresh: an editor open on an item that is no longer listed
+    /// (deleted here or in another tab) closes with it.
+    pub(super) fn forget_missing<'a>(self, ids: impl Iterator<Item = &'a str>) {
+        if self.editing.with_untracked(|t| t.is_item_missing(ids)) {
+            self.discard();
+        }
+    }
+
+    /// Tracked: the "+ Add …" editor is open.
+    pub(super) fn is_new(self) -> bool {
+        self.editing.with(EditTarget::is_new)
+    }
+
+    /// Tracked: the editor is open on row `id`.
+    pub(super) fn is_open_on(self, id: &str) -> bool {
+        self.editing.with(|t| t.is_item(id))
+    }
+
+    /// Validate and start a save. `None` when no editor is open, a save is already in
+    /// flight (held Enter, a double click), or a shared field is invalid (its message is
+    /// shown). The card may still reject its own fields before `mark_saving`.
+    pub(super) fn begin_save(self) -> Option<(SaveTicket, ConnectionFields)> {
+        let target = self.editing.get_untracked();
+        if target == EditTarget::Closed || self.draft.busy.get_untracked() {
+            return None;
+        }
+        match self.draft.validated() {
+            Ok(fields) => {
+                let generation = self.generation.get_untracked();
+                Some((SaveTicket { target, generation }, fields))
+            }
+            Err(message) => {
+                self.draft.show("error", message);
+                None
+            }
+        }
+    }
+
+    /// The request is going out: Save stays disabled until [`Self::finish_save`].
+    pub(super) fn mark_saving(self, message: &str) {
+        self.draft.busy.set(true);
+        self.draft.show("info", message);
+    }
+
+    /// A save finished (call it AFTER the list reload). Success closes the editor,
+    /// failure shows `error` in it — only if it is still the editor the save started
+    /// from. Returns whether it was, so the card can toast an error nobody saw. Save is
+    /// re-enabled last, so a repeat submit cannot slip in before the editor closes.
+    pub(super) fn finish_save(self, ticket: &SaveTicket, error: Option<&str>) -> bool {
+        let current = self.generation.get_untracked() == ticket.generation
+            && self.editing.get_untracked() == ticket.target;
+        if current {
+            match error {
+                None => self.close(),
+                Some(message) => self.draft.show("error", message),
+            }
+        }
+        self.draft.busy.set(false);
+        current
+    }
+
+    /// `true` (once) when the editor for `target` just closed. Tracked, so an Effect
+    /// calling it re-runs on every close.
+    fn take_focus_return(self, target: &EditTarget) -> bool {
+        let wanted = self.focus_return.with(|r| r.as_ref() == Some(target));
+        if wanted {
+            self.focus_return.set(None);
+        }
+        wanted
+    }
+}
+
+/// Give `button` focus when the editor for `target` closes, so a keyboard user lands
+/// back on the Edit / "+ Add" button they started from instead of on `<body>`.
+pub(super) fn focus_on_close(
+    editor: ListEditor,
+    button: NodeRef<leptos::html::Button>,
+    target: EditTarget,
+) {
+    Effect::new(move || {
+        if let Some(el) = button.get() {
+            if editor.take_focus_return(&target) {
+                let _ = el.focus();
+            }
+        }
+    });
 }
 
 /// An item-specific extra text field in the editor (Android's launch package).
@@ -173,20 +345,19 @@ pub(super) struct EditorSpec {
 }
 
 /// The inline editor. `creating` = the "+ Add …" item (Save creates); otherwise an
-/// existing row (Save updates). `on_save` validates and saves, `on_cancel` closes the
-/// editor without saving (also Escape). Only one editor exists in a card at a time,
-/// so the field `data-role`s and the message `id` stay unique on the page.
-pub(super) fn render_connection_editor<S, C>(
+/// existing row (Save updates). `on_save` validates and saves; Cancel and Escape
+/// close the editor without saving. Only one editor exists in a card at a time, so
+/// the field `data-role`s and the `id`s stay unique on the page.
+pub(super) fn render_connection_editor<S>(
     spec: EditorSpec,
-    draft: ConnectionDraft,
+    editor: ListEditor,
     creating: bool,
     on_save: S,
-    on_cancel: C,
 ) -> AnyView
 where
     S: Fn() + Copy + Send + 'static,
-    C: Fn() + Copy + Send + 'static,
 {
+    let draft = editor.draft;
     let role = move |field: &str| format!("{}-{field}", spec.role);
     let invalid = move || (draft.state.get() == "error").to_string();
     let (mode, title, submit_text) = if creating {
@@ -207,10 +378,13 @@ where
         ev.prevent_default();
         on_save();
     };
+    // Escape cancels here and stops: the operator page's window-level Escape
+    // (close the global search) must not fire as well.
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == KEY_ESCAPE {
             ev.prevent_default();
-            on_cancel();
+            ev.stop_propagation();
+            editor.close();
         }
     };
 
@@ -220,8 +394,10 @@ where
 
     view! {
         <form class="settings__form settings__form--inline-editor" data-role=role("editor")
-            data-mode=mode autocomplete="off" on:submit=on_submit on:keydown=on_keydown>
-            <p class="settings__editor-title" data-role=role("editor-title")>{title}</p>
+            data-mode=mode aria-labelledby=role("editor-title")
+            autocomplete="off" on:submit=on_submit on:keydown=on_keydown>
+            <h3 class="settings__editor-title" id=role("editor-title")
+                data-role=role("editor-title")>{title}</h3>
             <div class="settings__form-row settings__form-row--connection">
                 <label>
                     <span>"Label"</span>
@@ -267,7 +443,7 @@ where
                         {submit_text}
                     </button>
                     <button type="button" class="settings__button settings__button--ghost"
-                        data-role=role("cancel") on:click=move |_| on_cancel()>"Cancel"</button>
+                        data-role=role("cancel") on:click=move |_| editor.close()>"Cancel"</button>
                 </div>
             </div>
             <p id=spec.message_id class="settings__form-status" data-role=spec.message_role
@@ -323,6 +499,17 @@ mod tests {
         assert_eq!(EditTarget::New.item_id(), None);
         assert_eq!(EditTarget::Closed.item_id(), None);
         assert_eq!(EditTarget::default(), EditTarget::Closed);
+    }
+
+    #[test]
+    fn an_editor_on_a_row_that_vanished_from_the_list_is_missing() {
+        let row = EditTarget::Item("host-2".into());
+        assert!(!row.is_item_missing(["host-1", "host-2"].into_iter()));
+        assert!(row.is_item_missing(["host-1", "host-3"].into_iter()));
+        assert!(row.is_item_missing(std::iter::empty()));
+        // The new item and a closed editor never belong to a listed row.
+        assert!(!EditTarget::New.is_item_missing(std::iter::empty()));
+        assert!(!EditTarget::Closed.is_item_missing(std::iter::empty()));
     }
 
     #[test]

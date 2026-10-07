@@ -1,14 +1,16 @@
 //! Resolume Arena connections card for the settings page (#347).
 //!
 //! #819: **Edit** opens the editor IN the clicked row and "+ Add connection" opens
-//! it at the top of the list (`host_editor`). Rows are keyed on identity (id +
-//! `updated_at`, which only an edit changes) and read their live status through a
-//! `Memo`, so the 5 s poll updates the badge / latency / warning in place and never
-//! rebuilds a row or touches an open editor.
+//! it at the top of the list (`host_editor`). Rows are keyed on identity plus the
+//! fields they show or edit ([`row_key`]) — never on the live status — and read the
+//! status and timestamps through a `Memo`, so the 5 s poll updates the badge /
+//! latency / warning in place and never rebuilds a row or touches an open editor.
 
 use leptos::prelude::*;
 
-use super::host_editor::{render_connection_editor, ConnectionDraft, EditTarget, EditorSpec};
+use super::host_editor::{
+    focus_on_close, render_connection_editor, EditTarget, EditorSpec, ListEditor,
+};
 use super::row_status::{
     latency_text, resolume_state, resolume_warning, updated_created, HostWarning,
 };
@@ -31,16 +33,34 @@ const EDITOR: EditorSpec = EditorSpec {
     extra: None,
 };
 
+/// A row's `<For>` key: its id plus every field the row shows or edits. Never the
+/// live status (a poll must not rebuild a row) and never `updated_at` (#564 port-drift
+/// discovery bumps it in the background, mid-edit).
+fn row_key(h: &ResolumeHostDto) -> (String, String, String, u16, bool) {
+    (
+        h.id.clone(),
+        h.label.clone(),
+        h.host.clone(),
+        h.port,
+        h.is_enabled,
+    )
+}
+
 #[component]
 pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
     let hosts = RwSignal::new(Vec::<ResolumeHostDto>::new());
-    let editing = RwSignal::new(EditTarget::Closed);
-    let draft = ConnectionDraft::default();
+    let editor = ListEditor::default();
 
+    // Every list refresh goes through here, so an editor left open on a host that
+    // was deleted meanwhile (here or in another tab) closes with it.
+    let apply = move |list: Vec<ResolumeHostDto>| {
+        editor.forget_missing(list.iter().map(|h| h.id.as_str()));
+        hosts.set(list);
+    };
     let reload = move || {
         leptos::task::spawn_local(async move {
             if let Ok(list) = settings::list_resolume_hosts().await {
-                hosts.set(list);
+                apply(list);
             }
         });
     };
@@ -48,61 +68,37 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
     reload();
     gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, reload).forget();
 
-    let close_editor = move || {
-        editing.set(EditTarget::Closed);
-        draft.clear_message();
-    };
-    let open_new = move || {
-        draft.reset(DEFAULT_PORT);
-        editing.set(EditTarget::New);
-    };
     let open_edit = move |id: String| {
         if let Some(h) = hosts.with_untracked(|list| list.iter().find(|h| h.id == id).cloned()) {
-            draft.load(&h.label, &h.host, h.port, h.is_enabled);
-            editing.set(EditTarget::Item(h.id));
+            editor.open_item(h.id, &h.label, &h.host, h.port, h.is_enabled);
         }
     };
 
     let save = move || {
-        let target = editing.get_untracked();
-        if target == EditTarget::Closed || draft.busy.get_untracked() {
+        let Some((ticket, fields)) = editor.begin_save() else {
             return;
-        }
-        let fields = match draft.validated() {
-            Ok(fields) => fields,
-            Err(message) => {
-                draft.show("error", message);
-                return;
-            }
         };
         let payload = ResolumeHostDraft {
             label: fields.label,
             host: fields.host,
             port: fields.port,
-            is_enabled: draft.enabled.get_untracked(),
+            is_enabled: editor.draft.enabled.get_untracked(),
         };
-        let updating = target.item_id().map(str::to_string);
-        draft.busy.set(true);
-        draft.show(
-            "info",
-            if updating.is_some() {
-                "Saving changes…"
-            } else {
-                "Creating connection…"
-            },
-        );
+        let updating = ticket.updating();
+        editor.mark_saving(if updating.is_some() {
+            "Saving changes…"
+        } else {
+            "Creating connection…"
+        });
         leptos::task::spawn_local(async move {
             let result = match &updating {
                 Some(id) => settings::update_resolume_host(id, &payload).await,
                 None => settings::create_resolume_host(&payload).await,
             };
-            draft.busy.set(false);
-            // The operator may have opened another editor meanwhile: leave that one alone.
-            let still_open = editing.get_untracked() == target;
             match result {
                 Ok(_) => {
                     if let Ok(list) = settings::list_resolume_hosts().await {
-                        hosts.set(list);
+                        apply(list);
                     }
                     toast.show(
                         if updating.is_some() {
@@ -112,15 +108,11 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                         },
                         "success",
                     );
-                    if still_open {
-                        close_editor();
-                    }
+                    editor.finish_save(&ticket, None);
                 }
                 Err(err) => {
                     let message = format!("Unable to save connection. {err}");
-                    if still_open {
-                        draft.show("error", &message);
-                    } else {
+                    if !editor.finish_save(&ticket, Some(&message)) {
                         toast.show(&message, "error");
                     }
                 }
@@ -138,11 +130,9 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match settings::delete_resolume_host(&id).await {
                 Ok(()) => {
-                    if editing.with_untracked(|t| t.is_item(&id)) {
-                        close_editor();
-                    }
+                    editor.discard_if_open_on(&id);
                     if let Ok(list) = settings::list_resolume_hosts().await {
-                        hosts.set(list);
+                        apply(list);
                     }
                     toast.show("Deleted Resolume connection.", "success");
                 }
@@ -166,7 +156,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 Err(err) => toast.show(&format!("Test failed: {err}"), "error"),
             }
             if let Ok(list) = settings::list_resolume_hosts().await {
-                hosts.set(list);
+                apply(list);
             }
         });
     };
@@ -193,13 +183,15 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             }
             mapping_refreshing.set(false);
             if let Ok(list) = settings::list_resolume_hosts().await {
-                hosts.set(list);
+                apply(list);
             }
         });
     };
 
-    let adding = move || editing.with(EditTarget::is_new);
+    let adding = move || editor.is_new();
     let each_host = move || hosts.get();
+    let add_ref = NodeRef::<leptos::html::Button>::new();
+    focus_on_close(editor, add_ref, EditTarget::New);
 
     view! {
         <section class="settings__card">
@@ -220,13 +212,13 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             </header>
             <div class="settings__list-toolbar">
                 <button type="button" class="settings__button settings__button--primary"
-                    data-role="host-add" prop:disabled=adding
-                    on:click=move |_| open_new()>"+ Add connection"</button>
+                    node_ref=add_ref data-role="host-add" prop:disabled=adding
+                    on:click=move |_| editor.open_new(DEFAULT_PORT)>"+ Add connection"</button>
             </div>
             <ul class="settings__list" data-role="resolume-host-list">
                 <Show when=adding>
                     <li class="settings__list-item" data-role="host-new-item" data-editing="true">
-                        {render_connection_editor(EDITOR, draft, true, save, close_editor)}
+                        {render_connection_editor(EDITOR, editor, true, save)}
                     </li>
                 </Show>
                 <Show when=move || hosts.with(Vec::is_empty) && !adding()>
@@ -234,18 +226,25 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 </Show>
                 <For
                     each=each_host
-                    // Identity only: `updated_at` changes on an edit, never on a status
-                    // change, so the poll keeps every row (and an open editor) in place.
-                    key=|h: &ResolumeHostDto| (h.id.clone(), h.updated_at.clone())
+                    key=row_key
                     children=move |h: ResolumeHostDto| {
                         let edit_id = h.id.clone();
-                        let editing_this = Memo::new(move |_| editing.with(|t| t.is_item(&edit_id)));
-                        // This row's live status, re-read on every poll (ui skill: key on
-                        // identity, read the state through a Memo).
+                        let editing_this = Memo::new(move |_| editor.is_open_on(&edit_id));
+                        // This row's live status and timestamps, re-read on every poll (ui
+                        // skill: key on identity, read the changing state through a Memo).
                         let status_id = h.id.clone();
                         let status = Memo::new(move |_| {
                             hosts.with(|list| {
                                 list.iter().find(|x| x.id == status_id).and_then(|x| x.status.clone())
+                            })
+                        });
+                        let meta_id = h.id.clone();
+                        let timestamps = Memo::new(move |_| {
+                            hosts.with(|list| {
+                                list.iter()
+                                    .find(|x| x.id == meta_id)
+                                    .map(|x| updated_created(&x.updated_at, &x.created_at))
+                                    .unwrap_or_default()
                             })
                         });
                         let is_enabled = h.is_enabled;
@@ -270,10 +269,11 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                         let label = h.label.clone();
                         let host = h.host.clone();
                         let port = h.port;
-                        let timestamps = updated_created(&h.updated_at, &h.created_at);
                         let summary = move || {
                             let (id_test, id_refresh) = (id.clone(), id.clone());
                             let (id_edit, id_delete) = (id.clone(), id.clone());
+                            let edit_ref = NodeRef::<leptos::html::Button>::new();
+                            focus_on_close(editor, edit_ref, EditTarget::Item(id.clone()));
                             view! {
                                 <div class="settings__list-summary">
                                     <div class="settings__list-primary">
@@ -292,7 +292,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                                                 title="Last response time">{latency}</span>
                                         </p>
                                         <p class="settings__list-meta settings__list-meta--muted">
-                                            {timestamps.clone()}
+                                            {move || timestamps.get()}
                                         </p>
                                         {warning}
                                     </div>
@@ -306,7 +306,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                                             prop:disabled=move || mapping_refreshing.get()
                                             on:click=move |_| refresh_mapping(id_refresh.clone())>"Refresh mapping"</button>
                                         <button type="button" class="settings__button settings__button--ghost settings__button--small"
-                                            data-role="host-edit" data-id=id_edit.clone()
+                                            node_ref=edit_ref data-role="host-edit" data-id=id_edit.clone()
                                             on:click=move |_| open_edit(id_edit.clone())>"Edit"</button>
                                         <button type="button" class="settings__button settings__button--danger settings__button--small"
                                             data-role="host-delete" data-id=id_delete.clone()
@@ -320,7 +320,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                                 data-enabled=h.is_enabled.to_string()
                                 data-editing=move || editing_this.get().to_string()>
                                 {move || if editing_this.get() {
-                                    render_connection_editor(EDITOR, draft, false, save, close_editor)
+                                    render_connection_editor(EDITOR, editor, false, save)
                                 } else {
                                     summary().into_any()
                                 }}
@@ -377,7 +377,8 @@ fn mapping_refreshed_message(missing_clips: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::mapping_refreshed_message;
+    use super::{mapping_refreshed_message, row_key};
+    use crate::api::settings::{ResolumeHostDto, ResolumeStatusDto};
 
     #[test]
     fn a_complete_mapping_says_every_clip_was_found() {
@@ -397,5 +398,60 @@ mod tests {
             mapping_refreshed_message(&["#timer".to_string(), "#song-name".to_string()]),
             "Mapping refreshed — 2 clips missing: #timer, #song-name"
         );
+    }
+
+    fn host(state: &str, updated_at: &str) -> ResolumeHostDto {
+        ResolumeHostDto {
+            id: "h1".into(),
+            label: "Main Arena".into(),
+            host: "resolume.lan".into(),
+            port: 8090,
+            is_enabled: true,
+            created_at: "c".into(),
+            updated_at: updated_at.into(),
+            status: Some(ResolumeStatusDto {
+                state: state.into(),
+                last_latency_ms: None,
+                last_error: None,
+                consecutive_failures: 0,
+                error_since: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_status_change_or_a_background_updated_at_bump_keeps_the_row() {
+        // #819: the poll's status flip and #564's port-drift `updated_at` write must
+        // not rebuild the row (and re-focus an open editor).
+        assert_eq!(
+            row_key(&host("connected", "t1")),
+            row_key(&host("error", "t2"))
+        );
+    }
+
+    #[test]
+    fn every_shown_or_edited_field_re_keys_the_row() {
+        let base = host("connected", "t1");
+        let changed = [
+            ResolumeHostDto {
+                label: "Other".into(),
+                ..base.clone()
+            },
+            ResolumeHostDto {
+                host: "other.lan".into(),
+                ..base.clone()
+            },
+            ResolumeHostDto {
+                port: 8091,
+                ..base.clone()
+            },
+            ResolumeHostDto {
+                is_enabled: false,
+                ..base.clone()
+            },
+        ];
+        for edited in &changed {
+            assert_ne!(row_key(&base), row_key(edited));
+        }
     }
 }
