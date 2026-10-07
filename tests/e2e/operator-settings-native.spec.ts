@@ -53,6 +53,40 @@ async function gotoOperatorSettings(page: Page): Promise<void> {
   await expect(page.locator(".operator__header")).toHaveCount(1);
 }
 
+type Rect = { left: number; right: number; top: number; bottom: number; height: number; middle: number };
+
+/**
+ * The standalone header's "← Back to hub" link and version label, measured in ONE
+ * layout pass after the web font has loaded: two separate `boundingBox()` calls can
+ * straddle the Inter swap (`font-display: swap`) and mix two layouts.
+ */
+async function headerNavLayout(
+  page: Page,
+): Promise<{ link: Rect; version: Rect; scrollWidth: number; clientWidth: number }> {
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const rect = (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) throw new Error(`${selector} not found`);
+      const r = el.getBoundingClientRect();
+      return {
+        left: r.left,
+        right: r.right,
+        top: r.top,
+        bottom: r.bottom,
+        height: r.height,
+        middle: r.top + r.height / 2,
+      };
+    };
+    return {
+      link: rect(".settings__header-nav .settings__link"),
+      version: rect('.settings__header-nav [data-testid="version"]'),
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    };
+  });
+}
+
 test("operator Settings is a native panel, not an iframe, with a single header", async ({
   page,
 }) => {
@@ -139,15 +173,19 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   // ("← Back to hubv0.4.x", 0 px apart).
   const version = page.locator('.settings__header-nav [data-testid="version"]');
   await expect(version).toHaveText(/^v\d+\.\d+\.\d+/);
-  const linkBox = await page
-    .locator(".settings__header-nav .settings__link")
-    .boundingBox();
-  const versionBox = await version.boundingBox();
-  expect(linkBox).not.toBeNull();
-  expect(versionBox).not.toBeNull();
-  expect(versionBox!.x - (linkBox!.x + linkBox!.width)).toBeGreaterThanOrEqual(12);
-  const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
-  expect(Math.abs(middle(versionBox!) - middle(linkBox!))).toBeLessThanOrEqual(2);
+  const desktop = await headerNavLayout(page);
+  expect(desktop.version.left - desktop.link.right).toBeGreaterThanOrEqual(12);
+  expect(Math.abs(desktop.version.middle - desktop.link.middle)).toBeLessThanOrEqual(2);
+
+  // On a phone the version wraps under the link; the link stays one line (it was
+  // squeezed to one word per line) and nothing scrolls sideways.
+  const viewport = page.viewportSize();
+  await page.setViewportSize({ width: 360, height: 720 });
+  const phone = await headerNavLayout(page);
+  expect(phone.link.height).toBeLessThanOrEqual(desktop.link.height + 1);
+  expect(phone.version.top).toBeGreaterThanOrEqual(phone.link.bottom);
+  expect(phone.scrollWidth).toBeLessThanOrEqual(phone.clientWidth);
+  if (viewport) await page.setViewportSize(viewport);
 
   const cards = page.locator(".settings__main .settings__card");
   const count = await cards.count();
