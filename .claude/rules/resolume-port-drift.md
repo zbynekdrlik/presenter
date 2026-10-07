@@ -61,6 +61,17 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   never refused), so the two hosts can end up swapped. Neither is a
   regression from #564. A tie-breaker (e.g. prefer the host whose own
   configured port is refused) would be a separate decision.
+- **Operational rule — two Arenas on one PC: keep their webserver ports MORE
+  than `PORT_DRIFT_PROBE_RANGE` (5) apart** (PP since 2026-10-07: Arena-Bridge
+  8090, Songs Arena 8100). Then neither drift window reaches the other Arena
+  and the residual risk above cannot occur. The port lives in
+  `<user>\Documents\Resolume Arena\Preferences\server.xml`
+  (`<ServerController ... port="...">`), per Windows user, i.e. per Arena
+  instance. Edit it only with that Arena closed, keep a `.bak-<ts>` copy, then
+  re-point the presenter host (`PUT /integrations/resolume/hosts/{id}`).
+- **Clearing a wrong persisted drift by hand** (pre-#813 builds): a host/port
+  edit clears `active_port` (`repository/resolume.rs`, #564), so PUT the host
+  to a throw-away port and straight back.
 - Tests: `port_drift_sibling_tests.rs` drives the real registry + workers
   (`set_hosts`, `snapshot_for`, an in-memory `Repository` for the persisted
   clear). Passing `repo.list_resolume_hosts()` to `set_hosts` is safe in
