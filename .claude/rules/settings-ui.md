@@ -155,11 +155,16 @@ by `CardItem::key`) with unit tests for this.
   calls can straddle the swap and mix two layouts (a false red measured: gap 6 px,
   centres 3 px apart).
 - Phone widths (the standalone page, `operator-settings-native.spec.ts` checks
-  360 px): a flex row with a text input needs `width: 0; min-width: 0` on the
-  input. Its ~20-character intrinsic width otherwise counts towards the card's
-  minimum width (the NDI name input made the page 404 px on a 360 px phone). The
-  clip-name legend stacks to one column at ≤ 840 px, the header pads 20 px at
-  ≤ 480 px, and the header nav is `flex-wrap: wrap` + `white-space: nowrap`.
+  360 and 320 px): a flex row with a text input needs `width: 0; min-width: 0`
+  on the input (`min-width: 0` alone is not enough). Its ~20-character intrinsic
+  width otherwise counts towards the card's minimum width (the NDI name input made
+  the page 404 px on a 360 px phone). The clip-name legend stacks to one column
+  at ≤ 840 px (its 160 px name column alone made the page 393 px), the header
+  keeps a 16 px gap between title and nav and drops to 20 px side padding
+  (`padding-inline`) at ≤ 480 px, and the header nav is `flex-wrap: wrap` +
+  `white-space: nowrap`. To find what sets a
+  minimum width, set `width: min-content` on each card and compare — overflow
+  checks on a forced narrow width miss shrinkable content.
 
 ## Checking layout on Tier-0 (no local WASM build)
 
