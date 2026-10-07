@@ -143,6 +143,24 @@ by `CardItem::key`) with unit tests for this.
   `toEqual([])` on the rest (ui skill #718).
 - Delete through `page.request`, which is not routed and does not log to the console.
 
+## Measuring layout (E2E and live checks)
+
+- `.settings-layout` is the page's scroll container (`height: 100%;
+  overflow-y: auto`, so overflow-x computes to `auto`). It absorbs every overflow:
+  `document.documentElement.scrollWidth` stays at the viewport width even when the
+  page scrolls sideways. Measure `.settings-layout`'s `scrollWidth` vs
+  `clientWidth`.
+- The bundled Inter font uses `font-display: swap`. Read every rect you compare in
+  ONE `page.evaluate` after `await document.fonts.ready`. Two `boundingBox()`
+  calls can straddle the swap and mix two layouts (a false red measured: gap 6 px,
+  centres 3 px apart).
+- Phone widths (the standalone page, `operator-settings-native.spec.ts` checks
+  360 px): a flex row with a text input needs `width: 0; min-width: 0` on the
+  input. Its ~20-character intrinsic width otherwise counts towards the card's
+  minimum width (the NDI name input made the page 404 px on a 360 px phone). The
+  clip-name legend stacks to one column at ≤ 840 px, the header pads 20 px at
+  ≤ 480 px, and the header nav is `flex-wrap: wrap` + `white-space: nowrap`.
+
 ## Checking layout on Tier-0 (no local WASM build)
 
 - For CSS, inject the candidate stylesheet into the LIVE dev page with your own

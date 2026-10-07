@@ -44,6 +44,7 @@ body.settings {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 24px 40px;
   background: #1e293b;
   border-bottom: 1px solid rgba(148, 163, 184, 0.25);
@@ -468,6 +469,19 @@ body.in-iframe.settings .settings__card {
   .settings__form-row--port-middle {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* The clip-name legend stacks each name over its meaning: its 160 px name
+     column forced the page 44 px wider than a 360 px phone (#819). */
+  .settings__legend dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  /* Phone: the header's 40 px side padding leaves the nav too little room. */
+  .settings__header {
+    padding: 16px 20px;
+  }
 }
 
 /* ── Video Sources (NDI) — merged from former WASM-orphan settings.css ── */
@@ -583,4 +597,9 @@ body.in-iframe.settings .settings__card {
 }
 .settings__ndi-select .settings__input {
   flex: 1;
+  /* A text input's intrinsic width is ~20 characters, and it counted towards the
+     card's minimum width: the page was 404 px wide on a 360 px phone and scrolled
+     sideways (#819). `width: 0` drops that minimum; `flex: 1` still fills the row. */
+  width: 0;
+  min-width: 0;
 }
