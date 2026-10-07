@@ -481,8 +481,9 @@ impl ListEditor {
     /// A save finished (after a success, call it AFTER the list reload; a failure
     /// calls it at once). Success closes the editor, failure shows `error` in it —
     /// only if it is still the editor the save started from ([`save_is_current`]:
-    /// same open generation AND same target). Returns whether it was, so the card can toast an error nobody saw. Save is
-    /// re-enabled last, so a repeat submit cannot slip in before the editor closes.
+    /// same open generation AND same target). Returns whether it was, so the card
+    /// can toast an error nobody saw. Save is re-enabled last, so a repeat submit
+    /// cannot slip in before the editor closes.
     pub(super) fn finish_save(self, ticket: &SaveTicket, error: Option<&str>) -> bool {
         let generation = self.generation.get_untracked();
         let current = self

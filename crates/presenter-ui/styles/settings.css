@@ -62,12 +62,14 @@ body.settings {
 
 /* "← Back to hub" and the version label, side by side with a gap (they rendered
    glued together: "← Back to hubv0.4.x"). On a narrow screen the version wraps
-   under the link instead of squeezing the link to one word per line. */
+   under the link; `nowrap` keeps each of them on one line at any width and with
+   either font (fallback or Inter), instead of one word per line. */
 .settings__header-nav {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 16px;
+  white-space: nowrap;
 }
 
 .settings__header-nav .settings__link {
