@@ -277,8 +277,10 @@ impl ListEditor {
     /// from. Returns whether it was, so the card can toast an error nobody saw. Save is
     /// re-enabled last, so a repeat submit cannot slip in before the editor closes.
     pub(super) fn finish_save(self, ticket: &SaveTicket, error: Option<&str>) -> bool {
-        let current = self.generation.get_untracked() == ticket.generation
-            && self.editing.get_untracked() == ticket.target;
+        let generation = self.generation.get_untracked();
+        let current = self
+            .editing
+            .with_untracked(|editing| save_is_current(ticket, generation, editing));
         if current {
             match error {
                 None => self.close(),
@@ -300,6 +302,13 @@ impl ListEditor {
     }
 }
 
+/// Is the editor a finished save started from still the one on screen? Not when it
+/// was closed, moved to another item, or re-opened since (even on the same row: the
+/// open generation moved on), so a late save never closes or overwrites a newer editor.
+fn save_is_current(ticket: &SaveTicket, generation: u64, editing: &EditTarget) -> bool {
+    ticket.generation == generation && ticket.target == *editing
+}
+
 /// Give `button` focus when the editor for `target` closes, so a keyboard user lands
 /// back on the Edit / "+ Add" button they started from instead of on `<body>`.
 pub(super) fn focus_on_close(
@@ -309,11 +318,20 @@ pub(super) fn focus_on_close(
 ) {
     Effect::new(move || {
         if let Some(el) = button.get() {
-            if editor.take_focus_return(&target) {
+            if editor.take_focus_return(&target) && focus_is_free() {
                 let _ = el.focus();
             }
         }
     });
+}
+
+/// Nothing has focus (it fell back to `<body>` when the editor holding it was
+/// removed). A save closes its editor one request after the click; if the operator
+/// has clicked into another field meanwhile, focus stays there.
+fn focus_is_free() -> bool {
+    crate::utils::window::document()
+        .active_element()
+        .is_none_or(|el| el.tag_name() == "BODY")
 }
 
 /// An item-specific extra text field in the editor (Android's launch package).
@@ -478,7 +496,42 @@ fn render_extra_field(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_connection, ConnectionFields, EditTarget};
+    use super::{save_is_current, validate_connection, ConnectionFields, EditTarget, SaveTicket};
+
+    #[test]
+    fn a_late_save_only_settles_the_editor_it_started_from() {
+        let ticket = SaveTicket {
+            target: EditTarget::Item("host-1".into()),
+            generation: 4,
+        };
+        // Still the same editor: close it / show the error in it.
+        assert!(save_is_current(
+            &ticket,
+            4,
+            &EditTarget::Item("host-1".into())
+        ));
+        // The operator re-opened the SAME row meanwhile (generation moved on).
+        assert!(!save_is_current(
+            &ticket,
+            5,
+            &EditTarget::Item("host-1".into())
+        ));
+        // …closed it, or opened another row / the new item.
+        assert!(!save_is_current(&ticket, 4, &EditTarget::Closed));
+        assert!(!save_is_current(
+            &ticket,
+            5,
+            &EditTarget::Item("host-2".into())
+        ));
+        assert!(!save_is_current(&ticket, 5, &EditTarget::New));
+
+        let new_item = SaveTicket {
+            target: EditTarget::New,
+            generation: 7,
+        };
+        assert!(save_is_current(&new_item, 7, &EditTarget::New));
+        assert!(!save_is_current(&new_item, 8, &EditTarget::New));
+    }
 
     #[test]
     fn edit_target_tells_the_new_item_from_an_existing_row() {

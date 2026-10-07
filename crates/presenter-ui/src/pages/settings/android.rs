@@ -11,6 +11,7 @@ use leptos::prelude::*;
 use super::host_editor::{
     focus_on_close, render_connection_editor, EditTarget, EditorSpec, ExtraField, ListEditor,
 };
+use super::list_sync::ResponseOrder;
 use super::row_status::{android_attempts, android_state, updated_created};
 use super::{ToastHandle, STATUS_REFRESH_MS};
 use crate::api::settings::{self, AndroidDisplayDraft, AndroidDisplayDto};
@@ -60,19 +61,20 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
     let component = RwSignal::new(String::from(DEFAULT_COMPONENT));
     let spec = editor_spec(component);
 
-    // Every list refresh goes through here, so an editor left open on a display that
-    // was deleted meanwhile (here or in another tab) closes with it.
-    let apply = move |list: Vec<AndroidDisplayDto>| {
-        editor.forget_missing(list.iter().map(|d| d.id.as_str()));
-        displays.set(list);
-    };
-    let reload = move || {
-        leptos::task::spawn_local(async move {
-            if let Ok(list) = settings::list_android_displays().await {
-                apply(list);
+    // Every list fetch goes through here: numbered, so a slow older response (a poll
+    // sent before a save) never overwrites a newer one; and an editor left open on a
+    // display deleted meanwhile (here or in another tab) closes with it.
+    let order = ResponseOrder::default();
+    let fetch_displays = move || async move {
+        let seq = order.begin();
+        if let Ok(list) = settings::list_android_displays().await {
+            if order.accept(seq) {
+                editor.forget_missing(list.iter().map(|d| d.id.as_str()));
+                displays.set(list);
             }
-        });
+        }
     };
+    let reload = move || leptos::task::spawn_local(fetch_displays());
     // Initial load + 5s status poll.
     reload();
     gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, reload).forget();
@@ -119,9 +121,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
             };
             match result {
                 Ok(_) => {
-                    if let Ok(list) = settings::list_android_displays().await {
-                        apply(list);
-                    }
+                    fetch_displays().await;
                     toast.show(
                         if updating.is_some() {
                             "Saved Android stage display."
@@ -153,9 +153,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
             match settings::delete_android_display(&id).await {
                 Ok(()) => {
                     editor.discard_if_open_on(&id);
-                    if let Ok(list) = settings::list_android_displays().await {
-                        apply(list);
-                    }
+                    fetch_displays().await;
                     toast.show("Deleted Android stage display.", "success");
                 }
                 Err(err) => toast.show(&format!("Unable to delete display. {err}"), "error"),
@@ -169,9 +167,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                 Ok(()) => {
                     toast.show("Launch queued — refreshing status…", "success");
                     gloo_timers::future::TimeoutFuture::new(600).await;
-                    if let Ok(list) = settings::list_android_displays().await {
-                        apply(list);
-                    }
+                    fetch_displays().await;
                 }
                 Err(err) => toast.show(&format!("Unable to trigger launch. {err}"), "error"),
             }

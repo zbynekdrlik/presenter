@@ -11,6 +11,7 @@ use leptos::prelude::*;
 use super::host_editor::{
     focus_on_close, render_connection_editor, EditTarget, EditorSpec, ListEditor,
 };
+use super::list_sync::ResponseOrder;
 use super::row_status::{
     latency_text, resolume_state, resolume_warning, updated_created, HostWarning,
 };
@@ -51,19 +52,20 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
     let hosts = RwSignal::new(Vec::<ResolumeHostDto>::new());
     let editor = ListEditor::default();
 
-    // Every list refresh goes through here, so an editor left open on a host that
-    // was deleted meanwhile (here or in another tab) closes with it.
-    let apply = move |list: Vec<ResolumeHostDto>| {
-        editor.forget_missing(list.iter().map(|h| h.id.as_str()));
-        hosts.set(list);
-    };
-    let reload = move || {
-        leptos::task::spawn_local(async move {
-            if let Ok(list) = settings::list_resolume_hosts().await {
-                apply(list);
+    // Every list fetch goes through here: numbered, so a slow older response (a poll
+    // sent before a save) never overwrites a newer one; and an editor left open on a
+    // host deleted meanwhile (here or in another tab) closes with it.
+    let order = ResponseOrder::default();
+    let fetch_hosts = move || async move {
+        let seq = order.begin();
+        if let Ok(list) = settings::list_resolume_hosts().await {
+            if order.accept(seq) {
+                editor.forget_missing(list.iter().map(|h| h.id.as_str()));
+                hosts.set(list);
             }
-        });
+        }
     };
+    let reload = move || leptos::task::spawn_local(fetch_hosts());
     // Initial load + 5s status poll.
     reload();
     gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, reload).forget();
@@ -97,9 +99,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             };
             match result {
                 Ok(_) => {
-                    if let Ok(list) = settings::list_resolume_hosts().await {
-                        apply(list);
-                    }
+                    fetch_hosts().await;
                     toast.show(
                         if updating.is_some() {
                             "Updated Resolume connection."
@@ -131,9 +131,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             match settings::delete_resolume_host(&id).await {
                 Ok(()) => {
                     editor.discard_if_open_on(&id);
-                    if let Ok(list) = settings::list_resolume_hosts().await {
-                        apply(list);
-                    }
+                    fetch_hosts().await;
                     toast.show("Deleted Resolume connection.", "success");
                 }
                 Err(err) => toast.show(&format!("Unable to delete connection. {err}"), "error"),
@@ -155,9 +153,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 }
                 Err(err) => toast.show(&format!("Test failed: {err}"), "error"),
             }
-            if let Ok(list) = settings::list_resolume_hosts().await {
-                apply(list);
-            }
+            fetch_hosts().await;
         });
     };
 
@@ -182,9 +178,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 Err(err) => toast.show(&format!("Mapping refresh failed: {err}"), "error"),
             }
             mapping_refreshing.set(false);
-            if let Ok(list) = settings::list_resolume_hosts().await {
-                apply(list);
-            }
+            fetch_hosts().await;
         });
     };
 

@@ -41,9 +41,15 @@ status state needs its `.settings__status--<state>` colour there.
   request, reload the list, THEN `finish_save` — it re-enables Save last (a held
   Enter must not POST twice) and closes only if the open-generation counter still
   matches (the operator may have re-opened an editor, even the same row).
-- Every list refresh goes through the card's `apply`, which calls
-  `forget_missing` (a row deleted in another tab closes its editor).
-- Focus returns to the row's Edit button / "+ Add" via `focus_on_close`.
+- Every list fetch goes through the card's `fetch_hosts` / `fetch_displays`.
+  - It is numbered by `list_sync::ResponseOrder`, so a poll sent before a save and
+    landing after the save's reload is dropped instead of reverting the row.
+  - It calls `forget_missing`, so a row deleted in another tab closes its editor.
+  - Never call `hosts.set(list)` directly.
+- Focus returns to the row's Edit button / "+ Add" via `focus_on_close`, but only
+  when focus fell back to `<body>`. The save's close is async, and the operator may
+  already be typing elsewhere. The late-save check is the pure `save_is_current`,
+  which is unit-tested.
 
 ## Row `<For>` key: id + the fields the row shows or edits — never status, never `updated_at`
 
