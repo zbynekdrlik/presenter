@@ -816,3 +816,71 @@ test('#819 unsaved changes lock the other rows\' Edit and "+ Add" until they are
 
   expect(errors).toEqual([]);
 });
+
+test('#819 a row deleted elsewhere during its own save: focus reaches "+ Add" once the save settles', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const host = await createVia<ResolumeHost>(page, RESOLUME_HOSTS, {
+    label: `GoneMidSave${Date.now()}`,
+    host: 'arena-gone-mid-save.invalid',
+    port: 8090,
+    isEnabled: false,
+  });
+  let removed = false;
+
+  try {
+    await gotoOperatorSettings(page);
+    const row = resolumeRow(page, host.id);
+    await page.locator(`[data-role="host-edit"][data-id="${host.id}"]`).click();
+    await row.locator('[data-role="host-label"]').fill(`${host.label}Saved`);
+
+    // Hold the save's PUT, and remove the row elsewhere while it is in flight.
+    const putHeld = deferred();
+    const release = deferred();
+    await page.route(
+      (u) => u.pathname === `${RESOLUME_HOSTS}/${host.id}`,
+      async (route) => {
+        if (route.request().method() !== 'PUT') {
+          await route.fallback();
+          return;
+        }
+        putHeld.resolve();
+        await release.promise;
+        await route.continue();
+      },
+    );
+    await row.locator('[data-role="host-submit"]').click();
+    await putHeld.promise;
+    await deleteVia(page, `${RESOLUME_HOSTS}/${host.id}`);
+    removed = true;
+
+    // The next poll closes the editor even though its save is still in flight…
+    const toast = page.locator('[data-role="settings-toast"]');
+    await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0, { timeout: 20_000 });
+    await expect(toast).toHaveText('This connection was removed elsewhere.');
+    // …while "+ Add" stays locked by that save, so it cannot take focus yet.
+    const add = page.locator('[data-role="host-add"]');
+    await expect(add).toHaveAttribute('data-lock', 'saving');
+    await expect(add).toBeDisabled();
+
+    // The PUT now reaches a server without the row (a real 404): the save fails,
+    // the lock lifts, and the focus request still lands on "+ Add" — it was not used
+    // up on the disabled button.
+    release.resolve();
+    await expect(toast).toHaveText(/^Unable to save connection\./);
+    await expect(add).toBeEnabled();
+    await expect(add).toBeFocused();
+  } finally {
+    if (!removed) await deleteVia(page, `${RESOLUME_HOSTS}/${host.id}`);
+  }
+
+  // Exactly one deliberate non-2xx — that PUT's 404, which Chrome logs (ui skill
+  // #598 / #718) — and nothing else.
+  const notFound = errors.filter((e) =>
+    /Failed to load resource: the server responded with a status of 404\b/.test(e),
+  );
+  expect(notFound).toHaveLength(1);
+  expect(errors.filter((e) => !notFound.includes(e))).toEqual([]);
+});
