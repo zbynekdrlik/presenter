@@ -58,11 +58,18 @@ type Rect = { left: number; right: number; top: number; bottom: number; height: 
 /**
  * The standalone header's "← Back to hub" link and version label, measured in ONE
  * layout pass after the web font has loaded: two separate `boundingBox()` calls can
- * straddle the Inter swap (`font-display: swap`) and mix two layouts.
+ * straddle the Inter swap (`font-display: swap`) and mix two layouts. Also the
+ * header's content-box right edge, and the widths of `.settings-layout` — the page's
+ * real scroll container (`overflow-y: auto`), which absorbs any overflow, so the
+ * document itself never scrolls sideways.
  */
-async function headerNavLayout(
-  page: Page,
-): Promise<{ link: Rect; version: Rect; scrollWidth: number; clientWidth: number }> {
+async function headerNavLayout(page: Page): Promise<{
+  link: Rect;
+  version: Rect;
+  headerContentRight: number;
+  scrollWidth: number;
+  clientWidth: number;
+}> {
   return page.evaluate(async () => {
     await document.fonts.ready;
     const rect = (selector: string) => {
@@ -78,11 +85,16 @@ async function headerNavLayout(
         middle: r.top + r.height / 2,
       };
     };
+    const header = document.querySelector(".settings__header");
+    const layout = document.querySelector(".settings-layout");
+    if (!header || !layout) throw new Error("settings header / layout not found");
     return {
       link: rect(".settings__header-nav .settings__link"),
       version: rect('.settings__header-nav [data-testid="version"]'),
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
+      headerContentRight:
+        header.getBoundingClientRect().right - parseFloat(getComputedStyle(header).paddingRight),
+      scrollWidth: layout.scrollWidth,
+      clientWidth: layout.clientWidth,
     };
   });
 }
@@ -177,13 +189,17 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   expect(desktop.version.left - desktop.link.right).toBeGreaterThanOrEqual(12);
   expect(Math.abs(desktop.version.middle - desktop.link.middle)).toBeLessThanOrEqual(2);
 
-  // On a phone the version wraps under the link; the link stays one line (it was
-  // squeezed to one word per line) and nothing scrolls sideways.
+  // On a phone the version wraps under the link. Each stays one line (the link was
+  // squeezed to one word per line), both stay inside the header's padding, and the
+  // page does not scroll sideways (the NDI name input made it 404 px wide).
   const viewport = page.viewportSize();
   await page.setViewportSize({ width: 360, height: 720 });
   const phone = await headerNavLayout(page);
   expect(phone.link.height).toBeLessThanOrEqual(desktop.link.height + 1);
+  expect(phone.version.height).toBeLessThanOrEqual(desktop.version.height + 1);
   expect(phone.version.top).toBeGreaterThanOrEqual(phone.link.bottom);
+  expect(phone.link.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
+  expect(phone.version.right).toBeLessThanOrEqual(phone.headerContentRight + 0.5);
   expect(phone.scrollWidth).toBeLessThanOrEqual(phone.clientWidth);
   if (viewport) await page.setViewportSize(viewport);
 
