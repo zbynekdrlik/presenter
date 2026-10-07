@@ -218,7 +218,7 @@ async fn a_host_never_drifts_onto_the_port_of_a_sibling_on_the_same_address() {
         &registry,
         bridge.id,
         "the bridge host adopted the songs host's port, both hosts now drive the songs Arena",
-        |s| s.active_port.is_some(),
+        |s| s.active_port == Some(songs_port),
     )
     .await;
 }
@@ -256,7 +256,7 @@ async fn a_host_never_drifts_onto_a_port_a_sibling_has_adopted() {
         &registry,
         bridge.id,
         "the bridge host adopted the port the songs host drifted to",
-        |s| s.active_port.is_some(),
+        |s| s.active_port == Some(songs_drifted_port),
     )
     .await;
 }
@@ -287,7 +287,7 @@ async fn a_host_never_drifts_onto_a_port_a_sibling_adopted_at_runtime() {
         &registry,
         bridge.id,
         "the bridge host adopted the port the songs host drifted to at runtime",
-        |s| s.active_port.is_some(),
+        |s| s.active_port == Some(arena_port),
     )
     .await;
     assert_eq!(

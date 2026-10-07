@@ -105,8 +105,10 @@ impl PortClaims {
     /// Record that host `id` now dials `port`, unless a sibling owns it. The
     /// check and the write happen under one lock, so two workers probing at
     /// the same moment cannot both take the same port. `Err` carries the
-    /// owning sibling's label. A host missing from the table (a driver
-    /// without a registry, or a host deleted meanwhile) has no siblings.
+    /// owning sibling's label. For a host missing from the table (a host
+    /// deleted meanwhile) nothing is recorded, but every other host on its
+    /// address still counts as a sibling, so their ports are still refused.
+    /// A driver without a registry has an empty table: no siblings.
     pub(super) fn try_claim(
         &self,
         id: ResolumeHostId,

@@ -4,9 +4,11 @@ paths:
   - "crates/presenter-server/src/resolume/port_drift_sibling_tests.rs"
   - "crates/presenter-server/src/resolume/port_drift.rs"
   - "crates/presenter-server/src/resolume/port_claims.rs"
+  - "crates/presenter-server/src/resolume/mod.rs"
+  - "crates/presenter-server/src/resolume/driver.rs"
 ---
 
-# Resolume port drift — never onto a sibling's Arena (#813); tests use verified-free consecutive ports
+# Resolume port drift — never onto a port another host on the same address owns (#813); tests use verified-free consecutive ports
 
 ## A drift never lands on a port another host on the same address owns (#813)
 
@@ -48,6 +50,17 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   the mapping. `notify_siblings_changed` uses `try_send` and falls back to a
   spawned `send` on a full queue: `set_hosts` holds the hosts lock every push
   needs, so it must never wait on a busy worker for this.
+- **Keep the order in `set_hosts`:** rebuild the table FIRST, then stop /
+  refresh / notify / spawn. A worker spawned or refreshed before the rebuild
+  checks against the old sibling set.
+- **Residual risk (config-only protection, no Arena identity exists):** an
+  Arena that lands on a port in the window that NO host has claimed yet (the
+  songs Arena cannot bind 8091 and takes 8092 before the songs host probed)
+  goes to whichever host probes first. An Arena that drifts onto ANOTHER
+  host's configured port is not excluded for that host (a configured port is
+  never refused), so the two hosts can end up swapped. Neither is a
+  regression from #564. A tie-breaker (e.g. prefer the host whose own
+  configured port is refused) would be a separate decision.
 - Tests: `port_drift_sibling_tests.rs` drives the real registry + workers
   (`set_hosts`, `snapshot_for`, an in-memory `Repository` for the persisted
   clear). A negative "never adopts" check first waits for the host's
