@@ -23,6 +23,11 @@ import {
 // (API read-back), "+ Add …" opens the same editor at the top of the list, a status
 // poll neither rebuilds a row nor resets a typed draft, and no form row is taller
 // than its content.
+//
+// Round 2 (the editor state machine's guards): a poll answered after a save never
+// reverts the row (`list_sync::ResponseOrder`), a row deleted elsewhere closes its
+// editor with a toast and focus on "+ Add", a save in flight locks every trigger and
+// ignores Escape / Cancel, and unsaved changes lock the other rows' Edit and "+ Add".
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
@@ -399,10 +404,18 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     await expect(editor.locator('[data-role="android-component"]')).toHaveValue('com.tcl.browser');
     await expect(editor).toBeInViewport();
 
+    // The launch package is part of the draft (round 2, item 7): changing only it is an
+    // unsaved change, so "+ Add display" is locked until Save or Cancel.
+    const androidAdd = page.locator('[data-role="android-add"]');
+    await expect(androidAdd).toBeEnabled();
+    await editor.locator('[data-role="android-component"]').fill('com.discarded/.Main');
+    await expect(androidAdd).toBeDisabled();
+    await expect(androidAdd).toHaveAttribute('data-lock', 'unsaved');
+
     // Cancel restores.
     await editor.locator('[data-role="android-label"]').fill(`${display.label}Discarded`);
-    await editor.locator('[data-role="android-component"]').fill('com.discarded/.Main');
     await page.click('[data-role="android-cancel"]');
+    await expect(androidAdd).toBeEnabled();
     await expect(page.locator('[data-role="android-editor"]')).toHaveCount(0);
     await expect(row.locator('.settings__host-label')).toHaveText(display.label);
     await expect(row.locator('[data-role="android-component-value"]')).toHaveText('com.tcl.browser');
@@ -522,6 +535,283 @@ test('#819 compact layout: no form row taller than its content, Companion card u
     expect(labels.filter((l) => l.height > 90)).toEqual([]);
   } finally {
     await deleteVia(page, `${ANDROID_DISPLAYS}/${display.id}`);
+  }
+
+  expect(errors).toEqual([]);
+});
+
+// ── #819 round 2: the editor state machine's guards ─────────────────────────────────
+
+/** A promise plus its resolver, to hold a routed request until the test releases it. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function twoHosts(page: Page, prefix: string): Promise<[ResolumeHost, ResolumeHost]> {
+  const stamp = Date.now();
+  const a = await createVia<ResolumeHost>(page, RESOLUME_HOSTS, {
+    label: `${prefix}A${stamp}`,
+    host: 'arena-a.invalid',
+    port: 8090,
+    isEnabled: false,
+  });
+  const b = await createVia<ResolumeHost>(page, RESOLUME_HOSTS, {
+    label: `${prefix}B${stamp}`,
+    host: 'arena-b.invalid',
+    port: 8091,
+    isEnabled: false,
+  });
+  return [a, b];
+}
+
+test('#819 a status poll sent before a save but answered after it never reverts the saved row', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const host = await createVia<ResolumeHost>(page, RESOLUME_HOSTS, {
+    label: `StalePoll${Date.now()}`,
+    host: 'arena-stale.invalid',
+    port: 8090,
+    isEnabled: false,
+  });
+  const savedLabel = `${host.label}Saved`;
+
+  try {
+    await gotoOperatorSettings(page);
+    const row = resolumeRow(page, host.id);
+    await expect(row.locator('.settings__host-label')).toHaveText(host.label);
+    await page.locator(`[data-role="host-edit"][data-id="${host.id}"]`).click();
+    await row.locator('[data-role="host-label"]').fill(savedLabel);
+    await row.locator('[data-role="host-port"]').fill('8096');
+
+    // Hold the card's next status poll: take its answer from the server NOW (the
+    // pre-save list) and deliver it only after the save and the save's own reload
+    // are done. That is the "slow poll lands last" order `list_sync::ResponseOrder`
+    // must drop.
+    const pollHeld = deferred();
+    const release = deferred();
+    const staleDelivered = deferred();
+    let holding = false;
+    await page.route(
+      (u) => u.pathname === RESOLUME_HOSTS,
+      async (route) => {
+        if (holding || route.request().method() !== 'GET') {
+          await route.fallback();
+          return;
+        }
+        holding = true;
+        const stale = await route.fetch();
+        pollHeld.resolve();
+        await release.promise;
+        await route.fulfill({ response: stale });
+        staleDelivered.resolve();
+      },
+    );
+    await pollHeld.promise;
+
+    await row.locator('[data-role="host-submit"]').click();
+    // The success toast is shown after the save's reload was applied.
+    await waitForToast(page, 'Updated Resolume connection.');
+    await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
+    await expect(row.locator('.settings__host-label')).toHaveText(savedLabel);
+
+    // Record every DOM change of the list: an applied stale answer would put the old
+    // label back, even if only until the next poll.
+    await page.evaluate(
+      ({ id, staleLabel }) => {
+        const flags = window as unknown as { staleLabelSeen?: boolean };
+        flags.staleLabelSeen = false;
+        const list = document.querySelector('[data-role="resolume-host-list"]');
+        if (!list) throw new Error('Resolume host list not found');
+        new MutationObserver(() => {
+          const label = list.querySelector(`li[data-id="${id}"] .settings__host-label`);
+          if (label?.textContent === staleLabel) flags.staleLabelSeen = true;
+        }).observe(list, { childList: true, subtree: true, characterData: true });
+      },
+      { id: host.id, staleLabel: host.label },
+    );
+    release.resolve();
+    await staleDelivered.promise;
+    // Two more polls: by the second one the stale answer has certainly been handled.
+    await waitForHostsPoll(page);
+    await waitForHostsPoll(page);
+
+    expect(
+      await page.evaluate(() => (window as unknown as { staleLabelSeen?: boolean }).staleLabelSeen),
+    ).toBe(false);
+    await expect(row.locator('.settings__host-label')).toHaveText(savedLabel);
+    await expect(row.locator('.settings__host-addr')).toHaveText(/arena-stale\.invalid\s*:8096/);
+    const saved = await resolumeHost(page, host.id);
+    expect(saved.label).toBe(savedLabel);
+    expect(saved.port).toBe(8096);
+  } finally {
+    await deleteVia(page, `${RESOLUME_HOSTS}/${host.id}`);
+  }
+
+  expect(errors).toEqual([]);
+});
+
+test('#819 a row deleted elsewhere while edited: the editor closes, a toast says why, focus goes to "+ Add"', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const host = await createVia<ResolumeHost>(page, RESOLUME_HOSTS, {
+    label: `GoneElsewhere${Date.now()}`,
+    host: 'arena-gone.invalid',
+    port: 8090,
+    isEnabled: false,
+  });
+  let removed = false;
+
+  try {
+    await gotoOperatorSettings(page);
+    const row = resolumeRow(page, host.id);
+    await page.locator(`[data-role="host-edit"][data-id="${host.id}"]`).click();
+    const label = row.locator('[data-role="host-label"]');
+    await label.fill(`${host.label}Unsaved`);
+    await expect(label).toBeFocused();
+
+    // Another operator (another tab, the API) removes the row being edited.
+    await deleteVia(page, `${RESOLUME_HOSTS}/${host.id}`);
+    removed = true;
+
+    // The card's next poll no longer lists it: the editor closes and says why,
+    // instead of silently throwing the typed change away.
+    await waitForToast(page, 'This connection was removed elsewhere.');
+    await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
+    await expect(row).toHaveCount(0);
+    // Focus does not fall back to <body>: it lands on "+ Add connection", unlocked.
+    const add = page.locator('[data-role="host-add"]');
+    await expect(add).toBeEnabled();
+    await expect(add).toBeFocused();
+  } finally {
+    if (!removed) await deleteVia(page, `${RESOLUME_HOSTS}/${host.id}`);
+  }
+
+  expect(errors).toEqual([]);
+});
+
+test('#819 while a save is in flight every Edit and "+ Add" is locked and Escape / Cancel are ignored', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const [a, b] = await twoHosts(page, 'Busy');
+  const savedLabel = `${a.label}Saved`;
+
+  try {
+    await gotoOperatorSettings(page);
+    const rowA = resolumeRow(page, a.id);
+    await page.locator(`[data-role="host-edit"][data-id="${a.id}"]`).click();
+    const label = rowA.locator('[data-role="host-label"]');
+    await label.fill(savedLabel);
+
+    // Hold the save's PUT until the locked state has been checked.
+    const putHeld = deferred();
+    const release = deferred();
+    await page.route(
+      (u) => u.pathname === `${RESOLUME_HOSTS}/${a.id}`,
+      async (route) => {
+        if (route.request().method() !== 'PUT') {
+          await route.fallback();
+          return;
+        }
+        putHeld.resolve();
+        await release.promise;
+        await route.continue();
+      },
+    );
+    await rowA.locator('[data-role="host-submit"]').click();
+    await putHeld.promise;
+
+    const editB = page.locator(`[data-role="host-edit"][data-id="${b.id}"]`);
+    const add = page.locator('[data-role="host-add"]');
+    await expect(rowA.locator('[data-role="host-submit"]')).toBeDisabled();
+    await expect(rowA.locator('[data-role="host-cancel"]')).toBeDisabled();
+    for (const trigger of [editB, add]) {
+      await expect(trigger).toBeDisabled();
+      await expect(trigger).toHaveAttribute('data-lock', 'saving');
+    }
+
+    // Escape is ignored while saving: the editor stays open with what was typed.
+    await label.press('Escape');
+    // Let the page finish handling the key (a frame) before looking.
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => done(null))));
+    await expect(page.locator('[data-role="host-editor"]')).toHaveCount(1);
+    await expect(label).toHaveValue(savedLabel);
+
+    release.resolve();
+    await waitForToast(page, 'Updated Resolume connection.');
+    await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
+    await expect(rowA.locator('.settings__host-label')).toHaveText(savedLabel);
+    for (const trigger of [editB, add]) {
+      await expect(trigger).toBeEnabled();
+      await expect(trigger).not.toHaveAttribute('data-lock');
+    }
+    expect((await resolumeHost(page, a.id)).label).toBe(savedLabel);
+  } finally {
+    await deleteVia(page, `${RESOLUME_HOSTS}/${a.id}`);
+    await deleteVia(page, `${RESOLUME_HOSTS}/${b.id}`);
+  }
+
+  expect(errors).toEqual([]);
+});
+
+test('#819 unsaved changes lock the other rows\' Edit and "+ Add" until they are saved or cancelled', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const [a, b] = await twoHosts(page, 'Dirty');
+
+  try {
+    await gotoOperatorSettings(page);
+    const rowA = resolumeRow(page, a.id);
+    const editB = page.locator(`[data-role="host-edit"][data-id="${b.id}"]`);
+    const add = page.locator('[data-role="host-add"]');
+    await page.locator(`[data-role="host-edit"][data-id="${a.id}"]`).click();
+    const label = rowA.locator('[data-role="host-label"]');
+
+    // An editor with nothing changed locks nothing (one click switches rows).
+    await expect(editB).toBeEnabled();
+    await expect(add).toBeEnabled();
+
+    // A change locks the other triggers, with a tooltip saying what to do.
+    await label.fill(`${a.label}Changed`);
+    for (const trigger of [editB, add]) {
+      await expect(trigger).toBeDisabled();
+      await expect(trigger).toHaveAttribute('data-lock', 'unsaved');
+      await expect(trigger).toHaveAttribute('title', 'Save or cancel the open editor first');
+    }
+
+    // Typing the stored value back is no change any more.
+    await label.fill(a.label);
+    for (const trigger of [editB, add]) {
+      await expect(trigger).toBeEnabled();
+      await expect(trigger).not.toHaveAttribute('title');
+    }
+
+    // Every field counts, not only the label.
+    await rowA.locator('[data-role="host-port"]').fill('8099');
+    await expect(editB).toHaveAttribute('data-lock', 'unsaved');
+
+    // Cancel drops the change and unlocks everything; nothing was saved.
+    await rowA.locator('[data-role="host-cancel"]').click();
+    await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
+    for (const trigger of [editB, add]) {
+      await expect(trigger).toBeEnabled();
+      await expect(trigger).not.toHaveAttribute('data-lock');
+    }
+    expect((await resolumeHost(page, a.id)).port).toBe(a.port);
+  } finally {
+    await deleteVia(page, `${RESOLUME_HOSTS}/${a.id}`);
+    await deleteVia(page, `${RESOLUME_HOSTS}/${b.id}`);
   }
 
   expect(errors).toEqual([]);
