@@ -45,7 +45,9 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   `HostCommand::SiblingsChanged`, which `set_hosts` sends to every host whose
   own dial target did not change (a sibling was added, re-pointed, enabled or
   removed). `RefreshConfig` alone would never reach those hosts, and it drops
-  the mapping.
+  the mapping. `notify_siblings_changed` uses `try_send` and falls back to a
+  spawned `send` on a full queue: `set_hosts` holds the hosts lock every push
+  needs, so it must never wait on a busy worker for this.
 - Tests: `port_drift_sibling_tests.rs` drives the real registry + workers
   (`set_hosts`, `snapshot_for`, an in-memory `Repository` for the persisted
   clear). A negative "never adopts" check first waits for the host's

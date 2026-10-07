@@ -15,15 +15,18 @@
 //! `free_port_pair()` / `free_port_triple()` (verified-free consecutive ports,
 //! `.claude/rules/resolume-port-drift.md`), never `free_port() + N`.
 
+use super::driver::HostCommand;
 use super::port_drift_integration_tests::free_port_pair;
 use super::{
-    ResolumeConnectionSnapshot, ResolumeConnectionState, ResolumeErrorKind, ResolumeRegistry,
+    notify_siblings_changed, ResolumeConnectionSnapshot, ResolumeConnectionState,
+    ResolumeErrorKind, ResolumeRegistry,
 };
 use chrono::Utc;
 use presenter_core::{ResolumeHost, ResolumeHostDraft, ResolumeHostId};
 use presenter_persistence::{Repository, SettingsAuditSource};
 use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -415,4 +418,30 @@ async fn adding_a_host_on_an_adopted_port_clears_that_adoption() {
         |s| s.active_port.is_none(),
     )
     .await;
+}
+
+/// `set_hosts` holds the hosts lock every push needs while it notifies the
+/// workers, so a worker with a full queue must not make it wait: the notice
+/// still arrives once the worker has room.
+#[tokio::test]
+async fn a_full_worker_queue_never_holds_up_the_siblings_changed_notice() {
+    let (command_tx, mut command_rx) = mpsc::channel(1);
+    command_tx
+        .try_send(HostCommand::Shutdown)
+        .expect("fill the one-slot queue");
+
+    // Synchronous: returns at once although the queue is full.
+    notify_siblings_changed(&command_tx);
+
+    assert!(matches!(
+        command_rx.recv().await,
+        Some(HostCommand::Shutdown)
+    ));
+    let next = tokio::time::timeout(WAIT_BOUND, command_rx.recv())
+        .await
+        .expect("the notice arrives once the queue has room");
+    assert!(
+        matches!(next, Some(HostCommand::SiblingsChanged)),
+        "got {next:?}"
+    );
 }

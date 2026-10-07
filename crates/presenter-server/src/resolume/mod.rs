@@ -235,6 +235,21 @@ fn dial_target_changed(current: &ResolumeHost, next: &ResolumeHost) -> bool {
     current.host != next.host || current.port != next.port || current.is_enabled != next.is_enabled
 }
 
+/// #813: tell a running worker that its siblings changed. `set_hosts` holds
+/// the hosts lock that every stage/Bible/timer push needs, so it never waits
+/// on a busy worker's full queue for this: the command then goes out from a
+/// task. A late delivery is still right, the check reads the current table.
+fn notify_siblings_changed(command_tx: &mpsc::Sender<HostCommand>) {
+    if let Err(mpsc::error::TrySendError::Full(command)) =
+        command_tx.try_send(HostCommand::SiblingsChanged)
+    {
+        let command_tx = command_tx.clone();
+        tokio::spawn(async move {
+            let _ = command_tx.send(command).await;
+        });
+    }
+}
+
 /// The HTTP client for every Resolume request: the host workers (probe,
 /// composition, text PUTs, clip connects) and the settings "Test" button.
 ///
@@ -332,7 +347,7 @@ impl ResolumeRegistry {
                     // #813: a sibling may have been added, re-pointed or
                     // removed; the worker drops a port that is now a
                     // sibling's.
-                    let _ = entry.command_tx.send(HostCommand::SiblingsChanged).await;
+                    notify_siblings_changed(&entry.command_tx);
                     if entry.config.label != host.label {
                         entry.config = host;
                     }
