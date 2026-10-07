@@ -141,10 +141,12 @@ fn sibling_ports_in(
     configured_port: u16,
 ) -> SiblingPorts {
     let mut owned = SiblingPorts::new();
-    let siblings = table.iter().filter(|(other, claim)| {
-        **other != id && claim.is_enabled && claim.host_key == key && claim.port != configured_port
-    });
-    for (_, claim) in siblings {
+    let siblings = table
+        .iter()
+        .filter(|(other, _)| **other != id)
+        .map(|(_, claim)| claim)
+        .filter(|claim| claim.is_enabled && claim.host_key == key && claim.port != configured_port);
+    for claim in siblings {
         for port in std::iter::once(claim.port).chain(claim.active_port) {
             owned.entry(port).or_insert_with(|| claim.label.clone());
         }
