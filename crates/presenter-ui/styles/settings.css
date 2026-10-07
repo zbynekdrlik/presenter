@@ -60,6 +60,14 @@ body.settings {
   color: #94a3b8;
 }
 
+/* "← Back to hub" and the version label, side by side with a gap (they rendered
+   glued together: "← Back to hubv0.4.x"). */
+.settings__header-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .settings__header-nav .settings__link {
   text-decoration: none;
   color: #3b82f6;

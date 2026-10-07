@@ -78,9 +78,11 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
     was removed elsewhere.") says why, and focus goes to "+ Add" (once the save
     settles, if one of that row is in flight).
 - Save flow (`ListCard::save`): `begin_save` (no editor / busy / invalid → `None`),
-  `mark_saving`, request, reload the list, THEN `finish_save`. It re-enables Save
-  last (a held Enter must not POST twice) and closes only if the open-generation
-  counter still matches (`save_is_current`, unit-tested).
+  `mark_saving`, request, on success reload the list, THEN `finish_save`. A failed
+  request goes straight to `finish_save`, with no reload; a row deleted elsewhere is
+  closed by the poll's `forget_missing`, save in flight or not. `finish_save`
+  re-enables Save last (a held Enter must not POST twice) and closes only if the
+  open-generation counter still matches (`save_is_current`, unit-tested).
 
 ## The editor's guards: `trigger_lock` (pure, unit-tested)
 
