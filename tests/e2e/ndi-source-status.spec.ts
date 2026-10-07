@@ -138,6 +138,19 @@ test("a mapped NDI name that is not on the network is reported as not found @vid
   await expect(
     page.locator('[data-role="ndi-discovered-name"][data-ndi-name$="(PRESENTER-TEST)"]'),
   ).toBeVisible({ timeout: 30_000 });
+
+  // #819: a not-found row (dot + name + hint + the nowrap "Not found on the network"
+  // badge + Activate + Delete on ONE flex line) set a ~510 px min-content width, so the
+  // standalone page scrolled sideways on a phone: 589 px on a 320 px viewport on SNV
+  // prod. On a phone the row must wrap. `.settings-layout` is the scroll container.
+  await page.setViewportSize({ width: 320, height: 720 });
+  const fit = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const layout = document.querySelector(".settings-layout");
+    if (!layout) throw new Error(".settings-layout not found");
+    return { scrollWidth: layout.scrollWidth, clientWidth: layout.clientWidth };
+  });
+  expect(fit.scrollWidth).toBeLessThanOrEqual(fit.clientWidth);
 });
 
 test("a mapped NDI name that IS broadcasting goes Live @video-codec @synthetic-ndi", async ({
