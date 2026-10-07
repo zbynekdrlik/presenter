@@ -7,7 +7,8 @@
 //!   save and answered after it is dropped) and followed by `forget_missing` (an
 //!   editor on a row deleted elsewhere closes, with a toast);
 //! - the 5 s status poll;
-//! - save → reload → `finish_save`, and delete;
+//! - save (on success: reload, then `finish_save`; a failed request settles at
+//!   once), and delete;
 //! - every keyed row: its live status / timestamp `Memo`s, the inline editor or the
 //!   summary, the Edit / Delete buttons with their trigger locks and focus return.
 //!
@@ -182,8 +183,9 @@ impl<T: CardItem> ListCard<T> {
         }
     }
 
-    /// Save the open editor: request, reload the list, THEN settle the editor
-    /// (`finish_save` re-enables Save last and closes only the editor it started from).
+    /// Save the open editor: request; on success reload the list, THEN settle the
+    /// editor; a failed request settles at once, with no reload (`finish_save`
+    /// re-enables Save last and touches only the editor the save started from).
     fn save(self) {
         let Some((ticket, submission)) = self.editor.begin_save() else {
             return;

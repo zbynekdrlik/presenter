@@ -61,11 +61,13 @@ body.settings {
 }
 
 /* "← Back to hub" and the version label, side by side with a gap (they rendered
-   glued together: "← Back to hubv0.4.x"). */
+   glued together: "← Back to hubv0.4.x"). On a narrow screen the version wraps
+   under the link instead of squeezing the link to one word per line. */
 .settings__header-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 4px 16px;
 }
 
 .settings__header-nav .settings__link {

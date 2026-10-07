@@ -80,9 +80,11 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
 - Save flow (`ListCard::save`): `begin_save` (no editor / busy / invalid → `None`),
   `mark_saving`, request, on success reload the list, THEN `finish_save`. A failed
   request goes straight to `finish_save`, with no reload; a row deleted elsewhere is
-  closed by the poll's `forget_missing`, save in flight or not. `finish_save`
-  re-enables Save last (a held Enter must not POST twice) and closes only if the
-  open-generation counter still matches (`save_is_current`, unit-tested).
+  closed by the next list fetch's `forget_missing` (normally the 5 s poll), save in
+  flight or not. `finish_save` re-enables Save last (a held Enter must not POST
+  twice) and closes, or on failure shows the error, only if the save's ticket still
+  matches the editor: same open generation AND same target (`save_is_current`,
+  unit-tested); otherwise the card toasts the error.
 
 ## The editor's guards: `trigger_lock` (pure, unit-tested)
 
