@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn a_seeded_active_port_never_outranks_a_live_runtime_claim() {
         let live = host("arena songs", "10.77.8.201", 8089);
-        let claims = claims_of(&[live.clone()]);
+        let claims = claims_of(std::slice::from_ref(&live));
         // The songs host's worker found its Arena on 8092 and claimed it.
         assert_eq!(claims.try_claim(live.id, "10.77.8.201", 8089, 8092), Ok(()));
 
@@ -525,7 +525,7 @@ mod tests {
         // before this host was added) never locks this host out of its own
         // Arena.
         let songs = host("arena songs", "10.77.8.201", 8089);
-        let claims = claims_of(&[songs.clone()]);
+        let claims = claims_of(std::slice::from_ref(&songs));
         assert_eq!(
             claims.try_claim(songs.id, "10.77.8.201", 8089, 8090),
             Ok(())
