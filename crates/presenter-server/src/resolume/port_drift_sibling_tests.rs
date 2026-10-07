@@ -476,6 +476,62 @@ async fn adding_a_host_on_an_adopted_port_clears_that_adoption() {
     .await;
 }
 
+/// A persisted active port is a seed, never verified since it was written:
+/// it never outranks a port another host's worker dials right now. Here a
+/// host is added whose persisted active port is the port a running host
+/// drifted to. The running host keeps it, the new host starts on its
+/// configured port, and its persisted value is cleared.
+#[tokio::test]
+async fn a_live_drift_is_never_evicted_by_a_sibling_seeded_on_the_same_port() {
+    let (live_port, seeded_port, arena_port) = free_port_triple();
+    let _arena = start_arena_on(arena_port).await;
+    let repo = Repository::connect_in_memory().await.expect("repo");
+    let live = create_host(&repo, "arena songs", live_port).await;
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.attach_audit_writer(repo.clone());
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+    wait_for(&registry, live.id, "the songs host drifts as #564", |s| {
+        s.state == ResolumeConnectionState::Connected && s.active_port == Some(arena_port)
+    })
+    .await;
+
+    let seeded = create_host(&repo, "arena bridge", seeded_port).await;
+    repo.update_resolume_host_active_port(seeded.id, Some(arena_port))
+        .await
+        .expect("persist the bridge host's stale active_port");
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+
+    wait_for_persisted_active_port(
+        &repo,
+        seeded.id,
+        "the bridge host's seed on the songs host's port is cleared in the DB",
+        |active_port| active_port != Some(arena_port),
+    )
+    .await;
+    assert_never(
+        &registry,
+        live.id,
+        "the songs host was taken off the port it drifted to",
+        |s| s.active_port != Some(arena_port),
+    )
+    .await;
+    assert_ne!(
+        registry.snapshot_for(seeded.id).await.active_port,
+        Some(arena_port),
+        "the bridge host dials the songs host's Arena"
+    );
+    assert_eq!(
+        persisted_host(&repo, live.id).await.active_port,
+        Some(arena_port),
+        "the songs host's drift stays persisted"
+    );
+}
+
 /// `set_hosts` holds the hosts lock every push needs while it notifies the
 /// workers, so a worker with a full queue must not make it wait: the notice
 /// still arrives once the worker has room.

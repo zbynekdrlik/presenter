@@ -610,6 +610,10 @@ impl HostDriver {
         });
 
         let addr = candidates[0];
+        // #813: siblings that name this machine differently match by IP (an
+        // IP literal's is in the table since the rebuild).
+        self.port_claims
+            .record_resolved_ip(self.config.id, host, addr.ip());
         let ip = match addr.ip() {
             IpAddr::V4(v4) => v4.to_string(),
             IpAddr::V6(v6) => format!("[{}]", v6),

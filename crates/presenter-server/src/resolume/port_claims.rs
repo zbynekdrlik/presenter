@@ -7,7 +7,7 @@
 //! adopted it and persisted it (2026-10-06 21:25:59Z). From then on both hosts
 //! drove Songs PP. Arena exposes no instance id (both answer
 //! `{"name": "Arena"}`), so the only reliable signal is the configuration:
-//! a port another host on the same address is configured on, or has adopted,
+//! a port another host on the same machine is configured on, or has adopted,
 //! belongs to that host's Arena.
 //!
 //! The registry owns one [`PortClaims`] table. `ResolumeRegistry::set_hosts`
@@ -15,34 +15,79 @@
 //! before any worker is spawned or reconfigured, and every host worker holds
 //! a clone. A worker records the port it adopts, so a sibling's RUNTIME drift
 //! is excluded too, not only the persisted one the registry's config knows.
+//!
+//! Three rules from the round-2 review of v0.4.301:
+//! - A DISABLED host still owns its configured port. Disabling a host in
+//!   presenter does not stop its Arena, and PP disables idle hosts.
+//! - A persisted active port is only a seed. [`PortClaims::rebuild`] keeps
+//!   it only while no other host on the machine owns that port.
+//! - Two hosts are on the same machine when their host strings match, or
+//!   when both resolved to the same IP (`resolume-pp.lan` vs `10.77.8.201`).
 
 use presenter_core::{ResolumeHost, ResolumeHostId};
 use std::collections::{BTreeMap, HashMap};
+use std::net::IpAddr;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Ports owned by sibling hosts: port -> label of the sibling that owns it
 /// (for the logs).
 pub(super) type SiblingPorts = BTreeMap<u16, String>;
 
+type Table = HashMap<ResolumeHostId, PortClaim>;
+
 #[derive(Debug, Clone)]
 struct PortClaim {
     label: String,
-    host_key: String,
+    address: Address,
     port: u16,
     active_port: Option<u16>,
     is_enabled: bool,
+}
+
+/// Where a host's Arena runs, as far as the configuration tells.
+#[derive(Debug, Clone)]
+struct Address {
+    /// The host string, trimmed and lowercased ([`host_key`]).
+    key: String,
+    /// The IP the host string resolves to: parsed at once from an IP
+    /// literal, recorded by the host's worker for a hostname
+    /// ([`PortClaims::record_resolved_ip`]). `None` until then.
+    ip: Option<IpAddr>,
+}
+
+impl Address {
+    fn of(host: &str) -> Self {
+        Self {
+            key: host_key(host),
+            ip: host.trim().parse().ok(),
+        }
+    }
+
+    /// The same machine: the same host string, or the same resolved IP.
+    fn same_machine(&self, other: &Self) -> bool {
+        self.key == other.key || (self.ip.is_some() && self.ip == other.ip)
+    }
+}
+
+/// A persisted active port that [`PortClaims::rebuild`] did not keep,
+/// because another host on the same machine owns it (`owner` is that host's
+/// label).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DroppedSeed {
+    pub(super) id: ResolumeHostId,
+    pub(super) port: u16,
+    pub(super) owner: String,
 }
 
 /// The shared port-ownership table (see the module docs). Cheap to clone:
 /// every clone is the same table.
 #[derive(Debug, Clone, Default)]
 pub(super) struct PortClaims {
-    table: Arc<RwLock<HashMap<ResolumeHostId, PortClaim>>>,
+    table: Arc<RwLock<Table>>,
 }
 
-/// Two hosts are on the same machine when their host strings match after
-/// trimming, case-insensitively. Hostnames are case-insensitive and the
-/// settings form stores what the operator typed.
+/// The host string, trimmed and lowercased. Hostnames are case-insensitive
+/// and the settings form stores what the operator typed.
 pub(super) fn host_key(host: &str) -> String {
     host.trim().to_ascii_lowercase()
 }
@@ -50,56 +95,73 @@ pub(super) fn host_key(host: &str) -> String {
 impl PortClaims {
     /// No lock holder can leave the table half-written (every write is a
     /// plain field or map assignment), so a poisoned lock is still valid.
-    fn read(&self) -> RwLockReadGuard<'_, HashMap<ResolumeHostId, PortClaim>> {
+    fn read(&self) -> RwLockReadGuard<'_, Table> {
         self.table.read().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn write(&self) -> RwLockWriteGuard<'_, HashMap<ResolumeHostId, PortClaim>> {
+    fn write(&self) -> RwLockWriteGuard<'_, Table> {
         self.table.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Replace the table with `hosts`. A host for which `keeps_runtime_port`
     /// is true (its worker keeps running with its current dial state, no
-    /// `RefreshConfig`) keeps the active port its worker recorded; every other
-    /// host starts from its persisted `active_port`, the value its worker is
-    /// seeded with.
+    /// `RefreshConfig`) keeps the active port its worker recorded: a live
+    /// claim. Every other host starts from its persisted `active_port`: a
+    /// seed, which no probe has verified since it was written.
+    ///
+    /// An enabled host's seed is kept only if no other host on the same
+    /// machine owns that port (its configured port, its kept runtime claim or
+    /// its own seed). Otherwise it is dropped and returned, and the caller
+    /// starts that host on its configured port. A seed therefore never
+    /// outranks a live claim, two seeds on one port both drop, and the result
+    /// does not depend on the order in which the workers start. A host keeps
+    /// the IP its worker resolved while its host string stays the same.
     pub(super) fn rebuild<'a>(
         &self,
         hosts: impl IntoIterator<Item = &'a ResolumeHost>,
         keeps_runtime_port: impl Fn(&ResolumeHost) -> bool,
-    ) {
+    ) -> Vec<DroppedSeed> {
         let mut table = self.write();
-        let rebuilt: HashMap<ResolumeHostId, PortClaim> = hosts
-            .into_iter()
-            .map(|host| {
-                let active_port = match table.get(&host.id) {
-                    Some(claim) if keeps_runtime_port(host) => claim.active_port,
-                    _ => host.active_port,
-                };
-                let claim = PortClaim {
-                    label: host.label.clone(),
-                    host_key: host_key(&host.host),
-                    port: host.port,
-                    active_port,
-                    is_enabled: host.is_enabled,
-                };
-                (host.id, claim)
-            })
-            .collect();
+        let mut seeded = Vec::new();
+        let mut rebuilt = Table::new();
+        for host in hosts {
+            let previous = table.get(&host.id);
+            let active_port = match previous {
+                Some(claim) if keeps_runtime_port(host) => claim.active_port,
+                _ => {
+                    seeded.push(host.id);
+                    host.active_port
+                }
+            };
+            let claim = PortClaim {
+                label: host.label.clone(),
+                address: address_of(previous, &host.host),
+                port: host.port,
+                active_port,
+                is_enabled: host.is_enabled,
+            };
+            rebuilt.insert(host.id, claim);
+        }
+        let dropped = colliding_seeds(&rebuilt, &seeded);
+        for seed in &dropped {
+            if let Some(claim) = rebuilt.get_mut(&seed.id) {
+                claim.active_port = None;
+            }
+        }
         *table = rebuilt;
+        dropped
     }
 
-    /// Ports that ENABLED sibling hosts own: every other host on the same
-    /// address (`host_key`) contributes its configured port and its active
-    /// port. A sibling configured on this host's own `configured_port` is the
-    /// same Arena by intent, not another one, and contributes nothing.
+    /// Ports that sibling hosts own (see `sibling_ports_in`).
     pub(super) fn sibling_ports(
         &self,
         id: ResolumeHostId,
         host: &str,
         configured_port: u16,
     ) -> SiblingPorts {
-        sibling_ports_in(&self.read(), id, &host_key(host), configured_port)
+        let table = self.read();
+        let address = address_of(table.get(&id), host);
+        sibling_ports_in(&table, id, &address, configured_port)
     }
 
     /// Record that host `id` now dials `port`, unless a sibling owns it. The
@@ -107,7 +169,7 @@ impl PortClaims {
     /// the same moment cannot both take the same port. `Err` carries the
     /// owning sibling's label. For a host missing from the table (a host
     /// deleted meanwhile) nothing is recorded, but every other host on its
-    /// address still counts as a sibling, so their ports are still refused.
+    /// machine still counts as a sibling, so their ports are still refused.
     /// A driver without a registry has an empty table: no siblings.
     pub(super) fn try_claim(
         &self,
@@ -117,7 +179,8 @@ impl PortClaims {
         port: u16,
     ) -> Result<(), String> {
         let mut table = self.write();
-        let siblings = sibling_ports_in(&table, id, &host_key(host), configured_port);
+        let address = address_of(table.get(&id), host);
+        let siblings = sibling_ports_in(&table, id, &address, configured_port);
         // The configured port is this host's own intent: never refused.
         if let Some(owner) = siblings.get(&port).filter(|_| port != configured_port) {
             return Err(owner.clone());
@@ -134,12 +197,58 @@ impl PortClaims {
             claim.active_port = None;
         }
     }
+
+    /// Record the IP host `id` resolved `host` to (`resolve_endpoint`), so a
+    /// sibling that names the same machine differently is matched by IP from
+    /// now on. Ignored while the table holds another host string for `id`
+    /// (a worker that resolved its old config before it applied
+    /// `RefreshConfig`).
+    pub(super) fn record_resolved_ip(&self, id: ResolumeHostId, host: &str, ip: IpAddr) {
+        let key = host_key(host);
+        if let Some(claim) = self
+            .write()
+            .get_mut(&id)
+            .filter(|claim| claim.address.key == key)
+        {
+            claim.address.ip = Some(ip);
+        }
+    }
+
+    /// Whether host `id` is in the table. `set_hosts` rebuilds it before any
+    /// worker is spawned or gets `RefreshConfig`; debug builds assert that.
+    pub(super) fn contains(&self, id: ResolumeHostId) -> bool {
+        self.read().contains_key(&id)
+    }
+
+    /// The active port the table holds for host `id`.
+    #[cfg(test)]
+    pub(super) fn active_port_of(&self, id: ResolumeHostId) -> Option<u16> {
+        self.read().get(&id).and_then(|claim| claim.active_port)
+    }
 }
 
+/// `host`'s address. It keeps the IP that the host's worker resolved
+/// earlier, when `previous` (the host's claim so far) has the same host
+/// string.
+fn address_of(previous: Option<&PortClaim>, host: &str) -> Address {
+    let mut address = Address::of(host);
+    if let Some(claim) = previous.filter(|claim| claim.address.key == address.key) {
+        address.ip = address.ip.or(claim.address.ip);
+    }
+    address
+}
+
+/// Ports that sibling hosts own. Every other host on the same machine as
+/// `address` contributes its configured port, enabled or not (disabling a
+/// host in presenter does not stop its Arena). When enabled, it also
+/// contributes its active port. A disabled host never probes, so its
+/// persisted active port is unverified. A host configured on this host's
+/// own `configured_port` is the same Arena by intent, not another one, and
+/// contributes nothing.
 fn sibling_ports_in(
-    table: &HashMap<ResolumeHostId, PortClaim>,
+    table: &Table,
     id: ResolumeHostId,
-    key: &str,
+    address: &Address,
     configured_port: u16,
 ) -> SiblingPorts {
     let mut owned = SiblingPorts::new();
@@ -147,13 +256,34 @@ fn sibling_ports_in(
         .iter()
         .filter(|(other, _)| **other != id)
         .map(|(_, claim)| claim)
-        .filter(|claim| claim.is_enabled && claim.host_key == key && claim.port != configured_port);
+        .filter(|claim| claim.port != configured_port && address.same_machine(&claim.address));
     for claim in siblings {
-        for port in std::iter::once(claim.port).chain(claim.active_port) {
+        let active_port = claim.active_port.filter(|_| claim.is_enabled);
+        for port in std::iter::once(claim.port).chain(active_port) {
             owned.entry(port).or_insert_with(|| claim.label.clone());
         }
     }
     owned
+}
+
+/// The seeds in `seeded` that another host on the same machine owns (see
+/// [`PortClaims::rebuild`]). A disabled host's seed is left alone: the host
+/// never dials, and its active port owns nothing.
+fn colliding_seeds(table: &Table, seeded: &[ResolumeHostId]) -> Vec<DroppedSeed> {
+    seeded
+        .iter()
+        .filter_map(|id| {
+            let claim = table.get(id).filter(|claim| claim.is_enabled)?;
+            let port = claim.active_port.filter(|port| *port != claim.port)?;
+            let owners = sibling_ports_in(table, *id, &claim.address, claim.port);
+            let owner = owners.get(&port).cloned()?;
+            Some(DroppedSeed {
+                id: *id,
+                port,
+                owner,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -433,5 +563,159 @@ mod tests {
         assert!(claims
             .sibling_ports(bridge.id, "10.77.8.201", 8090)
             .is_empty());
+    }
+
+    #[test]
+    fn rebuild_returns_each_dropped_seed_with_its_owner() {
+        let bridge = host("arena bridge", "10.77.8.201", 8090).with_active_port(Some(8091));
+        let songs = host("arena songs", "10.77.8.201", 8091).with_active_port(Some(8093));
+        let claims = PortClaims::default();
+
+        let dropped = claims.rebuild([&bridge, &songs], |_| false);
+
+        // The songs host's seed collides with nothing and is kept.
+        assert_eq!(
+            dropped,
+            vec![DroppedSeed {
+                id: bridge.id,
+                port: 8091,
+                owner: "arena songs".to_string(),
+            }]
+        );
+        assert_eq!(claims.active_port_of(bridge.id), None);
+        assert_eq!(claims.active_port_of(songs.id), Some(8093));
+    }
+
+    #[test]
+    fn a_disabled_hosts_seed_is_neither_dropped_nor_drops_another_seed() {
+        let mut idle = host("arena idle", "10.77.8.201", 8090).with_active_port(Some(8093));
+        idle.is_enabled = false;
+        let songs = host("arena songs", "10.77.8.201", 8091).with_active_port(Some(8093));
+        let claims = PortClaims::default();
+
+        assert!(claims.rebuild([&idle, &songs], |_| false).is_empty());
+        assert_eq!(claims.active_port_of(idle.id), Some(8093));
+        assert_eq!(claims.active_port_of(songs.id), Some(8093));
+    }
+
+    #[test]
+    fn a_seed_on_the_hosts_own_configured_port_is_never_dropped() {
+        let bridge = host("arena bridge", "10.77.8.201", 8090).with_active_port(Some(8090));
+        let songs = host("arena songs", "10.77.8.201", 8089).with_active_port(Some(8090));
+        let claims = PortClaims::default();
+
+        // The songs seed sits on the bridge's configured port and drops; the
+        // bridge's own "seed" is its configured port, which no one outranks.
+        let dropped = claims.rebuild([&bridge, &songs], |_| false);
+        assert_eq!(
+            dropped.iter().map(|seed| seed.id).collect::<Vec<_>>(),
+            vec![songs.id]
+        );
+        assert_eq!(claims.active_port_of(bridge.id), Some(8090));
+    }
+
+    #[test]
+    fn a_hostname_matches_an_ip_literal_once_its_worker_resolved_it() {
+        let bridge = host("arena bridge", "resolume-pp.lan", 8090);
+        let songs = host("arena songs", "10.77.8.201", 8091);
+        let claims = claims_of(&[bridge.clone(), songs.clone()]);
+        // Not resolved yet: two machines as far as the table can tell.
+        assert!(claims
+            .sibling_ports(bridge.id, "resolume-pp.lan", 8090)
+            .is_empty());
+
+        claims.record_resolved_ip(bridge.id, "Resolume-PP.lan ", ip("10.77.8.201"));
+
+        assert_eq!(
+            ports(&claims.sibling_ports(bridge.id, "resolume-pp.lan", 8090)),
+            vec![8091]
+        );
+        assert_eq!(
+            ports(&claims.sibling_ports(songs.id, "10.77.8.201", 8091)),
+            vec![8090]
+        );
+        assert_eq!(
+            claims.try_claim(bridge.id, "resolume-pp.lan", 8090, 8091),
+            Err("arena songs".to_string())
+        );
+    }
+
+    #[test]
+    fn two_hostnames_match_only_when_both_resolved_to_the_same_ip() {
+        let bridge = host("arena bridge", "resolume-pp.lan", 8090);
+        let songs = host("arena songs", "arena-pc.lan", 8091);
+        let claims = claims_of(&[bridge.clone(), songs.clone()]);
+
+        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ip("10.77.8.201"));
+        assert!(claims
+            .sibling_ports(bridge.id, "resolume-pp.lan", 8090)
+            .is_empty());
+
+        claims.record_resolved_ip(songs.id, "arena-pc.lan", ip("10.77.8.202"));
+        assert!(claims
+            .sibling_ports(bridge.id, "resolume-pp.lan", 8090)
+            .is_empty());
+
+        claims.record_resolved_ip(songs.id, "arena-pc.lan", ip("10.77.8.201"));
+        assert_eq!(
+            ports(&claims.sibling_ports(bridge.id, "resolume-pp.lan", 8090)),
+            vec![8091]
+        );
+    }
+
+    #[test]
+    fn a_resolved_ip_survives_a_rebuild_only_while_the_host_string_is_unchanged() {
+        let bridge = host("arena bridge", "resolume-pp.lan", 8090);
+        let songs = host("arena songs", "10.77.8.201", 8091);
+        let claims = claims_of(&[bridge.clone(), songs.clone()]);
+        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ip("10.77.8.201"));
+
+        // A port edit (RefreshConfig): same host string, the IP stays.
+        let mut moved = bridge.clone();
+        moved.port = 8095;
+        claims.rebuild([&moved, &songs], |_| false);
+        assert_eq!(
+            ports(&claims.sibling_ports(bridge.id, "resolume-pp.lan", 8095)),
+            vec![8091]
+        );
+
+        // Re-pointed to another machine: the old IP is gone.
+        let mut elsewhere = moved.clone();
+        elsewhere.host = "other-pc.lan".to_string();
+        claims.rebuild([&elsewhere, &songs], |_| false);
+        assert!(claims
+            .sibling_ports(bridge.id, "other-pc.lan", 8095)
+            .is_empty());
+    }
+
+    #[test]
+    fn an_ip_resolved_for_an_old_host_string_is_ignored() {
+        let bridge = host("arena bridge", "other-pc.lan", 8090);
+        let songs = host("arena songs", "10.77.8.201", 8091);
+        let claims = claims_of(&[bridge.clone(), songs]);
+
+        // The worker resolved its previous host before applying the new
+        // config.
+        claims.record_resolved_ip(bridge.id, "resolume-pp.lan", ip("10.77.8.201"));
+
+        assert!(claims
+            .sibling_ports(bridge.id, "other-pc.lan", 8090)
+            .is_empty());
+    }
+
+    #[test]
+    fn contains_reports_the_hosts_of_the_last_rebuild() {
+        let bridge = host("arena bridge", "10.77.8.201", 8090);
+        let songs = host("arena songs", "10.77.8.201", 8091);
+        let claims = claims_of(&[bridge.clone(), songs.clone()]);
+        assert!(claims.contains(bridge.id) && claims.contains(songs.id));
+
+        claims.rebuild([&bridge], |_| true);
+        assert!(claims.contains(bridge.id));
+        assert!(!claims.contains(songs.id));
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().expect("an IP literal")
     }
 }

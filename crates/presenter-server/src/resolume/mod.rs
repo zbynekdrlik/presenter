@@ -40,14 +40,14 @@ use std::{
 };
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 pub(crate) use error_kind::ResolumeErrorKind;
 pub(crate) use mapping_refresh::MappingRefreshResult;
 
 use driver::{run_host_worker, HostCommand};
-use port_claims::PortClaims;
+use port_claims::{DroppedSeed, PortClaims};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_COMMAND_CAPACITY: usize = 16;
@@ -314,12 +314,14 @@ impl ResolumeRegistry {
 
         // #813: before any worker starts or is reconfigured, so each one's
         // port check sees every sibling. A host whose worker keeps running
-        // unchanged keeps the port it adopted at runtime.
-        self.port_claims.rebuild(desired.values(), |host| {
+        // unchanged keeps the port it adopted at runtime. A persisted active
+        // port another host owns is dropped before its worker is seeded.
+        let dropped = self.port_claims.rebuild(desired.values(), |host| {
             guard
                 .get(&host.id)
                 .is_some_and(|entry| !dial_target_changed(&entry.config, host))
         });
+        self.start_dropped_seeds_on_configured_port(&mut desired, &dropped);
 
         // Stop hosts that no longer exist
         let existing_ids: Vec<_> = guard.keys().copied().collect();
@@ -337,6 +339,10 @@ impl ResolumeRegistry {
             match guard.get_mut(&id) {
                 Some(entry) => {
                     if dial_target_changed(&entry.config, &host) {
+                        debug_assert!(
+                            self.port_claims.contains(id),
+                            "#813: the port claims are rebuilt before RefreshConfig"
+                        );
                         let _ = entry
                             .command_tx
                             .send(HostCommand::RefreshConfig(host.clone()))
@@ -360,7 +366,42 @@ impl ResolumeRegistry {
         }
     }
 
+    /// #813: `PortClaims::rebuild` did not keep these persisted active ports:
+    /// another host on the same machine owns each one. The host's worker is
+    /// seeded from `desired`, so it starts on its configured port, and the
+    /// clear is persisted like a heal-back (best-effort, `try_send`).
+    fn start_dropped_seeds_on_configured_port(
+        &self,
+        desired: &mut HashMap<ResolumeHostId, ResolumeHost>,
+        dropped: &[DroppedSeed],
+    ) {
+        for seed in dropped {
+            let Some(host) = desired.get_mut(&seed.id) else {
+                continue;
+            };
+            warn!(
+                host = %host.host,
+                configured_port = host.port,
+                active_port = seed.port,
+                sibling = %seed.owner,
+                "resolume persisted active port belongs to another host on the same machine; dialing the configured port"
+            );
+            host.active_port = None;
+            if let Some(tx) = self.port_drift_tx.get() {
+                let _ = tx.try_send(PortDriftEvent {
+                    host_id: seed.id,
+                    old_port: Some(seed.port),
+                    new_port: None,
+                });
+            }
+        }
+    }
+
     fn spawn_host(&self, host: ResolumeHost) -> HostEntry {
+        debug_assert!(
+            self.port_claims.contains(host.id),
+            "#813: the port claims are rebuilt before a worker spawns"
+        );
         let (command_tx, command_rx) = mpsc::channel(HOST_COMMAND_CAPACITY);
         let status = Arc::new(RwLock::new(if host.is_enabled {
             ResolumeConnectionSnapshot {
