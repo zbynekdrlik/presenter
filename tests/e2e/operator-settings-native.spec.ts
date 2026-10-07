@@ -60,9 +60,9 @@ type Rect = { left: number; right: number; top: number; bottom: number; height: 
  * layout pass after the web font has loaded: two separate `boundingBox()` calls can
  * straddle the Inter swap (`font-display: swap`) and mix two layouts. Also the title
  * block's and the nav's rects (for the title–nav gap), the header's content-box
- * right edge and top padding, and the widths of `.settings-layout` — the page's real
- * scroll container (`overflow-y: auto`), which absorbs any overflow, so the document
- * itself never scrolls sideways.
+ * right edge and top / bottom padding, and the widths of `.settings-layout` — the
+ * page's real scroll container (`overflow-y: auto`), which absorbs any overflow, so
+ * the document itself never scrolls sideways.
  */
 async function headerNavLayout(page: Page): Promise<{
   title: Rect;
@@ -71,6 +71,7 @@ async function headerNavLayout(page: Page): Promise<{
   version: Rect;
   headerContentRight: number;
   headerPaddingTop: number;
+  headerPaddingBottom: number;
   scrollWidth: number;
   clientWidth: number;
 }> {
@@ -100,6 +101,7 @@ async function headerNavLayout(page: Page): Promise<{
       headerContentRight:
         header.getBoundingClientRect().right - parseFloat(getComputedStyle(header).paddingRight),
       headerPaddingTop: parseFloat(getComputedStyle(header).paddingTop),
+      headerPaddingBottom: parseFloat(getComputedStyle(header).paddingBottom),
       scrollWidth: layout.scrollWidth,
       clientWidth: layout.clientWidth,
     };
@@ -211,6 +213,7 @@ test("standalone /ui/settings keeps its own header and scrolls", async ({
   expect(phone.nav.left - phone.title.right).toBeGreaterThanOrEqual(16);
   // Only the side padding shrinks on a phone; the top / bottom padding stays.
   expect(phone.headerPaddingTop).toBe(desktop.headerPaddingTop);
+  expect(phone.headerPaddingBottom).toBe(desktop.headerPaddingBottom);
   expect(phone.scrollWidth).toBeLessThanOrEqual(phone.clientWidth);
 
   // The narrowest phone: the nav still ends inside the header padding (it ate
