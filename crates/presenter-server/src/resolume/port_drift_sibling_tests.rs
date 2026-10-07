@@ -163,17 +163,17 @@ async fn persisted_host(repo: &Repository, id: ResolumeHostId) -> ResolumeHost {
         .expect("the host is persisted")
 }
 
-/// Poll the DB until the host's persisted `active_port` equals `expected`.
+/// Poll the DB until the host's persisted `active_port` satisfies `pred`.
 async fn wait_for_persisted_active_port(
     repo: &Repository,
     id: ResolumeHostId,
-    expected: Option<u16>,
     what: &str,
+    pred: impl Fn(Option<u16>) -> bool,
 ) {
     let deadline = Instant::now() + WAIT_BOUND;
     loop {
         let active_port = persisted_host(repo, id).await.active_port;
-        if active_port == expected {
+        if pred(active_port) {
             return;
         }
         assert!(
@@ -358,18 +358,21 @@ async fn a_persisted_active_port_that_a_sibling_owns_is_cleared_on_load() {
         .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
         .await;
 
+    // Not "is None": once cleared, the host re-probes its own window and
+    // may adopt a parallel test's mock Arena there. The point is that it is
+    // off the sibling's port.
     wait_for_persisted_active_port(
         &repo,
         bridge.id,
-        None,
         "the bridge host's sibling-owned active_port is cleared in the DB",
+        |active_port| active_port != Some(songs_port),
     )
     .await;
     wait_for(
         &registry,
         bridge.id,
-        "the bridge host dials its configured port",
-        |s| s.active_port.is_none(),
+        "the bridge host is off the songs host's port",
+        |s| s.active_port != Some(songs_port),
     )
     .await;
 }
@@ -404,18 +407,19 @@ async fn adding_a_host_on_an_adopted_port_clears_that_adoption() {
         .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
         .await;
 
+    // Not "is None": see the test above.
     wait_for_persisted_active_port(
         &repo,
         drifted.id,
-        None,
         "the drift onto the new host's port is cleared in the DB",
+        |active_port| active_port != Some(drifted_port),
     )
     .await;
     wait_for(
         &registry,
         drifted.id,
-        "the host dials its configured port again",
-        |s| s.active_port.is_none(),
+        "the host is off the new host's port",
+        |s| s.active_port != Some(drifted_port),
     )
     .await;
 }
