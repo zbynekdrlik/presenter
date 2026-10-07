@@ -120,8 +120,11 @@ silent no-op, or the element that held focus may still be in the DOM.
 - Gate the Effect on the same state that drives the button's `disabled` prop, and
   read that state tracked, so the Effect re-runs when it unlocks. Consume a
   one-shot "focus me" request only once the button is unlocked.
-- Defer the call itself with `leptos::task::spawn_local(async move { el.focus() })`.
-  The task queues behind the render effects already woken, so the DOM is current.
+- Defer the call itself with
+  `leptos::task::spawn_local(async move { let _ = el.focus(); })` (`focus()`
+  returns a `Result`, and `spawn_local` needs a `()` future). The task queues
+  behind the render effects already woken, so the DOM is current. The reference
+  also focuses only when focus fell back to `<body>` (`focus_is_free`).
 - Reference: `pages/settings/host_editor.rs` `focus_on_close`, with its
   `.claude/rules/settings-ui.md` entry. E2E: a row deleted elsewhere while its own
   save is in flight still lands focus on "+ Add".
