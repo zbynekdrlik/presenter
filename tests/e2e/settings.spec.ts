@@ -14,30 +14,47 @@ let serverHandle: ServerHandle | undefined;
 let baseURL: string;
 let mockResolume: MockResolumeHandle | undefined;
 
+// #819: there is no permanent add/edit form any more. "+ Add …" opens the inline
+// editor at the top of the list and a row's Edit opens it IN that row; one editor per
+// card at a time, so the field data-roles below stay unique on the page.
 const selectors = {
-  form: '[data-role="host-form"]',
+  addButton: '[data-role="host-add"]',
+  editor: '[data-role="host-editor"]',
   labelInput: '[data-role="host-label"]',
   hostInput: '[data-role="host-host"]',
   portInput: '[data-role="host-port"]',
   enabledCheckbox: '[data-role="host-enabled"]',
   submitButton: '[data-role="host-submit"]',
-  resetButton: '[data-role="host-reset"]',
   toast: '[data-role="toast"]',
   list: '[data-role="resolume-host-list"]',
   companionToggle: '[data-role="feature-companion-toggle"]',
   companionStatus: '[data-role="feature-status"]',
   companionPort: '[data-role="feature-companion-port"]',
   companionSubmit: '[data-role="feature-submit"]',
-  androidForm: '[data-role="android-form"]',
+  androidAdd: '[data-role="android-add"]',
+  androidEditor: '[data-role="android-editor"]',
   androidLabel: '[data-role="android-label"]',
   androidHost: '[data-role="android-host"]',
   androidPort: '[data-role="android-port"]',
   androidComponent: '[data-role="android-component"]',
   androidEnabled: '[data-role="android-enabled"]',
   androidSubmit: '[data-role="android-submit"]',
-  androidReset: '[data-role="android-reset"]',
   androidList: '[data-role="android-display-list"]',
 };
+
+/** Open the "+ Add connection" editor at the top of the Resolume list. */
+async function openResolumeAdd(page: Page) {
+  await page.click(selectors.addButton);
+  await expect(page.locator(`[data-role="host-new-item"] ${selectors.editor}`)).toBeVisible();
+}
+
+/** Open the "+ Add display" editor at the top of the Android list. */
+async function openAndroidAdd(page: Page) {
+  await page.click(selectors.androidAdd);
+  await expect(
+    page.locator(`[data-role="android-new-item"] ${selectors.androidEditor}`),
+  ).toBeVisible();
+}
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -135,13 +152,16 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   const mockHost = '127.0.0.1';
   const mockPort = String(mockResolume.port);
 
-  // Create a new connection.
+  // Create a new connection through "+ Add connection" (#819).
+  await openResolumeAdd(page);
   await page.fill(selectors.labelInput, testLabel);
   await page.fill(selectors.hostInput, mockHost);
   await page.fill(selectors.portInput, mockPort);
   await page.check(selectors.enabledCheckbox);
   await page.click(selectors.submitButton);
   await waitForToast(page, 'Added Resolume connection.');
+  // A successful save closes the editor.
+  await expect(page.locator(selectors.editor)).toHaveCount(0);
 
   const listItem = page.locator(`[data-role="resolume-host-list"] li[data-id]`).first();
   await expect(listItem).toContainText(testLabel);
@@ -171,8 +191,10 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   const hostId = hostsAfterCreate[0].id;
   const hostRow = page.locator(`[data-role="resolume-host-list"] li[data-id="${hostId}"]`);
 
-  // Edit the connection.
+  // Edit the connection — the editor opens IN this row, loaded with its values (#819).
   await page.locator(`[data-role="host-edit"][data-id="${hostId}"]`).click();
+  await expect(hostRow.locator(selectors.editor)).toBeVisible();
+  await expect(page.locator(selectors.labelInput)).toHaveValue(testLabel);
   const updatedLabel = `${testLabel} Updated`;
   await page.fill(selectors.labelInput, updatedLabel);
   await page.fill(selectors.hostInput, mockHost);
@@ -218,6 +240,7 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
 
   // Create a connection pointing at mock Resolume
   const testLabel = `Diag Test ${Date.now()}`;
+  await openResolumeAdd(page);
   await page.fill(selectors.labelInput, testLabel);
   await page.fill(selectors.hostInput, mockHost);
   await page.fill(selectors.portInput, mockPort);
@@ -317,6 +340,7 @@ test('resolume refresh mapping re-reads the composition only on demand', async (
   const compositionBefore = compositionGets();
   const productBefore = productGets();
   const testLabel = `Refresh Mapping ${Date.now()}`;
+  await openResolumeAdd(page);
   await page.fill(selectors.labelInput, testLabel);
   await page.fill(selectors.hostInput, '127.0.0.1');
   await page.fill(selectors.portInput, String(mock.port));
@@ -375,6 +399,7 @@ test('android stage launchers CRUD', async ({ page }) => {
   expect(initialCount).toBeGreaterThanOrEqual(4);
 
   const label = `Stage Display ${Date.now()}`;
+  await openAndroidAdd(page);
   await page.fill(selectors.androidLabel, label);
   await page.fill(selectors.androidHost, 'test-stage.invalid');
   await page.fill(selectors.androidPort, '5555');
@@ -396,8 +421,10 @@ test('android stage launchers CRUD', async ({ page }) => {
   );
   await expect(androidListItem).toContainText(label);
 
-  // Edit display details.
+  // Edit display details — in the row itself (#819).
   await page.locator(`[data-role="android-edit"][data-id="${created!.id}"]`).click();
+  await expect(androidListItem.locator(selectors.androidEditor)).toBeVisible();
+  await expect(page.locator(selectors.androidLabel)).toHaveValue(label);
   const updatedLabel = `${label} Updated`;
   await page.fill(selectors.androidLabel, updatedLabel);
   await page.fill(selectors.androidHost, 'other-stage.invalid');
@@ -504,8 +531,12 @@ test('migrated WASM settings page renders every card with a clean console', asyn
   // Every integration card the old blob managed must render in the WASM page.
   await expect(page.locator('[data-role="feature-companion-form"]')).toHaveCount(1);
   await expect(page.locator('[data-role="pref-line-limit"]')).toHaveCount(1);
-  await expect(page.locator('[data-role="host-form"]')).toHaveCount(1);
-  await expect(page.locator('[data-role="android-form"]')).toHaveCount(1);
+  // #819: the Resolume / Android cards add through "+ Add …"; no editor is open
+  // until the operator asks for one.
+  await expect(page.locator(selectors.addButton)).toHaveCount(1);
+  await expect(page.locator(selectors.androidAdd)).toHaveCount(1);
+  await expect(page.locator(selectors.editor)).toHaveCount(0);
+  await expect(page.locator(selectors.androidEditor)).toHaveCount(0);
   await expect(page.locator('[data-role="ableset-form"]')).toHaveCount(1);
   await expect(page.locator('[data-role="video-sources-card"]')).toHaveCount(1);
 
@@ -558,6 +589,7 @@ test('#455 out-of-range port is rejected, not silently saved', async ({ page }) 
   // ── Resolume: a too-large port must show the range error and create no host ──
   const resolumeBefore = await getHostsViaApi(page);
   const resolumeLabel = `Range Test ${Date.now()}`;
+  await openResolumeAdd(page);
   await page.fill(selectors.labelInput, resolumeLabel);
   await page.fill(selectors.hostInput, 'resolume.invalid');
   // The <input type=number max=65535> only blocks the spinner arrows, not a
@@ -578,6 +610,7 @@ test('#455 out-of-range port is rejected, not silently saved', async ({ page }) 
   // ── Android: same regression on the second port call site ──────────────────
   const androidBefore = await getAndroidDisplaysViaApi(page);
   const androidLabel = `Range Display ${Date.now()}`;
+  await openAndroidAdd(page);
   await page.fill(selectors.androidLabel, androidLabel);
   await page.fill(selectors.androidHost, 'stage.invalid');
   await page.fill(selectors.androidPort, '99999');

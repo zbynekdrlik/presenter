@@ -70,6 +70,18 @@ async function gotoSettings(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle');
 }
 
+/**
+ * #819: the Resolume / Android fields live in an inline editor that exists only
+ * once "+ Add …" (or a row's Edit) opened it — open the new-item editor of both
+ * cards so their a11y wiring can be checked.
+ */
+async function openConnectionEditors(page: Page): Promise<void> {
+  await page.click('[data-role="host-add"]');
+  await expect(page.locator('[data-role="host-editor"]')).toBeVisible();
+  await page.click('[data-role="android-add"]');
+  await expect(page.locator('[data-role="android-editor"]')).toBeVisible();
+}
+
 /** A field's `aria-describedby` must reference an element that EXISTS. */
 async function assertDescribedByReachable(page: Page, fieldSelector: string) {
   const field = page.locator(fieldSelector);
@@ -92,6 +104,7 @@ test('settings required inputs carry aria-required across all cards', async ({ p
   });
 
   await gotoSettings(page);
+  await openConnectionEditors(page);
 
   const requiredFields = [
     // Resolume
@@ -154,6 +167,7 @@ test('aria-invalid flips on a rejected submit and the described-by status carrie
   });
 
   await gotoSettings(page);
+  await openConnectionEditors(page);
 
   // Before any rejection, aria-invalid is "false" (idle state).
   const resolumeLabel = page.locator(selectors.resolumeLabel);

@@ -63,7 +63,8 @@ pub async fn update_features(draft: &FeatureFlagsDraft) -> Result<FeatureFlags, 
 
 // ── Resolume hosts ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+// `PartialEq`: the settings row reads its live status through a `Memo` (#819).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolumeStatusDto {
     #[serde(default)]
@@ -195,7 +196,8 @@ pub async fn get_resolume_connection_status() -> Result<Vec<ResolumeConnectionSt
 
 // ── Android stage displays ─────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+// `PartialEq`: the settings row reads its live status through a `Memo` (#819).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AndroidStatusDto {
     #[serde(default)]

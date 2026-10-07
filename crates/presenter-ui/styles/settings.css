@@ -70,42 +70,45 @@ body.settings {
   text-decoration: underline;
 }
 
+/* #819: compact spacing — cards 20 px apart, 20 px padding, 16 px between the
+   blocks inside a card. */
 .settings__main {
   max-width: 1000px;
-  margin: 32px auto;
-  padding: 0 32px 48px;
+  margin: 20px auto;
+  padding: 0 24px 40px;
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 20px;
 }
 
 .settings__card {
   background: #1e293b;
-  border-radius: 20px;
+  border-radius: 16px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-  padding: 32px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .settings__card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
+  gap: 16px;
 }
 
 .settings__card-header h2 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 600;
 }
 
 .settings__card-header p {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: #94a3b8;
-  max-width: 460px;
+  font-size: 0.9rem;
+  max-width: 560px;
 }
 
 .settings__badge-group {
@@ -135,56 +138,81 @@ body.settings {
   color: #94a3b8;
 }
 
+/* ── #819 compact form system ─────────────────────────────────────────────
+   ONE definition for every settings form: a field is its caption directly
+   above its input (6 px apart); the fields of a row sit in a responsive grid
+   (12 px gaps) and wrap to the next line on a narrow panel. A row is never
+   taller than its tallest field. (Before #819 a second, global
+   `.settings__form-row { flex-direction: column }` turned each label's 220 px
+   flex-basis into a 220 px HEIGHT — the "huge gaps" report.) */
 .settings__form {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
   background: #0f172a;
   border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 16px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 16px;
 }
 
 .settings__form-header h3 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 1.05rem;
   font-weight: 600;
 }
 
 .settings__form-header p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: #94a3b8;
+  font-size: 0.9rem;
 }
 
 .settings__form-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
 }
 
+/* Label | Host | Port: two flexible text columns and a narrow port column. */
+.settings__form-row--connection {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 110px;
+}
+
+/* Host | HTTP port | Library (Ableton). */
+.settings__form-row--port-middle {
+  grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr);
+}
+
+/* Auto-width controls on one line: a checkbox, a small input, buttons. A
+   single-field row is the same, so its one field keeps its natural width. */
+.settings__form-row--inline,
 .settings__form-row--single {
-  justify-content: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
 }
 
 .settings__form-row label {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  flex: 1 1 220px;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.85rem;
   font-weight: 600;
-  color: #f8fafc;
-}
-
-.settings__form-row label span {
-  font-size: 0.9rem;
+  color: #cbd5e1;
 }
 
 .settings__form-row input[type="text"],
 .settings__form-row input[type="number"] {
-  padding: 10px 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
   border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 10px;
-  font-size: 1rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 400;
   background: #1e293b;
   color: #f8fafc;
   transition:
@@ -198,54 +226,57 @@ body.settings {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
 }
 
+/* A port-sized field in a generic grid row: stays narrow, left-aligned. */
 .settings__form-control--small {
-  flex: 0 1 120px;
+  max-width: 140px;
 }
 
-.settings__form-checkbox {
-  flex: 0 1 auto;
+/* A caption + small number input in an inline row: the caption keeps its
+   natural width, the input is port-sized. */
+.settings__form-row .settings__form-control--tiny {
+  flex: 0 0 auto;
+}
+
+.settings__form-control--tiny input[type="number"] {
+  width: 110px;
+}
+
+/* A checkbox and its caption on ONE line, as tall as a text input so it
+   lines up with the inputs of an end-aligned row. */
+.settings__form-row .settings__form-checkbox {
+  flex: 0 0 auto;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding-top: 28px;
-  font-weight: 600;
-}
-
-.settings__form-checkbox--block {
-  padding-top: 0;
+  gap: 8px;
+  min-height: 37px;
+  font-size: 0.9rem;
+  color: #f8fafc;
 }
 
 .settings__form-checkbox input {
   width: 18px;
   height: 18px;
+  margin: 0;
 }
 
+/* Buttons size to their content and sit left-aligned. */
 .settings__form-actions {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
-}
-
-.settings__form-checkbox--inline {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 600;
-  color: #f8fafc;
-}
-
-.settings__form-checkbox--inline input {
-  width: 18px;
-  height: 18px;
+  justify-content: flex-start;
 }
 
 .settings__button {
+  flex: 0 0 auto;
+  width: auto;
   border: none;
-  border-radius: 10px;
-  font-size: 0.95rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
   font-weight: 600;
-  padding: 10px 18px;
+  padding: 8px 14px;
+  line-height: 1.25;
   cursor: pointer;
   transition:
     transform 0.15s ease,
@@ -260,12 +291,12 @@ body.settings {
 .settings__button--primary {
   background: #4f46e5;
   color: #ffffff;
-  box-shadow: 0 12px 24px rgba(79, 70, 229, 0.22);
+  box-shadow: 0 6px 14px rgba(79, 70, 229, 0.22);
 }
 
 .settings__button--primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 14px 28px rgba(79, 70, 229, 0.26);
+  box-shadow: 0 8px 18px rgba(79, 70, 229, 0.26);
 }
 
 .settings__button--ghost {
@@ -281,242 +312,42 @@ body.settings {
 .settings__button--danger {
   background: #dc2626;
   color: #ffffff;
-  box-shadow: 0 10px 24px rgba(220, 38, 38, 0.25);
+  box-shadow: 0 6px 14px rgba(220, 38, 38, 0.25);
 }
 
 .settings__button--danger:hover {
   transform: translateY(-1px);
 }
 
+/* Smaller row-action buttons (Test / Edit / Delete …). */
+.settings__button--small {
+  padding: 5px 10px;
+  font-size: 0.82rem;
+}
+
 .settings__form-status {
-  min-height: 1.2rem;
   font-size: 0.9rem;
   margin: 0;
 }
 
+/* No message → no empty line under the form. The element stays in the DOM,
+   so every field's aria-describedby still resolves. */
+.settings__form-status:empty {
+  display: none;
+}
+
 .settings__form-status[data-state="error"] {
-  color: #dc2626;
+  color: #f87171;
 }
 
 .settings__form-status[data-state="success"] {
-  color: #16a34a;
+  color: #4ade80;
 }
 
-.settings__list {
-  list-style: none;
-  padding: 0;
+.settings__hint {
   margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.settings__list-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 20px 24px;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 16px;
-  background: #334155;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
-}
-
-.settings__list-item[data-enabled="false"] {
-  opacity: 0.75;
-}
-
-.settings__list-primary {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.settings__list-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.settings__host-label {
-  font-size: 1.1rem;
-  font-weight: 600;
-}
-
-.settings__status {
   font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 4px 10px;
-  border-radius: 999px;
-}
-
-.settings__status--enabled {
-  background: #dcfcef;
-  color: #047857;
-}
-
-.settings__status--connecting {
-  background: #bfdbfe;
-  color: #1d4ed8;
-}
-
-.settings__status--disabled {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.settings__status--error {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-/* #546 — video-source liveness. Green = video is flowing; amber = on the network but
-   sending nothing; red = the mapped name is not out there at all (the PP outage). */
-.settings__status--live {
-  background: #dcfcef;
-  color: #047857;
-}
-
-.settings__status--not-broadcasting {
-  background: #fef3c7;
-  color: #b45309;
-}
-
-.settings__status--not-found {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.settings__status--ready,
-.settings__status--unknown,
-.settings__status--checking {
-  background: #e2e8f0;
-  color: #475569;
-}
-
-/* The one-line instruction under a broken row: what the operator should actually go
-   and DO about it. */
-.settings__source-hint {
-  margin-top: 4px;
-  font-size: 0.8rem;
-  line-height: 1.35;
-  color: #b45309;
-  max-width: 46ch;
-}
-
-/* The header badge before the first status poll answers — neutral, never the red "off". */
-.settings__badge--checking {
-  background: #e2e8f0;
-  color: #475569;
-}
-
-/* The pipeline's own error text, when it has one — the most specific "why" available. */
-.settings__source-detail {
-  margin-top: 2px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.72rem;
-  line-height: 1.3;
-  color: #64748b;
-  max-width: 46ch;
-  overflow-wrap: anywhere;
-}
-
-/* What is actually on the NDI network right now, listed next to what is mapped. */
-.settings__discovered {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-  font-size: 0.8rem;
-  color: #64748b;
-}
-
-.settings__discovered-title {
-  font-weight: 600;
-}
-
-/* #789: each discovered name is a one-click "add this source" chip. */
-.settings__discovered-name {
-  padding: 2px 8px;
-  border: none;
-  border-radius: 999px;
-  background: #e2e8f0;
-  color: #334155;
-  font-size: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  cursor: pointer;
-}
-
-.settings__discovered-name:hover:not(:disabled) {
-  background: #cbd5e1;
-}
-
-.settings__discovered-name:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-/* #789: an NDI name shown as its two parts — the source (bold) over the sending PC. */
-.settings__ndi-parts {
-  display: flex;
-  flex-direction: column;
-}
-
-.settings__discovered-name .settings__ndi-parts {
-  flex-direction: row;
-  align-items: baseline;
-  gap: 6px;
-}
-
-/* The row's light-grey PC colour is too faint on the chip's grey background. */
-.settings__discovered-name .settings__source-ndi {
-  color: #475569;
-}
-
-.settings__form-hint {
-  margin: 0 0 8px;
-  font-size: 0.8rem;
-  color: #64748b;
-}
-
-.settings__discovered-empty {
-  font-style: italic;
-}
-
-.settings__list-line {
-  margin: 0;
-  font-family: "JetBrains Mono", "Fira Mono", monospace;
-  font-size: 0.95rem;
-  color: #f8fafc;
-}
-
-.settings__list-meta {
-  margin: 0;
   color: #94a3b8;
-  font-size: 0.85rem;
-}
-
-.settings__list-meta--warning {
-  color: #b91c1c;
-  font-weight: 600;
-}
-
-.settings__list-actions {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.settings__list-empty {
-  padding: 32px;
-  border: 1px dashed rgba(148, 163, 184, 0.35);
-  border-radius: 16px;
-  text-align: center;
-  color: #94a3b8;
-  background: #0f172a;
-  font-weight: 500;
 }
 
 .settings__toast {
@@ -560,14 +391,14 @@ body.in-iframe.settings .settings__card {
 }
 
 .settings__legend {
-  margin-top: 1.75rem;
   background: rgba(148, 163, 184, 0.1);
   border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 14px;
-  padding: 1.25rem;
+  border-radius: 12px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 8px;
+  font-size: 0.9rem;
 }
 
 .settings__legend-note {
@@ -606,7 +437,7 @@ body.in-iframe.settings .settings__card {
 
 @media (max-width: 840px) {
   .settings__card {
-    padding: 24px;
+    padding: 16px;
   }
 
   .settings__card-header {
@@ -620,12 +451,9 @@ body.in-iframe.settings .settings__card {
     gap: 12px;
   }
 
-  .settings__list-item {
-    flex-direction: column;
-  }
-
-  .settings__list-actions {
-    align-self: flex-end;
+  .settings__form-row--connection,
+  .settings__form-row--port-middle {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -706,27 +534,29 @@ body.in-iframe.settings .settings__card {
 .settings__btn--add {
   background: #3b82f6;
   color: white;
-  padding: 10px 20px;
+  padding: 8px 14px;
   align-self: flex-start;
 }
 .settings__btn--add:hover {
   background: #2563eb;
 }
-.settings__form-row {
+/* The NDI-name field: caption above the input + Scan button. Its own class —
+   it used to restyle the shared `.settings__form-row` globally (#819). */
+.settings__ndi-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.settings__form-row label {
+.settings__ndi-field label {
   font-size: 0.85rem;
-  color: #94a3b8;
+  color: #cbd5e1;
   font-weight: 600;
 }
 .settings__input {
   background: #1e293b;
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 8px 10px;
   color: #f8fafc;
   font-size: 0.95rem;
 }
