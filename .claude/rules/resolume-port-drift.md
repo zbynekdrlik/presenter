@@ -63,7 +63,8 @@ clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
   configured port is refused) would be a separate decision.
 - Tests: `port_drift_sibling_tests.rs` drives the real registry + workers
   (`set_hosts`, `snapshot_for`, an in-memory `Repository` for the persisted
-  clear). A negative "never adopts" check first waits for the host's
+  clear). Passing `repo.list_resolume_hosts()` to `set_hosts` is safe in
+  parallel tests: each `connect_in_memory()` is its own DB. A negative "never adopts" check first waits for the host's
   `ConnectRefused` (the probe runs right after it), then watches the snapshot
   for 3 s. Three-port layouts use `free_port_triple()` there, which verifies
   all three ports like `free_port_pair()` does.

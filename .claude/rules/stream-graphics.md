@@ -56,10 +56,13 @@ An element whose stored `props` JSON fails to parse is SKIPPED with a `tracing::
 still returns. Order is deterministic: scenes by (kind: base<overlay, then position, then id),
 elements by z_order.
 
-## Repository tests: isolated single-connection in-memory DB, not `connect_in_memory`
-`Repository::connect_in_memory()` uses `sqlite::memory:?cache=shared` — ALL such connections in the
-process share ONE DB, so count/list assertions contaminate across tests. `stream_tests.rs` instead
-builds an isolated repo: `ConnectOptions` with `max_connections(1).min_connections(1)`,
+## Repository tests: isolated single-connection in-memory DB
+`Repository::connect_in_memory()` (`sqlite::memory:?cache=shared`) gives EACH call its own DB: sqlx
+rewrites `:memory:` to a unique `file:sqlx-in-memory-{seqno}` per parsed URL (sqlx-sqlite 0.8.6
+`options/parse.rs:20-24`; sea-orm 1.1.20 parses once per `Database::connect`), shared only by that
+pool's connections. So it does NOT contaminate across tests (corrected in #813; this section used to
+claim one process-wide DB). `stream_tests.rs` builds its own repo for the PRAGMA/single-connection
+control: `ConnectOptions` with `max_connections(1).min_connections(1)`,
 `execute_unprepared("PRAGMA foreign_keys = ON")` (required for the FK CASCADE-delete tests to fire),
 `Migrator::up`, then `Repository { db }` (the `db` field is `pub(crate)`). Copy this idiom for any
 stream repo test.
@@ -90,26 +93,25 @@ async in the live-loop (see `live-events.md`), not in the sync `apply_live_event
 in `protocol.rs::handle_command` (where every command dispatches, post the protocol.rs extraction), NOT
 literally in `mod.rs` — the arch's "mod.rs" wording predates that split.
 
-## Server-side (state/router) tests share the in-memory DB → own a UNIQUE slug per test (#706/#707)
-The repository-test isolation idiom above is NOT available from `presenter-server`: `Repository { db }`
-is `pub(crate)` to `presenter-persistence`, so a server test cannot build the isolated single-connection
-repo. `AppState::in_memory()` uses `Repository::connect_in_memory()` = `sqlite::memory:?cache=shared`,
-so ALL server tests in the process share ONE DB. Existing server tests avoid this by never asserting a
-global list/count on a shared table. Stream state/router tests must do the same: **each test creates its
-own uniquely-slugged output** (`s706-<name>` / `t-<name>`) and operates on THAT — never the seeded
-`stream` output — or two tests activating `stream` race on `active_scene_id`. The per-`AppState`
+## Server-side (state/router) tests: one DB per `AppState::in_memory()`; unique slugs anyway (#706/#707)
+`AppState::in_memory()` uses `Repository::connect_in_memory()`, which is a separate DB per call (see
+above, corrected in #813: the old "ALL server tests share ONE DB" claim was wrong). Two tests on two
+`AppState`s never see each other's rows; two tasks on ONE `AppState` share it. The convention stays:
+**each test creates its own uniquely-slugged output** (`s706-<name>` / `t-<name>`) and operates on
+THAT, not the seeded `stream` output, so the intent stays readable and a test that shares one state
+between tasks cannot race on `active_scene_id`. The per-`AppState`
 `LiveHub` is NOT shared, so hub-subscription assertions (`live_hub().subscribe()` + `try_recv`) are
 safe as-is.
 
-When a server test MUST assert across ALL outputs (a global list, or "unchanged → nothing sent"),
-a unique slug is not enough — a parallel test's new output changes the result. Build a fully
-isolated `AppState` over a temp-file SQLite DB instead:
+When a server test asserts across ALL outputs (a global list, or "unchanged → nothing sent"), the
+#814 reference uses a fully isolated `AppState` over a temp-file SQLite DB (that also works; given
+the per-call isolation above, `AppState::in_memory()` would be isolated as well):
 `presenter_persistence::Repository::connect(&DatabaseSettings::new(format!("sqlite://{}?mode=rwc",
 tempdir.join("x.db").display())))` + `AppState::new(repo, None, <companion_enabled>, 18_175,
 ResolumeRegistry::new()?, AndroidStageRegistry::new(), OscBridge::new(&OscConfig::default()),
 AbleSetBridge::new())`, keeping the `TempDir` alive (reference: `companion/catalog_tests.rs::
-isolated_state`, #814). Plain `sqlite::memory:` without `cache=shared` does NOT work here (each pooled
-connection gets its own empty, un-migrated DB).
+isolated_state`, #814). sqlx turns on the shared cache for any `:memory:` URL (`parse.rs:22`); only
+`cache=private` would give each pooled connection its own empty, un-migrated DB.
 
 ## Stream API is SLUG-addressed; show state lives in `/def` + the outputs list (no `/show` route)
 Output-scoped routes take the output SLUG, not the numeric id: `/stream/api/outputs/{slug}/scenes`,
