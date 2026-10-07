@@ -120,6 +120,26 @@ pub(super) fn sorted_text_param_ids(targets: &[ClipTarget]) -> Vec<i64> {
     ids
 }
 
+/// Total number of clips across all layers in a Resolume `/composition` body —
+/// the composition "size" logged on every fetch (#483).
+pub(super) fn count_clips(body: &Value) -> usize {
+    body.get("layers")
+        .and_then(|layers| layers.as_array())
+        .map(|layers| {
+            layers
+                .iter()
+                .map(|layer| {
+                    layer
+                        .get("clips")
+                        .and_then(|clips| clips.as_array())
+                        .map(|clips| clips.len())
+                        .unwrap_or(0)
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, layer_index: usize) {
     let clip_id = clip.get("id").and_then(Value::as_i64);
     let Some(clip_id) = clip_id else {

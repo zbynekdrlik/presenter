@@ -1,4 +1,4 @@
-use super::clip_map::ClipMapping;
+use super::clip_map::{count_clips, ClipMapping};
 use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
 use super::port_claims::PortClaims;
@@ -782,24 +782,4 @@ impl HostDriver {
 /// the status snapshot (which is `Send`/serializable, unlike `tokio::time::Instant`).
 fn now_plus(d: Duration) -> chrono::DateTime<Utc> {
     Utc::now() + chrono::Duration::milliseconds(d.as_millis().min(i64::MAX as u128) as i64)
-}
-
-/// Total number of clips across all layers in a Resolume `/composition` body —
-/// the composition "size" logged on every fetch (#483).
-pub(super) fn count_clips(body: &serde_json::Value) -> usize {
-    body.get("layers")
-        .and_then(|layers| layers.as_array())
-        .map(|layers| {
-            layers
-                .iter()
-                .map(|layer| {
-                    layer
-                        .get("clips")
-                        .and_then(|clips| clips.as_array())
-                        .map(|clips| clips.len())
-                        .unwrap_or(0)
-                })
-                .sum()
-        })
-        .unwrap_or(0)
 }
