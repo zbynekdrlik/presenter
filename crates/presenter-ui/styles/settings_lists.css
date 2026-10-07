@@ -26,16 +26,27 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
+/* A disabled item: a darker, dashed card. Not `opacity` — 0.75 faded the
+   secondary text, the warning and the status badges below 4.5:1 (#819); a darker
+   background only raises the contrast of the row's light text. */
 .settings__list-item[data-enabled="false"] {
-  opacity: 0.75;
+  background: #263346;
+  border-style: dashed;
+  box-shadow: none;
 }
 
 /* The row being edited (or the new item): the inline editor replaces the
-   summary in place, full opacity even for a disabled item. */
+   summary in place, a solid highlighted card even for a disabled item. */
 .settings__list-item[data-editing="true"] {
-  opacity: 1;
   background: #1e293b;
   border-color: #6366f1;
+  border-style: solid;
+}
+
+/* Row buttons (Test / Edit / Refresh mapping …): the ghost grey is 4.0:1 on the
+   row background, this is 7.0:1 (#819). */
+.settings__list-item .settings__button--ghost {
+  color: #cbd5e1;
 }
 
 /* The editor inside a list row needs no second frame of its own. */
@@ -244,22 +255,31 @@
   overflow-wrap: anywhere;
 }
 
-/* Secondary inline info on the address line (latency, launch package). */
+/* Secondary row text — the aside on the address line (latency, launch package)
+   and the meta lines under it. #cbd5e1 at 0.8rem is 7.0:1 on the row background
+   #334155 (8.6:1 on a disabled row); the former #94a3b8 (0.75rem on the muted
+   line) was 4.0:1, under the 4.5:1 minimum (#819). Smaller than the address line,
+   never fainter than this. */
 .settings__list-aside {
-  color: #94a3b8;
+  color: #cbd5e1;
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
 
+/* `overflow-wrap: anywhere` so a long unbroken token in a meta line (the
+   Android warning names `PRESENTER_ANDROID_STAGE_URL`, 27 chars) breaks instead
+   of setting the row's min-content width: it made the standalone page 328 px wide
+   on a 320 px phone (#819). */
 .settings__list-meta {
   margin: 0;
-  color: #94a3b8;
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
-/* Updated / Created and other bookkeeping: one small muted line. */
+/* Updated / Created, the Android attempts: bookkeeping, quieter than the
+   address line but readable. */
 .settings__list-meta--muted {
-  font-size: 0.75rem;
+  color: #cbd5e1;
 }
 
 .settings__list-meta--warning {

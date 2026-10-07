@@ -146,18 +146,18 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
     };
 
     view! {
-        <section class="settings__card settings__card--ableton">
+        <section class="settings__card">
             <header class="settings__card-header">
                 <div>
                     <h2>"Ableton Control"</h2>
                     <p>"Configure AbleSet tracking and Presenter's OSC listener."</p>
                 </div>
             </header>
-            <form class="settings__form settings__form--ableset" data-role="ableset-form" autocomplete="off"
+            <form class="settings__form" data-role="ableset-form" autocomplete="off"
                 data-mode=move || if enabled.get() { "enabled" } else { "disabled" }
                 on:submit=on_submit>
                 <div class="settings__form-row settings__form-row--single">
-                    <label class="settings__form-checkbox settings__form-checkbox--block">
+                    <label class="settings__form-checkbox">
                         <input type="checkbox" data-role="ableset-enabled"
                             prop:checked=move || enabled.get()
                             on:change=move |ev| enabled.set(event_target_checked(&ev)) />
@@ -174,7 +174,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                             prop:value=move || host.get()
                             on:input=move |ev| host.set(event_target_value(&ev)) />
                     </label>
-                    <label class="settings__form-control settings__form-control--small">
+                    <label class="settings__form-control--small">
                         <span>"HTTP Port"</span>
                         <input type="number" data-role="ableset-http-port" min="1" max="65535" required
                             aria-required="true"
@@ -194,7 +194,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                     </label>
                 </div>
                 <div class="settings__form-row settings__form-row--single">
-                    <label class="settings__form-control settings__form-control--small">
+                    <label class="settings__form-control--small">
                         <span>"OSC Listener Port"</span>
                         <input type="number" data-role="osc-port" min="1" max="65535" required
                             aria-required="true"

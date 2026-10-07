@@ -44,6 +44,7 @@ body.settings {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 24px 40px;
   background: #1e293b;
   border-bottom: 1px solid rgba(148, 163, 184, 0.25);
@@ -58,6 +59,18 @@ body.settings {
 .settings__header-title p {
   margin: 8px 0 0;
   color: #94a3b8;
+}
+
+/* "← Back to hub" and the version label, side by side with a gap (they rendered
+   glued together: "← Back to hubv0.4.x"). On a narrow screen the version wraps
+   under the link; `nowrap` keeps each of them on one line at any width and with
+   either font (fallback or Inter), instead of one word per line. */
+.settings__header-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  white-space: nowrap;
 }
 
 .settings__header-nav .settings__link {
@@ -159,12 +172,6 @@ body.settings {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 600;
-}
-
-.settings__form-header p {
-  margin: 4px 0 0;
-  color: #94a3b8;
-  font-size: 0.9rem;
 }
 
 .settings__form-row {
@@ -286,6 +293,13 @@ body.settings {
 .settings__button:disabled {
   opacity: 0.6;
   cursor: wait;
+}
+
+/* An Edit / "+ Add" locked by the open editor's unsaved changes is not waiting on
+   anything — it needs the operator to Save or Cancel first (#819). */
+.settings__button[data-lock="unsaved"]:disabled,
+.settings__button[data-lock="open"]:disabled {
+  cursor: not-allowed;
 }
 
 .settings__button--primary {
@@ -455,6 +469,21 @@ body.in-iframe.settings .settings__card {
   .settings__form-row--port-middle {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* The clip-name legend stacks each name over its meaning: its 160 px name
+     column made the page 393 px on a 360 px phone (33 px too wide) once the NDI
+     input stopped setting 404 px (#819), and squeezed the meanings at 600 px. */
+  .settings__legend dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  /* Phone: the header's 40 px side padding leaves the nav too little room; the
+     24 px top / bottom padding stays. */
+  .settings__header {
+    padding-inline: 20px;
+  }
 }
 
 /* ── Video Sources (NDI) — merged from former WASM-orphan settings.css ── */
@@ -570,4 +599,9 @@ body.in-iframe.settings .settings__card {
 }
 .settings__ndi-select .settings__input {
   flex: 1;
+  /* A text input's intrinsic width is ~20 characters, and it counted towards the
+     card's minimum width: the page was 404 px wide on a 360 px phone and scrolled
+     sideways (#819). `width: 0` drops that minimum; `flex: 1` still fills the row. */
+  width: 0;
+  min-width: 0;
 }
