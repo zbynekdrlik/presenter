@@ -338,6 +338,58 @@ async fn a_host_on_another_address_does_not_block_the_drift() {
     .await;
 }
 
+/// Disabling a host in presenter does not stop its Arena (PP disables idle
+/// hosts), so a disabled sibling still owns its configured port.
+#[tokio::test]
+async fn a_host_never_drifts_onto_the_configured_port_of_a_disabled_sibling() {
+    let (bridge_port, songs_port) = free_port_pair();
+    let _songs_arena = start_arena_on(songs_port).await;
+    let bridge = host_on("arena bridge", "127.0.0.1", bridge_port);
+    let mut songs = host_on("arena songs", "127.0.0.1", songs_port);
+    songs.is_enabled = false;
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.set_hosts(vec![bridge.clone(), songs]).await;
+
+    wait_for_refused(&registry, bridge.id).await;
+    assert_never(
+        &registry,
+        bridge.id,
+        "the bridge host adopted the port of the disabled songs host, whose Arena still runs",
+        |s| s.active_port == Some(songs_port),
+    )
+    .await;
+}
+
+/// One machine spelled two ways (`resolume-pp.lan` and `10.77.8.201` on PP;
+/// `localhost` and `127.0.0.1` here): the hosts are matched by the IP the
+/// worker resolved, not only by the host string.
+#[tokio::test]
+async fn a_host_never_drifts_onto_a_sibling_that_names_the_same_machine_differently() {
+    let (bridge_port, songs_port) = free_port_pair();
+    let _songs_arena = start_arena_on(songs_port).await;
+    let bridge = host_on("arena bridge", "localhost", bridge_port);
+    let songs = host_on("arena songs", "127.0.0.1", songs_port);
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry
+        .set_hosts(vec![bridge.clone(), songs.clone()])
+        .await;
+
+    wait_for(&registry, songs.id, "the songs host connects", |s| {
+        s.state == ResolumeConnectionState::Connected
+    })
+    .await;
+    wait_for_refused(&registry, bridge.id).await;
+    assert_never(
+        &registry,
+        bridge.id,
+        "the bridge host (localhost) adopted the port of the songs host (127.0.0.1)",
+        |s| s.active_port == Some(songs_port),
+    )
+    .await;
+}
+
 /// The PP DB after the incident: the bridge host persisted the songs host's
 /// port as its `active_port`. Loading the hosts (a restart after the deploy)
 /// must clear it in memory AND in the DB, so the incident heals by itself.

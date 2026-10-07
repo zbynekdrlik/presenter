@@ -214,16 +214,119 @@ mod tests {
     }
 
     #[test]
-    fn hosts_on_other_addresses_disabled_hosts_and_the_host_itself_own_nothing() {
+    fn hosts_on_other_addresses_and_the_host_itself_own_nothing() {
         let bridge = host("arena bridge", "10.77.8.201", 8090).with_active_port(Some(8092));
         let elsewhere = host("arena stream", "10.77.8.202", 8091);
-        let mut disabled = host("old songs", "10.77.8.201", 8094);
-        disabled.is_enabled = false;
-        let claims = claims_of(&[bridge.clone(), elsewhere, disabled]);
+        let claims = claims_of(&[bridge.clone(), elsewhere]);
 
         assert!(claims
             .sibling_ports(bridge.id, "10.77.8.201", 8090)
             .is_empty());
+    }
+
+    #[test]
+    fn a_disabled_sibling_owns_its_configured_port_but_not_its_active_port() {
+        // Disabling a host in presenter does not stop its Arena (PP disables
+        // idle hosts). A disabled host never probes, so its persisted active
+        // port is unverified and owns nothing.
+        let bridge = host("arena bridge", "10.77.8.201", 8090);
+        let mut songs = host("arena songs", "10.77.8.201", 8091).with_active_port(Some(8093));
+        songs.is_enabled = false;
+        let claims = claims_of(&[bridge.clone(), songs]);
+
+        assert_eq!(
+            ports(&claims.sibling_ports(bridge.id, "10.77.8.201", 8090)),
+            vec![8091]
+        );
+        assert_eq!(
+            claims.try_claim(bridge.id, "10.77.8.201", 8090, 8091),
+            Err("arena songs".to_string())
+        );
+        assert_eq!(
+            claims.try_claim(bridge.id, "10.77.8.201", 8090, 8093),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn ip_literals_spelled_differently_are_the_same_machine() {
+        let bridge = host("arena bridge", "::1", 8090);
+        let songs = host("arena songs", "0:0:0:0:0:0:0:1", 8091);
+        let claims = claims_of(&[bridge.clone(), songs]);
+
+        assert_eq!(
+            ports(&claims.sibling_ports(bridge.id, "::1", 8090)),
+            vec![8091]
+        );
+    }
+
+    #[test]
+    fn a_seeded_active_port_on_another_hosts_configured_port_is_not_kept() {
+        // The PP DB after the incident: the bridge persisted the songs host's
+        // configured port as its active port.
+        let bridge = host("arena bridge", "10.77.8.201", 8090).with_active_port(Some(8091));
+        let songs = host("arena songs", "10.77.8.201", 8091);
+        let claims = claims_of(&[bridge, songs.clone()]);
+
+        assert_eq!(
+            ports(&claims.sibling_ports(songs.id, "10.77.8.201", 8091)),
+            vec![8090]
+        );
+    }
+
+    #[test]
+    fn a_seeded_active_port_on_a_disabled_hosts_configured_port_is_not_kept() {
+        let bridge = host("arena bridge", "10.77.8.201", 8090).with_active_port(Some(8091));
+        let mut songs = host("arena songs", "10.77.8.201", 8091);
+        songs.is_enabled = false;
+        let claims = claims_of(&[bridge, songs.clone()]);
+
+        assert_eq!(
+            ports(&claims.sibling_ports(songs.id, "10.77.8.201", 8091)),
+            vec![8090]
+        );
+    }
+
+    #[test]
+    fn a_seeded_active_port_never_outranks_a_live_runtime_claim() {
+        let live = host("arena songs", "10.77.8.201", 8089);
+        let claims = claims_of(&[live.clone()]);
+        // The songs host's worker found its Arena on 8092 and claimed it.
+        assert_eq!(claims.try_claim(live.id, "10.77.8.201", 8089, 8092), Ok(()));
+
+        // A host is added (or re-pointed) whose persisted, unverified active
+        // port is that same 8092. The songs worker keeps running.
+        let seeded = host("arena bridge", "10.77.8.201", 8090).with_active_port(Some(8092));
+        claims.rebuild([&live, &seeded], |h| h.id == live.id);
+
+        // The live claim stays, the seed does not.
+        assert_eq!(
+            ports(&claims.sibling_ports(live.id, "10.77.8.201", 8089)),
+            vec![8090]
+        );
+        assert_eq!(claims.try_claim(live.id, "10.77.8.201", 8089, 8092), Ok(()));
+        assert_eq!(
+            ports(&claims.sibling_ports(seeded.id, "10.77.8.201", 8090)),
+            vec![8089, 8092]
+        );
+    }
+
+    #[test]
+    fn two_seeded_active_ports_on_the_same_port_are_both_dropped() {
+        // Neither value is verified, so neither outranks the other; both
+        // hosts re-probe and `try_claim` serializes the adoption.
+        let a = host("arena a", "10.77.8.201", 8090).with_active_port(Some(8093));
+        let b = host("arena b", "10.77.8.201", 8091).with_active_port(Some(8093));
+        let claims = claims_of(&[a.clone(), b.clone()]);
+
+        assert_eq!(
+            ports(&claims.sibling_ports(a.id, "10.77.8.201", 8090)),
+            vec![8091]
+        );
+        assert_eq!(
+            ports(&claims.sibling_ports(b.id, "10.77.8.201", 8091)),
+            vec![8090]
+        );
     }
 
     #[test]
@@ -276,11 +379,17 @@ mod tests {
 
     #[test]
     fn try_claim_always_allows_the_configured_port() {
-        // A sibling that (wrongly) adopted this host's configured port never
-        // locks this host out of its own Arena.
+        // A sibling that adopted this host's configured port (it did so
+        // before this host was added) never locks this host out of its own
+        // Arena.
+        let songs = host("arena songs", "10.77.8.201", 8089);
+        let claims = claims_of(&[songs.clone()]);
+        assert_eq!(
+            claims.try_claim(songs.id, "10.77.8.201", 8089, 8090),
+            Ok(())
+        );
         let bridge = host("arena bridge", "10.77.8.201", 8090);
-        let songs = host("arena songs", "10.77.8.201", 8089).with_active_port(Some(8090));
-        let claims = claims_of(&[bridge.clone(), songs]);
+        claims.rebuild([&bridge, &songs], |h| h.id == songs.id);
 
         assert_eq!(
             claims.try_claim(bridge.id, "10.77.8.201", 8090, 8090),
