@@ -1,29 +1,27 @@
 //! Android stage launchers card for the settings page (#347).
 //!
-//! #819: **Edit** opens the editor IN the clicked row and "+ Add display" opens it
-//! at the top of the list (`host_editor`, shared with the Resolume card). Rows are
-//! keyed on identity plus the fields they show or edit ([`row_key`]) and read their
-//! live launch status and timestamps through a `Memo`, so the 5 s poll never rebuilds
-//! a row or touches an open editor.
+//! #819: the list, its inline editor (Edit in the row, "+ Add display" at the top),
+//! the fetch / save / delete flow and the keyed rows are the shared
+//! `list_card::ListCard`, the same as the Resolume card. This file supplies the
+//! Android API and copy, the launch package as the editor's extra field (part of the
+//! draft: loaded on open, validated on save), and the row's own parts (launch status
+//! badge, launch package, attempts, error, Test). Rows are keyed on identity plus the
+//! fields they show or edit ([`row_key`]), never on the live launch status.
 
 use leptos::prelude::*;
 
-use super::host_editor::{
-    focus_on_close, render_connection_editor, EditTarget, EditorSpec, ExtraField, ListEditor,
-};
-use super::list_sync::ResponseOrder;
-use super::row_status::{android_attempts, android_state, updated_created};
-use super::{ToastHandle, STATUS_REFRESH_MS};
-use crate::api::settings::{self, AndroidDisplayDraft, AndroidDisplayDto};
-use crate::components::modal::confirm;
+use super::host_editor::{EditorSpec, ExtraField, Submission};
+use super::list_card::{CardItem, CardText, ListCard, RowParts};
+use super::row_status::{android_attempts, android_state};
+use super::ToastHandle;
+use crate::api::settings::{self, AndroidDisplayDraft, AndroidDisplayDto, AndroidStatusDto};
+use crate::api::ApiError;
 
-/// The adb port a new display starts with.
-const DEFAULT_PORT: u16 = 5555;
 /// The launch package a new display starts with.
 const DEFAULT_COMPONENT: &str = "com.tcl.browser";
 
-fn editor_spec(component: RwSignal<String>) -> EditorSpec {
-    EditorSpec {
+static TEXT: CardText = CardText {
+    editor: EditorSpec {
         role: "android",
         message_id: "android-form-status",
         message_role: "android-form-status",
@@ -36,10 +34,25 @@ fn editor_spec(component: RwSignal<String>) -> EditorSpec {
             caption: "Launch Package",
             role: "android-component",
             placeholder: DEFAULT_COMPONENT,
-            value: component,
+            default: DEFAULT_COMPONENT,
+            empty_message: "Launch component cannot be empty.",
         }),
-    }
-}
+    },
+    // The adb port.
+    default_port: 5555,
+    list_role: "android-display-list",
+    add_text: "+ Add display",
+    empty_text: "No Android stage displays configured yet.",
+    fallback_name: "this display",
+    saving: "Updating display…",
+    creating: "Creating display…",
+    updated: "Saved Android stage display.",
+    added: "Added Android stage display.",
+    deleted: "Deleted Android stage display.",
+    save_failed: "Unable to save display.",
+    delete_failed: "Unable to delete display.",
+    removed_elsewhere: "This display was removed elsewhere.",
+};
 
 /// A row's `<For>` key: its id plus every field the row shows or edits — never the
 /// live launch status, so a poll never rebuilds a row.
@@ -54,112 +67,78 @@ fn row_key(d: &AndroidDisplayDto) -> (String, String, String, u16, String, bool)
     )
 }
 
+impl CardItem for AndroidDisplayDto {
+    type Status = AndroidStatusDto;
+    type Key = (String, String, String, u16, String, bool);
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn key(&self) -> Self::Key {
+        row_key(self)
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn host(&self) -> &str {
+        &self.host
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+
+    fn extra(&self) -> &str {
+        &self.launch_component
+    }
+
+    fn status(&self) -> Option<AndroidStatusDto> {
+        self.status.clone()
+    }
+
+    fn created_at(&self) -> &str {
+        &self.created_at
+    }
+
+    fn updated_at(&self) -> &str {
+        &self.updated_at
+    }
+
+    async fn list() -> Result<Vec<Self>, ApiError> {
+        settings::list_android_displays().await
+    }
+
+    async fn save(id: Option<String>, submission: Submission) -> Result<(), ApiError> {
+        let draft = AndroidDisplayDraft {
+            label: submission.fields.label,
+            host: submission.fields.host,
+            port: submission.fields.port,
+            launch_component: submission.extra,
+            is_enabled: submission.enabled,
+        };
+        match id {
+            Some(id) => settings::update_android_display(&id, &draft)
+                .await
+                .map(drop),
+            None => settings::create_android_display(&draft).await.map(drop),
+        }
+    }
+
+    async fn delete(id: String) -> Result<(), ApiError> {
+        settings::delete_android_display(&id).await
+    }
+}
+
 #[component]
 pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
-    let displays = RwSignal::new(Vec::<AndroidDisplayDto>::new());
-    let editor = ListEditor::default();
-    let component = RwSignal::new(String::from(DEFAULT_COMPONENT));
-    let spec = editor_spec(component);
-
-    // Every list fetch goes through here: numbered, so a slow older response (a poll
-    // sent before a save) never overwrites a newer one; and an editor left open on a
-    // display deleted meanwhile (here or in another tab) closes with it.
-    let order = ResponseOrder::default();
-    let fetch_displays = move || async move {
-        let seq = order.begin();
-        if let Ok(list) = settings::list_android_displays().await {
-            if order.accept(seq) {
-                editor.forget_missing(list.iter().map(|d| d.id.as_str()));
-                displays.set(list);
-            }
-        }
-    };
-    let reload = move || leptos::task::spawn_local(fetch_displays());
-    // Initial load + 5s status poll.
-    reload();
-    gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, reload).forget();
-
-    let open_new = move || {
-        component.set(DEFAULT_COMPONENT.to_string());
-        editor.open_new(DEFAULT_PORT);
-    };
-    let open_edit = move |id: String| {
-        if let Some(d) = displays.with_untracked(|list| list.iter().find(|d| d.id == id).cloned()) {
-            component.set(d.launch_component.clone());
-            editor.open_item(d.id, &d.label, &d.host, d.port, d.is_enabled);
-        }
-    };
-
-    let save = move || {
-        let Some((ticket, fields)) = editor.begin_save() else {
-            return;
-        };
-        let component_val = component.get_untracked().trim().to_string();
-        if component_val.is_empty() {
-            editor
-                .draft
-                .show("error", "Launch component cannot be empty.");
-            return;
-        }
-        let payload = AndroidDisplayDraft {
-            label: fields.label,
-            host: fields.host,
-            port: fields.port,
-            launch_component: component_val,
-            is_enabled: editor.draft.enabled.get_untracked(),
-        };
-        let updating = ticket.updating();
-        editor.mark_saving(if updating.is_some() {
-            "Updating display…"
-        } else {
-            "Creating display…"
-        });
-        leptos::task::spawn_local(async move {
-            let result = match &updating {
-                Some(id) => settings::update_android_display(id, &payload).await,
-                None => settings::create_android_display(&payload).await,
-            };
-            match result {
-                Ok(_) => {
-                    fetch_displays().await;
-                    toast.show(
-                        if updating.is_some() {
-                            "Saved Android stage display."
-                        } else {
-                            "Added Android stage display."
-                        },
-                        "success",
-                    );
-                    editor.finish_save(&ticket, None);
-                }
-                Err(err) => {
-                    let message = format!("Unable to save display. {err}");
-                    if !editor.finish_save(&ticket, Some(&message)) {
-                        toast.show(&message, "error");
-                    }
-                }
-            }
-        });
-    };
-
-    let delete_display = move |id: String| {
-        let name = displays
-            .with_untracked(|list| list.iter().find(|d| d.id == id).map(|d| d.label.clone()))
-            .unwrap_or_else(|| "this display".to_string());
-        if !confirm(&format!("Remove {name}? Presenter will stop reconnecting.")) {
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            match settings::delete_android_display(&id).await {
-                Ok(()) => {
-                    editor.discard_if_open_on(&id);
-                    fetch_displays().await;
-                    toast.show("Deleted Android stage display.", "success");
-                }
-                Err(err) => toast.show(&format!("Unable to delete display. {err}"), "error"),
-            }
-        });
-    };
+    let card = ListCard::<AndroidDisplayDto>::new(toast, &TEXT);
 
     let test_display = move |id: String| {
         leptos::task::spawn_local(async move {
@@ -167,17 +146,62 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                 Ok(()) => {
                     toast.show("Launch queued — refreshing status…", "success");
                     gloo_timers::future::TimeoutFuture::new(600).await;
-                    fetch_displays().await;
+                    card.fetch().await;
                 }
                 Err(err) => toast.show(&format!("Unable to trigger launch. {err}"), "error"),
             }
         });
     };
 
-    let adding = move || editor.is_new();
-    let each_display = move || displays.get();
-    let add_ref = NodeRef::<leptos::html::Button>::new();
-    focus_on_close(editor, add_ref, EditTarget::New);
+    // The Android parts of a row: launch status badge + launch package, the
+    // attempts line, the error, and Test before the shared Edit / Delete.
+    let row = move |d: &AndroidDisplayDto, status: Memo<Option<AndroidStatusDto>>| {
+        let is_enabled = d.is_enabled;
+        let badge = move || status.with(|s| android_state(s.as_ref(), is_enabled));
+        let status_class = move || format!("settings__status settings__status--{}", badge().0);
+        let status_state = move || badge().0;
+        let status_label = move || badge().1;
+        let attempts = move || status.with(|s| android_attempts(s.as_ref()));
+        let warning = move || {
+            status
+                .with(|s| s.as_ref().and_then(|s| s.last_error.clone()))
+                .map(|err| {
+                    view! {
+                        <p class="settings__list-meta settings__list-meta--warning"
+                            data-role="android-error">{format!("⚠ {err}")}</p>
+                    }
+                })
+        };
+        let launch_component = d.launch_component.clone();
+        let id_test = d.id.clone();
+        RowParts {
+            line: view! {
+                <>
+                    <span class=status_class data-role="android-status" data-state=status_state>
+                        {status_label}
+                    </span>
+                    <span class="settings__list-aside" data-role="android-component-value"
+                        title="Launch package">{launch_component}</span>
+                </>
+            }
+            .into_any(),
+            meta: Some(
+                view! {
+                    <p class="settings__list-meta settings__list-meta--muted"
+                        data-role="android-attempts">{attempts}</p>
+                }
+                .into_any(),
+            ),
+            warning: warning.into_any(),
+            actions: view! {
+                <button type="button" class="settings__button settings__button--ghost settings__button--small"
+                    data-role="android-test" data-id=id_test.clone()
+                    on:click=move |_| test_display(id_test.clone())>"Test"</button>
+            }
+            .into_any(),
+        }
+    };
+    let displays = card.items;
 
     view! {
         <section class="settings__card">
@@ -193,115 +217,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                     <span class="settings__badge-label">"Displays"</span>
                 </div>
             </header>
-            <div class="settings__list-toolbar">
-                <button type="button" class="settings__button settings__button--primary"
-                    node_ref=add_ref data-role="android-add" prop:disabled=adding
-                    on:click=move |_| open_new()>"+ Add display"</button>
-            </div>
-            <ul class="settings__list" data-role="android-display-list">
-                <Show when=adding>
-                    <li class="settings__list-item" data-role="android-new-item" data-editing="true">
-                        {render_connection_editor(spec, editor, true, save)}
-                    </li>
-                </Show>
-                <Show when=move || displays.with(Vec::is_empty) && !adding()>
-                    <li class="settings__list-empty" data-role="android-empty">"No Android stage displays configured yet."</li>
-                </Show>
-                <For
-                    each=each_display
-                    key=row_key
-                    children=move |d: AndroidDisplayDto| {
-                        let edit_id = d.id.clone();
-                        let editing_this = Memo::new(move |_| editor.is_open_on(&edit_id));
-                        // This row's live launch status and timestamps, re-read on every poll.
-                        let status_id = d.id.clone();
-                        let status = Memo::new(move |_| {
-                            displays.with(|list| {
-                                list.iter().find(|x| x.id == status_id).and_then(|x| x.status.clone())
-                            })
-                        });
-                        let meta_id = d.id.clone();
-                        let timestamps = Memo::new(move |_| {
-                            displays.with(|list| {
-                                list.iter()
-                                    .find(|x| x.id == meta_id)
-                                    .map(|x| updated_created(&x.updated_at, &x.created_at))
-                                    .unwrap_or_default()
-                            })
-                        });
-                        let is_enabled = d.is_enabled;
-                        let badge = move || status.with(|s| android_state(s.as_ref(), is_enabled));
-                        let status_class = move || format!("settings__status settings__status--{}", badge().0);
-                        let status_state = move || badge().0;
-                        let status_label = move || badge().1;
-                        let attempts = move || status.with(|s| android_attempts(s.as_ref()));
-                        let warning = move || {
-                            status.with(|s| s.as_ref().and_then(|s| s.last_error.clone())).map(|err| view! {
-                                <p class="settings__list-meta settings__list-meta--warning"
-                                    data-role="android-error">{format!("⚠ {err}")}</p>
-                            })
-                        };
-                        let id = d.id.clone();
-                        let label = d.label.clone();
-                        let host = d.host.clone();
-                        let port = d.port;
-                        let launch_component = d.launch_component.clone();
-                        let summary = move || {
-                            let (id_test, id_edit, id_delete) = (id.clone(), id.clone(), id.clone());
-                            let edit_ref = NodeRef::<leptos::html::Button>::new();
-                            focus_on_close(editor, edit_ref, EditTarget::Item(id.clone()));
-                            view! {
-                                <div class="settings__list-summary">
-                                    <div class="settings__list-primary">
-                                        <div class="settings__list-title">
-                                            <span class="settings__host-label">{label.clone()}</span>
-                                        </div>
-                                        <p class="settings__list-line">
-                                            <span class="settings__host-addr">
-                                                <code>{host.clone()}</code>
-                                                <span class="settings__host-port">{format!(":{port}")}</span>
-                                            </span>
-                                            <span class=status_class data-role="android-status" data-state=status_state>
-                                                {status_label}
-                                            </span>
-                                            <span class="settings__list-aside" data-role="android-component-value"
-                                                title="Launch package">{launch_component.clone()}</span>
-                                        </p>
-                                        <p class="settings__list-meta settings__list-meta--muted"
-                                            data-role="android-attempts">{attempts}</p>
-                                        <p class="settings__list-meta settings__list-meta--muted">
-                                            {move || timestamps.get()}
-                                        </p>
-                                        {warning}
-                                    </div>
-                                    <div class="settings__list-actions">
-                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
-                                            data-role="android-test" data-id=id_test.clone()
-                                            on:click=move |_| test_display(id_test.clone())>"Test"</button>
-                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
-                                            node_ref=edit_ref data-role="android-edit" data-id=id_edit.clone()
-                                            on:click=move |_| open_edit(id_edit.clone())>"Edit"</button>
-                                        <button type="button" class="settings__button settings__button--danger settings__button--small"
-                                            data-role="android-delete" data-id=id_delete.clone()
-                                            on:click=move |_| delete_display(id_delete.clone())>"Delete"</button>
-                                    </div>
-                                </div>
-                            }
-                        };
-                        view! {
-                            <li class="settings__list-item" data-id=d.id.clone()
-                                data-enabled=d.is_enabled.to_string()
-                                data-editing=move || editing_this.get().to_string()>
-                                {move || if editing_this.get() {
-                                    render_connection_editor(spec, editor, false, save)
-                                } else {
-                                    summary().into_any()
-                                }}
-                            </li>
-                        }
-                    }
-                />
-            </ul>
+            {card.render_list(row)}
         </section>
     }
 }

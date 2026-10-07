@@ -67,7 +67,7 @@ pub fn CompanionCard() -> impl IntoView {
                 on:submit=on_submit
             >
                 <div class="settings__form-row settings__form-row--compact settings__form-row--inline">
-                    <label class="settings__form-checkbox settings__form-checkbox--inline">
+                    <label class="settings__form-checkbox">
                         <input
                             type="checkbox"
                             data-role="feature-companion-toggle"

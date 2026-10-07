@@ -1,37 +1,48 @@
 //! Resolume Arena connections card for the settings page (#347).
 //!
-//! #819: **Edit** opens the editor IN the clicked row and "+ Add connection" opens
-//! it at the top of the list (`host_editor`). Rows are keyed on identity plus the
-//! fields they show or edit ([`row_key`]) — never on the live status — and read the
-//! status and timestamps through a `Memo`, so the 5 s poll updates the badge /
-//! latency / warning in place and never rebuilds a row or touches an open editor.
+//! #819: the list, its inline editor (Edit in the row, "+ Add connection" at the top),
+//! the fetch / save / delete flow and the keyed rows are the shared
+//! `list_card::ListCard`. This file supplies the Resolume API and copy, the row's
+//! own parts (status badge, latency, retry warning, Test / Refresh mapping) and the
+//! clip-name legend. Rows are keyed on identity plus the fields they show or edit
+//! ([`row_key`]), never on the live status, so the 5 s poll updates the badge in
+//! place and never rebuilds a row or touches an open editor.
 
 use leptos::prelude::*;
 
-use super::host_editor::{
-    focus_on_close, render_connection_editor, EditTarget, EditorSpec, ListEditor,
-};
-use super::list_sync::ResponseOrder;
-use super::row_status::{
-    latency_text, resolume_state, resolume_warning, updated_created, HostWarning,
-};
-use super::{capitalize, ToastHandle, STATUS_REFRESH_MS};
-use crate::api::settings::{self, ResolumeHostDraft, ResolumeHostDto};
-use crate::components::modal::confirm;
+use super::host_editor::{EditorSpec, Submission};
+use super::list_card::{CardItem, CardText, ListCard, RowParts};
+use super::row_status::{latency_text, resolume_state, resolume_warning, HostWarning};
+use super::{capitalize, ToastHandle};
+use crate::api::settings::{self, ResolumeHostDraft, ResolumeHostDto, ResolumeStatusDto};
+use crate::api::ApiError;
 
-/// The port a new connection starts with (Arena's default web-server port).
-const DEFAULT_PORT: u16 = 8090;
-
-const EDITOR: EditorSpec = EditorSpec {
-    role: "host",
-    message_id: "resolume-form-status",
-    message_role: "form-status",
-    label_placeholder: "Main Arena",
-    host_placeholder: "resolume.lan",
-    new_title: "New Resolume connection",
-    new_submit: "Add connection",
-    edit_title: "Edit Resolume connection",
-    extra: None,
+static TEXT: CardText = CardText {
+    editor: EditorSpec {
+        role: "host",
+        message_id: "resolume-form-status",
+        message_role: "form-status",
+        label_placeholder: "Main Arena",
+        host_placeholder: "resolume.lan",
+        new_title: "New Resolume connection",
+        new_submit: "Add connection",
+        edit_title: "Edit Resolume connection",
+        extra: None,
+    },
+    // Arena's default web-server port.
+    default_port: 8090,
+    list_role: "resolume-host-list",
+    add_text: "+ Add connection",
+    empty_text: "No Resolume connections defined yet.",
+    fallback_name: "this connection",
+    saving: "Saving changes…",
+    creating: "Creating connection…",
+    updated: "Updated Resolume connection.",
+    added: "Added Resolume connection.",
+    deleted: "Deleted Resolume connection.",
+    save_failed: "Unable to save connection.",
+    delete_failed: "Unable to delete connection.",
+    removed_elsewhere: "This connection was removed elsewhere.",
 };
 
 /// A row's `<For>` key: its id plus every field the row shows or edits. Never the
@@ -47,97 +58,71 @@ fn row_key(h: &ResolumeHostDto) -> (String, String, String, u16, bool) {
     )
 }
 
+impl CardItem for ResolumeHostDto {
+    type Status = ResolumeStatusDto;
+    type Key = (String, String, String, u16, bool);
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn key(&self) -> Self::Key {
+        row_key(self)
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn host(&self) -> &str {
+        &self.host
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+
+    fn status(&self) -> Option<ResolumeStatusDto> {
+        self.status.clone()
+    }
+
+    fn created_at(&self) -> &str {
+        &self.created_at
+    }
+
+    fn updated_at(&self) -> &str {
+        &self.updated_at
+    }
+
+    async fn list() -> Result<Vec<Self>, ApiError> {
+        settings::list_resolume_hosts().await
+    }
+
+    async fn save(id: Option<String>, submission: Submission) -> Result<(), ApiError> {
+        let draft = ResolumeHostDraft {
+            label: submission.fields.label,
+            host: submission.fields.host,
+            port: submission.fields.port,
+            is_enabled: submission.enabled,
+        };
+        match id {
+            Some(id) => settings::update_resolume_host(&id, &draft).await.map(drop),
+            None => settings::create_resolume_host(&draft).await.map(drop),
+        }
+    }
+
+    async fn delete(id: String) -> Result<(), ApiError> {
+        settings::delete_resolume_host(&id).await
+    }
+}
+
 #[component]
 pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
-    let hosts = RwSignal::new(Vec::<ResolumeHostDto>::new());
-    let editor = ListEditor::default();
-
-    // Every list fetch goes through here: numbered, so a slow older response (a poll
-    // sent before a save) never overwrites a newer one; and an editor left open on a
-    // host deleted meanwhile (here or in another tab) closes with it.
-    let order = ResponseOrder::default();
-    let fetch_hosts = move || async move {
-        let seq = order.begin();
-        if let Ok(list) = settings::list_resolume_hosts().await {
-            if order.accept(seq) {
-                editor.forget_missing(list.iter().map(|h| h.id.as_str()));
-                hosts.set(list);
-            }
-        }
-    };
-    let reload = move || leptos::task::spawn_local(fetch_hosts());
-    // Initial load + 5s status poll.
-    reload();
-    gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, reload).forget();
-
-    let open_edit = move |id: String| {
-        if let Some(h) = hosts.with_untracked(|list| list.iter().find(|h| h.id == id).cloned()) {
-            editor.open_item(h.id, &h.label, &h.host, h.port, h.is_enabled);
-        }
-    };
-
-    let save = move || {
-        let Some((ticket, fields)) = editor.begin_save() else {
-            return;
-        };
-        let payload = ResolumeHostDraft {
-            label: fields.label,
-            host: fields.host,
-            port: fields.port,
-            is_enabled: editor.draft.enabled.get_untracked(),
-        };
-        let updating = ticket.updating();
-        editor.mark_saving(if updating.is_some() {
-            "Saving changes…"
-        } else {
-            "Creating connection…"
-        });
-        leptos::task::spawn_local(async move {
-            let result = match &updating {
-                Some(id) => settings::update_resolume_host(id, &payload).await,
-                None => settings::create_resolume_host(&payload).await,
-            };
-            match result {
-                Ok(_) => {
-                    fetch_hosts().await;
-                    toast.show(
-                        if updating.is_some() {
-                            "Updated Resolume connection."
-                        } else {
-                            "Added Resolume connection."
-                        },
-                        "success",
-                    );
-                    editor.finish_save(&ticket, None);
-                }
-                Err(err) => {
-                    let message = format!("Unable to save connection. {err}");
-                    if !editor.finish_save(&ticket, Some(&message)) {
-                        toast.show(&message, "error");
-                    }
-                }
-            }
-        });
-    };
-
-    let delete_host = move |id: String| {
-        let name = hosts
-            .with_untracked(|list| list.iter().find(|h| h.id == id).map(|h| h.label.clone()))
-            .unwrap_or_else(|| "this connection".to_string());
-        if !confirm(&format!("Remove {name}? Presenter will stop reconnecting.")) {
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            match settings::delete_resolume_host(&id).await {
-                Ok(()) => {
-                    editor.discard_if_open_on(&id);
-                    fetch_hosts().await;
-                    toast.show("Deleted Resolume connection.", "success");
-                }
-                Err(err) => toast.show(&format!("Unable to delete connection. {err}"), "error"),
-            }
-        });
-    };
+    let card = ListCard::<ResolumeHostDto>::new(toast, &TEXT);
 
     let test_host = move |id: String| {
         leptos::task::spawn_local(async move {
@@ -153,7 +138,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 }
                 Err(err) => toast.show(&format!("Test failed: {err}"), "error"),
             }
-            fetch_hosts().await;
+            card.fetch().await;
         });
     };
 
@@ -178,14 +163,64 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                 Err(err) => toast.show(&format!("Mapping refresh failed: {err}"), "error"),
             }
             mapping_refreshing.set(false);
-            fetch_hosts().await;
+            card.fetch().await;
         });
     };
 
-    let adding = move || editor.is_new();
-    let each_host = move || hosts.get();
-    let add_ref = NodeRef::<leptos::html::Button>::new();
-    focus_on_close(editor, add_ref, EditTarget::New);
+    // The Resolume parts of a row: status badge + latency, the retry warning, and
+    // Test / Refresh mapping before the shared Edit / Delete.
+    let row = move |h: &ResolumeHostDto, status: Memo<Option<ResolumeStatusDto>>| {
+        let is_enabled = h.is_enabled;
+        let state = move || status.with(|s| resolume_state(s.as_ref(), is_enabled));
+        let status_class = move || format!("settings__status settings__status--{}", state());
+        let status_label = move || capitalize(&state());
+        let latency =
+            move || status.with(|s| latency_text(s.as_ref().and_then(|s| s.last_latency_ms)));
+        let warning = move || {
+            status
+                .with(|s| resolume_warning(s.as_ref(), is_enabled))
+                .map(|w| match w {
+                    HostWarning::Retrying(text) => view! {
+                        <p class="settings__list-meta settings__list-meta--warning"
+                            data-role="host-error-detail">{text}</p>
+                    }
+                    .into_any(),
+                    HostWarning::Error(text) => view! {
+                        <p class="settings__list-meta settings__list-meta--warning">{text}</p>
+                    }
+                    .into_any(),
+                })
+        };
+        let (id_test, id_refresh) = (h.id.clone(), h.id.clone());
+        RowParts {
+            line: view! {
+                <>
+                    <span class=status_class data-role="host-status" data-state=state>
+                        {status_label}
+                    </span>
+                    <span class="settings__list-aside" data-role="host-latency"
+                        title="Last response time">{latency}</span>
+                </>
+            }
+            .into_any(),
+            meta: None,
+            warning: warning.into_any(),
+            actions: view! {
+                <>
+                    <button type="button" class="settings__button settings__button--ghost settings__button--small"
+                        data-role="host-test" data-id=id_test.clone()
+                        on:click=move |_| test_host(id_test.clone())>"Test"</button>
+                    <button type="button" class="settings__button settings__button--ghost settings__button--small"
+                        data-role="host-refresh-mapping" data-id=id_refresh.clone()
+                        title="Re-read the Arena composition after editing clips in Arena"
+                        prop:disabled=move || mapping_refreshing.get()
+                        on:click=move |_| refresh_mapping(id_refresh.clone())>"Refresh mapping"</button>
+                </>
+            }
+            .into_any(),
+        }
+    };
+    let hosts = card.items;
 
     view! {
         <section class="settings__card">
@@ -204,125 +239,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     <span class="settings__badge-label">"Hosts"</span>
                 </div>
             </header>
-            <div class="settings__list-toolbar">
-                <button type="button" class="settings__button settings__button--primary"
-                    node_ref=add_ref data-role="host-add" prop:disabled=adding
-                    on:click=move |_| editor.open_new(DEFAULT_PORT)>"+ Add connection"</button>
-            </div>
-            <ul class="settings__list" data-role="resolume-host-list">
-                <Show when=adding>
-                    <li class="settings__list-item" data-role="host-new-item" data-editing="true">
-                        {render_connection_editor(EDITOR, editor, true, save)}
-                    </li>
-                </Show>
-                <Show when=move || hosts.with(Vec::is_empty) && !adding()>
-                    <li class="settings__list-empty" data-role="host-empty">"No Resolume connections defined yet."</li>
-                </Show>
-                <For
-                    each=each_host
-                    key=row_key
-                    children=move |h: ResolumeHostDto| {
-                        let edit_id = h.id.clone();
-                        let editing_this = Memo::new(move |_| editor.is_open_on(&edit_id));
-                        // This row's live status and timestamps, re-read on every poll (ui
-                        // skill: key on identity, read the changing state through a Memo).
-                        let status_id = h.id.clone();
-                        let status = Memo::new(move |_| {
-                            hosts.with(|list| {
-                                list.iter().find(|x| x.id == status_id).and_then(|x| x.status.clone())
-                            })
-                        });
-                        let meta_id = h.id.clone();
-                        let timestamps = Memo::new(move |_| {
-                            hosts.with(|list| {
-                                list.iter()
-                                    .find(|x| x.id == meta_id)
-                                    .map(|x| updated_created(&x.updated_at, &x.created_at))
-                                    .unwrap_or_default()
-                            })
-                        });
-                        let is_enabled = h.is_enabled;
-                        let state = move || status.with(|s| resolume_state(s.as_ref(), is_enabled));
-                        let status_class = move || format!("settings__status settings__status--{}", state());
-                        let status_label = move || capitalize(&state());
-                        let latency = move || {
-                            status.with(|s| latency_text(s.as_ref().and_then(|s| s.last_latency_ms)))
-                        };
-                        let warning = move || {
-                            status.with(|s| resolume_warning(s.as_ref(), is_enabled)).map(|w| match w {
-                                HostWarning::Retrying(text) => view! {
-                                    <p class="settings__list-meta settings__list-meta--warning"
-                                        data-role="host-error-detail">{text}</p>
-                                }.into_any(),
-                                HostWarning::Error(text) => view! {
-                                    <p class="settings__list-meta settings__list-meta--warning">{text}</p>
-                                }.into_any(),
-                            })
-                        };
-                        let id = h.id.clone();
-                        let label = h.label.clone();
-                        let host = h.host.clone();
-                        let port = h.port;
-                        let summary = move || {
-                            let (id_test, id_refresh) = (id.clone(), id.clone());
-                            let (id_edit, id_delete) = (id.clone(), id.clone());
-                            let edit_ref = NodeRef::<leptos::html::Button>::new();
-                            focus_on_close(editor, edit_ref, EditTarget::Item(id.clone()));
-                            view! {
-                                <div class="settings__list-summary">
-                                    <div class="settings__list-primary">
-                                        <div class="settings__list-title">
-                                            <span class="settings__host-label">{label.clone()}</span>
-                                        </div>
-                                        <p class="settings__list-line">
-                                            <span class="settings__host-addr">
-                                                <code>{host.clone()}</code>
-                                                <span class="settings__host-port">{format!(":{port}")}</span>
-                                            </span>
-                                            <span class=status_class data-role="host-status" data-state=state>
-                                                {status_label}
-                                            </span>
-                                            <span class="settings__list-aside" data-role="host-latency"
-                                                title="Last response time">{latency}</span>
-                                        </p>
-                                        <p class="settings__list-meta settings__list-meta--muted">
-                                            {move || timestamps.get()}
-                                        </p>
-                                        {warning}
-                                    </div>
-                                    <div class="settings__list-actions">
-                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
-                                            data-role="host-test" data-id=id_test.clone()
-                                            on:click=move |_| test_host(id_test.clone())>"Test"</button>
-                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
-                                            data-role="host-refresh-mapping" data-id=id_refresh.clone()
-                                            title="Re-read the Arena composition after editing clips in Arena"
-                                            prop:disabled=move || mapping_refreshing.get()
-                                            on:click=move |_| refresh_mapping(id_refresh.clone())>"Refresh mapping"</button>
-                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
-                                            node_ref=edit_ref data-role="host-edit" data-id=id_edit.clone()
-                                            on:click=move |_| open_edit(id_edit.clone())>"Edit"</button>
-                                        <button type="button" class="settings__button settings__button--danger settings__button--small"
-                                            data-role="host-delete" data-id=id_delete.clone()
-                                            on:click=move |_| delete_host(id_delete.clone())>"Delete"</button>
-                                    </div>
-                                </div>
-                            }
-                        };
-                        view! {
-                            <li class="settings__list-item" data-id=h.id.clone()
-                                data-enabled=h.is_enabled.to_string()
-                                data-editing=move || editing_this.get().to_string()>
-                                {move || if editing_this.get() {
-                                    render_connection_editor(EDITOR, editor, false, save)
-                                } else {
-                                    summary().into_any()
-                                }}
-                            </li>
-                        }
-                    }
-                />
-            </ul>
+            {card.render_list(row)}
             // #697: static reference of the special clip-name conventions
             // Presenter supports and what each one does. Compiled-in (derived
             // from `presenter-server`'s resolume::clip_map), NOT a live fetch —

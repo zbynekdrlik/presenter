@@ -18,6 +18,7 @@ mod ableton;
 mod android;
 mod companion;
 mod host_editor;
+mod list_card;
 mod list_sync;
 mod preferences;
 mod resolume;

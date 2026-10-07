@@ -157,7 +157,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                 data-mode=move || if enabled.get() { "enabled" } else { "disabled" }
                 on:submit=on_submit>
                 <div class="settings__form-row settings__form-row--single">
-                    <label class="settings__form-checkbox settings__form-checkbox--block">
+                    <label class="settings__form-checkbox">
                         <input type="checkbox" data-role="ableset-enabled"
                             prop:checked=move || enabled.get()
                             on:change=move |ev| enabled.set(event_target_checked(&ev)) />

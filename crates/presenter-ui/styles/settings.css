@@ -161,12 +161,6 @@ body.settings {
   font-weight: 600;
 }
 
-.settings__form-header p {
-  margin: 4px 0 0;
-  color: #94a3b8;
-  font-size: 0.9rem;
-}
-
 .settings__form-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -286,6 +280,13 @@ body.settings {
 .settings__button:disabled {
   opacity: 0.6;
   cursor: wait;
+}
+
+/* An Edit / "+ Add" locked by the open editor's unsaved changes is not waiting on
+   anything — it needs the operator to Save or Cancel first (#819). */
+.settings__button[data-lock="unsaved"]:disabled,
+.settings__button[data-lock="open"]:disabled {
+  cursor: not-allowed;
 }
 
 .settings__button--primary {
