@@ -1,0 +1,330 @@
+/* Settings LIST rows — Resolume connections, Android displays, video sources,
+   trash — their status badges and the inline add/edit editor (#819). Split
+   out of settings.css; loaded right after it (index.html). */
+
+/* "+ Add …" sits right above its list; the new-item editor opens at the top
+   of the list, directly under it (#819). */
+.settings__list-toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.settings__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings__list-item {
+  padding: 12px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  background: #334155;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.settings__list-item[data-enabled="false"] {
+  opacity: 0.75;
+}
+
+/* The row being edited (or the new item): the inline editor replaces the
+   summary in place, full opacity even for a disabled item. */
+.settings__list-item[data-editing="true"] {
+  opacity: 1;
+  background: #1e293b;
+  border-color: #6366f1;
+}
+
+/* The editor inside a list row needs no second frame of its own. */
+.settings__form--inline-editor {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.settings__editor-title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #a5b4fc;
+}
+
+.settings__list-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.settings__list-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings__list-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings__host-label {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.settings__status {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.settings__status--enabled,
+.settings__status--connected,
+.settings__status--running,
+.settings__status--tracking,
+.settings__status--listening {
+  background: #dcfcef;
+  color: #047857;
+}
+
+.settings__status--connecting,
+.settings__status--launching {
+  background: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.settings__status--disabled {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.settings__status--error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+/* #546 — video-source liveness. Green = video is flowing; amber = on the network but
+   sending nothing; red = the mapped name is not out there at all (the PP outage). */
+.settings__status--live {
+  background: #dcfcef;
+  color: #047857;
+}
+
+.settings__status--not-broadcasting {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.settings__status--not-found {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.settings__status--ready,
+.settings__status--unknown,
+.settings__status--checking {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+/* The one-line instruction under a broken row: what the operator should actually go
+   and DO about it. */
+.settings__source-hint {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #b45309;
+  max-width: 46ch;
+}
+
+/* The header badge before the first status poll answers — neutral, never the red "off". */
+.settings__badge--checking {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+/* The pipeline's own error text, when it has one — the most specific "why" available. */
+.settings__source-detail {
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: #64748b;
+  max-width: 46ch;
+  overflow-wrap: anywhere;
+}
+
+/* What is actually on the NDI network right now, listed next to what is mapped. */
+.settings__discovered {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.settings__discovered-title {
+  font-weight: 600;
+}
+
+/* #789: each discovered name is a one-click "add this source" chip. */
+.settings__discovered-name {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+}
+
+.settings__discovered-name:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.settings__discovered-name:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* #789: an NDI name shown as its two parts — the source (bold) over the sending PC. */
+.settings__ndi-parts {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings__discovered-name .settings__ndi-parts {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* The row's light-grey PC colour is too faint on the chip's grey background. */
+.settings__discovered-name .settings__source-ndi {
+  color: #475569;
+}
+
+.settings__form-hint {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.settings__discovered-empty {
+  font-style: italic;
+}
+
+/* host:port, the status badge and the latency — one line (#819). */
+.settings__list-line {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 0.9rem;
+  color: #f8fafc;
+}
+
+/* `host` + `:port` glued together as one address. */
+.settings__host-addr {
+  font-family: "JetBrains Mono", "Fira Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+/* Secondary inline info on the address line (latency, launch package). */
+.settings__list-aside {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.settings__list-meta {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+/* Updated / Created and other bookkeeping: one small muted line. */
+.settings__list-meta--muted {
+  font-size: 0.75rem;
+}
+
+.settings__list-meta--warning {
+  color: #fca5a5;
+  font-weight: 600;
+}
+
+.settings__list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.settings__list-empty {
+  padding: 16px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  text-align: center;
+  color: #94a3b8;
+  background: #0f172a;
+  font-weight: 500;
+}
+
+/* Trash rows (Zmazané piesne / knižnice) and the plain status panels. */
+.settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings__row-title {
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.settings__row-sub {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.settings__empty {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+
+.settings__status-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+@media (max-width: 840px) {
+  .settings__list-summary {
+    flex-direction: column;
+  }
+
+  .settings__list-actions {
+    align-self: flex-end;
+  }
+}

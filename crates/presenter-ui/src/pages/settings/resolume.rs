@@ -1,137 +1,136 @@
 //! Resolume Arena connections card for the settings page (#347).
+//!
+//! #819: **Edit** opens the editor IN the clicked row and "+ Add connection" opens
+//! it at the top of the list (`host_editor`). Rows are keyed on identity (id +
+//! `updated_at`, which only an edit changes) and read their live status through a
+//! `Memo`, so the 5 s poll updates the badge / latency / warning in place and never
+//! rebuilds a row or touches an open editor.
 
 use leptos::prelude::*;
 
-use super::{capitalize, format_timestamp, parse_port_in_range, ToastHandle, STATUS_REFRESH_MS};
+use super::host_editor::{render_connection_editor, ConnectionDraft, EditTarget, EditorSpec};
+use super::row_status::{
+    latency_text, resolume_state, resolume_warning, updated_created, HostWarning,
+};
+use super::{capitalize, ToastHandle, STATUS_REFRESH_MS};
 use crate::api::settings::{self, ResolumeHostDraft, ResolumeHostDto};
 use crate::components::modal::confirm;
+
+/// The port a new connection starts with (Arena's default web-server port).
+const DEFAULT_PORT: u16 = 8090;
+
+const EDITOR: EditorSpec = EditorSpec {
+    role: "host",
+    message_id: "resolume-form-status",
+    message_role: "form-status",
+    label_placeholder: "Main Arena",
+    host_placeholder: "resolume.lan",
+    new_title: "New Resolume connection",
+    new_submit: "Add connection",
+    edit_title: "Edit Resolume connection",
+    extra: None,
+};
 
 #[component]
 pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
     let hosts = RwSignal::new(Vec::<ResolumeHostDto>::new());
-    let editing_id = RwSignal::new(Option::<String>::None);
-    let label = RwSignal::new(String::new());
-    let host = RwSignal::new(String::new());
-    let port = RwSignal::new(String::from("8090"));
-    let host_enabled = RwSignal::new(true);
-    let form_status = RwSignal::new(String::new());
-    let form_state = RwSignal::new(String::from("idle"));
-    let busy = RwSignal::new(false);
+    let editing = RwSignal::new(EditTarget::Closed);
+    let draft = ConnectionDraft::default();
 
-    let refresh = move || {
+    let reload = move || {
         leptos::task::spawn_local(async move {
             if let Ok(list) = settings::list_resolume_hosts().await {
                 hosts.set(list);
             }
         });
     };
-
     // Initial load + 5s status poll.
-    refresh();
-    {
-        let interval = gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, move || {
-            leptos::task::spawn_local(async move {
-                if let Ok(list) = settings::list_resolume_hosts().await {
-                    hosts.set(list);
-                }
-            });
-        });
-        interval.forget();
-    }
+    reload();
+    gloo_timers::callback::Interval::new(STATUS_REFRESH_MS, reload).forget();
 
-    let reset_form = move || {
-        editing_id.set(None);
-        label.set(String::new());
-        host.set(String::new());
-        port.set("8090".to_string());
-        host_enabled.set(true);
-        form_status.set(String::new());
-        form_state.set("idle".to_string());
+    let close_editor = move || {
+        editing.set(EditTarget::Closed);
+        draft.clear_message();
+    };
+    let open_new = move || {
+        draft.reset(DEFAULT_PORT);
+        editing.set(EditTarget::New);
+    };
+    let open_edit = move |id: String| {
+        if let Some(h) = hosts.with_untracked(|list| list.iter().find(|h| h.id == id).cloned()) {
+            draft.load(&h.label, &h.host, h.port, h.is_enabled);
+            editing.set(EditTarget::Item(h.id));
+        }
     };
 
-    let on_submit = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let label_val = label.get_untracked().trim().to_string();
-        let host_val = host.get_untracked().trim().to_string();
-        if label_val.is_empty() {
-            form_state.set("error".to_string());
-            form_status.set("Label cannot be empty.".to_string());
+    let save = move || {
+        let target = editing.get_untracked();
+        if target == EditTarget::Closed || draft.busy.get_untracked() {
             return;
         }
-        if host_val.is_empty() {
-            form_state.set("error".to_string());
-            form_status.set("Host cannot be empty.".to_string());
-            return;
-        }
-        let Some(port_val) = parse_port_in_range(&port.get_untracked()) else {
-            form_state.set("error".to_string());
-            form_status.set("Port must be between 1 and 65535.".to_string());
-            return;
+        let fields = match draft.validated() {
+            Ok(fields) => fields,
+            Err(message) => {
+                draft.show("error", message);
+                return;
+            }
         };
-        let draft = ResolumeHostDraft {
-            label: label_val,
-            host: host_val,
-            port: port_val,
-            is_enabled: host_enabled.get_untracked(),
+        let payload = ResolumeHostDraft {
+            label: fields.label,
+            host: fields.host,
+            port: fields.port,
+            is_enabled: draft.enabled.get_untracked(),
         };
-        let editing = editing_id.get_untracked();
-        busy.set(true);
-        form_state.set("info".to_string());
-        form_status.set(
-            if editing.is_some() {
+        let updating = target.item_id().map(str::to_string);
+        draft.busy.set(true);
+        draft.show(
+            "info",
+            if updating.is_some() {
                 "Saving changes…"
             } else {
                 "Creating connection…"
-            }
-            .to_string(),
+            },
         );
         leptos::task::spawn_local(async move {
-            let result = match &editing {
-                Some(id) => settings::update_resolume_host(id, &draft).await,
-                None => settings::create_resolume_host(&draft).await,
+            let result = match &updating {
+                Some(id) => settings::update_resolume_host(id, &payload).await,
+                None => settings::create_resolume_host(&payload).await,
             };
+            draft.busy.set(false);
+            // The operator may have opened another editor meanwhile: leave that one alone.
+            let still_open = editing.get_untracked() == target;
             match result {
                 Ok(_) => {
                     if let Ok(list) = settings::list_resolume_hosts().await {
                         hosts.set(list);
                     }
                     toast.show(
-                        if editing.is_some() {
+                        if updating.is_some() {
                             "Updated Resolume connection."
                         } else {
                             "Added Resolume connection."
                         },
                         "success",
                     );
-                    reset_form();
+                    if still_open {
+                        close_editor();
+                    }
                 }
                 Err(err) => {
-                    form_state.set("error".to_string());
-                    form_status.set(format!("Unable to save connection. {err}"));
+                    let message = format!("Unable to save connection. {err}");
+                    if still_open {
+                        draft.show("error", &message);
+                    } else {
+                        toast.show(&message, "error");
+                    }
                 }
             }
-            busy.set(false);
         });
     };
 
-    let start_edit = move |id: String| {
-        if let Some(h) = hosts.get_untracked().iter().find(|h| h.id == id) {
-            editing_id.set(Some(h.id.clone()));
-            label.set(h.label.clone());
-            host.set(h.host.clone());
-            port.set(h.port.to_string());
-            host_enabled.set(h.is_enabled);
-            form_status.set(String::new());
-            form_state.set("idle".to_string());
-        }
-    };
-
     let delete_host = move |id: String| {
-        let row = hosts.get_untracked();
-        let name = row
-            .iter()
-            .find(|h| h.id == id)
-            .map(|h| h.label.clone())
+        let name = hosts
+            .with_untracked(|list| list.iter().find(|h| h.id == id).map(|h| h.label.clone()))
             .unwrap_or_else(|| "this connection".to_string());
         if !confirm(&format!("Remove {name}? Presenter will stop reconnecting.")) {
             return;
@@ -139,11 +138,11 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match settings::delete_resolume_host(&id).await {
                 Ok(()) => {
+                    if editing.with_untracked(|t| t.is_item(&id)) {
+                        close_editor();
+                    }
                     if let Ok(list) = settings::list_resolume_hosts().await {
                         hosts.set(list);
-                    }
-                    if editing_id.get_untracked().as_deref() == Some(id.as_str()) {
-                        reset_form();
                     }
                     toast.show("Deleted Resolume connection.", "success");
                 }
@@ -157,10 +156,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             match settings::test_resolume_host(&id).await {
                 Ok(result) => {
                     if result.success {
-                        let latency = result
-                            .latency_ms
-                            .map(|ms| format!("{ms:.1} ms"))
-                            .unwrap_or_else(|| "—".to_string());
+                        let latency = latency_text(result.latency_ms);
                         toast.show(&format!("Connection OK ({latency})"), "success");
                     } else {
                         let err = result.error.unwrap_or_else(|| "unknown error".to_string());
@@ -202,6 +198,9 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
         });
     };
 
+    let adding = move || editing.with(EditTarget::is_new);
+    let each_host = move || hosts.get();
+
     view! {
         <section class="settings__card">
             <header class="settings__card-header">
@@ -219,179 +218,116 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     <span class="settings__badge-label">"Hosts"</span>
                 </div>
             </header>
-            <form class="settings__form" data-role="host-form" autocomplete="off" on:submit=on_submit>
-                <div class="settings__form-header">
-                    <div>
-                        <h3 data-role="form-title">
-                            {move || if editing_id.get().is_some() { "Edit Resolume Connection" } else { "Add Resolume Connection" }}
-                        </h3>
-                        <p data-role="form-subtitle">
-                            {move || if editing_id.get().is_some() { "Update host details or toggle availability." } else { "Specify hostname, port, and availability." }}
-                        </p>
-                    </div>
-                </div>
-                <div class="settings__form-row">
-                    <label>
-                        <span>"Label"</span>
-                        <input type="text" data-role="host-label" placeholder="Main Arena" required
-                            aria-required="true"
-                            aria-describedby="resolume-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
-                            prop:value=move || label.get()
-                            on:input=move |ev| label.set(event_target_value(&ev)) />
-                    </label>
-                    <label>
-                        <span>"Hostname or DNS"</span>
-                        <input type="text" data-role="host-host" placeholder="resolume.lan" required
-                            aria-required="true"
-                            aria-describedby="resolume-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
-                            prop:value=move || host.get()
-                            on:input=move |ev| host.set(event_target_value(&ev)) />
-                    </label>
-                    <label class="settings__form-control--small">
-                        <span>"Port"</span>
-                        // No native min/max/required: an out-of-range value (e.g.
-                        // 99999) must REACH `on_submit` so the Rust
-                        // `parse_port_in_range` guard rejects it with the styled
-                        // "Port must be between 1 and 65535." message. With the
-                        // native `max` constraint the browser silently blocks the
-                        // submit (the field is `:invalid`) and `on_submit` never
-                        // fires — making the #455 guard unreachable. The Rust guard
-                        // is the single authority for the 1..=65535 range. (#455)
-                        <input type="number" data-role="host-port"
-                            aria-required="true"
-                            aria-describedby="resolume-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
-                            prop:value=move || port.get()
-                            on:input=move |ev| port.set(event_target_value(&ev)) />
-                    </label>
-                </div>
-                <div class="settings__form-row settings__form-row--single">
-                    <label class="settings__form-checkbox settings__form-checkbox--block">
-                        <input type="checkbox" data-role="host-enabled"
-                            prop:checked=move || host_enabled.get()
-                            on:change=move |ev| host_enabled.set(event_target_checked(&ev)) />
-                        <span>"Enabled"</span>
-                    </label>
-                </div>
-                <div class="settings__form-actions">
-                    <button type="submit" class="settings__button settings__button--primary"
-                        data-role="host-submit" prop:disabled=move || busy.get()>
-                        {move || if editing_id.get().is_some() { "Save Changes" } else { "Add Connection" }}
-                    </button>
-                    {move || editing_id.get().is_some().then(|| view! {
-                        <button type="button" class="settings__button settings__button--ghost"
-                            data-role="host-reset" on:click=move |_| reset_form()>"Cancel"</button>
-                    })}
-                </div>
-                <p id="resolume-form-status" class="settings__form-status" data-role="form-status" data-state=move || form_state.get()>
-                    {move || form_status.get()}
-                </p>
-            </form>
+            <div class="settings__list-toolbar">
+                <button type="button" class="settings__button settings__button--primary"
+                    data-role="host-add" prop:disabled=adding
+                    on:click=move |_| open_new()>"+ Add connection"</button>
+            </div>
             <ul class="settings__list" data-role="resolume-host-list">
-                <Show
-                    when=move || !hosts.get().is_empty()
-                    fallback=|| view! {
-                        <li class="settings__list-empty" data-role="host-empty">"No Resolume connections defined yet."</li>
-                    }
-                >
-                    <For
-                        each=move || hosts.get()
-                        // Key encodes the rendered status so the 5s poll re-renders
-                        // a row when its connection state/latency/error changes —
-                        // not only when `updated_at` bumps on an edit.
-                        key=|h: &ResolumeHostDto| {
-                            let s = h.status.as_ref();
-                            format!(
-                                "{}-{}-{}-{}-{}-{}",
-                                h.id,
-                                h.updated_at,
-                                s.map(|s| s.state.as_str()).unwrap_or(""),
-                                s.map(|s| s.consecutive_failures).unwrap_or(0),
-                                s.and_then(|s| s.last_latency_ms).unwrap_or(0.0),
-                                s.and_then(|s| s.last_error.as_deref()).unwrap_or(""),
-                            )
-                        }
-                        children=move |h: ResolumeHostDto| {
-                            let status = h.status.clone().unwrap_or(settings::ResolumeStatusDto {
-                                state: if h.is_enabled { "connecting".into() } else { "disabled".into() },
-                                last_latency_ms: None,
-                                last_error: None,
-                                consecutive_failures: 0,
-                                error_since: None,
-                            });
-                            let raw_state = if status.state.is_empty() {
-                                if h.is_enabled { "connecting".to_string() } else { "disabled".to_string() }
-                            } else {
-                                status.state.to_lowercase()
-                            };
-                            let status_class = format!("settings__status settings__status--{raw_state}");
-                            let status_label = capitalize(&raw_state);
-                            let latency = status.last_latency_ms
-                                .map(|ms| format!("{ms:.1} ms"))
-                                .unwrap_or_else(|| "—".to_string());
-                            let updated = format_timestamp(&h.updated_at);
-                            let created = format_timestamp(&h.created_at);
-                            let detail = if let Some(err) = status.last_error.clone() {
-                                if raw_state == "error" {
-                                    let failures = status.consecutive_failures;
-                                    let plural = if failures != 1 { "s" } else { "" };
-                                    let since = status.error_since.as_ref()
-                                        .map(|s| format!(" since {}", format_timestamp(s)))
-                                        .unwrap_or_default();
-                                    Some(view! {
-                                        <p class="settings__list-meta settings__list-meta--warning" data-role="host-error-detail">
-                                            {format!("⚠ Retrying… ({failures} failure{plural}{since})")}
-                                        </p>
-                                    }.into_any())
-                                } else {
-                                    Some(view! {
-                                        <p class="settings__list-meta settings__list-meta--warning">{format!("⚠ {err}")}</p>
-                                    }.into_any())
-                                }
-                            } else { None };
-                            let id_test = h.id.clone();
-                            let id_refresh = h.id.clone();
-                            let id_edit = h.id.clone();
-                            let id_delete = h.id.clone();
+                <Show when=adding>
+                    <li class="settings__list-item" data-role="host-new-item" data-editing="true">
+                        {render_connection_editor(EDITOR, draft, true, save, close_editor)}
+                    </li>
+                </Show>
+                <Show when=move || hosts.with(Vec::is_empty) && !adding()>
+                    <li class="settings__list-empty" data-role="host-empty">"No Resolume connections defined yet."</li>
+                </Show>
+                <For
+                    each=each_host
+                    // Identity only: `updated_at` changes on an edit, never on a status
+                    // change, so the poll keeps every row (and an open editor) in place.
+                    key=|h: &ResolumeHostDto| (h.id.clone(), h.updated_at.clone())
+                    children=move |h: ResolumeHostDto| {
+                        let edit_id = h.id.clone();
+                        let editing_this = Memo::new(move |_| editing.with(|t| t.is_item(&edit_id)));
+                        // This row's live status, re-read on every poll (ui skill: key on
+                        // identity, read the state through a Memo).
+                        let status_id = h.id.clone();
+                        let status = Memo::new(move |_| {
+                            hosts.with(|list| {
+                                list.iter().find(|x| x.id == status_id).and_then(|x| x.status.clone())
+                            })
+                        });
+                        let is_enabled = h.is_enabled;
+                        let state = move || status.with(|s| resolume_state(s.as_ref(), is_enabled));
+                        let status_class = move || format!("settings__status settings__status--{}", state());
+                        let status_label = move || capitalize(&state());
+                        let latency = move || {
+                            status.with(|s| latency_text(s.as_ref().and_then(|s| s.last_latency_ms)))
+                        };
+                        let warning = move || {
+                            status.with(|s| resolume_warning(s.as_ref(), is_enabled)).map(|w| match w {
+                                HostWarning::Retrying(text) => view! {
+                                    <p class="settings__list-meta settings__list-meta--warning"
+                                        data-role="host-error-detail">{text}</p>
+                                }.into_any(),
+                                HostWarning::Error(text) => view! {
+                                    <p class="settings__list-meta settings__list-meta--warning">{text}</p>
+                                }.into_any(),
+                            })
+                        };
+                        let id = h.id.clone();
+                        let label = h.label.clone();
+                        let host = h.host.clone();
+                        let port = h.port;
+                        let timestamps = updated_created(&h.updated_at, &h.created_at);
+                        let summary = move || {
+                            let (id_test, id_refresh) = (id.clone(), id.clone());
+                            let (id_edit, id_delete) = (id.clone(), id.clone());
                             view! {
-                                <li class="settings__list-item" data-id=h.id.clone() data-enabled=h.is_enabled.to_string()>
+                                <div class="settings__list-summary">
                                     <div class="settings__list-primary">
                                         <div class="settings__list-title">
-                                            <span class="settings__host-label">{h.label.clone()}</span>
-                                            <span class=status_class>{status_label}</span>
+                                            <span class="settings__host-label">{label.clone()}</span>
                                         </div>
                                         <p class="settings__list-line">
-                                            <code>{h.host.clone()}</code>
-                                            <span class="settings__host-port">{format!(":{}", h.port)}</span>
+                                            <span class="settings__host-addr">
+                                                <code>{host.clone()}</code>
+                                                <span class="settings__host-port">{format!(":{port}")}</span>
+                                            </span>
+                                            <span class=status_class data-role="host-status" data-state=state>
+                                                {status_label}
+                                            </span>
+                                            <span class="settings__list-aside" data-role="host-latency"
+                                                title="Last response time">{latency}</span>
                                         </p>
-                                        <p class="settings__list-meta">{format!("Updated {updated}")}</p>
-                                        <p class="settings__list-meta">{format!("Created {created}")}</p>
-                                        <p class="settings__list-meta">{format!("Latency {latency}")}</p>
-                                        {detail}
+                                        <p class="settings__list-meta settings__list-meta--muted">
+                                            {timestamps.clone()}
+                                        </p>
+                                        {warning}
                                     </div>
                                     <div class="settings__list-actions">
-                                        <button type="button" class="settings__button settings__button--ghost"
+                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
                                             data-role="host-test" data-id=id_test.clone()
                                             on:click=move |_| test_host(id_test.clone())>"Test"</button>
-                                        <button type="button" class="settings__button settings__button--ghost"
+                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
                                             data-role="host-refresh-mapping" data-id=id_refresh.clone()
                                             title="Re-read the Arena composition after editing clips in Arena"
                                             prop:disabled=move || mapping_refreshing.get()
                                             on:click=move |_| refresh_mapping(id_refresh.clone())>"Refresh mapping"</button>
-                                        <button type="button" class="settings__button settings__button--ghost"
+                                        <button type="button" class="settings__button settings__button--ghost settings__button--small"
                                             data-role="host-edit" data-id=id_edit.clone()
-                                            on:click=move |_| start_edit(id_edit.clone())>"Edit"</button>
-                                        <button type="button" class="settings__button settings__button--danger"
+                                            on:click=move |_| open_edit(id_edit.clone())>"Edit"</button>
+                                        <button type="button" class="settings__button settings__button--danger settings__button--small"
                                             data-role="host-delete" data-id=id_delete.clone()
                                             on:click=move |_| delete_host(id_delete.clone())>"Delete"</button>
                                     </div>
-                                </li>
+                                </div>
                             }
+                        };
+                        view! {
+                            <li class="settings__list-item" data-id=h.id.clone()
+                                data-enabled=h.is_enabled.to_string()
+                                data-editing=move || editing_this.get().to_string()>
+                                {move || if editing_this.get() {
+                                    render_connection_editor(EDITOR, draft, false, save, close_editor)
+                                } else {
+                                    summary().into_any()
+                                }}
+                            </li>
                         }
-                    />
-                </Show>
+                    }
+                />
             </ul>
             // #697: static reference of the special clip-name conventions
             // Presenter supports and what each one does. Compiled-in (derived
