@@ -1,6 +1,7 @@
 use super::clip_map::ClipMapping;
 use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
+use super::port_claims::PortClaims;
 use super::provisional_mapping::{follow_up_deadline, selected_deck_id, ProvisionalMapping};
 use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
@@ -148,6 +149,8 @@ pub(super) enum HostCommand {
     RefreshConfig(ResolumeHost),
     /// #808: the operator's "Refresh mapping"; the worker replies when done.
     RefreshMapping(oneshot::Sender<MappingRefreshResult>),
+    /// #813: another host was added, changed or removed; re-check the port.
+    SiblingsChanged,
     Shutdown,
 }
 
@@ -158,11 +161,13 @@ pub(super) async fn run_host_worker(
     mut commands: mpsc::Receiver<HostCommand>,
     audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
     port_drift_tx: Option<mpsc::Sender<PortDriftEvent>>,
+    port_claims: PortClaims,
 ) -> anyhow::Result<()> {
     let mut driver = HostDriver::new(client, host.clone());
     driver.audit_tx = audit_tx;
     driver.port_drift_tx = port_drift_tx;
-    driver.refresh_status(&status).await;
+    driver.port_claims = port_claims;
+    driver.apply_dial_config(&status).await;
 
     let mut liveness_timer = tokio::time::interval(LIVENESS_INTERVAL);
     // A long push burst must not leave a queue of missed ticks that then probe
@@ -187,8 +192,9 @@ pub(super) async fn run_host_worker(
                     Some(HostCommand::RefreshConfig(new_config)) => {
                         host = new_config.clone();
                         driver.update_config(new_config);
-                        driver.refresh_status(&status).await;
+                        driver.apply_dial_config(&status).await;
                     }
+                    Some(HostCommand::SiblingsChanged) => driver.drop_sibling_port(&status).await,
                     Some(HostCommand::RefreshMapping(reply)) => {
                         let result = driver.manual_refresh(&status).await;
                         // The HTTP caller may have timed out; nobody to tell.
@@ -254,6 +260,8 @@ pub(super) struct HostDriver {
     /// #564: non-blocking sink for port-drift discovery/heal-back events.
     /// `None` in unit tests and whenever no DB-backed writer is wired.
     pub(super) port_drift_tx: Option<mpsc::Sender<PortDriftEvent>>,
+    /// #813: the registry's port-ownership table (`port_claims.rs`).
+    pub(super) port_claims: PortClaims,
     /// #563g: expected clip names missing from the last-fetched composition,
     /// cached so a status read reflects it without waiting for the caller to
     /// pass `status` into the fetch itself.
@@ -288,6 +296,7 @@ impl HostDriver {
             audit_tx: None,
             active_port,
             port_drift_tx: None,
+            port_claims: PortClaims::default(),
             missing_clips: Vec::new(),
             missing_clip_last_warn: HashMap::new(),
             provisional: ProvisionalMapping::default(),

@@ -14,6 +14,7 @@ mod latency_tests;
 mod mapping_refresh;
 #[cfg(test)]
 mod mapping_refresh_tests;
+mod port_claims;
 mod port_drift;
 #[cfg(test)]
 mod port_drift_integration_tests;
@@ -46,6 +47,7 @@ pub(crate) use error_kind::ResolumeErrorKind;
 pub(crate) use mapping_refresh::MappingRefreshResult;
 
 use driver::{run_host_worker, HostCommand};
+use port_claims::PortClaims;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_COMMAND_CAPACITY: usize = 16;
@@ -213,6 +215,10 @@ pub struct ResolumeRegistry {
     /// `audit_tx` by the same [`ResolumeRegistry::attach_audit_writer`] call
     /// (same Repository, same call site).
     port_drift_tx: Arc<OnceLock<mpsc::Sender<PortDriftEvent>>>,
+    /// #813: which ports each host owns, rebuilt by `set_hosts` and shared
+    /// with every host worker, so a port-drift probe never adopts another
+    /// host's Arena on the same address (`port_claims.rs`).
+    port_claims: PortClaims,
 }
 
 #[derive(Debug)]
@@ -221,6 +227,12 @@ struct HostEntry {
     status: Arc<RwLock<ResolumeConnectionSnapshot>>,
     command_tx: mpsc::Sender<HostCommand>,
     handle: JoinHandle<()>,
+}
+
+/// A host edit the worker must apply with `HostCommand::RefreshConfig`
+/// (a new dial target, or enabling/disabling). A label edit is not one.
+fn dial_target_changed(current: &ResolumeHost, next: &ResolumeHost) -> bool {
+    current.host != next.host || current.port != next.port || current.is_enabled != next.is_enabled
 }
 
 /// The HTTP client for every Resolume request: the host workers (probe,
@@ -252,6 +264,7 @@ impl ResolumeRegistry {
             hosts: Arc::new(RwLock::new(HashMap::new())),
             audit_tx: Arc::new(OnceLock::new()),
             port_drift_tx: Arc::new(OnceLock::new()),
+            port_claims: PortClaims::default(),
         })
     }
 
@@ -284,6 +297,15 @@ impl ResolumeRegistry {
         let mut desired: HashMap<ResolumeHostId, ResolumeHost> =
             hosts.into_iter().map(|host| (host.id, host)).collect();
 
+        // #813: before any worker starts or is reconfigured, so each one's
+        // port check sees every sibling. A host whose worker keeps running
+        // unchanged keeps the port it adopted at runtime.
+        self.port_claims.rebuild(desired.values(), |host| {
+            guard
+                .get(&host.id)
+                .is_some_and(|entry| !dial_target_changed(&entry.config, host))
+        });
+
         // Stop hosts that no longer exist
         let existing_ids: Vec<_> = guard.keys().copied().collect();
         for id in existing_ids {
@@ -299,16 +321,19 @@ impl ResolumeRegistry {
         for (id, host) in desired.drain() {
             match guard.get_mut(&id) {
                 Some(entry) => {
-                    if entry.config.host != host.host
-                        || entry.config.port != host.port
-                        || entry.config.is_enabled != host.is_enabled
-                    {
+                    if dial_target_changed(&entry.config, &host) {
                         let _ = entry
                             .command_tx
                             .send(HostCommand::RefreshConfig(host.clone()))
                             .await;
                         entry.config = host;
-                    } else if entry.config.label != host.label {
+                        continue;
+                    }
+                    // #813: a sibling may have been added, re-pointed or
+                    // removed; the worker drops a port that is now a
+                    // sibling's.
+                    let _ = entry.command_tx.send(HostCommand::SiblingsChanged).await;
+                    if entry.config.label != host.label {
                         entry.config = host;
                     }
                 }
@@ -344,6 +369,7 @@ impl ResolumeRegistry {
         let config_clone = host.clone();
         let audit_tx = self.audit_tx.get().cloned();
         let port_drift_tx = self.port_drift_tx.get().cloned();
+        let port_claims = self.port_claims.clone();
         let handle = tokio::spawn(async move {
             if let Err(err) = run_host_worker(
                 client,
@@ -352,6 +378,7 @@ impl ResolumeRegistry {
                 command_rx,
                 audit_tx,
                 port_drift_tx,
+                port_claims,
             )
             .await
             {

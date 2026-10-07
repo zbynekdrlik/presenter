@@ -1,8 +1,57 @@
 ---
 paths:
   - "crates/presenter-server/src/resolume/port_drift_integration_tests.rs"
+  - "crates/presenter-server/src/resolume/port_drift_sibling_tests.rs"
   - "crates/presenter-server/src/resolume/port_drift.rs"
+  - "crates/presenter-server/src/resolume/port_claims.rs"
 ---
+
+# Resolume port drift — never onto a sibling's Arena (#813); tests use verified-free consecutive ports
+
+## A drift never lands on a port another host on the same address owns (#813)
+
+PP runs two Arenas on one PC: Arena-Bridge on 8090 (host `arena bridge`) and
+the songs Arena on 8091 (host `arena songs`). With Arena-Bridge down, the
+bridge host's probe found the songs Arena answering `/product` on 8091,
+adopted it and persisted it (2026-10-06 21:25:59Z). Both hosts then drove
+Songs PP: lyrics twice, Bible pushes into a composition without `#bible`
+clips. Arena has no instance id (every Arena answers `{"name": "Arena"}`), so
+"is this MY Arena?" can only come from the configuration.
+
+- **`port_claims.rs` owns the answer.** One `PortClaims` table per registry:
+  per host its address key (`host_key`: trimmed, lowercase), configured port,
+  active port, enabled flag. `ResolumeRegistry::set_hosts` rebuilds it BEFORE
+  any worker spawns or gets `RefreshConfig`; every worker holds a clone.
+- **Sibling** = another ENABLED host with the same `host_key`. It owns its
+  configured port and its active port. A host configured on the SAME port as
+  this one targets the same Arena by intent and is not a sibling. Another
+  address (even another loopback IP) never is. Hostname aliases (`localhost`
+  vs `127.0.0.1`) are NOT resolved: they count as different machines.
+- **The probe** (`probe_port_drift`) scans `drift_candidates(configured,
+  siblings)`: the #564 window minus sibling-owned ports. The host's own
+  configured port is never dropped (heal-back must stay possible). The skip
+  logs a WARN on the #484 power-of-two gate of the host's failure streak
+  (`should_log_error(consecutive_failures)`), DEBUG otherwise.
+- **Adoption is check-and-claim under one lock** (`PortClaims::try_claim`), so
+  two workers probing at once cannot take the same port. A heal-back calls
+  `release`. A worker records every port it adopts, so a sibling's RUNTIME
+  drift is excluded, not only the persisted one. `rebuild` keeps that runtime
+  claim for a host whose worker keeps running (no host/port/enabled change)
+  and resets it to the persisted value for a host that gets `RefreshConfig`.
+- **A sibling-owned `active_port` is dropped and persisted**
+  (`HostDriver::drop_sibling_port` -> `adopt_active_port(None)` -> the
+  port-drift writer): at worker start (`apply_dial_config`, the pre-#813 PP
+  value heals by itself after the deploy), after `RefreshConfig`, and on
+  `HostCommand::SiblingsChanged`, which `set_hosts` sends to every host whose
+  own dial target did not change (a sibling was added, re-pointed, enabled or
+  removed). `RefreshConfig` alone would never reach those hosts, and it drops
+  the mapping.
+- Tests: `port_drift_sibling_tests.rs` drives the real registry + workers
+  (`set_hosts`, `snapshot_for`, an in-memory `Repository` for the persisted
+  clear). A negative "never adopts" check first waits for the host's
+  `ConnectRefused` (the probe runs right after it), then watches the snapshot
+  for 3 s. Three-port layouts use `free_port_triple()` there, which verifies
+  all three ports like `free_port_pair()` does.
 
 # Resolume port-drift tests — allocate a VERIFIED-FREE CONSECUTIVE port pair
 
