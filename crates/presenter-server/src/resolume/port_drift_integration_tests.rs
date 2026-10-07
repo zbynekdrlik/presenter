@@ -34,7 +34,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// is now VERIFIED free at allocation instead of blindly assumed. The residual
 /// release-then-rebind TOCTOU is the same negligible on-loopback window the
 /// single-port helper already accepted.
-fn free_port_pair() -> (u16, u16) {
+pub(super) fn free_port_pair() -> (u16, u16) {
     for _ in 0..100 {
         let base_listener = StdTcpListener::bind("127.0.0.1:0").expect("bind base ephemeral port");
         let base = base_listener.local_addr().expect("base local addr").port();
