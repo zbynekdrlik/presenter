@@ -9,7 +9,7 @@
 //! connection-refused failure and adopts (or heals back to) whichever port
 //! answers as a genuine Resolume instance.
 //!
-//! #813: never a port another Resolume host on the same address owns
+//! #813: never a port another Resolume host on the same machine owns
 //! (`port_claims.rs`). PP runs two Arenas on one PC on adjacent ports; with
 //! one of them down, its host found the other Arena on the next port and
 //! both hosts drove the same composition.
@@ -30,6 +30,9 @@ const PORT_DRIFT_PROBE_RANGE: u16 = 5;
 /// (i.e. is definitely up and reachable) — a slow/absent reply within half a
 /// second means "nothing Resolume-shaped is here", not "give it more time".
 const PORT_DRIFT_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+/// #813: bound for the one host lookup at worker start / `RefreshConfig`
+/// (`learn_resolved_ip`), the same as the HTTP connect timeout.
+const RESOLVE_AT_CONFIG_TIMEOUT: Duration = super::CONNECT_TIMEOUT;
 
 /// Candidate ports to probe, in order — the CONFIGURED port FIRST (so a
 /// cleanly-restarted Arena that re-bound its base port is re-adopted
@@ -45,7 +48,7 @@ pub(super) fn probe_candidate_ports(configured_port: u16) -> Vec<u16> {
 }
 
 /// #813: the probe window split into the ports to probe and the ports a
-/// sibling host on the same address owns (with that sibling's label).
+/// sibling host on the same machine owns (with that sibling's label).
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct DriftCandidates {
     pub(super) probe: Vec<u16>,
@@ -70,6 +73,16 @@ pub(super) fn drift_candidates(configured_port: u16, siblings: &SiblingPorts) ->
         }
     }
     candidates
+}
+
+/// #813: whether the "probe skipped ports owned by another host" line is a
+/// WARN for this failure streak. A host whose Arena stays down while its
+/// sibling's runs probes on every backoff retry, so the WARN rides the #484
+/// power-of-two gate on the host's failure streak, which resets on recovery
+/// (the 1st, 2nd, 4th, 8th failure and so on); DEBUG otherwise. Pure, so the
+/// gate is unit-tested.
+pub(super) fn sibling_skip_is_warn(consecutive_failures: u32) -> bool {
+    should_log_error(consecutive_failures)
 }
 
 /// Resolume's `GET /api/v1/product` identifies the running instance as
@@ -114,7 +127,7 @@ impl HostDriver {
     /// genuine Resolume hit. No-op when nothing in the window responds — an
     /// ordinary "host is down" failure, not a port drift.
     ///
-    /// #813: ports owned by a sibling host on the same address are never
+    /// #813: ports owned by a sibling host on the same machine are never
     /// probed nor adopted (`drift_candidates`); the skip is logged.
     pub(super) async fn probe_port_drift(
         &mut self,
@@ -149,8 +162,8 @@ impl HostDriver {
     /// #813: record the port this host is about to dial in the shared
     /// `PortClaims` table. `false` when a sibling claimed that port since the
     /// probe read the table (two workers probing at the same moment); the
-    /// probe then moves on.
-    fn claim_dial_port(&self, new_active: Option<u16>) -> bool {
+    /// probe then moves on. A heal-back (`None`) releases the claim.
+    pub(super) fn claim_dial_port(&self, new_active: Option<u16>) -> bool {
         let Some(port) = new_active else {
             self.port_claims.release(self.config.id);
             return true;
@@ -166,26 +179,23 @@ impl HostDriver {
                     configured_port = self.config.port,
                     port,
                     sibling = %owner,
-                    "resolume port-drift candidate was just taken by another host on the same address; not adopting it"
+                    "resolume port-drift candidate was just taken by another host on the same machine; not adopting it"
                 );
                 false
             }
         }
     }
 
-    /// #813: the probe skipped ports a sibling owns. A host whose Arena stays
-    /// down while the sibling's runs probes on every backoff retry, so the
-    /// WARN rides the #484 power-of-two gate on the host's failure streak,
-    /// which resets on recovery (the 1st, 2nd, 4th, 8th failure and so on).
-    /// DEBUG otherwise, never silent.
+    /// #813: the probe skipped ports a sibling owns, at WARN or DEBUG per
+    /// [`sibling_skip_is_warn`], never silent.
     fn log_sibling_owned_skip(&self, skipped: &[(u16, String)], consecutive_failures: u32) {
-        if should_log_error(consecutive_failures) {
+        if sibling_skip_is_warn(consecutive_failures) {
             warn!(
                 host = %self.config.host,
                 configured_port = self.config.port,
                 skipped = ?skipped,
                 consecutive_failures,
-                "resolume port-drift probe skipped ports owned by another host on the same address"
+                "resolume port-drift probe skipped ports owned by another host on the same machine"
             );
         } else {
             debug!(
@@ -193,19 +203,22 @@ impl HostDriver {
                 configured_port = self.config.port,
                 skipped = ?skipped,
                 consecutive_failures,
-                "resolume port-drift probe skipped ports owned by another host on the same address (suppressed)"
+                "resolume port-drift probe skipped ports owned by another host on the same machine (suppressed)"
             );
         }
     }
 
     /// #813: drop an adopted `active_port` that a sibling host on the same
-    /// address owns (its configured port, or a port it adopted), and persist
-    /// that like any heal-back. Runs at worker start (a value persisted
-    /// before #813, e.g. PP's bridge host on 8091), after a config refresh,
-    /// and when another host was added, changed or removed
-    /// (`HostCommand::SiblingsChanged`). It also re-records this host's dial
-    /// port in the shared table, so the table matches the driver after every
-    /// (re)configuration.
+    /// machine owns (its configured port, or a port it adopted), and persist
+    /// that like any heal-back. Runs at worker start and after a config
+    /// refresh, and when another host was added, changed or removed
+    /// (`HostCommand::SiblingsChanged`: a running host's port that a
+    /// sibling's new configuration now owns). At start, `set_hosts` has
+    /// already dropped a persisted value another host owns (PP's bridge host
+    /// on 8091 before #813); this check also catches one that only shows as
+    /// a sibling's once the host's IP is resolved. It also re-records this
+    /// host's dial port in the shared table, so the table matches the driver
+    /// after every (re)configuration.
     pub(super) async fn drop_sibling_port(
         &mut self,
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
@@ -225,7 +238,7 @@ impl HostDriver {
             configured_port = self.config.port,
             active_port = active,
             sibling = %owner,
-            "resolume active port belongs to another host on the same address; dialing the configured port again"
+            "resolume active port belongs to another host on the same machine; dialing the configured port again"
         );
         self.port_claims.release(self.config.id);
         self.adopt_active_port(None, status).await;
@@ -237,8 +250,30 @@ impl HostDriver {
         &mut self,
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
     ) {
+        self.learn_resolved_ip().await;
         self.drop_sibling_port(status).await;
         self.refresh_status(status).await;
+    }
+
+    /// #813: resolve the host once, so `resolve_endpoint` has recorded its IP
+    /// in the shared table before the start-up check. A sibling that names
+    /// the same machine differently (`resolume-pp.lan` vs `10.77.8.201`) is
+    /// then matched by IP. The endpoint stays cached for the first push.
+    /// Bounded by [`RESOLVE_AT_CONFIG_TIMEOUT`]: a disabled host never dials,
+    /// so its worker must not sit on an unreachable DNS server. A failure is
+    /// left to the push path, which retries and reports it; until the host
+    /// resolves, siblings are matched by host string only.
+    async fn learn_resolved_ip(&mut self) {
+        let error = match tokio::time::timeout(RESOLVE_AT_CONFIG_TIMEOUT, self.endpoint()).await {
+            Ok(Ok(_)) => return,
+            Ok(Err(err)) => format!("{err:#}"),
+            Err(_) => format!("no answer within {RESOLVE_AT_CONFIG_TIMEOUT:?}"),
+        };
+        debug!(
+            host = %self.config.host,
+            error = %error,
+            "resolume host not resolved at (re)configuration; matching siblings by host string until it resolves"
+        );
     }
 
     /// Apply a discovered (or healed) active port: update in-memory dial
@@ -345,6 +380,25 @@ mod tests {
         let candidates = drift_candidates(8090, &siblings(&[(8090, "arena songs")]));
         assert_eq!(candidates.probe, probe_candidate_ports(8090));
         assert!(candidates.sibling_owned.is_empty());
+    }
+
+    #[test]
+    fn the_sibling_skip_is_a_warn_on_the_power_of_two_failures_only() {
+        let gate: Vec<(u32, bool)> = (1..=9).map(|n| (n, sibling_skip_is_warn(n))).collect();
+        assert_eq!(
+            gate,
+            vec![
+                (1, true),
+                (2, true),
+                (3, false),
+                (4, true),
+                (5, false),
+                (6, false),
+                (7, false),
+                (8, true),
+                (9, false),
+            ]
+        );
     }
 
     #[test]

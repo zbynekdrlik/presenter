@@ -138,10 +138,17 @@ impl HostDriver {
     /// The 10 s worker tick: a `/product` liveness probe while a mapping is
     /// cached, then the deck check (a switched deck is refetched now); the
     /// composition only when there is no mapping.
+    ///
+    /// #813: it first re-checks the dial port against the port claims (one
+    /// lock, no network). A sibling that names this machine by hostname
+    /// records its IP only once its own lookup is done, maybe after this
+    /// host's start-up check or probe; a port that turns out to be that
+    /// sibling's is dropped within one tick.
     pub(super) async fn tick(&mut self, status: &Status) {
         if !self.config.is_enabled {
             return;
         }
+        self.drop_sibling_port(status).await;
         if self.in_backoff() {
             // #484/#563d: a down host is in its backoff window — skip this
             // tick instead of re-attempting (and re-logging), but say for how

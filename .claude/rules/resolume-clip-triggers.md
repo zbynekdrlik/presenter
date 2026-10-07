@@ -66,3 +66,12 @@ The tag-kind parsing lives in `parse_clip_kind`. Before #807 the function was 17
 because each of the 10 variants repeated its own struct literal. The fn-length gate checks
 every CHANGED file, so any edit of `clip_map.rs` would hard-fail it. When you add a
 `ClipTarget` field, set it once on the shared target. Do not re-expand the per-arm literals.
+
+## Renaming clips to presenter tags on a LIVE Arena (#813, PP 2026-10-07)
+
+No file surgery is needed while Arena runs. `PUT /api/v1/composition/clips/by-id/{id}`
+with `{"name":{"value":"#bible-translate-a"}}` returns 204. Read it back with a GET, then
+use "Refresh mapping" on the presenter host. The rename lives only in the running Arena
+until the operator saves the composition (Ctrl+S). Verify the saved `.avc` with a
+read-only search for `value="#tag"`. Editing the `.avc` directly works only with that
+Arena closed, and needs a backup first.

@@ -39,6 +39,10 @@ const WAIT_BOUND: Duration = Duration::from_secs(10);
 /// `/product` GET per candidate, 500 ms timeout each at worst).
 const NEVER_WINDOW: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(50);
+/// Bound for a clear that may wait for the host's next 10 s liveness tick
+/// (the #813 sibling re-check in `HostDriver::tick`), on top of
+/// [`WAIT_BOUND`].
+const TICK_BOUND: Duration = Duration::from_secs(25);
 
 /// Three CONSECUTIVE free ports, verified exactly like `free_port_pair()`
 /// (#744): `base` and `base + 1` stay bound while `base + 2` is tried, so a
@@ -163,30 +167,45 @@ async fn persisted_host(repo: &Repository, id: ResolumeHostId) -> ResolumeHost {
         .expect("the host is persisted")
 }
 
-/// Poll the DB until the host's persisted `active_port` equals `expected`.
+/// Poll the DB until the host's persisted `active_port` satisfies `pred`,
+/// bounded by [`WAIT_BOUND`].
 async fn wait_for_persisted_active_port(
     repo: &Repository,
     id: ResolumeHostId,
-    expected: Option<u16>,
     what: &str,
+    pred: impl Fn(Option<u16>) -> bool,
 ) {
-    let deadline = Instant::now() + WAIT_BOUND;
+    wait_for_persisted_active_port_within(repo, id, WAIT_BOUND, what, pred).await;
+}
+
+async fn wait_for_persisted_active_port_within(
+    repo: &Repository,
+    id: ResolumeHostId,
+    bound: Duration,
+    what: &str,
+    pred: impl Fn(Option<u16>) -> bool,
+) {
+    let deadline = Instant::now() + bound;
     loop {
         let active_port = persisted_host(repo, id).await.active_port;
-        if active_port == expected {
+        if pred(active_port) {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "{what} within {WAIT_BOUND:?}; persisted active_port is {active_port:?}"
+            "{what} within {bound:?}; persisted active_port is {active_port:?}"
         );
         tokio::time::sleep(POLL).await;
     }
 }
 
 async fn create_host(repo: &Repository, label: &str, port: u16) -> ResolumeHost {
+    create_host_on(repo, label, "127.0.0.1", port).await
+}
+
+async fn create_host_on(repo: &Repository, label: &str, host: &str, port: u16) -> ResolumeHost {
     repo.create_resolume_host(
-        &ResolumeHostDraft::new(label, "127.0.0.1", port),
+        &ResolumeHostDraft::new(label, host, port),
         SettingsAuditSource::HttpSetter,
         "test",
     )
@@ -338,6 +357,58 @@ async fn a_host_on_another_address_does_not_block_the_drift() {
     .await;
 }
 
+/// Disabling a host in presenter does not stop its Arena (PP disables idle
+/// hosts), so a disabled sibling still owns its configured port.
+#[tokio::test]
+async fn a_host_never_drifts_onto_the_configured_port_of_a_disabled_sibling() {
+    let (bridge_port, songs_port) = free_port_pair();
+    let _songs_arena = start_arena_on(songs_port).await;
+    let bridge = host_on("arena bridge", "127.0.0.1", bridge_port);
+    let mut songs = host_on("arena songs", "127.0.0.1", songs_port);
+    songs.is_enabled = false;
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.set_hosts(vec![bridge.clone(), songs]).await;
+
+    wait_for_refused(&registry, bridge.id).await;
+    assert_never(
+        &registry,
+        bridge.id,
+        "the bridge host adopted the port of the disabled songs host, whose Arena still runs",
+        |s| s.active_port == Some(songs_port),
+    )
+    .await;
+}
+
+/// One machine spelled two ways (`resolume-pp.lan` and `10.77.8.201` on PP;
+/// `localhost` and `127.0.0.1` here): the hosts are matched by the IP the
+/// worker resolved, not only by the host string.
+#[tokio::test]
+async fn a_host_never_drifts_onto_a_sibling_that_names_the_same_machine_differently() {
+    let (bridge_port, songs_port) = free_port_pair();
+    let _songs_arena = start_arena_on(songs_port).await;
+    let bridge = host_on("arena bridge", "localhost", bridge_port);
+    let songs = host_on("arena songs", "127.0.0.1", songs_port);
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry
+        .set_hosts(vec![bridge.clone(), songs.clone()])
+        .await;
+
+    wait_for(&registry, songs.id, "the songs host connects", |s| {
+        s.state == ResolumeConnectionState::Connected
+    })
+    .await;
+    wait_for_refused(&registry, bridge.id).await;
+    assert_never(
+        &registry,
+        bridge.id,
+        "the bridge host (localhost) adopted the port of the songs host (127.0.0.1)",
+        |s| s.active_port == Some(songs_port),
+    )
+    .await;
+}
+
 /// The PP DB after the incident: the bridge host persisted the songs host's
 /// port as its `active_port`. Loading the hosts (a restart after the deploy)
 /// must clear it in memory AND in the DB, so the incident heals by itself.
@@ -358,18 +429,21 @@ async fn a_persisted_active_port_that_a_sibling_owns_is_cleared_on_load() {
         .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
         .await;
 
+    // Not "is None": once cleared, the host re-probes its own window and
+    // may adopt a parallel test's mock Arena there. The point is that it is
+    // off the sibling's port.
     wait_for_persisted_active_port(
         &repo,
         bridge.id,
-        None,
         "the bridge host's sibling-owned active_port is cleared in the DB",
+        |active_port| active_port != Some(songs_port),
     )
     .await;
     wait_for(
         &registry,
         bridge.id,
-        "the bridge host dials its configured port",
-        |s| s.active_port.is_none(),
+        "the bridge host is off the songs host's port",
+        |s| s.active_port != Some(songs_port),
     )
     .await;
 }
@@ -404,18 +478,192 @@ async fn adding_a_host_on_an_adopted_port_clears_that_adoption() {
         .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
         .await;
 
+    // Not "is None": see the test above.
     wait_for_persisted_active_port(
         &repo,
         drifted.id,
-        None,
         "the drift onto the new host's port is cleared in the DB",
+        |active_port| active_port != Some(drifted_port),
     )
     .await;
     wait_for(
         &registry,
         drifted.id,
-        "the host dials its configured port again",
-        |s| s.active_port.is_none(),
+        "the host is off the new host's port",
+        |s| s.active_port != Some(drifted_port),
+    )
+    .await;
+}
+
+/// A persisted active port is a seed, never verified since it was written:
+/// it never outranks a port another host's worker dials right now. Here a
+/// host is added whose persisted active port is the port a running host
+/// drifted to. The running host keeps it, the new host starts on its
+/// configured port, and its persisted value is cleared.
+#[tokio::test]
+async fn a_live_drift_is_never_evicted_by_a_sibling_seeded_on_the_same_port() {
+    let (live_port, seeded_port, arena_port) = free_port_triple();
+    let _arena = start_arena_on(arena_port).await;
+    let repo = Repository::connect_in_memory().await.expect("repo");
+    let live = create_host(&repo, "arena songs", live_port).await;
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.attach_audit_writer(repo.clone());
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+    wait_for(&registry, live.id, "the songs host drifts as #564", |s| {
+        s.state == ResolumeConnectionState::Connected && s.active_port == Some(arena_port)
+    })
+    .await;
+
+    let seeded = create_host(&repo, "arena bridge", seeded_port).await;
+    repo.update_resolume_host_active_port(seeded.id, Some(arena_port))
+        .await
+        .expect("persist the bridge host's stale active_port");
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+
+    wait_for_persisted_active_port(
+        &repo,
+        seeded.id,
+        "the bridge host's seed on the songs host's port is cleared in the DB",
+        |active_port| active_port != Some(arena_port),
+    )
+    .await;
+    assert_never(
+        &registry,
+        live.id,
+        "the songs host was taken off the port it drifted to",
+        |s| s.active_port != Some(arena_port),
+    )
+    .await;
+    assert_ne!(
+        registry.snapshot_for(seeded.id).await.active_port,
+        Some(arena_port),
+        "the bridge host dials the songs host's Arena"
+    );
+    assert_eq!(
+        persisted_host(&repo, live.id).await.active_port,
+        Some(arena_port),
+        "the songs host's drift stays persisted"
+    );
+}
+
+/// Two hosts that both persisted the same active port: neither value was
+/// verified since, so neither outranks the other. `set_hosts` seeds both
+/// drivers with `active_port = None`, so both start on their configured port
+/// and both clears are persisted. Nothing listens anywhere, so no probe moves
+/// either host; dropping only the table entry would let whichever worker
+/// checked first keep the port for good.
+#[tokio::test]
+async fn two_hosts_seeded_on_the_same_port_both_start_on_their_configured_port() {
+    let (a_port, b_port, seeded_port) = free_port_triple();
+    let repo = Repository::connect_in_memory().await.expect("repo");
+    let a = create_host(&repo, "arena a", a_port).await;
+    let b = create_host(&repo, "arena b", b_port).await;
+    for id in [a.id, b.id] {
+        repo.update_resolume_host_active_port(id, Some(seeded_port))
+            .await
+            .expect("persist a stale active_port");
+    }
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.attach_audit_writer(repo.clone());
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+
+    for (id, what) in [(a.id, "host a's seed"), (b.id, "host b's seed")] {
+        wait_for_persisted_active_port(&repo, id, what, |active_port| {
+            active_port != Some(seeded_port)
+        })
+        .await;
+    }
+    wait_for_refused(&registry, a.id).await;
+    wait_for_refused(&registry, b.id).await;
+    for id in [a.id, b.id] {
+        assert_ne!(
+            registry.snapshot_for(id).await.active_port,
+            Some(seeded_port),
+            "a host kept the seeded port"
+        );
+    }
+}
+
+/// A host named by hostname whose persisted active port is the configured
+/// port of a sibling named by IP. The worker resolves its host before the
+/// start-up check (`learn_resolved_ip`), so it never dials the sibling's
+/// Arena, not even once. (The `localhost` tests need `127.0.0.1 localhost`
+/// in /etc/hosts, as on the ubuntu-latest CI runners.)
+#[tokio::test]
+async fn a_hostname_host_seeded_on_a_siblings_port_never_dials_that_arena() {
+    let (bridge_port, songs_port) = free_port_pair();
+    let _songs_arena = start_arena_on(songs_port).await;
+    let repo = Repository::connect_in_memory().await.expect("repo");
+    let bridge = create_host_on(&repo, "arena bridge", "localhost", bridge_port).await;
+    create_host(&repo, "arena songs", songs_port).await;
+    repo.update_resolume_host_active_port(bridge.id, Some(songs_port))
+        .await
+        .expect("persist the stale active_port");
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.attach_audit_writer(repo.clone());
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+
+    assert_never(
+        &registry,
+        bridge.id,
+        "the bridge host (localhost) connected to the songs host's Arena (127.0.0.1)",
+        |s| s.state == ResolumeConnectionState::Connected && s.active_port == Some(songs_port),
+    )
+    .await;
+    wait_for_persisted_active_port(
+        &repo,
+        bridge.id,
+        "the bridge host's seed on the songs host's port is cleared in the DB",
+        |active_port| active_port != Some(songs_port),
+    )
+    .await;
+}
+
+/// Now the SIBLING is the one named by hostname. Its IP reaches the table
+/// only when its own worker resolved it, which may be after the bridge's
+/// start-up check and first probe. The 10 s tick re-checks the dial port, so
+/// the bridge still ends up off the sibling's port.
+#[tokio::test]
+async fn a_host_leaves_a_siblings_port_when_the_sibling_resolves_late() {
+    let (bridge_port, songs_port) = free_port_pair();
+    let _songs_arena = start_arena_on(songs_port).await;
+    let repo = Repository::connect_in_memory().await.expect("repo");
+    let bridge = create_host(&repo, "arena bridge", bridge_port).await;
+    create_host_on(&repo, "arena songs", "localhost", songs_port).await;
+    repo.update_resolume_host_active_port(bridge.id, Some(songs_port))
+        .await
+        .expect("persist the stale active_port");
+
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.attach_audit_writer(repo.clone());
+    registry
+        .set_hosts(repo.list_resolume_hosts().await.expect("list hosts"))
+        .await;
+
+    wait_for_persisted_active_port_within(
+        &repo,
+        bridge.id,
+        TICK_BOUND,
+        "the bridge host left the port of the songs host (localhost)",
+        |active_port| active_port != Some(songs_port),
+    )
+    .await;
+    wait_for(
+        &registry,
+        bridge.id,
+        "the bridge host is off the songs host's port in memory",
+        |s| s.active_port != Some(songs_port),
     )
     .await;
 }
