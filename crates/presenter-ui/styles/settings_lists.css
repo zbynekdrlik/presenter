@@ -266,9 +266,14 @@
   overflow-wrap: anywhere;
 }
 
+/* `overflow-wrap: anywhere` so a long unbroken token in a meta line (the
+   Android warning names `PRESENTER_ANDROID_STAGE_URL`, 27 chars) breaks instead
+   of setting the row's min-content width: it made the standalone page 328 px wide
+   on a 320 px phone (#819). */
 .settings__list-meta {
   margin: 0;
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 /* Updated / Created, the Android attempts: bookkeeping, quieter than the

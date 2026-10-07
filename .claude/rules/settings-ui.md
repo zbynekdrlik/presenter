@@ -163,6 +163,11 @@ by `CardItem::key`) with unit tests for this.
 - The header has `gap: 16px`, a minimum title–nav gap at every width. At ≤ 480 px
   only its side padding drops to 20 px (`padding-inline`); the 24 px top / bottom
   padding stays. The header nav is `flex-wrap: wrap` + `white-space: nowrap`.
+- Every row text that can carry a long unbroken token needs `overflow-wrap:
+  anywhere` (`.settings__list-meta`, `-aside`, `.settings__host-addr`). The Android
+  warning names `PRESENTER_ANDROID_STAGE_URL` (27 chars). That alone set the row's
+  min-content to 248 px, and the standalone page measured 328 px on a 320 px phone.
+  It reproduces only with seeded rows, as in CI, never with an empty DB.
 - To find what sets a minimum width, set `width: min-content` on each card and
   compare. Overflow checks on a forced narrow width miss shrinkable content.
 
@@ -173,6 +178,15 @@ by `CardItem::key`) with unit tests for this.
   `selectorText` contains `.settings`, recursing into `@media`. Deleting every rule
   that mentions "settings" also removes the operator's
   `[data-view="settings"]` panel rule, and every card then measures 0 px.
+- **Run the CI-built binary.** It is faster than a mock and exact for markup.
+  `gh run download <run> -n build-artifacts` gives the binary, built with
+  `mock-integrations` + `test-helpers`. It hard-binds `127.0.0.1:8091`, which the
+  deployed `presenter-dev` holds, so start it in its own network namespace:
+  `sudo unshare -n bash -c "ip link set lo up; sudo -u newlevel <script>"`. The
+  script starts the binary (`PRESENTER_PORT=18399`, throwaway
+  `PRESENTER_DB_URL=sqlite://<tmp>/t.db?mode=rwc`) and then the node Playwright
+  probe against `127.0.0.1:18399`. `unshare -rn` (an unprivileged user namespace)
+  is blocked on dev2. This is not a local build, so Tier-0 allows it.
 - For new markup, use a static HTML mock with the same classes and both
   stylesheets, screenshotted at 1600 px and 600 px.
 - The E2E layout guard (`settings-inline-edit.spec.ts`) checks that the Companion
