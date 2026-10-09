@@ -5,6 +5,9 @@
  *  - #831 "VEĽKÉ PÍSMENÁ": ticking it on the nameplate (lower third) NAME line
  *    saves `uppercase: true` on that TextStyle only, and the output renders the
  *    line with `text-transform: uppercase` while the stored text keeps its case.
+ *  - #834 "Prelínať cez prázdno": the content-transition control offers cut /
+ *    crossfade / fade through empty, keeps the duration between the two fades,
+ *    and saves the picked mode.
  *
  * Every test asserts a clean browser console last.
  */
@@ -191,4 +194,52 @@ test("#831 VEĽKÉ PÍSMENÁ on the nameplate name line renders capitals on the 
 
   expect(outputErrors, `output console: ${outputErrors.join(" | ")}`).toEqual([]);
   expect(editorErrors, `editor console: ${editorErrors.join(" | ")}`).toEqual([]);
+});
+
+test("#834 the content transition offers 'Prelínať cez prázdno' and saves it", async ({ page }) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+
+  const scene = await addScene(page, "SC_834_FadeThrough");
+  await openPanel(page, scene);
+  const el = await addElement(page, scene, "lyrics");
+
+  const cut = page.locator('[data-role="stream-transition-cut"]');
+  const crossfade = page.locator('[data-role="stream-transition-fade"]');
+  const through = page.locator('[data-role="stream-transition-fade-through"]');
+  const ms = page.locator('[data-role="stream-transition-ms"]');
+  const savedTransition = async () =>
+    (await getElement(page, scene, el)).props.content_transition as Record<string, unknown>;
+
+  // A new lyrics element crossfades by default; all three choices are offered.
+  await expect(page.locator('[data-role="stream-transition"]')).toContainText(
+    "Prelínať cez prázdno",
+  );
+  await expect(crossfade).toBeChecked();
+  await expect(through).not.toBeChecked();
+  await expect(cut).not.toBeChecked();
+
+  // Fade through empty keeps the crossfade's duration, then saves a new one.
+  await through.check();
+  await expect(crossfade).not.toBeChecked();
+  await expect(ms).toHaveValue("300");
+  await ms.fill("700");
+  await save(page);
+  await expect.poll(savedTransition).toEqual({ mode: "fade_through", duration_ms: 700 });
+
+  // Back to crossfade: the duration carries over.
+  await crossfade.check();
+  await expect(through).not.toBeChecked();
+  await expect(ms).toHaveValue("700");
+  await save(page);
+  await expect.poll(savedTransition).toEqual({ mode: "fade", duration_ms: 700 });
+
+  // Cut: no duration to set.
+  await cut.check();
+  await expect(ms).toHaveCount(0);
+  await save(page);
+  await expect.poll(savedTransition).toEqual({ mode: "cut" });
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

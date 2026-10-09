@@ -1863,4 +1863,49 @@ mod tests {
         assert_eq!(back["primary_style"]["uppercase"], json!(true));
         assert!(back["secondary_style"].get("uppercase").is_none());
     }
+
+    // ---- #834 "fade through empty" content transition ----------------------
+
+    /// Lyrics props whose `content_transition` is the given wire object.
+    fn lyrics_with_transition(transition: serde_json::Value) -> serde_json::Value {
+        let mut v = serde_json::to_value(lyrics_props()).expect("serialize");
+        v["content_transition"] = transition;
+        v
+    }
+
+    #[test]
+    fn fade_through_transition_round_trips() {
+        let wire = json!({ "mode": "fade_through", "duration_ms": 400 });
+        let parsed: ContentTransition = serde_json::from_value(wire.clone()).expect("parse");
+        assert_eq!(serde_json::to_value(&parsed).expect("serialize"), wire);
+        // The existing modes keep their wire shape.
+        for wire in [
+            json!({ "mode": "cut" }),
+            json!({ "mode": "fade", "duration_ms": 250 }),
+        ] {
+            let parsed: ContentTransition = serde_json::from_value(wire.clone()).expect("parse");
+            assert_eq!(serde_json::to_value(&parsed).expect("serialize"), wire);
+        }
+    }
+
+    #[test]
+    fn fade_through_validated_like_fade() {
+        let ok = lyrics_with_transition(json!({ "mode": "fade_through", "duration_ms": 600 }));
+        let ok: StreamElementProps = serde_json::from_value(ok).expect("parse");
+        assert!(validate_props(&ok, &[]).is_ok());
+
+        let at_max = json!({ "mode": "fade_through", "duration_ms": STREAM_TRANSITION_MAX_MS });
+        let at_max: StreamElementProps =
+            serde_json::from_value(lyrics_with_transition(at_max)).expect("parse");
+        assert!(validate_props(&at_max, &[]).is_ok());
+
+        let too_long =
+            json!({ "mode": "fade_through", "duration_ms": STREAM_TRANSITION_MAX_MS + 1 });
+        let too_long: StreamElementProps =
+            serde_json::from_value(lyrics_with_transition(too_long)).expect("parse");
+        assert!(matches!(
+            validate_props(&too_long, &[]),
+            Err(StreamValidationError::TransitionTooLong { .. })
+        ));
+    }
 }
