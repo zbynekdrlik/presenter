@@ -29,7 +29,7 @@ import {
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
 
-type ElementDef = { id: number };
+type ElementDef = { id: number; props?: { kind?: string } };
 type SceneDef = { id: number; elements: ElementDef[] };
 type OutputDef = { scenes: SceneDef[] };
 
@@ -255,10 +255,13 @@ test("#829 Prehrať in the Menovky tab plays the plate in a preview the operator
   await expectActiveTab(page, "nameplates");
 
   // The output needs a lower third to play a plate on: create the default
-  // nameplate layer when it has none (the button only shows then).
-  const createLayer = page.locator('[data-role="stream-nameplate-create-layer"]');
-  if ((await createLayer.count()) > 0) {
-    await createLayer.click();
+  // nameplate layer when the SERVER def has none (the page's button also shows
+  // while its def is still loading, so never decide from the button).
+  const hasLowerThird = (await getDef(page)).scenes.some((s) =>
+    s.elements.some((e) => e.props?.kind === "lower_third"),
+  );
+  if (!hasLowerThird) {
+    await page.locator('[data-role="stream-nameplate-create-layer"]').click();
   }
   const frame = page.locator('[data-role="stream-nameplate-preview-frame"]');
   await expect(frame).toBeVisible({ timeout: 15_000 });
@@ -282,7 +285,23 @@ test("#829 Prehrať in the Menovky tab plays the plate in a preview the operator
     "Prehrať Test",
     { timeout: 10_000 },
   );
+  await expect(preview.locator('[data-role="stream-lower-third-plate"]').first()).toBeVisible();
   await expect(frame).toBeVisible();
+
+  // „Skryť" takes the previewed plate off the preview too (preview mode ignores
+  // the live plate feed, so only the editor can clear it).
+  await row.locator('[data-role="stream-nameplate-hide"]').click();
+  await expect(preview.locator('[data-role="stream-lower-third-plate"]')).toHaveCount(0, {
+    timeout: 10_000,
+  });
+
+  // The preview box fits a phone screen as well.
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expect(frame).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    "no horizontal page scroll with the Menovky preview at 320 px",
+  ).toBeLessThanOrEqual(0);
 
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

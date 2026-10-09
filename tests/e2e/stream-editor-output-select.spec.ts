@@ -184,5 +184,7 @@ test("#827 a remembered output that no longer exists falls back to the first lis
     staleNotFound.every((line) => /status of 404\b/.test(line)),
     `only 404s for the stale output: ${staleNotFound.join(" | ")}`,
   ).toBeTruthy();
+  // Re-checked last, so a late third refusal still fails the test.
+  expect(staleNotFound, "exactly the def + plate-list refusals").toHaveLength(2);
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });
