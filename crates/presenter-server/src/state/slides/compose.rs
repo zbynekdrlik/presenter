@@ -15,7 +15,8 @@ fn translation_short_code(code: &str) -> String {
 /// Typed input for the AI-facing bible composer. A stream of these is
 /// produced by the LLM after it edits DB verses against the sermon text,
 /// and the server composes slides out of the stream respecting the
-/// character limit — same splitting rules as live mode.
+/// character limit, counted in characters like live mode (#828). AI slides
+/// carry no translation text, so only the main text is measured.
 // `pub` (not `pub(crate)`): re-exported `pub` from `state::slides` so the
 // #680 `ai_eval` Layer-1 scorer (a separate crate root) can replay a
 // captured tool call's items through the REAL composer — see
@@ -70,10 +71,12 @@ fn format_verse_range(verses: &BTreeSet<u32>) -> String {
     }
 }
 
-/// Compose a stream of `BibleItem` into slides. Same greedy-packing rule
-/// as `compose_bible_slides`: accumulate verses into one slide until the
-/// next verse would overflow the character limit, then flush. Emphasis
-/// items and translation/book/chapter changes force a slide break.
+/// Compose a stream of `BibleItem` into slides. The greedy-packing rule of
+/// `compose_bible_slides`, on the main text only (AI slides have no
+/// translation text): accumulate verses into one slide until the next verse
+/// would overflow the character limit (characters, never bytes — #828), then
+/// flush. Emphasis items and translation/book/chapter changes force a slide
+/// break.
 ///
 /// A verse is NEVER split mid-text (issue #394): consecutive `Verse` items that
 /// share the same verse number are merged back into one whole verse, and a lone
@@ -147,7 +150,7 @@ pub fn compose_bible_items_into_slides(
                     // slide that the validator would then reject. (flush_keeping_last
                     // is a no-op when the verse is alone on the slide, so no extra
                     // line-count guard is needed here.)
-                    if acc.would_overflow_merge(text.len(), limit) {
+                    if acc.would_overflow_merge(text.chars().count(), limit) {
                         acc.flush_keeping_last(&mut slides, &group_verses);
                     }
                     if let Some(last) = acc.lines.last_mut() {
@@ -159,7 +162,7 @@ pub fn compose_bible_items_into_slides(
                 }
 
                 let line = format!("{number}. {text}");
-                if acc.would_overflow(line.len(), limit) {
+                if acc.would_overflow(line.chars().count(), limit) {
                     acc.flush(&mut slides, &group_verses);
                 }
 
@@ -193,7 +196,7 @@ impl VerseAccumulator {
         if self.lines.is_empty() {
             return false;
         }
-        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        let existing_len: usize = self.lines.iter().map(|line| line.chars().count()).sum();
         // joined existing lines = existing_len + (len - 1) separators; adding a
         // "\n" + new line = + 1 + new_line_len -> existing_len + len + new_line_len.
         let prospective = existing_len + self.lines.len() + new_line_len;
@@ -209,7 +212,7 @@ impl VerseAccumulator {
         if self.lines.is_empty() {
             return false;
         }
-        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        let existing_len: usize = self.lines.iter().map(|line| line.chars().count()).sum();
         // current joined length + " " + fragment.
         let prospective = existing_len + (self.lines.len() - 1) + 1 + frag_len;
         prospective > limit

@@ -344,7 +344,10 @@ pub fn validate_bible_slide(
     // it exceeds the limit. Multi-verse slides over the limit are still a real
     // over-packing error (the composer should have flushed before overflow),
     // and oversized emphasis/title slides (no reference) are still rejected.
-    if main.len() > character_limit as usize && !is_lone_whole_verse(main, main_reference) {
+    // Characters, never bytes (#828): the composer packs by `chars()`, and a
+    // Slovak diacritic is one character but two UTF-8 bytes.
+    if main.chars().count() > character_limit as usize && !is_lone_whole_verse(main, main_reference)
+    {
         return Err(ValidationError::new_with_limit(
             ValidationRule::MainExceedsCharacterLimit,
             main.to_string(),
