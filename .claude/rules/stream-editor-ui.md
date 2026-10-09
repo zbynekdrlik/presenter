@@ -393,6 +393,14 @@ TS strings: write the word without quotes, or use a backtick/single-quoted strin
   - the stored weight is appended as "<w> (nenahraté)" when no face has it, so the `<select>`
     never shows a weight other than the saved one.
 - The options carry `prop:selected` (the #827 rule), never `prop:value` on the `<select>`.
+- The font-FAMILY `<select>` (`stream-ts-font`) follows the same rule through
+  `font_faces::family_options`:
+  - its options are the built-ins, then each uploaded family once;
+  - a stored family that the async list lacks (still loading, or its last face deleted) stays
+    as "<family> (nenahraté)";
+  - the current family is a `Memo`, so typing in another field never rebuilds that long list.
+  - E2E: hold `**/stream/api/fonts` with `page.route` until the element form is open
+    (`stream-font-faces.spec.ts`, 2nd test).
 - The "Kurzíva" checkbox (`stream-ts-italic`):
   - it is enabled only when `has_italic_face(family, weight)`;
   - a ticked box stays enabled, so it can always be unticked;
