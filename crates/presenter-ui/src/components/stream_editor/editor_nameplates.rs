@@ -1,7 +1,7 @@
 //! "Menovky" (lower-third nameplate) editor panel (#779).
 //!
-//! An output-scoped panel (mounted OUTSIDE the `selected_scene` gate, after
-//! `EditorScenes`): the person-plate list (add / inline edit / delete / reorder),
+//! An output-scoped panel (its own „Menovky" tab since #829, always mounted):
+//! the person-plate list (add / inline edit / delete / reorder),
 //! a virtual "Pieseň" row, per-row Zobraziť / Skryť buttons that drive the REAL
 //! output, a Prehrať button that previews the plate animation in the preview
 //! iframe WITHOUT broadcasting (#777 channel sibling), an on-air highlight from
@@ -297,7 +297,7 @@ fn post_nameplate_preview(json: String) {
 #[cfg(not(target_arch = "wasm32"))]
 fn post_nameplate_preview(_json: String) {}
 
-/// The Menovky panel — mounted by `pages/stream_editor.rs` after `EditorScenes`.
+/// The Menovky panel — mounted by `pages/stream_editor.rs` in the Menovky tab.
 #[component]
 pub fn NameplatePanel(ctx: StreamEditorCtx) -> impl IntoView {
     let new_name = RwSignal::new(String::new());

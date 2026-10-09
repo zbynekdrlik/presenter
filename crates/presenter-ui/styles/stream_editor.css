@@ -29,13 +29,16 @@ html[data-stream-editor="true"] {
   flex-direction: column;
 }
 
+/* #829: the title and the nav wrap onto separate lines at phone width (the
+ * nav items keep `nowrap` each, but wrap between themselves), so the header
+ * never forces a horizontal page scroll. */
 .stream-editor__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #2a2e3a;
   background: #1a1d26;
 }
 
@@ -52,9 +55,51 @@ html[data-stream-editor="true"] {
 
 .stream-editor__header-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
+  gap: 0.5rem 1rem;
   white-space: nowrap;
+}
+
+/* #829: Scény | Menovky | Písma tab bar under the header (it carries the
+ * header's bottom border). The buttons wrap at phone width. */
+.stream-editor__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid #2a2e3a;
+  background: #1a1d26;
+}
+
+.stream-editor__tab {
+  margin-bottom: -1px;
+  padding: 0.55rem 1rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: #9aa1b1;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.stream-editor__tab:hover {
+  color: #e7e9ee;
+}
+
+.stream-editor__tab[data-active="true"] {
+  border-color: #2a2e3a;
+  background: #14161c;
+  color: #e7e9ee;
+  font-weight: 600;
+}
+
+/* Inactive panels stay MOUNTED (an unsaved element draft or a half-typed
+ * nameplate survives a tab switch); they are only hidden. */
+.stream-editor__tab-panel[data-active="false"] {
+  display: none;
 }
 
 .stream-editor__link {
@@ -723,9 +768,8 @@ html[data-stream-editor="true"] {
   flex: 0 0 auto;
 }
 
-/* #778: web-font upload/manage panel (a top-level tool in the editor main). */
+/* #778: web-font upload/manage panel (the „Písma" tab since #829). */
 .stream-editor__font-panel {
-    margin-top: 1rem;
     padding: 1rem;
     border: 1px solid #334155;
     border-radius: 8px;
@@ -742,6 +786,11 @@ html[data-stream-editor="true"] {
     align-items: center;
     flex-wrap: wrap;
     margin-bottom: 0.75rem;
+}
+/* #829: a file input's intrinsic width (~300 px) overflowed a phone screen. */
+.stream-editor__font-upload input[type="file"] {
+    max-width: 100%;
+    min-width: 0;
 }
 .stream-editor__font-list {
     list-style: none;
@@ -769,10 +818,10 @@ html[data-stream-editor="true"] {
     white-space: nowrap;
 }
 
-/* Lower-third nameplates ("Menovky") panel (#779). Output-scoped, mounted after
- * the scenes; reuses the shared __btn / __section-title / __panel-head styles. */
+/* Lower-third nameplates ("Menovky") panel (#779). Output-scoped, its own
+ * „Menovky" tab since #829; reuses the shared __btn / __section-title /
+ * __panel-head styles. */
 .stream-editor__nameplates {
-    margin-top: 1.5rem;
     padding: 1rem;
     background: #0f172a;
     border: 1px solid #1e293b;
@@ -853,4 +902,20 @@ html[data-stream-editor="true"] {
     padding: 0.4rem 0.6rem;
     flex: 1 1 10rem;
     min-width: 8rem;
+}
+
+/* #829: phone width — tighter gutters so the tabs and panels fit 320 px.
+ * Kept LAST so it overrides the base paddings above. */
+@media (max-width: 480px) {
+    .stream-editor__header {
+        padding: 0.75rem 1rem;
+    }
+
+    .stream-editor__tabs {
+        padding: 0 1rem;
+    }
+
+    .stream-editor__main {
+        padding: 1rem;
+    }
 }

@@ -20,6 +20,7 @@ pub mod editor_nameplates;
 pub mod editor_panel;
 pub mod editor_preview;
 pub mod editor_scenes;
+pub mod editor_tabs;
 pub mod element_form;
 pub mod frame_math;
 pub mod gesture;
@@ -39,6 +40,7 @@ use presenter_core::{
 };
 use serde::Serialize;
 
+use self::editor_tabs::EditorTab;
 use self::output_paths::{
     active_scene_path, def_path, output_path, overlay_path, scenes_order_path, scenes_path,
 };
@@ -136,6 +138,9 @@ pub struct StreamEditorCtx {
     pub output_slug: RwSignal<String>,
     /// The list of outputs for the header switcher (`GET /stream/api/outputs`).
     pub outputs: RwSignal<Vec<StreamOutputSummary>>,
+    /// The visible editor area — Scény / Menovky / Písma (#829). Every panel
+    /// stays mounted; switching only changes which one is shown.
+    pub tab: RwSignal<EditorTab>,
     pub def: RwSignal<Option<StreamOutputDef>>,
     pub active: RwSignal<StreamShowState>,
     pub toast_msg: RwSignal<String>,

@@ -8,7 +8,8 @@
 //! the editor header lets the operator switch between outputs (list from
 //! `GET /stream/api/outputs`). The selected slug is persisted in `localStorage`
 //! and mirrored to the `?output=` URL param so a reload / bookmark reopens the
-//! same output.
+//! same output. The raw-`localStorage` helpers here are shared with the editor
+//! tab memory (`editor_tabs.rs`, #829).
 //!
 //! These live in a sibling module (not `mod.rs`) purely to keep `mod.rs` under
 //! the file-size gate. The id-scoped path builders (`/stream/api/scenes/{id}`,
@@ -67,38 +68,37 @@ fn local_storage() -> Option<leptos::web_sys::Storage> {
     leptos::web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
-fn stored_output_slug() -> Option<String> {
+/// A non-empty raw `localStorage` value of the editor (`None` when absent,
+/// empty, or storage is unavailable). Shared with the tab memory (#829).
+pub(super) fn read_stored(key: &str) -> Option<String> {
     local_storage()
-        .and_then(|s| s.get_item(OUTPUT_STORAGE_KEY).ok().flatten())
+        .and_then(|s| s.get_item(key).ok().flatten())
         .filter(|v| !v.is_empty())
 }
 
-/// Persist the selected output slug to `localStorage` (best-effort; no-op when
-/// storage is unavailable, e.g. a sandboxed context).
-pub(super) fn persist_output_slug(slug: &str) {
+/// Store a raw `localStorage` value (best-effort; no-op when storage is
+/// unavailable, e.g. a sandboxed context).
+pub(super) fn write_stored(key: &str, value: &str) {
     if let Some(storage) = local_storage() {
-        let _ = storage.set_item(OUTPUT_STORAGE_KEY, slug);
+        let _ = storage.set_item(key, value);
     }
 }
 
-/// Mirror the selected output into the `?output=` URL param (best-effort) so a
-/// reload / share reopens the same output. Uses `replace_state` (no new history
-/// entry per switch). The editor reads only `?output=`, so replacing the whole
-/// query with `?output=<slug>` preserves everything that matters (and the slug is
-/// `^[a-z0-9-]+`, so it needs no URL-encoding).
+fn stored_output_slug() -> Option<String> {
+    read_stored(OUTPUT_STORAGE_KEY)
+}
+
+/// Persist the selected output slug to `localStorage`.
+pub(super) fn persist_output_slug(slug: &str) {
+    write_stored(OUTPUT_STORAGE_KEY, slug);
+}
+
+/// Mirror the selected output into the `?output=` URL param so a reload / share
+/// reopens the same output (no new history entry per switch). Only that one
+/// param changes — `?tab=` (#829) and anything else in the query stay. The slug
+/// is `^[a-z0-9-]+`, so it needs no URL-encoding.
 pub(super) fn mirror_output_to_url(slug: &str) {
-    let Some(win) = leptos::web_sys::window() else {
-        return;
-    };
-    let path = crate::utils::window::current_pathname();
-    let new_url = format!("{path}?output={slug}");
-    if let Ok(history) = win.history() {
-        let _ = history.replace_state_with_url(
-            &leptos::wasm_bindgen::JsValue::NULL,
-            "",
-            Some(&new_url),
-        );
-    }
+    crate::utils::window::replace_url_param("output", slug);
 }
 
 /// The output slug to open on load: `?output=` URL param → last `localStorage`
