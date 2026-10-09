@@ -1,4 +1,4 @@
-use super::{get_json, post_json, post_no_content, ApiError};
+use super::{get_json, post_json, post_json_detail, post_no_content, ApiError};
 use presenter_core::{
     BibleBroadcast, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
 };
@@ -306,8 +306,12 @@ pub struct BibleSlideVerseRefDto {
 }
 
 /// Generate slides from a Bible reference. Server: POST /bible/resolve
+///
+/// A failure carries the server's message (e.g. #826 "NLT nedostupné — …" when
+/// the NLT API is unreachable) so the load-passage toast says WHY, not just
+/// "Bad Gateway".
 pub async fn resolve_slides(req: &ResolveRequest) -> Result<ResolveResponse, ApiError> {
-    post_json("/bible/resolve", req).await
+    post_json_detail("/bible/resolve", req).await
 }
 
 // ---------------------------------------------------------------------------
