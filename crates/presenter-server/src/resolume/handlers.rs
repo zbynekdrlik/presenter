@@ -37,7 +37,7 @@ struct StagePushMetrics {
 }
 
 use super::driver::TRIGGER_DELAY;
-pub(super) use super::legacy_reference::legacy_translation_reference;
+use super::legacy_reference::legacy_translation_reference;
 
 pub(super) fn translation_short_code(code: &str) -> String {
     code.rsplit('-').next().unwrap_or(code).to_uppercase()

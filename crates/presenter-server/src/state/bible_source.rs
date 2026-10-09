@@ -203,7 +203,7 @@ impl AppState {
 
 /// The canonical book of a code (`"1JN"`) or, without a code, of a name in
 /// any supported language (`"1 John"`, `"1 Ján"`).
-fn canonical_book(book: &str, book_code: Option<&str>) -> Option<BibleBookCanonical> {
+pub(super) fn canonical_book(book: &str, book_code: Option<&str>) -> Option<BibleBookCanonical> {
     match book_code.map(str::trim).filter(|code| !code.is_empty()) {
         Some(code) => canonical_book_by_code(code),
         None => canonical_book_by_name(book),

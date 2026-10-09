@@ -4,7 +4,7 @@
 //! "1 Ján 1:1-3 (KJV)". Own file: `tests.rs` carries the #487 length debt.
 
 use super::driver::HostDriver;
-use super::handlers::legacy_translation_reference;
+use super::legacy_reference::legacy_translation_reference;
 use super::{BibleUpdate, ResolumeConnectionSnapshot, CONNECT_TIMEOUT};
 use chrono::Utc;
 use presenter_core::{

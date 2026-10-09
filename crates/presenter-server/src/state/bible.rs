@@ -588,28 +588,40 @@ impl AppState {
     }
 
     /// The book name `translation_code` uses for `reference`'s book, read from
-    /// the passage's first verse (one cheap lookup); `None` when unreadable.
+    /// the passage's first verse (one cheap local lookup); `None` when
+    /// unreadable. A remote translation names its books like its structure
+    /// translation (#826), so that one is read — never an API request.
     async fn first_verse_book(
         &self,
         translation_code: &str,
         reference: &BibleReference,
         book_code: Option<&str>,
     ) -> Option<String> {
+        let source = crate::bible_remote::structure_source(translation_code);
         let first = self
             .bible_passage_range(
-                translation_code,
+                source,
                 reference.book.as_str(),
                 book_code,
                 reference.chapter,
                 reference.verse_start,
                 reference.verse_start,
             )
-            .await
-            .ok()?;
-        first
-            .into_iter()
-            .next()
-            .map(|passage| passage.reference.book)
+            .await;
+        match first {
+            Ok(passages) => passages
+                .into_iter()
+                .next()
+                .map(|passage| passage.reference.book),
+            Err(err) => {
+                tracing::warn!(
+                    translation = source,
+                    error = %err,
+                    "secondary book name unreadable — the translate reference keeps the main name"
+                );
+                None
+            }
+        }
     }
 
     /// Trigger a Bible slide using the single-source-of-truth output.
@@ -727,12 +739,11 @@ impl AppState {
 }
 
 /// The canonical book code to look a SECONDARY translation up by: the
-/// reference's own code, else the code of its (main-language) book name.
+/// reference's own code (a blank one counts as none), else the code of its
+/// main-language book name — the same resolution as the #826 dispatch.
 fn secondary_book_code(reference: &BibleReference) -> Option<String> {
-    reference.book_code.clone().or_else(|| {
-        presenter_core::bible::canonical_book_by_name(&reference.book)
-            .map(|book| book.code.to_string())
-    })
+    super::bible_source::canonical_book(&reference.book, reference.book_code.as_deref())
+        .map(|book| book.code.to_string())
 }
 
 /// Verses as `"N. text"` paragraphs separated by a blank line — the legacy
