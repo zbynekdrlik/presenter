@@ -43,6 +43,8 @@ use crate::state::AppState;
 mod browser_check;
 pub(crate) use browser_check::check_browser_loadable;
 
+mod weight;
+
 /// Test-only sfnt byte surgery deriving the broken-font fixtures from the OFL
 /// fixture (#778 browser-sanitiser check) — shared by the unit + router tests.
 #[cfg(test)]
@@ -429,8 +431,10 @@ mod tests {
         // The committed OFL fixture font (tests/e2e/fixtures) doubles as the Rust
         // metadata-parse fixture — one licence-clean font for both test layers.
         let bytes = include_bytes!("../../../../tests/e2e/fixtures/fonts/Gruppo-Regular.ttf");
-        let meta = parse_font_metadata(bytes).expect("fixture parses");
+        let meta = parse_font_metadata(bytes, "Gruppo-Regular.ttf").expect("fixture parses");
         assert_eq!(meta.family, "Gruppo", "fixture family parsed: {meta:?}");
+        assert_eq!(meta.weight, 400, "OS/2 400 + style Regular: {meta:?}");
+        assert_eq!(meta.style_name.as_deref(), Some("Regular"));
         assert!(
             !meta.family.trim().is_empty(),
             "fixture has a family name: {meta:?}"
@@ -444,7 +448,7 @@ mod tests {
 
     #[test]
     fn parse_font_metadata_rejects_non_font_bytes() {
-        assert!(parse_font_metadata(b"this is definitely not a font").is_err());
+        assert!(parse_font_metadata(b"this is definitely not a font", "x.ttf").is_err());
     }
 
     #[tokio::test]
@@ -568,5 +572,218 @@ mod tests {
         assert!(cache.first_file_problem("aa"), "first report warns");
         assert!(!cache.first_file_problem("aa"), "repeat stays quiet");
         assert!(cache.first_file_problem("bb"), "another font warns");
+    }
+
+    // ---- #830: weight + italic from the style name -------------------------
+
+    const SUBFAMILY: u16 = 2;
+    const FULL_NAME: u16 = 4;
+    const TYPO_FAMILY: u16 = 16;
+    const TYPO_SUBFAMILY: u16 = 17;
+
+    /// A face of `family` derived from the OFL fixture, styled `style` in name
+    /// 17 while its OS/2 weight stays the default 400 — the Nexa mislabelling.
+    fn mislabelled_face(family: &str, style: &str) -> Vec<u8> {
+        use crate::state::stream_fonts::test_fonts::{with_names, GRUPPO_TTF};
+        with_names(
+            GRUPPO_TTF,
+            &[(TYPO_FAMILY, family), (TYPO_SUBFAMILY, style)],
+        )
+    }
+
+    #[test]
+    fn parse_font_metadata_reads_the_weight_from_a_mislabelled_style_name() {
+        for (style, weight) in [
+            ("Light", 300),
+            ("XBold", 800),
+            ("Heavy", 900),
+            ("Black", 900),
+        ] {
+            let meta = parse_font_metadata(&mislabelled_face("Parse830", style), "upload.ttf")
+                .expect("derived face parses");
+            assert_eq!(meta.family, "Parse830", "{style}");
+            assert_eq!(meta.weight, weight, "{style}");
+            assert_eq!(meta.style_name.as_deref(), Some(style));
+        }
+    }
+
+    #[test]
+    fn parse_font_metadata_leaves_an_os2_correct_face_alone() {
+        use crate::state::stream_fonts::test_fonts::with_os2_weight;
+        let bytes = with_os2_weight(&mislabelled_face("Parse830", "Black"), 300);
+        let meta = parse_font_metadata(&bytes, "Parse830-Black.ttf").unwrap();
+        assert_eq!(meta.weight, 300, "a non-default OS/2 weight is trusted");
+    }
+
+    #[test]
+    fn parse_font_metadata_falls_back_to_the_full_name_then_the_filename() {
+        use crate::state::stream_fonts::test_fonts::{with_names, GRUPPO_TTF};
+        let full = with_names(
+            GRUPPO_TTF,
+            &[(SUBFAMILY, "Italic"), (FULL_NAME, "Gruppo Light Italic")],
+        );
+        assert_eq!(
+            parse_font_metadata(&full, "upload.ttf").unwrap().weight,
+            300
+        );
+        let plain = with_names(
+            GRUPPO_TTF,
+            &[(SUBFAMILY, "Italic"), (FULL_NAME, "Gruppo Italic")],
+        );
+        assert_eq!(
+            parse_font_metadata(&plain, "Gruppo-Heavy-Italic.ttf")
+                .unwrap()
+                .weight,
+            900
+        );
+        assert_eq!(
+            parse_font_metadata(&plain, "upload.ttf").unwrap().weight,
+            400
+        );
+    }
+
+    #[test]
+    fn parse_font_metadata_reads_italic_from_the_flags_or_the_style_name() {
+        use crate::state::stream_fonts::test_fonts::{with_names, with_os2_italic, GRUPPO_TTF};
+        let flagged = with_os2_italic(&mislabelled_face("Parse830", "Black Italic"));
+        let meta = parse_font_metadata(&flagged, "x.ttf").unwrap();
+        assert!(meta.italic, "fsSelection italic: {meta:?}");
+        assert_eq!(meta.weight, 900);
+        // The name says Italic while the flags do not: still an italic face.
+        let named = with_names(GRUPPO_TTF, &[(SUBFAMILY, "Italic")]);
+        assert!(parse_font_metadata(&named, "x.ttf").unwrap().italic);
+        assert!(!parse_font_metadata(GRUPPO_TTF, "x.ttf").unwrap().italic);
+    }
+
+    #[test]
+    fn derived_faces_stay_browser_loadable() {
+        use crate::state::stream_fonts::test_fonts::{with_os2_italic, with_os2_weight};
+        // The fixture surgery must not add an OTS defect of its own.
+        let face = with_os2_italic(&with_os2_weight(
+            &mislabelled_face("Parse830", "Black Italic"),
+            400,
+        ));
+        assert_eq!(check_browser_loadable(&face), Ok(()));
+    }
+
+    async fn rederive_state() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = AppState::in_memory().await.unwrap();
+        state.set_stream_assets_dir(tmp.path().join("stream-assets"));
+        (state, tmp)
+    }
+
+    /// Store `bytes` as a face uploaded before #830: row metadata from the
+    /// OS/2 table alone (weight 400, upright), file on disk.
+    async fn seed_old_face(
+        state: &AppState,
+        family: &str,
+        style: &str,
+        bytes: &[u8],
+    ) -> StreamFont {
+        let sha = crate::state::stream_assets::sha256_hex(bytes);
+        state.font_store().store(&sha, "ttf", bytes).await.unwrap();
+        state
+            .repository()
+            .insert_or_get_stream_font(presenter_persistence::NewStreamFont {
+                sha256: sha,
+                original_filename: format!("{family}-{style}.ttf"),
+                family: family.to_string(),
+                weight: 400,
+                italic: false,
+                format: "ttf".to_string(),
+                size_bytes: bytes.len() as i64,
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn stored(state: &AppState, font: &StreamFont) -> (u16, bool) {
+        let row = state.repository().get_stream_font(font.id).await.unwrap();
+        (row.weight, row.italic)
+    }
+
+    #[tokio::test]
+    async fn rederive_fixes_stored_mislabelled_faces_and_is_idempotent() {
+        let (state, _tmp) = rederive_state().await;
+        let family = "Rederive830";
+        let light =
+            seed_old_face(&state, family, "Light", &mislabelled_face(family, "Light")).await;
+        let regular = seed_old_face(
+            &state,
+            family,
+            "Regular",
+            &mislabelled_face(family, "Regular"),
+        )
+        .await;
+        // Italic only by name (flags upright): the old row says upright.
+        let light_italic = seed_old_face(
+            &state,
+            family,
+            "LightItalic",
+            &mislabelled_face(family, "Light Italic"),
+        )
+        .await;
+
+        let changed = state.rederive_stream_font_faces().await.unwrap();
+        assert!(changed >= 2, "both mislabelled faces re-derived: {changed}");
+        assert_eq!(stored(&state, &light).await, (300, false));
+        assert_eq!(
+            stored(&state, &regular).await,
+            (400, false),
+            "already right"
+        );
+        assert_eq!(stored(&state, &light_italic).await, (300, true));
+
+        assert_eq!(
+            state.rederive_stream_font_family(family).await.unwrap(),
+            0,
+            "a second pass changes nothing"
+        );
+        assert_eq!(stored(&state, &light).await, (300, false));
+    }
+
+    #[tokio::test]
+    async fn rederive_moves_heavy_below_black_in_its_family() {
+        let (state, _tmp) = rederive_state().await;
+        // Nexa's shape: XBold, Heavy and Black all stored at 400.
+        let nexa = "Pair830";
+        let xbold = seed_old_face(&state, nexa, "XBold", &mislabelled_face(nexa, "XBold")).await;
+        let heavy = seed_old_face(&state, nexa, "Heavy", &mislabelled_face(nexa, "Heavy")).await;
+        let black = seed_old_face(&state, nexa, "Black", &mislabelled_face(nexa, "Black")).await;
+        // Heavy + Black without an 800 face.
+        let duo = "Duo830";
+        let duo_heavy = seed_old_face(&state, duo, "Heavy", &mislabelled_face(duo, "Heavy")).await;
+        let duo_black = seed_old_face(&state, duo, "Black", &mislabelled_face(duo, "Black")).await;
+
+        state.rederive_stream_font_faces().await.unwrap();
+        assert_eq!(stored(&state, &xbold).await.0, 800);
+        assert_eq!(stored(&state, &heavy).await.0, 850, "800 is XBold's");
+        assert_eq!(stored(&state, &black).await.0, 900);
+        assert_eq!(stored(&state, &duo_heavy).await.0, 800);
+        assert_eq!(stored(&state, &duo_black).await.0, 900);
+    }
+
+    #[tokio::test]
+    async fn rederive_skips_a_face_whose_file_is_missing() {
+        let (state, _tmp) = rederive_state().await;
+        // A row whose bytes are not on disk (never stored): its filename names
+        // a Black face, but nothing can be read, so the row stays as it is.
+        let bytes = mislabelled_face("Missing830", "Black");
+        let row = state
+            .repository()
+            .insert_or_get_stream_font(presenter_persistence::NewStreamFont {
+                sha256: crate::state::stream_assets::sha256_hex(&bytes),
+                original_filename: "Missing830-Black.ttf".to_string(),
+                family: "Missing830".to_string(),
+                weight: 400,
+                italic: false,
+                format: "ttf".to_string(),
+                size_bytes: bytes.len() as i64,
+            })
+            .await
+            .unwrap();
+        state.rederive_stream_font_faces().await.unwrap();
+        assert_eq!(stored(&state, &row).await, (400, false));
     }
 }

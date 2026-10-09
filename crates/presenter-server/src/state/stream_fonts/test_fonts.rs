@@ -10,6 +10,14 @@
 //! sfnt layout used here: a 12-byte header (`numTables` at byte 4), then one
 //! 16-byte record per table: `tag[4] checksum[4] offset[4] length[4]` (all
 //! big-endian). OTS ignores checksums, so a patched font needs no re-checksum.
+//!
+//! The #830 helpers derive the FACES of a test family the same way: rename the
+//! style in the `name` table ([`with_names`]), set the `OS/2` weight
+//! ([`with_os2_weight`]) or flag the face italic ([`with_os2_italic`]).
+
+use std::collections::BTreeMap;
+
+use read_fonts::{FontRef, TableProvider};
 
 /// The committed OFL fixture font (family "Gruppo"; `OS/2` version 4, 96 bytes).
 pub(crate) const GRUPPO_TTF: &[u8] =
@@ -70,4 +78,91 @@ pub(crate) fn with_table_renamed(font: &[u8], from: &[u8; 4], to: &[u8; 4]) -> V
     let at = record_pos(font, from);
     out[at..at + 4].copy_from_slice(to);
     out
+}
+
+/// Copy of `font` whose `OS/2` `usWeightClass` (bytes 4..6) is `weight`.
+pub(crate) fn with_os2_weight(font: &[u8], weight: u16) -> Vec<u8> {
+    let mut out = font.to_vec();
+    let at = table_offset(font, b"OS/2") as usize + 4;
+    out[at..at + 2].copy_from_slice(&weight.to_be_bytes());
+    out
+}
+
+/// Copy of `font` flagged italic in `OS/2` `fsSelection` (bytes 62..64): the
+/// ITALIC bit set and the REGULAR bit cleared, as a real italic face has it.
+pub(crate) fn with_os2_italic(font: &[u8]) -> Vec<u8> {
+    let mut out = font.to_vec();
+    let at = table_offset(font, b"OS/2") as usize + 62;
+    let flags = u16::from_be_bytes([out[at], out[at + 1]]);
+    let flags = (flags | 0x0001) & !0x0040;
+    out[at..at + 2].copy_from_slice(&flags.to_be_bytes());
+    out
+}
+
+/// Copy of `font` whose `name` table carries `names` (name id, text). Each pair
+/// replaces that id's string; every other Unicode/Windows name is kept.
+///
+/// The rebuilt table (format 0, Windows Unicode-BMP en-US records sorted by id)
+/// is APPENDED at a 4-byte aligned offset and the `name` record is repointed at
+/// it. The old table stays behind as an unused gap, which OTS accepts (it only
+/// checks alignment, bounds and overlap), so no other table moves.
+pub(crate) fn with_names(font: &[u8], names: &[(u16, &str)]) -> Vec<u8> {
+    let mut strings = existing_names(font);
+    for &(id, text) in names {
+        strings.insert(id, text.to_string());
+    }
+    let table = build_name_table(&strings);
+    let mut out = font.to_vec();
+    while out.len() % 4 != 0 {
+        out.push(0);
+    }
+    let offset = u32::try_from(out.len()).expect("fixture size fits u32");
+    let length = u32::try_from(table.len()).expect("name table size fits u32");
+    out.extend_from_slice(&table);
+    let at = record_pos(font, b"name");
+    out[at + 8..at + 12].copy_from_slice(&offset.to_be_bytes());
+    out[at + 12..at + 16].copy_from_slice(&length.to_be_bytes());
+    out
+}
+
+/// The font's Unicode (0) / Windows (3) names by id, first record per id.
+fn existing_names(font: &[u8]) -> BTreeMap<u16, String> {
+    let font = FontRef::new(font).expect("fixture parses");
+    let name = font.name().expect("fixture has a name table");
+    let data = name.string_data();
+    let mut out = BTreeMap::new();
+    for record in name.name_record() {
+        if !matches!(record.platform_id(), 0 | 3) {
+            continue;
+        }
+        if let Ok(text) = record.string(data) {
+            out.entry(record.name_id().to_u16())
+                .or_insert_with(|| text.to_string());
+        }
+    }
+    out
+}
+
+/// A format-0 `name` table: one Windows (3) / Unicode BMP (1) / en-US (0x0409)
+/// record per id, UTF-16BE strings.
+fn build_name_table(strings: &BTreeMap<u16, String>) -> Vec<u8> {
+    let count = u16::try_from(strings.len()).expect("name count fits u16");
+    let mut records = Vec::new();
+    let mut storage: Vec<u8> = Vec::new();
+    for (&id, text) in strings {
+        let encoded: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let length = u16::try_from(encoded.len()).expect("name length fits u16");
+        let offset = u16::try_from(storage.len()).expect("name storage fits u16");
+        for field in [3u16, 1, 0x0409, id, length, offset] {
+            records.extend_from_slice(&field.to_be_bytes());
+        }
+        storage.extend_from_slice(&encoded);
+    }
+    let mut table = Vec::new();
+    table.extend_from_slice(&0u16.to_be_bytes());
+    table.extend_from_slice(&count.to_be_bytes());
+    table.extend_from_slice(&(6 + 12 * count).to_be_bytes());
+    table.extend_from_slice(&records);
+    table.extend_from_slice(&storage);
+    table
 }
