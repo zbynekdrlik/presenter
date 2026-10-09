@@ -297,9 +297,9 @@ a `switch_output` clobber. Rules:
 - `close_panel()` is the RAW reset, with no question. Call it only after the caller has already
   decided: `switch_output` after its guard, and `delete_scene` after the delete was confirmed.
   Never wire it to a button.
-- A declined output switch leaves `output_slug` unchanged, so `prop:value` never re-fires and the
-  `<select>` would keep showing the rejected option. `on_output_change` (in `output_paths.rs`)
-  sets it back to `ctx.slug()` by hand.
+- A declined output switch leaves `output_slug` unchanged, so no option's `prop:selected` re-fires
+  and the `<select>` would keep showing the rejected option. `on_output_change` (in
+  `output_paths.rs`) sets it back to `ctx.slug()` by hand.
 - `ctx.prop_error` is `RwSignal<Option<PropError>>`. `PropError { element_id, message }` is in
   `prop_error.rs` (pure + host-tested). `save_props` tags a failed save with the element it saved
   (`set_prop_error`), and the form shows it only when `message_for(err, selected_element)`
@@ -320,3 +320,75 @@ a `switch_output` clobber. Rules:
 - Dialog handling in E2E: an un-handled `confirm()` is auto-DISMISSED by Playwright, which
   silently aborts a guarded action. Arm `answerNextDialog(page, accept)` before every click that
   can meet a dirty draft, and assert the question text.
+
+## A `<select>` fed by an async list: `prop:selected` on each OPTION, never `prop:value` (#827)
+`prop:value` on the `<select>` re-runs only when the SLUG changes, never when the options arrive.
+The options come later (`GET /stream/api/outputs` lands after the def), so the one value applied
+to the still-empty select matched nothing. When the options
+rendered, the browser picked the FIRST one, while the editor edited another output (PP:
+"Moderátor" shown, "stream" scenes edited). `OutputSelect` now sets
+`prop:selected = (slug == ctx.output_slug)` on every option. Each option is created already in the
+right state and follows every later switch, whatever order the list and the def arrive in. A slug
+missing from the list (a deleted output, a stale bookmark) switches to the first listed output
+through `switch_output`. `output_paths::fallback_output` (pure, host-tested) decides that.
+E2E: gate the page's `**/stream/api/outputs` with `page.route` so the def lands first. The glob
+matches only that exact path, not `/outputs/{slug}/…`.
+
+## Scény | Menovky | Písma tabs (#829): panels stay MOUNTED, URL params are merged
+- `editor_tabs.rs` owns `EditorTab` (ids `scenes|nameplates|fonts`), `initial_tab()` (`?tab=` →
+  localStorage `stream-editor-tab` → Scény), `ctx.select_tab()`, `EditorTabs` and `TabPanel`.
+  `TabPanel` only toggles `data-active`, and CSS `display:none` hides the inactive panel. Never
+  unmount a panel: the element draft and a half-typed nameplate must survive a switch, and a
+  switch must never touch the dirty-draft guard or the selection ticket.
+- Any editor URL param goes through `crate::utils::window::replace_url_param(name, value)`. It
+  sets one param and keeps the others plus the hash (`query_with_param` is pure and host-tested).
+  Before #829, `mirror_output_to_url` replaced the WHOLE query, which would drop `?tab=`. The page
+  also mirrors the tab ON MOUNT (`mirror_tab_to_url`), so a tab restored from localStorage is in
+  the URL too.
+- The two editor keys `stream-editor-output` / `stream-editor-tab` are RAW localStorage values (no
+  `presenter:` prefix, no JSON). The design names them that way, and stored values already use
+  the output key. Both go through `output_paths::{read_stored, write_stored}`. Any NEW per-browser
+  pref uses the shared `crate::state::session::{get,set}_persistent` instead.
+- E2E: the scene body `[data-role="stream-editor"]` is VISIBLE only on the Scény tab. A spec that
+  reloads into another tab must wait for `[data-role="stream-editor-tabs"]` instead. Every test
+  gets a fresh context, so localStorage never leaks a tab between tests. The font upload panel
+  sits behind `[data-role="stream-editor-tab"][data-tab="fonts"]` (`stream-fonts.spec.ts`).
+- „Prehrať" (nameplate preview) plays in the Menovky tab's OWN preview,
+  `[data-role="stream-nameplate-preview-frame"]`, not in the Scény workspace preview, which is
+  hidden while Menovky is open.
+  - `nameplate_preview_src` forces every lower-third scene on: overlays via `overlays=`, a base via
+    `scene=`.
+  - The frame is mounted only while Menovky is shown and a lower third exists, because an output
+    page is a full live client.
+  - Its `src` is a Memo, so a def refetch never reloads it mid-animation.
+  - Preview mode ignores the live plate feed AND the server auto-hide. „Skryť" therefore also posts
+    a clear (`clear_nameplate_preview`), or a played plate would stay on the preview forever.
+  - A Prehrať clicked while the frame is still booting (just after opening the tab) is dropped, for
+    the operator too. It is deliberately not replayed on load, because Prehrať is a momentary
+    action. E2E: wait for the frame's `body[data-wasm-ready]` and a `stream-element-lower-third`
+    before clicking.
+  - The box hook is `stream-nameplate-preview-box`. `stream-nameplate-preview` stays the row's
+    Prehrať button.
+  - Both editor previews share `editor_preview::{preview_base, post_to_frame}`.
+- Phone width:
+  - the header and the tab bar `flex-wrap`;
+  - the font `<input type=file>` gets `max-width:100%` (its ~300 px intrinsic width overflowed
+    320 px);
+  - at ≤480 px `.stream-editor__panel` / `__preview` drop their 20rem `min-width`.
+  - All the ≤480 px rules sit in ONE `@media` block at the END of `stream_editor.css`. It must
+    stay last: same-specificity base rules after it would win.
+  - E2E: measure `scrollWidth - clientWidth` on each tab AND with a scene's element form open.
+
+## Slovak quotes in a TS string: „…" closes on an ASCII `"` (#829)
+The Slovak low-high pair „Prehrať" ends in a plain ASCII `"`. Inside a `"…"` test title it ends
+the literal early, and the e2e `tsc` fails with TS1005. Do not type the pair inside double-quoted
+TS strings: write the word without quotes, or use a backtick/single-quoted string. Run
+`node ../../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` before EVERY spec commit.
+
+## Content-transition control = three radios (#834)
+`TransitionFields` offers Strih / Prelínať (crossfade) / Prelínať cez prázdno. The radios are
+`stream-transition-cut`, `stream-transition-fade` and `stream-transition-fade-through`, and they
+share one `name`, which is safe because only one property form is mounted. The crossfade radio
+kept the old checkbox's `data-role`, so `.check()` in older specs still works; `.uncheck()` on a
+radio would throw. `transition_choice.rs` (pure) carries the duration between the two fades. A
+cut starts at `STREAM_DEFAULT_FADE_MS`.

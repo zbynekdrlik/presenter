@@ -24,7 +24,7 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
     let iframe_ref = NodeRef::<leptos::html::Iframe>::new();
 
     let src = move || {
-        let base = format!("/stream/{}?preview=1", ctx.output_slug.get());
+        let base = preview_base(&ctx.output_slug.get());
         if live.get() {
             base
         } else {
@@ -102,22 +102,36 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
     }
 }
 
-/// Post a serialized draft message into the preview iframe's `contentWindow`
-/// (same-origin). No-op on the host (no browser).
+/// The output page in preview mode (`/stream/{slug}?preview=1`) — the base URL
+/// of every editor preview iframe (the scene preview here, the Menovky preview
+/// in `editor_nameplates.rs`, #829).
+pub(super) fn preview_base(slug: &str) -> String {
+    format!("/stream/{slug}?preview=1")
+}
+
+/// Post a serialized message into a preview iframe's `contentWindow`, scoped to
+/// our own origin (the output page's listeners check it). Shared by the draft
+/// push here and the nameplate preview (#829).
 #[cfg(target_arch = "wasm32")]
-fn push_draft(iframe_ref: NodeRef<leptos::html::Iframe>, json: String) {
+pub(super) fn post_to_frame(iframe: &leptos::web_sys::HtmlIFrameElement, json: &str) {
     use leptos::wasm_bindgen::JsValue;
 
-    let Some(iframe) = iframe_ref.get_untracked() else {
-        return;
-    };
     let Some(win) = iframe.content_window() else {
         return;
     };
     let origin = leptos::web_sys::window()
         .and_then(|w| w.location().origin().ok())
         .unwrap_or_else(|| "*".to_string());
-    let _ = win.post_message(&JsValue::from_str(&json), &origin);
+    let _ = win.post_message(&JsValue::from_str(json), &origin);
+}
+
+/// Post a serialized draft message into the preview iframe (same-origin).
+/// No-op on the host (no browser).
+#[cfg(target_arch = "wasm32")]
+fn push_draft(iframe_ref: NodeRef<leptos::html::Iframe>, json: String) {
+    if let Some(iframe) = iframe_ref.get_untracked() {
+        post_to_frame(&iframe, &json);
+    }
 }
 
 /// Host stub (see the wasm version).

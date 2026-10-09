@@ -244,6 +244,13 @@ pub struct TextStyle {
     /// wire back-compatible with pre-#785 stored props.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub letter_spacing_em: Option<f32>,
+    /// Render the text in capitals (#831) — CSS `text-transform: uppercase`,
+    /// so the stored text (song/band names from the library, lyrics, verses)
+    /// keeps its own case. `None` (the editor stores it when unticked) and
+    /// `Some(false)` show the text as stored; a serde default keeps pre-#831
+    /// stored props back-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uppercase: Option<bool>,
 }
 
 /// An optional background box drawn BEHIND a countdown's text (#785) — a
@@ -268,7 +275,16 @@ pub struct TextBox {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ContentTransition {
     Cut,
-    Fade { duration_ms: u32 },
+    /// Crossfade: the old text fades out WHILE the new one fades in.
+    Fade {
+        duration_ms: u32,
+    },
+    /// "Fade through empty" (#834, wire `fade_through`): the old text fades
+    /// out completely over `duration_ms`, and only then is the new text shown
+    /// and faded in over `duration_ms` — the two never overlap.
+    FadeThrough {
+        duration_ms: u32,
+    },
 }
 
 impl Default for ContentTransition {
@@ -865,12 +881,15 @@ fn validate_color(color: &str) -> Result<(), StreamValidationError> {
 }
 
 fn validate_transition(transition: &ContentTransition) -> Result<(), StreamValidationError> {
-    if let ContentTransition::Fade { duration_ms } = transition {
-        if *duration_ms > STREAM_TRANSITION_MAX_MS {
-            return Err(StreamValidationError::TransitionTooLong {
-                value: *duration_ms,
-            });
-        }
+    // A total match (not `if let Fade`), so a future timed variant cannot slip
+    // past the duration cap unvalidated (#834).
+    let duration_ms = match transition {
+        ContentTransition::Cut => return Ok(()),
+        ContentTransition::Fade { duration_ms }
+        | ContentTransition::FadeThrough { duration_ms } => *duration_ms,
+    };
+    if duration_ms > STREAM_TRANSITION_MAX_MS {
+        return Err(StreamValidationError::TransitionTooLong { value: duration_ms });
     }
     Ok(())
 }
@@ -897,6 +916,7 @@ mod tests {
             line_height: 1.2,
             shadow: None,
             letter_spacing_em: None,
+            uppercase: None,
         }
     }
 
@@ -1798,5 +1818,106 @@ mod tests {
         assert!(v.get("nameplateId").is_none());
         let back: ActiveNameplate = serde_json::from_value(v).unwrap();
         assert_eq!(back, active);
+    }
+
+    // ---- #831 TextStyle uppercase -----------------------------------------
+    // Wire-level on purpose: the style must KEEP the operator's `uppercase`
+    // choice through a store → load round trip (an ignored field would be
+    // silently dropped, which is exactly what these tests catch).
+
+    fn wire_text_style(extra: serde_json::Value) -> serde_json::Value {
+        let mut v = json!({
+            "fontFamily": "Inter",
+            "sizePct": 6.0,
+            "color": "#ffffff",
+            "weight": 700,
+            "align": "left",
+            "lineHeight": 1.2
+        });
+        if let (Some(obj), Some(more)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, val) in more {
+                obj.insert(k.clone(), val.clone());
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn text_style_uppercase_survives_a_round_trip() {
+        for flag in [true, false] {
+            let wire = wire_text_style(json!({ "uppercase": flag }));
+            let style: TextStyle = serde_json::from_value(wire).expect("parse");
+            let back = serde_json::to_value(&style).expect("serialize");
+            assert_eq!(back["uppercase"], json!(flag), "uppercase={flag} kept");
+        }
+    }
+
+    #[test]
+    fn text_style_without_uppercase_still_parses_and_omits_the_key() {
+        // A pre-#831 stored style has no `uppercase`: it must still load, and
+        // re-serialise WITHOUT the key (no churn in stored props).
+        let style: TextStyle = serde_json::from_value(wire_text_style(json!({}))).expect("parse");
+        assert!(validate_text_style(&style, &[]).is_ok());
+        let back = serde_json::to_value(&style).expect("serialize");
+        assert!(back.get("uppercase").is_none(), "no uppercase key: {back}");
+    }
+
+    #[test]
+    fn lower_third_lines_carry_uppercase_independently() {
+        // The plate's two lines are separate TextStyles: capitals on the name
+        // line must not leak onto the role line.
+        let mut v = serde_json::to_value(lower_third_props()).expect("serialize");
+        v["primary_style"] = wire_text_style(json!({ "uppercase": true }));
+        v["secondary_style"] = wire_text_style(json!({}));
+        let parsed: StreamElementProps = serde_json::from_value(v).expect("parse");
+        assert!(validate_props(&parsed, &[]).is_ok());
+        let back = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(back["primary_style"]["uppercase"], json!(true));
+        assert!(back["secondary_style"].get("uppercase").is_none());
+    }
+
+    // ---- #834 "fade through empty" content transition ----------------------
+
+    /// Lyrics props whose `content_transition` is the given wire object.
+    fn lyrics_with_transition(transition: serde_json::Value) -> serde_json::Value {
+        let mut v = serde_json::to_value(lyrics_props()).expect("serialize");
+        v["content_transition"] = transition;
+        v
+    }
+
+    #[test]
+    fn fade_through_transition_round_trips() {
+        let wire = json!({ "mode": "fade_through", "duration_ms": 400 });
+        let parsed: ContentTransition = serde_json::from_value(wire.clone()).expect("parse");
+        assert_eq!(serde_json::to_value(&parsed).expect("serialize"), wire);
+        // The existing modes keep their wire shape.
+        for wire in [
+            json!({ "mode": "cut" }),
+            json!({ "mode": "fade", "duration_ms": 250 }),
+        ] {
+            let parsed: ContentTransition = serde_json::from_value(wire.clone()).expect("parse");
+            assert_eq!(serde_json::to_value(&parsed).expect("serialize"), wire);
+        }
+    }
+
+    #[test]
+    fn fade_through_validated_like_fade() {
+        let ok = lyrics_with_transition(json!({ "mode": "fade_through", "duration_ms": 600 }));
+        let ok: StreamElementProps = serde_json::from_value(ok).expect("parse");
+        assert!(validate_props(&ok, &[]).is_ok());
+
+        let at_max = json!({ "mode": "fade_through", "duration_ms": STREAM_TRANSITION_MAX_MS });
+        let at_max: StreamElementProps =
+            serde_json::from_value(lyrics_with_transition(at_max)).expect("parse");
+        assert!(validate_props(&at_max, &[]).is_ok());
+
+        let too_long =
+            json!({ "mode": "fade_through", "duration_ms": STREAM_TRANSITION_MAX_MS + 1 });
+        let too_long: StreamElementProps =
+            serde_json::from_value(lyrics_with_transition(too_long)).expect("parse");
+        assert!(matches!(
+            validate_props(&too_long, &[]),
+            Err(StreamValidationError::TransitionTooLong { .. })
+        ));
     }
 }

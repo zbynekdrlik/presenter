@@ -12,6 +12,9 @@
  *   - CONTENT FADE vs CUT: on a slide change a `Fade` lyrics element shows a
  *     transient TWO-layer overlap (old + new text) then settles to one; a `Cut`
  *     element never shows two layers (instant swap).
+ *   - FADE THROUGH EMPTY (#834): the old text fades out first and the new one is
+ *     mounted only afterwards (never both in the DOM); a burst shows only the
+ *     newest text.
  *   - Zero console errors AND warnings (asserted last).
  *
  * Timing is sampled via in-browser requestAnimationFrame recorders (robust vs
@@ -331,6 +334,124 @@ test.describe("Stream output transitions", () => {
       .locator(`[data-role="stream-element-lyrics"][data-element-id="${lCut}"]`)
       .locator('[data-role="stream-lyrics-main"]');
     await expect(cutMain).toHaveText("How Great Thou Art", { timeout: 5_000 });
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  // #834: "fade through empty" — the old text fades OUT completely, and only
+  // then is the new text mounted and faded IN. The two texts are never in the
+  // DOM together, and a burst of changes shows only the newest pending text.
+  test("fade through empty: old text leaves before the new one is mounted", async ({
+    page,
+    request,
+  }) => {
+    const consoleErrors: string[] = [];
+    attachConsoleErrorCollector(page, consoleErrors);
+
+    const scene = await createScene(request, "FadeThroughScene", "base");
+    const lThrough = await addLyrics(request, scene, 0, { mode: "fade_through", duration_ms: 1_500 });
+    await activateBase(request, scene);
+    await gotoStream(page);
+
+    const element = page.locator(
+      `[data-role="stream-element-lyrics"][data-element-id="${lThrough}"]`,
+    );
+    const main = element.locator('[data-role="stream-lyrics-main"]');
+    const layers = element.locator('[data-role="stream-crossfade-layer"]');
+
+    const songA = await seedSong(request, "Amazing Grace");
+    await triggerSong(request, songA.presentationId, songA.slideId);
+    await expect(main).toHaveText("Amazing Grace", { timeout: 10_000 });
+    await expect(layers).toHaveCount(1, { timeout: 10_000 });
+
+    // Per frame: every layer's text, whether it is leaving, and its opacity.
+    const startLayerRecorder = (ms: number) =>
+      page.evaluate(
+        ({ id, ms }) => {
+          type LayerFrame = { texts: string[]; leaving: boolean[]; opacity: number[] };
+          const rec = { frames: [] as LayerFrame[] };
+          (window as unknown as { __layers: typeof rec }).__layers = rec;
+          const start = performance.now();
+          const tick = () => {
+            const els = Array.from(
+              document.querySelectorAll(
+                `[data-role="stream-element-lyrics"][data-element-id="${id}"] [data-role="stream-crossfade-layer"]`,
+              ),
+            );
+            rec.frames.push({
+              texts: els.map((el) => (el.textContent ?? "").trim()),
+              leaving: els.map((el) => el.classList.contains("stream-crossfade__layer--leaving")),
+              opacity: els.map((el) => parseFloat(getComputedStyle(el).opacity)),
+            });
+            if (performance.now() - start < ms) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        },
+        { id: lThrough, ms },
+      );
+    type LayerFrame = { texts: string[]; leaving: boolean[]; opacity: number[] };
+    const readLayerFrames = () =>
+      page.evaluate(
+        () => (window as unknown as { __layers: { frames: LayerFrame[] } }).__layers.frames,
+      );
+    const opacityOf = (f: LayerFrame, text: string) => f.opacity[f.texts.indexOf(text)];
+
+    // ── A → B: B appears only after A has faded out. ──
+    const songB = await seedSong(request, "How Great Thou Art");
+    await startLayerRecorder(4_500);
+    await triggerSong(request, songB.presentationId, songB.slideId);
+    await page.waitForTimeout(4_500);
+    let frames = await readLayerFrames();
+
+    const both = frames.filter(
+      (f) => f.texts.includes("Amazing Grace") && f.texts.includes("How Great Thou Art"),
+    );
+    expect(both.length, "old and new text are never in the DOM together").toBe(0);
+    expect(
+      frames.some(
+        (f) =>
+          f.texts.includes("Amazing Grace") &&
+          f.leaving[f.texts.indexOf("Amazing Grace")] &&
+          opacityOf(f, "Amazing Grace") > 0.02 &&
+          opacityOf(f, "Amazing Grace") < 0.98,
+      ),
+      "the old text fades out (leaving, opacity mid-fade) while the new one is absent",
+    ).toBeTruthy();
+    const firstNew = frames.findIndex((f) => f.texts.includes("How Great Thou Art"));
+    expect(firstNew, "the new text appears after the fade-out").toBeGreaterThan(0);
+    expect(
+      frames.slice(0, firstNew).some((f) => f.texts.includes("Amazing Grace")),
+      "the old text was still on screen before the new one mounted",
+    ).toBeTruthy();
+    expect(
+      frames.some((f) => {
+        const o = opacityOf(f, "How Great Thou Art");
+        return o > 0.02 && o < 0.98;
+      }),
+      "the new text fades in",
+    ).toBeTruthy();
+    await expect(main).toHaveText("How Great Thou Art", { timeout: 10_000 });
+    await expect(layers).toHaveCount(1, { timeout: 10_000 });
+
+    // ── B → C → D in a burst: only the newest pending text (D) is shown. ──
+    const songC = await seedSong(request, "Blessed Assurance");
+    const songD = await seedSong(request, "Cornerstone");
+    await startLayerRecorder(4_500);
+    await triggerSong(request, songC.presentationId, songC.slideId);
+    await triggerSong(request, songD.presentationId, songD.slideId);
+    await page.waitForTimeout(4_500);
+    frames = await readLayerFrames();
+
+    expect(
+      frames.some((f) => f.texts.includes("Blessed Assurance")),
+      "a text replaced while pending is never mounted",
+    ).toBeFalsy();
+    expect(
+      frames.some((f) => f.texts.includes("How Great Thou Art") && f.texts.includes("Cornerstone")),
+      "the newest text never overlaps the leaving one",
+    ).toBeFalsy();
+    await expect(main).toHaveText("Cornerstone", { timeout: 10_000 });
+    await expect(layers).toHaveCount(1, { timeout: 10_000 });
 
     expect(consoleErrors).toEqual([]);
   });

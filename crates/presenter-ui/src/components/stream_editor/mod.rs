@@ -20,6 +20,7 @@ pub mod editor_nameplates;
 pub mod editor_panel;
 pub mod editor_preview;
 pub mod editor_scenes;
+pub mod editor_tabs;
 pub mod element_form;
 pub mod frame_math;
 pub mod gesture;
@@ -30,6 +31,7 @@ pub mod prop_error;
 pub mod props_access;
 pub mod selection_intent;
 pub mod text_style_form;
+pub mod transition_choice;
 
 use leptos::prelude::*;
 use presenter_core::{
@@ -38,6 +40,7 @@ use presenter_core::{
 };
 use serde::Serialize;
 
+use self::editor_tabs::EditorTab;
 use self::output_paths::{
     active_scene_path, def_path, output_path, overlay_path, scenes_order_path, scenes_path,
 };
@@ -135,6 +138,9 @@ pub struct StreamEditorCtx {
     pub output_slug: RwSignal<String>,
     /// The list of outputs for the header switcher (`GET /stream/api/outputs`).
     pub outputs: RwSignal<Vec<StreamOutputSummary>>,
+    /// The visible editor area — Scény / Menovky / Písma (#829). Every panel
+    /// stays mounted; switching only changes which one is shown.
+    pub tab: RwSignal<EditorTab>,
     pub def: RwSignal<Option<StreamOutputDef>>,
     pub active: RwSignal<StreamShowState>,
     pub toast_msg: RwSignal<String>,
@@ -243,11 +249,23 @@ impl StreamEditorCtx {
     }
 
     /// Re-fetch the output list for the header switcher (mount + after a config
-    /// change that might add/rename an output).
+    /// change that might add/rename an output). #827: when the slug being edited
+    /// is not in the list (deleted / a stale bookmark), switch to the first
+    /// listed output, so the select and the editor agree.
     pub fn reload_outputs(self) {
         leptos::task::spawn_local(async move {
             match crate::api::get_json::<Vec<StreamOutputSummary>>("/stream/api/outputs").await {
-                Ok(list) => self.outputs.set(list),
+                Ok(list) => {
+                    let current = self.output_slug.get_untracked();
+                    let fallback = output_paths::fallback_output(&current, &list);
+                    self.outputs.set(list);
+                    if let Some(slug) = fallback {
+                        leptos::logging::log!(
+                            "stream editor: output {current:?} does not exist; switching to {slug:?}"
+                        );
+                        self.switch_output(slug);
+                    }
+                }
                 Err(e) => self.show_toast(&format!("Načítanie výstupov zlyhalo: {e}"), "error"),
             }
         });

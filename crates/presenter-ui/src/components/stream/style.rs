@@ -52,7 +52,8 @@ pub(super) fn frame_css(frame: &Frame, z: i32) -> String {
 }
 
 /// Typography CSS from a [`TextStyle`]: font family, size (`size_pct` ⇒ `vh`),
-/// color, weight, text-align, line-height, and an optional text-shadow.
+/// color, weight, text-align, line-height, and the optional letter spacing,
+/// capitals (#831) and text-shadow.
 pub(super) fn text_style_css(style: &TextStyle) -> String {
     let mut css = format!(
         "font-family:{};font-size:{}vh;color:{};font-weight:{};text-align:{};line-height:{};",
@@ -65,6 +66,10 @@ pub(super) fn text_style_css(style: &TextStyle) -> String {
     );
     if let Some(letter_spacing) = style.letter_spacing_em {
         css.push_str(&format!("letter-spacing:{letter_spacing}em;"));
+    }
+    // #831: capitals are a RENDER choice — the stored text keeps its case.
+    if style.uppercase == Some(true) {
+        css.push_str("text-transform:uppercase;");
     }
     if let Some(shadow) = &style.shadow {
         css.push_str(&format!(
@@ -103,4 +108,38 @@ pub(super) fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
     Some((r, g, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn style(uppercase: Option<bool>) -> TextStyle {
+        TextStyle {
+            font_family: "Inter".to_string(),
+            size_pct: 6.0,
+            color: "#ffffff".to_string(),
+            weight: 700,
+            align: TextAlign::Left,
+            line_height: 1.2,
+            shadow: None,
+            letter_spacing_em: None,
+            uppercase,
+        }
+    }
+
+    #[test]
+    fn uppercase_renders_text_transform() {
+        assert!(text_style_css(&style(Some(true))).contains("text-transform:uppercase;"));
+    }
+
+    #[test]
+    fn no_uppercase_renders_no_text_transform() {
+        for flag in [None, Some(false)] {
+            assert!(
+                !text_style_css(&style(flag)).contains("text-transform"),
+                "uppercase={flag:?} must leave the text as stored"
+            );
+        }
+    }
 }

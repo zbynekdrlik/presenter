@@ -52,6 +52,9 @@ pub(crate) fn seed_countdown_props() -> StreamElementProps {
                 color: "#0f172a8c".to_string(),
             }),
             letter_spacing_em: Some(0.08),
+            // #831: `None` is skipped on serialisation, so the seeded JSON is
+            // byte-identical to the one this migration always wrote.
+            uppercase: None,
         },
         frame: Frame {
             x_pct: 5.0,

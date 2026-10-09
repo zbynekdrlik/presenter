@@ -6,7 +6,8 @@
 //! E2E scoping: the whole group is a `<fieldset data-role="stream-ts-{role}">`;
 //! inner controls use FIXED data-roles (`stream-ts-font`, `-size`, `-color`,
 //! `-alpha`, `-weight`, `-align-left|center|right`, `-line-height`,
-//! `-shadow-enable`, `-shadow-x|y|blur|color`) selected WITHIN that group, so a
+//! `-letter-spacing`, `-uppercase` (#831), `-shadow-enable`,
+//! `-shadow-x|y|blur|color`) selected WITHIN that group, so a
 //! Verse's three groups stay distinguishable by their wrapper role.
 
 use std::collections::BTreeSet;
@@ -73,6 +74,12 @@ pub fn TextStyleForm(
         read_ts(&draft.get(), ts_slot)
             .and_then(|ts| ts.letter_spacing_em.map(|v| v.to_string()))
             .unwrap_or_default()
+    };
+    // #831: capitals (CSS text-transform) — the stored text keeps its case.
+    let is_uppercase = move || {
+        read_ts(&draft.get(), ts_slot)
+            .map(|ts| ts.uppercase == Some(true))
+            .unwrap_or(false)
     };
     let align_is = move |a: TextAlign| {
         read_ts(&draft.get(), ts_slot)
@@ -309,6 +316,23 @@ pub fn TextStyleForm(
                         }
                     }
                 />
+            </label>
+
+            // #831: render in capitals. Unticked stores `None` (no key on the
+            // wire), so an untouched style is byte-identical to a pre-#831 one.
+            <label class="stream-editor__field stream-editor__field--check">
+                <input
+                    type="checkbox"
+                    data-role="stream-ts-uppercase"
+                    prop:checked=is_uppercase
+                    on:change=move |ev| {
+                        let on = event_target_checked(&ev);
+                        draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
+                            ts.uppercase = if on { Some(true) } else { None };
+                        }));
+                    }
+                />
+                <span>"VEĽKÉ PÍSMENÁ"</span>
             </label>
 
             <label class="stream-editor__field stream-editor__field--check">
