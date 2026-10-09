@@ -228,19 +228,38 @@ mod tests {
     }
 
     #[test]
-    fn a_new_valid_value_or_another_box_clears_the_note() {
+    fn a_new_valid_value_clears_the_note_in_any_box() {
         let shown = hint(RangeField::VerseStart, "Kapitola má len 21 veršov");
         let other_value = bound_verse(2, 5, 5, &[10, 10, 10, 10, 21]);
         assert_eq!(
             next_hint(Some(&shown), RangeField::VerseStart, 21, &other_value),
             None
         );
-        let other_box = bound_chapter(5, 5, &[10; 5]);
+        let other_chapter = bound_chapter(4, 5, &[10; 5]);
         assert_eq!(
-            next_hint(Some(&shown), RangeField::Chapter, 5, &other_box),
+            next_hint(Some(&shown), RangeField::Chapter, 5, &other_chapter),
             None
         );
         assert_eq!(next_hint(None, RangeField::VerseEnd, 3, &other_value), None);
+    }
+
+    #[test]
+    fn another_box_committing_its_unchanged_value_keeps_the_note() {
+        // Verse 99 is clamped to 21 and mirrored into the end box; Enter on
+        // that untouched end box commits 21 again — nothing new was typed,
+        // so the "only 21 verses" note stays (it clears on the NEXT VALID
+        // VALUE, per the #825 design).
+        let shown = hint(RangeField::VerseStart, "Kapitola má len 21 veršov");
+        let unchanged_end = bound_verse(21, 5, 5, &[10, 10, 10, 10, 21]);
+        assert_eq!(
+            next_hint(Some(&shown), RangeField::VerseEnd, 21, &unchanged_end),
+            Some(shown.clone())
+        );
+        let unchanged_chapter = bound_chapter(5, 5, &[10; 5]);
+        assert_eq!(
+            next_hint(Some(&shown), RangeField::Chapter, 5, &unchanged_chapter),
+            Some(shown.clone())
+        );
     }
 
     #[test]

@@ -116,6 +116,11 @@ test("an over-range chapter and verse are clamped with an inline hint; the keybo
   await expect(verseEnd).toHaveValue(String(lastVerses));
   // Enter re-commits the clamped value: the note must survive it.
   await expect(hint).toHaveText(`Kapitola má len ${lastVerses} veršov`);
+  // Enter on the untouched (mirrored) end box commits nothing new — the
+  // note stays until the next valid value.
+  await verseEnd.press("Enter");
+  await expect(verseEnd).toHaveValue(String(lastVerses));
+  await expect(hint).toHaveText(`Kapitola má len ${lastVerses} veršov`);
 
   // The next valid value clears the note.
   await verseStart.fill("2");
