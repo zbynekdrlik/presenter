@@ -320,17 +320,16 @@ fn build_reference_label(
 
 /// The book name for the SECONDARY translation's reference label: the name the
 /// secondary translation itself uses ("1 John" in eng-kjv, while the main
-/// slk-seb says "1 Ján", #824). Without a secondary passage for any main verse
-/// there is nothing better than the main translation's name.
+/// slk-seb says "1 Ján", #824). `None` when the secondary translation has none
+/// of the verses: there is no translation text then, so no label either.
 fn secondary_book_name<'a>(
     main_passages: &[BiblePassage],
     secondary_lookup: &'a HashMap<u16, BiblePassage>,
-    main_book: &'a str,
-) -> &'a str {
+) -> Option<&'a str> {
     main_passages
         .iter()
         .find_map(|p| secondary_lookup.get(&p.reference.verse_start))
-        .map_or(main_book, |p| p.reference.book.as_str())
+        .map(|p| p.reference.book.as_str())
 }
 
 pub(crate) fn compose_bible_slides(
@@ -361,15 +360,15 @@ pub(crate) fn compose_bible_slides(
         full_verse_end,
         &main_translation.code,
     );
-    let translation_reference_label = secondary_translation.map(|t| {
-        let secondary_book = secondary_book_name(main_passages, secondary_lookup, &book);
-        build_reference_label(
+    let translation_reference_label = secondary_translation.and_then(|t| {
+        let secondary_book = secondary_book_name(main_passages, secondary_lookup)?;
+        Some(build_reference_label(
             secondary_book,
             chapter,
             full_verse_start,
             full_verse_end,
             &t.code,
-        )
+        ))
     });
 
     let mut current_main = String::new();
