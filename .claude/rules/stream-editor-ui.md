@@ -322,8 +322,9 @@ a `switch_output` clobber. Rules:
   can meet a dirty draft, and assert the question text.
 
 ## A `<select>` fed by an async list: `prop:selected` on each OPTION, never `prop:value` (#827)
-`prop:value` on the `<select>` runs once at construction. The options come later
-(`GET /stream/api/outputs` lands after the def), so that value matched nothing. When the options
+`prop:value` on the `<select>` re-runs only when the SLUG changes, never when the options arrive.
+The options come later (`GET /stream/api/outputs` lands after the def), so the one value applied
+to the still-empty select matched nothing. When the options
 rendered, the browser picked the FIRST one, while the editor edited another output (PP:
 "Moderátor" shown, "stream" scenes edited). `OutputSelect` now sets
 `prop:selected = (slug == ctx.output_slug)` on every option. Each option is created already in the
@@ -341,19 +342,35 @@ matches only that exact path, not `/outputs/{slug}/…`.
   switch must never touch the dirty-draft guard or the selection ticket.
 - Any editor URL param goes through `crate::utils::window::replace_url_param(name, value)`. It
   sets one param and keeps the others plus the hash (`query_with_param` is pure and host-tested).
-  Before #829, `mirror_output_to_url` replaced the WHOLE query, which would drop `?tab=`.
-- Raw localStorage for the editor: `output_paths::{read_stored, write_stored}` (no `presenter:`
-  prefix, no JSON). Don't add a third copy of the `local_storage()` helper.
+  Before #829, `mirror_output_to_url` replaced the WHOLE query, which would drop `?tab=`. The page
+  also mirrors the tab ON MOUNT (`mirror_tab_to_url`), so a tab restored from localStorage is in
+  the URL too.
+- The two editor keys `stream-editor-output` / `stream-editor-tab` are RAW localStorage values (no
+  `presenter:` prefix, no JSON). The design names them that way, and stored values already use
+  the output key. Both go through `output_paths::{read_stored, write_stored}`. Any NEW per-browser
+  pref uses the shared `crate::state::session::{get,set}_persistent` instead.
 - E2E: the scene body `[data-role="stream-editor"]` is VISIBLE only on the Scény tab. A spec that
   reloads into another tab must wait for `[data-role="stream-editor-tabs"]` instead. Every test
   gets a fresh context, so localStorage never leaks a tab between tests. The font upload panel
   sits behind `[data-role="stream-editor-tab"][data-tab="fonts"]` (`stream-fonts.spec.ts`).
-- Known gap: the Menovky „Prehrať" buttons post into the preview iframe, which lives in the
-  (hidden) Scény tab. The animation plays where the operator cannot see it.
-- Phone width: the header and the tab bar `flex-wrap`, the font `<input type=file>` gets
-  `max-width:100%` (its ~300 px intrinsic width overflowed 320 px), and the ≤480 px gutters sit in
-  ONE `@media` block at the END of `stream_editor.css`. It must stay last: same-specificity base
-  rules after it would win.
+- „Prehrať" (nameplate preview) plays in the Menovky tab's OWN preview,
+  `[data-role="stream-nameplate-preview-frame"]`, not in the Scény workspace preview, which is
+  hidden while Menovky is open.
+  - `nameplate_preview_src` forces every lower-third scene on: overlays via `overlays=`, a base via
+    `scene=`.
+  - The frame is mounted only while Menovky is shown and a lower third exists, because an output
+    page is a full live client.
+  - Its `src` is a Memo, so a def refetch never reloads it mid-animation.
+  - E2E: wait for the frame's `body[data-wasm-ready]` and a `stream-element-lower-third` before
+    clicking Prehrať. An earlier postMessage is lost.
+- Phone width:
+  - the header and the tab bar `flex-wrap`;
+  - the font `<input type=file>` gets `max-width:100%` (its ~300 px intrinsic width overflowed
+    320 px);
+  - at ≤480 px `.stream-editor__panel` / `__preview` drop their 20rem `min-width`.
+  - All the ≤480 px rules sit in ONE `@media` block at the END of `stream_editor.css`. It must
+    stay last: same-specificity base rules after it would win.
+  - E2E: measure `scrollWidth - clientWidth` on each tab AND with a scene's element form open.
 
 ## Content-transition control = three radios (#834)
 `TransitionFields` offers Strih / Prelínať (crossfade) / Prelínať cez prázdno. The radios are
