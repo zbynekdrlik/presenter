@@ -10,7 +10,9 @@
  *    and no "discard changes?" question appears;
  *  - the active tab is remembered (`?tab=` + localStorage) and merges with the
  *    `?output=` param instead of dropping it;
- *  - at 320 px the tabs wrap and the page never scrolls horizontally.
+ *  - at 320 px the tabs wrap and the page never scrolls horizontally, also
+ *    with a scene's workspace open;
+ *  - „Prehrať" on a plate plays it in a preview visible in the Menovky tab.
  *
  * Clean console is asserted last.
  */
@@ -215,24 +217,72 @@ test("#829 the tabs wrap at 320 px and the page never scrolls sideways", async (
   await page.setViewportSize({ width: 320, height: 640 });
   await openEditor(page);
 
+  const sidewaysOverflow = () =>
+    page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
   for (const id of TABS) {
     await tab(page, id).click();
     await expectActiveTab(page, id);
-    const overflow = await page.evaluate(() => ({
-      page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      bar: (() => {
-        const bar = document.querySelector('[data-role="stream-editor-tabs"]') as HTMLElement;
-        return bar.scrollWidth - bar.clientWidth;
-      })(),
-    }));
-    expect(overflow.page, `no horizontal page scroll on the ${id} tab`).toBeLessThanOrEqual(0);
-    expect(overflow.bar, "the tab bar itself does not overflow").toBeLessThanOrEqual(0);
+    const barOverflow = await page.evaluate(() => {
+      const bar = document.querySelector('[data-role="stream-editor-tabs"]') as HTMLElement;
+      return bar.scrollWidth - bar.clientWidth;
+    });
+    expect(await sidewaysOverflow(), `no horizontal page scroll on the ${id} tab`).toBeLessThanOrEqual(0);
+    expect(barOverflow, "the tab bar itself does not overflow").toBeLessThanOrEqual(0);
     for (const t of TABS) {
       const b = await tab(page, t).boundingBox();
       expect(b, `tab ${t} has a box`).toBeTruthy();
       expect(b!.x + b!.width, `tab ${t} fits the 320 px width`).toBeLessThanOrEqual(320);
     }
   }
+
+  // The Scény tab with a scene open and an element's form showing fits too.
+  await tab(page, "scenes").click();
+  await sceneWithSelectedElement(page, "SC_829_Narrow");
+  await expect(page.locator('[data-role="stream-prop-form"]')).toBeVisible();
+  expect(await sidewaysOverflow(), "no horizontal page scroll with the workspace open").toBeLessThanOrEqual(0);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#829 „Prehrať" in the Menovky tab plays the plate in a preview the operator can see", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+  await tab(page, "nameplates").click();
+  await expectActiveTab(page, "nameplates");
+
+  // The output needs a lower third to play a plate on: create the default
+  // nameplate layer when it has none (the button only shows then).
+  const createLayer = page.locator('[data-role="stream-nameplate-create-layer"]');
+  if ((await createLayer.count()) > 0) {
+    await createLayer.click();
+  }
+  const frame = page.locator('[data-role="stream-nameplate-preview-frame"]');
+  await expect(frame).toBeVisible({ timeout: 15_000 });
+  const preview = page.frameLocator('[data-role="stream-nameplate-preview-frame"]');
+  await expect(preview.locator('body[data-wasm-ready="true"]')).toHaveCount(1, { timeout: 30_000 });
+  await expect(preview.locator('[data-role="stream-element-lower-third"]').first()).toBeAttached({
+    timeout: 15_000,
+  });
+
+  // A plate of our own, then „Prehrať" on its row.
+  await page.locator('[data-role="stream-nameplate-new-name"]').fill("Prehrať Test");
+  await page.locator('[data-role="stream-nameplate-new-role"]').fill("hosť");
+  await page.locator('[data-role="stream-nameplate-add-submit"]').click();
+  const row = page.locator('[data-role="stream-nameplate"]').last();
+  await expect(row.locator('[data-role="stream-nameplate-name"]')).toHaveValue("Prehrať Test", {
+    timeout: 15_000,
+  });
+  await row.locator('[data-role="stream-nameplate-preview"]').click();
+
+  await expect(preview.locator('[data-role="stream-lower-third-primary"]').first()).toHaveText(
+    "Prehrať Test",
+    { timeout: 10_000 },
+  );
+  await expect(frame).toBeVisible();
 
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });
