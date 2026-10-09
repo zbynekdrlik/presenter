@@ -17,6 +17,10 @@
  *  - picking Black + Italic renders the OUTPUT text at font-weight 900,
  *    font-style italic, with one `@font-face` per weight/style loaded.
  *
+ * A second test reopens a countdown saved in the uploaded family while the
+ * editor's font list is held back (`page.route`): the family `<select>` must
+ * keep showing the stored family, before and after the late list (#827 rule).
+ *
  * A clean console on both pages is the last assertion.
  */
 import fs from "fs";
@@ -297,4 +301,83 @@ test("#830 every face of a mislabelled family is offered by name; Black Italic r
 
   expect(outputErrors, `output console: ${outputErrors.join(" | ")}`).toEqual([]);
   expect(editorErrors, `editor console: ${editorErrors.join(" | ")}`).toEqual([]);
+});
+
+const FONTS_ROUTE = "**/stream/api/fonts";
+
+/** Upload `faces` straight through the API (an already stored face dedups). */
+async function uploadViaApi(page: Page, faces: FaceFile[]) {
+  for (const f of faces) {
+    const res = await page.request.post(`${baseURL}/stream/fonts`, {
+      multipart: { file: { name: f.name, mimeType: "font/ttf", buffer: f.buffer } },
+    });
+    expect(res.ok(), `upload ${f.name} -> ${res.status()}`).toBeTruthy();
+  }
+}
+
+test("#830 a saved uploaded family stays selected when the font list arrives after the element", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+
+  // A countdown already saved in the uploaded family at its Regular 400 face.
+  // `page.request` is not intercepted by `page.route`.
+  await uploadViaApi(page, FIRST_FACES);
+  const scene = await page.request.post(`${baseURL}/stream/api/outputs/${SLUG}/scenes`, {
+    data: { name: `SC_830_late_${Date.now()}`, kind: "base" },
+  });
+  expect(scene.ok(), `create scene -> ${scene.status()}`).toBeTruthy();
+  const sceneId = String((await scene.json()).id);
+  const created = await page.request.post(`${baseURL}/stream/api/scenes/${sceneId}/elements`, {
+    data: {
+      kind: "countdown",
+      timer_id: 1,
+      style: {
+        fontFamily: FAMILY,
+        sizePct: 10,
+        color: "#ffffff",
+        weight: 400,
+        align: "center",
+        lineHeight: 1.2,
+      },
+      frame: { xPct: 10, yPct: 10, wPct: 50, hPct: 20 },
+    },
+  });
+  expect(created.ok(), `create element -> ${created.status()}`).toBeTruthy();
+  const elementId = String((await created.json()).id);
+
+  // Hold the editor's font list (and the preview's) until the element form is
+  // open, so the options arrive AFTER the draft — the #827 timing.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(FONTS_ROUTE, async (route) => {
+    await gate;
+    await route.continue();
+  });
+
+  await openEditor(page);
+  await openPanel(page, sceneId);
+  await page
+    .locator(
+      `[data-role="stream-element"][data-element-id="${elementId}"] [data-role="stream-element-select"]`,
+    )
+    .click();
+  const group = page.locator('[data-role="stream-ts-countdown"]');
+  const fontSelect = group.locator('[data-role="stream-ts-font"]');
+  await expect(fontSelect).toBeVisible({ timeout: 15_000 });
+
+  // Before the list lands the stored family is still the one shown.
+  await expect(fontSelect).toHaveValue(FAMILY);
+  await expect(fontSelect.locator("option:checked")).toHaveText(`${FAMILY} (nenahraté)`);
+
+  release();
+  // The late list names the family properly and the select still shows it.
+  await expect(fontSelect.locator("option:checked")).toHaveText(FAMILY, { timeout: 15_000 });
+  await expect(fontSelect).toHaveValue(FAMILY);
+  await expect(fontSelect.locator(`option[value="${FAMILY}"]`)).toHaveCount(1);
+  await expect(group.locator('[data-role="stream-ts-weight"]')).toHaveValue("400");
+  await page.unroute(FONTS_ROUTE);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

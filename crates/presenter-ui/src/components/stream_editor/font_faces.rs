@@ -204,4 +204,43 @@ mod tests {
         assert!(!has_italic_face(&fonts, "Gruppo", 400));
         assert!(!has_italic_face(&fonts, "Inter", 700), "built-in family");
     }
+
+    fn families(options: &[FamilyOption]) -> Vec<(&str, &str)> {
+        options
+            .iter()
+            .map(|o| (o.family.as_str(), o.label.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn family_options_list_built_ins_then_uploaded_families_once_each() {
+        let mut fonts = nexa();
+        // An uploaded face named like a built-in family is not listed twice.
+        fonts.push(face("Inter", 400, false, Some("Regular")));
+        let options = family_options(&fonts, "Nexa");
+        let mut expected: Vec<(&str, &str)> =
+            STREAM_FONT_FAMILIES.iter().map(|f| (*f, *f)).collect();
+        expected.extend([("Gruppo", "Gruppo"), ("Nexa", "Nexa")]);
+        assert_eq!(families(&options), expected);
+    }
+
+    #[test]
+    fn a_stored_family_missing_from_the_list_stays_listed() {
+        // The font list has not arrived yet (or the family was deleted): the
+        // select must keep showing the stored family, not its first option.
+        let options = family_options(&[], "Facet830");
+        assert_eq!(
+            options
+                .last()
+                .map(|o| (o.family.as_str(), o.label.as_str())),
+            Some(("Facet830", "Facet830 (nenahraté)"))
+        );
+        assert_eq!(options.len(), STREAM_FONT_FAMILIES.len() + 1);
+        // A built-in or an uploaded family needs no extra option.
+        assert_eq!(
+            family_options(&[], "Inter").len(),
+            STREAM_FONT_FAMILIES.len()
+        );
+        assert_eq!(family_options(&[], "").len(), STREAM_FONT_FAMILIES.len());
+    }
 }
