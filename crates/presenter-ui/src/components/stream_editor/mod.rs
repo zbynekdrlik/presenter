@@ -22,6 +22,7 @@ pub mod editor_preview;
 pub mod editor_scenes;
 pub mod editor_tabs;
 pub mod element_form;
+pub mod font_faces;
 pub mod frame_math;
 pub mod gesture;
 pub mod number_field;

@@ -45,12 +45,15 @@ pub fn ensure_fonts_css_link(version: u64) {
     }
 }
 
-/// Build the CSS font spec (`<weight> 1em "<family>"`) the browser's
-/// `FontFaceSet.load` accepts. Quotes/backslashes are stripped (upload already
-/// rejects them, this is defense in depth).
+/// Build the CSS font spec (`[italic ]<weight> 1em "<family>"`) the browser's
+/// `FontFaceSet.load` accepts. An italic face is named `italic` (#830): without
+/// it `load` would match the upright face, leaving the italic one to fetch
+/// (and flash the fallback) only when a text first uses it. Quotes/backslashes
+/// are stripped (upload already rejects them, this is defense in depth).
 fn face_spec(font: &StreamFont) -> String {
     let family = font.family.replace('"', "").replace('\\', "");
-    format!("{} 1em \"{}\"", font.weight, family)
+    let style = if font.italic { "italic " } else { "" };
+    format!("{style}{} 1em \"{}\"", font.weight, family)
 }
 
 /// Fetch the uploaded faces, preload each one, then flip `ready` true. A 2 s

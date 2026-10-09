@@ -251,6 +251,14 @@ pub struct TextStyle {
     /// stored props back-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uppercase: Option<bool>,
+    /// Render the text in an italic face (#830) — CSS `font-style: italic`.
+    /// An uploaded family serves its italic face at the chosen weight (the
+    /// editor offers the toggle only where one exists); without one the
+    /// browser slants the upright face. `None` (stored when unticked) and
+    /// `Some(false)` render upright; a serde default keeps pre-#830 stored
+    /// props back-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 /// An optional background box drawn BEHIND a countdown's text (#785) — a
@@ -563,6 +571,12 @@ pub struct StreamFont {
     /// On-disk container format: `"ttf"` or `"otf"`.
     pub format: String,
     pub size_bytes: i64,
+    /// The face's own style name (#830): typographic subfamily (name 17), else
+    /// subfamily (name 2), e.g. "Light", "Black Italic". Read from the stored
+    /// bytes when listing (not a DB column); the editor's weight picker labels
+    /// each face with it. `None` when the font names no style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_name: Option<String>,
 }
 
 /// One lower-third **nameplate** (#779) in an output's plate list. A `Person`
@@ -917,6 +931,7 @@ mod tests {
             shadow: None,
             letter_spacing_em: None,
             uppercase: None,
+            italic: None,
         }
     }
 
@@ -1874,6 +1889,39 @@ mod tests {
         let back = serde_json::to_value(&parsed).expect("serialize");
         assert_eq!(back["primary_style"]["uppercase"], json!(true));
         assert!(back["secondary_style"].get("uppercase").is_none());
+    }
+
+    // ---- #830 TextStyle italic ----------------------------------------------
+    // Wire-level for the same reason as #831: an ignored field would silently
+    // drop the operator's italic choice on store → load.
+
+    #[test]
+    fn text_style_italic_survives_a_round_trip() {
+        for flag in [true, false] {
+            let wire = wire_text_style(json!({ "italic": flag }));
+            let style: TextStyle = serde_json::from_value(wire).expect("parse");
+            let back = serde_json::to_value(&style).expect("serialize");
+            assert_eq!(back["italic"], json!(flag), "italic={flag} kept");
+        }
+    }
+
+    #[test]
+    fn text_style_without_italic_still_parses_and_omits_the_key() {
+        // A pre-#830 stored style has no `italic`: it still loads, and an
+        // untouched style serialises byte-identically (no `italic` key).
+        let style: TextStyle = serde_json::from_value(wire_text_style(json!({}))).expect("parse");
+        let back = serde_json::to_value(&style).expect("serialize");
+        assert!(back.get("italic").is_none(), "no italic key: {back}");
+    }
+
+    #[test]
+    fn an_italic_text_style_passes_validation() {
+        let mut v = serde_json::to_value(lower_third_props()).expect("serialize");
+        v["primary_style"] = wire_text_style(json!({ "italic": true }));
+        let parsed: StreamElementProps = serde_json::from_value(v).expect("parse");
+        assert!(validate_props(&parsed, &[]).is_ok());
+        let back = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(back["primary_style"]["italic"], json!(true));
     }
 
     // ---- #834 "fade through empty" content transition ----------------------

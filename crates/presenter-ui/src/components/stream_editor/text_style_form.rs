@@ -5,16 +5,15 @@
 //!
 //! E2E scoping: the whole group is a `<fieldset data-role="stream-ts-{role}">`;
 //! inner controls use FIXED data-roles (`stream-ts-font`, `-size`, `-color`,
-//! `-alpha`, `-weight`, `-align-left|center|right`, `-line-height`,
-//! `-letter-spacing`, `-uppercase` (#831), `-shadow-enable`,
+//! `-alpha`, `-weight`, `-italic` (#830), `-align-left|center|right`,
+//! `-line-height`, `-letter-spacing`, `-uppercase` (#831), `-shadow-enable`,
 //! `-shadow-x|y|blur|color`) selected WITHIN that group, so a
 //! Verse's three groups stay distinguishable by their wrapper role.
 
-use std::collections::BTreeSet;
-
 use leptos::prelude::*;
-use presenter_core::{StreamElementProps, StreamFont, TextAlign, STREAM_FONT_FAMILIES};
+use presenter_core::{StreamElementProps, StreamFont, TextAlign};
 
+use super::font_faces::{family_options, has_italic_face, weight_options};
 use super::props_access::{default_shadow, join_color, read_ts, split_color, with_ts_mut, TsSlot};
 
 /// One labelled `TextStyle` editor bound to `draft` at `ts_slot`.
@@ -33,7 +32,7 @@ pub fn TextStyleForm(
     role: &'static str,
     /// Uploaded web-font faces (#778) — the picker lists their families on top
     /// of the built-in whitelist, and an uploaded family's weight control
-    /// becomes a `<select>` of the weights actually uploaded for it.
+    /// becomes a `<select>` of its faces, named "<style> <weight>" (#830).
     fonts: RwSignal<Vec<StreamFont>>,
 ) -> impl IntoView {
     let group_role = format!("stream-ts-{role}");
@@ -123,42 +122,66 @@ pub fn TextStyleForm(
 
     // Font <option> list = built-in whitelist ∪ uploaded families (#778), each
     // option rendered in its OWN face. Reactive so uploaded families appear once
-    // the async font list loads.
+    // the async font list loads. #830: each option carries `prop:selected` (the
+    // #827 rule — a `prop:value` on the <select> ran before the late list and
+    // left the FIRST family showing), and a stored family the list lacks stays
+    // as "<family> (nenahraté)". The family is a Memo, so typing in any other
+    // field never rebuilds the (long) option list.
+    let current_family = Memo::new(move |_| font());
     let font_options = move || {
-        let mut families: Vec<String> =
-            STREAM_FONT_FAMILIES.iter().map(|f| f.to_string()).collect();
-        let uploaded: BTreeSet<String> = fonts.get().into_iter().map(|f| f.family).collect();
-        for fam in uploaded {
-            if !families.contains(&fam) {
-                families.push(fam);
-            }
-        }
-        families
+        let current = current_family.get();
+        fonts
+            .with(|fs| family_options(fs, &current))
             .into_iter()
-            .map(|fam| {
-                let opt_style = format!("font-family:\"{}\";", fam.replace('"', ""));
-                let label = fam.clone();
-                view! { <option value=fam style=opt_style>{label}</option> }
+            .map(|opt| {
+                let opt_style = format!("font-family:\"{}\";", opt.family.replace('"', ""));
+                let selected = opt.family == current;
+                view! {
+                    <option value=opt.family style=opt_style prop:selected=selected>{opt.label}</option>
+                }
             })
             .collect_view()
     };
 
     // True when the currently-selected family is an uploaded web font (its
-    // weight control becomes a <select> of the uploaded weights).
+    // weight control becomes a <select> of the uploaded faces).
     let is_uploaded_family = move || {
         let fam = font();
-        fonts.get().iter().any(|f| f.family == fam)
+        fonts.with(|fs| fs.iter().any(|f| f.family == fam))
     };
-    // The uploaded weights for the selected family, ascending.
-    let uploaded_weights = move || {
+    let weight_value = move || {
+        read_ts(&draft.get(), ts_slot)
+            .map(|ts| ts.weight)
+            .unwrap_or(400)
+    };
+    // #830: one option per uploaded weight, named by its face ("Black 900").
+    // Each option carries `prop:selected` (the #827 async-list rule), so the
+    // select shows the stored weight whatever order fonts + draft arrive in.
+    let weight_choices = move || {
         let fam = font();
-        let ws: BTreeSet<u16> = fonts
-            .get()
-            .iter()
-            .filter(|f| f.family == fam)
-            .map(|f| f.weight)
-            .collect();
-        ws.into_iter().collect::<Vec<u16>>()
+        let current = weight_value();
+        fonts
+            .with(|fs| weight_options(fs, &fam, current))
+            .into_iter()
+            .map(|opt| {
+                let selected = opt.weight == current;
+                view! {
+                    <option value=opt.weight.to_string() prop:selected=selected>{opt.label}</option>
+                }
+            })
+            .collect_view()
+    };
+    // #830: italic, offered where the family has an italic face at this
+    // weight. A ticked box stays enabled so it can always be unticked.
+    let is_italic = move || {
+        read_ts(&draft.get(), ts_slot)
+            .map(|ts| ts.italic == Some(true))
+            .unwrap_or(false)
+    };
+    let italic_available = move || {
+        let fam = font();
+        let weight = weight_value();
+        fonts.with(|fs| has_italic_face(fs, &fam, weight))
     };
 
     view! {
@@ -169,7 +192,6 @@ pub fn TextStyleForm(
                 <span>"Písmo"</span>
                 <select
                     data-role="stream-ts-font"
-                    prop:value=font
                     on:change=move |ev| {
                         let v = event_target_value(&ev);
                         draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.font_family = v.clone()));
@@ -224,9 +246,9 @@ pub fn TextStyleForm(
 
             <label class="stream-editor__field">
                 <span>"Hrúbka"</span>
-                // #778: an uploaded family limits the weight control to the
-                // weights actually uploaded (a <select>); a built-in family
-                // keeps the free numeric input.
+                // #778/#830: an uploaded family limits the weight control to
+                // its uploaded faces (a <select>, "<style> <weight>"); a
+                // built-in family keeps the free numeric input.
                 <Show
                     when=is_uploaded_family
                     fallback=move || view! {
@@ -244,21 +266,38 @@ pub fn TextStyleForm(
                 >
                     <select
                         data-role="stream-ts-weight"
-                        prop:value=weight
                         on:change=move |ev| {
                             if let Ok(v) = event_target_value(&ev).parse::<u16>() {
                                 draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.weight = v));
                             }
                         }
                     >
-                        {move || {
-                            uploaded_weights()
-                                .into_iter()
-                                .map(|w| view! { <option value=w.to_string()>{w.to_string()}</option> })
-                                .collect_view()
-                        }}
+                        {weight_choices}
                     </select>
                 </Show>
+            </label>
+
+            // #830: italic. Unticked stores `None` (no key on the wire), so an
+            // untouched style is byte-identical to a pre-#830 one.
+            <label
+                class="stream-editor__field stream-editor__field--check"
+                title=move || {
+                    if italic_available() { "" } else { "Toto písmo nemá kurzívu v tejto hrúbke" }
+                }
+            >
+                <input
+                    type="checkbox"
+                    data-role="stream-ts-italic"
+                    prop:checked=is_italic
+                    prop:disabled=move || !italic_available() && !is_italic()
+                    on:change=move |ev| {
+                        let on = event_target_checked(&ev);
+                        draft.update(|p| with_ts_mut(p, ts_slot, |ts| {
+                            ts.italic = if on { Some(true) } else { None };
+                        }));
+                    }
+                />
+                <span>"Kurzíva"</span>
             </label>
 
             <div class="stream-editor__field stream-editor__align">

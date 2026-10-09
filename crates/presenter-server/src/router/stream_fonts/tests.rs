@@ -7,7 +7,7 @@
 
 use crate::router::build_router;
 use crate::state::stream_fonts::test_fonts::{
-    with_os2_version, with_table_length, with_table_renamed,
+    with_names, with_os2_italic, with_os2_version, with_table_length, with_table_renamed,
 };
 use crate::state::AppState;
 use axum::body::Body;
@@ -86,6 +86,7 @@ fn text_style(family: &str) -> TextStyle {
         shadow: None,
         letter_spacing_em: None,
         uppercase: None,
+        italic: None,
     }
 }
 
@@ -561,4 +562,146 @@ async fn stored_font_with_missing_file_is_hidden_from_list_and_css() {
         !css.contains(&format!("/stream/fonts/{}\")", font.id)),
         "no @font-face for a face with no file: {css}"
     );
+}
+
+// ── #830: a family whose files carry the default OS/2 weight ─────────────────
+//
+// Nexa on SNV/PP: Light, Heavy, Black and XBold all declare usWeightClass 400;
+// the real style is only in name 17. Each face must still get its own weight,
+// or `/stream/fonts.css` emits colliding `@font-face` rules. The faces are
+// derived in memory from the OFL fixture (`test_fonts::with_names`).
+
+const TYPO_FAMILY: u16 = 16;
+const TYPO_SUBFAMILY: u16 = 17;
+
+/// A face of `family` styled `style` in name 17, OS/2 left at the default 400.
+fn family_face(family: &str, style: &str) -> Vec<u8> {
+    with_names(
+        FIXTURE_TTF,
+        &[(TYPO_FAMILY, family), (TYPO_SUBFAMILY, style)],
+    )
+}
+
+/// The `@font-face` block of `/stream/fonts.css` that serves font `id`.
+fn css_rule_for(css: &str, id: i64) -> String {
+    let src = format!("url(\"/stream/fonts/{id}\")");
+    css.split("@font-face")
+        .find(|rule| rule.contains(&src))
+        .unwrap_or_else(|| panic!("no @font-face rule for font {id}: {css}"))
+        .to_string()
+}
+
+#[tokio::test]
+async fn a_mislabelled_family_lists_one_weight_per_face() {
+    let (state, _dir) = test_state().await;
+    let family = "Router830";
+    // Heavy is uploaded BEFORE Black: Black's upload must move the stored
+    // Heavy face below it (not only the next restart's re-derive).
+    let faces = [
+        ("Router830-Regular.ttf", family_face(family, "Regular")),
+        ("Router830-Light.ttf", family_face(family, "Light")),
+        ("Router830-Heavy.ttf", family_face(family, "Heavy")),
+        ("Router830-Black.ttf", family_face(family, "Black")),
+        (
+            "Router830-BlackItalic.ttf",
+            with_os2_italic(&family_face(family, "Black Italic")),
+        ),
+    ];
+    let mut ids = Vec::new();
+    for (filename, bytes) in &faces {
+        ids.push(upload(&state, filename, bytes).await.id);
+    }
+
+    let response = get(&state, "/stream/api/fonts").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let listed = body_json(response).await;
+    let mut faces_listed: Vec<(u64, bool, String)> = listed
+        .as_array()
+        .expect("font list is an array")
+        .iter()
+        .filter(|f| f["family"] == family)
+        .map(|f| {
+            (
+                f["weight"].as_u64().expect("weight"),
+                f["italic"].as_bool().expect("italic"),
+                f["styleName"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    faces_listed.sort();
+    assert_eq!(
+        faces_listed,
+        vec![
+            (300, false, "Light".to_string()),
+            (400, false, "Regular".to_string()),
+            (800, false, "Heavy".to_string()),
+            (900, false, "Black".to_string()),
+            (900, true, "Black Italic".to_string()),
+        ],
+        "one distinct weight/style per face, named by its style: {listed}"
+    );
+
+    let css = String::from_utf8(body_bytes(get(&state, "/stream/fonts.css").await).await).unwrap();
+    let expected = [
+        (ids[0], 400, "normal"),
+        (ids[1], 300, "normal"),
+        (ids[2], 800, "normal"),
+        (ids[3], 900, "normal"),
+        (ids[4], 900, "italic"),
+    ];
+    for (id, weight, style) in expected {
+        let rule = css_rule_for(&css, id);
+        assert!(
+            rule.contains(&format!("font-weight: {weight};")),
+            "face {id} served at weight {weight}: {rule}"
+        );
+        assert!(
+            rule.contains(&format!("font-style: {style};")),
+            "face {id} served as {style}: {rule}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn deleting_the_black_face_moves_heavy_back_to_900() {
+    let (state, _dir) = test_state().await;
+    let family = "Drop830";
+    let heavy = upload(&state, "Drop830-Heavy.ttf", &family_face(family, "Heavy")).await;
+    let black = upload(&state, "Drop830-Black.ttf", &family_face(family, "Black")).await;
+    assert_eq!(stored_weight(&state, heavy.id).await, 800, "below Black");
+
+    let response = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/stream/fonts/{}", black.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        stored_weight(&state, heavy.id).await,
+        900,
+        "with no Black face left, Heavy is 900 again"
+    );
+}
+
+async fn stored_weight(state: &AppState, id: i64) -> u16 {
+    state.repository().get_stream_font(id).await.unwrap().weight
+}
+
+#[tokio::test]
+async fn a_heavy_face_uploaded_after_black_answers_with_its_moved_weight() {
+    let (state, _dir) = test_state().await;
+    let family = "Late830";
+    let black = upload(&state, "Late830-Black.ttf", &family_face(family, "Black")).await;
+    let heavy = upload(&state, "Late830-Heavy.ttf", &family_face(family, "Heavy")).await;
+    assert_eq!(black.weight, 900);
+    assert_eq!(
+        heavy.weight, 800,
+        "the upload answers with the re-derived row"
+    );
+    assert_eq!(heavy.style_name.as_deref(), Some("Heavy"));
 }
