@@ -396,6 +396,17 @@ pub fn validate_bible_slide(
 mod tests {
     use super::*;
 
+    // -- Rule 5: the length counts characters (#828) --
+
+    #[test]
+    fn length_counts_characters_not_bytes() {
+        // 29 characters but 51 UTF-8 bytes (Slovak diacritics are 2 bytes):
+        // within a 30-character limit, as the composer packs it.
+        let main = "1. čšžťďňľôäáé\n2. ČŠŽŤĎŇĽÔÄÁÉ";
+        assert_eq!(main.chars().count(), 29);
+        assert!(validate_bible_slide(main, "Ján 1:1-2 (SEB)", 30).is_ok());
+    }
+
     // -- Rule 1: reference format --
 
     #[test]

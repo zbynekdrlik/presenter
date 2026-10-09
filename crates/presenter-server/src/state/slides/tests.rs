@@ -436,6 +436,16 @@ fn compose_items_second_verse_one_over_limit_splits_to_two_slides() {
     assert_eq!(slides[1].main, "2. bbbbbbbb");
 }
 
+/// #828: the AI composer counts CHARACTERS like the live composer: two
+/// verses of 29 characters (51 UTF-8 bytes) stay on one slide at limit 30.
+#[test]
+fn compose_items_counts_diacritics_as_one_character() {
+    let items = vec![verse(1, "čšžťďňľôäáé"), verse(2, "ČŠŽŤĎŇĽÔÄÁÉ")];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    assert_eq!(slides.len(), 1);
+    assert_eq!(slides[0].main, "1. čšžťďňľôäáé\n2. ČŠŽŤĎŇĽÔÄÁÉ");
+}
+
 #[test]
 fn compose_items_emphasis_between_verses_breaks_slide() {
     let items = vec![
