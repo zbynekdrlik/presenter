@@ -175,7 +175,11 @@ test("#827 a remembered output that no longer exists falls back to the first lis
     await expect(sceneCard(page, firstScenes[0].id)).toBeVisible();
   }
 
-  expect(staleNotFound.length, "the stale output's requests were refused").toBeGreaterThan(0);
+  // Exactly the two output-scoped cold-load reads 404: the def and the plate
+  // list (`nameplates/active` is in-memory state and answers 200 null).
+  await expect
+    .poll(() => staleNotFound.length, { message: staleNotFound.join(" | ") })
+    .toBe(2);
   expect(
     staleNotFound.every((line) => /status of 404\b/.test(line)),
     `only 404s for the stale output: ${staleNotFound.join(" | ")}`,
