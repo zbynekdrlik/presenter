@@ -379,6 +379,12 @@ matches only that exact path, not `/outputs/{slug}/…`.
     stay last: same-specificity base rules after it would win.
   - E2E: measure `scrollWidth - clientWidth` on each tab AND with a scene's element form open.
 
+## Slovak quotes in a TS string: „…" closes on an ASCII `"` (#829)
+The Slovak low-high pair „Prehrať" ends in a plain ASCII `"`. Inside a `"…"` test title it ends
+the literal early, and the e2e `tsc` fails with TS1005. Do not type the pair inside double-quoted
+TS strings: write the word without quotes, or use a backtick/single-quoted string. Run
+`node ../../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` before EVERY spec commit.
+
 ## Content-transition control = three radios (#834)
 `TransitionFields` offers Strih / Prelínať (crossfade) / Prelínať cez prázdno. The radios are
 `stream-transition-cut`, `stream-transition-fade` and `stream-transition-fade-through`, and they
