@@ -5,6 +5,8 @@ paths:
   - "crates/presenter-ui/src/components/stage/ndi_frame_stats.rs"
   - "crates/presenter-ui/src/components/stage/ndi_health_ticker.rs"
   - "crates/presenter-ui/src/components/stage/ndi_video.rs"
+  - "crates/presenter-ui/src/components/stage/ndi_session_stats.rs"
+  - "crates/presenter-ui/src/components/stage/ndi_watchdog.rs"
 ---
 
 # `ndi_frames_live` — the per-session Cell vs shared-signal desync (#757, #732, #500)
@@ -63,3 +65,14 @@ fail if `stage-ndi-video--dormant` is EVER observed. Sampling the whole window (
 state via a trailing `.not.toHaveClass`, which retries until absent) is what catches BOTH the
 permanent stuck-dormant (original bug) AND a transient ~1s blink from a layer-1-guard-only
 regression that the layer-2 ticker would otherwise heal before an end-state check samples.
+
+## Per-session client-stats reporter: stop on 404 (2026-10-10)
+
+`ndi_session_stats::start_session_stats_reporter` POSTs `/ndi/sessions/{id}/client-stats` every
+~5 s while the watchdog is `active`. When a WHEP session's ICE never connects, the server reaps
+the session while the client still waits on it (up to the 61 s last-resort reload). Every POST then
+answers 404, and Chrome logs `Failed to load resource … 404` for EACH one, no matter that the code
+swallows the result (13 console errors seen on SNV `/ui/operator`). A beacon aimed at a
+server-owned resource must READ the status: `keep_reporting_after(Some(404)) == false` sets the
+reporter's `gone` flag, leaving at most one console error per dead session. 503 (no NDI SDK), other
+statuses and network errors keep reporting.
