@@ -321,6 +321,23 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   but the recommended default for a countdown is `Cut` (per-second fades look wrong). The OUTPUT page
   HONORS whatever is stored; setting the `Cut` default belongs in the EDITOR's new-element defaults
   (`stream_editor.rs`, not built yet) — a CONTRACT-ASSUMPTION for the editor lane, not a core-default change.
+- **`FadeThrough { duration_ms }` (#834, wire `fade_through`) = fade the old text OUT, then mount
+  the new one and fade it IN.** The two never coexist in the DOM.
+  - A change marks the visible layer leaving and keeps the new text as PENDING, with no layer yet.
+    `content_layers::fade_through_change` does this.
+  - ONE removal-buffer Timeout (`fade_ms + 80`) then calls `fade_through_settle` inside a single
+    `try_update`. It drops that wave's layers and, once nothing is left, mounts the pending text.
+    Because drop and mount happen in one update, the `<Show>` wrapper never unmounts between the
+    two.
+  - Changes during the fade-out only replace the pending text, so a burst shows only the newest.
+    An empty text clears it, so a clear only fades out. Only one wave is ever in flight.
+  - The pending text is a `StoredValue`: copy it out, update, write back. Use the `try_` variants
+    inside the timer.
+  - `validate_transition` is a TOTAL match (it was `if let Fade`, the #745 silent-skip shape), so
+    every timed variant hits the ms cap.
+  - E2E recorder: a rAF loop collecting each layer's text, `--leaving` class and opacity. Assert
+    that no frame holds both texts, that the old text is sampled mid-fade with the new one absent,
+    and that a B→C→D burst never mounts C (`stream-output-transitions.spec.ts`).
 
 ## Bundled OFL fonts (#717) — trunk `copy-dir` + relative `@font-face url()`
 
@@ -385,6 +402,7 @@ The lower third splits WHO is on air from HOW it looks, which is different from 
 The old SSR `/overlays/timer` (a second, hand-styled renderer) is GONE. The OBS timer is now a seeded stream OUTPUT `slug=timer` designed in the normal editor; `/overlays/timer` → `302 /stream/timer` (`ui_routes::timer_overlay_redirect`), and `ui/timer_overlay.rs` + its CSS + the now-orphaned `ui/utils.rs` (`json_safe`/`format_seconds_compact` were used ONLY by the SSR page — `mod ui` is PRIVATE so they were dead code, not public API) are deleted.
 
 - **`TextStyle.letter_spacing_em: Option<f32>`** — serde `default` + `skip_serializing_if`, validated `-0.2..=1.0` (`STREAM_LETTER_SPACING_MIN/MAX_EM`, re-exported in `lib.rs`), rendered by `components/stream/style.rs::text_style_css` as `letter-spacing:{v}em`. `None` = no rule (browser default).
+- **`TextStyle.uppercase: Option<bool>` (#831)** — same serde shape, so it needs no validation. `text_style_css` emits `text-transform:uppercase` only for `Some(true)`. Capitals are a RENDER choice: the stored and library text keeps its case, and the DOM `textContent` is unchanged while `innerText` is uppercase. The editor's "VEĽKÉ PÍSMENÁ" checkbox stores `None` when unticked. A new `TextStyle` field needs every full literal updated (E0063). That covers the core / persistence / server test helpers, `props_access::default_text_style`, AND the timer seed migration, whose `None` is serialisation-neutral (the seeded JSON stays byte-identical).
 - **`Countdown.box: Option<TextBox>`** — `TextBox { color, opacity, padding_pct, radius_pct }`. `box` is a Rust KEYWORD → the field is `r#box` with `#[serde(rename = "box")]`; serde would strip the `r#` anyway, but the explicit rename documents the wire key. It joins EVERY exhaustive `Countdown { … }` destructure/literal (core `validate_props`, `props_access` defaults, `scene_render`, and every test literal in core/persistence/server) — grep `Countdown {` before touching it. Validated by `validate_text_box` (reuses `validate_color`/`validate_opacity`/`validate_pct`). Rendered by `element_countdown` as an INNER `.stream-countdown-box` wrapper: its translucency is an `rgba()` background (opacity baked into the alpha via `style.rs::text_box_css` + `hex_rgb`), NEVER a CSS `opacity` — a wrapper `opacity` would fade the digits too (same rule as `element_lower_third::bar_background`).
 - **`element_countdown` now HONOURS `timer_id`** (reverses #709's "always countdown_to_start"): `1` = `countdown_to_start` (count-DOWN via `format_countdown`), `2` = `preach_timer` (count-UP via the NEW shared `presenter_core::format_elapsed`, `MM:SS`/`HH:MM:SS`); any other id renders empty. Both interpolate whole seconds since the server push only while `Running`. `format_elapsed` is the shared count-up sibling of `format_countdown` (camera-crew's private copy was consolidated onto it).
 - **Seed migration `m20260920_000001_seed_timer_output`** — NOTE the name is `_seed_`, NOT `_create_`, so it does NOT match the `m*_create_*.rs` size/fn-gate exemption and IS gated (keep it small). Additive + idempotent on top of `m20260820_000001`: `INSERT OR IGNORE` the output, `NOT EXISTS`-guarded scene + element, `IS NULL`-guarded active-scene set. The element `props` JSON is built from the REAL `StreamElementProps` via `serde_json::to_string` (typo-proof — a hand-written JSON that mis-shapes a field would be SILENTLY skipped by `load_output_def`'s per-element degrade). `timer` is NOT in `RESERVED_STREAM_SLUGS` — the seed simply owns it.
