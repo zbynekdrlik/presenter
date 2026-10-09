@@ -244,6 +244,13 @@ pub struct TextStyle {
     /// wire back-compatible with pre-#785 stored props.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub letter_spacing_em: Option<f32>,
+    /// Render the text in capitals (#831) — CSS `text-transform: uppercase`,
+    /// so the stored text (song/band names from the library, lyrics, verses)
+    /// keeps its own case. `None` (the editor stores it when unticked) and
+    /// `Some(false)` show the text as stored; a serde default keeps pre-#831
+    /// stored props back-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uppercase: Option<bool>,
 }
 
 /// An optional background box drawn BEHIND a countdown's text (#785) — a
@@ -897,6 +904,7 @@ mod tests {
             line_height: 1.2,
             shadow: None,
             letter_spacing_em: None,
+            uppercase: None,
         }
     }
 

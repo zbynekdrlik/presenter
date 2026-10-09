@@ -313,6 +313,7 @@ mod tests {
             line_height: 1.1,
             shadow: None,
             letter_spacing_em: None,
+            uppercase: None,
         }
     }
 
