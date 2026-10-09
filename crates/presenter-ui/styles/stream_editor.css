@@ -904,8 +904,16 @@ html[data-stream-editor="true"] {
     min-width: 8rem;
 }
 
-/* #829: phone width — tighter gutters so the tabs and panels fit 320 px.
- * Kept LAST so it overrides the base paddings above. */
+/* #829: the Menovky tab's own 16:9 preview (where „Prehrať" plays) — it reuses
+ * the checkerboard __preview-box, capped so it does not fill a wide screen. */
+.stream-editor__nameplate-preview {
+    max-width: 32rem;
+    margin: 0 0 0.75rem;
+}
+
+/* #829: phone width — tighter gutters, and the element panel / scene preview
+ * drop their 20rem minimum, so the tabs and an open scene fit 320 px.
+ * Kept LAST so it overrides the base rules above. */
 @media (max-width: 480px) {
     .stream-editor__header {
         padding: 0.75rem 1rem;
@@ -917,5 +925,14 @@ html[data-stream-editor="true"] {
 
     .stream-editor__main {
         padding: 1rem;
+    }
+
+    .stream-editor__workspace {
+        padding: 1rem;
+    }
+
+    .stream-editor__panel,
+    .stream-editor__preview {
+        min-width: 0;
     }
 }

@@ -18,7 +18,9 @@ use crate::components::stream_editor::editor_nameplates::NameplatePanel;
 use crate::components::stream_editor::editor_panel::EditorPanel;
 use crate::components::stream_editor::editor_preview::EditorPreview;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
-use crate::components::stream_editor::editor_tabs::{initial_tab, EditorTab, EditorTabs, TabPanel};
+use crate::components::stream_editor::editor_tabs::{
+    initial_tab, mirror_tab_to_url, EditorTab, EditorTabs, TabPanel,
+};
 use crate::components::stream_editor::output_paths::{initial_output_slug, OutputSelect};
 use crate::components::stream_editor::StreamEditorCtx;
 use crate::components::version_label::VersionLabel;
@@ -75,6 +77,10 @@ pub fn StreamEditorPage() -> impl IntoView {
             crate::components::stream_editor::selection_intent::SelectionIntent::default(),
         ),
     };
+
+    // #829: the URL names the tab on screen from the start (a tab restored from
+    // localStorage too), so a reload / bookmark / output switch carries it.
+    mirror_tab_to_url(ctx.tab.get_untracked());
 
     // Cold load.
     ctx.refresh();

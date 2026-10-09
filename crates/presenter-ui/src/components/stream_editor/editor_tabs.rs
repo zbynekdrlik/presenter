@@ -73,6 +73,13 @@ pub fn initial_tab() -> EditorTab {
     resolve_tab(url.as_deref(), stored.as_deref())
 }
 
+/// Mirror the shown tab into `?tab=`, keeping `?output=` and every other param.
+/// Called on load too, so the URL always names the tab on screen (a reload, a
+/// bookmark or a later output switch carries it).
+pub fn mirror_tab_to_url(tab: EditorTab) {
+    crate::utils::window::replace_url_param("tab", tab.id());
+}
+
 impl StreamEditorCtx {
     /// Show another tab and remember it (localStorage + `?tab=`). Only the
     /// panels' visibility changes — nothing is unmounted, so no unsaved work is
@@ -83,8 +90,18 @@ impl StreamEditorCtx {
         }
         self.tab.set(tab);
         write_stored(TAB_STORAGE_KEY, tab.id());
-        crate::utils::window::replace_url_param("tab", tab.id());
+        mirror_tab_to_url(tab);
     }
+}
+
+/// The DOM ids tying a tab button to its panel (`aria-controls` /
+/// `aria-labelledby`).
+fn tab_dom_id(tab: EditorTab) -> String {
+    format!("stream-editor-tab-{}", tab.id())
+}
+
+fn panel_dom_id(tab: EditorTab) -> String {
+    format!("stream-editor-panel-{}", tab.id())
 }
 
 /// The tab bar under the editor header. Its buttons wrap at phone width.
@@ -98,6 +115,8 @@ pub fn EditorTabs(ctx: StreamEditorCtx) -> impl IntoView {
                 <button
                     type="button"
                     role="tab"
+                    id=tab_dom_id(t)
+                    aria-controls=panel_dom_id(t)
                     class="stream-editor__tab"
                     data-role="stream-editor-tab"
                     data-tab=t.id()
@@ -128,6 +147,8 @@ pub fn TabPanel(ctx: StreamEditorCtx, tab: EditorTab, children: Children) -> imp
     view! {
         <div
             class="stream-editor__tab-panel"
+            id=panel_dom_id(tab)
+            aria-labelledby=tab_dom_id(tab)
             data-role="stream-tab-panel"
             data-tab=tab.id()
             data-active=move || bool_attr(ctx.tab.get() == tab)
