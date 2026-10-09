@@ -6,9 +6,11 @@
  * editor offered just "400" and "700", and fonts.css served colliding
  * `@font-face` rules. This spec builds a family the same way: four faces derived
  * in memory from the OFL fixture (Regular, Heavy, Black, Black Italic), every
- * one at OS/2 400, Heavy uploaded BEFORE Black. It uploads them through the
- * editor's Písma tab, then checks:
+ * one at OS/2 400. It uploads them through the editor's Písma tab in two
+ * batches (Regular + Heavy, then Black + Black Italic), then checks:
  *
+ *  - the font panel names each face, and its Heavy row moves from 900 to 800
+ *    when Black arrives in the later batch;
  *  - the server gives each face its own weight (Heavy 800 below Black 900);
  *  - the weight picker lists every face as "<style name> <weight>";
  *  - Italic is offered only where the family has an italic face;
@@ -70,10 +72,15 @@ function face(style: string): Buffer {
   return withNames(fixture, { [TYPO_FAMILY]: FAMILY, [TYPO_SUBFAMILY]: style });
 }
 
-/** Heavy comes BEFORE Black: Black's upload must move the stored Heavy. */
-const FACES = [
+type FaceFile = { name: string; buffer: Buffer };
+
+/** First batch: Regular + Heavy (Heavy alone is 900). */
+const FIRST_FACES: FaceFile[] = [
   { name: "Facet830-Regular.ttf", buffer: face("Regular") },
   { name: "Facet830-Heavy.ttf", buffer: face("Heavy") },
+];
+/** Second batch: Black's upload must move the stored Heavy below it (800). */
+const SECOND_FACES: FaceFile[] = [
   { name: "Facet830-Black.ttf", buffer: face("Black") },
   { name: "Facet830-BlackItalic.ttf", buffer: withItalicFlag(face("Black Italic")) },
 ];
@@ -113,19 +120,25 @@ async function getElement(page: Page, sceneId: string, id: string): Promise<Elem
   return el as ElementDef;
 }
 
-/** Upload every face through the Písma tab's panel, then back to Scény. */
-async function uploadFaces(page: Page) {
-  await page.locator(sel.fontsTab).click();
+/** Upload `faces` through the Písma tab's panel (the tab must be open) and
+ *  wait until the panel lists `total` faces of FAMILY. */
+async function uploadFaces(page: Page, faces: FaceFile[], total: number) {
   await page.setInputFiles(
     sel.fontUpload,
-    FACES.map((f) => ({ name: f.name, mimeType: "font/ttf", buffer: f.buffer })),
+    faces.map((f) => ({ name: f.name, mimeType: "font/ttf", buffer: f.buffer })),
   );
   await page.locator(sel.fontUploadBtn).click();
-  await expect(page.locator(`${sel.fontItem}[data-font-family="${FAMILY}"]`)).toHaveCount(
-    FACES.length,
-    { timeout: 30_000 },
-  );
-  await page.locator(sel.scenesTab).click();
+  await expect(page.locator(`${sel.fontItem}[data-font-family="${FAMILY}"]`)).toHaveCount(total, {
+    timeout: 30_000,
+  });
+}
+
+/** The label of the font panel's row for FAMILY's Heavy face. */
+function heavyLabel(page: Page) {
+  return page
+    .locator(sel.fontItem)
+    .filter({ hasText: `${FAMILY} Heavy —` })
+    .locator(".stream-editor__font-preview");
 }
 
 async function addScene(page: Page, name: string): Promise<string> {
@@ -179,7 +192,15 @@ test("#830 every face of a mislabelled family is offered by name; Black Italic r
   const editorErrors: string[] = [];
   attachEditorConsoleCollector(page, editorErrors);
   await openEditor(page);
-  await uploadFaces(page);
+
+  // Upload in two batches through the Písma tab. The panel names each face by
+  // its style, and the Heavy row follows its weight when Black arrives later.
+  await page.locator(sel.fontsTab).click();
+  await uploadFaces(page, FIRST_FACES, 2);
+  await expect(heavyLabel(page)).toHaveText(`${FAMILY} Heavy — 900`);
+  await uploadFaces(page, SECOND_FACES, 4);
+  await expect(heavyLabel(page)).toHaveText(`${FAMILY} Heavy — 800`);
+  await page.locator(sel.scenesTab).click();
 
   // Server: one distinct weight/style per face, each named by its style.
   const listed = (await (await page.request.get(`${baseURL}/stream/api/fonts`)).json()) as ListedFont[];

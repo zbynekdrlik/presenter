@@ -824,7 +824,9 @@ mod tests {
         .await;
 
         let changed = state.rederive_stream_font_faces().await.unwrap();
-        assert!(changed >= 2, "both mislabelled faces re-derived: {changed}");
+        // Each `AppState::in_memory()` has its own database (#813): only this
+        // test's two mislabelled faces exist to change.
+        assert_eq!(changed, 2, "both mislabelled faces re-derived");
         assert_eq!(stored(&state, &light).await, (300, false));
         assert_eq!(
             stored(&state, &regular).await,

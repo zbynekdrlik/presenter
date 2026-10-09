@@ -663,6 +663,36 @@ async fn a_mislabelled_family_lists_one_weight_per_face() {
 }
 
 #[tokio::test]
+async fn deleting_the_black_face_moves_heavy_back_to_900() {
+    let (state, _dir) = test_state().await;
+    let family = "Drop830";
+    let heavy = upload(&state, "Drop830-Heavy.ttf", &family_face(family, "Heavy")).await;
+    let black = upload(&state, "Drop830-Black.ttf", &family_face(family, "Black")).await;
+    assert_eq!(stored_weight(&state, heavy.id).await, 800, "below Black");
+
+    let response = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/stream/fonts/{}", black.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        stored_weight(&state, heavy.id).await,
+        900,
+        "with no Black face left, Heavy is 900 again"
+    );
+}
+
+async fn stored_weight(state: &AppState, id: i64) -> u16 {
+    state.repository().get_stream_font(id).await.unwrap().weight
+}
+
+#[tokio::test]
 async fn a_heavy_face_uploaded_after_black_answers_with_its_moved_weight() {
     let (state, _dir) = test_state().await;
     let family = "Late830";

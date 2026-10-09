@@ -422,6 +422,25 @@ mod tests {
     }
 
     #[test]
+    fn colliding_styles_lists_each_shared_weight_and_style_once() {
+        // An OS/2-declared Heavy 900 next to a name-derived Black 900 still
+        // collides; the re-derive WARNs about such a pair.
+        assert_eq!(
+            colliding_styles(&[
+                (900, false),
+                (900, false),
+                (900, true),
+                (400, false),
+                (900, false),
+            ]),
+            vec![(900, false)]
+        );
+        assert!(
+            colliding_styles(&[(800, false), (850, false), (900, false), (900, true)]).is_empty()
+        );
+    }
+
+    #[test]
     fn italic_is_read_from_the_style_names() {
         assert!(style_says_italic(&sub17("Black Italic")));
         assert!(style_says_italic(&StyleNames {
