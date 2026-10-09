@@ -35,6 +35,7 @@ pub(crate) use api_stage::ApiStageState;
 mod background_tasks;
 pub(crate) mod bible;
 mod bible_manager;
+mod bible_source;
 mod broadcasting;
 mod cache_manager;
 mod companion;

@@ -314,7 +314,8 @@ fn is_lone_whole_verse(main: &str, main_reference: &str) -> bool {
 ///
 /// Rules:
 /// - **Rule 5 (character limit)** applies to every slide: `main` must not
-///   exceed `character_limit` bytes. Checked first — cheap, common, fail-fast.
+///   exceed `character_limit` characters (`chars().count()`). Checked first —
+///   cheap, common, fail-fast.
 /// - **Rule 3 (no raw bold markers)** applies to every slide: neither
 ///   `main` nor `main_reference` may contain `##`.
 /// - If `main_reference` is empty (emphasis/title slide): `main` must be
@@ -344,7 +345,10 @@ pub fn validate_bible_slide(
     // it exceeds the limit. Multi-verse slides over the limit are still a real
     // over-packing error (the composer should have flushed before overflow),
     // and oversized emphasis/title slides (no reference) are still rejected.
-    if main.len() > character_limit as usize && !is_lone_whole_verse(main, main_reference) {
+    // Characters, never bytes (#828): the composer packs by `chars()`, and a
+    // Slovak diacritic is one character but two UTF-8 bytes.
+    if main.chars().count() > character_limit as usize && !is_lone_whole_verse(main, main_reference)
+    {
         return Err(ValidationError::new_with_limit(
             ValidationRule::MainExceedsCharacterLimit,
             main.to_string(),
@@ -395,6 +399,17 @@ pub fn validate_bible_slide(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Rule 5: the length counts characters (#828) --
+
+    #[test]
+    fn length_counts_characters_not_bytes() {
+        // 29 characters but 51 UTF-8 bytes (Slovak diacritics are 2 bytes):
+        // within a 30-character limit, as the composer packs it.
+        let main = "1. čšžťďňľôäáé\n2. ČŠŽŤĎŇĽÔÄÁÉ";
+        assert_eq!(main.chars().count(), 29);
+        assert!(validate_bible_slide(main, "Ján 1:1-2 (SEB)", 30).is_ok());
+    }
 
     // -- Rule 1: reference format --
 

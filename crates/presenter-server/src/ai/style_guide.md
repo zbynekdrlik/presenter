@@ -97,6 +97,7 @@ The server's `find_bible_passage` and `resolve_bible_slides` tools accept both a
 - SEVP / ECAV = Slovenský evanjelický preklad (slk-sevp)
 - MIL = Milostný preklad (slk-mil)
 - KJV = King James Version (eng-kjv)
+- NLT = New Living Translation (eng-nlt) — fetched online from Tyndale's NLT API when loaded; `search_bible` does not search it
 
 ## Other formatting rules
 

@@ -178,6 +178,7 @@ fn clear_update() -> BibleUpdate {
         passage: None,
         secondary_text: None,
         secondary_translation_code: None,
+        secondary_book: None,
         slide_output: None,
     }
 }
@@ -398,6 +399,7 @@ fn verse_update() -> BibleUpdate {
         passage: None,
         secondary_text: None,
         secondary_translation_code: None,
+        secondary_book: None,
         slide_output: Some(BibleSlideOutput {
             main_text: "For God so loved".to_string(),
             main_reference: "John 3:16 (KJV)".to_string(),

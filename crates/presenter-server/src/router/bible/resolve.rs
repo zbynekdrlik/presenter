@@ -37,6 +37,10 @@ pub(crate) struct BibleResolveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     secondary_translation: Option<BibleTranslation>,
     slides: Vec<BibleSlideDto>,
+    /// #826: the secondary translation was unreachable (the NLT API), so the
+    /// slides carry the main text only — shown to the operator as a toast.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,7 +155,7 @@ pub(crate) async fn resolve_bible_slides(
         let prefs = state.get_bible_preferences().await?;
         prefs.character_limit
     };
-    let (main_translation, secondary_translation, slides) = state
+    let generated = state
         .generate_bible_slides(
             main_translation_code,
             payload.secondary_translation.as_deref(),
@@ -163,10 +167,15 @@ pub(crate) async fn resolve_bible_slides(
             character_limit,
         )
         .await?;
-    let slide_dtos: Vec<BibleSlideDto> = slides.iter().map(generated_slide_to_dto).collect();
+    let slide_dtos: Vec<BibleSlideDto> = generated
+        .slides
+        .iter()
+        .map(generated_slide_to_dto)
+        .collect();
     Ok(Json(BibleResolveResponse {
-        main_translation,
-        secondary_translation,
+        main_translation: generated.main_translation,
+        secondary_translation: generated.secondary_translation,
         slides: slide_dtos,
+        warning: generated.secondary_warning,
     }))
 }

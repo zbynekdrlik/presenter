@@ -1368,6 +1368,35 @@ body.operator {
   border-top: 1px solid rgba(147, 197, 253, 0.2);
 }
 
+/* #828: per-slide character counts (main / translation), muted; warning
+   colour when over the Bible character limit. */
+.operator__slide-char-counts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+
+.operator__slide-chars {
+  font-size: 0.65rem;
+  line-height: 1.2;
+  padding: 0 0.3rem;
+  border-radius: 0.25rem;
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.12);
+  font-variant-numeric: tabular-nums;
+}
+
+.operator__slide-chars[data-field="translation"] {
+  color: #93c5fd;
+}
+
+.operator__slide-chars--over,
+.operator__slide-chars--over[data-field="translation"] {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.16);
+}
+
 /* Bible slide reference footer */
 .operator__slide-footer {
   display: flex;
@@ -2218,24 +2247,59 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
      reserves its own space as an in-flow sticky grid row now, no manual
      padding-top needed. */
   display: grid;
+  /* #832: this browser's slides-per-row choice (inherited from `body`, set
+     by the toolbar control) wins; without one the default applies — 3, or
+     2 on a phone (the ≤480 px query below sets the default only). */
+  --operator-slide-columns: 3;
   grid-template-columns: repeat(
-    var(--operator-slide-columns, 3),
+    var(--operator-slide-columns-choice, var(--operator-slide-columns)),
     minmax(0, 1fr)
   );
   gap: 0.9rem;
   align-content: start;
 }
 
-.operator__slides[data-size="compact"] {
-  --operator-slide-columns: 4;
+/* #832: cards stay readable at 6–8 per row — tighter padding, smaller type,
+   long words break instead of widening the grid. */
+.operator__slides > * {
+  min-width: 0;
 }
 
-.operator__slides[data-size="medium"] {
-  --operator-slide-columns: 3;
+body[data-slide-columns-dense="true"] .operator__slide-card {
+  padding: 0.5rem;
+  gap: 0.4rem;
 }
 
-.operator__slides[data-size="expanded"] {
-  --operator-slide-columns: 2;
+body[data-slide-columns-dense="true"] .operator__slide-text {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+/* #832: the slides-per-row stepper in the slides toolbar. */
+.operator__slide-columns {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--operator-muted);
+}
+
+.operator__slide-columns button {
+  min-width: 1.6rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid var(--operator-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.operator__slide-columns-value {
+  min-width: 1.2rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--operator-text);
 }
 
 .operator__slide-card {
@@ -2451,8 +2515,9 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   .operator__version-badge {
     display: none;
   }
+  /* #832: the phone DEFAULT — an explicit per-browser choice still wins. */
   .operator__slides {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    --operator-slide-columns: 2;
   }
 }
 

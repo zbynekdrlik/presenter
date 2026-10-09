@@ -53,10 +53,6 @@ pub(crate) struct BibleTriggerRequest {
     pub(crate) main_text: Option<String>,
     #[serde(default)]
     pub(crate) translation_text: Option<String>,
-    #[serde(default)]
-    pub(crate) main_reference_label: Option<String>,
-    #[serde(default)]
-    pub(crate) translation_reference_label: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -86,8 +82,6 @@ pub(crate) async fn trigger_bible_broadcast(
     let text_overrides = crate::state::bible::BibleTriggerOverrides {
         main_text: payload.main_text,
         translation_text: payload.translation_text,
-        main_reference_label: payload.main_reference_label,
-        translation_reference_label: payload.translation_reference_label,
     };
     // #633: `RepositoryError::NotFound` maps to 404 by default via the
     // centralized `From<anyhow::Error> for AppError` — `AppError::from` here
