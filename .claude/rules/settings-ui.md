@@ -168,6 +168,13 @@ by `CardItem::key`) with unit tests for this.
   warning names `PRESENTER_ANDROID_STAGE_URL` (27 chars). That alone set the row's
   min-content to 248 px, and the standalone page measured 328 px on a 320 px phone.
   It reproduces only with seeded rows, as in CI, never with an empty DB.
+- Video Sources rows (`.settings__source-item`) wrap: `flex-wrap: wrap`, and the
+  info column is `flex: 1 1 160px; min-width: 0`. A not-found row on ONE line
+  (name, hint, the nowrap badge "Not found on the network", Activate, Delete) is
+  about 510 px. Measured on prod v0.4.304: SNV 589/320, PP 427/320. CI seeds no
+  not-found row, so the guard for it is in `ndi-source-status.spec.ts` (synthetic
+  NDI lane). After a release, also check the standalone page on BOTH prod sites at
+  320 px. Real data catches what seeded data cannot.
 - To find what sets a minimum width, set `width: min-content` on each card and
   compare. Overflow checks on a forced narrow width miss shrinkable content.
 
