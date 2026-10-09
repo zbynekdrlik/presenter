@@ -12,13 +12,15 @@
 //! disturbs the existing beacon's interval accumulators.
 //!
 //! Fire-and-forget: a failed POST is tolerated silently (no `console.warn`),
-//! per the stage's zero-console-noise rule.
+//! per the stage's zero-console-noise rule. The one exception is a 404: the
+//! server reaped the session (e.g. ICE never connected), so the reporter stops
+//! for good instead of logging a `Failed to load resource` error every ~5s.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
-use leptos::web_sys::RtcPeerConnection;
+use leptos::web_sys::{Response, RtcPeerConnection};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use super::ndi_beacon::extract_inbound_video;
@@ -81,24 +83,40 @@ pub(crate) fn build_client_stats_body(
     .to_string()
 }
 
-/// POST the compact sample to the session-keyed endpoint. Fire-and-forget; any
-/// error (including an expired session's 404) is swallowed silently.
-async fn post_session_stats(session_id: &str, body: String) {
+/// Whether the reporter keeps POSTing after a client-stats response with
+/// `status` (`None` = no response at all: the request could not be built or
+/// the fetch failed). Only a 404 stops it: the server reaped the session and
+/// the id never comes back, so every further POST would be one more console
+/// error. Stored (204), no NDI SDK (503), any other status and a network error
+/// say nothing final about the session. Pure — host-testable.
+pub(crate) fn keep_reporting_after(status: Option<u16>) -> bool {
+    status != Some(404)
+}
+
+/// POST the compact sample to the session-keyed endpoint and return the HTTP
+/// status, or `None` when no response arrived. Errors are otherwise tolerated
+/// silently; the caller decides via `keep_reporting_after`.
+async fn post_session_stats(session_id: &str, body: String) -> Option<u16> {
     let init = leptos::web_sys::RequestInit::new();
     init.set_method("POST");
     init.set_body(&JsValue::from_str(&body));
     let Ok(headers) = leptos::web_sys::Headers::new() else {
-        return;
+        return None;
     };
     let _ = headers.set("Content-Type", "application/json");
     init.set_headers(&headers);
     let url = format!("/ndi/sessions/{session_id}/client-stats");
     let Ok(request) = leptos::web_sys::Request::new_with_str_and_init(&url, &init) else {
-        return;
+        return None;
     };
-    if let Some(window) = leptos::web_sys::window() {
-        let _ = JsFuture::from(window.fetch_with_request(&request)).await;
-    }
+    let window = leptos::web_sys::window()?;
+    let Ok(response) = JsFuture::from(window.fetch_with_request(&request)).await else {
+        return None;
+    };
+    let Ok(response) = response.dyn_into::<Response>() else {
+        return None;
+    };
+    Some(response.status())
 }
 
 /// Start the ~5s per-session stats reporter. Returns the `setInterval` handle
@@ -106,6 +124,7 @@ async fn post_session_stats(session_id: &str, body: String) {
 /// ticker. Reads the frame stats non-destructively so the existing beacon's
 /// accumulators are untouched; getStats supplies `framesDecoded` /
 /// `jitterBufferMs`, this session's own count window supplies `presentedFps`.
+/// Stops posting for good after the first 404 (the session is gone).
 pub(crate) fn start_session_stats_reporter(
     pc: &RtcPeerConnection,
     session_id: String,
@@ -117,8 +136,10 @@ pub(crate) fn start_session_stats_reporter(
     let active = Rc::clone(active);
     // This reporter's OWN presented-fps window: (last cumulative count, last ts).
     let window: Rc<Cell<(u32, f64)>> = Rc::new(Cell::new((stats.frames_presented.get(), now_ms())));
+    // Set once the server answers 404: the session was reaped, never post again.
+    let gone = Rc::new(Cell::new(false));
     let cb = Closure::<dyn FnMut()>::new(move || {
-        if !active.get() {
+        if !active.get() || gone.get() {
             return;
         }
         let now = now_ms();
@@ -134,6 +155,7 @@ pub(crate) fn start_session_stats_reporter(
         let frames_live = stats.frames_live.get();
         let pc = pc.clone();
         let session_id = session_id.clone();
+        let gone = Rc::clone(&gone);
         spawn_local(async move {
             if let Ok(report) = JsFuture::from(pc.get_stats()).await {
                 let inbound = extract_inbound_video(&report);
@@ -144,7 +166,13 @@ pub(crate) fn start_session_stats_reporter(
                     inbound.frames_decoded.unwrap_or(0.0),
                     frames_live,
                 );
-                post_session_stats(&session_id, body).await;
+                let status = post_session_stats(&session_id, body).await;
+                // `replace` keeps the log to one line even if two POSTs race.
+                if !keep_reporting_after(status) && !gone.replace(true) {
+                    leptos::logging::log!(
+                        "ndi session stats: session {session_id} gone (404), reporter stopped"
+                    );
+                }
             }
         });
     });
