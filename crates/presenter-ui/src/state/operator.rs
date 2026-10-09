@@ -73,6 +73,9 @@ pub struct OperatorState {
     pub open_modal: RwSignal<Option<String>>,
     pub modal_target_id: RwSignal<Option<String>>,
     pub line_limit: RwSignal<u32>,
+    /// #832: this browser's slides-per-row choice (1–8); `None` = the CSS
+    /// default (3, or 2 on a phone).
+    pub slide_columns: RwSignal<Option<u8>>,
     pub catalog_top_height: RwSignal<f64>,
     pub mobile_nav_open: RwSignal<bool>,
     pub submitting: RwSignal<bool>,
@@ -190,6 +193,12 @@ impl OperatorState {
             open_modal: RwSignal::new(None),
             modal_target_id: RwSignal::new(None),
             line_limit: RwSignal::new(line_limit),
+            slide_columns: RwSignal::new(crate::state::slide_columns::parse_slide_columns(
+                crate::state::session::try_get_local(
+                    crate::state::slide_columns::SLIDE_COLUMNS_KEY,
+                )
+                .as_deref(),
+            )),
             catalog_top_height: RwSignal::new(catalog_top_height),
             mobile_nav_open: RwSignal::new(false),
             submitting: RwSignal::new(false),

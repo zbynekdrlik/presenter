@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
+use crate::components::slide_columns::SlideColumnsControl;
 use crate::state::bible::{slide_char_count, BibleState};
 use crate::state::AppContext;
 
@@ -21,6 +22,7 @@ pub fn BibleSlidesColumn() -> impl IntoView {
         >
             <div class="operator__slides-toolbar operator__slides-toolbar--minimal">
                 <AddEmptySlideButton />
+                <SlideColumnsControl />
             </div>
             <div class="operator__slides" data-role="slides">
                 {move || {

@@ -6,10 +6,20 @@
 
 use wasm_bindgen::JsCast;
 
-/// Number of columns in the `.operator__slides` grid (CSS:
-/// `grid-template-columns: repeat(3, minmax(0, 1fr))`). The next-row anchor
-/// for an active slide at DOM index N is the slide at index N + COLUMNS_PER_ROW.
-const COLUMNS_PER_ROW: usize = 3;
+/// Columns of a `.operator__slides` grid when its layout cannot be read (the
+/// CSS default). The next-row anchor for an active slide at DOM index N is the
+/// slide at index N + the grid's column count.
+const DEFAULT_COLUMNS_PER_ROW: usize = 3;
+
+/// Columns of `container` as laid out — #832 makes them a per-browser choice
+/// (1–8), so the lookahead reads the computed `grid-template-columns`.
+fn columns_per_row(container: &web_sys::HtmlElement) -> usize {
+    web_sys::window()
+        .and_then(|window| window.get_computed_style(container).ok().flatten())
+        .and_then(|style| style.get_property_value("grid-template-columns").ok())
+        .and_then(|tracks| crate::state::slide_columns::track_count(&tracks))
+        .unwrap_or(DEFAULT_COLUMNS_PER_ROW)
+}
 
 /// Default fallback step for wheel scroll (pixels) when no slide card is
 /// rendered yet to measure.
@@ -51,8 +61,9 @@ pub(super) fn scroll_slide_into_view(slide_id: &str) {
         return;
     }
 
-    // Find the next-row anchor: the slide at active_index + COLUMNS_PER_ROW
+    // Find the next-row anchor: the slide at active_index + the column count
     // in DOM order within the same container.
+    let columns_per_row = columns_per_row(&container);
     let cards = container.query_selector_all("[data-slide-id]").ok();
     let next_row_el: Option<web_sys::HtmlElement> = cards.and_then(|nodes| {
         let mut active_index: Option<usize> = None;
@@ -66,7 +77,7 @@ pub(super) fn scroll_slide_into_view(slide_id: &str) {
                 }
             }
         }
-        let target_index = active_index? + COLUMNS_PER_ROW;
+        let target_index = active_index? + columns_per_row;
         nodes
             .item(target_index as u32)
             .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())

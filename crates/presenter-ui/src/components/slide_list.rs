@@ -9,6 +9,7 @@ use crate::state::operator::{OperatorState, SaveStatus};
 use crate::state::AppContext;
 use crate::utils::color::group_pill_style;
 
+use super::slide_columns::SlideColumnsControl;
 use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
     apply_focused_class, field_has_warning, format_multiline, is_interactive_tag,
@@ -145,6 +146,9 @@ pub fn SlideList() -> impl IntoView {
 
     view! {
         <section class="operator__slides-column">
+            <div class="operator__slides-toolbar operator__slides-toolbar--minimal">
+                <SlideColumnsControl />
+            </div>
             <div class="operator__slides-area">
                 <Show
                     when=move || ctx.selected_presentation.with(|p| p.is_some())

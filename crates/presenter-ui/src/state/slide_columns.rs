@@ -1,4 +1,53 @@
 //! #832: the per-browser "slides per row" setting of the operator slide grids.
+//!
+//! The choice lives in localStorage (each operator's browser keeps its own,
+//! nothing goes to the server) and drives every `.operator__slides` grid
+//! through the inherited `--operator-slide-columns-choice` custom property
+//! on `body` (`pages/operator.rs`). Without a choice the CSS default applies:
+//! 3 per row, 2 on a phone (≤480 px).
+
+/// Fewest slides per row the stepper allows.
+pub const MIN_SLIDE_COLUMNS: u8 = 1;
+/// Most slides per row the stepper allows.
+pub const MAX_SLIDE_COLUMNS: u8 = 8;
+/// Slides per row without a choice (the CSS default on a desktop).
+pub const DEFAULT_SLIDE_COLUMNS: u8 = 3;
+/// localStorage key of the choice (behind `session`'s prefix).
+pub const SLIDE_COLUMNS_KEY: &str = "operatorSlideColumns";
+
+/// The stored choice, if it is a number of slides per row in 1–8.
+pub fn parse_slide_columns(stored: Option<&str>) -> Option<u8> {
+    stored?
+        .trim()
+        .parse::<u8>()
+        .ok()
+        .filter(|columns| (MIN_SLIDE_COLUMNS..=MAX_SLIDE_COLUMNS).contains(columns))
+}
+
+/// One stepper click from the current choice (or the default), kept in 1–8.
+pub fn step_slide_columns(current: Option<u8>, delta: i8) -> u8 {
+    let from = i16::from(current.unwrap_or(DEFAULT_SLIDE_COLUMNS));
+    let next =
+        (from + i16::from(delta)).clamp(i16::from(MIN_SLIDE_COLUMNS), i16::from(MAX_SLIDE_COLUMNS));
+    u8::try_from(next).unwrap_or(DEFAULT_SLIDE_COLUMNS)
+}
+
+/// Six or more per row: the cards switch to the dense layout (smaller type,
+/// tighter padding) so they stay readable.
+pub fn is_dense(columns: u8) -> bool {
+    columns >= 6
+}
+
+/// The column count of a laid-out grid from its computed
+/// `grid-template-columns` ("120px 120px 120px" → 3); `None` when there are
+/// no tracks.
+pub fn track_count(computed_tracks: &str) -> Option<usize> {
+    let tracks = computed_tracks.trim();
+    if tracks.is_empty() || tracks == "none" {
+        return None;
+    }
+    Some(tracks.split_whitespace().count())
+}
 
 #[cfg(test)]
 mod tests {

@@ -11,6 +11,7 @@ mod presentation_list_drag;
 pub mod presentation_modal;
 pub mod resolume_status;
 pub mod search;
+pub mod slide_columns;
 pub mod slide_list;
 mod slide_list_scroll;
 mod slide_list_utils;
