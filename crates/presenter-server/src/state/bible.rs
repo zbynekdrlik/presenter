@@ -686,3 +686,6 @@ fn numbered_verse_text(range: &[presenter_core::BiblePassage]) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
+
+#[cfg(test)]
+mod trigger_tests;
