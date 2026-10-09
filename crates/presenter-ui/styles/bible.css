@@ -436,6 +436,20 @@ body.operator.operator--bible .operator__panel--bible {
   box-sizing: border-box;
 }
 
+/* #825: the maximum next to each box ("Chapter / 50") and the inline note
+   when a typed chapter/verse was past the range and got clamped. */
+.operator--bible .operator__field-max {
+  margin-left: 0.3rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.operator--bible .operator__range-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #f59e0b;
+}
+
 /* Position the header search dropdown below the sticky header
    Header height ≈ padding (0.65rem × 2) + content (~1.6rem) = ~2.9rem */
 .operator--bible .operator__search-results {

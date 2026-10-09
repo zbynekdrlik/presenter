@@ -7,17 +7,18 @@ use crate::state::AppContext;
 
 use super::bible_controls::SelectionControls;
 use super::bible_prepared::{BiblePreparedTab, BiblePresentationModal, BibleSettingsTab};
+use super::bible_reference::ReferenceInputs;
 use super::bible_slides::BibleSlidesColumn;
 
 /// Shared `NodeRef` handles for the four inputs that participate in the
 /// keyboard-navigation chain on the Bible live tab. Provided via context so
 /// each input's `on:keydown` handler can step focus to the next input.
 #[derive(Copy, Clone)]
-struct BibleFocusRefs {
-    book_filter: NodeRef<leptos::html::Input>,
-    chapter: NodeRef<leptos::html::Input>,
-    verse_start: NodeRef<leptos::html::Input>,
-    verse_end: NodeRef<leptos::html::Input>,
+pub(super) struct BibleFocusRefs {
+    pub(super) book_filter: NodeRef<leptos::html::Input>,
+    pub(super) chapter: NodeRef<leptos::html::Input>,
+    pub(super) verse_start: NodeRef<leptos::html::Input>,
+    pub(super) verse_end: NodeRef<leptos::html::Input>,
 }
 
 /// Bible page — 2-column layout matching the legacy Bible UI.
@@ -662,167 +663,6 @@ fn BookList() -> impl IntoView {
                     }).collect_view().into_any()
                 }
             }}
-        </div>
-    }
-}
-
-#[component]
-fn ReferenceInputs() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let refs = expect_context::<BibleFocusRefs>();
-    let book_filter = bs.book_filter;
-    let selected_chapter = bs.selected_chapter;
-    let verse_start_signal = bs.verse_start;
-    let verse_end_signal = bs.verse_end;
-    let on_chapter = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(input) = target {
-            if let Ok(val) = input.value().parse::<u16>() {
-                selected_chapter.set(val.max(1));
-                verse_start_signal.set(1);
-                verse_end_signal.set(None);
-            }
-        }
-    };
-
-    let on_verse_start = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(input) = target {
-            if let Ok(val) = input.value().parse::<u16>() {
-                let start = val.max(1);
-                verse_start_signal.set(start);
-                // #702: mirror the start into the end — the dominant case is a
-                // single verse, so entering a start auto-fills the end with the
-                // same number. A later explicit end edit persists (nothing
-                // re-mirrors until the start changes again), so a range / to-end
-                // is still one edit away.
-                verse_end_signal.set(Some(start));
-            }
-        }
-    };
-
-    let on_verse_end = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(input) = target {
-            let val_str = input.value();
-            if val_str.is_empty() {
-                verse_end_signal.set(None);
-            } else if let Ok(val) = val_str.parse::<u16>() {
-                verse_end_signal.set(Some(val.max(1)));
-            }
-        }
-    };
-
-    // Enter on chapter → commit chapter value, jump to verse-start.
-    let on_chapter_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() != "Enter" {
-            return;
-        }
-        ev.prevent_default();
-        if let Some(input) = refs.chapter.get() {
-            if let Ok(val) = input.value().parse::<u16>() {
-                selected_chapter.set(val.max(1));
-                verse_start_signal.set(1);
-                verse_end_signal.set(None);
-            }
-        }
-        if let Some(el) = refs.verse_start.get() {
-            let _ = el.focus();
-            el.select();
-        }
-    };
-
-    // Enter on verse-start → commit value, jump to verse-end.
-    let on_verse_start_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() != "Enter" {
-            return;
-        }
-        ev.prevent_default();
-        if let Some(input) = refs.verse_start.get() {
-            if let Ok(val) = input.value().parse::<u16>() {
-                let start = val.max(1);
-                verse_start_signal.set(start);
-                // #702: mirror start -> end (single-verse fast path). The end
-                // input is focused + selected below, so a range is one type away.
-                verse_end_signal.set(Some(start));
-            }
-        }
-        if let Some(el) = refs.verse_end.get() {
-            let _ = el.focus();
-            el.select();
-        }
-    };
-
-    // Enter on verse-end → commit (or clear) value, return to book-filter.
-    // The debounced auto-load effect (`bible.rs` mount-time) already fires
-    // a passage fetch 300ms after the signal updates, so no explicit load
-    // click is needed here. Clearing the filter collapses the book list so
-    // the operator can immediately start typing the next book.
-    let on_verse_end_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() != "Enter" {
-            return;
-        }
-        ev.prevent_default();
-        if let Some(input) = refs.verse_end.get() {
-            let val_str = input.value();
-            if val_str.is_empty() {
-                verse_end_signal.set(None);
-            } else if let Ok(val) = val_str.parse::<u16>() {
-                verse_end_signal.set(Some(val.max(1)));
-            }
-            let _ = input.blur();
-        }
-        book_filter.set(String::new());
-        if let Some(el) = refs.book_filter.get() {
-            let _ = el.focus();
-        }
-    };
-
-    view! {
-        <div class="operator__reference-grid">
-            <label class="operator__field">
-                <span>"Chapter"</span>
-                <input
-                    type="number"
-                    data-role="chapter-input"
-                    min="1"
-                    node_ref=refs.chapter
-                    prop:value=move || selected_chapter.get().to_string()
-                    on:change=on_chapter
-                    on:keydown=on_chapter_keydown
-                />
-            </label>
-            <label class="operator__field">
-                <span>"Verse start"</span>
-                <input
-                    type="number"
-                    data-role="verse-start"
-                    min="1"
-                    node_ref=refs.verse_start
-                    prop:value=move || verse_start_signal.get().to_string()
-                    on:input=on_verse_start
-                    on:keydown=on_verse_start_keydown
-                />
-            </label>
-            <label class="operator__field">
-                <span>"Verse end"</span>
-                <input
-                    type="number"
-                    data-role="verse-end"
-                    min="1"
-                    node_ref=refs.verse_end
-                    prop:value=move || verse_end_signal.get().map(|v| v.to_string()).unwrap_or_default()
-                    placeholder="All"
-                    on:change=on_verse_end
-                    on:keydown=on_verse_end_keydown
-                />
-            </label>
         </div>
     }
 }

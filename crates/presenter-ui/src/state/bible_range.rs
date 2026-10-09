@@ -1,6 +1,82 @@
 //! #825: bound a typed chapter / verse by the selected book's counts and say
 //! why when it was over — the decision behind the Bible page's range hint.
 
+use super::bible::clamp_selection;
+
+/// A typed chapter or verse bounded to the selected book, plus the note to
+/// show when it was past the range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedInput {
+    pub value: u16,
+    pub hint: Option<String>,
+}
+
+/// The typed chapter bounded to the book's chapters (`clamp_selection`), with
+/// "Kniha má len N kapitol" when it was past the last one. Without a selected
+/// book (`chapter_count == 0`) only the lower bound 1 applies.
+pub fn bound_chapter(typed: u16, chapter_count: u16, verse_counts: &[u16]) -> BoundedInput {
+    if chapter_count == 0 || verse_counts.is_empty() {
+        return BoundedInput {
+            value: typed.max(1),
+            hint: None,
+        };
+    }
+    let value = clamp_selection(chapter_count, verse_counts, typed, 1, None).chapter;
+    let hint = (typed > chapter_count).then(|| {
+        format!(
+            "Kniha má len {}",
+            counted(chapter_count, "kapitolu", "kapitoly", "kapitol")
+        )
+    });
+    BoundedInput { value, hint }
+}
+
+/// A typed verse (start OR end) bounded to `chapter`'s verses
+/// (`clamp_selection`), with "Kapitola má len M veršov" when it was past the
+/// last one. The END is bounded like the start and never collapsed to "all"
+/// (`clamp_selection` turns `end <= start` into `None`, but the #702 mirror
+/// sets `end = start` for a single verse). Without a selected book only the
+/// lower bound 1 applies.
+pub fn bound_verse(
+    typed: u16,
+    chapter: u16,
+    chapter_count: u16,
+    verse_counts: &[u16],
+) -> BoundedInput {
+    if chapter_count == 0 || verse_counts.is_empty() {
+        return BoundedInput {
+            value: typed.max(1),
+            hint: None,
+        };
+    }
+    let clamped = clamp_selection(chapter_count, verse_counts, chapter, typed, None);
+    let max_verse = verse_counts
+        .get(usize::from(clamped.chapter.max(1)) - 1)
+        .copied()
+        .unwrap_or(1)
+        .max(1);
+    let hint = (typed > max_verse).then(|| {
+        format!(
+            "Kapitola má len {}",
+            counted(max_verse, "verš", "verše", "veršov")
+        )
+    });
+    BoundedInput {
+        value: clamped.verse_start,
+        hint,
+    }
+}
+
+/// `n` with the Slovak noun form it takes: 1 → `one`, 2–4 → `few`, else `many`.
+fn counted(n: u16, one: &str, few: &str, many: &str) -> String {
+    let noun = match n {
+        1 => one,
+        2..=4 => few,
+        _ => many,
+    };
+    format!("{n} {noun}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
