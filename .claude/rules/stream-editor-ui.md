@@ -385,6 +385,22 @@ the literal early, and the e2e `tsc` fails with TS1005. Do not type the pair ins
 TS strings: write the word without quotes, or use a backtick/single-quoted string. Run
 `node ../../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` before EVERY spec commit.
 
+## Uploaded-family weight picker + Kurzíva (#830)
+- `font_faces.rs` (pure, host-tested) builds the weight options of an uploaded family:
+  - one option per distinct weight, labelled "<style name> <weight>" from `StreamFont::style_name`;
+  - a weight with only an italic face drops "Italic";
+  - a nameless face gets the OpenType standard name, or just the number;
+  - the stored weight is appended as "<w> (nenahraté)" when no face has it, so the `<select>`
+    never shows a weight other than the saved one.
+- The options carry `prop:selected` (the #827 rule), never `prop:value` on the `<select>`.
+- The "Kurzíva" checkbox (`stream-ts-italic`):
+  - it is enabled only when `has_italic_face(family, weight)`;
+  - a ticked box stays enabled, so it can always be unticked;
+  - unticked stores `None`.
+  - A built-in family has no italic face, so its box is disabled unless already ticked.
+- E2E: a new countdown starts at weight 700, so with an uploaded family the box is disabled until
+  a weight that has an italic face is picked (`stream-font-faces.spec.ts`).
+
 ## Content-transition control = three radios (#834)
 `TransitionFields` offers Strih / Prelínať (crossfade) / Prelínať cez prázdno. The radios are
 `stream-transition-cut`, `stream-transition-fade` and `stream-transition-fade-through`, and they
