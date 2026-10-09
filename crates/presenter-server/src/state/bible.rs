@@ -20,10 +20,15 @@ use std::collections::HashMap;
 pub struct BibleTriggerOverrides {
     pub main_text: Option<String>,
     pub translation_text: Option<String>,
-    #[allow(dead_code)] // Prepared for reference label editing in Bible trigger UI
-    pub main_reference_label: Option<String>,
-    #[allow(dead_code)] // Prepared for reference label editing in Bible trigger UI
-    pub translation_reference_label: Option<String>,
+}
+
+/// The secondary side of a legacy trigger (#824): its text, its translation
+/// code and the book name that translation uses (for the translate reference).
+#[derive(Debug, Default)]
+struct TriggerSecondary {
+    text: Option<String>,
+    translation_code: Option<String>,
+    book: Option<String>,
 }
 
 /// What [`AppState::generate_bible_slides`] produced. `secondary_warning`
@@ -451,7 +456,7 @@ impl AppState {
         let passage = self
             .trigger_main_passage(translation_code, reference, overrides.main_text)
             .await?;
-        let (secondary_text, secondary_translation_code) = self
+        let secondary = self
             .trigger_secondary_text(reference, overrides.translation_text)
             .await?;
 
@@ -466,8 +471,9 @@ impl AppState {
         self.resolume_registry
             .bible_update(BibleUpdate {
                 passage: Some(broadcast.clone()),
-                secondary_text,
-                secondary_translation_code,
+                secondary_text: secondary.text,
+                secondary_translation_code: secondary.translation_code,
+                secondary_book: secondary.book,
                 slide_output: None, // Legacy path - no slide output
             })
             .await;
@@ -518,31 +524,45 @@ impl AppState {
         ))
     }
 
-    /// The secondary text + translation code of a legacy trigger: the
-    /// client's edited text (under the saved secondary translation), else the
-    /// saved secondary translation's verses. A secondary translation that
-    /// cannot be read right now (e.g. the NLT API is down, #826) is logged
-    /// and left out — the main passage still goes on air.
+    /// The secondary side of a legacy trigger: the client's edited text (under
+    /// the saved secondary translation), else the saved secondary
+    /// translation's verses — plus the book name that translation uses (#824).
+    /// A secondary translation that cannot be read right now (e.g. the NLT API
+    /// is down, #826) is logged and left out — the main passage still goes on
+    /// air.
     async fn trigger_secondary_text(
         &self,
         reference: &BibleReference,
         translation_text: Option<String>,
-    ) -> anyhow::Result<(Option<String>, Option<String>)> {
+    ) -> anyhow::Result<TriggerSecondary> {
         let prefs = self.get_bible_preferences().await?;
-        if let Some(text) = translation_text {
-            return Ok((
-                (!text.is_empty()).then_some(text),
-                prefs.secondary_translation,
-            ));
-        }
         let Some(code) = prefs.secondary_translation else {
-            return Ok((None, None));
+            return Ok(TriggerSecondary {
+                text: translation_text.filter(|text| !text.is_empty()),
+                ..TriggerSecondary::default()
+            });
         };
+        // The main reference may carry only the MAIN book name ("1 Ján" from
+        // the AI tool); the secondary rows are found by the canonical code.
+        let book_code = secondary_book_code(reference);
+        if let Some(text) = translation_text {
+            let book = if text.is_empty() {
+                None
+            } else {
+                self.first_verse_book(&code, reference, book_code.as_deref())
+                    .await
+            };
+            return Ok(TriggerSecondary {
+                text: (!text.is_empty()).then_some(text),
+                translation_code: Some(code),
+                book,
+            });
+        }
         let range = self
             .bible_passage_range(
                 &code,
                 reference.book.as_str(),
-                reference.book_code.as_deref(),
+                book_code.as_deref(),
                 reference.chapter,
                 reference.verse_start,
                 reference.verse_end,
@@ -557,10 +577,39 @@ impl AppState {
                 );
                 Vec::new()
             });
-        if range.is_empty() {
-            return Ok((None, None));
-        }
-        Ok((Some(numbered_verse_text(&range)), Some(code)))
+        let Some(first) = range.first() else {
+            return Ok(TriggerSecondary::default());
+        };
+        Ok(TriggerSecondary {
+            book: Some(first.reference.book.clone()),
+            text: Some(numbered_verse_text(&range)),
+            translation_code: Some(code),
+        })
+    }
+
+    /// The book name `translation_code` uses for `reference`'s book, read from
+    /// the passage's first verse (one cheap lookup); `None` when unreadable.
+    async fn first_verse_book(
+        &self,
+        translation_code: &str,
+        reference: &BibleReference,
+        book_code: Option<&str>,
+    ) -> Option<String> {
+        let first = self
+            .bible_passage_range(
+                translation_code,
+                reference.book.as_str(),
+                book_code,
+                reference.chapter,
+                reference.verse_start,
+                reference.verse_start,
+            )
+            .await
+            .ok()?;
+        first
+            .into_iter()
+            .next()
+            .map(|passage| passage.reference.book)
     }
 
     /// Trigger a Bible slide using the single-source-of-truth output.
@@ -675,6 +724,15 @@ impl AppState {
     ) {
         self.bible.ingestion_override = Some(ingestion);
     }
+}
+
+/// The canonical book code to look a SECONDARY translation up by: the
+/// reference's own code, else the code of its (main-language) book name.
+fn secondary_book_code(reference: &BibleReference) -> Option<String> {
+    reference.book_code.clone().or_else(|| {
+        presenter_core::bible::canonical_book_by_name(&reference.book)
+            .map(|book| book.code.to_string())
+    })
 }
 
 /// Verses as `"N. text"` paragraphs separated by a blank line — the legacy

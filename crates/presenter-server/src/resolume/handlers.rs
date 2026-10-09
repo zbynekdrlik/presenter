@@ -37,6 +37,7 @@ struct StagePushMetrics {
 }
 
 use super::driver::TRIGGER_DELAY;
+pub(super) use super::legacy_reference::legacy_translation_reference;
 
 pub(super) fn translation_short_code(code: &str) -> String {
     code.rsplit('-').next().unwrap_or(code).to_uppercase()
@@ -538,12 +539,11 @@ impl HostDriver {
         }
 
         // Send secondary translation reference to #bible-translate-reference-a/b
-        let sec_ref = if let Some(ref sec_code) = update.secondary_translation_code {
-            let sec_short = translation_short_code(sec_code);
-            format!("{reference} ({sec_short})")
-        } else {
-            String::new()
-        };
+        let sec_ref = legacy_translation_reference(
+            &passage.passage.reference,
+            update.secondary_book.as_deref(),
+            update.secondary_translation_code.as_deref(),
+        );
         let sec_ref_targets = self
             .update_lane_text(
                 bible_translation_lane,

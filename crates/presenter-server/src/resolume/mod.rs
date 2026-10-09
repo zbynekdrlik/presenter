@@ -13,6 +13,7 @@ mod keepalive_tests;
 mod latency_tests;
 #[cfg(test)]
 mod legacy_bible_tests;
+mod legacy_reference;
 mod mapping_refresh;
 #[cfg(test)]
 mod mapping_refresh_tests;
@@ -166,6 +167,10 @@ pub struct BibleUpdate {
     pub passage: Option<BibleBroadcast>,
     pub secondary_text: Option<String>,
     pub secondary_translation_code: Option<String>,
+    /// Legacy path (#824): the book name the SECONDARY translation uses
+    /// ("1 John" for eng-kjv), so `#bible-translate-reference` does not repeat
+    /// the main translation's ("1 Ján"). `None` falls back to the main name.
+    pub secondary_book: Option<String>,
     /// New: single source of truth slide output (preferred)
     pub slide_output: Option<BibleSlideOutput>,
 }
@@ -178,6 +183,7 @@ impl BibleUpdate {
             passage: None,
             secondary_text: None,
             secondary_translation_code: None,
+            secondary_book: None,
             slide_output: output,
         }
     }

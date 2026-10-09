@@ -149,10 +149,6 @@ pub struct TriggerRequest {
     pub main_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub main_reference_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub translation_reference_label: Option<String>,
 }
 
 /// Trigger a Bible broadcast (structured reference). Server: POST /bible/trigger
