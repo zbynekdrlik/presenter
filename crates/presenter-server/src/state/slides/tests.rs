@@ -187,10 +187,12 @@ fn compose_bible_slides_secondary_label_uses_the_secondary_book_name() {
     );
 }
 
-/// Without any secondary passage there is no secondary book name: the label
-/// falls back to the main book name (the pre-#824 behaviour, still correct here).
+/// Without any secondary passage (KJV has no Tobit; a versification miss) there
+/// is no secondary text and no secondary book name. A translation reference
+/// would then name the MAIN book under the secondary code ("Tobiáš 1:1 (KJV)")
+/// next to an empty translation, so no translation reference is emitted (#824).
 #[test]
-fn compose_bible_slides_secondary_label_falls_back_to_the_main_book_name() {
+fn compose_bible_slides_without_secondary_passages_emits_no_translation_label() {
     let main_translation = test_translation("slk-seb");
     let secondary_translation = test_translation("eng-kjv");
     let passages = vec![test_passage("1 Ján", 1, 1, "Čo bolo od počiatku.")];
@@ -211,9 +213,10 @@ fn compose_bible_slides_secondary_label_falls_back_to_the_main_book_name() {
         .as_ref()
         .and_then(|m| m.bible.as_ref())
         .expect("bible metadata");
+    assert_eq!(bible.translation_reference_label, None);
     assert_eq!(
-        bible.translation_reference_label.as_deref(),
-        Some("1 Ján 1:1 (KJV)")
+        bible.main_reference_label.as_deref(),
+        Some("1 Ján 1:1 (SEB)")
     );
 }
 
