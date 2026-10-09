@@ -11,7 +11,9 @@ use wasm_bindgen::JsCast;
 
 use super::bible::BibleFocusRefs;
 use crate::state::bible::BibleState;
-use crate::state::bible_range::{bound_chapter, bound_verse, BoundedInput};
+use crate::state::bible_range::{
+    bound_chapter, bound_verse, next_hint, BoundedInput, RangeField, RangeHint,
+};
 
 /// The input element an event fired on.
 fn event_input(ev: &web_sys::Event) -> Option<web_sys::HtmlInputElement> {
@@ -37,7 +39,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
     let selected_chapter = bs.selected_chapter;
     let verse_start_signal = bs.verse_start;
     let verse_end_signal = bs.verse_end;
-    let range_hint = RwSignal::new(None::<String>);
+    let range_hint = RwSignal::new(None::<RangeHint>);
 
     // A book change clears the note (#825).
     Effect::new(move || {
@@ -54,19 +56,33 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
                 .unwrap_or_default()
         })
     };
+    // The note after a commit to `field` whose value was `previous` — kept
+    // when the box only re-commits the value the clamp wrote (`next_hint`).
+    let update_hint = move |field: RangeField, previous: u16, bounded: &BoundedInput| {
+        let next = range_hint
+            .with_untracked(|current| next_hint(current.as_ref(), field, previous, bounded));
+        range_hint.set(next);
+    };
     let apply_chapter = move |typed: u16| -> BoundedInput {
         let (chapter_count, verse_counts) = counts();
+        let previous = selected_chapter.get_untracked();
         let bounded = bound_chapter(typed, chapter_count, &verse_counts);
+        update_hint(RangeField::Chapter, previous, &bounded);
+        // A re-commit of the same chapter must not reset the verses typed
+        // meanwhile (the `change` can arrive after the focus moved on).
+        if bounded.value != previous {
+            verse_start_signal.set(1);
+            verse_end_signal.set(None);
+        }
         selected_chapter.set(bounded.value);
-        verse_start_signal.set(1);
-        verse_end_signal.set(None);
-        range_hint.set(bounded.hint.clone());
         bounded
     };
     let apply_verse_start = move |typed: u16| -> BoundedInput {
         let (chapter_count, verse_counts) = counts();
         let chapter = selected_chapter.get_untracked();
+        let previous = verse_start_signal.get_untracked();
         let bounded = bound_verse(typed, chapter, chapter_count, &verse_counts);
+        update_hint(RangeField::VerseStart, previous, &bounded);
         verse_start_signal.set(bounded.value);
         // #702: mirror the start into the end — the dominant case is a
         // single verse, so entering a start auto-fills the end with the same
@@ -74,15 +90,15 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
         // until the start changes again), so a range / to-end is still one
         // edit away.
         verse_end_signal.set(Some(bounded.value));
-        range_hint.set(bounded.hint.clone());
         bounded
     };
     let apply_verse_end = move |typed: u16| -> BoundedInput {
         let (chapter_count, verse_counts) = counts();
         let chapter = selected_chapter.get_untracked();
+        let previous = verse_end_signal.get_untracked().unwrap_or(0);
         let bounded = bound_verse(typed, chapter, chapter_count, &verse_counts);
+        update_hint(RangeField::VerseEnd, previous, &bounded);
         verse_end_signal.set(Some(bounded.value));
-        range_hint.set(bounded.hint.clone());
         bounded
     };
     // An emptied end box means "to the end of the chapter".
@@ -242,7 +258,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
             </label>
         </div>
         {move || range_hint.get().map(|hint| view! {
-            <p class="operator__range-hint" data-role="bible-range-hint" role="status">{hint}</p>
+            <p class="operator__range-hint" data-role="bible-range-hint" role="status">{hint.text}</p>
         })}
     }
 }

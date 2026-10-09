@@ -67,6 +67,46 @@ pub fn bound_verse(
     }
 }
 
+/// Which box a range note is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeField {
+    Chapter,
+    VerseStart,
+    VerseEnd,
+}
+
+/// The inline note and the box it is about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RangeHint {
+    pub field: RangeField,
+    pub text: String,
+}
+
+/// The note after committing `bounded` to `field`, whose value was
+/// `previous`: a clamp shows its note; the SAME box re-committing its
+/// unchanged value keeps the current note — Enter writes the clamped value
+/// into the box, and the focus move / blur that follows fires the browser's
+/// `change` with exactly that value; any other valid value clears it.
+pub fn next_hint(
+    current: Option<&RangeHint>,
+    field: RangeField,
+    previous: u16,
+    bounded: &BoundedInput,
+) -> Option<RangeHint> {
+    if let Some(text) = &bounded.hint {
+        return Some(RangeHint {
+            field,
+            text: text.clone(),
+        });
+    }
+    let recommit = bounded.value == previous && current.is_some_and(|hint| hint.field == field);
+    if recommit {
+        current.cloned()
+    } else {
+        None
+    }
+}
+
 /// `n` with the Slovak noun form it takes: 1 → `one`, 2–4 → `few`, else `many`.
 fn counted(n: u16, one: &str, few: &str, many: &str) -> String {
     let noun = match n {
