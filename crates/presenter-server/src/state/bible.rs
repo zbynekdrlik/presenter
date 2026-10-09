@@ -1,6 +1,7 @@
 //! Bible search, broadcast, and ingestion methods for [`AppState`].
 
 use super::AppState;
+use crate::bible_remote::RemoteBibleError;
 use crate::live::LiveEvent;
 use crate::resolume::BibleUpdate;
 use chrono::Utc;
@@ -24,6 +25,22 @@ pub struct BibleTriggerOverrides {
     #[allow(dead_code)] // Prepared for reference label editing in Bible trigger UI
     pub translation_reference_label: Option<String>,
 }
+
+/// What [`AppState::generate_bible_slides`] produced. `secondary_warning`
+/// is set when the secondary translation could not be read (the NLT API is
+/// unreachable, #826): the slides then carry the main text only, and the
+/// caller shows the warning to the operator.
+#[derive(Debug)]
+pub struct GeneratedBibleSlides {
+    pub main_translation: BibleTranslation,
+    pub secondary_translation: Option<BibleTranslation>,
+    pub slides: Vec<Slide>,
+    pub secondary_warning: Option<String>,
+}
+
+/// Secondary verses keyed by verse number, plus the operator warning when the
+/// secondary translation was unreachable.
+type SecondaryVerses = (HashMap<u16, presenter_core::BiblePassage>, Option<String>);
 
 /// Returns a safe placeholder BibleReference for legacy broadcast fallback.
 /// The hardcoded values (empty book, chapter=1, verses 1-1) are guaranteed valid.
@@ -88,7 +105,7 @@ impl AppState {
         verse_start: u16,
         verse_end: u16,
         character_limit: u32,
-    ) -> anyhow::Result<(BibleTranslation, Option<BibleTranslation>, Vec<Slide>)> {
+    ) -> anyhow::Result<GeneratedBibleSlides> {
         let translations = self.list_bible_translations().await?;
         let main_translation = translations
             .iter()
@@ -119,25 +136,20 @@ impl AppState {
             .first()
             .and_then(|p| p.reference.book_code.clone());
 
-        let secondary_lookup: HashMap<u16, presenter_core::BiblePassage> =
-            if let Some(ref tr) = secondary_translation {
-                let passages = self
-                    .bible_passage_range(
-                        &tr.code,
-                        book,
-                        canonical_book_code.as_deref(),
-                        chapter,
-                        verse_start,
-                        verse_end,
-                    )
-                    .await?;
-                passages
-                    .into_iter()
-                    .map(|p| (p.reference.verse_start, p))
-                    .collect()
-            } else {
-                HashMap::new()
-            };
+        let (secondary_lookup, secondary_warning) = match secondary_translation {
+            Some(ref tr) => {
+                self.secondary_verse_lookup(
+                    tr,
+                    book,
+                    canonical_book_code.as_deref(),
+                    chapter,
+                    verse_start,
+                    verse_end,
+                )
+                .await?
+            }
+            None => (HashMap::new(), None),
+        };
 
         let slides = super::slides::compose_bible_slides(
             &main_translation,
@@ -149,7 +161,60 @@ impl AppState {
             verse_end,
         )?;
 
-        Ok((main_translation, secondary_translation, slides))
+        Ok(GeneratedBibleSlides {
+            main_translation,
+            secondary_translation,
+            slides,
+            secondary_warning,
+        })
+    }
+
+    /// The secondary translation's verses by verse number. A remote
+    /// translation that cannot be reached right now (the NLT API, #826) gives
+    /// no verses plus a warning for the operator, so the main text still
+    /// loads during a service; any other error still fails the load.
+    async fn secondary_verse_lookup(
+        &self,
+        translation: &BibleTranslation,
+        book: &str,
+        book_code: Option<&str>,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+    ) -> anyhow::Result<SecondaryVerses> {
+        let fetched = self
+            .bible_passage_range(
+                &translation.code,
+                book,
+                book_code,
+                chapter,
+                verse_start,
+                verse_end,
+            )
+            .await;
+        match fetched {
+            Ok(passages) => Ok((
+                passages
+                    .into_iter()
+                    .map(|p| (p.reference.verse_start, p))
+                    .collect(),
+                None,
+            )),
+            Err(err) => match err.downcast_ref::<RemoteBibleError>() {
+                Some(remote) => {
+                    tracing::warn!(
+                        translation = %translation.code,
+                        error = %remote,
+                        "secondary Bible translation unavailable — loading the main text only"
+                    );
+                    Ok((
+                        HashMap::new(),
+                        Some(format!("{remote} — sekundárny preklad vynechaný")),
+                    ))
+                }
+                None => Err(err),
+            },
+        }
     }
 
     // Bible presentation methods

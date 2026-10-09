@@ -891,9 +891,15 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     };
 
     let history_signal = bs.loaded_passages_history;
+    let warning_ctx = ctx.clone();
     leptos::task::spawn_local(async move {
         match bible::resolve_slides(&req).await {
             Ok(resp) => {
+                // #826: the slides loaded, but without the secondary text
+                // (its remote source is down) — always tell the operator.
+                if let Some(warning) = resp.warning.as_deref() {
+                    warning_ctx.show_toast(warning, "error");
+                }
                 slides.set(resp.slides);
                 history_signal.update(|history| {
                     history.retain(|p| p.label != history_entry.label);

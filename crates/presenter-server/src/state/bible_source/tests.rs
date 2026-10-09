@@ -176,7 +176,7 @@ async fn seb_main_with_nlt_secondary_names_the_book_in_english_with_nlt() {
     let mut state = seb_and_kjv().await;
     let server = mock_nlt(&mut state, "1Jn.1.1-3", page(FIXTURE_1JN), 1).await;
 
-    let (main, secondary, slides) = state
+    let generated = state
         .generate_bible_slides(
             "slk-seb",
             Some(NLT_CODE),
@@ -190,8 +190,13 @@ async fn seb_main_with_nlt_secondary_names_the_book_in_english_with_nlt() {
         .await
         .expect("slides");
 
-    assert_eq!(main.code, "slk-seb");
-    assert_eq!(secondary.map(|t| t.code).as_deref(), Some(NLT_CODE));
+    assert_eq!(generated.main_translation.code, "slk-seb");
+    assert_eq!(
+        generated.secondary_translation.map(|t| t.code).as_deref(),
+        Some(NLT_CODE)
+    );
+    assert!(generated.secondary_warning.is_none());
+    let slides = generated.slides;
     assert_eq!(slides.len(), 1);
     let bible = bible_metadata(&slides[0]);
     assert_eq!(
@@ -258,11 +263,11 @@ async fn nlt_book_and_chapter_structure_is_the_kjv_one_without_a_request() {
 }
 
 #[tokio::test]
-async fn nlt_down_is_a_typed_error_and_other_translations_keep_working() {
+async fn an_unreachable_nlt_secondary_loads_the_main_text_with_a_warning() {
     let mut state = seb_and_kjv().await;
     let _server = mock_nlt(&mut state, "1Jn.1.1-3", ResponseTemplate::new(500), 1).await;
 
-    let err = state
+    let generated = state
         .generate_bible_slides(
             "slk-seb",
             Some(NLT_CODE),
@@ -274,10 +279,26 @@ async fn nlt_down_is_a_typed_error_and_other_translations_keep_working() {
             2000,
         )
         .await
-        .expect_err("NLT down must fail the load");
-    assert!(err.downcast_ref::<RemoteBibleError>().is_some(), "{err:#}");
+        .expect("the SEB text still loads");
 
-    let (_, _, slides) = state
+    let warning = generated.secondary_warning.expect("operator warning");
+    assert!(warning.starts_with("NLT nedostupné"), "{warning}");
+    assert!(
+        warning.contains("sekundárny preklad vynechaný"),
+        "{warning}"
+    );
+    assert_eq!(generated.slides.len(), 1);
+    let slide = &generated.slides[0];
+    assert!(slide
+        .content
+        .main
+        .value()
+        .starts_with("1. Čo bolo od počiatku."));
+    assert!(slide.content.translation.value().is_empty());
+    assert_eq!(bible_metadata(slide).translation_reference_label, None);
+
+    // Another secondary translation keeps working meanwhile.
+    let with_kjv = state
         .generate_bible_slides(
             "slk-seb",
             Some("eng-kjv"),
@@ -290,11 +311,40 @@ async fn nlt_down_is_a_typed_error_and_other_translations_keep_working() {
         )
         .await
         .expect("KJV still works");
+    assert!(with_kjv.secondary_warning.is_none());
     assert_eq!(
-        bible_metadata(&slides[0])
+        bible_metadata(&with_kjv.slides[0])
             .translation_reference_label
             .as_deref(),
         Some("1 John 1:1-3 (KJV)")
+    );
+}
+
+#[tokio::test]
+async fn an_unreachable_nlt_main_translation_fails_the_load_with_a_typed_error() {
+    let mut state = seb_and_kjv().await;
+    let _server = mock_nlt(&mut state, "1Jn.1.1-3", ResponseTemplate::new(500), 1).await;
+
+    let err = state
+        .generate_bible_slides(
+            NLT_CODE,
+            Some("slk-seb"),
+            "1 John",
+            Some("1JN"),
+            1,
+            1,
+            3,
+            2000,
+        )
+        .await
+        .expect_err("without the main text there is nothing to show");
+
+    assert!(
+        matches!(
+            err.downcast_ref::<RemoteBibleError>(),
+            Some(RemoteBibleError::Status { status: 500, .. })
+        ),
+        "{err:#}"
     );
 }
 
@@ -314,7 +364,6 @@ async fn searching_the_nlt_is_empty_and_makes_no_request() {
 
     assert!(nlt_hits.is_empty());
     assert!(all_hits.iter().any(|p| p.translation.code == "eng-kjv"));
-    assert!(all_hits.iter().all(|p| p.translation.code != NLT_CODE));
     server.verify().await;
 }
 

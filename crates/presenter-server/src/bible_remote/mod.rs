@@ -82,9 +82,11 @@ pub(crate) fn nlt_passages(
         .collect()
 }
 
-/// A failed NLT fetch. The router maps it to 503 (the API could not be
-/// reached) or 502 (it answered, but unusably) with this Slovak message, which
-/// the operator sees in the "Failed to load passage" toast.
+/// A failed NLT fetch. As the MAIN translation's error the router maps it to
+/// 503 (the API could not be reached) or 502 (it answered, but unusably) with
+/// this Slovak message, shown in the "Failed to load passage" toast; as the
+/// SECONDARY translation's error the main text loads anyway and this message
+/// becomes the resolve `warning` toast (`AppState::generate_bible_slides`).
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RemoteBibleError {
     /// No answer within the request timeout.

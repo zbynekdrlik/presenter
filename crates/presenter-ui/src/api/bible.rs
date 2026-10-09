@@ -248,6 +248,10 @@ pub struct ResolveResponse {
     pub main_translation: BibleTranslation,
     pub secondary_translation: Option<BibleTranslation>,
     pub slides: Vec<BibleSlideDto>,
+    /// #826: set when the secondary translation was unreachable (the NLT
+    /// API) — the slides carry the main text only.
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
