@@ -3,7 +3,11 @@
 //! it in `#bible-translate-reference` ("1 John …", not the main "1 Ján …").
 
 use super::*;
+use crate::bible_remote::{NltClient, NLT_CODE};
 use presenter_core::bible::BibleIngestionBatch;
+use std::time::Duration;
+use wiremock::matchers::path;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn seed(state: &AppState, code: &str, language: &str, book: &str, texts: &[&str]) {
     let translation = BibleTranslation::new(code, code, language);
@@ -126,4 +130,55 @@ async fn without_a_secondary_translation_there_is_no_secondary_book() {
     assert_eq!(secondary.text, None);
     assert_eq!(secondary.translation_code, None);
     assert_eq!(secondary.book, None);
+}
+
+#[tokio::test]
+async fn a_blank_book_code_still_finds_the_secondary_verses() {
+    let state = seb_main_kjv_secondary().await;
+    let reference = BibleReference {
+        book: "1 Ján".to_string(),
+        book_code: Some(String::new()),
+        book_number: None,
+        chapter: 1,
+        verse_start: 1,
+        verse_end: 1,
+    };
+
+    let secondary = state
+        .trigger_secondary_text(&reference, None)
+        .await
+        .expect("secondary");
+
+    assert_eq!(secondary.book.as_deref(), Some("1 John"));
+    assert!(secondary.text.is_some());
+}
+
+#[tokio::test]
+async fn an_edited_nlt_secondary_names_its_book_without_calling_the_api() {
+    // The NLT's book names are eng-kjv's (#826): looking one up must not
+    // cost an API request (up to a 10 s timeout) before the slide goes on air.
+    let mut state = seb_main_kjv_secondary().await;
+    let server = MockServer::start().await;
+    Mock::given(path("/api/passages"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    state.set_test_nlt_client(NltClient::for_test(&server.uri(), Duration::from_secs(5)));
+    state
+        .set_bible_preferences(
+            BiblePreferences::default().with_secondary_translation(Some(NLT_CODE.to_string())),
+        )
+        .await
+        .expect("preferences");
+    let reference = BibleReference::new_with_code("1 Ján", "1JN", 62, 1, 1, 1).expect("reference");
+
+    let secondary = state
+        .trigger_secondary_text(&reference, Some("Edited NLT line.".to_string()))
+        .await
+        .expect("secondary");
+
+    assert_eq!(secondary.text.as_deref(), Some("Edited NLT line."));
+    assert_eq!(secondary.book.as_deref(), Some("1 John"));
+    server.verify().await;
 }
