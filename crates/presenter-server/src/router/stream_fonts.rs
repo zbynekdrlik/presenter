@@ -132,30 +132,47 @@ async fn upload_font(
         .await?;
 
     Ok(Json(
-        rederive_uploaded_family(&state, font, meta.style_name).await?,
+        rederive_uploaded_family(&state, font, meta.style_name).await,
     ))
 }
 
 /// #830: re-derive the uploaded face's family, since a new Black face moves a
 /// stored Heavy below it. Answers with the face as stored now, plus its style
-/// name. A failed re-derive leaves the stored weights as uploaded (logged); the
-/// next startup's pass retries it.
+/// name. The bytes and the row are already stored, so nothing here fails the
+/// upload: a failed re-derive or re-read is logged and the next startup's pass
+/// retries it.
 async fn rederive_uploaded_family(
     state: &AppState,
     font: StreamFont,
     style_name: Option<String>,
-) -> Result<StreamFont, AppError> {
-    if let Err(e) = state.rederive_stream_font_family(&font.family).await {
+) -> StreamFont {
+    rederive_family_logged(state, &font.family, "upload").await;
+    let mut current = match state.repository().get_stream_font(font.id).await {
+        Ok(current) => current,
+        Err(e) => {
+            tracing::warn!(
+                font_id = font.id,
+                error = %e,
+                "re-reading the uploaded font failed — answering with the row as inserted"
+            );
+            font
+        }
+    };
+    current.style_name = style_name;
+    current
+}
+
+/// Re-derive `family` after an upload or delete changed its faces (#830), with
+/// a WARN instead of an error: the change itself already happened.
+async fn rederive_family_logged(state: &AppState, family: &str, after: &str) {
+    if let Err(e) = state.rederive_stream_font_family(family).await {
         tracing::warn!(
-            font_id = font.id,
-            family = %font.family,
+            family,
+            after,
             error = %e,
-            "font family re-derive after upload failed — weights kept as uploaded"
+            "font family re-derive failed — weights kept as stored, retried on the next start"
         );
     }
-    let mut font = state.repository().get_stream_font(font.id).await?;
-    font.style_name = style_name;
-    Ok(font)
 }
 
 /// The content checks of an upload, in order, each a `422`: container by magic
@@ -233,7 +250,8 @@ async fn serve_font(
 
 /// `DELETE /stream/fonts/{id}` — delete the row (repository guard ⇒ 409 with the
 /// referencing scene names while it is the last face of an in-use family) then
-/// the file. 404 for a missing row.
+/// the file, then re-derive the family (#830: deleting its Black face moves a
+/// style-derived Heavy back to 900). 404 for a missing row.
 #[instrument(skip_all)]
 async fn delete_font(
     State(state): State<AppState>,
@@ -250,6 +268,7 @@ async fn delete_font(
             "font row deleted but its file could not be removed"
         );
     }
+    rederive_family_logged(&state, &font.family, "delete").await;
     Ok(StatusCode::NO_CONTENT)
 }
 

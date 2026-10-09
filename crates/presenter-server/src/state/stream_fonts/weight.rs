@@ -10,7 +10,10 @@
 //! comes from the first style name that names one: the typographic subfamily
 //! (name 17), then the subfamily (2), the full name (4) and finally the
 //! original filename. A non-default OS/2 weight is always trusted.
-//! [`family_weights`] then keeps a family's Heavy and Black faces apart.
+//! [`family_weights`] then keeps a family's Heavy and Black faces apart, and
+//! [`colliding_styles`] names any pair still sharing a weight and style.
+
+use std::collections::BTreeMap;
 
 /// A weight word found in a style name, as the OpenType `usWeightClass`
 /// table names them. Heavy and Black are kept apart (both 900) so
@@ -168,6 +171,22 @@ pub(crate) fn family_weights(faces: &[FaceWeight]) -> Vec<u16> {
         .collect()
 }
 
+/// The (weight, italic) pairs that two or more faces still share after
+/// [`family_weights`], ascending. Such faces collide in `/stream/fonts.css`
+/// (the browser uses one of them), e.g. an OS/2-declared Heavy 900 next to a
+/// name-derived Black 900, which no rule here may move.
+pub(crate) fn colliding_styles(faces: &[(u16, bool)]) -> Vec<(u16, bool)> {
+    let mut counts: BTreeMap<(u16, bool), usize> = BTreeMap::new();
+    for &face in faces {
+        *counts.entry(face).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, count)| count > 1)
+        .map(|(face, _)| face)
+        .collect()
+}
+
 /// The first weight word in an already-squashed name.
 fn keyword_in(squashed: &str) -> Option<WeightKeyword> {
     KEYWORDS
@@ -186,11 +205,8 @@ fn squash(name: &str) -> String {
 
 /// `name` with its (squashed) family name cut out, wherever it sits: a full
 /// name starts with it, a filename may carry a vendor prefix first
-/// ("Fontfabric - Nexa-Black").
+/// ("Fontfabric - Nexa-Black"). An empty family cuts nothing.
 fn without_family(name: &str, family: &str) -> String {
-    if family.is_empty() {
-        return name.to_string();
-    }
     name.replacen(family, "", 1)
 }
 

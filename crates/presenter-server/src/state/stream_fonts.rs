@@ -370,7 +370,10 @@ impl AppState {
             return Some(face);
         }
         let bytes = self.read_stored_font(store, font).await?;
-        Some(self.evaluate_face(font, &bytes))
+        let style_name = parse_font_metadata(&bytes, &font.original_filename)
+            .ok()
+            .and_then(|meta| meta.style_name);
+        Some(self.evaluate_face(font, &bytes, style_name))
     }
 
     /// A stored face's bytes, or `None` (logged via
@@ -390,9 +393,14 @@ impl AppState {
         }
     }
 
-    /// Check a stored face's bytes, cache the verdict + style name under its
-    /// sha256, and WARN when a browser would refuse it.
-    fn evaluate_face(&self, font: &StreamFont, bytes: &[u8]) -> FaceVerdict {
+    /// Check a stored face's bytes, cache the verdict + its (already parsed)
+    /// style name under its sha256, and WARN when a browser would refuse it.
+    fn evaluate_face(
+        &self,
+        font: &StreamFont,
+        bytes: &[u8],
+        style_name: Option<String>,
+    ) -> FaceVerdict {
         let loadable = match check_browser_loadable(bytes) {
             Ok(()) => true,
             Err(defect) => {
@@ -407,9 +415,6 @@ impl AppState {
                 false
             }
         };
-        let style_name = parse_font_metadata(bytes, &font.original_filename)
-            .ok()
-            .and_then(|meta| meta.style_name);
         let face = FaceVerdict {
             loadable,
             style_name,

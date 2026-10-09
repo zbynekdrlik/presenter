@@ -110,7 +110,11 @@ pub fn FontPanel(ctx: StreamEditorCtx) -> impl IntoView {
             <ul class="stream-editor__font-list" data-role="stream-font-list">
                 <For
                     each=face_items
-                    key=|f| f.id
+                    // #830: a later upload can move a stored face's weight
+                    // (a new Black moves Heavy below it), and a keyed <For>
+                    // never re-renders an unchanged key — so the key carries
+                    // every field the row shows.
+                    key=|f| (f.id, f.weight, f.italic, f.style_name.clone())
                     children=move |f: StreamFont| {
                         let id = f.id;
                         let family = f.family.clone();

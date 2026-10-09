@@ -111,25 +111,25 @@ impl Repository {
 
     /// Set a face's `weight` + `italic` (#830 — re-derived from its bytes).
     /// Only those two columns change; the row's sha256, family and file stay.
+    /// `false` when no such row exists: a delete may race the re-derive, which
+    /// then skips that face instead of failing its whole pass.
     #[instrument(skip_all)]
     pub async fn update_stream_font_face(
         &self,
         id: i64,
         weight: u16,
         italic: bool,
-    ) -> anyhow::Result<()> {
-        let id =
-            i32::try_from(id).map_err(|_| RepositoryError::NotFound("stream font not found"))?;
+    ) -> anyhow::Result<bool> {
+        let Ok(id) = i32::try_from(id) else {
+            return Ok(false);
+        };
         let result = stream_font::Entity::update_many()
             .col_expr(stream_font::Column::Weight, Expr::value(i32::from(weight)))
             .col_expr(stream_font::Column::Italic, Expr::value(italic))
             .filter(stream_font::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
-        if result.rows_affected == 0 {
-            return Err(RepositoryError::NotFound("stream font not found").into());
-        }
-        Ok(())
+        Ok(result.rows_affected > 0)
     }
 
     /// The DISTINCT uploaded font families — the extra set unioned with the
