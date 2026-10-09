@@ -6,7 +6,8 @@
 //! now does ([`parse_font_metadata`] + [`family_weights`]) and updates the
 //! rows that differ. It needs no schema change, is idempotent, and logs every
 //! change. It runs once at startup for every family, and for one family after
-//! each upload, since a new Black face moves a stored Heavy below it.
+//! each upload or delete: a new Black face moves a stored Heavy below it, and
+//! deleting the Black face moves Heavy back to 900.
 //!
 //! One lock serialises the passes: two uploads of the same family each
 //! re-derive it, and without the lock the older pass could write a weight it
@@ -129,7 +130,8 @@ impl AppState {
 }
 
 /// WARN when faces of `family` still share a weight + style after the
-/// re-derive: `/stream/fonts.css` then serves only one of each pair.
+/// re-derive: `/stream/fonts.css` lists both, and the browser uses only one of
+/// each pair.
 fn warn_on_collisions(family: &str, derived: &[(StreamFont, FontMeta)], weights: &[u16]) {
     let styles: Vec<(u16, bool)> = derived
         .iter()
@@ -141,7 +143,7 @@ fn warn_on_collisions(family: &str, derived: &[(StreamFont, FontMeta)], weights:
         tracing::warn!(
             family,
             ?collisions,
-            "stream font faces still share a weight and style — fonts.css serves only one of each"
+            "stream font faces still share a weight and style — the browser uses only one of each pair"
         );
     }
 }
