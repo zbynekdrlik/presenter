@@ -69,7 +69,12 @@ AI tools all call these methods.
   Book abbreviations (`books.rs`) were checked live: the API wants `1Thes`/`2Thes`
   and `1Jn`/`2Jn`/`3Jn`, not the OSIS `1Thess`/`1John`.
 - Cache: bounded LRU of chunks (256), keyed by (book_code, chapter, start, end),
-  in memory only; a failed request is never cached. The cache lock is a
+  in memory only; a failed request is never cached.
+- Fail fast: after a `Timeout`/`Network` failure the client answers
+  `RemoteBibleError::Backoff` for 30 s (`UNREACHABLE_BACKOFF`) without asking the
+  API, so with the venue's internet down each load degrades at once instead of
+  waiting out the 10 s timeout. Any API answer ends the pause; HTTP-status
+  failures (`Status`, `NoVerses`) never start it. The cache lock is a
   `std::sync::Mutex` that must never be held across an `.await`.
 - The request URL carries the key: never log the URL; transport errors go through
   `describe()` (`reqwest::Error::without_url`).
@@ -89,15 +94,17 @@ whitespace collapsed. No HTML-parser crate: the markup is flat and generated.
 ## Errors → HTTP
 
 `RemoteBibleError` (`bible_remote/mod.rs`) is mapped in the router's central
-`From<anyhow::Error> for AppError`: `Timeout`/`Network` → 503, `Status`/`NoVerses`
-→ 502, with the Slovak "NLT nedostupné — API/internet: …" message. The UI's
+`From<anyhow::Error> for AppError`: `Timeout`/`Network`/`Backoff` → 503,
+`Status`/`NoVerses` → 502, with the Slovak "NLT nedostupné — API/internet: …" message. The UI's
 `resolve_slides` uses `post_json_detail`, so the "Failed to load passage" toast
 shows that message.
 
 That hard failure is only for the NLT as MAIN translation (nothing to show).
-An unreachable SECONDARY translation never blocks a load — a remembered NLT
-secondary would otherwise kill every Bible load of a service the moment the
-internet drops:
+An unavailable SECONDARY translation (any `RemoteBibleError`: unreachable, or an
+unusable answer such as a bad key / spent daily quota) never fails a load — a
+remembered NLT secondary would otherwise kill every Bible load of a service the
+moment the internet drops. (The first load after the drop still waits for the
+request timeout; the fail-fast pause makes the next ones immediate.)
 
 - `generate_bible_slides` (`secondary_verse_lookup`) catches a
   `RemoteBibleError` from the secondary fetch, composes main-only slides and
@@ -107,13 +114,17 @@ internet drops:
 - The legacy `trigger_bible_passage` logs an unreachable secondary and leaves it
   out — the main passage still goes on air.
 
-## Known limit of the eng-kjv structure
+## Chapters the NLT numbers longer than eng-kjv
 
-The NLT's verse counts are eng-kjv's. Where the NLT numbers MORE verses than
-the KJV (3 John 1 has 15 verses in the NLT, 14 in the KJV; Revelation 12:18),
-a whole-chapter load with the NLT as MAIN stops at the KJV count (resolve
-computes `verse_end` from the structure) and drops the extra verse. The NLT as
-SECONDARY follows the main translation's range and is unaffected.
+The NLT's verse counts are eng-kjv's, except the chapters in
+`bible_remote::NLT_LONGER_CHAPTERS` (`nlt_structure`, applied by
+`bible_book_chapter_summaries` for `eng-nlt`): 3 John 1 has 15 verses in the
+NLT (14 in the KJV) and Revelation 12 has 18 (17) — both checked live. Without
+the override a whole-chapter load with the NLT as MAIN (resolve takes
+`verse_end` from the structure) would drop that last verse. If another such
+chapter turns up, add it to the table (check the KJV count on prod read-only
+and the NLT with one API request); the NLT as SECONDARY follows the main
+translation's range and is unaffected either way.
 
 ## Env + tests
 
