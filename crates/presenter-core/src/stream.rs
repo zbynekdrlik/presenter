@@ -1882,6 +1882,39 @@ mod tests {
         assert!(back["secondary_style"].get("uppercase").is_none());
     }
 
+    // ---- #830 TextStyle italic ----------------------------------------------
+    // Wire-level for the same reason as #831: an ignored field would silently
+    // drop the operator's italic choice on store → load.
+
+    #[test]
+    fn text_style_italic_survives_a_round_trip() {
+        for flag in [true, false] {
+            let wire = wire_text_style(json!({ "italic": flag }));
+            let style: TextStyle = serde_json::from_value(wire).expect("parse");
+            let back = serde_json::to_value(&style).expect("serialize");
+            assert_eq!(back["italic"], json!(flag), "italic={flag} kept");
+        }
+    }
+
+    #[test]
+    fn text_style_without_italic_still_parses_and_omits_the_key() {
+        // A pre-#830 stored style has no `italic`: it still loads, and an
+        // untouched style serialises byte-identically (no `italic` key).
+        let style: TextStyle = serde_json::from_value(wire_text_style(json!({}))).expect("parse");
+        let back = serde_json::to_value(&style).expect("serialize");
+        assert!(back.get("italic").is_none(), "no italic key: {back}");
+    }
+
+    #[test]
+    fn an_italic_text_style_passes_validation() {
+        let mut v = serde_json::to_value(lower_third_props()).expect("serialize");
+        v["primary_style"] = wire_text_style(json!({ "italic": true }));
+        let parsed: StreamElementProps = serde_json::from_value(v).expect("parse");
+        assert!(validate_props(&parsed, &[]).is_ok());
+        let back = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(back["primary_style"]["italic"], json!(true));
+    }
+
     // ---- #834 "fade through empty" content transition ----------------------
 
     /// Lyrics props whose `content_transition` is the given wire object.
