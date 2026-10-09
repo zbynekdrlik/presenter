@@ -43,10 +43,12 @@ book change. Three traps:
 - That write-back makes the browser fire `change` with the CLAMPED value as soon
   as the focus moves (Enter → focus to the next box; verse end's Enter blurs) —
   synchronously, inside the keydown handler. A plain "valid value → clear the
-  note" then wipes the note before it ever renders. Every commit goes through
-  `bible_range::next_hint`: a commit that changes nothing keeps the note,
-  whichever box it came from (Enter on the untouched mirrored end box too);
-  only a NEW valid value clears it. A verse-start commit also moves the end
-  through the #702 mirror, so it goes through `next_verse_start_hint` (an
-  unchanged start that moves the end is a new value). Likewise a re-commit of
-  the same chapter must not reset the verses.
+  note" then wipes the note before it ever renders. Every commit goes through a
+  host-tested `bible_range` note helper — `next_hint`: a commit that changes
+  nothing keeps the note, whichever box it came from (Enter on the untouched
+  mirrored end box too); only a NEW valid value clears it. A verse-start commit
+  also moves the end through the #702 mirror, so it goes through
+  `next_verse_start_hint` (an unchanged start that moves the end is a new
+  value); an emptied end box goes through `next_end_cleared_hint` (new only when
+  the end was set). Likewise a re-commit of the same chapter must not reset the
+  verses.

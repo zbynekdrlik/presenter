@@ -12,8 +12,8 @@ use wasm_bindgen::JsCast;
 use super::bible::BibleFocusRefs;
 use crate::state::bible::BibleState;
 use crate::state::bible_range::{
-    bound_chapter, bound_verse, next_hint, next_verse_start_hint, BoundedInput, RangeField,
-    RangeHint,
+    bound_chapter, bound_verse, next_end_cleared_hint, next_hint, next_verse_start_hint,
+    BoundedInput, RangeField, RangeHint,
 };
 
 /// The input element an event fired on.
@@ -110,11 +110,10 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
     let commit_verse_end = move |input: &web_sys::HtmlInputElement| {
         let val_str = input.value();
         if val_str.is_empty() {
-            // A new value only when the end was set — re-committing an
-            // already empty end changes nothing, so the note stays.
-            if verse_end_signal.get_untracked().is_some() {
-                range_hint.set(None);
-            }
+            let previous_end = verse_end_signal.get_untracked();
+            let next = range_hint
+                .with_untracked(|current| next_end_cleared_hint(current.as_ref(), previous_end));
+            range_hint.set(next);
             verse_end_signal.set(None);
         } else if let Ok(val) = val_str.parse::<u16>() {
             show_bounded(input, &apply_verse_end(val));

@@ -123,6 +123,20 @@ pub fn next_verse_start_hint(
     next_hint(current, RangeField::VerseStart, previous_start, bounded)
 }
 
+/// The note after the end box is EMPTIED ("to the end of the chapter"): a
+/// new value only when the end was set (`previous_end`) — re-committing an
+/// already empty end changes nothing, so the note stays.
+pub fn next_end_cleared_hint(
+    current: Option<&RangeHint>,
+    previous_end: Option<u16>,
+) -> Option<RangeHint> {
+    if previous_end.is_some() {
+        None
+    } else {
+        current.cloned()
+    }
+}
+
 /// `n` with the Slovak noun form it takes: 1 → `one`, 2–4 → `few`, else `many`.
 fn counted(n: u16, one: &str, few: &str, many: &str) -> String {
     let noun = match n {
