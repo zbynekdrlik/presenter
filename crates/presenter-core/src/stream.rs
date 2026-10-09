@@ -275,7 +275,16 @@ pub struct TextBox {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ContentTransition {
     Cut,
-    Fade { duration_ms: u32 },
+    /// Crossfade: the old text fades out WHILE the new one fades in.
+    Fade {
+        duration_ms: u32,
+    },
+    /// "Fade through empty" (#834, wire `fade_through`): the old text fades
+    /// out completely over `duration_ms`, and only then is the new text shown
+    /// and faded in over `duration_ms` — the two never overlap.
+    FadeThrough {
+        duration_ms: u32,
+    },
 }
 
 impl Default for ContentTransition {
@@ -872,12 +881,15 @@ fn validate_color(color: &str) -> Result<(), StreamValidationError> {
 }
 
 fn validate_transition(transition: &ContentTransition) -> Result<(), StreamValidationError> {
-    if let ContentTransition::Fade { duration_ms } = transition {
-        if *duration_ms > STREAM_TRANSITION_MAX_MS {
-            return Err(StreamValidationError::TransitionTooLong {
-                value: *duration_ms,
-            });
-        }
+    // A total match (not `if let Fade`), so a future timed variant cannot slip
+    // past the duration cap unvalidated (#834).
+    let duration_ms = match transition {
+        ContentTransition::Cut => return Ok(()),
+        ContentTransition::Fade { duration_ms }
+        | ContentTransition::FadeThrough { duration_ms } => *duration_ms,
+    };
+    if duration_ms > STREAM_TRANSITION_MAX_MS {
+        return Err(StreamValidationError::TransitionTooLong { value: duration_ms });
     }
     Ok(())
 }

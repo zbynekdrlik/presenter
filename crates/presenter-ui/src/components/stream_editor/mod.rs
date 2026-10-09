@@ -30,6 +30,7 @@ pub mod prop_error;
 pub mod props_access;
 pub mod selection_intent;
 pub mod text_style_form;
+pub mod transition_choice;
 
 use leptos::prelude::*;
 use presenter_core::{

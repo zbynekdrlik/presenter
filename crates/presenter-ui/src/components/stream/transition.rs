@@ -1,12 +1,14 @@
 //! Content-crossfade primitive for the stream output page (#716, epic #718).
 //!
 //! `CrossfadeText` animates a single text line whose CONTENT changes over time
-//! (a lyric line, a verse line, the countdown text). It renders the current text
-//! plus — transiently, during a `Fade` — the OUTGOING text, each as a stacked
+//! (a lyric line, a verse line). It renders the current text plus —
+//! transiently, during a `Fade` — the OUTGOING text, each as a stacked
 //! `.stream-crossfade__layer`, so the old fades out while the new fades in. A
-//! `Cut` swaps atomically (never two layers, no overlap frame). It is the shared
-//! implementation reused by the countdown / lyrics / verse elements so the
-//! transition logic lives in ONE place.
+//! `Cut` swaps atomically (never two layers, no overlap frame). A `FadeThrough`
+//! (#834) fades the old text out FIRST and mounts the new one only after it is
+//! gone (the pure state lives in `content_layers.rs`). It is the shared
+//! implementation reused by the lyrics / verse elements so the transition
+//! logic lives in ONE place.
 //!
 //! Change detection rides the `Memo<String>` the caller passes: a Memo only
 //! notifies on a genuine value change, so e.g. the countdown (whose text is
@@ -21,30 +23,19 @@ use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::ContentTransition;
 
+use super::content_layers::{fade_through_change, fade_through_settle, ContentLayer};
+
 /// A leaving layer is removed this many ms AFTER its fade duration, so the
 /// opacity transition has fully completed before the node leaves the DOM.
 const FADE_REMOVE_BUFFER_MS: u32 = 80;
-
-/// One rendered copy of the content: the current text, or an outgoing text still
-/// fading out. Keyed on `seq` (a monotonic instance id — NOT the text) so the
-/// same text re-appearing while a previous copy is still leaving never collides.
-#[derive(Clone)]
-struct ContentLayer {
-    seq: u64,
-    text: String,
-    /// `true` for a `Fade` layer (animates in/out); `false` for a `Cut` layer
-    /// (instant). Immutable per layer.
-    fade: bool,
-    /// Set when this layer is fading out and scheduled for removal.
-    leaving: bool,
-}
 
 #[component]
 pub fn CrossfadeText(
     /// The reactive current text (empty ⇒ no visible content). A `Memo` so the
     /// crossfade fires only on a genuine value change.
     text: Memo<String>,
-    /// How a content change animates: `Cut` = instant, `Fade` = crossfade.
+    /// How a content change animates: `Cut` = instant, `Fade` = crossfade,
+    /// `FadeThrough` = fade out, then fade the new text in (#834).
     transition: ContentTransition,
     /// `data-role` for the wrapper (e.g. `"stream-lyrics-main"`) — the element the
     /// E2E targets for text/geometry/count.
@@ -64,12 +55,17 @@ pub fn CrossfadeText(
     #[prop(optional)]
     fill: bool,
 ) -> impl IntoView {
-    let (is_fade, fade_ms) = match transition {
-        ContentTransition::Cut => (false, 0u32),
-        ContentTransition::Fade { duration_ms } => (true, duration_ms),
+    // `is_fade`: layers animate in/out. `through`: a change waits for the
+    // fade-out before the new text is mounted (#834) instead of crossfading.
+    let (is_fade, through, fade_ms) = match transition {
+        ContentTransition::Cut => (false, false, 0u32),
+        ContentTransition::Fade { duration_ms } => (true, false, duration_ms),
+        ContentTransition::FadeThrough { duration_ms } => (true, true, duration_ms),
     };
 
     let layers = RwSignal::new(Vec::<ContentLayer>::new());
+    // #834: the text waiting for the current fade-out (`FadeThrough` only).
+    let pending = StoredValue::new(None::<String>);
     let next_seq = StoredValue::new(0u64);
     let bump = move || {
         let s = next_seq.get_value();
@@ -97,6 +93,7 @@ pub fn CrossfadeText(
                 }
             }
             Some(p) if p == cur => {}
+            Some(_) if through => fade_through(layers, pending, &cur, fade_ms, bump),
             Some(_) if is_fade => {
                 let mut removing = Vec::new();
                 layers.update(|ls| {
@@ -214,4 +211,35 @@ pub fn CrossfadeText(
             </div>
         </Show>
     }
+}
+
+/// A `FadeThrough` text change (#834): the visible text starts fading out and
+/// `cur` waits as the pending text; when that fade-out ends, ONE dispose-safe
+/// `try_update` drops the old layer and mounts the newest pending text, which
+/// then fades in through `@starting-style`. A change while a fade-out is
+/// already running only replaces the pending text (no second timer).
+fn fade_through(
+    layers: RwSignal<Vec<ContentLayer>>,
+    pending: StoredValue<Option<String>>,
+    cur: &str,
+    fade_ms: u32,
+    bump: impl Fn() -> u64 + Copy + 'static,
+) {
+    let mut waiting = pending.get_value();
+    let mut started = Vec::new();
+    layers.update(|ls| started = fade_through_change(ls, &mut waiting, cur, bump));
+    pending.set_value(waiting);
+    if started.is_empty() {
+        return;
+    }
+    Timeout::new(fade_ms + FADE_REMOVE_BUFFER_MS, move || {
+        // The element may have been re-rendered or the page closed meanwhile:
+        // every access is a `try_`, so a late timer is a no-op.
+        let Some(mut waiting) = pending.try_get_value() else {
+            return;
+        };
+        let _ = layers.try_update(|ls| fade_through_settle(ls, &mut waiting, &started, bump));
+        let _ = pending.try_set_value(waiting);
+    })
+    .forget();
 }
