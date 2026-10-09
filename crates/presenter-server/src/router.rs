@@ -670,6 +670,18 @@ impl AppError {
         )
     }
 
+    /// #826: a failed remote Bible fetch — 503 when the API could not be
+    /// reached, 502 when it answered unusably. The message is the error's own
+    /// text, never an outer `.context(...)` layer.
+    fn remote_bible(err: &crate::bible_remote::RemoteBibleError) -> Self {
+        let status = if err.is_unreachable() {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        Self::new(status, anyhow::anyhow!(err.to_string()))
+    }
+
     /// 503 with `Retry-After: <retry_after_secs>` header.
     ///
     /// Used by the WHEP shim when the per-source consumer cap is hit so
@@ -700,8 +712,17 @@ impl AppError {
 /// added between the repository and the router — see
 /// `.claude/rules/repository-error-pattern.md` for the anyhow-internals
 /// citation.
+///
+/// #826: a remote Bible translation (the NLT API) that cannot serve a passage
+/// carries a typed `bible_remote::RemoteBibleError`. It can surface from any
+/// handler that reads verses (resolve, passage lookup, trigger), so it is
+/// mapped HERE too: 503 when the API is unreachable, 502 when it answered
+/// unusably — with the error's own Slovak message for the operator's toast.
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
+        if let Some(remote) = err.downcast_ref::<crate::bible_remote::RemoteBibleError>() {
+            return Self::remote_bible(remote);
+        }
         match err.downcast_ref::<presenter_persistence::RepositoryError>() {
             Some(presenter_persistence::RepositoryError::NotFound(msg)) => Self::not_found(*msg),
             Some(presenter_persistence::RepositoryError::TargetNotFound(msg)) => {

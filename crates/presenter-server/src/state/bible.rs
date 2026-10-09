@@ -63,10 +63,8 @@ pub struct BibleSlideReferenceMetadata {
 }
 
 impl AppState {
-    // Bible translation methods
-    pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
-        self.repository.list_bible_translations().await
-    }
+    // Translation listing and every verse/structure read live in
+    // `bible_source.rs` (#826: the repository-or-remote dispatch).
 
     pub async fn update_bible_translation(
         &self,
@@ -77,72 +75,6 @@ impl AppState {
     ) -> anyhow::Result<Option<BibleTranslation>> {
         self.repository
             .update_bible_translation(code, name, language, show_in_dashboard)
-            .await
-    }
-
-    // Bible passage search methods
-    pub async fn search_bible_passages_cross(
-        &self,
-        translation_code: Option<&str>,
-        query: &str,
-        limit: u32,
-    ) -> anyhow::Result<Vec<presenter_core::BiblePassage>> {
-        self.repository
-            .search_bible_passages_cross(translation_code, query, limit)
-            .await
-    }
-
-    pub async fn find_bible_passage(
-        &self,
-        translation_code: &str,
-        reference: &BibleReference,
-    ) -> anyhow::Result<Option<presenter_core::BiblePassage>> {
-        self.repository
-            .find_bible_passage(translation_code, reference)
-            .await
-    }
-
-    /// Load a contiguous verse range from the DB in a single query. Used
-    /// by the AI `load_bible_verses` tool to return raw per-verse objects
-    /// to the LLM. Thin wrapper over the repository method — no splitting,
-    /// no grouping, no composition; the caller decides what to do with
-    /// the verses.
-    pub async fn bible_passage_range(
-        &self,
-        translation_code: &str,
-        book: &str,
-        book_code: Option<&str>,
-        chapter: u16,
-        verse_start: u16,
-        verse_end: u16,
-    ) -> anyhow::Result<Vec<presenter_core::BiblePassage>> {
-        self.repository
-            .bible_passage_range(
-                translation_code,
-                book,
-                book_code,
-                chapter,
-                verse_start,
-                verse_end,
-            )
-            .await
-    }
-
-    pub async fn list_bible_books(
-        &self,
-        translation_code: &str,
-    ) -> anyhow::Result<Vec<presenter_core::bible::BibleBookChapterSummary>> {
-        self.repository
-            .bible_book_chapter_summaries(translation_code)
-            .await
-    }
-
-    pub async fn bible_book_chapter_summaries(
-        &self,
-        translation_code: &str,
-    ) -> anyhow::Result<Vec<presenter_core::bible::BibleBookChapterSummary>> {
-        self.repository
-            .bible_book_chapter_summaries(translation_code)
             .await
     }
 
@@ -173,7 +105,6 @@ impl AppState {
         };
 
         let main_passages = self
-            .repository
             .bible_passage_range(
                 &main_translation.code,
                 book,
@@ -191,7 +122,6 @@ impl AppState {
         let secondary_lookup: HashMap<u16, presenter_core::BiblePassage> =
             if let Some(ref tr) = secondary_translation {
                 let passages = self
-                    .repository
                     .bible_passage_range(
                         &tr.code,
                         book,
@@ -452,97 +382,12 @@ impl AppState {
         reference: &BibleReference,
         overrides: BibleTriggerOverrides,
     ) -> anyhow::Result<BibleBroadcast> {
-        // Try to find a range of verses first (for multi-verse slides)
-        let range = self
-            .repository
-            .bible_passage_range(
-                translation_code,
-                reference.book.as_str(),
-                reference.book_code.as_deref(),
-                reference.chapter,
-                reference.verse_start,
-                reference.verse_end,
-            )
+        let passage = self
+            .trigger_main_passage(translation_code, reference, overrides.main_text)
             .await?;
-
-        let passage = if let Some(main_text) = overrides.main_text {
-            // Use the text override from the client (edited slide)
-            let translation = if range.is_empty() {
-                self.repository
-                    .find_bible_passage(translation_code, reference)
-                    .await?
-                    .map(|p| p.translation)
-                    .ok_or(RepositoryError::NotFound("passage not found"))?
-            } else {
-                range[0].translation.clone()
-            };
-            presenter_core::BiblePassage::new(reference.clone(), translation, main_text)
-        } else if range.is_empty() {
-            // Fall back to exact match for single-verse passages
-            self.repository
-                .find_bible_passage(translation_code, reference)
-                .await?
-                .ok_or(RepositoryError::NotFound("passage not found"))?
-        } else {
-            // Combine multiple verses into a single passage
-            let mut combined_text = String::new();
-            for entry in &range {
-                if !combined_text.is_empty() {
-                    combined_text.push_str("\n\n");
-                }
-                let label = format!("{}. ", entry.reference.verse_start);
-                combined_text.push_str(&label);
-                combined_text.push_str(entry.text.as_str());
-            }
-            let translation = range[0].translation.clone();
-            // Use the original reference directly - it already has the correct range
-            presenter_core::BiblePassage::new(reference.clone(), translation, combined_text)
-        };
-
-        // Fetch secondary translation text if configured
-        let (secondary_text, secondary_translation_code) =
-            if let Some(translation_text) = overrides.translation_text {
-                // Use the translation text override from the client
-                let prefs = self.get_bible_preferences().await?;
-                let sec_code = prefs.secondary_translation.clone();
-                if translation_text.is_empty() {
-                    (None, sec_code)
-                } else {
-                    (Some(translation_text), sec_code)
-                }
-            } else {
-                let prefs = self.get_bible_preferences().await?;
-                if let Some(ref sec_code) = prefs.secondary_translation {
-                    let sec_range = self
-                        .repository
-                        .bible_passage_range(
-                            sec_code,
-                            reference.book.as_str(),
-                            reference.book_code.as_deref(),
-                            reference.chapter,
-                            reference.verse_start,
-                            reference.verse_end,
-                        )
-                        .await
-                        .unwrap_or_default();
-                    if sec_range.is_empty() {
-                        (None, None)
-                    } else {
-                        let mut sec_text = String::new();
-                        for entry in &sec_range {
-                            if !sec_text.is_empty() {
-                                sec_text.push_str("\n\n");
-                            }
-                            let label = format!("{}. ", entry.reference.verse_start);
-                            sec_text.push_str(&label);
-                            sec_text.push_str(entry.text.as_str());
-                        }
-                        (Some(sec_text), Some(sec_code.clone()))
-                    }
-                } else {
-                    (None, None)
-                }
-            };
+        let (secondary_text, secondary_translation_code) = self
+            .trigger_secondary_text(reference, overrides.translation_text)
+            .await?;
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
         {
@@ -561,6 +406,95 @@ impl AppState {
             })
             .await;
         Ok(broadcast)
+    }
+
+    /// The main passage of a legacy trigger: the client's edited text, else
+    /// the verse range as numbered paragraphs, else the exact passage row.
+    /// Read through the #826 dispatch, so a remote translation works too.
+    async fn trigger_main_passage(
+        &self,
+        translation_code: &str,
+        reference: &BibleReference,
+        main_text: Option<String>,
+    ) -> anyhow::Result<presenter_core::BiblePassage> {
+        // Try to find a range of verses first (for multi-verse slides)
+        let range = self
+            .bible_passage_range(
+                translation_code,
+                reference.book.as_str(),
+                reference.book_code.as_deref(),
+                reference.chapter,
+                reference.verse_start,
+                reference.verse_end,
+            )
+            .await?;
+        let translation = match range.first() {
+            Some(first) => first.translation.clone(),
+            // Fall back to exact match for single-verse passages
+            None => {
+                let exact = self
+                    .find_bible_passage(translation_code, reference)
+                    .await?
+                    .ok_or(RepositoryError::NotFound("passage not found"))?;
+                if main_text.is_none() {
+                    return Ok(exact);
+                }
+                exact.translation
+            }
+        };
+        // The edited text from the client wins; otherwise combine the verses.
+        // The original reference already carries the correct range.
+        let text = main_text.unwrap_or_else(|| numbered_verse_text(&range));
+        Ok(presenter_core::BiblePassage::new(
+            reference.clone(),
+            translation,
+            text,
+        ))
+    }
+
+    /// The secondary text + translation code of a legacy trigger: the
+    /// client's edited text (under the saved secondary translation), else the
+    /// saved secondary translation's verses. A secondary translation that
+    /// cannot be read right now (e.g. the NLT API is down, #826) is logged
+    /// and left out — the main passage still goes on air.
+    async fn trigger_secondary_text(
+        &self,
+        reference: &BibleReference,
+        translation_text: Option<String>,
+    ) -> anyhow::Result<(Option<String>, Option<String>)> {
+        let prefs = self.get_bible_preferences().await?;
+        if let Some(text) = translation_text {
+            return Ok((
+                (!text.is_empty()).then_some(text),
+                prefs.secondary_translation,
+            ));
+        }
+        let Some(code) = prefs.secondary_translation else {
+            return Ok((None, None));
+        };
+        let range = self
+            .bible_passage_range(
+                &code,
+                reference.book.as_str(),
+                reference.book_code.as_deref(),
+                reference.chapter,
+                reference.verse_start,
+                reference.verse_end,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    translation = %code,
+                    reference = %reference.to_human_readable(),
+                    error = %err,
+                    "secondary Bible translation unavailable — triggering without it"
+                );
+                Vec::new()
+            });
+        if range.is_empty() {
+            return Ok((None, None));
+        }
+        Ok((Some(numbered_verse_text(&range)), Some(code)))
     }
 
     /// Trigger a Bible slide using the single-source-of-truth output.
@@ -675,4 +609,14 @@ impl AppState {
     ) {
         self.bible.ingestion_override = Some(ingestion);
     }
+}
+
+/// Verses as `"N. text"` paragraphs separated by a blank line — the legacy
+/// trigger's multi-verse text.
+fn numbered_verse_text(range: &[presenter_core::BiblePassage]) -> String {
+    range
+        .iter()
+        .map(|entry| format!("{}. {}", entry.reference.verse_start, entry.text))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
