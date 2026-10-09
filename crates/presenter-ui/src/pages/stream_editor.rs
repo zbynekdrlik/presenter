@@ -7,7 +7,8 @@
 //!   * `StreamState`         → applied directly to `active` (activation does not
 //!                             bump `config_revision`).
 //!   * `StreamConfigChanged` → refetch the def when its revision advances.
-//! The scene UI + all write actions live in `components/stream_editor`.
+//! The scene UI + all write actions live in `components/stream_editor`. The
+//! areas sit in Scény / Menovky / Písma tabs (#829, `editor_tabs.rs`).
 
 use leptos::prelude::*;
 use presenter_core::{LiveEvent, StreamShowState};
@@ -17,6 +18,9 @@ use crate::components::stream_editor::editor_nameplates::NameplatePanel;
 use crate::components::stream_editor::editor_panel::EditorPanel;
 use crate::components::stream_editor::editor_preview::EditorPreview;
 use crate::components::stream_editor::editor_scenes::EditorScenes;
+use crate::components::stream_editor::editor_tabs::{
+    initial_tab, mirror_tab_to_url, EditorTab, EditorTabs, TabPanel,
+};
 use crate::components::stream_editor::output_paths::{initial_output_slug, OutputSelect};
 use crate::components::stream_editor::StreamEditorCtx;
 use crate::components::version_label::VersionLabel;
@@ -51,6 +55,8 @@ pub fn StreamEditorPage() -> impl IntoView {
         // #785: open the output from `?output=` / localStorage / the default.
         output_slug: RwSignal::new(initial_output_slug()),
         outputs: RwSignal::new(Vec::new()),
+        // #829: reopen the tab from `?tab=` / localStorage (default Scény).
+        tab: RwSignal::new(initial_tab()),
         def: RwSignal::new(None),
         active: RwSignal::new(crate::components::stream_editor::empty_show_state()),
         toast_msg: RwSignal::new(String::new()),
@@ -71,6 +77,10 @@ pub fn StreamEditorPage() -> impl IntoView {
             crate::components::stream_editor::selection_intent::SelectionIntent::default(),
         ),
     };
+
+    // #829: the URL names the tab on screen from the start (a tab restored from
+    // localStorage too), so a reload / bookmark / output switch carries it.
+    mirror_tab_to_url(ctx.tab.get_untracked());
 
     // Cold load.
     ctx.refresh();
@@ -153,16 +163,25 @@ pub fn StreamEditorPage() -> impl IntoView {
                     <span class="stream-editor__version"><VersionLabel /></span>
                 </nav>
             </header>
+            // #829: one area at a time. Every panel stays mounted (hidden, not
+            // unmounted), so unsaved work survives a tab switch.
+            <EditorTabs ctx=ctx />
             <main class="stream-editor__main">
-                <EditorScenes ctx=ctx />
-                <Show when=move || ctx.selected_scene.get().is_some()>
-                    <section class="stream-editor__workspace" data-role="stream-workspace">
-                        <EditorPanel ctx=ctx />
-                        <EditorPreview ctx=ctx />
-                    </section>
-                </Show>
-                <NameplatePanel ctx=ctx />
-                <FontPanel ctx=ctx />
+                <TabPanel ctx=ctx tab=EditorTab::Scenes>
+                    <EditorScenes ctx=ctx />
+                    <Show when=move || ctx.selected_scene.get().is_some()>
+                        <section class="stream-editor__workspace" data-role="stream-workspace">
+                            <EditorPanel ctx=ctx />
+                            <EditorPreview ctx=ctx />
+                        </section>
+                    </Show>
+                </TabPanel>
+                <TabPanel ctx=ctx tab=EditorTab::Nameplates>
+                    <NameplatePanel ctx=ctx />
+                </TabPanel>
+                <TabPanel ctx=ctx tab=EditorTab::Fonts>
+                    <FontPanel ctx=ctx />
+                </TabPanel>
             </main>
             <div
                 class="stream-editor__toast"

@@ -27,6 +27,18 @@ fn live_library_ids_subquery() -> SelectStatement {
         .to_owned()
 }
 
+/// Only the first words of a query are matched (#833 review): every token
+/// adds four LIKEs per slide, and a pasted verse line is not a better query
+/// than its first words.
+const MAX_SEARCH_TOKENS: usize = 8;
+
+/// Upper bound on slide-phase pages (#833 review). Each page excludes every
+/// presentation already scanned, so it always brings new songs; the bound only
+/// caps a pathological query.
+const MAX_SLIDE_PAGES: usize = 8;
+
+type SlideRows = Vec<(slide_entity::Model, Option<presentation_entity::Model>)>;
+
 struct SearchContext {
     tokens: Vec<String>,
     has_tokens: bool,
@@ -37,8 +49,11 @@ struct SearchContext {
     seen_library_ids: HashSet<String>,
     seen_presentation_ids: HashSet<String>,
     seen_slide_ids: HashSet<String>,
-    matched_library_ids: HashSet<String>,
-    matched_presentation_ids: HashSet<String>,
+    /// Per token (same index as `tokens`): the ids of LIVE libraries whose
+    /// folded name contains it (#833). A token may be satisfied by the
+    /// library name instead of the presentation/slide text, so the SQL
+    /// prefilters need these to stay EQUAL to the Rust all-tokens check.
+    token_libraries: Vec<Vec<String>>,
 }
 
 impl SearchContext {
@@ -63,7 +78,15 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let tokens = query_tokens(trimmed);
+        let mut tokens = query_tokens(trimmed);
+        if tokens.len() > MAX_SEARCH_TOKENS {
+            tracing::debug!(
+                total = tokens.len(),
+                kept = MAX_SEARCH_TOKENS,
+                "search: query truncated to its first words"
+            );
+            tokens.truncate(MAX_SEARCH_TOKENS);
+        }
         let has_tokens = !tokens.is_empty();
         let cap = limit.clamp(1, 100) as usize;
 
@@ -77,10 +100,10 @@ impl Repository {
             seen_library_ids: HashSet::with_capacity(cap),
             seen_presentation_ids: HashSet::with_capacity(cap),
             seen_slide_ids: HashSet::with_capacity(cap),
-            matched_library_ids: HashSet::with_capacity(cap),
-            matched_presentation_ids: HashSet::new(),
+            token_libraries: Vec::new(),
         };
 
+        self.load_token_libraries(&mut ctx).await?;
         self.search_libraries(&mut ctx).await?;
         if !ctx.is_full() {
             self.search_presentations(&mut ctx).await?;
@@ -92,13 +115,63 @@ impl Repository {
         Ok(ctx.results)
     }
 
+    /// Fill `ctx.token_libraries` (#833). Deliberately unlimited: libraries
+    /// are few, and a per-token set cut by a LIMIT would make the later SQL
+    /// prefilters reject real matches.
+    async fn load_token_libraries(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
+        let mut per_token = Vec::with_capacity(ctx.tokens.len());
+        for token in &ctx.tokens {
+            let ids: Vec<String> = library::Entity::find()
+                .filter(library::Column::SearchName.contains(token.clone()))
+                .filter(library::Column::DeletedAt.is_null())
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|model| model.id)
+                .collect();
+            per_token.push(ids);
+        }
+        tracing::debug!(
+            tokens = ?ctx.tokens,
+            libraries_per_token = ?per_token.iter().map(Vec::len).collect::<Vec<_>>(),
+            "search: per-token library matches"
+        );
+        ctx.token_libraries = per_token;
+        Ok(())
+    }
+
+    /// `cond` OR "the presentation's library name holds token `idx`".
+    fn or_token_library(cond: Condition, ctx: &SearchContext, idx: usize) -> Condition {
+        match ctx.token_libraries.get(idx) {
+            Some(ids) if !ids.is_empty() => {
+                cond.add(presentation_entity::Column::LibraryId.is_in(ids.iter().cloned()))
+            }
+            _ => cond,
+        }
+    }
+
+    /// Every token in the presentation name or its library name — the exact
+    /// SQL twin of `search_presentations`' Rust check (#833).
+    fn presentation_tokens_condition(ctx: &SearchContext) -> Condition {
+        let mut all_tokens = Condition::all();
+        for (idx, token) in ctx.tokens.iter().enumerate() {
+            let per_token = Condition::any()
+                .add(presentation_entity::Column::SearchName.contains(token.clone()));
+            all_tokens = all_tokens.add(Self::or_token_library(per_token, ctx, idx));
+        }
+        all_tokens
+    }
+
     async fn search_libraries(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
         let mut library_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             library_condition = library_condition.add(library::Column::Name.contains(&ctx.trimmed));
         }
         if ctx.has_tokens {
-            let mut token_condition = Condition::any();
+            // #833: ALL tokens, not any — a library listed as a result must
+            // hold every token, and an any-token query let "s"/"sa" fill
+            // the LIMIT with libraries the Rust check then dropped.
+            let mut token_condition = Condition::all();
             for token in &ctx.tokens {
                 token_condition =
                     token_condition.add(library::Column::SearchName.contains(token.clone()));
@@ -120,20 +193,11 @@ impl Repository {
             if !ctx.seen_library_ids.insert(model.id.clone()) {
                 continue;
             }
-            let tokens_in_name = if ctx.has_tokens {
+            if ctx.has_tokens {
                 let haystack = fold_query(&model.name);
-                ctx.tokens
-                    .iter()
-                    .filter(|token| haystack.contains(*token))
-                    .count()
-            } else {
-                0
-            };
-            if tokens_in_name > 0 {
-                ctx.matched_library_ids.insert(model.id.clone());
-            }
-            if ctx.has_tokens && tokens_in_name < ctx.tokens.len() {
-                continue;
+                if !ctx.tokens.iter().all(|token| haystack.contains(token)) {
+                    continue;
+                }
             }
             let library_id = LibraryId::from_uuid(parse_uuid(&model.id)?);
             ctx.library_names
@@ -153,19 +217,6 @@ impl Repository {
             }
         }
 
-        // Pre-fetch presentation IDs belonging to matched libraries for later use
-        let matched_library_vec: Vec<String> = ctx.matched_library_ids.iter().cloned().collect();
-        if !matched_library_vec.is_empty() {
-            let matched_presentations = presentation_entity::Entity::find()
-                .filter(presentation_entity::Column::LibraryId.is_in(matched_library_vec))
-                .filter(presentation_entity::Column::DeletedAt.is_null())
-                .all(&self.db)
-                .await?;
-            for model in matched_presentations {
-                ctx.matched_presentation_ids.insert(model.id.clone());
-            }
-        }
-
         Ok(())
     }
 
@@ -175,24 +226,14 @@ impl Repository {
             return Ok(());
         }
 
-        let matched_library_vec: Vec<String> = ctx.matched_library_ids.iter().cloned().collect();
-
         let mut presentation_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             presentation_condition = presentation_condition
                 .add(presentation_entity::Column::Name.contains(&ctx.trimmed));
         }
         if ctx.has_tokens {
-            let mut token_branch = Condition::all();
-            for token in &ctx.tokens {
-                token_branch = token_branch
-                    .add(presentation_entity::Column::SearchName.contains(token.clone()));
-            }
-            presentation_condition = presentation_condition.add(token_branch);
-        }
-        if !matched_library_vec.is_empty() {
-            presentation_condition = presentation_condition
-                .add(presentation_entity::Column::LibraryId.is_in(matched_library_vec));
+            presentation_condition =
+                presentation_condition.add(Self::presentation_tokens_condition(ctx));
         }
 
         let presentation_rows = presentation_entity::Entity::find()
@@ -218,12 +259,6 @@ impl Repository {
                 Some(model) if model.deleted_at.is_none() => model,
                 _ => continue,
             };
-            if !ctx
-                .seen_presentation_ids
-                .insert(presentation_model.id.clone())
-            {
-                continue;
-            }
             if ctx.has_tokens {
                 let combined = fold_query(&format!(
                     "{} {}",
@@ -232,6 +267,15 @@ impl Repository {
                 if !ctx.tokens.iter().all(|token| combined.contains(token)) {
                     continue;
                 }
+            }
+            // #833 review: mark the presentation seen only once it is
+            // EMITTED — a row the check above rejects must stay findable by
+            // its lyrics in the slide phase.
+            if !ctx
+                .seen_presentation_ids
+                .insert(presentation_model.id.clone())
+            {
+                continue;
             }
             let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
             let library_uuid = parse_uuid(&library_model.id)?;
@@ -258,10 +302,11 @@ impl Repository {
     }
 
     /// Build the WHERE condition for the slide-text phase of a search.
+    /// #833: equal to `emit_slide_result`'s Rust check — every token must be
+    /// in the slide text, the presentation name or the library name. The old
+    /// condition OR'd in every presentation of any library holding ANY token,
+    /// and those rows filled the LIMIT before the real lyric was read.
     fn slide_search_condition(ctx: &SearchContext) -> Condition {
-        let matched_presentation_vec: Vec<String> =
-            ctx.matched_presentation_ids.iter().cloned().collect();
-
         let mut slide_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             slide_condition = slide_condition
@@ -271,18 +316,15 @@ impl Repository {
         }
         if ctx.has_tokens {
             let mut token_condition = Condition::all();
-            for token in &ctx.tokens {
+            for (idx, token) in ctx.tokens.iter().enumerate() {
                 let per_token = Condition::any()
                     .add(slide_entity::Column::WorshipMainSearch.contains(token.clone()))
                     .add(slide_entity::Column::WorshipTranslateSearch.contains(token.clone()))
-                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()));
-                token_condition = token_condition.add(per_token);
+                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()))
+                    .add(presentation_entity::Column::SearchName.contains(token.clone()));
+                token_condition = token_condition.add(Self::or_token_library(per_token, ctx, idx));
             }
             slide_condition = slide_condition.add(token_condition);
-        }
-        if !matched_presentation_vec.is_empty() {
-            slide_condition = slide_condition
-                .add(slide_entity::Column::PresentationId.is_in(matched_presentation_vec));
         }
         slide_condition
     }
@@ -338,44 +380,79 @@ impl Repository {
         }
     }
 
+    /// The slide-text phase, read in pages (#833 review). The LIMIT counts
+    /// slide ROWS while results are per presentation, so one page could be
+    /// filled by the many slides of a few songs (or of songs already emitted
+    /// by name) and cut off a lyric match elsewhere. Every page now excludes
+    /// all presentations already scanned, so it only ever brings new songs.
     async fn search_slides(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
-        let remaining = ctx.remaining();
-        if remaining == 0 {
-            return Ok(());
+        let mut scanned: HashSet<String> = ctx.seen_presentation_ids.clone();
+        for page in 0..MAX_SLIDE_PAGES {
+            let remaining = ctx.remaining();
+            if remaining == 0 {
+                break;
+            }
+            let page_rows = (remaining * 4).max(40) as u64;
+            let slide_rows = self.fetch_slide_page(ctx, &scanned, page_rows).await?;
+            let fetched = slide_rows.len();
+            for (slide_model, _) in &slide_rows {
+                scanned.insert(slide_model.presentation_id.clone());
+            }
+
+            let (pending, missing_library_ids) = Self::collect_pending_slides(ctx, slide_rows);
+            if !missing_library_ids.is_empty() {
+                self.backfill_live_library_names(ctx, missing_library_ids)
+                    .await?;
+            }
+            for (slide_model, presentation_model) in pending {
+                if ctx.is_full() {
+                    break;
+                }
+                Self::emit_slide_result(ctx, slide_model, presentation_model)?;
+            }
+            tracing::debug!(
+                page,
+                fetched,
+                results = ctx.results.len(),
+                "search: slide page"
+            );
+            if (fetched as u64) < page_rows {
+                break;
+            }
         }
+        Ok(())
+    }
 
-        let slide_condition = Self::slide_search_condition(ctx);
-
-        // #558 S10: the two name-search phases (search_libraries' matched-
-        // presentations prefetch, search_presentations itself) both filter
-        // DeletedAt.is_null() — the slide-TEXT phase must too, or a trashed
-        // song's lyrics still surface it in results.
-        let slide_rows = slide_entity::Entity::find()
-            .filter(slide_condition)
+    /// One page of slide-text matches, skipping every presentation in
+    /// `scanned`, ordered by slide position (then id, so pages are stable).
+    async fn fetch_slide_page(
+        &self,
+        ctx: &SearchContext,
+        scanned: &HashSet<String>,
+        rows: u64,
+    ) -> anyhow::Result<SlideRows> {
+        // #558 S10: the name-search phases filter DeletedAt.is_null() — the
+        // slide-TEXT phase must too, or a trashed song's lyrics still surface
+        // it in results.
+        let mut query = slide_entity::Entity::find()
+            .filter(Self::slide_search_condition(ctx))
             .filter(presentation_entity::Column::DeletedAt.is_null())
             // #646: same SQL-side exclusion as `search_presentations` —
             // see `live_library_ids_subquery`'s doc comment.
-            .filter(presentation_entity::Column::LibraryId.in_subquery(live_library_ids_subquery()))
+            .filter(
+                presentation_entity::Column::LibraryId.in_subquery(live_library_ids_subquery()),
+            );
+        if !scanned.is_empty() {
+            query = query
+                .filter(slide_entity::Column::PresentationId.is_not_in(scanned.iter().cloned()));
+        }
+        Ok(query
             .order_by_asc(slide_entity::Column::Position)
-            .limit(remaining as u64)
+            .order_by_asc(slide_entity::Column::Id)
+            .limit(rows)
             .find_also_related(presentation_entity::Entity)
             .all(&self.db)
-            .await?;
-
-        let (pending, missing_library_ids) = Self::collect_pending_slides(ctx, slide_rows);
-        if !missing_library_ids.is_empty() {
-            self.backfill_live_library_names(ctx, missing_library_ids)
-                .await?;
-        }
-
-        for (slide_model, presentation_model) in pending {
-            if ctx.is_full() {
-                break;
-            }
-            Self::emit_slide_result(ctx, slide_model, presentation_model)?;
-        }
-
-        Ok(())
+            .await?)
     }
 
     /// First pass over the raw slide-join rows: dedupe by slide id, drop rows
@@ -384,7 +461,7 @@ impl Repository {
     /// (extracted per the #558 round-3 function-length gate; #635 split).
     fn collect_pending_slides(
         ctx: &mut SearchContext,
-        slide_rows: Vec<(slide_entity::Model, Option<presentation_entity::Model>)>,
+        slide_rows: SlideRows,
     ) -> (
         Vec<(slide_entity::Model, presentation_entity::Model)>,
         HashSet<String>,

@@ -1,4 +1,4 @@
-use super::{get_json, post_json, post_no_content, ApiError};
+use super::{get_json, post_json, post_json_detail, post_no_content, ApiError};
 use presenter_core::{
     BibleBroadcast, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
 };
@@ -149,10 +149,6 @@ pub struct TriggerRequest {
     pub main_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub main_reference_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub translation_reference_label: Option<String>,
 }
 
 /// Trigger a Bible broadcast (structured reference). Server: POST /bible/trigger
@@ -248,6 +244,10 @@ pub struct ResolveResponse {
     pub main_translation: BibleTranslation,
     pub secondary_translation: Option<BibleTranslation>,
     pub slides: Vec<BibleSlideDto>,
+    /// #826: set when the secondary translation was unreachable (the NLT
+    /// API) — the slides carry the main text only.
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -306,8 +306,12 @@ pub struct BibleSlideVerseRefDto {
 }
 
 /// Generate slides from a Bible reference. Server: POST /bible/resolve
+///
+/// A failure carries the server's message (e.g. #826 "NLT nedostupné — …" when
+/// the NLT API is unreachable) so the load-passage toast says WHY, not just
+/// "Bad Gateway".
 pub async fn resolve_slides(req: &ResolveRequest) -> Result<ResolveResponse, ApiError> {
-    post_json("/bible/resolve", req).await
+    post_json_detail("/bible/resolve", req).await
 }
 
 // ---------------------------------------------------------------------------

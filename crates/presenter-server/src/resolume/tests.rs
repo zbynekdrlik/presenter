@@ -721,7 +721,7 @@ fn translation_short_code_handles_empty_string() {
 
 // ── Helper: create a mock driver with a running wiremock server ─────
 
-async fn setup_bible_driver() -> (
+pub(super) async fn setup_bible_driver() -> (
     MockServer,
     HostDriver,
     Arc<RwLock<ResolumeConnectionSnapshot>>,
@@ -749,6 +749,7 @@ async fn handle_bible_routes_to_slide_output_when_present() {
         passage: None,
         secondary_text: None,
         secondary_translation_code: None,
+        secondary_book: None,
         slide_output: Some(output),
     };
 
@@ -805,6 +806,7 @@ async fn handle_bible_routes_to_legacy_when_no_slide_output() {
         passage: Some(broadcast),
         secondary_text: Some("Neboť Bůh tak miloval svět".to_string()),
         secondary_translation_code: Some("cs-cep".to_string()),
+        secondary_book: None,
         slide_output: None,
     };
 
@@ -853,6 +855,7 @@ async fn handle_bible_routes_to_clear_when_no_passage() {
         passage: None,
         secondary_text: None,
         secondary_translation_code: None,
+        secondary_book: None,
         slide_output: None,
     };
 

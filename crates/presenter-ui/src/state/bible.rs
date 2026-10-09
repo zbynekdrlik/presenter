@@ -167,6 +167,14 @@ pub struct ClampedSelection {
     pub verse_end: Option<u16>,
 }
 
+/// #828: a slide text's character count (never bytes — a Slovak diacritic is
+/// one character, as the server's split counts it) and whether it is over the
+/// Bible character limit. Drives the slide card's count badge.
+pub fn slide_char_count(text: &str, limit: u32) -> (usize, bool) {
+    let count = text.chars().count();
+    (count, count > limit as usize)
+}
+
 /// Clamp chapter/verse values against a book's chapter and verse counts.
 ///
 /// Preserves values when they fit; clamps when they don't. If `verse_end`
@@ -273,6 +281,19 @@ mod tests {
                 verse_end: None,
             }
         );
+    }
+
+    #[test]
+    fn slide_char_count_counts_characters_not_bytes() {
+        // #828: "čšž" is 3 characters but 6 UTF-8 bytes.
+        assert_eq!(slide_char_count("čšž", 320), (3, false));
+        assert_eq!(slide_char_count("", 320), (0, false));
+    }
+
+    #[test]
+    fn slide_char_count_flags_only_a_count_over_the_limit() {
+        assert_eq!(slide_char_count("abcd", 4), (4, false));
+        assert_eq!(slide_char_count("abcde", 4), (5, true));
     }
 
     #[test]

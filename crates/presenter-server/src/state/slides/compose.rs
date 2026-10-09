@@ -15,7 +15,8 @@ fn translation_short_code(code: &str) -> String {
 /// Typed input for the AI-facing bible composer. A stream of these is
 /// produced by the LLM after it edits DB verses against the sermon text,
 /// and the server composes slides out of the stream respecting the
-/// character limit — same splitting rules as live mode.
+/// character limit, counted in characters like live mode (#828). AI slides
+/// carry no translation text, so only the main text is measured.
 // `pub` (not `pub(crate)`): re-exported `pub` from `state::slides` so the
 // #680 `ai_eval` Layer-1 scorer (a separate crate root) can replay a
 // captured tool call's items through the REAL composer — see
@@ -70,10 +71,12 @@ fn format_verse_range(verses: &BTreeSet<u32>) -> String {
     }
 }
 
-/// Compose a stream of `BibleItem` into slides. Same greedy-packing rule
-/// as `compose_bible_slides`: accumulate verses into one slide until the
-/// next verse would overflow the character limit, then flush. Emphasis
-/// items and translation/book/chapter changes force a slide break.
+/// Compose a stream of `BibleItem` into slides. The greedy-packing rule of
+/// `compose_bible_slides`, on the main text only (AI slides have no
+/// translation text): accumulate verses into one slide until the next verse
+/// would overflow the character limit (characters, never bytes — #828), then
+/// flush. Emphasis items and translation/book/chapter changes force a slide
+/// break.
 ///
 /// A verse is NEVER split mid-text (issue #394): consecutive `Verse` items that
 /// share the same verse number are merged back into one whole verse, and a lone
@@ -147,7 +150,7 @@ pub fn compose_bible_items_into_slides(
                     // slide that the validator would then reject. (flush_keeping_last
                     // is a no-op when the verse is alone on the slide, so no extra
                     // line-count guard is needed here.)
-                    if acc.would_overflow_merge(text.len(), limit) {
+                    if acc.would_overflow_merge(text.chars().count(), limit) {
                         acc.flush_keeping_last(&mut slides, &group_verses);
                     }
                     if let Some(last) = acc.lines.last_mut() {
@@ -159,7 +162,7 @@ pub fn compose_bible_items_into_slides(
                 }
 
                 let line = format!("{number}. {text}");
-                if acc.would_overflow(line.len(), limit) {
+                if acc.would_overflow(line.chars().count(), limit) {
                     acc.flush(&mut slides, &group_verses);
                 }
 
@@ -193,7 +196,7 @@ impl VerseAccumulator {
         if self.lines.is_empty() {
             return false;
         }
-        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        let existing_len: usize = self.lines.iter().map(|line| line.chars().count()).sum();
         // joined existing lines = existing_len + (len - 1) separators; adding a
         // "\n" + new line = + 1 + new_line_len -> existing_len + len + new_line_len.
         let prospective = existing_len + self.lines.len() + new_line_len;
@@ -209,7 +212,7 @@ impl VerseAccumulator {
         if self.lines.is_empty() {
             return false;
         }
-        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        let existing_len: usize = self.lines.iter().map(|line| line.chars().count()).sum();
         // current joined length + " " + fragment.
         let prospective = existing_len + (self.lines.len() - 1) + 1 + frag_len;
         prospective > limit
@@ -332,6 +335,92 @@ fn secondary_book_name<'a>(
         .map(|p| p.reference.book.as_str())
 }
 
+/// The slide being built: its main and translation lines and verse spans.
+#[derive(Default)]
+struct SlideDraft {
+    main: String,
+    translation: String,
+    verses: Vec<(u16, u16)>,
+}
+
+impl SlideDraft {
+    fn is_empty(&self) -> bool {
+        self.main.is_empty()
+    }
+
+    /// Whether adding this verse would push the main OR the translation text
+    /// over `limit` characters (#828: whichever translation is longer decides).
+    fn would_exceed(&self, main_line: &str, translation_line: Option<&str>, limit: usize) -> bool {
+        joined_chars(&self.main, main_line) > limit
+            || translation_line.is_some_and(|line| joined_chars(&self.translation, line) > limit)
+    }
+
+    fn push(&mut self, main_line: &str, translation_line: Option<&str>, verse: (u16, u16)) {
+        push_line(&mut self.main, main_line);
+        if let Some(line) = translation_line {
+            push_line(&mut self.translation, line);
+        }
+        self.verses.push(verse);
+    }
+}
+
+/// Characters (never bytes: a Slovak diacritic is one) of `text` once `line`
+/// is appended on a new line.
+fn joined_chars(text: &str, line: &str) -> usize {
+    text.chars().count() + usize::from(!text.is_empty()) + line.chars().count()
+}
+
+fn push_line(text: &mut String, line: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(line);
+}
+
+/// Everything the live slides of one passage share besides their text.
+struct BibleSlideFrame<'a> {
+    main_translation: &'a BibleTranslation,
+    secondary_translation: Option<&'a BibleTranslation>,
+    book: String,
+    book_code: Option<String>,
+    book_number: Option<u16>,
+    chapter: u16,
+    reference_label: String,
+    translation_reference_label: Option<String>,
+}
+
+impl BibleSlideFrame<'_> {
+    /// Append the slide of `draft` to `slides` (a blank draft adds nothing).
+    fn push_slide(&self, slides: &mut Vec<Slide>, draft: SlideDraft) -> anyhow::Result<()> {
+        if draft.main.trim().is_empty() {
+            return Ok(());
+        }
+        let content = SlideContent::new(
+            SlideText::new(&draft.main)?,
+            SlideText::new(&draft.translation)?,
+            SlideText::new(&self.reference_label)?,
+            Some(SlideGroup::new(&self.reference_label)),
+        );
+        let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
+            translation_code: self.main_translation.code.clone(),
+            secondary_translation_code: self.secondary_translation.map(|t| t.code.clone()),
+            book: self.book.clone(),
+            book_code: self.book_code.clone(),
+            book_number: self.book_number,
+            chapter: self.chapter,
+            verses: draft
+                .verses
+                .iter()
+                .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
+                .collect(),
+            main_reference_label: Some(self.reference_label.clone()),
+            translation_reference_label: self.translation_reference_label.clone(),
+        });
+        slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));
+        Ok(())
+    }
+}
+
 pub(crate) fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
@@ -341,20 +430,15 @@ pub(crate) fn compose_bible_slides(
     full_verse_start: u16,
     full_verse_end: u16,
 ) -> anyhow::Result<Vec<Slide>> {
-    let mut slides: Vec<Slide> = Vec::new();
-    if main_passages.is_empty() {
-        return Ok(slides);
-    }
-
-    let book = main_passages[0].reference.book.clone();
-    let book_code = main_passages[0].reference.book_code.clone();
-    let book_number = main_passages[0].reference.book_number;
-    let chapter = main_passages[0].reference.chapter;
+    let Some(first) = main_passages.first() else {
+        return Ok(Vec::new());
+    };
+    let chapter = first.reference.chapter;
 
     // The full reference label appears on all slides (includes translation
     // code). A secondary translation gets its own label.
-    let full_reference_label = build_reference_label(
-        &book,
+    let reference_label = build_reference_label(
+        &first.reference.book,
         chapter,
         full_verse_start,
         full_verse_end,
@@ -370,80 +454,37 @@ pub(crate) fn compose_bible_slides(
             &t.code,
         ))
     });
-
-    let mut current_main = String::new();
-    let mut current_tr = String::new();
-    let mut verses_meta: Vec<(u16, u16)> = Vec::new();
-
-    let push_slide = |slides: &mut Vec<Slide>,
-                      main: String,
-                      tr: String,
-                      verses: &[(u16, u16)]|
-     -> anyhow::Result<()> {
-        if main.trim().is_empty() {
-            return Ok(());
-        }
-        let content = SlideContent::new(
-            SlideText::new(&main)?,
-            SlideText::new(&tr)?,
-            SlideText::new(&full_reference_label)?,
-            Some(SlideGroup::new(&full_reference_label)),
-        );
-        let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
-            translation_code: main_translation.code.clone(),
-            secondary_translation_code: secondary_translation.map(|t| t.code.clone()),
-            book: book.clone(),
-            book_code: book_code.clone(),
-            book_number,
-            chapter,
-            verses: verses
-                .iter()
-                .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
-                .collect(),
-            main_reference_label: Some(full_reference_label.clone()),
-            translation_reference_label: translation_reference_label.clone(),
-        });
-        slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));
-        Ok(())
+    let frame = BibleSlideFrame {
+        main_translation,
+        secondary_translation,
+        book: first.reference.book.clone(),
+        book_code: first.reference.book_code.clone(),
+        book_number: first.reference.book_number,
+        chapter,
+        reference_label,
+        translation_reference_label,
     };
 
-    for p in main_passages {
-        let label = format!("{}. ", p.reference.verse_start);
-        let line = format!("{}{}", label, p.text);
-        let prospective_len =
-            current_main.len() + if current_main.is_empty() { 0 } else { 1 } + line.len();
-        if prospective_len > character_limit as usize && !current_main.is_empty() {
-            // flush
-            push_slide(
-                &mut slides,
-                current_main.clone(),
-                current_tr.clone(),
-                &verses_meta,
-            )?;
-            current_main.clear();
-            current_tr.clear();
-            verses_meta.clear();
+    let limit = character_limit as usize;
+    let mut slides = Vec::new();
+    let mut draft = SlideDraft::default();
+    for passage in main_passages {
+        let verse = passage.reference.verse_start;
+        let main_line = format!("{verse}. {}", passage.text);
+        let translation_line = secondary_lookup
+            .get(&verse)
+            .map(|sec| format!("{}. {}", sec.reference.verse_start, sec.text));
+        // A lone verse longer than the limit stays one whole slide (#434).
+        if !draft.is_empty() && draft.would_exceed(&main_line, translation_line.as_deref(), limit) {
+            frame.push_slide(&mut slides, std::mem::take(&mut draft))?;
         }
-        if !current_main.is_empty() {
-            current_main.push('\n');
-        }
-        current_main.push_str(&line);
-        // translation (secondary)
-        if let Some(sec) = secondary_lookup.get(&p.reference.verse_start) {
-            let tr_label = format!("{}. ", sec.reference.verse_start);
-            let tr_line = format!("{}{}", tr_label, sec.text);
-            if !current_tr.is_empty() {
-                current_tr.push('\n');
-            }
-            current_tr.push_str(&tr_line);
-        }
-        verses_meta.push((p.reference.verse_start, p.reference.verse_end));
+        draft.push(
+            &main_line,
+            translation_line.as_deref(),
+            (verse, passage.reference.verse_end),
+        );
     }
-
-    // final flush
-    if !current_main.is_empty() {
-        push_slide(&mut slides, current_main, current_tr, &verses_meta)?;
-    }
+    frame.push_slide(&mut slides, draft)?;
 
     Ok(slides)
 }

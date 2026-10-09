@@ -11,7 +11,7 @@
 
 use leptos::prelude::*;
 use presenter_core::{
-    AnimationPreset, ContentTransition, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS,
+    AnimationPreset, ImageFit, StreamElementProps, STREAM_DEFAULT_FADE_MS,
     STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
 };
 
@@ -22,6 +22,7 @@ use super::props_access::{
     default_text_box, read_transition, split_color, with_transition_mut, TsSlot,
 };
 use super::text_style_form::TextStyleForm;
+use super::transition_choice::{self, TransitionChoice};
 use super::StreamEditorCtx;
 
 /// The two Presenter timers a countdown element can bind to. `timer_id` is
@@ -448,43 +449,62 @@ fn CountdownBoxFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
     }
 }
 
-/// Content-transition control (cut vs crossfade + duration) for lyrics + verse.
-/// Countdown carries a `content_transition` in the model but ignores it (a
-/// per-tick fade flickers — #776), so the editor hides this control for it.
+/// Content-transition control for lyrics + verse: cut / crossfade / fade
+/// through empty (#834) as one radio group, plus the duration for either fade
+/// (kept when switching between the two). Countdown carries a
+/// `content_transition` in the model but ignores it (a per-tick fade flickers —
+/// #776), so the editor hides this control for it.
 #[component]
 fn TransitionFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
-    let is_fade = move || {
-        matches!(
-            read_transition(&draft.get()),
-            Some(ContentTransition::Fade { .. })
-        )
+    let choice = move || read_transition(&draft.get()).map(|t| TransitionChoice::of(&t));
+    let has_duration = move || {
+        read_transition(&draft.get())
+            .and_then(|t| transition_choice::duration_ms(&t))
+            .is_some()
     };
-    let duration = move || match read_transition(&draft.get()) {
-        Some(ContentTransition::Fade { duration_ms }) => duration_ms.to_string(),
-        _ => STREAM_DEFAULT_FADE_MS.to_string(),
+    let duration = move || {
+        read_transition(&draft.get())
+            .and_then(|t| transition_choice::duration_ms(&t))
+            .unwrap_or(STREAM_DEFAULT_FADE_MS)
+            .to_string()
     };
+    let pick = move |c: TransitionChoice| {
+        draft.update(|p| with_transition_mut(p, |t| *t = c.apply(t)));
+    };
+    // One shared name: a single selection across the three radios. Only one
+    // property form is mounted at a time, so the name is unique on the page.
+    const RADIO_GROUP: &str = "stream-content-transition";
     view! {
         <fieldset class="stream-editor__transition" data-role="stream-transition">
             <legend class="stream-editor__ts-legend">"Prechod obsahu"</legend>
             <label class="stream-editor__field stream-editor__field--check">
                 <input
-                    type="checkbox"
+                    type="radio" name=RADIO_GROUP
+                    data-role="stream-transition-cut"
+                    prop:checked=move || choice() == Some(TransitionChoice::Cut)
+                    on:change=move |_| pick(TransitionChoice::Cut)
+                />
+                <span>"Strih (bez prechodu)"</span>
+            </label>
+            <label class="stream-editor__field stream-editor__field--check">
+                <input
+                    type="radio" name=RADIO_GROUP
                     data-role="stream-transition-fade"
-                    prop:checked=is_fade
-                    on:change=move |ev| {
-                        let on = event_target_checked(&ev);
-                        draft.update(|p| with_transition_mut(p, |t| {
-                            *t = if on {
-                                ContentTransition::Fade { duration_ms: STREAM_DEFAULT_FADE_MS }
-                            } else {
-                                ContentTransition::Cut
-                            };
-                        }));
-                    }
+                    prop:checked=move || choice() == Some(TransitionChoice::Crossfade)
+                    on:change=move |_| pick(TransitionChoice::Crossfade)
                 />
                 <span>"Prelínať (crossfade)"</span>
             </label>
-            <Show when=is_fade>
+            <label class="stream-editor__field stream-editor__field--check">
+                <input
+                    type="radio" name=RADIO_GROUP
+                    data-role="stream-transition-fade-through"
+                    prop:checked=move || choice() == Some(TransitionChoice::FadeThrough)
+                    on:change=move |_| pick(TransitionChoice::FadeThrough)
+                />
+                <span>"Prelínať cez prázdno"</span>
+            </label>
+            <Show when=has_duration>
                 <label class="stream-editor__field">
                     <span>"Trvanie (ms)"</span>
                     <input type="number" min="0" max="10000" step="50" data-role="stream-transition-ms"
@@ -492,7 +512,7 @@ fn TransitionFields(draft: RwSignal<StreamElementProps>) -> impl IntoView {
                         on:input=move |ev| {
                             if let Ok(v) = event_target_value(&ev).parse::<u32>() {
                                 draft.update(|p| with_transition_mut(p, |t| {
-                                    if let ContentTransition::Fade { duration_ms } = t { *duration_ms = v; }
+                                    transition_choice::set_duration_ms(t, v);
                                 }));
                             }
                         } />

@@ -4,6 +4,7 @@
 //!
 //! - `broadcast`: current active Bible passage broadcast (legacy `/bible/active`)
 //! - `slide_output`: single-source-of-truth Bible slide output
+//! - `nlt`: the NLT API client serving the remote `eng-nlt` translation (#826)
 //! - `ingestion_override` (test-only): swaps the ingestion service in tests
 //!
 //! Pure relocation: the two `Arc<RwLock<_>>` handles keep their exact types, so
@@ -14,6 +15,7 @@
 
 use std::sync::Arc;
 
+use crate::bible_remote::NltClient;
 use presenter_core::{BibleBroadcast, BibleSlideOutput};
 use tokio::sync::RwLock;
 
@@ -27,6 +29,9 @@ pub(crate) struct BibleManager {
     pub(crate) broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
     /// Single-source-of-truth Bible slide output.
     pub(crate) slide_output: Arc<RwLock<Option<BibleSlideOutput>>>,
+    /// #826: the NLT API client (with its in-memory verse cache), shared by
+    /// every clone — see `state/bible_source.rs`.
+    pub(crate) nlt: Arc<NltClient>,
     /// Test-only ingestion override (swaps the real ingestion service).
     #[cfg(test)]
     pub(crate) ingestion_override: Option<Arc<dyn super::seed::TestBibleIngestion + Send + Sync>>,
@@ -40,6 +45,7 @@ impl BibleManager {
         Self {
             broadcast: Arc::new(RwLock::new(None)),
             slide_output: Arc::new(RwLock::new(None)),
+            nlt: Arc::new(NltClient::from_env()),
             #[cfg(test)]
             ingestion_override: None,
         }

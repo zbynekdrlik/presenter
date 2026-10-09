@@ -569,10 +569,12 @@ async fn create_bible_presentation_with_long_passage_composes_many_slides() {
 
     for (idx, slide) in pres.slides.iter().enumerate() {
         let main = slide.main.value();
+        // #828: the character limit counts CHARACTERS, not UTF-8 bytes — a
+        // Slovak slide of 189 characters is 203 bytes and fits a 200 limit.
+        let chars = main.chars().count();
         assert!(
-            main.len() <= char_limit as usize,
-            "slide[{idx}] main.len()={} exceeds limit {}: {:?}",
-            main.len(),
+            chars <= char_limit as usize,
+            "slide[{idx}] has {chars} characters, over the limit {}: {:?}",
             char_limit,
             main
         );

@@ -1,7 +1,7 @@
 //! "Menovky" (lower-third nameplate) editor panel (#779).
 //!
-//! An output-scoped panel (mounted OUTSIDE the `selected_scene` gate, after
-//! `EditorScenes`): the person-plate list (add / inline edit / delete / reorder),
+//! An output-scoped panel (its own „Menovky" tab since #829, always mounted):
+//! the person-plate list (add / inline edit / delete / reorder),
 //! a virtual "Pieseň" row, per-row Zobraziť / Skryť buttons that drive the REAL
 //! output, a Prehrať button that previews the plate animation in the preview
 //! iframe WITHOUT broadcasting (#777 channel sibling), an on-air highlight from
@@ -13,10 +13,11 @@
 use leptos::prelude::*;
 use presenter_core::{
     ActiveNameplate, Nameplate, NameplateSource, SceneKind, StreamElementDef, StreamElementProps,
-    StreamSceneDef, StreamShowState,
+    StreamOutputDef, StreamSceneDef, StreamShowState,
 };
 use serde::Serialize;
 
+use super::editor_tabs::EditorTab;
 use super::output_paths::{
     nameplates_active_path, nameplates_order_path, nameplates_path, overlay_path, scenes_path,
 };
@@ -270,34 +271,101 @@ pub fn preview_nameplate(
     post_nameplate_preview(json);
 }
 
-/// Post a serialized nameplate-preview message into the preview iframe's
-/// `contentWindow` (same-origin). No-op on the host / when no preview iframe is
-/// mounted (no scene open in the workspace).
+/// Take the previewed plate off the Menovky preview („Skryť"). Preview mode
+/// ignores the live plate feed and server auto-hide, so only the editor can
+/// clear a plate it played there (#829 second review).
+pub fn clear_nameplate_preview() {
+    post_nameplate_preview(crate::components::stream::nameplate_preview::serialize_message(None));
+}
+
+/// Post a serialized nameplate-preview message into the Menovky tab's own
+/// preview iframe (same-origin, #829) — the frame the operator sees next to the
+/// „Prehrať" buttons. Before #829 it targeted the Scény workspace preview, which
+/// the tabs hide while Menovky is open. No-op on the host / when no Menovky
+/// preview is mounted (the output has no lower third yet). A click while that
+/// frame is still booting is dropped: Prehrať is a momentary action, so it is
+/// deliberately NOT replayed when the frame (re)loads.
 #[cfg(target_arch = "wasm32")]
 fn post_nameplate_preview(json: String) {
-    use leptos::wasm_bindgen::{JsCast, JsValue};
+    use leptos::wasm_bindgen::JsCast;
 
     let document = crate::utils::window::document();
-    let Ok(Some(el)) = document.query_selector("[data-role=\"stream-preview-frame\"]") else {
+    let Ok(Some(el)) = document.query_selector("[data-role=\"stream-nameplate-preview-frame\"]")
+    else {
         return;
     };
-    let Some(iframe) = el.dyn_ref::<leptos::web_sys::HtmlIFrameElement>() else {
-        return;
-    };
-    let Some(win) = iframe.content_window() else {
-        return;
-    };
-    let origin = leptos::web_sys::window()
-        .and_then(|w| w.location().origin().ok())
-        .unwrap_or_else(|| "*".to_string());
-    let _ = win.post_message(&JsValue::from_str(&json), &origin);
+    if let Some(iframe) = el.dyn_ref::<leptos::web_sys::HtmlIFrameElement>() {
+        super::editor_preview::post_to_frame(iframe, &json);
+    }
 }
 
 /// Host stub (see the wasm version).
 #[cfg(not(target_arch = "wasm32"))]
 fn post_nameplate_preview(_json: String) {}
 
-/// The Menovky panel — mounted by `pages/stream_editor.rs` after `EditorScenes`.
+/// The Menovky preview URL (#829): the output page in preview mode with every
+/// scene that holds a lower third forced on screen — overlay scenes through
+/// `overlays=`, the first such base scene through `scene=` — so „Prehrať"
+/// animates in a frame the operator sees, whichever scene is open elsewhere.
+pub(super) fn nameplate_preview_src(slug: &str, def: Option<&StreamOutputDef>) -> String {
+    let mut src = super::editor_preview::preview_base(slug);
+    let Some(def) = def else {
+        return src;
+    };
+    let has_plate = |s: &&StreamSceneDef| {
+        s.elements
+            .iter()
+            .any(|e| matches!(e.props, StreamElementProps::LowerThird { .. }))
+    };
+    if let Some(base) = def
+        .scenes
+        .iter()
+        .filter(has_plate)
+        .find(|s| s.kind == SceneKind::Base)
+    {
+        src.push_str(&format!("&scene={}", base.id));
+    }
+    let overlays: Vec<String> = def
+        .scenes
+        .iter()
+        .filter(has_plate)
+        .filter(|s| s.kind == SceneKind::Overlay)
+        .map(|s| s.id.to_string())
+        .collect();
+    if !overlays.is_empty() {
+        src.push_str(&format!("&overlays={}", overlays.join(",")));
+    }
+    src
+}
+
+/// The Menovky tab's own 16:9 preview (#829): the real output page with the
+/// lower-third scene(s) forced on, where „Prehrať" plays. The panel mounts it
+/// only while the Menovky tab is shown and the output has a lower third — an
+/// output page is a full live client, so no hidden copy keeps running.
+#[component]
+fn NameplatePreviewFrame(ctx: StreamEditorCtx) -> impl IntoView {
+    // A Memo: a def refetch that keeps the same lower-third scenes must not
+    // reload the frame (which would drop a plate mid-animation).
+    let src = Memo::new(move |_| {
+        let slug = ctx.output_slug.get();
+        ctx.def.with(|d| nameplate_preview_src(&slug, d.as_ref()))
+    });
+    view! {
+        <div
+            class="stream-editor__preview-box stream-editor__nameplate-preview"
+            data-role="stream-nameplate-preview-box"
+        >
+            <iframe
+                class="stream-editor__preview-frame"
+                data-role="stream-nameplate-preview-frame"
+                src=move || src.get()
+                title="Náhľad menovky"
+            ></iframe>
+        </div>
+    }
+}
+
+/// The Menovky panel — mounted by `pages/stream_editor.rs` in the Menovky tab.
 #[component]
 pub fn NameplatePanel(ctx: StreamEditorCtx) -> impl IntoView {
     let new_name = RwSignal::new(String::new());
@@ -336,6 +404,11 @@ pub fn NameplatePanel(ctx: StreamEditorCtx) -> impl IntoView {
                 </Show>
             </header>
 
+            // #829: „Prehrať" plays here, in the tab the operator is looking at.
+            <Show when=move || ctx.tab.get() == EditorTab::Nameplates && ctx.has_lower_third()>
+                <NameplatePreviewFrame ctx=ctx />
+            </Show>
+
             // Song (virtual) row.
             <div
                 class="stream-editor__nameplate stream-editor__nameplate--song"
@@ -361,7 +434,7 @@ pub fn NameplatePanel(ctx: StreamEditorCtx) -> impl IntoView {
                             preview_nameplate(NameplateSource::Song, None, name, lib);
                         }>"Prehrať"</button>
                     <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-hide"
-                        on:click=move |_| ctx.hide_nameplate()>"Skryť"</button>
+                        on:click=move |_| { ctx.hide_nameplate(); clear_nameplate_preview(); }>"Skryť"</button>
                 </div>
             </div>
 
@@ -431,7 +504,7 @@ fn NameplateRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-preview"
                     on:click=move |_| preview_nameplate(NameplateSource::Person, Some(id), name(), role())>"Prehrať"</button>
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-hide"
-                    on:click=move |_| ctx.hide_nameplate()>"Skryť"</button>
+                    on:click=move |_| { ctx.hide_nameplate(); clear_nameplate_preview(); }>"Skryť"</button>
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-up"
                     title="Vyššie" on:click=move |_| ctx.move_nameplate(id, true)>"↑"</button>
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-down"
@@ -440,5 +513,84 @@ fn NameplateRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                     on:click=move |_| ctx.delete_nameplate(id)>"Zmazať"</button>
             </div>
         </li>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scene(id: i64, kind: SceneKind, kinds: &[&str]) -> StreamSceneDef {
+        StreamSceneDef {
+            id,
+            name: format!("scene-{id}"),
+            kind,
+            position: 0,
+            is_active: false,
+            transition_ms: None,
+            elements: kinds
+                .iter()
+                .enumerate()
+                .map(|(i, k)| StreamElementDef {
+                    id: id * 10 + i as i64,
+                    z_order: i as i32,
+                    props: default_element_props(k),
+                })
+                .collect(),
+        }
+    }
+
+    fn def(scenes: Vec<StreamSceneDef>) -> StreamOutputDef {
+        StreamOutputDef {
+            id: 1,
+            slug: "stream".to_string(),
+            name: "Stream".to_string(),
+            default_transition_ms: 300,
+            base_transition_ms: None,
+            overlay_transition_ms: None,
+            active_scene_id: None,
+            config_revision: 1,
+            scenes,
+        }
+    }
+
+    #[test]
+    fn overlay_lower_thirds_are_forced_on() {
+        let d = def(vec![
+            scene(1, SceneKind::Base, &["color"]),
+            scene(2, SceneKind::Overlay, &["lower_third"]),
+            scene(3, SceneKind::Overlay, &["image"]),
+            scene(4, SceneKind::Overlay, &["color", "lower_third"]),
+        ]);
+        assert_eq!(
+            nameplate_preview_src("stream", Some(&d)),
+            "/stream/stream?preview=1&overlays=2,4"
+        );
+    }
+
+    #[test]
+    fn a_base_lower_third_is_forced_as_the_scene() {
+        let d = def(vec![
+            scene(5, SceneKind::Base, &["verse"]),
+            scene(6, SceneKind::Base, &["lower_third"]),
+            scene(7, SceneKind::Base, &["lower_third"]),
+        ]);
+        assert_eq!(
+            nameplate_preview_src("timer", Some(&d)),
+            "/stream/timer?preview=1&scene=6"
+        );
+    }
+
+    #[test]
+    fn without_a_lower_third_or_a_def_it_is_the_plain_preview() {
+        let d = def(vec![scene(1, SceneKind::Base, &["color"])]);
+        assert_eq!(
+            nameplate_preview_src("stream", Some(&d)),
+            "/stream/stream?preview=1"
+        );
+        assert_eq!(
+            nameplate_preview_src("stream", None),
+            "/stream/stream?preview=1"
+        );
     }
 }

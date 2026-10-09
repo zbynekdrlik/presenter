@@ -57,3 +57,38 @@ fn non_repository_error_still_defaults_to_500() {
     let app_err: AppError = err.into();
     assert_eq!(app_err.status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+// --- #826: a remote Bible translation (the NLT API) that cannot serve ---
+
+#[test]
+fn unreachable_remote_bible_maps_to_503_with_its_slovak_message() {
+    let err: anyhow::Error = crate::bible_remote::RemoteBibleError::Timeout {
+        reference: "1Jn.1.1-3".to_string(),
+        timeout: std::time::Duration::from_secs(10),
+    }
+    .into();
+    let app_err: AppError = err.into();
+    assert_eq!(app_err.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        app_err.error.to_string().starts_with("NLT nedostupné"),
+        "{}",
+        app_err.error
+    );
+}
+
+#[test]
+fn unusable_remote_bible_answer_maps_to_502_even_under_context() {
+    let err: anyhow::Error = anyhow::Error::from(crate::bible_remote::RemoteBibleError::Status {
+        reference: "1Jn.1.1-3".to_string(),
+        status: 500,
+    })
+    .context("while resolving slides");
+    let app_err: AppError = err.into();
+    assert_eq!(app_err.status, StatusCode::BAD_GATEWAY);
+    // The operator sees the NLT message, not the outer context.
+    assert!(
+        app_err.error.to_string().contains("HTTP 500"),
+        "{}",
+        app_err.error
+    );
+}

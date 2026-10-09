@@ -45,6 +45,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         let mode = ctx.mode;
         let mobile_nav_open = op.mobile_nav_open;
         let line_limit = op.line_limit;
+        let slide_columns = op.slide_columns;
         Effect::new(move || {
             if let Some(body) = crate::utils::window::document_body() {
                 let _ = body.set_attribute("data-view", &view.get());
@@ -69,6 +70,9 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                 let _ = body
                     .style()
                     .set_property("--operator-line-limit-ch", &ll.to_string());
+
+                // #832: this browser's slides-per-row choice for every grid.
+                crate::components::slide_columns::apply_slide_columns(&body, slide_columns.get());
             }
         });
     }

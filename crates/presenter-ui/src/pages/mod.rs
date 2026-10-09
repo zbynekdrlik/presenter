@@ -2,6 +2,7 @@ pub mod ai;
 pub mod bible;
 pub mod bible_controls;
 pub mod bible_prepared;
+pub mod bible_reference;
 pub mod bible_slides;
 pub mod camera;
 pub mod operator;

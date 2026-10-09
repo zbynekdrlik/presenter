@@ -1,6 +1,8 @@
 pub mod bible;
+pub mod bible_range;
 pub mod operator;
 pub mod session;
+pub mod slide_columns;
 pub mod stage;
 pub mod tablet;
 

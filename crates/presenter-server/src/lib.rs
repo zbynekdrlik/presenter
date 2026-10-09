@@ -81,6 +81,7 @@
 mod ableset;
 pub mod ai;
 mod android_stage;
+mod bible_remote;
 mod companion;
 pub mod config;
 mod live;

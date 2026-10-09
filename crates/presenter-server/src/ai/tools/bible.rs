@@ -207,7 +207,7 @@ pub(super) async fn resolve_bible_slides(
         .map(|v| v as u32)
         .unwrap_or(default_char_limit);
 
-    let (main_trans, _, slides) = state
+    let generated = state
         .generate_bible_slides(
             &translation,
             None,
@@ -220,6 +220,7 @@ pub(super) async fn resolve_bible_slides(
         )
         .await?;
 
+    let slides = &generated.slides;
     let slide_data: Vec<Value> = slides.iter().map(|s| slide_to_json(s)).collect();
 
     let preview = format!(
@@ -228,7 +229,7 @@ pub(super) async fn resolve_bible_slides(
         chapter,
         verse_start,
         verse_end,
-        main_trans.code,
+        generated.main_translation.code,
         slides.len()
     );
     Ok((serde_json::to_string(&slide_data)?, preview))

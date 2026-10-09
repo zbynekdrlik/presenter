@@ -336,6 +336,11 @@ export async function startTestServer(
     // calling startTestServer.
     PRESENTER_AI_API_URL:
       process.env.PRESENTER_AI_API_URL ?? "http://127.0.0.1:1/v1",
+    // #826: same for the NLT translation (eng-nlt is fetched from Tyndale's
+    // NLT API): a dead loopback by default, so no spec ever egresses to
+    // api.nlt.to. `bible-nlt-translation.spec.ts` points it at its own mock.
+    PRESENTER_NLT_API_URL:
+      process.env.PRESENTER_NLT_API_URL ?? "http://127.0.0.1:1",
     RUST_LOG:
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };
