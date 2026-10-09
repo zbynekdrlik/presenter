@@ -83,10 +83,12 @@ pub struct RangeHint {
 }
 
 /// The note after committing `bounded` to `field`, whose value was
-/// `previous`: a clamp shows its note; the SAME box re-committing its
-/// unchanged value keeps the current note — Enter writes the clamped value
-/// into the box, and the focus move / blur that follows fires the browser's
-/// `change` with exactly that value; any other valid value clears it.
+/// `previous`: a clamp shows its note; a commit that changes nothing keeps
+/// the current note, whichever box it came from — Enter writes the clamped
+/// value into the box and the focus move / blur that follows fires the
+/// browser's `change` with exactly that value, and Enter on the untouched
+/// mirrored end box commits its value again. Only the next VALID VALUE (in
+/// any box) clears the note.
 pub fn next_hint(
     current: Option<&RangeHint>,
     field: RangeField,
@@ -99,12 +101,26 @@ pub fn next_hint(
             text: text.clone(),
         });
     }
-    let recommit = bounded.value == previous && current.is_some_and(|hint| hint.field == field);
-    if recommit {
+    if bounded.value == previous {
         current.cloned()
     } else {
         None
     }
+}
+
+/// [`next_hint`] for a verse-START commit, which also mirrors the start into
+/// the end box (#702): an unchanged start that MOVES the end (`previous_end`
+/// was not the start) is a new value too and clears the note.
+pub fn next_verse_start_hint(
+    current: Option<&RangeHint>,
+    previous_start: u16,
+    previous_end: Option<u16>,
+    bounded: &BoundedInput,
+) -> Option<RangeHint> {
+    if bounded.hint.is_none() && previous_end != Some(bounded.value) {
+        return None;
+    }
+    next_hint(current, RangeField::VerseStart, previous_start, bounded)
 }
 
 /// `n` with the Slovak noun form it takes: 1 → `one`, 2–4 → `few`, else `many`.

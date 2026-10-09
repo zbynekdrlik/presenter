@@ -12,7 +12,8 @@ use wasm_bindgen::JsCast;
 use super::bible::BibleFocusRefs;
 use crate::state::bible::BibleState;
 use crate::state::bible_range::{
-    bound_chapter, bound_verse, next_hint, BoundedInput, RangeField, RangeHint,
+    bound_chapter, bound_verse, next_hint, next_verse_start_hint, BoundedInput, RangeField,
+    RangeHint,
 };
 
 /// The input element an event fired on.
@@ -57,7 +58,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
         })
     };
     // The note after a commit to `field` whose value was `previous` — kept
-    // when the box only re-commits the value the clamp wrote (`next_hint`).
+    // when the commit changes nothing (`next_hint`).
     let update_hint = move |field: RangeField, previous: u16, bounded: &BoundedInput| {
         let next = range_hint
             .with_untracked(|current| next_hint(current.as_ref(), field, previous, bounded));
@@ -81,8 +82,12 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
         let (chapter_count, verse_counts) = counts();
         let chapter = selected_chapter.get_untracked();
         let previous = verse_start_signal.get_untracked();
+        let previous_end = verse_end_signal.get_untracked();
         let bounded = bound_verse(typed, chapter, chapter_count, &verse_counts);
-        update_hint(RangeField::VerseStart, previous, &bounded);
+        let next = range_hint.with_untracked(|current| {
+            next_verse_start_hint(current.as_ref(), previous, previous_end, &bounded)
+        });
+        range_hint.set(next);
         verse_start_signal.set(bounded.value);
         // #702: mirror the start into the end — the dominant case is a
         // single verse, so entering a start auto-fills the end with the same
@@ -105,8 +110,12 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
     let commit_verse_end = move |input: &web_sys::HtmlInputElement| {
         let val_str = input.value();
         if val_str.is_empty() {
+            // A new value only when the end was set — re-committing an
+            // already empty end changes nothing, so the note stays.
+            if verse_end_signal.get_untracked().is_some() {
+                range_hint.set(None);
+            }
             verse_end_signal.set(None);
-            range_hint.set(None);
         } else if let Ok(val) = val_str.parse::<u16>() {
             show_bounded(input, &apply_verse_end(val));
         }
