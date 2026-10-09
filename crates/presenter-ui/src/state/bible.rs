@@ -276,6 +276,19 @@ mod tests {
     }
 
     #[test]
+    fn slide_char_count_counts_characters_not_bytes() {
+        // #828: "čšž" is 3 characters but 6 UTF-8 bytes.
+        assert_eq!(slide_char_count("čšž", 320), (3, false));
+        assert_eq!(slide_char_count("", 320), (0, false));
+    }
+
+    #[test]
+    fn slide_char_count_flags_only_a_count_over_the_limit() {
+        assert_eq!(slide_char_count("abcd", 4), (4, false));
+        assert_eq!(slide_char_count("abcde", 4), (5, true));
+    }
+
+    #[test]
     fn book_name_normalisation_folds_slovak_diacritics() {
         let filter = presenter_core::bible::normalise_book_key("lukas");
         let key = presenter_core::bible::normalise_book_key("Lukáš");

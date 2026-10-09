@@ -220,6 +220,142 @@ fn compose_bible_slides_without_secondary_passages_emits_no_translation_label() 
     );
 }
 
+// --- #828: the character limit counts the LONGER text, in characters ---
+
+/// Secondary (English) passages keyed by verse number, as `generate_bible_slides`
+/// builds them.
+fn english(lines: &[(u16, &str)]) -> HashMap<u16, BiblePassage> {
+    let translation = test_translation("eng-kjv");
+    lines
+        .iter()
+        .map(|(verse, text)| {
+            (
+                *verse,
+                BiblePassage::new(
+                    BibleReference::new("1 John", 1, *verse, *verse).unwrap(),
+                    translation.clone(),
+                    (*text).to_string(),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn slide_texts(slides: &[presenter_core::Slide]) -> Vec<(String, String)> {
+    slides
+        .iter()
+        .map(|slide| {
+            (
+                slide.content.main.value().to_string(),
+                slide.content.translation.value().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// #828: the two short Slovak lines fit the limit together (17 + 1 + 17 = 35
+/// characters <= 40), but their English lines do not (32 + 1 + 32 = 65). The
+/// longer translation decides, so each verse gets its own slide.
+#[test]
+fn compose_bible_slides_splits_when_the_translation_would_exceed_the_limit() {
+    let passages = vec![
+        test_passage("1 Ján", 1, 1, "Krátky verš A."),
+        test_passage("1 Ján", 1, 2, "Krátky verš B."),
+    ];
+    let secondary = english(&[
+        (1, "A much longer English line A."),
+        (2, "A much longer English line B."),
+    ]);
+
+    let slides = compose_bible_slides(
+        &test_translation("slk-seb"),
+        Some(&test_translation("eng-kjv")),
+        &passages,
+        &secondary,
+        40,
+        1,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(
+        slide_texts(&slides),
+        vec![
+            (
+                "1. Krátky verš A.".to_string(),
+                "1. A much longer English line A.".to_string()
+            ),
+            (
+                "2. Krátky verš B.".to_string(),
+                "2. A much longer English line B.".to_string()
+            ),
+        ]
+    );
+    for (_, translation) in slide_texts(&slides) {
+        assert!(translation.chars().count() <= 40, "{translation}");
+    }
+}
+
+/// #828: the limit counts CHARACTERS. Both lines together are 29 characters
+/// (14 + 1 + 14) — within 30 — but 51 UTF-8 bytes, because every Slovak
+/// diacritic is two bytes. They stay on one slide.
+#[test]
+fn compose_bible_slides_counts_diacritics_as_one_character() {
+    let passages = vec![
+        test_passage("1 Ján", 1, 1, "čšžťďňľôäáé"),
+        test_passage("1 Ján", 1, 2, "ČŠŽŤĎŇĽÔÄÁÉ"),
+    ];
+    let joined = format!("1. {}\n2. {}", passages[0].text, passages[1].text);
+    assert_eq!(joined.chars().count(), 29);
+    assert!(joined.len() > 30, "the bytes must exceed the limit");
+
+    let slides = compose_bible_slides(
+        &test_translation("slk-seb"),
+        None,
+        &passages,
+        &HashMap::new(),
+        30,
+        1,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(slides.len(), 1);
+    assert_eq!(slides[0].content.main.value(), joined);
+}
+
+/// #828 (#394/#434 behaviour kept): a verse longer than the limit on its own
+/// stays one whole slide — never cut mid-verse — and the next verse starts a
+/// new slide.
+#[test]
+fn compose_bible_slides_keeps_a_lone_oversized_verse_whole() {
+    let long_verse = "Toto je veľmi dlhý verš, ktorý sám prekročí limit.";
+    let passages = vec![
+        test_passage("1 Ján", 1, 1, long_verse),
+        test_passage("1 Ján", 1, 2, "Krátky."),
+    ];
+    let secondary = english(&[(1, "Short."), (2, "Also short.")]);
+
+    let slides = compose_bible_slides(
+        &test_translation("slk-seb"),
+        Some(&test_translation("eng-kjv")),
+        &passages,
+        &secondary,
+        20,
+        1,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(
+        slide_texts(&slides),
+        vec![
+            (format!("1. {long_verse}"), "1. Short.".to_string()),
+            ("2. Krátky.".to_string(), "2. Also short.".to_string()),
+        ]
+    );
+}
+
 // --- compose_bible_items_into_slides tests ---
 
 fn verse(number: u32, text: &str) -> BibleItem {
