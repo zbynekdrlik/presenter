@@ -271,30 +271,32 @@ pub fn preview_nameplate(
     post_nameplate_preview(json);
 }
 
+/// Take the previewed plate off the Menovky preview („Skryť"). Preview mode
+/// ignores the live plate feed and server auto-hide, so only the editor can
+/// clear a plate it played there (#829 second review).
+pub fn clear_nameplate_preview() {
+    post_nameplate_preview(crate::components::stream::nameplate_preview::serialize_message(None));
+}
+
 /// Post a serialized nameplate-preview message into the Menovky tab's own
 /// preview iframe (same-origin, #829) — the frame the operator sees next to the
 /// „Prehrať" buttons. Before #829 it targeted the Scény workspace preview, which
 /// the tabs hide while Menovky is open. No-op on the host / when no Menovky
-/// preview is mounted (the output has no lower third yet).
+/// preview is mounted (the output has no lower third yet). A click while that
+/// frame is still booting is dropped: Prehrať is a momentary action, so it is
+/// deliberately NOT replayed when the frame (re)loads.
 #[cfg(target_arch = "wasm32")]
 fn post_nameplate_preview(json: String) {
-    use leptos::wasm_bindgen::{JsCast, JsValue};
+    use leptos::wasm_bindgen::JsCast;
 
     let document = crate::utils::window::document();
     let Ok(Some(el)) = document.query_selector("[data-role=\"stream-nameplate-preview-frame\"]")
     else {
         return;
     };
-    let Some(iframe) = el.dyn_ref::<leptos::web_sys::HtmlIFrameElement>() else {
-        return;
-    };
-    let Some(win) = iframe.content_window() else {
-        return;
-    };
-    let origin = leptos::web_sys::window()
-        .and_then(|w| w.location().origin().ok())
-        .unwrap_or_else(|| "*".to_string());
-    let _ = win.post_message(&JsValue::from_str(&json), &origin);
+    if let Some(iframe) = el.dyn_ref::<leptos::web_sys::HtmlIFrameElement>() {
+        super::editor_preview::post_to_frame(iframe, &json);
+    }
 }
 
 /// Host stub (see the wasm version).
@@ -306,7 +308,7 @@ fn post_nameplate_preview(_json: String) {}
 /// `overlays=`, the first such base scene through `scene=` — so „Prehrať"
 /// animates in a frame the operator sees, whichever scene is open elsewhere.
 pub(super) fn nameplate_preview_src(slug: &str, def: Option<&StreamOutputDef>) -> String {
-    let mut src = format!("/stream/{slug}?preview=1");
+    let mut src = super::editor_preview::preview_base(slug);
     let Some(def) = def else {
         return src;
     };
@@ -351,7 +353,7 @@ fn NameplatePreviewFrame(ctx: StreamEditorCtx) -> impl IntoView {
     view! {
         <div
             class="stream-editor__preview-box stream-editor__nameplate-preview"
-            data-role="stream-nameplate-preview"
+            data-role="stream-nameplate-preview-box"
         >
             <iframe
                 class="stream-editor__preview-frame"
@@ -432,7 +434,7 @@ pub fn NameplatePanel(ctx: StreamEditorCtx) -> impl IntoView {
                             preview_nameplate(NameplateSource::Song, None, name, lib);
                         }>"Prehrať"</button>
                     <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-hide"
-                        on:click=move |_| ctx.hide_nameplate()>"Skryť"</button>
+                        on:click=move |_| { ctx.hide_nameplate(); clear_nameplate_preview(); }>"Skryť"</button>
                 </div>
             </div>
 
@@ -502,7 +504,7 @@ fn NameplateRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-preview"
                     on:click=move |_| preview_nameplate(NameplateSource::Person, Some(id), name(), role())>"Prehrať"</button>
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-hide"
-                    on:click=move |_| ctx.hide_nameplate()>"Skryť"</button>
+                    on:click=move |_| { ctx.hide_nameplate(); clear_nameplate_preview(); }>"Skryť"</button>
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-up"
                     title="Vyššie" on:click=move |_| ctx.move_nameplate(id, true)>"↑"</button>
                 <button type="button" class="stream-editor__btn stream-editor__btn--ghost" data-role="stream-nameplate-down"
