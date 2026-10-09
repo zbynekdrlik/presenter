@@ -4,10 +4,14 @@
 
 use super::books::nlt_book_abbreviation;
 use super::cache::{ChunkCache, ChunkKey};
-use super::client::{api_reference, chunk_ranges, MAX_VERSES_PER_FETCH, MAX_VERSES_PER_REQUEST};
+use super::client::{
+    api_reference, chunk_ranges, NltConfig, MAX_VERSES_PER_FETCH, MAX_VERSES_PER_REQUEST,
+};
 use super::parse::{decode_entities, parse_verses, verse_text};
 use super::*;
-use presenter_core::bible::{canonical_book_by_code, canonical_book_by_number};
+use presenter_core::bible::{
+    canonical_book_by_code, canonical_book_by_number, BibleBookChapterSummary,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -212,6 +216,30 @@ fn nlt_passages_carry_the_given_book_name_and_the_canonical_code() {
     );
     assert_eq!(passages[0].translation.code, NLT_CODE);
     assert_eq!(passages[0].text, "synthetic");
+}
+
+#[test]
+fn nlt_structure_extends_only_the_chapters_the_nlt_numbers_longer() {
+    let summary = |code: &str, chapter: u16, verse_count: u16| BibleBookChapterSummary {
+        book: code.to_string(),
+        book_code: Some(code.to_string()),
+        book_number: None,
+        chapter,
+        verse_count,
+    };
+    let kjv = vec![
+        summary("3JN", 1, 14),
+        summary("REV", 12, 17),
+        summary("REV", 13, 18),
+        summary("1JN", 1, 10),
+    ];
+
+    let counts: Vec<u16> = nlt_structure(kjv)
+        .iter()
+        .map(|chapter| chapter.verse_count)
+        .collect();
+
+    assert_eq!(counts, vec![15, 18, 18, 10]);
 }
 
 #[test]
@@ -444,6 +472,85 @@ async fn an_unreachable_api_is_a_typed_network_error_that_never_shows_the_key() 
     assert!(err.is_unreachable());
     assert!(!err.to_string().contains("key="), "{err}");
     assert!(!err.to_string().contains("127.0.0.1"), "{err}");
+}
+
+fn client_with_backoff(server: &MockServer, timeout: Duration, backoff: Duration) -> NltClient {
+    NltClient::new(NltConfig {
+        base_url: server.uri(),
+        api_key: "TEST".to_string(),
+        timeout,
+        unreachable_backoff: backoff,
+    })
+}
+
+#[tokio::test]
+async fn after_an_unreachable_api_later_requests_fail_fast_without_asking() {
+    let server = MockServer::start().await;
+    Mock::given(path("/api/passages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(FIXTURE_1JN)
+                .set_delay(Duration::from_secs(3)),
+        )
+        .mount(&server)
+        .await;
+    let client = client_with_backoff(&server, Duration::from_millis(200), Duration::from_secs(60));
+
+    let first = client
+        .fetch_verses("1JN", 1, 1, 3)
+        .await
+        .expect_err("timeout");
+    let second = client
+        .fetch_verses("1JN", 1, 4, 6)
+        .await
+        .expect_err("fails fast");
+
+    assert!(
+        matches!(first, RemoteBibleError::Timeout { .. }),
+        "{first:?}"
+    );
+    assert!(
+        matches!(second, RemoteBibleError::Backoff { .. }),
+        "{second:?}"
+    );
+    assert!(second.is_unreachable());
+    assert!(second.to_string().starts_with("NLT nedostupné"), "{second}");
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1, "the second fetch must not ask the API");
+}
+
+#[tokio::test]
+async fn the_fail_fast_pause_ends_and_the_api_is_asked_again() {
+    let server = MockServer::start().await;
+    Mock::given(path("/api/passages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(FIXTURE_1JN)
+                .set_delay(Duration::from_secs(3)),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_page(&server, "1Jn.1.1-3", FIXTURE_1JN.to_string()).await;
+    let client = client_with_backoff(
+        &server,
+        Duration::from_millis(200),
+        Duration::from_millis(100),
+    );
+
+    let first = client.fetch_verses("1JN", 1, 1, 3).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let verses = client
+        .fetch_verses("1JN", 1, 1, 3)
+        .await
+        .expect("the API is asked again after the pause");
+
+    assert!(
+        matches!(first, Err(RemoteBibleError::Timeout { .. })),
+        "{first:?}"
+    );
+    assert_eq!(verses.len(), 3);
+    server.verify().await;
 }
 
 #[tokio::test]

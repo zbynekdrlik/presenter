@@ -9,6 +9,11 @@
 //! a chapter come back as the chapter's last verse, a missing chapter as the
 //! book's last chapter), so every page is filtered to the requested range.
 //!
+//! After the API was UNREACHABLE (timeout, no connection) the client fails
+//! fast for `UNREACHABLE_BACKOFF`, so with the venue's internet down a load
+//! with an NLT secondary degrades at once instead of waiting out the timeout
+//! on every passage.
+//!
 //! The request URL carries the API key: it is never logged, and transport
 //! errors are reported without their URL.
 
@@ -33,12 +38,15 @@ pub(super) const MAX_VERSES_PER_FETCH: u16 = 200;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Cached chunks (≤50 verses each), least recently used evicted first.
 const CACHE_CAPACITY: usize = 256;
+/// How long requests fail fast after the API was unreachable.
+const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Where and how the client talks to the API.
 pub(super) struct NltConfig {
     pub(super) base_url: String,
     pub(super) api_key: String,
     pub(super) timeout: Duration,
+    pub(super) unreachable_backoff: Duration,
 }
 
 impl NltConfig {
@@ -49,6 +57,7 @@ impl NltConfig {
             base_url: env_or("PRESENTER_NLT_API_URL", DEFAULT_API_URL),
             api_key: env_or("PRESENTER_NLT_API_KEY", DEFAULT_API_KEY),
             timeout: REQUEST_TIMEOUT,
+            unreachable_backoff: UNREACHABLE_BACKOFF,
         }
     }
 }
@@ -66,6 +75,8 @@ pub(crate) struct NltClient {
     http: reqwest::Client,
     config: NltConfig,
     cache: Mutex<ChunkCache>,
+    /// Until when requests fail fast (set by an unreachable API).
+    unreachable_until: Mutex<Option<Instant>>,
 }
 
 impl NltClient {
@@ -84,6 +95,7 @@ impl NltClient {
             http: reqwest::Client::new(),
             config,
             cache: Mutex::new(ChunkCache::new(CACHE_CAPACITY)),
+            unreachable_until: Mutex::new(None),
         }
     }
 
@@ -94,6 +106,7 @@ impl NltClient {
             base_url: base_url.to_string(),
             api_key: DEFAULT_API_KEY.to_string(),
             timeout,
+            unreachable_backoff: UNREACHABLE_BACKOFF,
         })
     }
 
@@ -144,16 +157,53 @@ impl NltClient {
             tracing::debug!(reference, verses = verses.len(), "NLT cache hit");
             return Ok(verses);
         }
+        if let Some(retry_in) = self.backoff_remaining() {
+            tracing::debug!(
+                reference,
+                ?retry_in,
+                "NLT API was unreachable — failing fast"
+            );
+            return Err(RemoteBibleError::Backoff {
+                reference: reference.to_string(),
+                retry_secs: retry_in.as_secs().max(1),
+            });
+        }
         tracing::debug!(reference, "NLT cache miss");
-        let verses = Arc::new(self.request(&key, reference).await?);
+        let fetched = self.request(&key, reference).await;
+        self.note_reachability(&fetched);
+        let verses = Arc::new(fetched?);
         self.lock_cache().insert(key, Arc::clone(&verses));
         Ok(verses)
+    }
+
+    /// Time left in the fail-fast pause, if one is running.
+    fn backoff_remaining(&self) -> Option<Duration> {
+        let until = (*self.lock_unreachable())?;
+        until.checked_duration_since(Instant::now())
+    }
+
+    /// An unreachable API starts the fail-fast pause; any answer ends it.
+    fn note_reachability(&self, fetched: &Result<Vec<NltVerse>, RemoteBibleError>) {
+        let mut until = self.lock_unreachable();
+        match fetched {
+            Err(err) if err.is_unreachable() => {
+                *until = Instant::now().checked_add(self.config.unreachable_backoff);
+            }
+            _ => *until = None,
+        }
     }
 
     /// The cache lock is never held across an `.await`; a poisoned lock still
     /// holds a consistent cache (every mutation is a single push/pop).
     fn lock_cache(&self) -> MutexGuard<'_, ChunkCache> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Same discipline as [`Self::lock_cache`]; never held with it.
+    fn lock_unreachable(&self) -> MutexGuard<'_, Option<Instant>> {
+        self.unreachable_until
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// One logged API request for `key`'s range.
@@ -163,42 +213,46 @@ impl NltClient {
         reference: &str,
     ) -> Result<Vec<NltVerse>, RemoteBibleError> {
         let started = Instant::now();
-        let outcome = self
-            .request_page(reference)
-            .await
-            .and_then(|(status, page)| {
-                let parsed = parse_verses(&page);
-                if parsed.is_empty() {
-                    return Err(RemoteBibleError::NoVerses {
-                        reference: reference.to_string(),
-                    });
-                }
-                Ok((status, in_range(parsed, key)))
-            });
+        let answer = self.request_page(reference).await;
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        match outcome {
-            Ok((status, verses)) => {
-                tracing::info!(
-                    reference,
-                    verses = verses.len(),
-                    status,
-                    elapsed_ms,
-                    "NLT API request"
-                );
-                Ok(verses)
-            }
+        let (status, page) = match answer {
+            Ok(answer) => answer,
             Err(err) => {
                 let status = match &err {
                     RemoteBibleError::Status { status, .. } => Some(*status),
                     _ => None,
                 };
                 tracing::warn!(reference, ?status, elapsed_ms, error = %err, "NLT API request failed");
-                Err(err)
+                return Err(err);
             }
+        };
+        let parsed = parse_verses(&page);
+        if parsed.is_empty() {
+            let err = RemoteBibleError::NoVerses {
+                reference: reference.to_string(),
+            };
+            tracing::warn!(
+                reference,
+                status,
+                elapsed_ms,
+                body_bytes = page.len(),
+                error = %err,
+                "NLT API request failed"
+            );
+            return Err(err);
         }
+        let verses = in_range(parsed, key);
+        tracing::info!(
+            reference,
+            verses = verses.len(),
+            status,
+            elapsed_ms,
+            "NLT API request"
+        );
+        Ok(verses)
     }
 
-    /// The page body and its HTTP status (always a success status).
+    /// The HTTP status (always a success status) and the page body.
     async fn request_page(&self, reference: &str) -> Result<(u16, String), RemoteBibleError> {
         let url = format!(
             "{}/api/passages",

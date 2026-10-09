@@ -123,14 +123,20 @@ impl AppState {
     }
 
     /// Per-chapter summaries of a translation; a remote translation answers
-    /// with its structure translation's (`eng-kjv`) — no request is made.
+    /// with its structure translation's (`eng-kjv`, with the NLT's longer
+    /// chapters applied) — no request is made.
     pub async fn bible_book_chapter_summaries(
         &self,
         translation_code: &str,
     ) -> anyhow::Result<Vec<BibleBookChapterSummary>> {
-        self.repository
+        let summaries = self
+            .repository
             .bible_book_chapter_summaries(bible_remote::structure_source(translation_code))
-            .await
+            .await?;
+        if bible_remote::is_remote_translation(translation_code) {
+            return Ok(bible_remote::nlt_structure(summaries));
+        }
+        Ok(summaries)
     }
 
     async fn remote_passage_range(

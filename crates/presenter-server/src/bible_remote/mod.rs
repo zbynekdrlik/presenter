@@ -21,7 +21,7 @@ mod tests;
 
 use std::time::Duration;
 
-use presenter_core::bible::BibleBookCanonical;
+use presenter_core::bible::{BibleBookCanonical, BibleBookChapterSummary};
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 
 pub(crate) use client::NltClient;
@@ -55,6 +55,30 @@ pub(crate) fn structure_source(code: &str) -> &str {
     } else {
         code
     }
+}
+
+/// Chapters where the NLT numbers MORE verses than eng-kjv, whose structure
+/// it otherwise reuses: `(book code, chapter, NLT verse count)`. Checked live
+/// on 2026-10-09 against eng-kjv (3 John 1 = 14 verses, Revelation 12 = 17).
+const NLT_LONGER_CHAPTERS: [(&str, u16, u16); 2] = [("3JN", 1, 15), ("REV", 12, 18)];
+
+/// eng-kjv's chapter summaries with the NLT's longer chapters applied, so a
+/// whole-chapter load with the NLT as main reaches its last verse.
+pub(crate) fn nlt_structure(
+    mut summaries: Vec<BibleBookChapterSummary>,
+) -> Vec<BibleBookChapterSummary> {
+    for summary in &mut summaries {
+        let Some(code) = summary.book_code.as_deref() else {
+            continue;
+        };
+        let longer = NLT_LONGER_CHAPTERS.iter().find(|(book, chapter, _)| {
+            book.eq_ignore_ascii_case(code) && *chapter == summary.chapter
+        });
+        if let Some((_, _, verses)) = longer {
+            summary.verse_count = summary.verse_count.max(*verses);
+        }
+    }
+    summaries
 }
 
 /// One single-verse NLT passage per fetched verse, named with `book` (the
@@ -104,12 +128,21 @@ pub(crate) enum RemoteBibleError {
     /// The API answered 200, but the page held no verse at all.
     #[error("NLT nedostupné — API/internet: {reference} nevrátilo žiadny verš")]
     NoVerses { reference: String },
+    /// The API was unreachable a moment ago; not asked again yet.
+    #[error(
+        "NLT nedostupné — API/internet: {reference}: posledný pokus zlyhal, \
+         ďalší o {retry_secs} s"
+    )]
+    Backoff { reference: String, retry_secs: u64 },
 }
 
 impl RemoteBibleError {
     /// `true` when the API could not be reached (→ 503); `false` when it
     /// answered with something unusable (→ 502).
     pub(crate) fn is_unreachable(&self) -> bool {
-        matches!(self, Self::Timeout { .. } | Self::Network { .. })
+        matches!(
+            self,
+            Self::Timeout { .. } | Self::Network { .. } | Self::Backoff { .. }
+        )
     }
 }

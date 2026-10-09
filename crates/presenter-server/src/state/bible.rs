@@ -28,7 +28,7 @@ pub struct BibleTriggerOverrides {
 
 /// What [`AppState::generate_bible_slides`] produced. `secondary_warning`
 /// is set when the secondary translation could not be read (the NLT API is
-/// unreachable, #826): the slides then carry the main text only, and the
+/// unavailable, #826): the slides then carry the main text only, and the
 /// caller shows the warning to the operator.
 #[derive(Debug)]
 pub struct GeneratedBibleSlides {
@@ -39,7 +39,7 @@ pub struct GeneratedBibleSlides {
 }
 
 /// Secondary verses keyed by verse number, plus the operator warning when the
-/// secondary translation was unreachable.
+/// secondary translation was unavailable.
 type SecondaryVerses = (HashMap<u16, presenter_core::BiblePassage>, Option<String>);
 
 /// Returns a safe placeholder BibleReference for legacy broadcast fallback.
@@ -170,9 +170,10 @@ impl AppState {
     }
 
     /// The secondary translation's verses by verse number. A remote
-    /// translation that cannot be reached right now (the NLT API, #826) gives
-    /// no verses plus a warning for the operator, so the main text still
-    /// loads during a service; any other error still fails the load.
+    /// translation that is unavailable right now (the NLT API unreachable or
+    /// answering unusably, #826) gives no verses plus a warning for the
+    /// operator, so the main text still loads during a service; any other
+    /// error still fails the load.
     async fn secondary_verse_lookup(
         &self,
         translation: &BibleTranslation,

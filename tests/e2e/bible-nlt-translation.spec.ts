@@ -123,8 +123,9 @@ test.afterAll(async () => {
 });
 
 /**
- * Console errors/warnings of `page`. `allowed` names the ONE expected line a
- * failure test provokes on purpose (Chrome logs every non-2xx fetch).
+ * Console errors/warnings of `page`. `allowed` matches the expected lines a
+ * failure test provokes on purpose (Chrome logs every non-2xx fetch — one per
+ * failed load, so the button load and the debounced auto-load each add one).
  */
 function collectConsoleMessages(
   page: Page,
@@ -242,10 +243,11 @@ test("NLT API down: the SEB slides still load and a toast says the NLT is unavai
     { start: 4, end: 6 },
   );
 
-  await expect(page.locator('[data-role="toast"]')).toContainText(
-    "NLT nedostupné",
-    { timeout: 15_000 },
-  );
+  const toast = page.locator('[data-role="toast"]');
+  await expect(toast).toContainText("NLT nedostupné", { timeout: 15_000 });
+  // The degraded-load warning, not the failed-load toast.
+  await expect(toast).toContainText("sekundárny preklad vynechaný");
+  await expect(toast).not.toContainText("Failed to load passage");
   const card = page.locator('[data-role="slide-card"]').first();
   await expect(card.locator(".operator__slide-reference").first()).toHaveText(
     /1:4-6 \(SEB\)$/,
