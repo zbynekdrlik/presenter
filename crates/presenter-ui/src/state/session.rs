@@ -43,3 +43,28 @@ pub fn get_persistent(key: &str) -> Option<String> {
 pub fn set_persistent(key: &str, value: &str) {
     let _ = LocalStorage::set(format!("{PREFIX}{key}"), value.to_string());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_values_stay_json_strings_like_gloo_storage_wrote_them() {
+        // Values saved by earlier builds (gloo-storage) are JSON strings, and
+        // E2E specs seed `sessionStorage` the same way — keep the format.
+        assert_eq!(encode_stored("5"), "\"5\"");
+        assert_eq!(encode_stored("Ján \"1\""), "\"Ján \\\"1\\\"\"");
+        assert_eq!(decode_stored("\"5\""), Some("5".to_string()));
+        assert_eq!(
+            decode_stored(&encode_stored("Ján \"1\"")),
+            Some("Ján \"1\"".to_string())
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_json_string_reads_as_absent() {
+        assert_eq!(decode_stored("5"), None);
+        assert_eq!(decode_stored(""), None);
+        assert_eq!(decode_stored("{"), None);
+    }
+}

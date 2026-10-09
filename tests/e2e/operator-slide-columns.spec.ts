@@ -145,9 +145,16 @@ test("a phone keeps 2 per row by default, an explicit choice wins", async ({
   try {
     await openOperator(phone.page);
     await expectColumns(phone.page, 2);
+    // The control shows what the phone grid shows.
+    await expect(
+      control(phone.page).locator('[data-role="slide-columns-value"]'),
+    ).toHaveText("2");
 
     // An explicit choice made in this browser beats the phone default.
     await phone.page.setViewportSize({ width: 1280, height: 800 });
+    await expect(
+      control(phone.page).locator('[data-role="slide-columns-value"]'),
+    ).toHaveText("3");
     await control(phone.page)
       .locator('[data-role="slide-columns-increase"]')
       .click();

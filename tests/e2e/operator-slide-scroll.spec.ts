@@ -130,7 +130,7 @@ test("lookahead: clicking a slide makes next-row slide visible", async ({
   // Allow the scroll Effect (which runs after click) to settle.
   await page.waitForTimeout(300);
 
-  // The next-row anchor for index 3 is index 6 (index + COLUMNS_PER_ROW=3).
+  // The next-row anchor for index 3 is index 6 (index + 3 columns, the default).
   // It must be visible within the container (bottom <= container.bottom).
   const visibility = await page.evaluate(() => {
     const container = document.querySelector(".operator__slides");
@@ -315,6 +315,89 @@ test("load-at-start: opening a new presentation scrolls slide list to top", asyn
     return c?.scrollTop ?? -1;
   });
   expect(scrollAfterSwitch).toBe(0);
+
+  expect(
+    consoleMessages.filter(
+      (m) => !m.includes("favicon") && !m.includes("crbug.com/981419"),
+    ),
+  ).toEqual([]);
+});
+
+test("lookahead follows this browser's slides-per-row choice (#832): 5 per row", async ({
+  page,
+}) => {
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  // 40 slides → 8 rows at 5 per row: rows below the fold to scroll to.
+  const headers = { "Content-Type": "application/json" };
+  const libResp = await fetch(new URL("/libraries", baseURL).toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: "_E2E Slide Scroll 5 per row" }),
+  });
+  const lib = await libResp.json();
+  const slides40 = Array.from({ length: 40 }, (_, i) => ({
+    main: `Line ${i + 1}\nSecond line of ${i + 1}\nThird line`,
+  }));
+  const presResp = await fetch(
+    new URL(`/libraries/${lib.id}/presentations`, baseURL).toString(),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Scroll Test Song C", slides: slides40 }),
+    },
+  );
+  const presId40 = (await presResp.json()).presentation.id as string;
+
+  // This browser chose 5 per row (session.rs keeps gloo's JSON format).
+  await page.goto(new URL("/ui/operator", baseURL).toString());
+  await page.evaluate(() =>
+    localStorage.setItem("presenter:operatorSlideColumns", JSON.stringify("5")),
+  );
+  await openPresentation(page, presId40);
+
+  const columns = await page.evaluate(
+    () =>
+      getComputedStyle(document.querySelector(".operator__slides")!)
+        .gridTemplateColumns.split(" ")
+        .filter((track) => track.length > 0).length,
+  );
+  expect(columns).toBe(5);
+
+  // A fully visible row whose NEXT row is still below the fold.
+  const target = await page.evaluate(() => {
+    const container = document.querySelector(".operator__slides") as HTMLElement;
+    container.scrollTop = 0;
+    const cards = Array.from(container.querySelectorAll("[data-slide-id]"));
+    const box = container.getBoundingClientRect();
+    for (let i = 0; i + 5 < cards.length; i += 5) {
+      const row = cards[i].getBoundingClientRect();
+      const next = cards[i + 5].getBoundingClientRect();
+      if (row.top >= box.top && row.bottom <= box.bottom && next.bottom > box.bottom + 2) {
+        return i;
+      }
+    }
+    return -1;
+  });
+  expect(target).toBeGreaterThanOrEqual(0);
+
+  await page.locator(".operator__slides [data-slide-id]").nth(target).click();
+  // Allow the scroll Effect (which runs after click) to settle.
+  await page.waitForTimeout(300);
+
+  // The next row is index + 5 at 5 per row — it must now be on screen.
+  const nextRowVisible = await page.evaluate((index) => {
+    const container = document.querySelector(".operator__slides") as HTMLElement;
+    const cards = container.querySelectorAll("[data-slide-id]");
+    const anchor = (cards[index + 5] as Element).getBoundingClientRect();
+    return anchor.bottom <= container.getBoundingClientRect().bottom + 2;
+  }, target);
+  expect(nextRowVisible).toBe(true);
 
   expect(
     consoleMessages.filter(

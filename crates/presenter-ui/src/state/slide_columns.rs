@@ -71,11 +71,36 @@ mod tests {
 
     #[test]
     fn stepping_starts_from_the_default_and_stays_within_one_to_eight() {
-        assert_eq!(step_slide_columns(None, 1), DEFAULT_SLIDE_COLUMNS + 1);
-        assert_eq!(step_slide_columns(None, -1), DEFAULT_SLIDE_COLUMNS - 1);
-        assert_eq!(step_slide_columns(Some(8), 1), MAX_SLIDE_COLUMNS);
-        assert_eq!(step_slide_columns(Some(1), -1), MIN_SLIDE_COLUMNS);
-        assert_eq!(step_slide_columns(Some(4), 1), 5);
+        let default = DEFAULT_SLIDE_COLUMNS;
+        assert_eq!(
+            step_slide_columns(None, default, 1),
+            DEFAULT_SLIDE_COLUMNS + 1
+        );
+        assert_eq!(
+            step_slide_columns(None, default, -1),
+            DEFAULT_SLIDE_COLUMNS - 1
+        );
+        assert_eq!(step_slide_columns(Some(8), default, 1), MAX_SLIDE_COLUMNS);
+        assert_eq!(step_slide_columns(Some(1), default, -1), MIN_SLIDE_COLUMNS);
+        assert_eq!(step_slide_columns(Some(4), default, 1), 5);
+    }
+
+    #[test]
+    fn without_a_choice_a_phone_shows_two_per_row_and_a_desktop_three() {
+        assert_eq!(default_slide_columns(400.0), 2);
+        assert_eq!(default_slide_columns(480.0), 2);
+        assert_eq!(default_slide_columns(481.0), 3);
+        assert_eq!(default_slide_columns(1280.0), 3);
+    }
+
+    #[test]
+    fn stepping_without_a_choice_starts_from_what_the_phone_shows() {
+        // The phone grid shows 2: "+" makes it 3 (not 4), "−" makes it 1.
+        assert_eq!(step_slide_columns(None, default_slide_columns(400.0), 1), 3);
+        assert_eq!(
+            step_slide_columns(None, default_slide_columns(400.0), -1),
+            1
+        );
     }
 
     #[test]
