@@ -27,6 +27,18 @@ fn live_library_ids_subquery() -> SelectStatement {
         .to_owned()
 }
 
+/// Only the first words of a query are matched (#833 review): every token
+/// adds four LIKEs per slide, and a pasted verse line is not a better query
+/// than its first words.
+const MAX_SEARCH_TOKENS: usize = 8;
+
+/// Upper bound on slide-phase pages (#833 review). Each page excludes every
+/// presentation already scanned, so it always brings new songs; the bound only
+/// caps a pathological query.
+const MAX_SLIDE_PAGES: usize = 8;
+
+type SlideRows = Vec<(slide_entity::Model, Option<presentation_entity::Model>)>;
+
 struct SearchContext {
     tokens: Vec<String>,
     has_tokens: bool,
@@ -66,7 +78,15 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let tokens = query_tokens(trimmed);
+        let mut tokens = query_tokens(trimmed);
+        if tokens.len() > MAX_SEARCH_TOKENS {
+            tracing::debug!(
+                total = tokens.len(),
+                kept = MAX_SEARCH_TOKENS,
+                "search: query truncated to its first words"
+            );
+            tokens.truncate(MAX_SEARCH_TOKENS);
+        }
         let has_tokens = !tokens.is_empty();
         let cap = limit.clamp(1, 100) as usize;
 
@@ -239,12 +259,6 @@ impl Repository {
                 Some(model) if model.deleted_at.is_none() => model,
                 _ => continue,
             };
-            if !ctx
-                .seen_presentation_ids
-                .insert(presentation_model.id.clone())
-            {
-                continue;
-            }
             if ctx.has_tokens {
                 let combined = fold_query(&format!(
                     "{} {}",
@@ -253,6 +267,15 @@ impl Repository {
                 if !ctx.tokens.iter().all(|token| combined.contains(token)) {
                     continue;
                 }
+            }
+            // #833 review: mark the presentation seen only once it is
+            // EMITTED — a row the check above rejects must stay findable by
+            // its lyrics in the slide phase.
+            if !ctx
+                .seen_presentation_ids
+                .insert(presentation_model.id.clone())
+            {
+                continue;
             }
             let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
             let library_uuid = parse_uuid(&library_model.id)?;
@@ -357,44 +380,79 @@ impl Repository {
         }
     }
 
+    /// The slide-text phase, read in pages (#833 review). The LIMIT counts
+    /// slide ROWS while results are per presentation, so one page could be
+    /// filled by the many slides of a few songs (or of songs already emitted
+    /// by name) and cut off a lyric match elsewhere. Every page now excludes
+    /// all presentations already scanned, so it only ever brings new songs.
     async fn search_slides(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
-        let remaining = ctx.remaining();
-        if remaining == 0 {
-            return Ok(());
+        let mut scanned: HashSet<String> = ctx.seen_presentation_ids.clone();
+        for page in 0..MAX_SLIDE_PAGES {
+            let remaining = ctx.remaining();
+            if remaining == 0 {
+                break;
+            }
+            let page_rows = (remaining * 4).max(40) as u64;
+            let slide_rows = self.fetch_slide_page(ctx, &scanned, page_rows).await?;
+            let fetched = slide_rows.len();
+            for (slide_model, _) in &slide_rows {
+                scanned.insert(slide_model.presentation_id.clone());
+            }
+
+            let (pending, missing_library_ids) = Self::collect_pending_slides(ctx, slide_rows);
+            if !missing_library_ids.is_empty() {
+                self.backfill_live_library_names(ctx, missing_library_ids)
+                    .await?;
+            }
+            for (slide_model, presentation_model) in pending {
+                if ctx.is_full() {
+                    break;
+                }
+                Self::emit_slide_result(ctx, slide_model, presentation_model)?;
+            }
+            tracing::debug!(
+                page,
+                fetched,
+                results = ctx.results.len(),
+                "search: slide page"
+            );
+            if (fetched as u64) < page_rows {
+                break;
+            }
         }
+        Ok(())
+    }
 
-        let slide_condition = Self::slide_search_condition(ctx);
-
-        // #558 S10: the two name-search phases (search_libraries' matched-
-        // presentations prefetch, search_presentations itself) both filter
-        // DeletedAt.is_null() — the slide-TEXT phase must too, or a trashed
-        // song's lyrics still surface it in results.
-        let slide_rows = slide_entity::Entity::find()
-            .filter(slide_condition)
+    /// One page of slide-text matches, skipping every presentation in
+    /// `scanned`, ordered by slide position (then id, so pages are stable).
+    async fn fetch_slide_page(
+        &self,
+        ctx: &SearchContext,
+        scanned: &HashSet<String>,
+        rows: u64,
+    ) -> anyhow::Result<SlideRows> {
+        // #558 S10: the name-search phases filter DeletedAt.is_null() — the
+        // slide-TEXT phase must too, or a trashed song's lyrics still surface
+        // it in results.
+        let mut query = slide_entity::Entity::find()
+            .filter(Self::slide_search_condition(ctx))
             .filter(presentation_entity::Column::DeletedAt.is_null())
             // #646: same SQL-side exclusion as `search_presentations` —
             // see `live_library_ids_subquery`'s doc comment.
-            .filter(presentation_entity::Column::LibraryId.in_subquery(live_library_ids_subquery()))
+            .filter(
+                presentation_entity::Column::LibraryId.in_subquery(live_library_ids_subquery()),
+            );
+        if !scanned.is_empty() {
+            query = query
+                .filter(slide_entity::Column::PresentationId.is_not_in(scanned.iter().cloned()));
+        }
+        Ok(query
             .order_by_asc(slide_entity::Column::Position)
-            .limit(remaining as u64)
+            .order_by_asc(slide_entity::Column::Id)
+            .limit(rows)
             .find_also_related(presentation_entity::Entity)
             .all(&self.db)
-            .await?;
-
-        let (pending, missing_library_ids) = Self::collect_pending_slides(ctx, slide_rows);
-        if !missing_library_ids.is_empty() {
-            self.backfill_live_library_names(ctx, missing_library_ids)
-                .await?;
-        }
-
-        for (slide_model, presentation_model) in pending {
-            if ctx.is_full() {
-                break;
-            }
-            Self::emit_slide_result(ctx, slide_model, presentation_model)?;
-        }
-
-        Ok(())
+            .await?)
     }
 
     /// First pass over the raw slide-join rows: dedupe by slide id, drop rows
@@ -403,7 +461,7 @@ impl Repository {
     /// (extracted per the #558 round-3 function-length gate; #635 split).
     fn collect_pending_slides(
         ctx: &mut SearchContext,
-        slide_rows: Vec<(slide_entity::Model, Option<presentation_entity::Model>)>,
+        slide_rows: SlideRows,
     ) -> (
         Vec<(slide_entity::Model, presentation_entity::Model)>,
         HashSet<String>,
