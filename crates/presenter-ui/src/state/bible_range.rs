@@ -263,6 +263,34 @@ mod tests {
     }
 
     #[test]
+    fn a_verse_start_commit_that_moves_the_mirrored_end_clears_the_note() {
+        // The end box was clamped to 21 ("only 21 verses"); typing the SAME
+        // start 2 again mirrors 2 into the end (#702) — a new end value.
+        let shown = hint(RangeField::VerseEnd, "Kapitola má len 21 veršov");
+        let same_start = bound_verse(2, 5, 5, &[10, 10, 10, 10, 21]);
+        assert_eq!(
+            next_verse_start_hint(Some(&shown), 2, Some(21), &same_start),
+            None
+        );
+    }
+
+    #[test]
+    fn a_verse_start_recommit_with_the_end_already_mirrored_keeps_the_note() {
+        let shown = hint(RangeField::VerseStart, "Kapitola má len 21 veršov");
+        let recommit = bound_verse(21, 5, 5, &[10, 10, 10, 10, 21]);
+        assert_eq!(
+            next_verse_start_hint(Some(&shown), 21, Some(21), &recommit),
+            Some(shown.clone())
+        );
+        // A clamp still shows its own note.
+        let clamped = bound_verse(99, 5, 5, &[10, 10, 10, 10, 21]);
+        assert_eq!(
+            next_verse_start_hint(None, 2, Some(2), &clamped),
+            Some(shown.clone())
+        );
+    }
+
+    #[test]
     fn the_hints_use_slovak_plural_forms() {
         assert_eq!(
             bound_chapter(9, 1, &[25]).hint.as_deref(),
