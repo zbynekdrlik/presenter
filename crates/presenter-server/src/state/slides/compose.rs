@@ -332,6 +332,92 @@ fn secondary_book_name<'a>(
         .map(|p| p.reference.book.as_str())
 }
 
+/// The slide being built: its main and translation lines and verse spans.
+#[derive(Default)]
+struct SlideDraft {
+    main: String,
+    translation: String,
+    verses: Vec<(u16, u16)>,
+}
+
+impl SlideDraft {
+    fn is_empty(&self) -> bool {
+        self.main.is_empty()
+    }
+
+    /// Whether adding this verse would push the main OR the translation text
+    /// over `limit` characters (#828: whichever translation is longer decides).
+    fn would_exceed(&self, main_line: &str, translation_line: Option<&str>, limit: usize) -> bool {
+        joined_chars(&self.main, main_line) > limit
+            || translation_line.is_some_and(|line| joined_chars(&self.translation, line) > limit)
+    }
+
+    fn push(&mut self, main_line: &str, translation_line: Option<&str>, verse: (u16, u16)) {
+        push_line(&mut self.main, main_line);
+        if let Some(line) = translation_line {
+            push_line(&mut self.translation, line);
+        }
+        self.verses.push(verse);
+    }
+}
+
+/// Characters (never bytes: a Slovak diacritic is one) of `text` once `line`
+/// is appended on a new line.
+fn joined_chars(text: &str, line: &str) -> usize {
+    text.chars().count() + usize::from(!text.is_empty()) + line.chars().count()
+}
+
+fn push_line(text: &mut String, line: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(line);
+}
+
+/// Everything the live slides of one passage share besides their text.
+struct BibleSlideFrame<'a> {
+    main_translation: &'a BibleTranslation,
+    secondary_translation: Option<&'a BibleTranslation>,
+    book: String,
+    book_code: Option<String>,
+    book_number: Option<u16>,
+    chapter: u16,
+    reference_label: String,
+    translation_reference_label: Option<String>,
+}
+
+impl BibleSlideFrame<'_> {
+    /// Append the slide of `draft` to `slides` (a blank draft adds nothing).
+    fn push_slide(&self, slides: &mut Vec<Slide>, draft: SlideDraft) -> anyhow::Result<()> {
+        if draft.main.trim().is_empty() {
+            return Ok(());
+        }
+        let content = SlideContent::new(
+            SlideText::new(&draft.main)?,
+            SlideText::new(&draft.translation)?,
+            SlideText::new(&self.reference_label)?,
+            Some(SlideGroup::new(&self.reference_label)),
+        );
+        let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
+            translation_code: self.main_translation.code.clone(),
+            secondary_translation_code: self.secondary_translation.map(|t| t.code.clone()),
+            book: self.book.clone(),
+            book_code: self.book_code.clone(),
+            book_number: self.book_number,
+            chapter: self.chapter,
+            verses: draft
+                .verses
+                .iter()
+                .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
+                .collect(),
+            main_reference_label: Some(self.reference_label.clone()),
+            translation_reference_label: self.translation_reference_label.clone(),
+        });
+        slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));
+        Ok(())
+    }
+}
+
 pub(crate) fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
@@ -341,20 +427,15 @@ pub(crate) fn compose_bible_slides(
     full_verse_start: u16,
     full_verse_end: u16,
 ) -> anyhow::Result<Vec<Slide>> {
-    let mut slides: Vec<Slide> = Vec::new();
-    if main_passages.is_empty() {
-        return Ok(slides);
-    }
-
-    let book = main_passages[0].reference.book.clone();
-    let book_code = main_passages[0].reference.book_code.clone();
-    let book_number = main_passages[0].reference.book_number;
-    let chapter = main_passages[0].reference.chapter;
+    let Some(first) = main_passages.first() else {
+        return Ok(Vec::new());
+    };
+    let chapter = first.reference.chapter;
 
     // The full reference label appears on all slides (includes translation
     // code). A secondary translation gets its own label.
-    let full_reference_label = build_reference_label(
-        &book,
+    let reference_label = build_reference_label(
+        &first.reference.book,
         chapter,
         full_verse_start,
         full_verse_end,
@@ -370,80 +451,37 @@ pub(crate) fn compose_bible_slides(
             &t.code,
         ))
     });
-
-    let mut current_main = String::new();
-    let mut current_tr = String::new();
-    let mut verses_meta: Vec<(u16, u16)> = Vec::new();
-
-    let push_slide = |slides: &mut Vec<Slide>,
-                      main: String,
-                      tr: String,
-                      verses: &[(u16, u16)]|
-     -> anyhow::Result<()> {
-        if main.trim().is_empty() {
-            return Ok(());
-        }
-        let content = SlideContent::new(
-            SlideText::new(&main)?,
-            SlideText::new(&tr)?,
-            SlideText::new(&full_reference_label)?,
-            Some(SlideGroup::new(&full_reference_label)),
-        );
-        let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
-            translation_code: main_translation.code.clone(),
-            secondary_translation_code: secondary_translation.map(|t| t.code.clone()),
-            book: book.clone(),
-            book_code: book_code.clone(),
-            book_number,
-            chapter,
-            verses: verses
-                .iter()
-                .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
-                .collect(),
-            main_reference_label: Some(full_reference_label.clone()),
-            translation_reference_label: translation_reference_label.clone(),
-        });
-        slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));
-        Ok(())
+    let frame = BibleSlideFrame {
+        main_translation,
+        secondary_translation,
+        book: first.reference.book.clone(),
+        book_code: first.reference.book_code.clone(),
+        book_number: first.reference.book_number,
+        chapter,
+        reference_label,
+        translation_reference_label,
     };
 
-    for p in main_passages {
-        let label = format!("{}. ", p.reference.verse_start);
-        let line = format!("{}{}", label, p.text);
-        let prospective_len =
-            current_main.len() + if current_main.is_empty() { 0 } else { 1 } + line.len();
-        if prospective_len > character_limit as usize && !current_main.is_empty() {
-            // flush
-            push_slide(
-                &mut slides,
-                current_main.clone(),
-                current_tr.clone(),
-                &verses_meta,
-            )?;
-            current_main.clear();
-            current_tr.clear();
-            verses_meta.clear();
+    let limit = character_limit as usize;
+    let mut slides = Vec::new();
+    let mut draft = SlideDraft::default();
+    for passage in main_passages {
+        let verse = passage.reference.verse_start;
+        let main_line = format!("{verse}. {}", passage.text);
+        let translation_line = secondary_lookup
+            .get(&verse)
+            .map(|sec| format!("{}. {}", sec.reference.verse_start, sec.text));
+        // A lone verse longer than the limit stays one whole slide (#434).
+        if !draft.is_empty() && draft.would_exceed(&main_line, translation_line.as_deref(), limit) {
+            frame.push_slide(&mut slides, std::mem::take(&mut draft))?;
         }
-        if !current_main.is_empty() {
-            current_main.push('\n');
-        }
-        current_main.push_str(&line);
-        // translation (secondary)
-        if let Some(sec) = secondary_lookup.get(&p.reference.verse_start) {
-            let tr_label = format!("{}. ", sec.reference.verse_start);
-            let tr_line = format!("{}{}", tr_label, sec.text);
-            if !current_tr.is_empty() {
-                current_tr.push('\n');
-            }
-            current_tr.push_str(&tr_line);
-        }
-        verses_meta.push((p.reference.verse_start, p.reference.verse_end));
+        draft.push(
+            &main_line,
+            translation_line.as_deref(),
+            (verse, passage.reference.verse_end),
+        );
     }
-
-    // final flush
-    if !current_main.is_empty() {
-        push_slide(&mut slides, current_main, current_tr, &verses_meta)?;
-    }
+    frame.push_slide(&mut slides, draft)?;
 
     Ok(slides)
 }

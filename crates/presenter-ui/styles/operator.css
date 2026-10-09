@@ -1368,6 +1368,35 @@ body.operator {
   border-top: 1px solid rgba(147, 197, 253, 0.2);
 }
 
+/* #828: per-slide character counts (main / translation), muted; warning
+   colour when over the Bible character limit. */
+.operator__slide-char-counts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+
+.operator__slide-chars {
+  font-size: 0.65rem;
+  line-height: 1.2;
+  padding: 0 0.3rem;
+  border-radius: 0.25rem;
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.12);
+  font-variant-numeric: tabular-nums;
+}
+
+.operator__slide-chars[data-field="translation"] {
+  color: #93c5fd;
+}
+
+.operator__slide-chars--over,
+.operator__slide-chars--over[data-field="translation"] {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.16);
+}
+
 /* Bible slide reference footer */
 .operator__slide-footer {
   display: flex;

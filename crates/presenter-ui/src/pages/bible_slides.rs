@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
-use crate::state::bible::BibleState;
+use crate::state::bible::{slide_char_count, BibleState};
 use crate::state::AppContext;
 
 // ---------------------------------------------------------------------------
@@ -167,17 +167,46 @@ fn build_trigger_request(
     }
 }
 
+/// #828: the small character-count badge of one slide text; warning-coloured
+/// (`data-over="true"`) when the count is over the Bible character limit.
+fn char_count_badge(field: &'static str, text: &str, limit: u32) -> impl IntoView {
+    let (count, over) = slide_char_count(text, limit);
+    let title = if over {
+        format!("{count} characters, over the limit of {limit}")
+    } else {
+        format!("{count} characters (limit {limit})")
+    };
+    view! {
+        <span
+            class="operator__slide-chars"
+            class:operator__slide-chars--over=over
+            data-role="slide-char-count"
+            data-field=field
+            data-over=if over { "true" } else { "false" }
+            title=title
+        >
+            {count}
+        </span>
+    }
+}
+
 /// Render the slide body content (shared between live and prepared cards).
 /// Bible slides have 4 fields: Main, Translation, Main Reference, Translation Reference.
-/// Group is a worship field — not used here.
+/// Group is a worship field — not used here. `limit` is the Bible character
+/// limit the count badges compare against (#828).
 fn slide_body_view(
     main: String,
     trans: String,
     main_ref: String,
     trans_ref: String,
+    limit: u32,
 ) -> impl IntoView {
+    let main_badge = char_count_badge("main", &main, limit);
+    let translation_badge =
+        (!trans.is_empty()).then(|| char_count_badge("translation", &trans, limit));
     view! {
         <section class="operator__slide-bodies operator__slide-bodies--bible">
+            <div class="operator__slide-char-counts">{main_badge}{translation_badge}</div>
             <div class="operator__slide-text operator__slide-text--main">{main}</div>
             {if !trans.is_empty() {
                 Some(view! {
@@ -356,6 +385,7 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
     let trans_text_sig = RwSignal::new(slide.bible_translation.clone());
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(trans_ref_initial);
+    let character_limit = bs.character_limit;
 
     let is_selected = {
         let sid = slide_id.clone();
@@ -439,7 +469,7 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
                     let trans = trans_text_sig.get();
                     let mref = main_ref_sig.get();
                     let tref = trans_ref_sig.get();
-                    slide_body_view(main, trans, mref, tref)
+                    slide_body_view(main, trans, mref, tref, character_limit.get())
                 }}
             </div>
         </div>
@@ -502,6 +532,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let trans_text_sig = RwSignal::new(slide.bible_translation.clone());
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(slide.bible_translation_reference.clone());
+    let character_limit = bs.character_limit;
 
     let on_trigger = make_trigger_handler(
         &ctx,
@@ -716,7 +747,13 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 let tref = trans_ref_ro.clone();
                 move || {
                     if mode.get() != "edit" {
-                        Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), tref.clone()))
+                        Some(slide_body_view(
+                            main.clone(),
+                            trans.clone(),
+                            mref.clone(),
+                            tref.clone(),
+                            character_limit.get(),
+                        ))
                     } else {
                         None
                     }
