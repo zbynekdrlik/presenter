@@ -133,6 +133,90 @@ fn compose_bible_slides_with_secondary_translation() {
     assert_eq!(slide.content.stage.value(), "John 3:16 (SEB)");
 }
 
+/// #824 (PP, 2026-10-09): SEB main + KJV secondary showed "1 Ján 1:1-10 (KJV)".
+/// The secondary label must name the book the way the SECONDARY translation
+/// does ("1 John"), while the main label keeps the main translation's name.
+#[test]
+fn compose_bible_slides_secondary_label_uses_the_secondary_book_name() {
+    let main_translation = test_translation("slk-seb");
+    let secondary_translation = test_translation("eng-kjv");
+    let passages = vec![
+        test_passage("1 Ján", 1, 1, "Čo bolo od počiatku."),
+        test_passage("1 Ján", 1, 2, "Lebo život sa zjavil."),
+    ];
+    let mut secondary = HashMap::new();
+    for (verse, text) in [
+        (1, "That which was from the beginning."),
+        (2, "For the life was manifested."),
+    ] {
+        secondary.insert(
+            verse,
+            BiblePassage::new(
+                BibleReference::new("1 John", 1, verse, verse).unwrap(),
+                secondary_translation.clone(),
+                text.to_string(),
+            ),
+        );
+    }
+
+    let slides = compose_bible_slides(
+        &main_translation,
+        Some(&secondary_translation),
+        &passages,
+        &secondary,
+        320,
+        1,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(slides.len(), 1);
+    let bible = slides[0]
+        .metadata
+        .as_ref()
+        .and_then(|m| m.bible.as_ref())
+        .expect("bible metadata");
+    assert_eq!(
+        bible.main_reference_label.as_deref(),
+        Some("1 Ján 1:1-2 (SEB)")
+    );
+    assert_eq!(
+        bible.translation_reference_label.as_deref(),
+        Some("1 John 1:1-2 (KJV)"),
+        "the translation reference must use the secondary translation's book name"
+    );
+}
+
+/// Without any secondary passage there is no secondary book name: the label
+/// falls back to the main book name (the pre-#824 behaviour, still correct here).
+#[test]
+fn compose_bible_slides_secondary_label_falls_back_to_the_main_book_name() {
+    let main_translation = test_translation("slk-seb");
+    let secondary_translation = test_translation("eng-kjv");
+    let passages = vec![test_passage("1 Ján", 1, 1, "Čo bolo od počiatku.")];
+
+    let slides = compose_bible_slides(
+        &main_translation,
+        Some(&secondary_translation),
+        &passages,
+        &HashMap::new(),
+        320,
+        1,
+        1,
+    )
+    .unwrap();
+
+    let bible = slides[0]
+        .metadata
+        .as_ref()
+        .and_then(|m| m.bible.as_ref())
+        .expect("bible metadata");
+    assert_eq!(
+        bible.translation_reference_label.as_deref(),
+        Some("1 Ján 1:1 (KJV)")
+    );
+}
+
 // --- compose_bible_items_into_slides tests ---
 
 fn verse(number: u32, text: &str) -> BibleItem {
