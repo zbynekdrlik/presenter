@@ -232,4 +232,30 @@ mod tests {
         let body = build_client_stats_body(30.0, 33.0, None, 100.0, false);
         assert!(body.contains("\"jitterBufferMs\":null"), "{body}");
     }
+
+    #[test]
+    fn a_404_means_the_session_is_gone_so_reporting_stops() {
+        assert!(
+            !keep_reporting_after(Some(404)),
+            "a reaped session answers 404 forever — every further POST is one more console error"
+        );
+    }
+
+    #[test]
+    fn stored_and_transient_statuses_keep_reporting() {
+        for status in [200, 204, 400, 429, 500, 502, 503] {
+            assert!(
+                keep_reporting_after(Some(status)),
+                "status {status} does not mean the session is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn a_network_error_keeps_reporting() {
+        assert!(
+            keep_reporting_after(None),
+            "a dropped fetch (no response at all) must not stop the reporter"
+        );
+    }
 }
