@@ -1,8 +1,11 @@
 ---
 paths:
   - "crates/presenter-ui/src/pages/bible.rs"
+  - "crates/presenter-ui/src/pages/bible_reference.rs"
   - "crates/presenter-ui/src/state/bible.rs"
+  - "crates/presenter-ui/src/state/bible_range.rs"
   - "tests/e2e/wasm-bible.spec.ts"
+  - "tests/e2e/bible-range-hint.spec.ts"
 ---
 
 # Bible page (`/ui/operator/bible`) — DOM contract & E2E determinism
@@ -18,3 +21,29 @@ The translation-switch effect (`selected_translation` change → `spawn_local(li
 ## Reproducing bible UI behaviour without a local build (Tier-0)
 
 Local cargo builds are banned here. Drive the live dev server instead: `http://10.77.8.134:8080/ui/operator/bible`, `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and SHARED across full translations (`eng-kjv`, `slk-seb`, `slk-roh` all carry `1CH`/`1JN`); the list is sorted by code (first book = `1CH`). Partial translations exist (`slk-mil` = 4 gospels only) — switching TO one whose books lack the selected code exercises the "cleared" path.
+
+## Chapter / verse inputs bound to the selected book (#825)
+
+`ReferenceInputs` lives in `pages/bible_reference.rs` (moved out of the
+1000-line-capped `bible.rs`). A typed chapter / verse is bounded on change /
+input AND on Enter by `state::bible_range::{bound_chapter, bound_verse}`
+(host-tested, reusing `clamp_selection`), the boxes carry `max=` and a "/ N"
+next to the label (`data-role="chapter-max" | "verse-max" | "verse-end-max"`),
+and a clamp shows `data-role="bible-range-hint"` ("Kniha má len N kapitol" /
+"Kapitola má len M veršov", Slovak plural forms) until the next valid value or a
+book change. Two traps:
+
+- Never pass a typed verse END through `clamp_selection`'s end logic: it turns
+  `end <= start` into `None` ("whole chapter"), but the #702 mirror sets
+  `end = start` for the single-verse fast path. `bound_verse` bounds the end like
+  the start.
+- After a clamp, write the bounded value back into the `<input>` itself
+  (`show_bounded`): the signal may already hold that value, so a re-render alone
+  can leave "60" visible.
+- That write-back makes the browser fire `change` with the CLAMPED value as soon
+  as the focus moves (Enter → focus to the next box; verse end's Enter blurs) —
+  synchronously, inside the keydown handler. A plain "valid value → clear the
+  note" then wipes the note before it ever renders. Every commit goes through
+  `bible_range::next_hint`: the same box re-committing its unchanged value keeps
+  the note; a new valid value or another box clears it. Likewise a re-commit of
+  the same chapter must not reset the verses.
