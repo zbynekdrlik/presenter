@@ -10,12 +10,10 @@
 //! `-shadow-x|y|blur|color`) selected WITHIN that group, so a
 //! Verse's three groups stay distinguishable by their wrapper role.
 
-use std::collections::BTreeSet;
-
 use leptos::prelude::*;
-use presenter_core::{StreamElementProps, StreamFont, TextAlign, STREAM_FONT_FAMILIES};
+use presenter_core::{StreamElementProps, StreamFont, TextAlign};
 
-use super::font_faces::{has_italic_face, weight_options};
+use super::font_faces::{family_options, has_italic_face, weight_options};
 use super::props_access::{default_shadow, join_color, read_ts, split_color, with_ts_mut, TsSlot};
 
 /// One labelled `TextStyle` editor bound to `draft` at `ts_slot`.
@@ -124,22 +122,23 @@ pub fn TextStyleForm(
 
     // Font <option> list = built-in whitelist ∪ uploaded families (#778), each
     // option rendered in its OWN face. Reactive so uploaded families appear once
-    // the async font list loads.
+    // the async font list loads. #830: each option carries `prop:selected` (the
+    // #827 rule — a `prop:value` on the <select> ran before the late list and
+    // left the FIRST family showing), and a stored family the list lacks stays
+    // as "<family> (nenahraté)". The family is a Memo, so typing in any other
+    // field never rebuilds the (long) option list.
+    let current_family = Memo::new(move |_| font());
     let font_options = move || {
-        let mut families: Vec<String> =
-            STREAM_FONT_FAMILIES.iter().map(|f| f.to_string()).collect();
-        let uploaded: BTreeSet<String> = fonts.get().into_iter().map(|f| f.family).collect();
-        for fam in uploaded {
-            if !families.contains(&fam) {
-                families.push(fam);
-            }
-        }
-        families
+        let current = current_family.get();
+        fonts
+            .with(|fs| family_options(fs, &current))
             .into_iter()
-            .map(|fam| {
-                let opt_style = format!("font-family:\"{}\";", fam.replace('"', ""));
-                let label = fam.clone();
-                view! { <option value=fam style=opt_style>{label}</option> }
+            .map(|opt| {
+                let opt_style = format!("font-family:\"{}\";", opt.family.replace('"', ""));
+                let selected = opt.family == current;
+                view! {
+                    <option value=opt.family style=opt_style prop:selected=selected>{opt.label}</option>
+                }
             })
             .collect_view()
     };
@@ -193,7 +192,6 @@ pub fn TextStyleForm(
                 <span>"Písmo"</span>
                 <select
                     data-role="stream-ts-font"
-                    prop:value=font
                     on:change=move |ev| {
                         let v = event_target_value(&ev);
                         draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.font_family = v.clone()));

@@ -6,10 +6,51 @@
 //! labelled with the face's own style name ("Light 300", "Black 900") from
 //! `StreamFont::style_name`. The Italic toggle is a separate checkbox, enabled
 //! where the family has an italic face at the chosen weight.
+//!
+//! Both `<select>`s are fed by the async font list, so a stored value that the
+//! list does not (yet) contain is kept as a "(nenahraté)" option: the select
+//! then never falls back to its first option (the #827 rule).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use presenter_core::StreamFont;
+use presenter_core::{StreamFont, STREAM_FONT_FAMILIES};
+
+/// One option of the font-family `<select>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyOption {
+    pub family: String,
+    pub label: String,
+}
+
+/// The font-family options: the built-in families, then every uploaded family
+/// once (alphabetical), then `current` labelled "<family> (nenahraté)" when it
+/// is neither — while the font list is still loading, or after its last face
+/// was deleted, the select keeps showing the stored family instead of its first
+/// option. An empty `current` adds nothing.
+pub fn family_options(fonts: &[StreamFont], current: &str) -> Vec<FamilyOption> {
+    let mut families: Vec<String> = STREAM_FONT_FAMILIES.iter().map(|f| f.to_string()).collect();
+    let uploaded: BTreeSet<&str> = fonts.iter().map(|f| f.family.as_str()).collect();
+    for family in uploaded {
+        if !families.iter().any(|f| f == family) {
+            families.push(family.to_string());
+        }
+    }
+    let missing = !current.is_empty() && !families.iter().any(|f| f == current);
+    let mut options: Vec<FamilyOption> = families
+        .into_iter()
+        .map(|family| FamilyOption {
+            label: family.clone(),
+            family,
+        })
+        .collect();
+    if missing {
+        options.push(FamilyOption {
+            family: current.to_string(),
+            label: format!("{current} (nenahraté)"),
+        });
+    }
+    options
+}
 
 /// One option of an uploaded family's weight `<select>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
