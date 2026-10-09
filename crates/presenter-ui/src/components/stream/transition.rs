@@ -11,9 +11,9 @@
 //! logic lives in ONE place.
 //!
 //! Change detection rides the `Memo<String>` the caller passes: a Memo only
-//! notifies on a genuine value change, so e.g. the countdown (whose text is
-//! re-derived every 250 ms off the page tick) crossfades only on the per-second
-//! value change, never every tick.
+//! notifies on a genuine value change, so a re-derived but unchanged line
+//! never animates. (The countdown does not use this component: its per-tick
+//! digits swap in place, #776.)
 //!
 //! Empty text renders NOTHING (the wrapper is unmounted when no layer remains),
 //! so a cleared line is DOM-absent — the transparent output stays clean and the
