@@ -361,8 +361,15 @@ matches only that exact path, not `/outputs/{slug}/…`.
   - The frame is mounted only while Menovky is shown and a lower third exists, because an output
     page is a full live client.
   - Its `src` is a Memo, so a def refetch never reloads it mid-animation.
-  - E2E: wait for the frame's `body[data-wasm-ready]` and a `stream-element-lower-third` before
-    clicking Prehrať. An earlier postMessage is lost.
+  - Preview mode ignores the live plate feed AND the server auto-hide. „Skryť" therefore also posts
+    a clear (`clear_nameplate_preview`), or a played plate would stay on the preview forever.
+  - A Prehrať clicked while the frame is still booting (just after opening the tab) is dropped, for
+    the operator too. It is deliberately not replayed on load, because Prehrať is a momentary
+    action. E2E: wait for the frame's `body[data-wasm-ready]` and a `stream-element-lower-third`
+    before clicking.
+  - The box hook is `stream-nameplate-preview-box`. `stream-nameplate-preview` stays the row's
+    Prehrať button.
+  - Both editor previews share `editor_preview::{preview_base, post_to_frame}`.
 - Phone width:
   - the header and the tab bar `flex-wrap`;
   - the font `<input type=file>` gets `max-width:100%` (its ~300 px intrinsic width overflowed

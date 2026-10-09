@@ -288,15 +288,20 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   `mark_leaving` re-pointing the outgoing base to the incoming scene's duration was a DEAD WRITE — the
   scene faded over its creation duration while its removal timeout used the new one → a pop when
   per-scene overrides differ. Tier-0 hides this (no local build); catch it by reading + review.
-- **Content fade = a reusable `components/stream/transition.rs::CrossfadeText`.** Props: `text:
-  Memo<String>` (the Memo dedups so a per-250 ms-re-derived countdown crossfades only on the per-second
-  value change), a `ContentTransition`, wrapper role/class/style, a `fill` flag. It stacks layers in
-  ONE CSS grid cell (`.stream-crossfade { display:grid }`, layers `grid-area:1/1`; `--fill` =
-  `grid-template-columns: minmax(0,1fr)` so lyrics/verse text wraps, countdown stays content-sized).
-  `Fade` marks old layers leaving + adds new; `Cut` replaces atomically (never 2 layers). It renders
-  the wrapper ONLY when a layer exists, so empty/cleared content is DOM-ABSENT — preserving the #710
-  `toHaveCount(0)` count-0-on-clear/toggle contract. Keep the outer element's text-style on the ELEMENT
-  (countdown) so the layers INHERIT it and the #709 font-size/text-shadow asserts on the element still pass.
+- **Content fade = a reusable `components/stream/transition.rs::CrossfadeText`, used by LYRICS and
+  VERSE only.** (The countdown left it in #776: its digits swap in place in one text node.)
+  - Props:
+    - `text: Memo<String>`: the Memo dedups, so an unchanged re-derived line never animates;
+    - a `ContentTransition`;
+    - the wrapper's role / class / style;
+    - a `fill` flag.
+  - Layers stack in ONE CSS grid cell: `.stream-crossfade { display:grid }`, every layer
+    `grid-area:1/1`, and `--fill` (`grid-template-columns: minmax(0,1fr)`) lets lyrics/verse text
+    wrap.
+  - `Fade` marks old layers leaving and adds the new one. `Cut` replaces atomically (never 2
+    layers). `FadeThrough` is described below.
+  - The wrapper renders ONLY when a layer exists, so empty or cleared content is DOM-ABSENT. That
+    preserves the #710 `toHaveCount(0)` count-0-on-clear/toggle contract.
 - **Scene reconcile = a `RwSignal<Vec<SceneLayer>>` + one Effect on `def`+`show_state`.** A
   `config_revision` bump ⇒ rebuild fresh (config edits are not the smooth path); same revision ⇒
   crossfade the base + reconcile overlays individually. Read `layers` only via `with_untracked`/`update`
