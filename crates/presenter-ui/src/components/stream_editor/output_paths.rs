@@ -110,10 +110,27 @@ pub fn initial_output_slug() -> String {
         .unwrap_or_else(|| DEFAULT_OUTPUT_SLUG.to_string())
 }
 
+/// #827: the output to switch to once the outputs list is known — the FIRST
+/// listed output when `current` is not in the list (deleted / mistyped /
+/// remembered from another server), else `None` (keep editing `current`).
+pub(super) fn fallback_output(current: &str, outputs: &[StreamOutputSummary]) -> Option<String> {
+    if outputs.iter().any(|o| o.slug == current) {
+        return None;
+    }
+    outputs.first().map(|o| o.slug.clone())
+}
+
 // ---- The output switcher ---------------------------------------------------
 
 /// Header `<select>` listing every output (`GET /stream/api/outputs`); changing
 /// it switches the whole editor to that output (`StreamEditorCtx::switch_output`).
+///
+/// #827: the selection lives on the OPTIONS (`prop:selected`), not on the
+/// select's `value`. The list arrives after the def, and a `prop:value` applied
+/// to a still-empty select matches nothing; when the options render later the
+/// browser then picks the FIRST one while the editor edits another output.
+/// Each option is created already in the right state and follows every later
+/// slug change, whatever order the list and the def land in.
 #[component]
 pub fn OutputSelect(ctx: StreamEditorCtx) -> impl IntoView {
     let options = move || {
@@ -121,7 +138,9 @@ pub fn OutputSelect(ctx: StreamEditorCtx) -> impl IntoView {
             .get()
             .into_iter()
             .map(|o: StreamOutputSummary| {
-                view! { <option value=o.slug>{o.name}</option> }
+                let slug = o.slug.clone();
+                let selected = move || ctx.output_slug.with(|s| *s == slug);
+                view! { <option value=o.slug prop:selected=selected>{o.name}</option> }
             })
             .collect_view()
     };
@@ -130,7 +149,6 @@ pub fn OutputSelect(ctx: StreamEditorCtx) -> impl IntoView {
             <span>"Výstup"</span>
             <select
                 data-role="stream-output-select"
-                prop:value=move || ctx.output_slug.get()
                 on:change=move |ev| on_output_change(ctx, &ev)
             >
                 {options}
@@ -140,8 +158,9 @@ pub fn OutputSelect(ctx: StreamEditorCtx) -> impl IntoView {
 }
 
 /// Switch to the picked output. When the operator declines to discard unsaved
-/// element edits (#787 reopen) the slug does not change, so `prop:value` never
-/// re-fires — put the `<select>` back on the current output by hand.
+/// element edits (#787 reopen) the slug does not change, so no option's
+/// `prop:selected` re-fires — put the `<select>` back on the current output by
+/// hand.
 fn on_output_change(ctx: StreamEditorCtx, ev: &web_sys::Event) {
     use wasm_bindgen::JsCast;
     let Some(select) = ev
@@ -152,5 +171,44 @@ fn on_output_change(ctx: StreamEditorCtx, ev: &web_sys::Event) {
     };
     if !ctx.switch_output(select.value()) {
         select.set_value(&ctx.slug());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(slug: &str) -> StreamOutputSummary {
+        StreamOutputSummary {
+            id: 1,
+            slug: slug.to_string(),
+            name: slug.to_uppercase(),
+            default_transition_ms: 300,
+            base_transition_ms: None,
+            overlay_transition_ms: None,
+            active_scene_id: None,
+            config_revision: 0,
+        }
+    }
+
+    #[test]
+    fn a_listed_output_stays_selected() {
+        let list = [output("moderator"), output("stream"), output("timer")];
+        assert_eq!(fallback_output("timer", &list), None);
+        assert_eq!(fallback_output("moderator", &list), None);
+    }
+
+    #[test]
+    fn a_missing_output_falls_back_to_the_first_listed() {
+        let list = [output("moderator"), output("stream")];
+        assert_eq!(
+            fallback_output("gone", &list),
+            Some("moderator".to_string())
+        );
+    }
+
+    #[test]
+    fn an_empty_list_has_nothing_to_fall_back_to() {
+        assert_eq!(fallback_output("stream", &[]), None);
     }
 }

@@ -244,11 +244,23 @@ impl StreamEditorCtx {
     }
 
     /// Re-fetch the output list for the header switcher (mount + after a config
-    /// change that might add/rename an output).
+    /// change that might add/rename an output). #827: when the slug being edited
+    /// is not in the list (deleted / a stale bookmark), switch to the first
+    /// listed output, so the select and the editor agree.
     pub fn reload_outputs(self) {
         leptos::task::spawn_local(async move {
             match crate::api::get_json::<Vec<StreamOutputSummary>>("/stream/api/outputs").await {
-                Ok(list) => self.outputs.set(list),
+                Ok(list) => {
+                    let current = self.output_slug.get_untracked();
+                    let fallback = output_paths::fallback_output(&current, &list);
+                    self.outputs.set(list);
+                    if let Some(slug) = fallback {
+                        leptos::logging::log!(
+                            "stream editor: output {current:?} does not exist; switching to {slug:?}"
+                        );
+                        self.switch_output(slug);
+                    }
+                }
                 Err(e) => self.show_toast(&format!("Načítanie výstupov zlyhalo: {e}"), "error"),
             }
         });
