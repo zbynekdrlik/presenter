@@ -1799,4 +1799,60 @@ mod tests {
         let back: ActiveNameplate = serde_json::from_value(v).unwrap();
         assert_eq!(back, active);
     }
+
+    // ---- #831 TextStyle uppercase -----------------------------------------
+    // Wire-level on purpose: the style must KEEP the operator's `uppercase`
+    // choice through a store → load round trip (an ignored field would be
+    // silently dropped, which is exactly what these tests catch).
+
+    fn wire_text_style(extra: serde_json::Value) -> serde_json::Value {
+        let mut v = json!({
+            "fontFamily": "Inter",
+            "sizePct": 6.0,
+            "color": "#ffffff",
+            "weight": 700,
+            "align": "left",
+            "lineHeight": 1.2
+        });
+        if let (Some(obj), Some(more)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, val) in more {
+                obj.insert(k.clone(), val.clone());
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn text_style_uppercase_survives_a_round_trip() {
+        for flag in [true, false] {
+            let wire = wire_text_style(json!({ "uppercase": flag }));
+            let style: TextStyle = serde_json::from_value(wire).expect("parse");
+            let back = serde_json::to_value(&style).expect("serialize");
+            assert_eq!(back["uppercase"], json!(flag), "uppercase={flag} kept");
+        }
+    }
+
+    #[test]
+    fn text_style_without_uppercase_still_parses_and_omits_the_key() {
+        // A pre-#831 stored style has no `uppercase`: it must still load, and
+        // re-serialise WITHOUT the key (no churn in stored props).
+        let style: TextStyle = serde_json::from_value(wire_text_style(json!({}))).expect("parse");
+        assert!(validate_text_style(&style, &[]).is_ok());
+        let back = serde_json::to_value(&style).expect("serialize");
+        assert!(back.get("uppercase").is_none(), "no uppercase key: {back}");
+    }
+
+    #[test]
+    fn lower_third_lines_carry_uppercase_independently() {
+        // The plate's two lines are separate TextStyles: capitals on the name
+        // line must not leak onto the role line.
+        let mut v = serde_json::to_value(lower_third_props()).expect("serialize");
+        v["primary_style"] = wire_text_style(json!({ "uppercase": true }));
+        v["secondary_style"] = wire_text_style(json!({}));
+        let parsed: StreamElementProps = serde_json::from_value(v).expect("parse");
+        assert!(validate_props(&parsed, &[]).is_ok());
+        let back = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(back["primary_style"]["uppercase"], json!(true));
+        assert!(back["secondary_style"].get("uppercase").is_none());
+    }
 }
