@@ -1,6 +1,7 @@
 ---
 paths:
   - "crates/**/*.rs"
+  - "crates/**/Cargo.toml"
 ---
 
 # Local quality-gate gotchas (#407 file-size gate, function-length gate)
@@ -263,3 +264,17 @@ bash scripts/dev/placeholder_check.sh . && bash scripts/dev/feature_router_check
 E2E TypeScript (CI job "TypeScript Type Check") also runs locally without compiling Rust. A
 `.claude/worktrees/agent-*` checkout has no `node_modules`; use the main checkout's:
 `node ../../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` from the worktree root.
+
+## Dropping a dependency under Tier-0: refresh the lockfile with `cargo metadata --offline` (#832)
+
+When a change leaves a crate dependency unused (e.g. `gloo-storage` in `presenter-ui` after
+`state/session.rs` moved to `web_sys::Storage`), remove it from `Cargo.toml` in the same PR and
+refresh that crate's `Cargo.lock` WITHOUT compiling:
+
+```bash
+cd crates/presenter-ui && cargo metadata --format-version 1 --offline > /dev/null
+```
+
+It rewrites the lock (the removed package, its now-orphaned entries, and the current
+`presenter-core` path version — the UI lock lags it) and needs no network. CI builds the UI
+without `--locked`, so a stale lock would not fail it, but leave no dead dependency behind.
