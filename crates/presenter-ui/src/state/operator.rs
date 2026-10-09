@@ -194,7 +194,7 @@ impl OperatorState {
             modal_target_id: RwSignal::new(None),
             line_limit: RwSignal::new(line_limit),
             slide_columns: RwSignal::new(crate::state::slide_columns::parse_slide_columns(
-                crate::state::session::try_get_local(
+                crate::state::session::get_persistent(
                     crate::state::slide_columns::SLIDE_COLUMNS_KEY,
                 )
                 .as_deref(),

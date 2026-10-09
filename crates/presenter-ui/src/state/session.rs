@@ -1,47 +1,69 @@
-use gloo_storage::{LocalStorage, SessionStorage, Storage};
+//! Browser storage of UI state: per tab (`sessionStorage`) and per browser
+//! (`localStorage`). Every access is NON-THROWING — with storage unavailable
+//! (private mode, blocked site data) a read is `None` and a write is dropped,
+//! where gloo-storage used to throw and kill the handler (#832). Values stay
+//! stored as JSON strings (`"\"5\""`), the format gloo-storage wrote, so values
+//! saved by earlier builds (and the E2E specs' seeded `sessionStorage`) still
+//! read back.
 
 const PREFIX: &str = "presenter:";
 
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+fn session_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.session_storage().ok()?
+}
+
+/// The stored form of `value`: a JSON string.
+fn encode_stored(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// The value of a stored JSON string; `None` for anything else.
+fn decode_stored(raw: &str) -> Option<String> {
+    serde_json::from_str(raw).ok()
+}
+
+fn read(storage: Option<web_sys::Storage>, key: &str) -> Option<String> {
+    let raw = storage?.get_item(&format!("{PREFIX}{key}")).ok()??;
+    decode_stored(&raw)
+}
+
+fn write(storage: Option<web_sys::Storage>, key: &str, value: &str) {
+    if let Some(storage) = storage {
+        let _ = storage.set_item(&format!("{PREFIX}{key}"), &encode_stored(value));
+    }
+}
+
 /// Get a value from session storage (per-tab state).
 pub fn get(key: &str) -> Option<String> {
-    SessionStorage::get(format!("{PREFIX}{key}")).ok()
+    read(session_storage(), key)
 }
 
 /// Set a value in session storage (per-tab state).
 pub fn set(key: &str, value: &str) {
-    let _ = SessionStorage::set(format!("{PREFIX}{key}"), value.to_string());
+    write(session_storage(), key, value);
 }
 
 /// Remove a value from session storage.
 pub fn remove(key: &str) {
-    SessionStorage::delete(format!("{PREFIX}{key}"));
-}
-
-/// Read a raw value from local storage WITHOUT throwing when storage is
-/// unavailable (private mode, blocked site data) — gloo's `LocalStorage`
-/// throws there. Stored unencoded, so never mix a key with `get_persistent`.
-pub fn try_get_local(key: &str) -> Option<String> {
-    let storage = web_sys::window()?.local_storage().ok()??;
-    storage.get_item(&format!("{PREFIX}{key}")).ok()?
-}
-
-/// Store a raw value in local storage; `false` when storage is unavailable.
-pub fn try_set_local(key: &str, value: &str) -> bool {
-    web_sys::window()
-        .and_then(|window| window.local_storage().ok().flatten())
-        .is_some_and(|storage| storage.set_item(&format!("{PREFIX}{key}"), value).is_ok())
+    if let Some(storage) = session_storage() {
+        let _ = storage.remove_item(&format!("{PREFIX}{key}"));
+    }
 }
 
 /// Get a value from local storage (persistent across sessions).
-/// Use for settings like lineLimit and catalogTopHeight.
+/// Use for settings like lineLimit, catalogTopHeight and slide columns.
 pub fn get_persistent(key: &str) -> Option<String> {
-    LocalStorage::get(format!("{PREFIX}{key}")).ok()
+    read(local_storage(), key)
 }
 
 /// Set a value in local storage (persistent across sessions).
-/// Use for settings like lineLimit and catalogTopHeight.
+/// Use for settings like lineLimit, catalogTopHeight and slide columns.
 pub fn set_persistent(key: &str, value: &str) {
-    let _ = LocalStorage::set(format!("{PREFIX}{key}"), value.to_string());
+    write(local_storage(), key, value);
 }
 
 #[cfg(test)]

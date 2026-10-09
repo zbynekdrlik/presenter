@@ -10,8 +10,13 @@
 pub const MIN_SLIDE_COLUMNS: u8 = 1;
 /// Most slides per row the stepper allows.
 pub const MAX_SLIDE_COLUMNS: u8 = 8;
-/// Slides per row without a choice (the CSS default on a desktop).
+/// Slides per row without a choice on a desktop (the CSS default).
 pub const DEFAULT_SLIDE_COLUMNS: u8 = 3;
+/// Slides per row without a choice on a phone (the ≤480 px CSS default).
+pub const PHONE_SLIDE_COLUMNS: u8 = 2;
+/// Widest viewport (CSS px) that counts as a phone — the `max-width: 480px`
+/// query in `styles/operator.css`.
+pub const PHONE_MAX_WIDTH: f64 = 480.0;
 /// localStorage key of the choice (behind `session`'s prefix).
 pub const SLIDE_COLUMNS_KEY: &str = "operatorSlideColumns";
 
@@ -24,9 +29,20 @@ pub fn parse_slide_columns(stored: Option<&str>) -> Option<u8> {
         .filter(|columns| (MIN_SLIDE_COLUMNS..=MAX_SLIDE_COLUMNS).contains(columns))
 }
 
-/// One stepper click from the current choice (or the default), kept in 1–8.
-pub fn step_slide_columns(current: Option<u8>, delta: i8) -> u8 {
-    let from = i16::from(current.unwrap_or(DEFAULT_SLIDE_COLUMNS));
+/// Slides per row WITHOUT a choice at this viewport width — what the grid
+/// shows then: 2 on a phone, 3 otherwise.
+pub fn default_slide_columns(viewport_width: f64) -> u8 {
+    if viewport_width <= PHONE_MAX_WIDTH {
+        PHONE_SLIDE_COLUMNS
+    } else {
+        DEFAULT_SLIDE_COLUMNS
+    }
+}
+
+/// One stepper click from the current choice — or, without one, from the
+/// `default` the grid shows — kept in 1–8.
+pub fn step_slide_columns(current: Option<u8>, default: u8, delta: i8) -> u8 {
+    let from = i16::from(current.unwrap_or(default));
     let next =
         (from + i16::from(delta)).clamp(i16::from(MIN_SLIDE_COLUMNS), i16::from(MAX_SLIDE_COLUMNS));
     u8::try_from(next).unwrap_or(DEFAULT_SLIDE_COLUMNS)

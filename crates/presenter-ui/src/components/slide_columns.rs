@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use crate::state::operator::OperatorState;
 use crate::state::session;
 use crate::state::slide_columns::{
-    is_dense, step_slide_columns, DEFAULT_SLIDE_COLUMNS, SLIDE_COLUMNS_KEY,
+    default_slide_columns, is_dense, step_slide_columns, SLIDE_COLUMNS_KEY,
 };
 
 /// Apply this browser's choice to `body`: the inherited
@@ -31,19 +31,39 @@ pub fn apply_slide_columns(body: &web_sys::HtmlElement, choice: Option<u8>) {
     );
 }
 
+/// The viewport width in CSS px; unreadable counts as a desktop.
+fn viewport_width() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.inner_width().ok())
+        .and_then(|width| width.as_f64())
+        .unwrap_or(f64::MAX)
+}
+
 /// "− N +" — slides per row for every slide grid on the page, remembered in
-/// this browser only. A click past 1 or 8 keeps the bound (`step_slide_columns`).
+/// this browser only. Without a choice it shows (and steps from) what the grid
+/// shows: 2 on a phone, 3 otherwise. A click past 1 or 8 keeps the bound.
 #[component]
 pub fn SlideColumnsControl() -> impl IntoView {
     let op = use_ctx!(OperatorState);
     let slide_columns = op.slide_columns;
-    let shown = move || slide_columns.get().unwrap_or(DEFAULT_SLIDE_COLUMNS);
+    let width = RwSignal::new(viewport_width());
+    // Removed on unmount; `WindowListenerHandle` is `Send`, so `on_cleanup`
+    // accepts it in the host build too.
+    let resize = window_event_listener_untyped("resize", move |_| width.set(viewport_width()));
+    on_cleanup(move || resize.remove());
+
+    let shown = move || {
+        slide_columns
+            .get()
+            .unwrap_or_else(|| default_slide_columns(width.get()))
+    };
     let change = move |delta: i8| {
-        let next = step_slide_columns(slide_columns.get_untracked(), delta);
+        let default = default_slide_columns(width.get_untracked());
+        let next = step_slide_columns(slide_columns.get_untracked(), default, delta);
         slide_columns.set(Some(next));
         // Unavailable storage (private mode, blocked site data) only means
         // the choice is not remembered; it still applies to this page.
-        let _ = session::try_set_local(SLIDE_COLUMNS_KEY, &next.to_string());
+        session::set_persistent(SLIDE_COLUMNS_KEY, &next.to_string());
     };
 
     view! {
