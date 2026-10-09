@@ -52,6 +52,19 @@ REMOVE the file, so the AI cleanly falls back to the stored DB row / default rat
 than running half-configured. Changing the model in production is a variable edit
 + redeploy — no code change.
 
+### Bible — remote NLT translation (#826)
+
+The New Living Translation (`eng-nlt`) is not a local file: it is fetched on
+demand from Tyndale's NLT API and cached in memory only (never stored). It is
+listed when `eng-kjv` is installed (the NLT reuses its books and chapters) and
+needs internet; when the API is unreachable a passage load answers 503/502 with
+"NLT nedostupné — API/internet" and every other translation keeps working.
+
+| Variable                | Default              | Purpose |
+| ----------------------- | -------------------- | ------- |
+| `PRESENTER_NLT_API_KEY` | `TEST`               | Tyndale NLT API key. `TEST` = anonymous: ≤50 verses per request, ≤500 requests per day. A registered key raises this to ≤500 verses, ≤5000 requests. |
+| `PRESENTER_NLT_API_URL` | `https://api.nlt.to` | API base URL. Tests point it at a mock; the E2E harness defaults it to a dead loopback. |
+
 ### Companion Integration
 
 | Variable                      | Default | Description                      |

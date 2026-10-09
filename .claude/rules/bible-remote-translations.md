@@ -1,0 +1,105 @@
+---
+paths:
+  - "crates/presenter-server/src/bible_remote/**"
+  - "crates/presenter-server/src/state/bible_source.rs"
+  - "crates/presenter-server/src/state/bible_source/**"
+  - "crates/presenter-server/src/state/bible.rs"
+  - "crates/presenter-server/src/state/bible_manager.rs"
+  - "tests/e2e/bible-nlt-translation.spec.ts"
+---
+
+# Remote Bible translations — the NLT from Tyndale's API (#826)
+
+## Why it is remote
+
+Every other translation is a local file ingested into `bible_passages`. The New
+Living Translation (`eng-nlt`, Tyndale House) is copyrighted and this repo is
+PUBLIC, so it can never be a committed file. The owner (non-commercial church
+use) chose Tyndale's own NLT API, `https://api.nlt.to`, which exists so apps can
+DISPLAY NLT text: passages are fetched on demand and cached in memory only.
+
+- **Never bulk-copy the NLT** (no "download it all into SQLite", no scraping of
+  BibleGateway & co.) and **never commit NLT text** beyond the few-verse parser
+  fixtures in `bible_remote/fixtures/` (three samples, ~10 verses, attribution
+  in their header). Tests use synthetic text in the API's markup.
+- Tyndale's attribution rule is the `(NLT)` after every quotation — the
+  existing `(CODE)` reference suffix (`translation_short_code("eng-nlt")`).
+
+## One dispatch — `state/bible_source.rs`
+
+Every verse and book/chapter read goes through `AppState`:
+`list_bible_translations`, `bible_passage_range`, `find_bible_passage`,
+`bible_book_chapter_summaries` / `list_bible_books`,
+`search_bible_passages_cross`. `bible_remote::is_remote_translation(code)`
+picks the API, everything else the repository. `generate_bible_slides`,
+`trigger_bible_passage`, the `/bible/*` router, the Companion trigger and the
+AI tools all call these methods.
+
+- **Never call `self.repository.bible_passage_range` / `find_bible_passage` /
+  `bible_book_chapter_summaries` / `list_bible_translations` from a new call
+  site** — the NLT would silently be missing there. Grep for them after any
+  Bible change; only `bible_source.rs` may use them.
+- The NLT has NO DB rows. Its books, chapters and verse counts come from
+  `eng-kjv` (`structure_source`), and so does every NLT passage's book NAME
+  (`structure_book_name`, KJV's chapter 1:1 row: "Psalms", "Song of Songs").
+  That is what makes the #824 secondary label read `1 John 1:1-3 (NLT)`.
+- `eng-nlt` is listed only when `eng-kjv` is installed, and AFTER the installed
+  translations — index-based E2E specs (`selectOption({ index: N })`, `nth(1)`)
+  keep their meaning.
+- Search never covers the NLT (no local text): `Some("eng-nlt")` → empty, no
+  request.
+- `find_bible_passage` matches single verses only (NLT passages are single
+  verses) — a multi-verse reference is `None` without a request.
+
+## The client — `bible_remote/client.rs`
+
+`GET {PRESENTER_NLT_API_URL}/api/passages?ref=<Book>.<ch>.<start>-<end>&version=NLT&key=<PRESENTER_NLT_API_KEY>`
+
+- Limits: anonymous `TEST` key ≤50 verses/request, ≤500 requests/day; a
+  registered key ≤500 verses, ≤5000 requests. Ranges go out in ≤50-verse chunks
+  (`MAX_VERSES_PER_REQUEST`), a fetch is capped at 200 verses
+  (`MAX_VERSES_PER_FETCH`, Psalm 119 = 176), 10 s timeout per request.
+- **The API CLAMPS instead of failing**: `1Jn.1.12-15` answers verse 10 (the
+  chapter's last), a missing chapter answers the book's last chapter. Every page
+  is filtered to the requested chapter + range, and a chunk with nothing in range
+  ends the fetch (the chapter is over).
+- An unknown book abbreviation answers 200 with an EMPTY page → `NoVerses`.
+  Book abbreviations (`books.rs`) were checked live: the API wants `1Thes`/`2Thes`
+  and `1Jn`/`2Jn`/`3Jn`, not the OSIS `1Thess`/`1John`.
+- Cache: bounded LRU of chunks (256), keyed by (book_code, chapter, start, end),
+  in memory only; a failed request is never cached. The cache lock is a
+  `std::sync::Mutex` that must never be held across an `.await`.
+- The request URL carries the key: never log the URL; transport errors go through
+  `describe()` (`reqwest::Error::without_url`).
+- Logging: every request at INFO (ref, verses, status, elapsed_ms), cache
+  hit/miss at DEBUG, failures at WARN with the error.
+
+## Parser — `bible_remote/parse.rs`
+
+One `<verse_export ch= vn=>` = one verse. Text starts after
+`<span class="vn">N</span>`; everything before it (chapter heading, `h3`/`h4`
+section headings, Psalm 119 Hebrew letters, `p.psa-title`) is dropped. Footnote
+bodies `span.tn` nest spans → cut at the MATCHING `</span>` (balanced scan, not
+a regex). `span.sc` (small-caps `Lord`) → `LORD`, as eng-kjv writes it. Block
+tags (`p`, poetry lines) → a space, inline tags → nothing, entities decoded,
+whitespace collapsed. No HTML-parser crate: the markup is flat and generated.
+
+## Errors → HTTP
+
+`RemoteBibleError` (`bible_remote/mod.rs`) is mapped in the router's central
+`From<anyhow::Error> for AppError`: `Timeout`/`Network` → 503, `Status`/`NoVerses`
+→ 502, with the Slovak "NLT nedostupné — API/internet: …" message. The UI's
+`resolve_slides` uses `post_json_detail`, so the toast shows that message. In
+the legacy `trigger_bible_passage` an unreachable SECONDARY translation is logged
+and left out — the main passage still goes on air.
+
+## Env + tests
+
+- `PRESENTER_NLT_API_KEY` (default `TEST`), `PRESENTER_NLT_API_URL` (default
+  `https://api.nlt.to`).
+- Rust tests point a client at wiremock via `NltClient::for_test` +
+  `AppState::set_test_nlt_client` — never via env (process-global, parallel
+  tests race).
+- `tests/e2e/support.ts` defaults `PRESENTER_NLT_API_URL` to a dead loopback
+  (`http://127.0.0.1:1`); `bible-nlt-translation.spec.ts` overrides it with its
+  own mock server before `startTestServer`.
