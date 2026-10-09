@@ -41,6 +41,8 @@ const FAMILY = "Gruppo"; // the fixture's internal name-table family.
 
 const sel = {
   editorBody: '[data-role="stream-editor"]',
+  fontsTab: '[data-role="stream-editor-tab"][data-tab="fonts"]',
+  scenesTab: '[data-role="stream-editor-tab"][data-tab="scenes"]',
   fontUpload: '[data-role="stream-font-upload"]',
   fontUploadBtn: '[data-role="stream-font-upload-btn"]',
   fontItem: '[data-role="stream-font-item"]',
@@ -82,14 +84,17 @@ async function openEditor(page: Page): Promise<void> {
   await page.waitForSelector(sel.editorBody, { timeout: 30_000 });
 }
 
-/** Upload the fixture font through the editor's font panel UI. */
+/** Upload the fixture font through the editor's font panel UI. The panel lives
+ *  in the „Písma" tab (#829); come back to „Scény" afterwards. */
 async function uploadFontViaUi(page: Page): Promise<void> {
+  await page.locator(sel.fontsTab).click();
   await page.setInputFiles(sel.fontUpload, FONT_FIXTURE);
   await page.locator(sel.fontUploadBtn).click();
   // The face appears in the panel list once the upload + reload complete.
   await expect(
     page.locator(`${sel.fontItem}[data-font-family="${FAMILY}"]`),
   ).toHaveCount(1, { timeout: 20_000 });
+  await page.locator(sel.scenesTab).click();
 }
 
 async function addBaseScene(page: Page, name: string): Promise<string> {
