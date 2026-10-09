@@ -57,8 +57,10 @@ than running half-configured. Changing the model in production is a variable edi
 The New Living Translation (`eng-nlt`) is not a local file: it is fetched on
 demand from Tyndale's NLT API and cached in memory only (never stored). It is
 listed when `eng-kjv` is installed (the NLT reuses its books and chapters) and
-needs internet; when the API is unreachable a passage load answers 503/502 with
-"NLT nedostupné — API/internet" and every other translation keeps working.
+needs internet. When the API is unreachable, a load with the NLT as MAIN
+translation answers 503/502 with "NLT nedostupné — API/internet"; with the NLT as
+SECONDARY the main text still loads and the operator gets that message as a
+toast. Every other translation keeps working.
 
 | Variable                | Default              | Purpose |
 | ----------------------- | -------------------- | ------- |

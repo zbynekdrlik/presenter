@@ -21,7 +21,9 @@ DISPLAY NLT text: passages are fetched on demand and cached in memory only.
 - **Never bulk-copy the NLT** (no "download it all into SQLite", no scraping of
   BibleGateway & co.) and **never commit NLT text** beyond the few-verse parser
   fixtures in `bible_remote/fixtures/` (three samples, ~10 verses, attribution
-  in their header). Tests use synthetic text in the API's markup.
+  in their header). The parser and dispatch tests may read those fixtures;
+  every other test (wiremock pages, the E2E mock) uses synthetic words in the
+  API's markup.
 - Tyndale's attribution rule is the `(NLT)` after every quotation — the
   existing `(CODE)` reference suffix (`translation_short_code("eng-nlt")`).
 
@@ -89,9 +91,29 @@ whitespace collapsed. No HTML-parser crate: the markup is flat and generated.
 `RemoteBibleError` (`bible_remote/mod.rs`) is mapped in the router's central
 `From<anyhow::Error> for AppError`: `Timeout`/`Network` → 503, `Status`/`NoVerses`
 → 502, with the Slovak "NLT nedostupné — API/internet: …" message. The UI's
-`resolve_slides` uses `post_json_detail`, so the toast shows that message. In
-the legacy `trigger_bible_passage` an unreachable SECONDARY translation is logged
-and left out — the main passage still goes on air.
+`resolve_slides` uses `post_json_detail`, so the "Failed to load passage" toast
+shows that message.
+
+That hard failure is only for the NLT as MAIN translation (nothing to show).
+An unreachable SECONDARY translation never blocks a load — a remembered NLT
+secondary would otherwise kill every Bible load of a service the moment the
+internet drops:
+
+- `generate_bible_slides` (`secondary_verse_lookup`) catches a
+  `RemoteBibleError` from the secondary fetch, composes main-only slides and
+  returns `GeneratedBibleSlides::secondary_warning`; `/bible/resolve` sends it as
+  `warning` and the Bible page shows it as an error toast on every load
+  (`load_passage`). Any OTHER secondary error still fails the load.
+- The legacy `trigger_bible_passage` logs an unreachable secondary and leaves it
+  out — the main passage still goes on air.
+
+## Known limit of the eng-kjv structure
+
+The NLT's verse counts are eng-kjv's. Where the NLT numbers MORE verses than
+the KJV (3 John 1 has 15 verses in the NLT, 14 in the KJV; Revelation 12:18),
+a whole-chapter load with the NLT as MAIN stops at the KJV count (resolve
+computes `verse_end` from the structure) and drops the extra verse. The NLT as
+SECONDARY follows the main translation's range and is unaffected.
 
 ## Env + tests
 
