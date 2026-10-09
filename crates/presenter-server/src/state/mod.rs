@@ -206,6 +206,8 @@ pub struct AppState {
     /// #778: cached browser-loadability verdicts of stored fonts (by sha256),
     /// `Arc`-shared by every clone — see `stream_fonts::FontVerdictCache`.
     stream_font_verdicts: Arc<stream_fonts::FontVerdictCache>,
+    /// #830: serialises the font-face re-derive passes (startup + per upload).
+    stream_font_rederive_lock: Arc<tokio::sync::Mutex<()>>,
     /// #771: how this process booted. In [`StartupMode::Validate`] the
     /// constructor + `from_config` skip every integration/background task and
     /// `/healthz` skips the live AI probe. Defaults to `Normal` for every
@@ -379,6 +381,7 @@ impl AppState {
             nameplates: stream_nameplates::NameplateManager::new(),
             stream_assets_dir: stream_assets::resolve_dir(),
             stream_font_verdicts: Arc::new(stream_fonts::FontVerdictCache::default()),
+            stream_font_rederive_lock: Arc::new(tokio::sync::Mutex::new(())),
             startup_mode,
         };
         // #771: heartbeat broadcasting is a background task — skip it in the

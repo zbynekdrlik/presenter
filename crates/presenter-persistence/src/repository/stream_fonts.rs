@@ -15,8 +15,8 @@ use crate::entities::{stream_element, stream_font, stream_scene};
 use chrono::Utc;
 use presenter_core::stream::{StreamElementProps, StreamFont};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, NotSet, PaginatorTrait,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, NotSet,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use std::collections::BTreeSet;
 use tracing::instrument;
@@ -96,6 +96,40 @@ impl Repository {
             .await?
             .ok_or(RepositoryError::NotFound("stream font not found"))?;
         Ok(font_from_model(model))
+    }
+
+    /// Every face of one family, oldest first (#830 — the re-derive reads a
+    /// whole family at once, because a Black face moves a Heavy below it).
+    pub async fn stream_fonts_of_family(&self, family: &str) -> anyhow::Result<Vec<StreamFont>> {
+        let models = stream_font::Entity::find()
+            .filter(stream_font::Column::Family.eq(family))
+            .order_by_asc(stream_font::Column::Id)
+            .all(&self.db)
+            .await?;
+        Ok(models.into_iter().map(font_from_model).collect())
+    }
+
+    /// Set a face's `weight` + `italic` (#830 — re-derived from its bytes).
+    /// Only those two columns change; the row's sha256, family and file stay.
+    #[instrument(skip_all)]
+    pub async fn update_stream_font_face(
+        &self,
+        id: i64,
+        weight: u16,
+        italic: bool,
+    ) -> anyhow::Result<()> {
+        let id =
+            i32::try_from(id).map_err(|_| RepositoryError::NotFound("stream font not found"))?;
+        let result = stream_font::Entity::update_many()
+            .col_expr(stream_font::Column::Weight, Expr::value(i32::from(weight)))
+            .col_expr(stream_font::Column::Italic, Expr::value(italic))
+            .filter(stream_font::Column::Id.eq(id))
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(RepositoryError::NotFound("stream font not found").into());
+        }
+        Ok(())
     }
 
     /// The DISTINCT uploaded font families — the extra set unioned with the
@@ -190,5 +224,7 @@ fn font_from_model(model: stream_font::Model) -> StreamFont {
         italic: model.italic,
         format: model.format,
         size_bytes: model.size_bytes as i64,
+        // Not a column: read from the face's bytes by the server (#830).
+        style_name: None,
     }
 }

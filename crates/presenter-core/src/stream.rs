@@ -563,6 +563,12 @@ pub struct StreamFont {
     /// On-disk container format: `"ttf"` or `"otf"`.
     pub format: String,
     pub size_bytes: i64,
+    /// The face's own style name (#830): typographic subfamily (name 17), else
+    /// subfamily (name 2), e.g. "Light", "Black Italic". Read from the stored
+    /// bytes when listing (not a DB column); the editor's weight picker labels
+    /// each face with it. `None` when the font names no style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_name: Option<String>,
 }
 
 /// One lower-third **nameplate** (#779) in an output's plate list. A `Person`

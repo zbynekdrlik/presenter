@@ -104,7 +104,7 @@ async fn upload_font(
         ));
     }
 
-    let (detected, meta) = validate_font_bytes(&data)?;
+    let (detected, meta) = validate_font_bytes(&data, filename.as_deref().unwrap_or_default())?;
     let sha256 = sha256_hex(&data);
 
     // Write the bytes FIRST (idempotent on identical content), then the row.
@@ -131,14 +131,40 @@ async fn upload_font(
         })
         .await?;
 
-    Ok(Json(font))
+    Ok(Json(
+        rederive_uploaded_family(&state, font, meta.style_name).await?,
+    ))
+}
+
+/// #830: re-derive the uploaded face's family, since a new Black face moves a
+/// stored Heavy below it. Answers with the face as stored now, plus its style
+/// name. A failed re-derive leaves the stored weights as uploaded (logged); the
+/// next startup's pass retries it.
+async fn rederive_uploaded_family(
+    state: &AppState,
+    font: StreamFont,
+    style_name: Option<String>,
+) -> Result<StreamFont, AppError> {
+    if let Err(e) = state.rederive_stream_font_family(&font.family).await {
+        tracing::warn!(
+            font_id = font.id,
+            family = %font.family,
+            error = %e,
+            "font family re-derive after upload failed — weights kept as uploaded"
+        );
+    }
+    let mut font = state.repository().get_stream_font(font.id).await?;
+    font.style_name = style_name;
+    Ok(font)
 }
 
 /// The content checks of an upload, in order, each a `422`: container by magic
 /// bytes (ttf/otf only), browser loadability (#778 — a font every browser's
 /// OpenType sanitiser drops would never render and make each page log a
 /// console warning), readable metadata, and a CSS-safe family name.
-fn validate_font_bytes(data: &[u8]) -> Result<(DetectedFont, FontMeta), AppError> {
+/// `filename` is the uploaded file's name, the last place the face's weight is
+/// read from (#830).
+fn validate_font_bytes(data: &[u8], filename: &str) -> Result<(DetectedFont, FontMeta), AppError> {
     let detected = detect_font(data).ok_or_else(|| {
         AppError::unprocessable(
             "unsupported font type (only raw TTF and OTF are accepted; \
@@ -153,7 +179,7 @@ fn validate_font_bytes(data: &[u8]) -> Result<(DetectedFont, FontMeta), AppError
         ))
     })?;
 
-    let meta = parse_font_metadata(data)
+    let meta = parse_font_metadata(data, filename)
         .map_err(|e| AppError::unprocessable(format!("could not read font metadata: {e}")))?;
 
     if !family_name_is_safe(&meta.family) {

@@ -44,6 +44,14 @@ mod browser_check;
 pub(crate) use browser_check::check_browser_loadable;
 
 mod weight;
+use weight::{
+    resolve_weight, style_says_italic, weight_from_style_name, FaceWeight, StyleNames,
+    WeightKeyword,
+};
+
+/// Re-deriving stored faces' weight/italic from their bytes (#830): the
+/// startup pass and the per-family pass after an upload.
+mod rederive;
 
 /// Test-only sfnt byte surgery deriving the broken-font fixtures from the OFL
 /// fixture (#778 browser-sanitiser check) — shared by the unit + router tests.
@@ -89,6 +97,24 @@ pub(crate) struct FontMeta {
     pub family: String,
     pub weight: u16,
     pub italic: bool,
+    /// The face's own style label (#830): name 17, else name 2 ("Light",
+    /// "Black Italic"). Shown in the editor's weight picker.
+    pub style_name: Option<String>,
+    /// The weight word the style names carry (#830), if any.
+    pub keyword: Option<WeightKeyword>,
+    /// `weight` came from `keyword`, not from the OS/2 table (#830).
+    pub weight_from_style: bool,
+}
+
+impl FontMeta {
+    /// This face's input to the family-level weight rule (#830).
+    pub(crate) fn face_weight(&self) -> FaceWeight {
+        FaceWeight {
+            weight: self.weight,
+            keyword: self.keyword,
+            from_style: self.weight_from_style,
+        }
+    }
 }
 
 /// Why a font's metadata could not be read — mapped to `422` by the router.
@@ -100,31 +126,56 @@ pub(crate) enum FontParseError {
     NoFamily,
 }
 
-/// Parse family / weight / italic from a raw ttf/otf byte buffer. Family is the
-/// typographic family (name id 16) falling back to the legacy family (id 1);
-/// weight is `OS/2.usWeightClass` (clamped into the valid 1..=1000 range,
-/// defaulting to 400 when the `OS/2` table is absent); italic is the `OS/2`
-/// `fsSelection` italic bit, falling back to `head.macStyle` when there is no
-/// `OS/2` table.
-pub(crate) fn parse_font_metadata(bytes: &[u8]) -> Result<FontMeta, FontParseError> {
+/// Parse family / weight / italic from a raw ttf/otf byte buffer; `filename` is
+/// the uploaded file's name (the last place a style is looked for).
+///
+/// - Family: the typographic family (name 16), falling back to the legacy
+///   family (name 1).
+/// - Weight: `OS/2.usWeightClass`, clamped into 1..=1000. When it is the
+///   default 400, or there is no `OS/2` table, the style name decides (#830,
+///   see [`weight::weight_from_style_name`]).
+/// - Italic: the `OS/2` `fsSelection` italic or oblique bit (`head.macStyle`
+///   when there is no `OS/2` table), or a style name saying Italic/Oblique.
+pub(crate) fn parse_font_metadata(
+    bytes: &[u8],
+    filename: &str,
+) -> Result<FontMeta, FontParseError> {
     let font = FontRef::new(bytes).map_err(|_| FontParseError::Unparseable)?;
     let family = pick_family(&font).ok_or(FontParseError::NoFamily)?;
-    let weight = font
+    let typographic_subfamily = name_record(&font, NameId::TYPOGRAPHIC_SUBFAMILY_NAME);
+    let subfamily = name_record(&font, NameId::SUBFAMILY_NAME);
+    let full_name = name_record(&font, NameId::FULL_NAME);
+    let names = StyleNames {
+        family: &family,
+        typographic_subfamily: typographic_subfamily.as_deref(),
+        subfamily: subfamily.as_deref(),
+        full_name: full_name.as_deref(),
+        filename: Some(filename),
+    };
+    let keyword = weight_from_style_name(&names);
+    let os2_weight = font
         .os2()
-        .map(|os2| os2.us_weight_class())
-        .unwrap_or(400)
-        .clamp(1, 1000);
-    let italic = match font.os2() {
-        Ok(os2) => os2.fs_selection().contains(SelectionFlags::ITALIC),
+        .ok()
+        .map(|os2| os2.us_weight_class().clamp(1, 1000));
+    let (weight, weight_from_style) = resolve_weight(os2_weight, keyword);
+    let flagged_italic = match font.os2() {
+        Ok(os2) => os2
+            .fs_selection()
+            .intersects(SelectionFlags::ITALIC | SelectionFlags::OBLIQUE),
         Err(_) => font
             .head()
             .map(|head| head.mac_style().contains(MacStyle::ITALIC))
             .unwrap_or(false),
     };
+    let italic = flagged_italic || style_says_italic(&names);
+    let style_name = names.display();
     Ok(FontMeta {
         family,
         weight,
         italic,
+        style_name,
+        keyword,
+        weight_from_style,
     })
 }
 
@@ -249,14 +300,19 @@ impl AppState {
     /// preload) and `GET /stream/fonts.css`, so no page ever fetches a face the
     /// browser's OpenType sanitiser refuses (the console warning SNV/PP logged
     /// for font id 71). Nothing is deleted: the row and the file stay, and an
-    /// explicit `DELETE /stream/fonts/{id}` still works.
+    /// explicit `DELETE /stream/fonts/{id}` still works. Each listed face
+    /// carries its style name (#830), read from the same cached bytes check.
     pub(crate) async fn loadable_stream_fonts(&self) -> anyhow::Result<Vec<StreamFont>> {
         let fonts = self.repository().list_stream_fonts().await?;
         let store = self.font_store();
         let mut loadable = Vec::with_capacity(fonts.len());
-        for font in fonts {
-            if self.stored_font_is_loadable(&store, &font).await {
-                loadable.push(font);
+        for mut font in fonts {
+            match self.stored_face(&store, &font).await {
+                Some(face) if face.loadable => {
+                    font.style_name = face.style_name;
+                    loadable.push(font);
+                }
+                _ => {}
             }
         }
         Ok(loadable)
@@ -282,41 +338,62 @@ impl AppState {
         }
     }
 
-    /// Run [`AppState::warm_stream_font_verdicts`] in the background (startup,
-    /// off the request path). A background task, so it is skipped in validate
-    /// (schema-probe) mode like every other one (#771). `pub` because `main.rs`
-    /// is a separate crate root (a `pub(crate)` fn called only from there is
-    /// dead code to clippy).
-    pub fn spawn_stream_font_verdict_warmup(&self) {
+    /// The startup font work, in the background (off the request path):
+    /// re-derive every stored face's weight/italic from its bytes (#830,
+    /// [`AppState::rederive_stream_font_faces_at_startup`]), then warm the
+    /// browser-loadability verdicts. The re-derive already caches each verdict
+    /// from the bytes it reads, so the warm-up only reads what it missed. A
+    /// background task, so it is skipped in validate (schema-probe) mode like
+    /// every other one (#771). `pub` because `main.rs` is a separate crate root
+    /// (a `pub(crate)` fn called only from there is dead code to clippy).
+    pub fn spawn_stream_font_startup(&self) {
         if !self.startup_mode().starts_integrations() {
-            tracing::info!("validate startup mode — stream-font verdict warm-up skipped");
+            tracing::info!(
+                "validate startup mode — stream-font re-derive and verdict warm-up skipped"
+            );
             return;
         }
         let state = self.clone();
-        tokio::spawn(async move { state.warm_stream_font_verdicts().await });
+        tokio::spawn(async move {
+            state.rederive_stream_font_faces_at_startup().await;
+            state.warm_stream_font_verdicts().await;
+        });
     }
 
-    /// Cached browser-loadability verdict for one stored face. The verdict is a
-    /// pure function of the bytes, which are immutable per sha256, so it is
-    /// computed once per process (and logged once when negative). A missing or
-    /// unreadable file hides the face without caching, so it reappears as soon
-    /// as the file is back.
-    async fn stored_font_is_loadable(&self, store: &FontStore, font: &StreamFont) -> bool {
-        if let Some(verdict) = self.stream_font_verdicts.get(&font.sha256) {
-            return verdict;
+    /// Cached browser-loadability verdict + style name of one stored face, or
+    /// `None` when its file is missing or unreadable. Both are pure functions of
+    /// the bytes, which are immutable per sha256, so they are computed once per
+    /// process (and a refusal is logged once). A missing or unreadable file is
+    /// not cached, so the face reappears as soon as the file is back.
+    async fn stored_face(&self, store: &FontStore, font: &StreamFont) -> Option<FaceVerdict> {
+        if let Some(face) = self.stream_font_verdicts.face(&font.sha256) {
+            return Some(face);
         }
-        let bytes = match store.read(&font.sha256, &font.format).await {
-            Ok(Some(bytes)) => bytes,
+        let bytes = self.read_stored_font(store, font).await?;
+        Some(self.evaluate_face(font, &bytes))
+    }
+
+    /// A stored face's bytes, or `None` (logged via
+    /// [`AppState::report_font_file_problem`]) when the file is missing or
+    /// unreadable.
+    async fn read_stored_font(&self, store: &FontStore, font: &StreamFont) -> Option<Vec<u8>> {
+        match store.read(&font.sha256, &font.format).await {
+            Ok(Some(bytes)) => Some(bytes),
             Ok(None) => {
                 self.report_font_file_problem(font, "missing");
-                return false;
+                None
             }
             Err(e) => {
                 self.report_font_file_problem(font, &format!("unreadable: {e}"));
-                return false;
+                None
             }
-        };
-        let loadable = match check_browser_loadable(&bytes) {
+        }
+    }
+
+    /// Check a stored face's bytes, cache the verdict + style name under its
+    /// sha256, and WARN when a browser would refuse it.
+    fn evaluate_face(&self, font: &StreamFont, bytes: &[u8]) -> FaceVerdict {
+        let loadable = match check_browser_loadable(bytes) {
             Ok(()) => true,
             Err(defect) => {
                 tracing::warn!(
@@ -330,9 +407,16 @@ impl AppState {
                 false
             }
         };
+        let style_name = parse_font_metadata(bytes, &font.original_filename)
+            .ok()
+            .and_then(|meta| meta.style_name);
+        let face = FaceVerdict {
+            loadable,
+            style_name,
+        };
         self.stream_font_verdicts
-            .record(font.sha256.clone(), loadable);
-        loadable
+            .record(font.sha256.clone(), face.clone());
+        face
     }
 
     /// Log a stored face whose file is missing/unreadable: WARN the first time
@@ -347,7 +431,7 @@ impl AppState {
                 sha256 = %font.sha256,
                 problem,
                 "stored font file unavailable — face hidden from fonts.css and the \
-                 font list (warned once per font)"
+                 font list, its weight not re-derived (warned once per font)"
             );
         } else {
             tracing::debug!(
@@ -360,26 +444,40 @@ impl AppState {
     }
 }
 
-/// Per-process cache of [`check_browser_loadable`] verdicts for STORED fonts,
-/// keyed by content sha256 (#778 reopen). One instance per `AppState`, shared
-/// by every clone through an `Arc` (the `ai_health_cache` pattern). The lock is
-/// held only for a map lookup/insert, never across an await; a poisoned lock
-/// degrades to a cache miss (the verdict is recomputed), never a panic.
+/// What the bytes of one stored face say, cached per sha256: whether a browser
+/// will load it (#778 reopen) and its style name (#830).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FaceVerdict {
+    loadable: bool,
+    style_name: Option<String>,
+}
+
+/// Per-process cache of [`FaceVerdict`]s for STORED fonts, keyed by content
+/// sha256 (#778 reopen). One instance per `AppState`, shared by every clone
+/// through an `Arc` (the `ai_health_cache` pattern). The lock is held only for
+/// a map lookup/insert, never across an await; a poisoned lock degrades to a
+/// cache miss (the verdict is recomputed), never a panic.
 #[derive(Debug, Default)]
 pub(crate) struct FontVerdictCache {
-    verdicts: Mutex<HashMap<String, bool>>,
+    verdicts: Mutex<HashMap<String, FaceVerdict>>,
     /// Shas whose missing/unreadable file was already WARN-logged.
     file_problem_warned: Mutex<HashSet<String>>,
 }
 
 impl FontVerdictCache {
+    /// The cached loadability verdict alone (the tests' view of the cache).
+    #[cfg(test)]
     fn get(&self, sha256: &str) -> Option<bool> {
-        self.verdicts.lock().ok()?.get(sha256).copied()
+        self.face(sha256).map(|face| face.loadable)
     }
 
-    fn record(&self, sha256: String, loadable: bool) {
+    fn face(&self, sha256: &str) -> Option<FaceVerdict> {
+        self.verdicts.lock().ok()?.get(sha256).cloned()
+    }
+
+    fn record(&self, sha256: String, face: FaceVerdict) {
         if let Ok(mut verdicts) = self.verdicts.lock() {
-            verdicts.insert(sha256, loadable);
+            verdicts.insert(sha256, face);
         }
     }
 
