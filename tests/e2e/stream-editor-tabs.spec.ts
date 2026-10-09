@@ -245,7 +245,7 @@ test("#829 the tabs wrap at 320 px and the page never scrolls sideways", async (
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });
 
-test("#829 „Prehrať" in the Menovky tab plays the plate in a preview the operator can see", async ({
+test("#829 Prehrať in the Menovky tab plays the plate in a preview the operator can see", async ({
   page,
 }) => {
   const errors: string[] = [];
