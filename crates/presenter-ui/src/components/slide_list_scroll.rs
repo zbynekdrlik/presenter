@@ -63,7 +63,7 @@ pub(super) fn scroll_slide_into_view(slide_id: &str) {
 
     // Find the next-row anchor: the slide at active_index + the column count
     // in DOM order within the same container.
-    let columns_per_row = columns_per_row(&container);
+    let columns = columns_per_row(&container);
     let cards = container.query_selector_all("[data-slide-id]").ok();
     let next_row_el: Option<web_sys::HtmlElement> = cards.and_then(|nodes| {
         let mut active_index: Option<usize> = None;
@@ -77,7 +77,7 @@ pub(super) fn scroll_slide_into_view(slide_id: &str) {
                 }
             }
         }
-        let target_index = active_index? + columns_per_row;
+        let target_index = active_index? + columns;
         nodes
             .item(target_index as u32)
             .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())

@@ -314,7 +314,8 @@ fn is_lone_whole_verse(main: &str, main_reference: &str) -> bool {
 ///
 /// Rules:
 /// - **Rule 5 (character limit)** applies to every slide: `main` must not
-///   exceed `character_limit` bytes. Checked first — cheap, common, fail-fast.
+///   exceed `character_limit` characters (`chars().count()`). Checked first —
+///   cheap, common, fail-fast.
 /// - **Rule 3 (no raw bold markers)** applies to every slide: neither
 ///   `main` nor `main_reference` may contain `##`.
 /// - If `main_reference` is empty (emphasis/title slide): `main` must be

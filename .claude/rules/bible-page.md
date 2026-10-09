@@ -31,7 +31,7 @@ input AND on Enter by `state::bible_range::{bound_chapter, bound_verse}`
 next to the label (`data-role="chapter-max" | "verse-max" | "verse-end-max"`),
 and a clamp shows `data-role="bible-range-hint"` ("Kniha má len N kapitol" /
 "Kapitola má len M veršov", Slovak plural forms) until the next valid value or a
-book change. Two traps:
+book change. Three traps:
 
 - Never pass a typed verse END through `clamp_selection`'s end logic: it turns
   `end <= start` into `None` ("whole chapter"), but the #702 mirror sets
@@ -44,6 +44,9 @@ book change. Two traps:
   as the focus moves (Enter → focus to the next box; verse end's Enter blurs) —
   synchronously, inside the keydown handler. A plain "valid value → clear the
   note" then wipes the note before it ever renders. Every commit goes through
-  `bible_range::next_hint`: the same box re-committing its unchanged value keeps
-  the note; a new valid value or another box clears it. Likewise a re-commit of
+  `bible_range::next_hint`: a commit that changes nothing keeps the note,
+  whichever box it came from (Enter on the untouched mirrored end box too);
+  only a NEW valid value clears it. A verse-start commit also moves the end
+  through the #702 mirror, so it goes through `next_verse_start_hint` (an
+  unchanged start that moves the end is a new value). Likewise a re-commit of
   the same chapter must not reset the verses.

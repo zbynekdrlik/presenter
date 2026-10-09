@@ -721,7 +721,7 @@ fn translation_short_code_handles_empty_string() {
 
 // ── Helper: create a mock driver with a running wiremock server ─────
 
-async fn setup_bible_driver() -> (
+pub(super) async fn setup_bible_driver() -> (
     MockServer,
     HostDriver,
     Arc<RwLock<ResolumeConnectionSnapshot>>,
