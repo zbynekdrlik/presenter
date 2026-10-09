@@ -114,6 +114,8 @@ test("an over-range chapter and verse are clamped with an inline hint; the keybo
   await verseStart.press("Enter");
   await expect(verseEnd).toBeFocused();
   await expect(verseEnd).toHaveValue(String(lastVerses));
+  // Enter re-commits the clamped value: the note must survive it.
+  await expect(hint).toHaveText(`Kapitola má len ${lastVerses} veršov`);
 
   // The next valid value clears the note.
   await verseStart.fill("2");
@@ -121,9 +123,16 @@ test("an over-range chapter and verse are clamped with an inline hint; the keybo
   await expect(verseEnd).toHaveValue("2");
   await expect(hint).toHaveCount(0);
 
-  // An over-range verse END is clamped too.
+  // An over-range verse END is clamped too — on Tab and on Enter (Enter
+  // blurs the box, which re-commits the clamped value).
   await verseEnd.fill("99");
   await verseEnd.press("Tab");
+  await expect(verseEnd).toHaveValue(String(lastVerses));
+  await expect(hint).toHaveText(`Kapitola má len ${lastVerses} veršov`);
+  await verseStart.fill("2");
+  await expect(hint).toHaveCount(0);
+  await verseEnd.fill("99");
+  await verseEnd.press("Enter");
   await expect(verseEnd).toHaveValue(String(lastVerses));
   await expect(hint).toHaveText(`Kapitola má len ${lastVerses} veršov`);
 

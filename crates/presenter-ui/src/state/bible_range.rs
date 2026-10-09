@@ -159,6 +159,50 @@ mod tests {
         );
     }
 
+    fn hint(field: RangeField, text: &str) -> RangeHint {
+        RangeHint {
+            field,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_clamp_shows_its_note_for_that_box() {
+        let bounded = bound_chapter(60, 5, &[10; 5]);
+        assert_eq!(
+            next_hint(None, RangeField::Chapter, 1, &bounded),
+            Some(hint(RangeField::Chapter, "Kniha má len 5 kapitol"))
+        );
+    }
+
+    #[test]
+    fn the_same_box_recommitting_its_clamped_value_keeps_the_note() {
+        // Enter writes "5" into the box; moving the focus then fires the
+        // browser's `change` with that "5" — the note must survive it.
+        let shown = hint(RangeField::Chapter, "Kniha má len 5 kapitol");
+        let recommit = bound_chapter(5, 5, &[10; 5]);
+        assert_eq!(
+            next_hint(Some(&shown), RangeField::Chapter, 5, &recommit),
+            Some(shown.clone())
+        );
+    }
+
+    #[test]
+    fn a_new_valid_value_or_another_box_clears_the_note() {
+        let shown = hint(RangeField::VerseStart, "Kapitola má len 21 veršov");
+        let other_value = bound_verse(2, 5, 5, &[10, 10, 10, 10, 21]);
+        assert_eq!(
+            next_hint(Some(&shown), RangeField::VerseStart, 21, &other_value),
+            None
+        );
+        let other_box = bound_chapter(5, 5, &[10; 5]);
+        assert_eq!(
+            next_hint(Some(&shown), RangeField::Chapter, 5, &other_box),
+            None
+        );
+        assert_eq!(next_hint(None, RangeField::VerseEnd, 3, &other_value), None);
+    }
+
     #[test]
     fn the_hints_use_slovak_plural_forms() {
         assert_eq!(
