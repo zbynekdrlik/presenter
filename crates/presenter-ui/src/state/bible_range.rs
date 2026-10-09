@@ -307,6 +307,24 @@ mod tests {
     }
 
     #[test]
+    fn emptying_a_set_end_box_clears_the_note() {
+        // An emptied end = "to the end of the chapter": a new value.
+        let shown = hint(RangeField::VerseStart, "Kapitola má len 21 veršov");
+        assert_eq!(next_end_cleared_hint(Some(&shown), Some(21)), None);
+    }
+
+    #[test]
+    fn re_committing_an_already_empty_end_box_keeps_the_note() {
+        // Enter on the end box that was already empty changes nothing.
+        let shown = hint(RangeField::Chapter, "Kniha má len 5 kapitol");
+        assert_eq!(
+            next_end_cleared_hint(Some(&shown), None),
+            Some(shown.clone())
+        );
+        assert_eq!(next_end_cleared_hint(None, None), None);
+    }
+
+    #[test]
     fn the_hints_use_slovak_plural_forms() {
         assert_eq!(
             bound_chapter(9, 1, &[25]).hint.as_deref(),
