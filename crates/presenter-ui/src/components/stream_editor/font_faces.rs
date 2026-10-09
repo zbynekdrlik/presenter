@@ -1,3 +1,107 @@
+//! The uploaded faces of one font family, as the text-style form offers them
+//! (#830). Pure + host-tested.
+//!
+//! A family like Nexa has many faces (Light, Regular, Bold, XBold, Heavy,
+//! Black, plus italics). The weight `<select>` gets ONE option per weight,
+//! labelled with the face's own style name ("Light 300", "Black 900") from
+//! `StreamFont::style_name`. The Italic toggle is a separate checkbox, enabled
+//! where the family has an italic face at the chosen weight.
+
+use std::collections::BTreeMap;
+
+use presenter_core::StreamFont;
+
+/// One option of an uploaded family's weight `<select>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeightOption {
+    pub weight: u16,
+    pub label: String,
+}
+
+/// The weight options of `family`, ascending, one per distinct weight. An
+/// option is named by its upright face's style name; a weight with only an
+/// italic face uses that name without "Italic"; a nameless face gets the
+/// standard name of its weight, or just the number. `current` (the style's
+/// stored weight) is added when no face has it, so the select never displays a
+/// weight other than the one that is saved.
+pub fn weight_options(fonts: &[StreamFont], family: &str, current: u16) -> Vec<WeightOption> {
+    // weight → (upright face's style name, italic face's style name)
+    let mut by_weight: BTreeMap<u16, (Option<&str>, Option<&str>)> = BTreeMap::new();
+    for font in fonts.iter().filter(|f| f.family == family) {
+        let names = by_weight.entry(font.weight).or_default();
+        let style = font.style_name.as_deref();
+        if font.italic {
+            names.1 = names.1.or(style);
+        } else {
+            names.0 = names.0.or(style);
+        }
+    }
+    let mut options: Vec<WeightOption> = by_weight
+        .into_iter()
+        .map(|(weight, (upright, italic))| WeightOption {
+            weight,
+            label: weight_label(upright, italic, weight),
+        })
+        .collect();
+    if !options.iter().any(|o| o.weight == current) {
+        options.push(WeightOption {
+            weight: current,
+            label: format!("{current} (nenahraté)"),
+        });
+        options.sort_by_key(|o| o.weight);
+    }
+    options
+}
+
+/// True when `family` has an italic face at exactly `weight`.
+pub fn has_italic_face(fonts: &[StreamFont], family: &str, weight: u16) -> bool {
+    fonts
+        .iter()
+        .any(|f| f.family == family && f.italic && f.weight == weight)
+}
+
+/// "<name> <weight>", or the bare weight when no name is known.
+fn weight_label(upright: Option<&str>, italic: Option<&str>, weight: u16) -> String {
+    let name = upright
+        .map(str::trim)
+        .map(str::to_string)
+        .or_else(|| italic.map(without_italic))
+        .filter(|name| !name.is_empty())
+        .or_else(|| standard_weight_name(weight).map(str::to_string));
+    match name {
+        Some(name) => format!("{name} {weight}"),
+        None => weight.to_string(),
+    }
+}
+
+/// An italic face's style name without its "Italic"/"Oblique" word
+/// ("Light Italic" → "Light"; a bare "Italic" → "").
+fn without_italic(style: &str) -> String {
+    style
+        .split_whitespace()
+        .filter(|word| {
+            !word.eq_ignore_ascii_case("italic") && !word.eq_ignore_ascii_case("oblique")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The OpenType name of a standard weight.
+fn standard_weight_name(weight: u16) -> Option<&'static str> {
+    Some(match weight {
+        100 => "Thin",
+        200 => "ExtraLight",
+        300 => "Light",
+        400 => "Regular",
+        500 => "Medium",
+        600 => "SemiBold",
+        700 => "Bold",
+        800 => "ExtraBold",
+        900 => "Black",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

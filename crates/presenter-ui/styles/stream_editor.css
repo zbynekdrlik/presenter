@@ -518,6 +518,11 @@ html[data-stream-editor="true"] {
   gap: 0.4rem;
 }
 
+/* #830: an unavailable option (no italic face at this weight) reads as off. */
+.stream-editor__field--check:has(input:disabled) {
+  opacity: 0.55;
+}
+
 .stream-editor__align {
   flex-direction: column;
 }

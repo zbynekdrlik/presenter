@@ -120,12 +120,16 @@ pub fn FontPanel(ctx: StreamEditorCtx) -> impl IntoView {
                             f.weight,
                             if f.italic { "italic" } else { "normal" },
                         );
-                        let label = format!(
-                            "{} — {}{}",
-                            family,
-                            f.weight,
-                            if f.italic { " kurzíva" } else { "" },
-                        );
+                        // #830: name the face by its own style ("Nexa Black
+                        // Italic — 900"), which says italic itself.
+                        let label = match &f.style_name {
+                            Some(style) => format!("{family} {style} — {}", f.weight),
+                            None => format!(
+                                "{family} — {}{}",
+                                f.weight,
+                                if f.italic { " kurzíva" } else { "" },
+                            ),
+                        };
                         view! {
                             <li
                                 class="stream-editor__font-item"

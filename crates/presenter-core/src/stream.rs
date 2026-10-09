@@ -251,6 +251,14 @@ pub struct TextStyle {
     /// stored props back-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uppercase: Option<bool>,
+    /// Render the text in an italic face (#830) — CSS `font-style: italic`.
+    /// An uploaded family serves its italic face at the chosen weight (the
+    /// editor offers the toggle only where one exists); without one the
+    /// browser slants the upright face. `None` (stored when unticked) and
+    /// `Some(false)` render upright; a serde default keeps pre-#830 stored
+    /// props back-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 /// An optional background box drawn BEHIND a countdown's text (#785) — a
@@ -923,6 +931,7 @@ mod tests {
             shadow: None,
             letter_spacing_em: None,
             uppercase: None,
+            italic: None,
         }
     }
 

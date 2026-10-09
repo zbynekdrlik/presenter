@@ -45,6 +45,7 @@ pub(super) fn text_style() -> TextStyle {
         shadow: None,
         letter_spacing_em: None,
         uppercase: None,
+        italic: None,
     }
 }
 

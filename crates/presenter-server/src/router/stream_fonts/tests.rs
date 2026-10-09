@@ -86,6 +86,7 @@ fn text_style(family: &str) -> TextStyle {
         shadow: None,
         letter_spacing_em: None,
         uppercase: None,
+        italic: None,
     }
 }
 
