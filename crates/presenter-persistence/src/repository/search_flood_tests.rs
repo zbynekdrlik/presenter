@@ -116,3 +116,72 @@ async fn a_library_word_plus_a_lyric_word_still_finds_the_song() {
         names(&results)
     );
 }
+
+/// #833 review: the slide phase's LIMIT counted slide ROWS. Songs whose TITLE
+/// holds every token match on all their slides, and those rows (or a second
+/// slide of a song already emitted) filled the window, so a lyric match in
+/// another song was cut off.
+#[tokio::test]
+async fn many_slides_of_title_matches_do_not_crowd_out_a_lyric_match() {
+    let repo = repo().await;
+    for title in ["Víťazím A", "Víťazím B"] {
+        let slides = (0..30).map(|p| slide(p, "iný text")).collect();
+        let presentation = Presentation::new(title, slides).unwrap();
+        let library = Library::new(format!("Knižnica {title}"), vec![presentation]).unwrap();
+        repo.upsert_library(&library).await.unwrap();
+    }
+    let slides = (0..6)
+        .map(|p| {
+            slide(
+                p,
+                if p == 5 {
+                    "už víťazím v Ňom"
+                } else {
+                    "verš"
+                },
+            )
+        })
+        .collect();
+    let target = Presentation::new("Pieseň Z", slides).unwrap();
+    repo.upsert_library(&Library::new("Zbor", vec![target]).unwrap())
+        .await
+        .unwrap();
+
+    let results = repo.search_presenter("vitazim", 5).await.unwrap();
+
+    assert!(
+        names(&results).iter().any(|n| n == "Pieseň Z"),
+        "the lyric match must not be crowded out by title matches, got {:?}",
+        names(&results)
+    );
+}
+
+/// #833 review: a very long query (a pasted verse) cost 4 LIKEs per token on
+/// every slide. Only the first `MAX_SEARCH_TOKENS` words are matched, so a
+/// long paste still finds the song its first words come from.
+#[tokio::test]
+async fn a_long_pasted_query_matches_on_its_first_words() {
+    let repo = repo().await;
+    let target = Presentation::new(
+        "Pieseň L",
+        vec![slide(0, "jeden dva tri styri pat sest sedem osem devat")],
+    )
+    .unwrap();
+    repo.upsert_library(&Library::new("Zbor", vec![target]).unwrap())
+        .await
+        .unwrap();
+
+    let results = repo
+        .search_presenter(
+            "jeden dva tri styri pat sest sedem osem xenon yttrium zirkon wolfram",
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        names(&results).iter().any(|n| n == "Pieseň L"),
+        "a long query must match on its first words, got {:?}",
+        names(&results)
+    );
+}
