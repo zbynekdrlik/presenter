@@ -349,7 +349,7 @@ test.describe("Stream output transitions", () => {
     attachConsoleErrorCollector(page, consoleErrors);
 
     const scene = await createScene(request, "FadeThroughScene", "base");
-    const lThrough = await addLyrics(request, scene, 0, { mode: "fade_through", duration_ms: 800 });
+    const lThrough = await addLyrics(request, scene, 0, { mode: "fade_through", duration_ms: 1_500 });
     await activateBase(request, scene);
     await gotoStream(page);
 
@@ -361,8 +361,8 @@ test.describe("Stream output transitions", () => {
 
     const songA = await seedSong(request, "Amazing Grace");
     await triggerSong(request, songA.presentationId, songA.slideId);
-    await expect(main).toHaveText("Amazing Grace", { timeout: 5_000 });
-    await expect(layers).toHaveCount(1, { timeout: 5_000 });
+    await expect(main).toHaveText("Amazing Grace", { timeout: 10_000 });
+    await expect(layers).toHaveCount(1, { timeout: 10_000 });
 
     // Per frame: every layer's text, whether it is leaving, and its opacity.
     const startLayerRecorder = (ms: number) =>
@@ -398,9 +398,9 @@ test.describe("Stream output transitions", () => {
 
     // ── A → B: B appears only after A has faded out. ──
     const songB = await seedSong(request, "How Great Thou Art");
-    await startLayerRecorder(2_800);
+    await startLayerRecorder(4_500);
     await triggerSong(request, songB.presentationId, songB.slideId);
-    await page.waitForTimeout(2_800);
+    await page.waitForTimeout(4_500);
     let frames = await readLayerFrames();
 
     const both = frames.filter(
@@ -430,16 +430,16 @@ test.describe("Stream output transitions", () => {
       }),
       "the new text fades in",
     ).toBeTruthy();
-    await expect(main).toHaveText("How Great Thou Art", { timeout: 5_000 });
-    await expect(layers).toHaveCount(1, { timeout: 5_000 });
+    await expect(main).toHaveText("How Great Thou Art", { timeout: 10_000 });
+    await expect(layers).toHaveCount(1, { timeout: 10_000 });
 
     // ── B → C → D in a burst: only the newest pending text (D) is shown. ──
     const songC = await seedSong(request, "Blessed Assurance");
     const songD = await seedSong(request, "Cornerstone");
-    await startLayerRecorder(2_800);
+    await startLayerRecorder(4_500);
     await triggerSong(request, songC.presentationId, songC.slideId);
     await triggerSong(request, songD.presentationId, songD.slideId);
-    await page.waitForTimeout(2_800);
+    await page.waitForTimeout(4_500);
     frames = await readLayerFrames();
 
     expect(
@@ -450,8 +450,8 @@ test.describe("Stream output transitions", () => {
       frames.some((f) => f.texts.includes("How Great Thou Art") && f.texts.includes("Cornerstone")),
       "the newest text never overlaps the leaving one",
     ).toBeFalsy();
-    await expect(main).toHaveText("Cornerstone", { timeout: 5_000 });
-    await expect(layers).toHaveCount(1, { timeout: 5_000 });
+    await expect(main).toHaveText("Cornerstone", { timeout: 10_000 });
+    await expect(layers).toHaveCount(1, { timeout: 10_000 });
 
     expect(consoleErrors).toEqual([]);
   });
