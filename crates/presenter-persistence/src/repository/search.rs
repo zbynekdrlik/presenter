@@ -37,8 +37,11 @@ struct SearchContext {
     seen_library_ids: HashSet<String>,
     seen_presentation_ids: HashSet<String>,
     seen_slide_ids: HashSet<String>,
-    matched_library_ids: HashSet<String>,
-    matched_presentation_ids: HashSet<String>,
+    /// Per token (same index as `tokens`): the ids of LIVE libraries whose
+    /// folded name contains it (#833). A token may be satisfied by the
+    /// library name instead of the presentation/slide text, so the SQL
+    /// prefilters need these to stay EQUAL to the Rust all-tokens check.
+    token_libraries: Vec<Vec<String>>,
 }
 
 impl SearchContext {
@@ -77,10 +80,10 @@ impl Repository {
             seen_library_ids: HashSet::with_capacity(cap),
             seen_presentation_ids: HashSet::with_capacity(cap),
             seen_slide_ids: HashSet::with_capacity(cap),
-            matched_library_ids: HashSet::with_capacity(cap),
-            matched_presentation_ids: HashSet::new(),
+            token_libraries: Vec::new(),
         };
 
+        self.load_token_libraries(&mut ctx).await?;
         self.search_libraries(&mut ctx).await?;
         if !ctx.is_full() {
             self.search_presentations(&mut ctx).await?;
@@ -92,13 +95,63 @@ impl Repository {
         Ok(ctx.results)
     }
 
+    /// Fill `ctx.token_libraries` (#833). Deliberately unlimited: libraries
+    /// are few, and a per-token set cut by a LIMIT would make the later SQL
+    /// prefilters reject real matches.
+    async fn load_token_libraries(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
+        let mut per_token = Vec::with_capacity(ctx.tokens.len());
+        for token in &ctx.tokens {
+            let ids: Vec<String> = library::Entity::find()
+                .filter(library::Column::SearchName.contains(token.clone()))
+                .filter(library::Column::DeletedAt.is_null())
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|model| model.id)
+                .collect();
+            per_token.push(ids);
+        }
+        tracing::debug!(
+            tokens = ?ctx.tokens,
+            libraries_per_token = ?per_token.iter().map(Vec::len).collect::<Vec<_>>(),
+            "search: per-token library matches"
+        );
+        ctx.token_libraries = per_token;
+        Ok(())
+    }
+
+    /// `cond` OR "the presentation's library name holds token `idx`".
+    fn or_token_library(cond: Condition, ctx: &SearchContext, idx: usize) -> Condition {
+        match ctx.token_libraries.get(idx) {
+            Some(ids) if !ids.is_empty() => {
+                cond.add(presentation_entity::Column::LibraryId.is_in(ids.iter().cloned()))
+            }
+            _ => cond,
+        }
+    }
+
+    /// Every token in the presentation name or its library name — the exact
+    /// SQL twin of `search_presentations`' Rust check (#833).
+    fn presentation_tokens_condition(ctx: &SearchContext) -> Condition {
+        let mut all_tokens = Condition::all();
+        for (idx, token) in ctx.tokens.iter().enumerate() {
+            let per_token = Condition::any()
+                .add(presentation_entity::Column::SearchName.contains(token.clone()));
+            all_tokens = all_tokens.add(Self::or_token_library(per_token, ctx, idx));
+        }
+        all_tokens
+    }
+
     async fn search_libraries(&self, ctx: &mut SearchContext) -> anyhow::Result<()> {
         let mut library_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             library_condition = library_condition.add(library::Column::Name.contains(&ctx.trimmed));
         }
         if ctx.has_tokens {
-            let mut token_condition = Condition::any();
+            // #833: ALL tokens, not any — a library listed as a result must
+            // hold every token, and an any-token query let "s"/"sa" fill
+            // the LIMIT with libraries the Rust check then dropped.
+            let mut token_condition = Condition::all();
             for token in &ctx.tokens {
                 token_condition =
                     token_condition.add(library::Column::SearchName.contains(token.clone()));
@@ -120,20 +173,11 @@ impl Repository {
             if !ctx.seen_library_ids.insert(model.id.clone()) {
                 continue;
             }
-            let tokens_in_name = if ctx.has_tokens {
+            if ctx.has_tokens {
                 let haystack = fold_query(&model.name);
-                ctx.tokens
-                    .iter()
-                    .filter(|token| haystack.contains(*token))
-                    .count()
-            } else {
-                0
-            };
-            if tokens_in_name > 0 {
-                ctx.matched_library_ids.insert(model.id.clone());
-            }
-            if ctx.has_tokens && tokens_in_name < ctx.tokens.len() {
-                continue;
+                if !ctx.tokens.iter().all(|token| haystack.contains(token)) {
+                    continue;
+                }
             }
             let library_id = LibraryId::from_uuid(parse_uuid(&model.id)?);
             ctx.library_names
@@ -153,19 +197,6 @@ impl Repository {
             }
         }
 
-        // Pre-fetch presentation IDs belonging to matched libraries for later use
-        let matched_library_vec: Vec<String> = ctx.matched_library_ids.iter().cloned().collect();
-        if !matched_library_vec.is_empty() {
-            let matched_presentations = presentation_entity::Entity::find()
-                .filter(presentation_entity::Column::LibraryId.is_in(matched_library_vec))
-                .filter(presentation_entity::Column::DeletedAt.is_null())
-                .all(&self.db)
-                .await?;
-            for model in matched_presentations {
-                ctx.matched_presentation_ids.insert(model.id.clone());
-            }
-        }
-
         Ok(())
     }
 
@@ -175,24 +206,14 @@ impl Repository {
             return Ok(());
         }
 
-        let matched_library_vec: Vec<String> = ctx.matched_library_ids.iter().cloned().collect();
-
         let mut presentation_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             presentation_condition = presentation_condition
                 .add(presentation_entity::Column::Name.contains(&ctx.trimmed));
         }
         if ctx.has_tokens {
-            let mut token_branch = Condition::all();
-            for token in &ctx.tokens {
-                token_branch = token_branch
-                    .add(presentation_entity::Column::SearchName.contains(token.clone()));
-            }
-            presentation_condition = presentation_condition.add(token_branch);
-        }
-        if !matched_library_vec.is_empty() {
-            presentation_condition = presentation_condition
-                .add(presentation_entity::Column::LibraryId.is_in(matched_library_vec));
+            presentation_condition =
+                presentation_condition.add(Self::presentation_tokens_condition(ctx));
         }
 
         let presentation_rows = presentation_entity::Entity::find()
@@ -258,10 +279,11 @@ impl Repository {
     }
 
     /// Build the WHERE condition for the slide-text phase of a search.
+    /// #833: equal to `emit_slide_result`'s Rust check — every token must be
+    /// in the slide text, the presentation name or the library name. The old
+    /// condition OR'd in every presentation of any library holding ANY token,
+    /// and those rows filled the LIMIT before the real lyric was read.
     fn slide_search_condition(ctx: &SearchContext) -> Condition {
-        let matched_presentation_vec: Vec<String> =
-            ctx.matched_presentation_ids.iter().cloned().collect();
-
         let mut slide_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             slide_condition = slide_condition
@@ -271,18 +293,15 @@ impl Repository {
         }
         if ctx.has_tokens {
             let mut token_condition = Condition::all();
-            for token in &ctx.tokens {
+            for (idx, token) in ctx.tokens.iter().enumerate() {
                 let per_token = Condition::any()
                     .add(slide_entity::Column::WorshipMainSearch.contains(token.clone()))
                     .add(slide_entity::Column::WorshipTranslateSearch.contains(token.clone()))
-                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()));
-                token_condition = token_condition.add(per_token);
+                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()))
+                    .add(presentation_entity::Column::SearchName.contains(token.clone()));
+                token_condition = token_condition.add(Self::or_token_library(per_token, ctx, idx));
             }
             slide_condition = slide_condition.add(token_condition);
-        }
-        if !matched_presentation_vec.is_empty() {
-            slide_condition = slide_condition
-                .add(slide_entity::Column::PresentationId.is_in(matched_presentation_vec));
         }
         slide_condition
     }

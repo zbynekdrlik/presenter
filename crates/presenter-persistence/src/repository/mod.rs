@@ -17,6 +17,8 @@ mod presentation_copy_tests;
 mod resolume;
 mod search;
 #[cfg(test)]
+mod search_flood_tests;
+#[cfg(test)]
 mod search_trash_tests;
 mod slide_stage_layout;
 mod stage_state;
