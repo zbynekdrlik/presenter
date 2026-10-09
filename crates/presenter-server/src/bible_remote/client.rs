@@ -163,32 +163,43 @@ impl NltClient {
         reference: &str,
     ) -> Result<Vec<NltVerse>, RemoteBibleError> {
         let started = Instant::now();
-        let outcome = self.request_page(reference).await.and_then(|page| {
-            let parsed = parse_verses(&page);
-            if parsed.is_empty() {
-                return Err(RemoteBibleError::NoVerses {
-                    reference: reference.to_string(),
-                });
-            }
-            Ok(in_range(parsed, key))
-        });
+        let outcome = self
+            .request_page(reference)
+            .await
+            .and_then(|(status, page)| {
+                let parsed = parse_verses(&page);
+                if parsed.is_empty() {
+                    return Err(RemoteBibleError::NoVerses {
+                        reference: reference.to_string(),
+                    });
+                }
+                Ok((status, in_range(parsed, key)))
+            });
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        match &outcome {
-            Ok(verses) => tracing::info!(
-                reference,
-                verses = verses.len(),
-                status = 200,
-                elapsed_ms,
-                "NLT API request"
-            ),
+        match outcome {
+            Ok((status, verses)) => {
+                tracing::info!(
+                    reference,
+                    verses = verses.len(),
+                    status,
+                    elapsed_ms,
+                    "NLT API request"
+                );
+                Ok(verses)
+            }
             Err(err) => {
-                tracing::warn!(reference, elapsed_ms, error = %err, "NLT API request failed")
+                let status = match &err {
+                    RemoteBibleError::Status { status, .. } => Some(*status),
+                    _ => None,
+                };
+                tracing::warn!(reference, ?status, elapsed_ms, error = %err, "NLT API request failed");
+                Err(err)
             }
         }
-        outcome
     }
 
-    async fn request_page(&self, reference: &str) -> Result<String, RemoteBibleError> {
+    /// The page body and its HTTP status (always a success status).
+    async fn request_page(&self, reference: &str) -> Result<(u16, String), RemoteBibleError> {
         let url = format!(
             "{}/api/passages",
             self.config.base_url.trim_end_matches('/')
@@ -212,10 +223,11 @@ impl NltClient {
                 status: status.as_u16(),
             });
         }
-        response
+        let page = response
             .text()
             .await
-            .map_err(|err| self.transport_error(reference, err))
+            .map_err(|err| self.transport_error(reference, err))?;
+        Ok((status.as_u16(), page))
     }
 
     fn transport_error(&self, reference: &str, err: reqwest::Error) -> RemoteBibleError {

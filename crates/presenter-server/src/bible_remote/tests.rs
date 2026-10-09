@@ -436,9 +436,14 @@ async fn an_unreachable_api_is_a_typed_network_error_that_never_shows_the_key() 
         .await
         .expect_err("connection refused");
 
-    assert!(matches!(err, RemoteBibleError::Network { .. }), "{err:?}");
+    let RemoteBibleError::Network { detail, .. } = &err else {
+        panic!("expected a network error, got {err:?}");
+    };
+    // The cause chain names the failed connect; the URL (with the key) is gone.
+    assert!(detail.to_lowercase().contains("connect"), "{detail}");
     assert!(err.is_unreachable());
     assert!(!err.to_string().contains("key="), "{err}");
+    assert!(!err.to_string().contains("127.0.0.1"), "{err}");
 }
 
 #[tokio::test]
