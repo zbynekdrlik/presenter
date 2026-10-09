@@ -45,6 +45,7 @@ pub(super) fn text_style() -> TextStyle {
         shadow: None,
         letter_spacing_em: None,
         uppercase: None,
+        italic: None,
     }
 }
 
@@ -694,7 +695,7 @@ async fn delete_output_cascades_scenes_and_elements() {
 
 // ---- #778 uploaded web fonts ----------------------------------------------
 
-fn new_font(sha: &str, family: &str, weight: u16, italic: bool) -> NewStreamFont {
+pub(super) fn new_font(sha: &str, family: &str, weight: u16, italic: bool) -> NewStreamFont {
     NewStreamFont {
         sha256: sha.to_string(),
         original_filename: format!("{family}.ttf"),

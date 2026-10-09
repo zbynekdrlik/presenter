@@ -43,6 +43,16 @@ use crate::state::AppState;
 mod browser_check;
 pub(crate) use browser_check::check_browser_loadable;
 
+mod weight;
+use weight::{
+    resolve_weight, style_says_italic, weight_from_style_name, FaceWeight, StyleNames,
+    WeightKeyword,
+};
+
+/// Re-deriving stored faces' weight/italic from their bytes (#830): the
+/// startup pass and the per-family pass after an upload.
+mod rederive;
+
 /// Test-only sfnt byte surgery deriving the broken-font fixtures from the OFL
 /// fixture (#778 browser-sanitiser check) — shared by the unit + router tests.
 #[cfg(test)]
@@ -87,6 +97,24 @@ pub(crate) struct FontMeta {
     pub family: String,
     pub weight: u16,
     pub italic: bool,
+    /// The face's own style label (#830): name 17, else name 2 ("Light",
+    /// "Black Italic"). Shown in the editor's weight picker.
+    pub style_name: Option<String>,
+    /// The weight word the style names carry (#830), if any.
+    pub keyword: Option<WeightKeyword>,
+    /// `weight` came from `keyword`, not from the OS/2 table (#830).
+    pub weight_from_style: bool,
+}
+
+impl FontMeta {
+    /// This face's input to the family-level weight rule (#830).
+    pub(crate) fn face_weight(&self) -> FaceWeight {
+        FaceWeight {
+            weight: self.weight,
+            keyword: self.keyword,
+            from_style: self.weight_from_style,
+        }
+    }
 }
 
 /// Why a font's metadata could not be read — mapped to `422` by the router.
@@ -98,31 +126,56 @@ pub(crate) enum FontParseError {
     NoFamily,
 }
 
-/// Parse family / weight / italic from a raw ttf/otf byte buffer. Family is the
-/// typographic family (name id 16) falling back to the legacy family (id 1);
-/// weight is `OS/2.usWeightClass` (clamped into the valid 1..=1000 range,
-/// defaulting to 400 when the `OS/2` table is absent); italic is the `OS/2`
-/// `fsSelection` italic bit, falling back to `head.macStyle` when there is no
-/// `OS/2` table.
-pub(crate) fn parse_font_metadata(bytes: &[u8]) -> Result<FontMeta, FontParseError> {
+/// Parse family / weight / italic from a raw ttf/otf byte buffer; `filename` is
+/// the uploaded file's name (the last place a style is looked for).
+///
+/// - Family: the typographic family (name 16), falling back to the legacy
+///   family (name 1).
+/// - Weight: `OS/2.usWeightClass`, clamped into 1..=1000. When it is the
+///   default 400, or there is no `OS/2` table, the style name decides (#830,
+///   see [`weight::weight_from_style_name`]).
+/// - Italic: the `OS/2` `fsSelection` italic or oblique bit (`head.macStyle`
+///   when there is no `OS/2` table), or a style name saying Italic/Oblique.
+pub(crate) fn parse_font_metadata(
+    bytes: &[u8],
+    filename: &str,
+) -> Result<FontMeta, FontParseError> {
     let font = FontRef::new(bytes).map_err(|_| FontParseError::Unparseable)?;
     let family = pick_family(&font).ok_or(FontParseError::NoFamily)?;
-    let weight = font
+    let typographic_subfamily = name_record(&font, NameId::TYPOGRAPHIC_SUBFAMILY_NAME);
+    let subfamily = name_record(&font, NameId::SUBFAMILY_NAME);
+    let full_name = name_record(&font, NameId::FULL_NAME);
+    let names = StyleNames {
+        family: &family,
+        typographic_subfamily: typographic_subfamily.as_deref(),
+        subfamily: subfamily.as_deref(),
+        full_name: full_name.as_deref(),
+        filename: Some(filename),
+    };
+    let keyword = weight_from_style_name(&names);
+    let os2_weight = font
         .os2()
-        .map(|os2| os2.us_weight_class())
-        .unwrap_or(400)
-        .clamp(1, 1000);
-    let italic = match font.os2() {
-        Ok(os2) => os2.fs_selection().contains(SelectionFlags::ITALIC),
+        .ok()
+        .map(|os2| os2.us_weight_class().clamp(1, 1000));
+    let (weight, weight_from_style) = resolve_weight(os2_weight, keyword);
+    let flagged_italic = match font.os2() {
+        Ok(os2) => os2
+            .fs_selection()
+            .intersects(SelectionFlags::ITALIC | SelectionFlags::OBLIQUE),
         Err(_) => font
             .head()
             .map(|head| head.mac_style().contains(MacStyle::ITALIC))
             .unwrap_or(false),
     };
+    let italic = flagged_italic || style_says_italic(&names);
+    let style_name = names.display();
     Ok(FontMeta {
         family,
         weight,
         italic,
+        style_name,
+        keyword,
+        weight_from_style,
     })
 }
 
@@ -247,14 +300,19 @@ impl AppState {
     /// preload) and `GET /stream/fonts.css`, so no page ever fetches a face the
     /// browser's OpenType sanitiser refuses (the console warning SNV/PP logged
     /// for font id 71). Nothing is deleted: the row and the file stay, and an
-    /// explicit `DELETE /stream/fonts/{id}` still works.
+    /// explicit `DELETE /stream/fonts/{id}` still works. Each listed face
+    /// carries its style name (#830), read from the same cached bytes check.
     pub(crate) async fn loadable_stream_fonts(&self) -> anyhow::Result<Vec<StreamFont>> {
         let fonts = self.repository().list_stream_fonts().await?;
         let store = self.font_store();
         let mut loadable = Vec::with_capacity(fonts.len());
-        for font in fonts {
-            if self.stored_font_is_loadable(&store, &font).await {
-                loadable.push(font);
+        for mut font in fonts {
+            match self.stored_face(&store, &font).await {
+                Some(face) if face.loadable => {
+                    font.style_name = face.style_name;
+                    loadable.push(font);
+                }
+                _ => {}
             }
         }
         Ok(loadable)
@@ -280,41 +338,70 @@ impl AppState {
         }
     }
 
-    /// Run [`AppState::warm_stream_font_verdicts`] in the background (startup,
-    /// off the request path). A background task, so it is skipped in validate
-    /// (schema-probe) mode like every other one (#771). `pub` because `main.rs`
-    /// is a separate crate root (a `pub(crate)` fn called only from there is
-    /// dead code to clippy).
-    pub fn spawn_stream_font_verdict_warmup(&self) {
+    /// The startup font work, in the background (off the request path):
+    /// re-derive every stored face's weight/italic from its bytes (#830,
+    /// [`AppState::rederive_stream_font_faces_at_startup`]), then warm the
+    /// browser-loadability verdicts. The re-derive already caches each verdict
+    /// from the bytes it reads, so the warm-up only reads what it missed. A
+    /// background task, so it is skipped in validate (schema-probe) mode like
+    /// every other one (#771). `pub` because `main.rs` is a separate crate root
+    /// (a `pub(crate)` fn called only from there is dead code to clippy).
+    pub fn spawn_stream_font_startup(&self) {
         if !self.startup_mode().starts_integrations() {
-            tracing::info!("validate startup mode — stream-font verdict warm-up skipped");
+            tracing::info!(
+                "validate startup mode — stream-font re-derive and verdict warm-up skipped"
+            );
             return;
         }
         let state = self.clone();
-        tokio::spawn(async move { state.warm_stream_font_verdicts().await });
+        tokio::spawn(async move {
+            state.rederive_stream_font_faces_at_startup().await;
+            state.warm_stream_font_verdicts().await;
+        });
     }
 
-    /// Cached browser-loadability verdict for one stored face. The verdict is a
-    /// pure function of the bytes, which are immutable per sha256, so it is
-    /// computed once per process (and logged once when negative). A missing or
-    /// unreadable file hides the face without caching, so it reappears as soon
-    /// as the file is back.
-    async fn stored_font_is_loadable(&self, store: &FontStore, font: &StreamFont) -> bool {
-        if let Some(verdict) = self.stream_font_verdicts.get(&font.sha256) {
-            return verdict;
+    /// Cached browser-loadability verdict + style name of one stored face, or
+    /// `None` when its file is missing or unreadable. Both are pure functions of
+    /// the bytes, which are immutable per sha256, so they are computed once per
+    /// process (and a refusal is logged once). A missing or unreadable file is
+    /// not cached, so the face reappears as soon as the file is back.
+    async fn stored_face(&self, store: &FontStore, font: &StreamFont) -> Option<FaceVerdict> {
+        if let Some(face) = self.stream_font_verdicts.face(&font.sha256) {
+            return Some(face);
         }
-        let bytes = match store.read(&font.sha256, &font.format).await {
-            Ok(Some(bytes)) => bytes,
+        let bytes = self.read_stored_font(store, font).await?;
+        let style_name = parse_font_metadata(&bytes, &font.original_filename)
+            .ok()
+            .and_then(|meta| meta.style_name);
+        Some(self.evaluate_face(font, &bytes, style_name))
+    }
+
+    /// A stored face's bytes, or `None` (logged via
+    /// [`AppState::report_font_file_problem`]) when the file is missing or
+    /// unreadable.
+    async fn read_stored_font(&self, store: &FontStore, font: &StreamFont) -> Option<Vec<u8>> {
+        match store.read(&font.sha256, &font.format).await {
+            Ok(Some(bytes)) => Some(bytes),
             Ok(None) => {
                 self.report_font_file_problem(font, "missing");
-                return false;
+                None
             }
             Err(e) => {
                 self.report_font_file_problem(font, &format!("unreadable: {e}"));
-                return false;
+                None
             }
-        };
-        let loadable = match check_browser_loadable(&bytes) {
+        }
+    }
+
+    /// Check a stored face's bytes, cache the verdict + its (already parsed)
+    /// style name under its sha256, and WARN when a browser would refuse it.
+    fn evaluate_face(
+        &self,
+        font: &StreamFont,
+        bytes: &[u8],
+        style_name: Option<String>,
+    ) -> FaceVerdict {
+        let loadable = match check_browser_loadable(bytes) {
             Ok(()) => true,
             Err(defect) => {
                 tracing::warn!(
@@ -328,9 +415,13 @@ impl AppState {
                 false
             }
         };
+        let face = FaceVerdict {
+            loadable,
+            style_name,
+        };
         self.stream_font_verdicts
-            .record(font.sha256.clone(), loadable);
-        loadable
+            .record(font.sha256.clone(), face.clone());
+        face
     }
 
     /// Log a stored face whose file is missing/unreadable: WARN the first time
@@ -345,7 +436,7 @@ impl AppState {
                 sha256 = %font.sha256,
                 problem,
                 "stored font file unavailable — face hidden from fonts.css and the \
-                 font list (warned once per font)"
+                 font list, its weight not re-derived (warned once per font)"
             );
         } else {
             tracing::debug!(
@@ -358,26 +449,40 @@ impl AppState {
     }
 }
 
-/// Per-process cache of [`check_browser_loadable`] verdicts for STORED fonts,
-/// keyed by content sha256 (#778 reopen). One instance per `AppState`, shared
-/// by every clone through an `Arc` (the `ai_health_cache` pattern). The lock is
-/// held only for a map lookup/insert, never across an await; a poisoned lock
-/// degrades to a cache miss (the verdict is recomputed), never a panic.
+/// What the bytes of one stored face say, cached per sha256: whether a browser
+/// will load it (#778 reopen) and its style name (#830).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FaceVerdict {
+    loadable: bool,
+    style_name: Option<String>,
+}
+
+/// Per-process cache of [`FaceVerdict`]s for STORED fonts, keyed by content
+/// sha256 (#778 reopen). One instance per `AppState`, shared by every clone
+/// through an `Arc` (the `ai_health_cache` pattern). The lock is held only for
+/// a map lookup/insert, never across an await; a poisoned lock degrades to a
+/// cache miss (the verdict is recomputed), never a panic.
 #[derive(Debug, Default)]
 pub(crate) struct FontVerdictCache {
-    verdicts: Mutex<HashMap<String, bool>>,
+    verdicts: Mutex<HashMap<String, FaceVerdict>>,
     /// Shas whose missing/unreadable file was already WARN-logged.
     file_problem_warned: Mutex<HashSet<String>>,
 }
 
 impl FontVerdictCache {
+    /// The cached loadability verdict alone (the tests' view of the cache).
+    #[cfg(test)]
     fn get(&self, sha256: &str) -> Option<bool> {
-        self.verdicts.lock().ok()?.get(sha256).copied()
+        self.face(sha256).map(|face| face.loadable)
     }
 
-    fn record(&self, sha256: String, loadable: bool) {
+    fn face(&self, sha256: &str) -> Option<FaceVerdict> {
+        self.verdicts.lock().ok()?.get(sha256).cloned()
+    }
+
+    fn record(&self, sha256: String, face: FaceVerdict) {
         if let Ok(mut verdicts) = self.verdicts.lock() {
-            verdicts.insert(sha256, loadable);
+            verdicts.insert(sha256, face);
         }
     }
 
@@ -429,8 +534,10 @@ mod tests {
         // The committed OFL fixture font (tests/e2e/fixtures) doubles as the Rust
         // metadata-parse fixture — one licence-clean font for both test layers.
         let bytes = include_bytes!("../../../../tests/e2e/fixtures/fonts/Gruppo-Regular.ttf");
-        let meta = parse_font_metadata(bytes).expect("fixture parses");
+        let meta = parse_font_metadata(bytes, "Gruppo-Regular.ttf").expect("fixture parses");
         assert_eq!(meta.family, "Gruppo", "fixture family parsed: {meta:?}");
+        assert_eq!(meta.weight, 400, "OS/2 400 + style Regular: {meta:?}");
+        assert_eq!(meta.style_name.as_deref(), Some("Regular"));
         assert!(
             !meta.family.trim().is_empty(),
             "fixture has a family name: {meta:?}"
@@ -444,7 +551,7 @@ mod tests {
 
     #[test]
     fn parse_font_metadata_rejects_non_font_bytes() {
-        assert!(parse_font_metadata(b"this is definitely not a font").is_err());
+        assert!(parse_font_metadata(b"this is definitely not a font", "x.ttf").is_err());
     }
 
     #[tokio::test]
@@ -568,5 +675,220 @@ mod tests {
         assert!(cache.first_file_problem("aa"), "first report warns");
         assert!(!cache.first_file_problem("aa"), "repeat stays quiet");
         assert!(cache.first_file_problem("bb"), "another font warns");
+    }
+
+    // ---- #830: weight + italic from the style name -------------------------
+
+    const SUBFAMILY: u16 = 2;
+    const FULL_NAME: u16 = 4;
+    const TYPO_FAMILY: u16 = 16;
+    const TYPO_SUBFAMILY: u16 = 17;
+
+    /// A face of `family` derived from the OFL fixture, styled `style` in name
+    /// 17 while its OS/2 weight stays the default 400 — the Nexa mislabelling.
+    fn mislabelled_face(family: &str, style: &str) -> Vec<u8> {
+        use crate::state::stream_fonts::test_fonts::{with_names, GRUPPO_TTF};
+        with_names(
+            GRUPPO_TTF,
+            &[(TYPO_FAMILY, family), (TYPO_SUBFAMILY, style)],
+        )
+    }
+
+    #[test]
+    fn parse_font_metadata_reads_the_weight_from_a_mislabelled_style_name() {
+        for (style, weight) in [
+            ("Light", 300),
+            ("XBold", 800),
+            ("Heavy", 900),
+            ("Black", 900),
+        ] {
+            let meta = parse_font_metadata(&mislabelled_face("Parse830", style), "upload.ttf")
+                .expect("derived face parses");
+            assert_eq!(meta.family, "Parse830", "{style}");
+            assert_eq!(meta.weight, weight, "{style}");
+            assert_eq!(meta.style_name.as_deref(), Some(style));
+        }
+    }
+
+    #[test]
+    fn parse_font_metadata_leaves_an_os2_correct_face_alone() {
+        use crate::state::stream_fonts::test_fonts::with_os2_weight;
+        let bytes = with_os2_weight(&mislabelled_face("Parse830", "Black"), 300);
+        let meta = parse_font_metadata(&bytes, "Parse830-Black.ttf").unwrap();
+        assert_eq!(meta.weight, 300, "a non-default OS/2 weight is trusted");
+    }
+
+    #[test]
+    fn parse_font_metadata_falls_back_to_the_full_name_then_the_filename() {
+        use crate::state::stream_fonts::test_fonts::{with_names, GRUPPO_TTF};
+        let full = with_names(
+            GRUPPO_TTF,
+            &[(SUBFAMILY, "Italic"), (FULL_NAME, "Gruppo Light Italic")],
+        );
+        assert_eq!(
+            parse_font_metadata(&full, "upload.ttf").unwrap().weight,
+            300
+        );
+        let plain = with_names(
+            GRUPPO_TTF,
+            &[(SUBFAMILY, "Italic"), (FULL_NAME, "Gruppo Italic")],
+        );
+        assert_eq!(
+            parse_font_metadata(&plain, "Gruppo-Heavy-Italic.ttf")
+                .unwrap()
+                .weight,
+            900
+        );
+        assert_eq!(
+            parse_font_metadata(&plain, "upload.ttf").unwrap().weight,
+            400
+        );
+    }
+
+    #[test]
+    fn parse_font_metadata_reads_italic_from_the_flags_or_the_style_name() {
+        use crate::state::stream_fonts::test_fonts::{with_names, with_os2_italic, GRUPPO_TTF};
+        let flagged = with_os2_italic(&mislabelled_face("Parse830", "Black Italic"));
+        let meta = parse_font_metadata(&flagged, "x.ttf").unwrap();
+        assert!(meta.italic, "fsSelection italic: {meta:?}");
+        assert_eq!(meta.weight, 900);
+        // The name says Italic while the flags do not: still an italic face.
+        let named = with_names(GRUPPO_TTF, &[(SUBFAMILY, "Italic")]);
+        assert!(parse_font_metadata(&named, "x.ttf").unwrap().italic);
+        assert!(!parse_font_metadata(GRUPPO_TTF, "x.ttf").unwrap().italic);
+    }
+
+    #[test]
+    fn derived_faces_stay_browser_loadable() {
+        use crate::state::stream_fonts::test_fonts::{with_os2_italic, with_os2_weight};
+        // The fixture surgery must not add an OTS defect of its own.
+        let face = with_os2_italic(&with_os2_weight(
+            &mislabelled_face("Parse830", "Black Italic"),
+            400,
+        ));
+        assert_eq!(check_browser_loadable(&face), Ok(()));
+    }
+
+    async fn rederive_state() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = AppState::in_memory().await.unwrap();
+        state.set_stream_assets_dir(tmp.path().join("stream-assets"));
+        (state, tmp)
+    }
+
+    /// Store `bytes` as a face uploaded before #830: row metadata from the
+    /// OS/2 table alone (weight 400, upright), file on disk.
+    async fn seed_old_face(
+        state: &AppState,
+        family: &str,
+        style: &str,
+        bytes: &[u8],
+    ) -> StreamFont {
+        let sha = crate::state::stream_assets::sha256_hex(bytes);
+        state.font_store().store(&sha, "ttf", bytes).await.unwrap();
+        state
+            .repository()
+            .insert_or_get_stream_font(presenter_persistence::NewStreamFont {
+                sha256: sha,
+                original_filename: format!("{family}-{style}.ttf"),
+                family: family.to_string(),
+                weight: 400,
+                italic: false,
+                format: "ttf".to_string(),
+                size_bytes: bytes.len() as i64,
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn stored(state: &AppState, font: &StreamFont) -> (u16, bool) {
+        let row = state.repository().get_stream_font(font.id).await.unwrap();
+        (row.weight, row.italic)
+    }
+
+    #[tokio::test]
+    async fn rederive_fixes_stored_mislabelled_faces_and_is_idempotent() {
+        let (state, _tmp) = rederive_state().await;
+        let family = "Rederive830";
+        let light =
+            seed_old_face(&state, family, "Light", &mislabelled_face(family, "Light")).await;
+        let regular = seed_old_face(
+            &state,
+            family,
+            "Regular",
+            &mislabelled_face(family, "Regular"),
+        )
+        .await;
+        // Italic only by name (flags upright): the old row says upright.
+        let light_italic = seed_old_face(
+            &state,
+            family,
+            "LightItalic",
+            &mislabelled_face(family, "Light Italic"),
+        )
+        .await;
+
+        let changed = state.rederive_stream_font_faces().await.unwrap();
+        // Each `AppState::in_memory()` has its own database (#813): only this
+        // test's two mislabelled faces exist to change.
+        assert_eq!(changed, 2, "both mislabelled faces re-derived");
+        assert_eq!(stored(&state, &light).await, (300, false));
+        assert_eq!(
+            stored(&state, &regular).await,
+            (400, false),
+            "already right"
+        );
+        assert_eq!(stored(&state, &light_italic).await, (300, true));
+
+        assert_eq!(
+            state.rederive_stream_font_family(family).await.unwrap(),
+            0,
+            "a second pass changes nothing"
+        );
+        assert_eq!(stored(&state, &light).await, (300, false));
+    }
+
+    #[tokio::test]
+    async fn rederive_moves_heavy_below_black_in_its_family() {
+        let (state, _tmp) = rederive_state().await;
+        // Nexa's shape: XBold, Heavy and Black all stored at 400.
+        let nexa = "Pair830";
+        let xbold = seed_old_face(&state, nexa, "XBold", &mislabelled_face(nexa, "XBold")).await;
+        let heavy = seed_old_face(&state, nexa, "Heavy", &mislabelled_face(nexa, "Heavy")).await;
+        let black = seed_old_face(&state, nexa, "Black", &mislabelled_face(nexa, "Black")).await;
+        // Heavy + Black without an 800 face.
+        let duo = "Duo830";
+        let duo_heavy = seed_old_face(&state, duo, "Heavy", &mislabelled_face(duo, "Heavy")).await;
+        let duo_black = seed_old_face(&state, duo, "Black", &mislabelled_face(duo, "Black")).await;
+
+        state.rederive_stream_font_faces().await.unwrap();
+        assert_eq!(stored(&state, &xbold).await.0, 800);
+        assert_eq!(stored(&state, &heavy).await.0, 850, "800 is XBold's");
+        assert_eq!(stored(&state, &black).await.0, 900);
+        assert_eq!(stored(&state, &duo_heavy).await.0, 800);
+        assert_eq!(stored(&state, &duo_black).await.0, 900);
+    }
+
+    #[tokio::test]
+    async fn rederive_skips_a_face_whose_file_is_missing() {
+        let (state, _tmp) = rederive_state().await;
+        // A row whose bytes are not on disk (never stored): its filename names
+        // a Black face, but nothing can be read, so the row stays as it is.
+        let bytes = mislabelled_face("Missing830", "Black");
+        let row = state
+            .repository()
+            .insert_or_get_stream_font(presenter_persistence::NewStreamFont {
+                sha256: crate::state::stream_assets::sha256_hex(&bytes),
+                original_filename: "Missing830-Black.ttf".to_string(),
+                family: "Missing830".to_string(),
+                weight: 400,
+                italic: false,
+                format: "ttf".to_string(),
+                size_bytes: bytes.len() as i64,
+            })
+            .await
+            .unwrap();
+        state.rederive_stream_font_faces().await.unwrap();
+        assert_eq!(stored(&state, &row).await, (400, false));
     }
 }

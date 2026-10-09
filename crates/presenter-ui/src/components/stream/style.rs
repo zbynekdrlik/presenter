@@ -53,7 +53,7 @@ pub(super) fn frame_css(frame: &Frame, z: i32) -> String {
 
 /// Typography CSS from a [`TextStyle`]: font family, size (`size_pct` ⇒ `vh`),
 /// color, weight, text-align, line-height, and the optional letter spacing,
-/// capitals (#831) and text-shadow.
+/// capitals (#831), italic (#830) and text-shadow.
 pub(super) fn text_style_css(style: &TextStyle) -> String {
     let mut css = format!(
         "font-family:{};font-size:{}vh;color:{};font-weight:{};text-align:{};line-height:{};",
@@ -70,6 +70,11 @@ pub(super) fn text_style_css(style: &TextStyle) -> String {
     // #831: capitals are a RENDER choice — the stored text keeps its case.
     if style.uppercase == Some(true) {
         css.push_str("text-transform:uppercase;");
+    }
+    // #830: the family's italic face at this weight (fonts.css declares each
+    // face's `font-style`, so the browser picks it by this property).
+    if style.italic == Some(true) {
+        css.push_str("font-style:italic;");
     }
     if let Some(shadow) = &style.shadow {
         css.push_str(&format!(
@@ -125,6 +130,7 @@ mod tests {
             shadow: None,
             letter_spacing_em: None,
             uppercase,
+            italic: None,
         }
     }
 
@@ -140,6 +146,42 @@ mod tests {
                 !text_style_css(&style(flag)).contains("text-transform"),
                 "uppercase={flag:?} must leave the text as stored"
             );
+        }
+    }
+
+    /// A style read from the wire with `extra` fields (#830 italic).
+    fn wire_style(extra: serde_json::Value) -> TextStyle {
+        let mut v = serde_json::json!({
+            "fontFamily": "Nexa",
+            "sizePct": 6.0,
+            "color": "#ffffff",
+            "weight": 900,
+            "align": "left",
+            "lineHeight": 1.2
+        });
+        if let (Some(obj), Some(more)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, val) in more {
+                obj.insert(k.clone(), val.clone());
+            }
+        }
+        serde_json::from_value(v).expect("text style parses")
+    }
+
+    #[test]
+    fn italic_renders_font_style_italic() {
+        let css = text_style_css(&wire_style(serde_json::json!({ "italic": true })));
+        assert!(css.contains("font-style:italic;"), "{css}");
+        assert!(css.contains("font-weight:900;"), "{css}");
+    }
+
+    #[test]
+    fn no_italic_renders_no_font_style() {
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({ "italic": false }),
+        ] {
+            let css = text_style_css(&wire_style(extra.clone()));
+            assert!(!css.contains("font-style"), "{extra}: {css}");
         }
     }
 }
