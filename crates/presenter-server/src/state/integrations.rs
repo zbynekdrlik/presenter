@@ -600,9 +600,25 @@ impl AppState {
             // Skip — reviving it here is exactly the #747 bug.
             return Ok(None);
         };
-        match self.reconnect_action(&source.id.to_string()).await {
+        let source_id = source.id.to_string();
+        match self.reconnect_action(&source_id).await {
             ReconnectAction::Repair => {}
-            ReconnectAction::Heartbeat => {
+            ReconnectAction::Heartbeat { leftovers } => {
+                if leftovers {
+                    if let Some(manager) = &self.ndi_manager {
+                        tracing::warn!(
+                            source_id = %source_id,
+                            ndi_name = %source.ndi_name,
+                            "NDI auto-reconnect: reaping a leftover pipeline next to the active \
+                             source (a switch whose #370 reap never ran)"
+                        );
+                        manager.stop_other_pipelines(&source_id).await;
+                    }
+                }
+                self.live_hub.publish(LiveEvent::NdiSourceActivated {
+                    source_id,
+                    ndi_name: source.ndi_name,
+                });
                 self.live_hub.publish(LiveEvent::NdiConnectionStatus {
                     status: "connected".to_string(),
                 });
@@ -629,7 +645,9 @@ impl AppState {
             return ReconnectAction::Wait;
         };
         match snapshots.iter().find(|(id, _)| id == source_id) {
-            Some((_, PipelineState::Streaming)) => ReconnectAction::Heartbeat,
+            Some((_, PipelineState::Streaming)) => ReconnectAction::Heartbeat {
+                leftovers: snapshots.iter().any(|(id, _)| id != source_id),
+            },
             Some((_, PipelineState::Starting)) => ReconnectAction::Wait,
             Some((_, PipelineState::Errored(_) | PipelineState::Stopped)) | None => {
                 ReconnectAction::Repair
@@ -642,12 +660,15 @@ impl AppState {
 enum ReconnectAction {
     /// No pipeline, or a dead one (errored/stopped): re-activate the source.
     Repair,
-    /// The pipeline streams: re-publish only the "connected" status. The live
-    /// hub never replays, so a stage that missed an event heals a stale
-    /// "failed"/"no-signal" overlay from this; a full re-activation here used
-    /// to log a false "source restored" and re-broadcast NdiSourceActivated
-    /// every 30 s.
-    Heartbeat,
+    /// The pipeline streams: no re-activation (it used to log a false
+    /// "source restored" every 30 s), only the state heartbeat —
+    /// NdiSourceActivated + "connected". The live hub never replays and a
+    /// lagging socket skips events, so a stage that missed a switch learns
+    /// the source here and a stale "failed"/"no-signal" overlay heals; the
+    /// stage leaves its frames gate alone for a same-source announcement
+    /// (#757). `leftovers`: another pipeline is still up (a switch whose #370
+    /// reap never ran, e.g. its HTTP handler was dropped mid-start) — reap it.
+    Heartbeat { leftovers: bool },
     /// An activation is in flight (starting) or the manager is busy ("could
     /// not look", #546): leave it for the next tick.
     Wait,
