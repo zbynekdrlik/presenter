@@ -290,3 +290,14 @@ Before adding tests to a `*_tests.rs` file, run `bash scripts/dev/count_prod_lin
 Near the cap, put the new tests in their own `<area>_tests.rs`: import the shared helpers via
 `use super::<sibling>_tests::{repo, …};` after making them `pub(super)`, and register it with
 `#[cfg(test)] mod <area>_tests;` in the parent.
+
+## `state::ndi_control` is a PRIVATE module — Fake-NDI tests live under `state/` (E0603)
+
+`state/mod.rs` declares `mod ndi_control;` (not `pub(crate)`), so `FakeNdiControl`,
+`NdiManagerHandle` and `StartOutcome` are `pub(crate)` items inside a module only `state` and its
+descendants can name. A test in `router/tests.rs` that writes `use crate::state::ndi_control::…`
+fails `E0603: module ndi_control is private` — Tier-0 surfaces it only at CI's Clippy job. Put a
+Fake-backed test (e.g. a `/healthz` assertion that needs `set_snapshots_unreadable`) in
+`state/tests.rs` or a `state/*` test module (`use super::ndi_control::…`) and drive the router
+from there with `crate::router::build_router(state.clone())` — the existing validate-mode
+`/healthz` test does exactly this.

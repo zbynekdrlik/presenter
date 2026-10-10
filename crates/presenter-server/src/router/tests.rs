@@ -150,41 +150,6 @@ async fn health_endpoint_reports_ndi_pipelines_field() {
     );
 }
 
-/// `/healthz` flags a manager it could not read (`ndi_pipelines_busy`), so the
-/// stage's last-resort reload guard does not read the empty list as "source
-/// down" while a source switch holds the manager's lock.
-#[tokio::test]
-async fn health_endpoint_flags_an_unreadable_ndi_manager() {
-    use crate::state::ndi_control::{FakeNdiControl, NdiManagerHandle, StartOutcome};
-    async fn healthz(state: &AppState) -> serde_json::Value {
-        let response = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/healthz")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&bytes).expect("/healthz returns JSON")
-    }
-    let mut state = AppState::in_memory().await.unwrap();
-    let fake = FakeNdiControl::with_outcome(StartOutcome::Ok);
-    state.set_ndi_handle(NdiManagerHandle::Fake(fake.clone()));
-
-    let read = healthz(&state).await;
-    assert_eq!(read["ndi_pipelines_busy"], json!(false), "{read}");
-
-    fake.set_snapshots_unreadable();
-    let busy = healthz(&state).await;
-    assert_eq!(busy["ndi_pipelines_busy"], json!(true), "{busy}");
-    assert_eq!(busy["ndi_pipelines"], json!([]), "{busy}");
-}
-
 /// Regression for #760: `/healthz` must carry a backend-agnostic `ai`
 /// summary object `{connected, error, model}` so an EXTERNAL watchdog can
 /// detect a dead AI backend within minutes (the SNV outage sat unnoticed
