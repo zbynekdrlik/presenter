@@ -962,6 +962,104 @@ mod tests {
         );
     }
 
+    /// The 30 s reconnect ticker only REPAIRS: a source whose pipeline is
+    /// already streaming needs nothing. Re-activating it every tick logged
+    /// "NDI auto-reconnect: source restored" ~2880x/day on SNV and re-broadcast
+    /// NdiSourceActivated + a "connected" status to every live client.
+    #[tokio::test]
+    async fn reconnect_leaves_a_streaming_pipeline_alone() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_pipeline(&a_str, presenter_ndi::pipeline::PipelineState::Streaming);
+        let calls_before = fake.calls();
+        let mut rx = state.live_hub().subscribe();
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert!(
+            result.is_none(),
+            "a streaming pipeline must not be re-activated; returned {result:?}"
+        );
+        assert_eq!(
+            fake.calls(),
+            calls_before,
+            "no start_pipeline / reap for a pipeline that is already up"
+        );
+        let mut published = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            published.push(ev);
+        }
+        assert!(
+            published.is_empty(),
+            "nothing changed, so nothing may be broadcast; got {published:?}"
+        );
+    }
+
+    /// A busy manager (its snapshot unreadable) is "could not look", not "no
+    /// pipeline" (#546): the ticker leaves it for the next tick instead of
+    /// re-activating on a guess.
+    #[tokio::test]
+    async fn reconnect_leaves_a_busy_manager_for_the_next_tick() {
+        let (state, a_id, _a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_snapshots_unreadable();
+        let calls_before = fake.calls();
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert!(result.is_none(), "busy must not trigger a re-activation");
+        assert_eq!(fake.calls(), calls_before, "no start_pipeline while busy");
+    }
+
+    /// The repair still happens: a dead (errored) pipeline for the active
+    /// source is re-activated by the ticker.
+    #[tokio::test]
+    async fn reconnect_restarts_an_errored_pipeline() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_pipeline(
+            &a_str,
+            presenter_ndi::pipeline::PipelineState::Errored("ndisrc EOS".to_string()),
+        );
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert_eq!(
+            result.map(|s| s.id),
+            Some(a_id),
+            "a dead pipeline is restored"
+        );
+        assert!(
+            fake.calls()
+                .iter()
+                .filter(
+                    |c| matches!(c, NdiCall::StartPipeline { source_id, .. } if *source_id == a_str)
+                )
+                .count()
+                >= 2,
+            "the ticker must start the dead source's pipeline again; calls = {:?}",
+            fake.calls()
+        );
+    }
+
     // #747: the 30 s NDI auto-reconnect ticker (`background_tasks.rs`) reads the
     // active source and then re-activates it. If that read happens OUTSIDE the
     // `activation_lock`, an operator deactivate committing in the read→activate gap
