@@ -22,6 +22,14 @@ flood from that; #741 removed the contention). `MutexGuard` is `Send`, so the co
 NOT catch a hold-across-`.await` — you must confine the guard by hand (a `{ … }` block whose
 tail moves the needed `Arc` out, or a helper that owns the whole lock scope).
 
+## A bounded lock-wait timeout is "busy", never "not found"
+
+The 200 ms `active` waits (`pipeline_snapshots_checked`, `record_client_stats`, …) can expire
+during the remaining legitimate contention (reserve/finalize, `stop_*` teardown). Report that as
+its own outcome — `None` for the snapshot readers (#546), `NdiSessionError::Busy` (→ 503) for
+`record_client_stats` — never as an empty result or `SessionNotFound` (→ 404): a client that acts
+on "not found" (the stage stats reporter stops for good) turns a busy moment into permanent loss.
+
 ## The reservation pattern (`manager/activation.rs`, #741)
 
 `start_pipeline` / `rebuild_pipeline` do: **reserve under the lock** (check_active_entry →
