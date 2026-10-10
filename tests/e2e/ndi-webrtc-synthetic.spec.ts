@@ -1353,12 +1353,14 @@ test("stage stops the per-session client-stats reporter after a 404 (synthetic s
         `session ${id} kept POSTing client stats after its 404 (${hits} POSTs)`,
       ).toBe(1);
     }
+    // Poll the lines themselves: a failure then prints the LAST received list
+    // (a message template would freeze the list at poll creation).
     await expect
-      .poll(() => stoppedLogs.length, {
+      .poll(() => [...stoppedLogs], {
         timeout: 5_000,
-        message: `one "reporter stopped" log line per 404'd session, got: ${stoppedLogs.join("; ")}`,
+        message: `one "reporter stopped" log line per 404'd session`,
       })
-      .toBe(hitsBySession.size);
+      .toHaveLength(hitsBySession.size);
     const failedLoads = consoleErrors.filter((e) =>
       /Failed to load resource.*404/i.test(e),
     );
