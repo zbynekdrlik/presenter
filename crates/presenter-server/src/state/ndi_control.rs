@@ -115,10 +115,10 @@ impl NdiManagerHandle {
 
     /// Forward to [`NdiManager::pipeline_health_snapshots`] — per-pipeline
     /// delivery health (state + drop ratio + consumer count) for `/healthz`
-    /// (#768).
+    /// (#768). `None` when the manager's lock could not be taken in time.
     pub(crate) async fn pipeline_health_snapshots(
         &self,
-    ) -> Vec<presenter_ndi::pipeline::health::PipelineDropHealth> {
+    ) -> Option<Vec<presenter_ndi::pipeline::health::PipelineDropHealth>> {
         match self {
             Self::Real(m) => m.pipeline_health_snapshots().await,
             // The Fake carries no real pipeline (no StreamProducer counters), so
@@ -126,22 +126,22 @@ impl NdiManagerHandle {
             // the health-endpoint shape tests; the drop-ratio path is exercised
             // by the presenter-ndi seam tests, not the server Fake.
             #[cfg(test)]
-            Self::Fake(f) => f
-                .pipeline_snapshots()
-                .unwrap_or_default()
-                .into_iter()
-                .map(
-                    |(source_id, state)| presenter_ndi::pipeline::health::PipelineDropHealth {
-                        source_id,
-                        state,
-                        drop_ratio: 0.0,
-                        consumers: 0,
-                        // #768 D3: no window on the Fake (no real counters) → null.
-                        drop_ratio_30s: None,
-                        pushed_fps_30s: None,
-                    },
-                )
-                .collect(),
+            Self::Fake(f) => f.pipeline_snapshots().map(|snapshots| {
+                snapshots
+                    .into_iter()
+                    .map(
+                        |(source_id, state)| presenter_ndi::pipeline::health::PipelineDropHealth {
+                            source_id,
+                            state,
+                            drop_ratio: 0.0,
+                            consumers: 0,
+                            // #768 D3: no window on the Fake (no real counters) → null.
+                            drop_ratio_30s: None,
+                            pushed_fps_30s: None,
+                        },
+                    )
+                    .collect()
+            }),
         }
     }
 

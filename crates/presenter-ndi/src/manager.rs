@@ -111,7 +111,7 @@ struct ActiveSource {
     /// blocking pipeline methods (`add_consumer` spawn_blocks for ~10s,
     /// `add_ice_candidate` / `remove_consumer` also spawn_block). Without
     /// this, holding the active-map lock across those awaits serializes ALL
-    /// WHEP operations on the manager, stalls `pipeline_snapshots()` (used
+    /// WHEP operations on the manager, stalls `pipeline_snapshots_checked()` (used
     /// by `/healthz`) and blocks the supervisor's `rebuild_pipeline`.
     pub(in crate::manager) pipeline: std::sync::Arc<NdiPipeline>,
     /// Supervisor task handle. Aborted on `stop_pipeline` / `stop_all` /

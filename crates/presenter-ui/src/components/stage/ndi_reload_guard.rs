@@ -39,7 +39,8 @@ pub(crate) fn should_reload_given_pipeline_state(server_has_streaming_pipeline: 
 /// actively-streaming NDI pipeline. An entry counts as "streaming" when its
 /// `state` is `"streaming"` or `"starting"` (about to deliver frames) — a
 /// `"stopped"` / `"errored"` pipeline, or an empty/absent `ndi_pipelines`
-/// array, means the source is NOT delivering media.
+/// array, means the source is NOT delivering media — unless the server flags
+/// `ndi_pipelines_busy` (it could not look), which counts as streaming.
 ///
 /// Pure over the response text so it is unit-testable on host. A body that
 /// fails to parse returns `false` here — but callers treat a FAILED fetch
@@ -50,6 +51,12 @@ pub(crate) fn healthz_body_has_streaming_pipeline(body: &str) -> bool {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
         return false;
     };
+    // The server could not read its pipelines in time (`ndi_pipelines_busy`):
+    // the empty list says nothing about the source, so it must not veto the
+    // reload — the same "unknown → reload" default as a failed fetch.
+    if json.get("ndi_pipelines_busy").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
     let Some(pipelines) = json.get("ndi_pipelines").and_then(|v| v.as_array()) else {
         return false;
     };

@@ -359,18 +359,38 @@ pub(crate) async fn ndi_session_client_stats(
     }
 }
 
+/// One `/healthz.ndi_pipelines[]` entry: state (+ last_error) and delivery health.
+pub(crate) fn render_ndi_health_entry(
+    h: &presenter_ndi::pipeline::health::PipelineDropHealth,
+) -> serde_json::Value {
+    let mut entry = crate::router::render_ndi_pipeline_entry(&h.source_id, &h.state);
+    // #768: per-pipeline delivery health so an external watchdog AND
+    // the post-deploy self-heal gate detect a pipeline dropping most
+    // of its encoded frames (the boot-restore incident: dropRatio
+    // ~0.75 with consumers attached, while `state` stayed "streaming").
+    entry["dropRatio"] = serde_json::json!(h.drop_ratio);
+    entry["consumers"] = serde_json::json!(h.consumers);
+    // #768 D3: trailing-30s aggregate so the watchdog sees CURRENT
+    // health (the cumulative dropRatio is diluted on a long-lived
+    // pipeline). Always present; `null` until a window exists.
+    entry["dropRatio30s"] = serde_json::json!(h.drop_ratio_30s);
+    entry["pushedFps30s"] = serde_json::json!(h.pushed_fps_30s);
+    entry
+}
+
 /// HTTP status for a refused client-stats sample. Only an unknown/expired
-/// session may answer 404 — the stage reporter stops for good on it — so a
-/// busy manager (`Busy`, the bounded lock wait expired) answers 503 and the
-/// reporter retries. Pure → unit-tested without libndi.
+/// session may answer 404 — the stage reporter stops for good on it — so
+/// every other refusal (a busy manager, `Busy`; variants this path cannot
+/// produce today) answers 503 and the reporter retries. Pure → unit-tested
+/// without libndi.
 fn client_stats_error(err: presenter_ndi::manager::NdiSessionError) -> AppError {
     use presenter_ndi::manager::NdiSessionError;
     match err {
-        NdiSessionError::Busy => AppError::service_unavailable("NDI manager busy — try again"),
-        NdiSessionError::SessionNotFound { .. }
+        NdiSessionError::SessionNotFound { .. } => AppError::not_found("NDI session not found"),
+        NdiSessionError::Busy
         | NdiSessionError::SourceNotActive
         | NdiSessionError::ConsumerCapReached { .. } => {
-            AppError::not_found("NDI session not found")
+            AppError::service_unavailable(format!("NDI client stats not stored: {err}"))
         }
     }
 }

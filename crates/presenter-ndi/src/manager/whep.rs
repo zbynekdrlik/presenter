@@ -23,34 +23,12 @@ fn should_log_contention(streak: u32) -> bool {
 }
 
 impl NdiManager {
-    /// Snapshot of every active pipeline's current state.
-    ///
-    /// Returns one entry per source currently in the active map, as
-    /// `(source_id, PipelineState)`. Used by `/healthz` (#333 item 7) so
-    /// dashboards can detect activation failures within seconds instead of
-    /// inferring from operator-reported 'red error' status.
-    ///
-    /// Bounded by a 200 ms lock-acquisition timeout (deep-review 🟡 #1):
-    /// `start_pipeline` and `rebuild_pipeline` hold the same `active` mutex
-    /// for up to 8 s during the caps-wait. Without the timeout, a `/healthz`
-    /// request that races a pipeline start would block long enough to
-    /// trip a 5 s LB health-check timeout — exactly the failure mode
-    /// item 7 was supposed to expose. On timeout we return an empty vec
-    /// and log a warning; the caller (LB / dashboard) sees "no pipelines"
-    /// for one poll cycle, which is preferable to a hung probe.
-    ///
-    /// Callers that must not read a timeout as "no pipelines" (the #546 source
-    /// status join — an empty map there means "sending nothing", which is a very
-    /// different sentence to put in front of an operator) use
-    /// [`Self::pipeline_snapshots_checked`] instead.
-    pub async fn pipeline_snapshots(&self) -> Vec<(String, PipelineState)> {
-        self.pipeline_snapshots_checked().await.unwrap_or_default()
-    }
-
-    /// Like [`Self::pipeline_snapshots`], but `None` when the 200 ms lock wait
-    /// expired — i.e. "the manager is busy (almost always: building/starting a
-    /// pipeline), we could not look", as opposed to `Some(vec![])`, "we looked
-    /// and there are no pipelines".
+    /// Snapshot of every active pipeline's state, `(source_id, PipelineState)`
+    /// per source in the active map — or `None` when the 200 ms lock wait
+    /// expired, i.e. "the manager is busy, we could not look", as opposed to
+    /// `Some(vec![])`, "we looked and there are no pipelines". The bound keeps
+    /// a status poll from stalling behind a pipeline start/teardown; there is
+    /// deliberately no empty-on-timeout variant (it reads as "no pipelines").
     ///
     /// The distinction is load-bearing for #546: a caller that cannot tell the two
     /// apart concludes "active, on the network, no pipeline" and tells the operator
@@ -102,7 +80,7 @@ impl NdiManager {
     /// `None` if the source isn't active in the manager's active map.
     ///
     /// Uses the same 200 ms lock-acquisition timeout pattern as
-    /// `pipeline_snapshots` so a `/ndi/snapshot/:id` probe doesn't stall
+    /// `pipeline_snapshots_checked` so a `/ndi/snapshot/:id` probe doesn't stall
     /// behind a concurrent pipeline start/rebuild. On timeout returns `None`
     /// (caller maps to 503).
     pub async fn pipeline_snapshot(
@@ -124,22 +102,15 @@ impl NdiManager {
     /// pipeline Arcs out from under the `active` lock (200 ms bounded, like the
     /// other snapshot readers) and computes the cheap delivery totals UNLOCKED,
     /// so it NEVER holds `active` across the per-pipeline sessions-lock await
-    /// (the #741 stall). Empty vec on lock-timeout — `/healthz` must never hang
-    /// (same fail-cheap posture as [`Self::pipeline_snapshots`]). Uses the cheap
+    /// (the #741 stall). `None` on lock-timeout — `/healthz` must never hang,
+    /// and "could not look" must stay distinguishable from "no pipelines": the
+    /// stage's last-resort reload guard reads an empty list as "source down"
+    /// (same contract as [`Self::pipeline_snapshots_checked`]). Uses the cheap
     /// atomic-only totals, NOT the RTCP get-stats `snapshot()`.
     pub async fn pipeline_health_snapshots(
         &self,
-    ) -> Vec<crate::pipeline::health::PipelineDropHealth> {
-        let pipelines: Vec<(String, std::sync::Arc<NdiPipeline>)> =
-            match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
-                .await
-            {
-                Ok(guard) => guard
-                    .iter()
-                    .map(|(id, src)| (id.clone(), std::sync::Arc::clone(&src.pipeline)))
-                    .collect(),
-                Err(_) => return Vec::new(),
-            };
+    ) -> Option<Vec<crate::pipeline::health::PipelineDropHealth>> {
+        let pipelines = clone_active_sources(&self.active, HEALTH_LOCK_WAIT).await?;
         let mut out = Vec::with_capacity(pipelines.len());
         for (source_id, pipeline) in pipelines {
             let state = pipeline.state();
@@ -154,15 +125,15 @@ impl NdiManager {
                 pushed_fps_30s: totals.pushed_fps_30s,
             });
         }
-        out
+        Some(out)
     }
 
     /// Store a client-reported frame-stats sample for one WHEP session (#768
     /// D6). The session id is globally unique (UUID), so it is matched across
     /// every active pipeline without needing the source id in the URL.
     ///
-    /// Clones the pipeline Arcs out from under the `active` lock (200 ms
-    /// bounded, like the other snapshot readers) and records UNLOCKED, so it
+    /// Clones the pipeline Arcs out from under the `active` lock (bounded by
+    /// `CLIENT_STATS_LOCK_WAIT`, 2 s — not a probe) and records UNLOCKED, so it
     /// NEVER holds `active` across the per-pipeline sessions-lock await (the
     /// #741 stall). `NdiSessionError::SessionNotFound` when no active pipeline
     /// has the session (unknown/expired → router maps to 404);
@@ -178,7 +149,7 @@ impl NdiManager {
             .inspect_err(|_| {
                 tracing::debug!(
                     session_id,
-                    "ndi client-stats: active lock busy (200 ms), answering Busy"
+                    "ndi client-stats: active lock busy (2 s), answering Busy"
                 );
             })?;
         for pipeline in pipelines {
@@ -375,20 +346,44 @@ impl NdiManager {
     }
 }
 
-/// The active pipelines' Arcs, cloned out under the `active` lock with the
-/// same 200 ms bound as the snapshot readers, or `NdiSessionError::Busy` when
-/// that wait expired. Busy is NOT "session not found": the caller could not
-/// look. Takes the map directly so the bound is testable without libndi.
+/// Lock budget of the `/healthz` pipeline reader: a readiness probe must never
+/// hang behind a pipeline start/teardown.
+const HEALTH_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Lock budget of a client-stats POST. Not a probe — waiting out a short
+/// teardown under the lock beats answering `Busy` (a 503 the stage console
+/// logs), and the handler holds nothing while it waits.
+const CLIENT_STATS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+type ActiveMap = tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>>;
+
+/// `(source_id, pipeline)` for every active source, cloned out under the
+/// `active` lock within `wait`, or `None` when that wait expired — "could not
+/// look", never "no pipelines". Takes the map directly so the bound is
+/// testable without libndi.
+async fn clone_active_sources(
+    active: &ActiveMap,
+    wait: std::time::Duration,
+) -> Option<Vec<(String, std::sync::Arc<NdiPipeline>)>> {
+    let guard = tokio::time::timeout(wait, active.lock()).await.ok()?;
+    Some(
+        guard
+            .iter()
+            .map(|(id, src)| (id.clone(), std::sync::Arc::clone(&src.pipeline)))
+            .collect(),
+    )
+}
+
+/// The active pipelines for a client-stats POST, or `NdiSessionError::Busy`
+/// when the lock wait expired. Busy is NOT "session not found": the caller
+/// could not look, and the stage reporter stops for good on a 404.
 async fn clone_active_pipelines(
-    active: &tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>>,
+    active: &ActiveMap,
 ) -> Result<Vec<std::sync::Arc<NdiPipeline>>, NdiSessionError> {
-    let guard = tokio::time::timeout(std::time::Duration::from_millis(200), active.lock())
+    let sources = clone_active_sources(active, CLIENT_STATS_LOCK_WAIT)
         .await
-        .map_err(|_| NdiSessionError::Busy)?;
-    Ok(guard
-        .values()
-        .map(|src| std::sync::Arc::clone(&src.pipeline))
-        .collect())
+        .ok_or(NdiSessionError::Busy)?;
+    Ok(sources.into_iter().map(|(_, pipeline)| pipeline).collect())
 }
 
 /// Translate the pipeline's OWN typed `AddConsumerError` into the shared
