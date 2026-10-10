@@ -445,63 +445,24 @@ pub const BUILD_CHANNEL: &str = match option_env!("PRESENTER_BUILD_CHANNEL") {
     None => "dev",
 };
 
-/// Render one NDI pipeline snapshot as a JSON object for the `/healthz`
-/// response. Stable schema:
-/// - `source_id`: UUID string identifying the video source
-/// - `state`: one of `starting | streaming | stopped | errored`
-/// - `last_error`: present ONLY when `state == "errored"`; never null
-///
-/// Extracted as a free function so the schema can be unit-tested without
-/// constructing a full NdiManager (which requires libndi-loadable runtime).
-pub(crate) fn render_ndi_pipeline_entry(
-    source_id: &str,
-    pipeline_state: &presenter_ndi::pipeline::PipelineState,
-) -> serde_json::Value {
-    use presenter_ndi::pipeline::PipelineState;
-    let (state_label, last_error) = match pipeline_state {
-        PipelineState::Starting => ("starting", None),
-        PipelineState::Streaming => ("streaming", None),
-        PipelineState::Stopped => ("stopped", None),
-        PipelineState::Errored(detail) => ("errored", Some(detail.as_str())),
-    };
-    let mut entry = serde_json::json!({
-        "source_id": source_id,
-        "state": state_label,
-    });
-    if let Some(err) = last_error {
-        entry["last_error"] = serde_json::Value::String(err.to_string());
-    }
-    entry
-}
-
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     // #333 item 7: include NDI pipeline state per source so dashboards
     // detect activation failures within seconds (instead of inferring from
     // operator-reported 'red error' status). Field is always an array —
-    // empty when no NDI manager is loaded OR no sources are active.
-    let ndi_pipelines = match state.ndi_manager() {
-        Some(manager) => manager
-            .pipeline_health_snapshots()
-            .await
-            .into_iter()
-            .map(|h| {
-                let mut entry = render_ndi_pipeline_entry(&h.source_id, &h.state);
-                // #768: per-pipeline delivery health so an external watchdog AND
-                // the post-deploy self-heal gate detect a pipeline dropping most
-                // of its encoded frames (the boot-restore incident: dropRatio
-                // ~0.75 with consumers attached, while `state` stayed "streaming").
-                entry["dropRatio"] = serde_json::json!(h.drop_ratio);
-                entry["consumers"] = serde_json::json!(h.consumers);
-                // #768 D3: trailing-30s aggregate so the watchdog sees CURRENT
-                // health (the cumulative dropRatio is diluted on a long-lived
-                // pipeline). Always present; `null` until a window exists.
-                entry["dropRatio30s"] = serde_json::json!(h.drop_ratio_30s);
-                entry["pushedFps30s"] = serde_json::json!(h.pushed_fps_30s);
-                entry
-            })
-            .collect::<Vec<_>>(),
-        None => Vec::new(),
+    // empty when no NDI manager is loaded, no sources are active, OR the
+    // manager could not be read in time. That last case is flagged by
+    // `ndi_pipelines_busy`, so a reader (the stage's last-resort reload
+    // guard) never takes "could not look" for "no pipelines".
+    let health = match state.ndi_manager() {
+        Some(manager) => manager.pipeline_health_snapshots().await,
+        None => Some(Vec::new()),
     };
+    let ndi_pipelines_busy = health.is_none();
+    let ndi_pipelines: Vec<serde_json::Value> = health
+        .unwrap_or_default()
+        .iter()
+        .map(integrations::ndi::render_ndi_health_entry)
+        .collect();
 
     // #760: a backend-agnostic AI-health summary so an EXTERNAL watchdog can
     // detect a dead AI backend within minutes (the SNV outage sat unnoticed
@@ -526,6 +487,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "version": VERSION,
             "channel": BUILD_CHANNEL,
             "ndi_pipelines": ndi_pipelines,
+            "ndi_pipelines_busy": ndi_pipelines_busy,
             "ai": ai,
         })),
     )

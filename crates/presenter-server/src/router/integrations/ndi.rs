@@ -88,7 +88,9 @@ pub(crate) async fn ndi_ice_servers(State(state): State<AppState>) -> Json<serde
 /// tailing logs.
 ///
 /// 404 — source is not currently active (no pipeline exists for this id).
-/// 503 — NDI SDK not available on this host.
+/// 503 — NDI SDK not available on this host, or the manager is busy (its
+/// lock is held by a pipeline start/teardown) — retry; says nothing about
+/// whether the source is active.
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn ndi_snapshot(
     axum::extract::Path(source_id): axum::extract::Path<String>,
@@ -100,10 +102,11 @@ pub(crate) async fn ndi_snapshot(
     let snap = manager
         .pipeline_snapshot(&source_id)
         .await
+        .map_err(snapshot_error)?
         .ok_or_else(|| AppError::not_found("NDI source not active"))?;
-    Ok(Json(
-        serde_json::to_value(snap).expect("PipelineSnapshot serializes"),
-    ))
+    let body = serde_json::to_value(snap)
+        .map_err(|err| AppError::internal(format!("NDI snapshot not serializable: {err}")))?;
+    Ok(Json(body))
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,8 +336,9 @@ pub(crate) struct NdiClientStatsReport {
 /// `POST /ndi/sessions/:session_id/client-stats` — store the latest client
 /// frame-stats sample on the matching WHEP session (#768 D6).
 ///
-/// 204 — stored. 404 — no active pipeline has this session (unknown/expired).
-/// 503 — NDI SDK not available on this host.
+/// 204 — stored. 404 — no active pipeline has this session (unknown/expired);
+/// the stage reporter stops for good on it. 503 — NDI SDK not available on
+/// this host, or the manager was busy (the reporter retries next tick).
 #[instrument(skip_all, fields(session_id = %session_id))]
 pub(crate) async fn ndi_session_client_stats(
     axum::extract::Path(session_id): axum::extract::Path<String>,
@@ -352,11 +356,82 @@ pub(crate) async fn ndi_session_client_stats(
         frames_live: report.frames_live,
         received_at: std::time::Instant::now(),
     };
-    // record_client_stats returns a typed NdiSessionError whose only variant
-    // here is SessionNotFound → 404 (unknown or expired session).
     match manager.record_client_stats(&session_id, sample).await {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(_) => Err(AppError::not_found("NDI session not found")),
+        Err(err) => Err(client_stats_error(err)),
+    }
+}
+
+/// Render one NDI pipeline snapshot as a JSON object for the `/healthz`
+/// response. Stable schema:
+/// - `source_id`: UUID string identifying the video source
+/// - `state`: one of `starting | streaming | stopped | errored`
+/// - `last_error`: present ONLY when `state == "errored"`; never null
+///
+/// Extracted as a free function so the schema can be unit-tested without
+/// constructing a full NdiManager (which requires libndi-loadable runtime).
+fn render_ndi_pipeline_entry(
+    source_id: &str,
+    pipeline_state: &presenter_ndi::pipeline::PipelineState,
+) -> serde_json::Value {
+    use presenter_ndi::pipeline::PipelineState;
+    let (state_label, last_error) = match pipeline_state {
+        PipelineState::Starting => ("starting", None),
+        PipelineState::Streaming => ("streaming", None),
+        PipelineState::Stopped => ("stopped", None),
+        PipelineState::Errored(detail) => ("errored", Some(detail.as_str())),
+    };
+    let mut entry = serde_json::json!({
+        "source_id": source_id,
+        "state": state_label,
+    });
+    if let Some(err) = last_error {
+        entry["last_error"] = serde_json::Value::String(err.to_string());
+    }
+    entry
+}
+
+/// One `/healthz.ndi_pipelines[]` entry: state (+ last_error) and delivery health.
+pub(crate) fn render_ndi_health_entry(
+    h: &presenter_ndi::pipeline::health::PipelineDropHealth,
+) -> serde_json::Value {
+    let mut entry = render_ndi_pipeline_entry(&h.source_id, &h.state);
+    // #768: per-pipeline delivery health so an external watchdog AND
+    // the post-deploy self-heal gate detect a pipeline dropping most
+    // of its encoded frames (the boot-restore incident: dropRatio
+    // ~0.75 with consumers attached, while `state` stayed "streaming").
+    entry["dropRatio"] = serde_json::json!(h.drop_ratio);
+    entry["consumers"] = serde_json::json!(h.consumers);
+    // #768 D3: trailing-30s aggregate so the watchdog sees CURRENT
+    // health (the cumulative dropRatio is diluted on a long-lived
+    // pipeline). Always present; `null` until a window exists.
+    entry["dropRatio30s"] = serde_json::json!(h.drop_ratio_30s);
+    entry["pushedFps30s"] = serde_json::json!(h.pushed_fps_30s);
+    entry
+}
+
+/// HTTP status for a refused `/ndi/snapshot`. "Not active" is `Ok(None)`
+/// (→ 404), never an error, so every refusal — `Busy`, the lock wait expired
+/// mid source switch — answers 503: retry, the source may well be active.
+/// Pure → unit-tested without libndi.
+fn snapshot_error(err: presenter_ndi::manager::NdiSessionError) -> AppError {
+    AppError::service_unavailable(format!("NDI snapshot not taken: {err}"))
+}
+
+/// HTTP status for a refused client-stats sample. Only an unknown/expired
+/// session may answer 404 — the stage reporter stops for good on it — so
+/// every other refusal (a busy manager, `Busy`; variants this path cannot
+/// produce today) answers 503 and the reporter retries. Pure → unit-tested
+/// without libndi.
+fn client_stats_error(err: presenter_ndi::manager::NdiSessionError) -> AppError {
+    use presenter_ndi::manager::NdiSessionError;
+    match err {
+        NdiSessionError::SessionNotFound { .. } => AppError::not_found("NDI session not found"),
+        NdiSessionError::Busy
+        | NdiSessionError::SourceNotActive
+        | NdiSessionError::ConsumerCapReached { .. } => {
+            AppError::service_unavailable(format!("NDI client stats not stored: {err}"))
+        }
     }
 }
 
@@ -365,6 +440,88 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+
+    /// Schema regression for #333 item 7 (deep-review 🟡 #3): the snapshot
+    /// renderer must produce stable JSON for every PipelineState variant and
+    /// MUST include `last_error` only on the `errored` variant. Previously
+    /// the test only asserted the field name; this test pins the per-variant
+    /// shape so mutations to state labels or last_error inclusion are caught.
+    #[test]
+    fn render_ndi_pipeline_entry_emits_correct_shape_per_variant() {
+        use presenter_ndi::pipeline::PipelineState;
+
+        let starting = render_ndi_pipeline_entry("src-1", &PipelineState::Starting);
+        assert_eq!(starting["source_id"], "src-1");
+        assert_eq!(starting["state"], "starting");
+        assert!(
+            starting.get("last_error").is_none(),
+            "Starting must NOT include last_error: {starting:?}"
+        );
+
+        let streaming = render_ndi_pipeline_entry("src-2", &PipelineState::Streaming);
+        assert_eq!(streaming["state"], "streaming");
+        assert!(streaming.get("last_error").is_none());
+
+        let stopped = render_ndi_pipeline_entry("src-3", &PipelineState::Stopped);
+        assert_eq!(stopped["state"], "stopped");
+        assert!(stopped.get("last_error").is_none());
+
+        let errored = render_ndi_pipeline_entry(
+            "src-4",
+            &PipelineState::Errored("pipeline died: ndisrc EOS".to_string()),
+        );
+        assert_eq!(errored["state"], "errored");
+        assert_eq!(
+            errored["last_error"], "pipeline died: ndisrc EOS",
+            "Errored MUST carry last_error verbatim so dashboards surface the cause"
+        );
+    }
+
+    /// A busy manager is not "source not active": `/ndi/snapshot` answers
+    /// 503 for every refusal; only `Ok(None)` reaches the 404.
+    #[test]
+    fn snapshot_busy_is_503_never_404() {
+        use presenter_ndi::manager::NdiSessionError;
+        let busy = snapshot_error(NdiSessionError::Busy).into_response();
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let other = snapshot_error(NdiSessionError::SourceNotActive).into_response();
+        assert_eq!(
+            other.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the not-active 404 comes from Ok(None), never from an error"
+        );
+    }
+
+    /// The stage's session-stats reporter stops for good on a 404, so only an
+    /// unknown/expired session may answer 404. A busy manager (the `active`
+    /// lock wait expired mid source switch) must answer 503 so the reporter
+    /// retries on its next tick.
+    #[test]
+    fn client_stats_busy_is_503_and_unknown_session_is_404() {
+        use presenter_ndi::manager::NdiSessionError;
+        let busy = client_stats_error(NdiSessionError::Busy).into_response();
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let gone = client_stats_error(NdiSessionError::SessionNotFound {
+            session_id: "s-1".to_string(),
+        })
+        .into_response();
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// 404 is the "session gone, stop for good" contract — no other refusal
+    /// may use it, even one `record_client_stats` cannot produce today.
+    #[test]
+    fn client_stats_only_an_unknown_session_is_404() {
+        use presenter_ndi::manager::NdiSessionError;
+        for err in [
+            NdiSessionError::SourceNotActive,
+            NdiSessionError::ConsumerCapReached { max: 8 },
+        ] {
+            let label = err.to_string();
+            let status = client_stats_error(err).into_response().status();
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{label}");
+        }
+    }
 
     /// Build a fresh in-memory AppState that may or may not have a real NDI
     /// manager attached depending on whether libndi is loadable on the host.

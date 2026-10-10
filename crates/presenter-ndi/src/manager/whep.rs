@@ -12,7 +12,7 @@ use crate::pipeline::{AddConsumerError, NdiPipeline, PipelineState, StreamProfil
 
 use super::{ActiveSource, NdiManager, NdiSessionError, WhepOp, WhepReply};
 
-/// Whether to emit the `pipeline_snapshots` contention WARN for this 1-based
+/// Whether to emit the probe-reader contention WARN for this 1-based
 /// consecutive-timeout `streak`. Logs the first timeout and then only at
 /// power-of-two milestones, so a long `start_pipeline`/`rebuild_pipeline` window
 /// (which holds `active` for up to 8 s) produces ~log2(N)+1 WARN lines instead
@@ -23,34 +23,12 @@ fn should_log_contention(streak: u32) -> bool {
 }
 
 impl NdiManager {
-    /// Snapshot of every active pipeline's current state.
-    ///
-    /// Returns one entry per source currently in the active map, as
-    /// `(source_id, PipelineState)`. Used by `/healthz` (#333 item 7) so
-    /// dashboards can detect activation failures within seconds instead of
-    /// inferring from operator-reported 'red error' status.
-    ///
-    /// Bounded by a 200 ms lock-acquisition timeout (deep-review 🟡 #1):
-    /// `start_pipeline` and `rebuild_pipeline` hold the same `active` mutex
-    /// for up to 8 s during the caps-wait. Without the timeout, a `/healthz`
-    /// request that races a pipeline start would block long enough to
-    /// trip a 5 s LB health-check timeout — exactly the failure mode
-    /// item 7 was supposed to expose. On timeout we return an empty vec
-    /// and log a warning; the caller (LB / dashboard) sees "no pipelines"
-    /// for one poll cycle, which is preferable to a hung probe.
-    ///
-    /// Callers that must not read a timeout as "no pipelines" (the #546 source
-    /// status join — an empty map there means "sending nothing", which is a very
-    /// different sentence to put in front of an operator) use
-    /// [`Self::pipeline_snapshots_checked`] instead.
-    pub async fn pipeline_snapshots(&self) -> Vec<(String, PipelineState)> {
-        self.pipeline_snapshots_checked().await.unwrap_or_default()
-    }
-
-    /// Like [`Self::pipeline_snapshots`], but `None` when the 200 ms lock wait
-    /// expired — i.e. "the manager is busy (almost always: building/starting a
-    /// pipeline), we could not look", as opposed to `Some(vec![])`, "we looked
-    /// and there are no pipelines".
+    /// Snapshot of every active pipeline's state, `(source_id, PipelineState)`
+    /// per source in the active map — or `None` when the 200 ms lock wait
+    /// expired, i.e. "the manager is busy, we could not look", as opposed to
+    /// `Some(vec![])`, "we looked and there are no pipelines". The bound keeps
+    /// a status poll from stalling behind a pipeline start/teardown; there is
+    /// deliberately no empty-on-timeout variant (it reads as "no pipelines").
     ///
     /// The distinction is load-bearing for #546: a caller that cannot tell the two
     /// apart concludes "active, on the network, no pipeline" and tells the operator
@@ -62,61 +40,57 @@ impl NdiManager {
     /// (the reserve/finalize critical sections and `stop_*`'s `pipeline.stop().await`
     /// under the lock).
     pub async fn pipeline_snapshots_checked(&self) -> Option<Vec<(String, PipelineState)>> {
-        match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
-        {
-            Ok(guard) => {
-                // Acquired → contention (if any) has cleared; reset the streak so
-                // the next contention burst logs fresh from its first timeout.
-                self.snapshot_contention_streak.store(0, Ordering::Relaxed);
-                Some(
-                    guard
-                        .iter()
-                        .map(|(id, src)| (id.clone(), src.pipeline.state()))
-                        .collect(),
-                )
-            }
-            Err(_) => {
-                // #736: the WARN used to fire on EVERY 200 ms timeout, so an 8 s
-                // `start_pipeline`/`rebuild_pipeline` window (holding `active`)
-                // flooded the journal with thousands of identical lines across
-                // status polls + /healthz. Gate it on a power-of-two streak so
-                // contention stays visible but rare, not routine.
-                let streak = self
-                    .snapshot_contention_streak
-                    .fetch_add(1, Ordering::Relaxed)
-                    .saturating_add(1);
-                if should_log_contention(streak) {
-                    tracing::warn!(
-                        streak,
-                        "pipeline_snapshots lock acquisition timed out after 200 ms — \
-                         likely contended with a long-running pipeline start/rebuild; \
-                         reporting the snapshot as unavailable (#333 item 7, #546, #736)"
-                    );
-                }
-                None
-            }
-        }
+        let sources = clone_active_sources(&self.active, PROBE_LOCK_WAIT).await;
+        self.note_probe("video-source status", sources.is_some());
+        sources.map(|sources| {
+            sources
+                .into_iter()
+                .map(|(id, pipeline)| (id, pipeline.state()))
+                .collect()
+        })
     }
 
-    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`. Returns
-    /// `None` if the source isn't active in the manager's active map.
-    ///
-    /// Uses the same 200 ms lock-acquisition timeout pattern as
-    /// `pipeline_snapshots` so a `/ndi/snapshot/:id` probe doesn't stall
-    /// behind a concurrent pipeline start/rebuild. On timeout returns `None`
-    /// (caller maps to 503).
+    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`: `Ok(None)`
+    /// when the source isn't active, `Err(NdiSessionError::Busy)` when the
+    /// 200 ms probe wait expired (→ 503) — "could not look" must never read
+    /// as "not active" (→ 404) for a source that is mid-switch.
     pub async fn pipeline_snapshot(
         &self,
         source_id: &str,
-    ) -> Option<crate::pipeline::PipelineSnapshot> {
-        let guard = tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
-            .await
-            .ok()?;
-        let pipeline = std::sync::Arc::clone(&guard.get(source_id)?.pipeline);
-        drop(guard);
+    ) -> Result<Option<crate::pipeline::PipelineSnapshot>, NdiSessionError> {
+        let pipeline = clone_active_pipeline(&self.active, source_id).await;
+        self.note_probe("/ndi/snapshot", pipeline.is_ok());
+        let Some(pipeline) = pipeline? else {
+            return Ok(None);
+        };
         let mut snap = pipeline.snapshot().await;
         snap.source_id = source_id.to_string();
-        Some(snap)
+        Ok(Some(snap))
+    }
+
+    /// Track one probe reader's lock wait. A success resets the contention
+    /// streak; a timeout bumps it and logs on the power-of-two milestones
+    /// (#736: one WARN per probe timeout used to flood the journal during
+    /// an 8 s start/rebuild window). Every probe reader reports here, so a
+    /// busy `/healthz` — which can make a stage TV reload — stays traceable.
+    fn note_probe(&self, reader: &'static str, readable: bool) {
+        if readable {
+            self.snapshot_contention_streak.store(0, Ordering::Relaxed);
+            return;
+        }
+        let streak = self
+            .snapshot_contention_streak
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if should_log_contention(streak) {
+            tracing::warn!(
+                streak,
+                reader,
+                wait_ms = PROBE_LOCK_WAIT.as_millis() as u64,
+                "NDI active-map lock acquisition timed out — likely contended with a \
+                 pipeline start/teardown; reporting busy, not empty (#333 item 7, #546, #736)"
+            );
+        }
     }
 
     /// Per-pipeline delivery HEALTH for `/healthz.ndi_pipelines[]` (#768):
@@ -124,22 +98,17 @@ impl NdiManager {
     /// pipeline Arcs out from under the `active` lock (200 ms bounded, like the
     /// other snapshot readers) and computes the cheap delivery totals UNLOCKED,
     /// so it NEVER holds `active` across the per-pipeline sessions-lock await
-    /// (the #741 stall). Empty vec on lock-timeout — `/healthz` must never hang
-    /// (same fail-cheap posture as [`Self::pipeline_snapshots`]). Uses the cheap
+    /// (the #741 stall). `None` on lock-timeout — `/healthz` must never hang,
+    /// and "could not look" must stay distinguishable from "no pipelines": the
+    /// stage's last-resort reload guard reads an empty list as "source down"
+    /// (same contract as [`Self::pipeline_snapshots_checked`]). Uses the cheap
     /// atomic-only totals, NOT the RTCP get-stats `snapshot()`.
     pub async fn pipeline_health_snapshots(
         &self,
-    ) -> Vec<crate::pipeline::health::PipelineDropHealth> {
-        let pipelines: Vec<(String, std::sync::Arc<NdiPipeline>)> =
-            match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
-                .await
-            {
-                Ok(guard) => guard
-                    .iter()
-                    .map(|(id, src)| (id.clone(), std::sync::Arc::clone(&src.pipeline)))
-                    .collect(),
-                Err(_) => return Vec::new(),
-            };
+    ) -> Option<Vec<crate::pipeline::health::PipelineDropHealth>> {
+        let pipelines = clone_active_sources(&self.active, PROBE_LOCK_WAIT).await;
+        self.note_probe("/healthz", pipelines.is_some());
+        let pipelines = pipelines?;
         let mut out = Vec::with_capacity(pipelines.len());
         for (source_id, pipeline) in pipelines {
             let state = pipeline.state();
@@ -154,37 +123,33 @@ impl NdiManager {
                 pushed_fps_30s: totals.pushed_fps_30s,
             });
         }
-        out
+        Some(out)
     }
 
     /// Store a client-reported frame-stats sample for one WHEP session (#768
     /// D6). The session id is globally unique (UUID), so it is matched across
     /// every active pipeline without needing the source id in the URL.
     ///
-    /// Clones the pipeline Arcs out from under the `active` lock (200 ms
-    /// bounded, like the other snapshot readers) and records UNLOCKED, so it
+    /// Clones the pipeline Arcs out from under the `active` lock (bounded by
+    /// `CLIENT_STATS_LOCK_WAIT`, 2 s — not a probe) and records UNLOCKED, so it
     /// NEVER holds `active` across the per-pipeline sessions-lock await (the
     /// #741 stall). `NdiSessionError::SessionNotFound` when no active pipeline
-    /// has the session (unknown/expired → router maps to 404).
+    /// has the session (unknown/expired → router maps to 404);
+    /// `NdiSessionError::Busy` when the lock wait expired (→ 503) — the stage
+    /// reporter stops for good on a 404, so a busy manager must never say it.
     pub async fn record_client_stats(
         &self,
         session_id: &str,
         sample: crate::pipeline::client_stats::ClientStatsSample,
     ) -> Result<(), NdiSessionError> {
-        let pipelines: Vec<std::sync::Arc<NdiPipeline>> =
-            match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
-                .await
-            {
-                Ok(guard) => guard
-                    .values()
-                    .map(|src| std::sync::Arc::clone(&src.pipeline))
-                    .collect(),
-                Err(_) => {
-                    return Err(NdiSessionError::SessionNotFound {
-                        session_id: session_id.to_string(),
-                    })
-                }
-            };
+        let pipelines = clone_active_pipelines(&self.active)
+            .await
+            .inspect_err(|_| {
+                tracing::debug!(
+                    session_id,
+                    "ndi client-stats: active lock busy (2 s), answering Busy"
+                );
+            })?;
         for pipeline in pipelines {
             if pipeline.record_client_stats(session_id, sample).await {
                 return Ok(());
@@ -379,6 +344,61 @@ impl NdiManager {
     }
 }
 
+/// Lock budget of the probe readers (`/healthz`, the video-source status
+/// poll, `/ndi/snapshot/{id}`): a probe must never hang behind a pipeline
+/// start/teardown.
+const PROBE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Lock budget of a client-stats POST. Not a probe — waiting out a short
+/// teardown under the lock beats answering `Busy` (a 503 the stage console
+/// logs), and the handler holds nothing while it waits.
+const CLIENT_STATS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+type ActiveMap = tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>>;
+
+/// `(source_id, pipeline)` for every active source, cloned out under the
+/// `active` lock within `wait`, or `None` when that wait expired — "could not
+/// look", never "no pipelines". Takes the map directly so the bound is
+/// testable without libndi.
+async fn clone_active_sources(
+    active: &ActiveMap,
+    wait: std::time::Duration,
+) -> Option<Vec<(String, std::sync::Arc<NdiPipeline>)>> {
+    let guard = tokio::time::timeout(wait, active.lock()).await.ok()?;
+    Some(
+        guard
+            .iter()
+            .map(|(id, src)| (id.clone(), std::sync::Arc::clone(&src.pipeline)))
+            .collect(),
+    )
+}
+
+/// One source's pipeline for `/ndi/snapshot/{id}`: `Ok(None)` when the source
+/// is not active, `NdiSessionError::Busy` when the probe wait expired.
+async fn clone_active_pipeline(
+    active: &ActiveMap,
+    source_id: &str,
+) -> Result<Option<std::sync::Arc<NdiPipeline>>, NdiSessionError> {
+    let guard = tokio::time::timeout(PROBE_LOCK_WAIT, active.lock())
+        .await
+        .map_err(|_| NdiSessionError::Busy)?;
+    Ok(guard
+        .get(source_id)
+        .map(|src| std::sync::Arc::clone(&src.pipeline)))
+}
+
+/// The active pipelines for a client-stats POST, or `NdiSessionError::Busy`
+/// when the lock wait expired. Busy is NOT "session not found": the caller
+/// could not look, and the stage reporter stops for good on a 404.
+async fn clone_active_pipelines(
+    active: &ActiveMap,
+) -> Result<Vec<std::sync::Arc<NdiPipeline>>, NdiSessionError> {
+    let sources = clone_active_sources(active, CLIENT_STATS_LOCK_WAIT)
+        .await
+        .ok_or(NdiSessionError::Busy)?;
+    Ok(sources.into_iter().map(|(_, pipeline)| pipeline).collect())
+}
+
 /// Translate the pipeline's OWN typed `AddConsumerError` into the shared
 /// router-facing `NdiSessionError` at the ONE place it crosses into
 /// `anyhow::Result` (`whep_post`), so `ndi_whep.rs` has a single downcast
@@ -445,6 +465,123 @@ mod tests {
                 "CapReached must translate to NdiSessionError::ConsumerCapReached, got: {other:?}"
             ),
         }
+    }
+
+    /// A client-stats POST that cannot get the `active` lock within its 2 s
+    /// budget (a source switch tearing the old pipeline down under the lock)
+    /// must say BUSY, not "session not found": the stage reporter stops for
+    /// good on a 404, so a busy manager answering 404 silenced a healthy TV's
+    /// stats for the rest of its session. Once the lock frees, the same call
+    /// succeeds. Paused clock: the 2 s wait elapses instantly.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_active_map_reads_as_busy_not_session_not_found() {
+        let active: tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>> =
+            tokio::sync::Mutex::new(std::collections::HashMap::new());
+        let guard = active.lock().await;
+        let busy = clone_active_pipelines(&active).await;
+        assert!(
+            matches!(busy, Err(NdiSessionError::Busy)),
+            "a lock wait that expired must be Busy (-> 503, the reporter retries)"
+        );
+        drop(guard);
+        let free = clone_active_pipelines(&active).await;
+        assert!(
+            matches!(free, Ok(ref pipelines) if pipelines.is_empty()),
+            "a free lock must yield the (empty) pipeline list"
+        );
+    }
+
+    /// `/healthz`'s pipeline reader must say "could not look" (`None`) when
+    /// the `active` lock is held past its 200 ms budget — an empty list there
+    /// reads as "source down" and vetoes the stage's last-resort reload.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_active_map_is_unreadable_for_the_health_snapshot() {
+        let active: tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>> =
+            tokio::sync::Mutex::new(std::collections::HashMap::new());
+        let guard = active.lock().await;
+        assert!(
+            clone_active_sources(&active, PROBE_LOCK_WAIT)
+                .await
+                .is_none(),
+            "a lock wait that expired must read as unknown, not as no pipelines"
+        );
+        drop(guard);
+        assert!(
+            matches!(
+                clone_active_sources(&active, PROBE_LOCK_WAIT).await,
+                Some(ref sources) if sources.is_empty()
+            ),
+            "a free lock must yield the (empty) source list"
+        );
+    }
+
+    /// `/ndi/snapshot/{id}` must say BUSY when the `active` lock is held past
+    /// its 200 ms budget: answering "not found" there told the operator an
+    /// active source was "not active" during every source switch.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_active_map_is_busy_for_the_single_source_snapshot() {
+        let active: ActiveMap = tokio::sync::Mutex::new(std::collections::HashMap::new());
+        let guard = active.lock().await;
+        assert!(
+            matches!(
+                clone_active_pipeline(&active, "src-1").await,
+                Err(NdiSessionError::Busy)
+            ),
+            "a lock wait that expired must be Busy (-> 503), never not-active (-> 404)"
+        );
+        drop(guard);
+        assert!(
+            matches!(clone_active_pipeline(&active, "src-1").await, Ok(None)),
+            "a free lock without that source must read as not active"
+        );
+        let pipeline = std::sync::Arc::new(NdiPipeline::stopped_for_test());
+        active.lock().await.insert(
+            "src-1".to_string(),
+            ActiveSource {
+                pipeline: std::sync::Arc::clone(&pipeline),
+                supervisor: None,
+            },
+        );
+        assert!(
+            matches!(
+                clone_active_pipeline(&active, "src-1").await,
+                Ok(Some(ref found)) if std::sync::Arc::ptr_eq(found, &pipeline)
+            ),
+            "an active source must yield ITS pipeline"
+        );
+        assert!(
+            matches!(clone_active_pipeline(&active, "src-2").await, Ok(None)),
+            "another source must not be picked up by the lookup"
+        );
+    }
+
+    /// The client-stats POST waits out a short hold that the probes give up
+    /// on: a ~300 ms teardown under the lock must not turn a healthy TV's
+    /// sample into a 503, while a probe still answers within its 200 ms.
+    /// Both readers start TOGETHER against the hold — run one after the
+    /// other, the probe would use up 200 ms of it and a 200 ms POST wait
+    /// would pass too — so this pins CLIENT_STATS_LOCK_WAIT > 300 ms >
+    /// PROBE_LOCK_WAIT, deterministic on a paused clock.
+    #[tokio::test(start_paused = true)]
+    async fn client_stats_outlasts_a_hold_the_probes_give_up_on() {
+        let active = std::sync::Arc::new(ActiveMap::new(std::collections::HashMap::new()));
+        let guard = std::sync::Arc::clone(&active).lock_owned().await;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            drop(guard);
+        });
+        let (probe, stats) = tokio::join!(
+            clone_active_sources(&active, PROBE_LOCK_WAIT),
+            clone_active_pipelines(&active),
+        );
+        assert!(
+            probe.is_none(),
+            "a probe must give up on a hold longer than its 200 ms budget"
+        );
+        assert!(
+            matches!(stats, Ok(ref pipelines) if pipelines.is_empty()),
+            "a client-stats POST must wait out a 300 ms hold, not answer Busy"
+        );
     }
 
     /// `Other(anyhow::Error)` must pass through UNCHANGED — the inner

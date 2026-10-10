@@ -63,6 +63,13 @@ pub enum NdiSessionError {
     /// stale candidate — see `NdiPipeline::add_ice_candidate`'s doc comment).
     #[error("session not found: {session_id}")]
     SessionNotFound { session_id: String },
+    /// A bounded `active` lock wait expired (2 s for a client-stats POST,
+    /// 200 ms for the `/ndi/snapshot` probe) — the manager is busy (a
+    /// reserve/finalize section or a pipeline teardown under the lock), so it
+    /// could not look. Says nothing about the session or source: retry, never
+    /// treat it as unknown/expired/not active.
+    #[error("NDI manager busy — try again")]
+    Busy,
 }
 
 /// One operation in the WHEP signaller protocol.
@@ -105,8 +112,9 @@ struct ActiveSource {
     /// blocking pipeline methods (`add_consumer` spawn_blocks for ~10s,
     /// `add_ice_candidate` / `remove_consumer` also spawn_block). Without
     /// this, holding the active-map lock across those awaits serializes ALL
-    /// WHEP operations on the manager, stalls `pipeline_snapshots()` (used
-    /// by `/healthz`) and blocks the supervisor's `rebuild_pipeline`.
+    /// WHEP operations on the manager, times out the bounded probe readers
+    /// (`/healthz`, the video-source status poll, `/ndi/snapshot`) and blocks
+    /// the supervisor's `rebuild_pipeline`.
     pub(in crate::manager) pipeline: std::sync::Arc<NdiPipeline>,
     /// Supervisor task handle. Aborted on `stop_pipeline` / `stop_all` /
     /// `retain_only_active` / operator reactivate to prevent leaks. `Some(live
@@ -247,7 +255,7 @@ pub struct NdiManager {
     pub(in crate::manager) _finder_shutdown: FinderShutdown,
     /// Map source_id (UUID string) → ActiveSource pipeline.
     pub(in crate::manager) active: Mutex<HashMap<String, ActiveSource>>,
-    /// #736: consecutive `pipeline_snapshots_checked` lock-acquisition timeouts.
+    /// #736: consecutive probe-reader (`note_probe`) lock-acquisition timeouts.
     /// Incremented on each 200 ms timeout, reset to 0 on a successful
     /// acquisition; the contention WARN is power-of-two-gated on this count so a
     /// long `start_pipeline`/`rebuild_pipeline` window logs ~log2(N)+1 lines

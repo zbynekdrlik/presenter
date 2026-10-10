@@ -9,8 +9,9 @@ paths:
 # NdiManager active-map locking + the reservation activation pattern (#741)
 
 `NdiManager.active` is a `tokio::sync::Mutex<HashMap<String, ActiveSource>>`. It is the
-single choke point for the operator-dashboard status poll (`pipeline_snapshots_checked` →
-also `/healthz`), `stop_*`, `periodic_reap`, `pipeline_snapshot(:id)`, AND every WHEP
+single choke point for the probe readers (operator-dashboard status poll
+`pipeline_snapshots_checked`, `/healthz` `pipeline_health_snapshots`, `/ndi/snapshot`
+`pipeline_snapshot(:id)`), `record_client_stats`, `stop_*`, `periodic_reap`, AND every WHEP
 POST/PATCH/DELETE (they lock it to clone the pipeline `Arc`).
 
 ## Iron rule: NEVER hold `active` across a slow pipeline op
@@ -21,6 +22,29 @@ across the 8 s wait stalls ALL of the callers above for 8 s per activation (#736
 flood from that; #741 removed the contention). `MutexGuard` is `Send`, so the compiler will
 NOT catch a hold-across-`.await` — you must confine the guard by hand (a `{ … }` block whose
 tail moves the needed `Arc` out, or a helper that owns the whole lock scope).
+
+## A bounded lock-wait timeout is "busy", never "not found"
+
+The bounded `active` waits (`PROBE_LOCK_WAIT` 200 ms for the probes `pipeline_snapshots_checked` /
+`pipeline_health_snapshots` / `pipeline_snapshot`; `CLIENT_STATS_LOCK_WAIT` 2 s for
+`record_client_stats`, which is not a probe) can expire during the remaining legitimate contention
+(reserve/finalize, `stop_*` teardown). Report that as its own outcome — `None` for the list readers
+(#546; `/healthz` adds `ndi_pipelines_busy`), `NdiSessionError::Busy` for `pipeline_snapshot` and
+`record_client_stats` (both → 503) — never as an empty result, `Ok(None)` "not active" or
+`SessionNotFound` (→ 404): a reader that acts on "nothing there" (the stage reload guard skips the
+reload, the stats reporter stops for good, the operator is told an active source is not active)
+turns a busy moment into a wrong decision. Every probe reports its wait through `note_probe` (one
+streak-gated WARN naming the reader, #736). The seams `clone_active_sources` /
+`clone_active_pipeline` / `clone_active_pipelines` (`manager/whep.rs`) take the bare map, so a test
+holds the lock and asserts the outcome without libndi — on a PAUSED clock
+(`#[tokio::test(start_paused = true)]`, tokio `test-util` is a presenter-ndi dev-dependency): the
+2 s wait elapses instantly, and "the POST outlasts a hold the probe gives up on" is deterministic
+(`Arc::clone(&map).lock_owned()`, released by a spawned task after a 300 ms `sleep`). Start BOTH
+readers together (`tokio::join!`) against such a hold: run one after the other, the first eats
+part of the hold and the second passes with a wait it should fail on (a 200 ms client-stats wait
+stayed green that way). The router side maps the typed refusals in pure fns
+(`client_stats_error`, `snapshot_error` in `router/integrations/ndi.rs`) so the status is tested
+without libndi.
 
 ## The reservation pattern (`manager/activation.rs`, #741)
 

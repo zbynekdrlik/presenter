@@ -85,10 +85,11 @@ pub(crate) fn build_client_stats_body(
 
 /// Whether the reporter keeps POSTing after a client-stats response with
 /// `status` (`None` = no response at all: the request could not be built or
-/// the fetch failed). Only a 404 stops it: the server reaped the session and
-/// the id never comes back, so every further POST would be one more console
-/// error. Stored (204), no NDI SDK (503), any other status and a network error
-/// say nothing final about the session. Pure — host-testable.
+/// the fetch failed). Only a 404 stops it: the server answers 404 only for a
+/// session it no longer has (reaped), and that id never comes back, so every
+/// further POST would be one more console error. Stored (204), no NDI SDK or
+/// a busy manager (503), any other status and a network error say nothing
+/// final about the session. Pure — host-testable.
 pub(crate) fn keep_reporting_after(status: Option<u16>) -> bool {
     status != Some(404)
 }
@@ -166,6 +167,10 @@ pub(crate) fn start_session_stats_reporter(
                     inbound.frames_decoded.unwrap_or(0.0),
                     frames_live,
                 );
+                // An earlier POST's 404 may have landed during the getStats await.
+                if gone.get() {
+                    return;
+                }
                 let status = post_session_stats(&session_id, body).await;
                 // `replace` keeps the log to one line even if two POSTs race.
                 if !keep_reporting_after(status) && !gone.replace(true) {
