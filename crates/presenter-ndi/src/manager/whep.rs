@@ -39,9 +39,13 @@ impl NdiManager {
     /// `None` path stays load-bearing for the brief genuine contention that remains
     /// (the reserve/finalize critical sections and `stop_*`'s `pipeline.stop().await`
     /// under the lock).
-    pub async fn pipeline_snapshots_checked(&self) -> Option<Vec<(String, PipelineState)>> {
+    /// `reader` names the caller in the contention WARN (`note_probe`).
+    pub async fn pipeline_snapshots_checked(
+        &self,
+        reader: &'static str,
+    ) -> Option<Vec<(String, PipelineState)>> {
         let sources = clone_active_sources(&self.active, PROBE_LOCK_WAIT).await;
-        self.note_probe("video-source status", sources.is_some());
+        self.note_probe(reader, sources.is_some());
         sources.map(|sources| {
             sources
                 .into_iter()

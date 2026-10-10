@@ -159,9 +159,12 @@ impl AppState {
                             .await
                         {
                             Ok(Some(source)) => {
+                                // A repair (no live pipeline). Not "restored":
+                                // a silent broadcaster (#448) also lands here,
+                                // after its own "not yet producing" line.
                                 tracing::info!(
                                     ndi_name = %source.ndi_name,
-                                    "NDI auto-reconnect: source restored"
+                                    "NDI auto-reconnect: re-activated the source's pipeline"
                                 );
                             }
                             Ok(None) => {}
