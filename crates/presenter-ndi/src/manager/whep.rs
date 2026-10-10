@@ -534,13 +534,34 @@ mod tests {
             matches!(clone_active_pipeline(&active, "src-1").await, Ok(None)),
             "a free lock without that source must read as not active"
         );
+        let pipeline = std::sync::Arc::new(NdiPipeline::stopped_for_test());
+        active.lock().await.insert(
+            "src-1".to_string(),
+            ActiveSource {
+                pipeline: std::sync::Arc::clone(&pipeline),
+                supervisor: None,
+            },
+        );
+        assert!(
+            matches!(
+                clone_active_pipeline(&active, "src-1").await,
+                Ok(Some(ref found)) if std::sync::Arc::ptr_eq(found, &pipeline)
+            ),
+            "an active source must yield ITS pipeline"
+        );
+        assert!(
+            matches!(clone_active_pipeline(&active, "src-2").await, Ok(None)),
+            "another source must not be picked up by the lookup"
+        );
     }
 
     /// The client-stats POST waits out a short hold that the probes give up
     /// on: a ~300 ms teardown under the lock must not turn a healthy TV's
     /// sample into a 503, while a probe still answers within its 200 ms.
-    /// Pins CLIENT_STATS_LOCK_WAIT > PROBE_LOCK_WAIT, deterministic on a
-    /// paused clock.
+    /// Both readers start TOGETHER against the hold — run one after the
+    /// other, the probe would use up 200 ms of it and a 200 ms POST wait
+    /// would pass too — so this pins CLIENT_STATS_LOCK_WAIT > 300 ms >
+    /// PROBE_LOCK_WAIT, deterministic on a paused clock.
     #[tokio::test(start_paused = true)]
     async fn client_stats_outlasts_a_hold_the_probes_give_up_on() {
         let active = std::sync::Arc::new(ActiveMap::new(std::collections::HashMap::new()));
@@ -549,14 +570,16 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             drop(guard);
         });
+        let (probe, stats) = tokio::join!(
+            clone_active_sources(&active, PROBE_LOCK_WAIT),
+            clone_active_pipelines(&active),
+        );
         assert!(
-            clone_active_sources(&active, PROBE_LOCK_WAIT)
-                .await
-                .is_none(),
+            probe.is_none(),
             "a probe must give up on a hold longer than its 200 ms budget"
         );
         assert!(
-            matches!(clone_active_pipelines(&active).await, Ok(ref pipelines) if pipelines.is_empty()),
+            matches!(stats, Ok(ref pipelines) if pipelines.is_empty()),
             "a client-stats POST must wait out a 300 ms hold, not answer Busy"
         );
     }
