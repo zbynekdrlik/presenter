@@ -575,7 +575,8 @@ impl AppState {
     /// The NDI 30 s auto-reconnect ticker's read-then-activate step
     /// (`background_tasks.rs`): (re)activate whatever source is currently
     /// `is_active` in the DB, restoring its pipeline after the sender comes back
-    /// online. Returns the reconnected source, or `None` when no source is active.
+    /// online. Returns the reconnected source, or `None` when no source is active
+    /// or its pipeline needs no repair (see `ReconnectAction`).
     ///
     /// #747: acquire `activation_lock` BEFORE reading the active source and hold
     /// it across the activation, so an operator `deactivate_video_sources` /
@@ -599,10 +600,57 @@ impl AppState {
             // Skip — reviving it here is exactly the #747 bug.
             return Ok(None);
         };
+        match self.reconnect_action(&source.id.to_string()).await {
+            ReconnectAction::Repair => {}
+            ReconnectAction::Heartbeat => {
+                self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                    status: "connected".to_string(),
+                });
+                return Ok(None);
+            }
+            ReconnectAction::Wait => return Ok(None),
+        }
         self.activate_video_source_locked(source.id, audit_source, actor)
             .await
             .map(Some)
     }
+
+    /// What the reconnect ticker does for the active source's pipeline.
+    async fn reconnect_action(&self, source_id: &str) -> ReconnectAction {
+        use presenter_ndi::pipeline::PipelineState;
+        let Some(manager) = &self.ndi_manager else {
+            return ReconnectAction::Repair;
+        };
+        let Some(snapshots) = manager.pipeline_snapshots_checked().await else {
+            tracing::debug!(
+                source_id,
+                "NDI auto-reconnect: manager busy, re-checking on the next tick"
+            );
+            return ReconnectAction::Wait;
+        };
+        match snapshots.iter().find(|(id, _)| id == source_id) {
+            Some((_, PipelineState::Streaming)) => ReconnectAction::Heartbeat,
+            Some((_, PipelineState::Starting)) => ReconnectAction::Wait,
+            Some((_, PipelineState::Errored(_) | PipelineState::Stopped)) | None => {
+                ReconnectAction::Repair
+            }
+        }
+    }
+}
+
+/// The 30 s NDI reconnect ticker's decision for the active source.
+enum ReconnectAction {
+    /// No pipeline, or a dead one (errored/stopped): re-activate the source.
+    Repair,
+    /// The pipeline streams: re-publish only the "connected" status. The live
+    /// hub never replays, so a stage that missed an event heals a stale
+    /// "failed"/"no-signal" overlay from this; a full re-activation here used
+    /// to log a false "source restored" and re-broadcast NdiSourceActivated
+    /// every 30 s.
+    Heartbeat,
+    /// An activation is in flight (starting) or the manager is busy ("could
+    /// not look", #546): leave it for the next tick.
+    Wait,
 }
 
 #[cfg(test)]
