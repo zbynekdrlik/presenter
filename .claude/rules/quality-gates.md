@@ -278,3 +278,15 @@ cd crates/presenter-ui && cargo metadata --format-version 1 --offline > /dev/nul
 It rewrites the lock (the removed package, its now-orphaned entries, and the current
 `presenter-core` path version — the UI lock lags it) and needs no network. CI builds the UI
 without `--locked`, so a stale lock would not fail it, but leave no dead dependency behind.
+
+## Only `tests.rs` / `tests/*.rs` are file-size exempt — a sibling `foo_tests.rs` is NOT (#830)
+
+`quality-check.sh`'s `EXEMPT_FILESIZE_PATTERNS` are `*/presenter-migration/src/*.rs`,
+`**/tests.rs` and `**/tests/*.rs`. A sibling test file declared `#[cfg(test)] mod foo_tests;`
+(e.g. `repository/stream_tests.rs`) has no INLINE `#[cfg(test)] mod … {` boundary, so
+`count_prod_lines.sh` counts EVERY line as production and the 1000-line hard-fail applies.
+`stream_tests.rs` reached 1003 lines with two #830 tests and would have failed the Quality job.
+Before adding tests to a `*_tests.rs` file, run `bash scripts/dev/count_prod_lines.sh <file>`.
+Near the cap, put the new tests in their own `<area>_tests.rs`: import the shared helpers via
+`use super::<sibling>_tests::{repo, …};` after making them `pub(super)`, and register it with
+`#[cfg(test)] mod <area>_tests;` in the parent.
