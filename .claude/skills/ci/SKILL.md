@@ -112,6 +112,16 @@ BEFORE the scan so a re-deploy never accumulates duplicate host-key entries (the
 Reuse this exact shape for any NEW ssh-based deploy step added to these workflows -- never a bare
 `ssh-keyscan ... 2>/dev/null` again.
 
+## "Failed to install chrome" after a stalled download = transient, one `--failed` rerun
+
+Different cause from the #610 apt-source failure below, same final line. On a GitHub-hosted
+Playwright shard (`/home/runner/work/...`) the branded-Chrome download can stall: the curl progress
+rows sit at the same byte count (e.g. `2  136M  2 4176k`) for minutes, then
+`curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR` → `Error: Failed to install
+chrome`, before any test ran (no blob report). Nothing in the diff can cause it: wait for the run
+to finish, `gh run rerun <run-id> --failed` ONCE (the skipped deploy jobs rerun with it), and treat
+a second identical failure as real (CDN/egress), not as flake. Seen on run 38027267466 (v0.4.310).
+
 ## Dead `deb.nodesource.com` apt source breaks `--with-deps` browser install (#610)
 
 The `NDI WebRTC E2E` job's "Install Playwright (branded Chrome for H.264)" step runs
