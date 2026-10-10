@@ -102,7 +102,7 @@ pub(crate) async fn ndi_snapshot(
     let snap = manager
         .pipeline_snapshot(&source_id)
         .await
-        .map_err(|err| AppError::service_unavailable(format!("NDI snapshot not taken: {err}")))?
+        .map_err(snapshot_error)?
         .ok_or_else(|| AppError::not_found("NDI source not active"))?;
     let body = serde_json::to_value(snap)
         .map_err(|err| AppError::internal(format!("NDI snapshot not serializable: {err}")))?;
@@ -410,6 +410,14 @@ pub(crate) fn render_ndi_health_entry(
     entry
 }
 
+/// HTTP status for a refused `/ndi/snapshot`. "Not active" is `Ok(None)`
+/// (→ 404), never an error, so every refusal — `Busy`, the lock wait expired
+/// mid source switch — answers 503: retry, the source may well be active.
+/// Pure → unit-tested without libndi.
+fn snapshot_error(err: presenter_ndi::manager::NdiSessionError) -> AppError {
+    AppError::service_unavailable(format!("NDI snapshot not taken: {err}"))
+}
+
 /// HTTP status for a refused client-stats sample. Only an unknown/expired
 /// session may answer 404 — the stage reporter stops for good on it — so
 /// every other refusal (a busy manager, `Busy`; variants this path cannot
@@ -466,6 +474,21 @@ mod tests {
         assert_eq!(
             errored["last_error"], "pipeline died: ndisrc EOS",
             "Errored MUST carry last_error verbatim so dashboards surface the cause"
+        );
+    }
+
+    /// A busy manager is not "source not active": `/ndi/snapshot` answers
+    /// 503 for every refusal; only `Ok(None)` reaches the 404.
+    #[test]
+    fn snapshot_busy_is_503_never_404() {
+        use presenter_ndi::manager::NdiSessionError;
+        let busy = snapshot_error(NdiSessionError::Busy).into_response();
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let other = snapshot_error(NdiSessionError::SourceNotActive).into_response();
+        assert_eq!(
+            other.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the not-active 404 comes from Ok(None), never from an error"
         );
     }
 

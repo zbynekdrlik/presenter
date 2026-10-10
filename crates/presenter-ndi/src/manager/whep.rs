@@ -70,7 +70,7 @@ impl NdiManager {
 
     /// Track one probe reader's lock wait. A success resets the contention
     /// streak; a timeout bumps it and logs on the power-of-two milestones
-    /// (#736: one WARN per 200 ms timeout used to flood the journal during
+    /// (#736: one WARN per probe timeout used to flood the journal during
     /// an 8 s start/rebuild window). Every probe reader reports here, so a
     /// busy `/healthz` — which can make a stage TV reload — stays traceable.
     fn note_probe(&self, reader: &'static str, readable: bool) {
@@ -86,9 +86,9 @@ impl NdiManager {
             tracing::warn!(
                 streak,
                 reader,
-                "NDI active-map lock acquisition timed out after 200 ms — likely \
-                 contended with a pipeline start/teardown; reporting busy, not empty \
-                 (#333 item 7, #546, #736)"
+                wait_ms = PROBE_LOCK_WAIT.as_millis() as u64,
+                "NDI active-map lock acquisition timed out — likely contended with a \
+                 pipeline start/teardown; reporting busy, not empty (#333 item 7, #546, #736)"
             );
         }
     }
