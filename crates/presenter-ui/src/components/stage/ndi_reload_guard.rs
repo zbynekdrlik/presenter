@@ -214,6 +214,17 @@ mod tests {
     }
 
     #[test]
+    fn healthz_busy_manager_does_not_suppress_the_reload() {
+        // The server could not read its pipelines within the lock budget (a
+        // source switch tearing the old pipeline down) — an EMPTY list then
+        // says nothing about the source, so it must not veto the reload.
+        let body = r#"{"status":"ok","ndi_pipelines":[],"ndi_pipelines_busy":true}"#;
+        assert!(healthz_body_has_streaming_pipeline(body));
+        let read = r#"{"status":"ok","ndi_pipelines":[],"ndi_pipelines_busy":false}"#;
+        assert!(!healthz_body_has_streaming_pipeline(read));
+    }
+
+    #[test]
     fn healthz_missing_field_or_garbage_means_not_streaming() {
         // No ndi_pipelines key, or unparseable body → not streaming (the
         // SUCCESSFUL-but-malformed case; a FAILED fetch is the caller's

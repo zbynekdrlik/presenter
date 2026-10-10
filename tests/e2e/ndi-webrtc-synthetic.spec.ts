@@ -1320,9 +1320,20 @@ test("stage stops the per-session client-stats reporter after a 404 (synthetic s
     await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
       timeout: 10_000,
     });
-    await expect(page.locator('video[data-role="ndi-video"]')).toBeVisible({
-      timeout: 15_000,
-    });
+    const video = page.locator('video[data-role="ndi-video"]');
+    await expect(video).toBeVisible({ timeout: 15_000 });
+    // The session is up once frames present (WHEP connect can take ~10s on
+    // a loaded runner); only then does the 20s first-POST window start.
+    await expect
+      .poll(
+        () =>
+          video.evaluate(
+            (v: HTMLVideoElement) =>
+              v.getVideoPlaybackQuality().totalVideoFrames,
+          ),
+        { timeout: 25_000, message: "stage never presented a frame" },
+      )
+      .toBeGreaterThan(0);
 
     // The first POST lands ~5s after the session is up (plus getStats).
     await expect
@@ -1342,10 +1353,12 @@ test("stage stops the per-session client-stats reporter after a 404 (synthetic s
         `session ${id} kept POSTing client stats after its 404 (${hits} POSTs)`,
       ).toBe(1);
     }
-    expect(
-      stoppedLogs.length,
-      `one "reporter stopped" log line per 404'd session, got: ${stoppedLogs.join("; ")}`,
-    ).toBe(hitsBySession.size);
+    await expect
+      .poll(() => stoppedLogs.length, {
+        timeout: 5_000,
+        message: `one "reporter stopped" log line per 404'd session, got: ${stoppedLogs.join("; ")}`,
+      })
+      .toBe(hitsBySession.size);
     const failedLoads = consoleErrors.filter((e) =>
       /Failed to load resource.*404/i.test(e),
     );

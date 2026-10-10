@@ -482,6 +482,30 @@ mod tests {
         );
     }
 
+    /// `/healthz`'s pipeline reader must say "could not look" (`None`) when
+    /// the `active` lock is held past its 200 ms budget — an empty list there
+    /// reads as "source down" and vetoes the stage's last-resort reload.
+    #[tokio::test]
+    async fn a_held_active_map_is_unreadable_for_the_health_snapshot() {
+        let active: tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>> =
+            tokio::sync::Mutex::new(std::collections::HashMap::new());
+        let guard = active.lock().await;
+        assert!(
+            clone_active_sources(&active, HEALTH_LOCK_WAIT)
+                .await
+                .is_none(),
+            "a lock wait that expired must read as unknown, not as no pipelines"
+        );
+        drop(guard);
+        assert!(
+            matches!(
+                clone_active_sources(&active, HEALTH_LOCK_WAIT).await,
+                Some(ref sources) if sources.is_empty()
+            ),
+            "a free lock must yield the (empty) source list"
+        );
+    }
+
     /// `Other(anyhow::Error)` must pass through UNCHANGED — the inner
     /// error is extracted and returned as-is, not wrapped in an
     /// `NdiSessionError` variant. The message text must survive verbatim.

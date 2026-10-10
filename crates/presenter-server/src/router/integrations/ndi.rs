@@ -397,6 +397,21 @@ mod tests {
         assert_eq!(gone.status(), StatusCode::NOT_FOUND);
     }
 
+    /// 404 is the "session gone, stop for good" contract — no other refusal
+    /// may use it, even one `record_client_stats` cannot produce today.
+    #[test]
+    fn client_stats_only_an_unknown_session_is_404() {
+        use presenter_ndi::manager::NdiSessionError;
+        for err in [
+            NdiSessionError::SourceNotActive,
+            NdiSessionError::ConsumerCapReached { max: 8 },
+        ] {
+            let label = err.to_string();
+            let status = client_stats_error(err).into_response().status();
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{label}");
+        }
+    }
+
     /// Build a fresh in-memory AppState that may or may not have a real NDI
     /// manager attached depending on whether libndi is loadable on the host.
     async fn fresh_state() -> AppState {
