@@ -963,9 +963,12 @@ mod tests {
     }
 
     /// The 30 s reconnect ticker only REPAIRS: a source whose pipeline is
-    /// already streaming needs nothing. Re-activating it every tick logged
-    /// "NDI auto-reconnect: source restored" ~2880x/day on SNV and re-broadcast
-    /// NdiSourceActivated + a "connected" status to every live client.
+    /// already streaming is not re-activated. Re-activating it every tick
+    /// logged "NDI auto-reconnect: source restored" ~2880x/day on SNV and
+    /// re-broadcast NdiSourceActivated to every live client. The "connected"
+    /// status IS still published each tick: the live hub never replays, so a
+    /// stage that missed an event (its socket was resetting) heals a stale
+    /// "failed"/"no-signal" overlay from this heartbeat.
     #[tokio::test]
     async fn reconnect_leaves_a_streaming_pipeline_alone() {
         let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
@@ -996,8 +999,42 @@ mod tests {
             published.push(ev);
         }
         assert!(
-            published.is_empty(),
-            "nothing changed, so nothing may be broadcast; got {published:?}"
+            matches!(
+                published.as_slice(),
+                [LiveEvent::NdiConnectionStatus { status }] if status == "connected"
+            ),
+            "only the \"connected\" status heartbeat, never a re-activation; got {published:?}"
+        );
+    }
+
+    /// A pipeline that is still STARTING belongs to an activation in flight
+    /// (it publishes its own status): the ticker neither re-activates it nor
+    /// claims "connected" before it streams.
+    #[tokio::test]
+    async fn reconnect_waits_for_a_starting_pipeline() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_pipeline(&a_str, presenter_ndi::pipeline::PipelineState::Starting);
+        let calls_before = fake.calls();
+        let mut rx = state.live_hub().subscribe();
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert!(result.is_none(), "a starting pipeline is not re-activated");
+        assert_eq!(
+            fake.calls(),
+            calls_before,
+            "no start_pipeline for a starting pipeline"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing may be published for a pipeline that is still starting"
         );
     }
 
