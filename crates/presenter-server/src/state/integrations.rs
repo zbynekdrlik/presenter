@@ -1044,9 +1044,10 @@ mod tests {
         published
     }
 
-    /// Whether `published` is exactly the ticker's state heartbeat for `id`:
-    /// NdiSourceActivated (that source) + NdiConnectionStatus "connected".
-    fn is_heartbeat(published: &[LiveEvent], id: &str) -> bool {
+    /// Whether `published` is exactly the activation announcement for `id`:
+    /// NdiSourceActivated (that source) + NdiConnectionStatus "connected" —
+    /// what both the ticker's heartbeat and a full repair publish.
+    fn is_activation_announcement(published: &[LiveEvent], id: &str) -> bool {
         matches!(
             published,
             [
@@ -1090,7 +1091,7 @@ mod tests {
         );
         let published = drain(&mut rx);
         assert!(
-            is_heartbeat(&published, &a_str),
+            is_activation_announcement(&published, &a_str),
             "only the state heartbeat (activated + connected); got {published:?}"
         );
     }
@@ -1133,7 +1134,10 @@ mod tests {
             "exactly one reap keeping A, no start_pipeline"
         );
         let published = drain(&mut rx);
-        assert!(is_heartbeat(&published, &a_str), "got {published:?}");
+        assert!(
+            is_activation_announcement(&published, &a_str),
+            "got {published:?}"
+        );
     }
 
     /// A pipeline that is still STARTING belongs to an activation in flight
@@ -1241,7 +1245,7 @@ mod tests {
         assert_eq!(reaps, 2, "{state_of_a:?}: the repair runs the #370 reap");
         let published = drain(&mut rx);
         assert!(
-            is_heartbeat(&published, &a_str),
+            is_activation_announcement(&published, &a_str),
             "{state_of_a:?}: a repair announces activated + connected; got {published:?}"
         );
     }
