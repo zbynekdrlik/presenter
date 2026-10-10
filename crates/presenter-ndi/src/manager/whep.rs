@@ -12,7 +12,7 @@ use crate::pipeline::{AddConsumerError, NdiPipeline, PipelineState, StreamProfil
 
 use super::{ActiveSource, NdiManager, NdiSessionError, WhepOp, WhepReply};
 
-/// Whether to emit the `pipeline_snapshots` contention WARN for this 1-based
+/// Whether to emit the probe-reader contention WARN for this 1-based
 /// consecutive-timeout `streak`. Logs the first timeout and then only at
 /// power-of-two milestones, so a long `start_pipeline`/`rebuild_pipeline` window
 /// (which holds `active` for up to 8 s) produces ~log2(N)+1 WARN lines instead
@@ -40,61 +40,57 @@ impl NdiManager {
     /// (the reserve/finalize critical sections and `stop_*`'s `pipeline.stop().await`
     /// under the lock).
     pub async fn pipeline_snapshots_checked(&self) -> Option<Vec<(String, PipelineState)>> {
-        match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
-        {
-            Ok(guard) => {
-                // Acquired → contention (if any) has cleared; reset the streak so
-                // the next contention burst logs fresh from its first timeout.
-                self.snapshot_contention_streak.store(0, Ordering::Relaxed);
-                Some(
-                    guard
-                        .iter()
-                        .map(|(id, src)| (id.clone(), src.pipeline.state()))
-                        .collect(),
-                )
-            }
-            Err(_) => {
-                // #736: the WARN used to fire on EVERY 200 ms timeout, so an 8 s
-                // `start_pipeline`/`rebuild_pipeline` window (holding `active`)
-                // flooded the journal with thousands of identical lines across
-                // status polls + /healthz. Gate it on a power-of-two streak so
-                // contention stays visible but rare, not routine.
-                let streak = self
-                    .snapshot_contention_streak
-                    .fetch_add(1, Ordering::Relaxed)
-                    .saturating_add(1);
-                if should_log_contention(streak) {
-                    tracing::warn!(
-                        streak,
-                        "pipeline_snapshots lock acquisition timed out after 200 ms — \
-                         likely contended with a long-running pipeline start/rebuild; \
-                         reporting the snapshot as unavailable (#333 item 7, #546, #736)"
-                    );
-                }
-                None
-            }
-        }
+        let sources = clone_active_sources(&self.active, PROBE_LOCK_WAIT).await;
+        self.note_probe("video-source status", sources.is_some());
+        sources.map(|sources| {
+            sources
+                .into_iter()
+                .map(|(id, pipeline)| (id, pipeline.state()))
+                .collect()
+        })
     }
 
-    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`. Returns
-    /// `None` if the source isn't active in the manager's active map.
-    ///
-    /// Uses the same 200 ms lock-acquisition timeout pattern as
-    /// `pipeline_snapshots_checked` so a `/ndi/snapshot/:id` probe doesn't stall
-    /// behind a concurrent pipeline start/rebuild. On timeout returns `None`
-    /// (caller maps to 503).
+    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`: `Ok(None)`
+    /// when the source isn't active, `Err(NdiSessionError::Busy)` when the
+    /// 200 ms probe wait expired (→ 503) — "could not look" must never read
+    /// as "not active" (→ 404) for a source that is mid-switch.
     pub async fn pipeline_snapshot(
         &self,
         source_id: &str,
-    ) -> Option<crate::pipeline::PipelineSnapshot> {
-        let guard = tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
-            .await
-            .ok()?;
-        let pipeline = std::sync::Arc::clone(&guard.get(source_id)?.pipeline);
-        drop(guard);
+    ) -> Result<Option<crate::pipeline::PipelineSnapshot>, NdiSessionError> {
+        let pipeline = clone_active_pipeline(&self.active, source_id).await;
+        self.note_probe("/ndi/snapshot", pipeline.is_ok());
+        let Some(pipeline) = pipeline? else {
+            return Ok(None);
+        };
         let mut snap = pipeline.snapshot().await;
         snap.source_id = source_id.to_string();
-        Some(snap)
+        Ok(Some(snap))
+    }
+
+    /// Track one probe reader's lock wait. A success resets the contention
+    /// streak; a timeout bumps it and logs on the power-of-two milestones
+    /// (#736: one WARN per 200 ms timeout used to flood the journal during
+    /// an 8 s start/rebuild window). Every probe reader reports here, so a
+    /// busy `/healthz` — which can make a stage TV reload — stays traceable.
+    fn note_probe(&self, reader: &'static str, readable: bool) {
+        if readable {
+            self.snapshot_contention_streak.store(0, Ordering::Relaxed);
+            return;
+        }
+        let streak = self
+            .snapshot_contention_streak
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if should_log_contention(streak) {
+            tracing::warn!(
+                streak,
+                reader,
+                "NDI active-map lock acquisition timed out after 200 ms — likely \
+                 contended with a pipeline start/teardown; reporting busy, not empty \
+                 (#333 item 7, #546, #736)"
+            );
+        }
     }
 
     /// Per-pipeline delivery HEALTH for `/healthz.ndi_pipelines[]` (#768):
@@ -110,7 +106,9 @@ impl NdiManager {
     pub async fn pipeline_health_snapshots(
         &self,
     ) -> Option<Vec<crate::pipeline::health::PipelineDropHealth>> {
-        let pipelines = clone_active_sources(&self.active, HEALTH_LOCK_WAIT).await?;
+        let pipelines = clone_active_sources(&self.active, PROBE_LOCK_WAIT).await;
+        self.note_probe("/healthz", pipelines.is_some());
+        let pipelines = pipelines?;
         let mut out = Vec::with_capacity(pipelines.len());
         for (source_id, pipeline) in pipelines {
             let state = pipeline.state();
@@ -346,9 +344,10 @@ impl NdiManager {
     }
 }
 
-/// Lock budget of the `/healthz` pipeline reader: a readiness probe must never
-/// hang behind a pipeline start/teardown.
-const HEALTH_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
+/// Lock budget of the probe readers (`/healthz`, the video-source status
+/// poll, `/ndi/snapshot/{id}`): a probe must never hang behind a pipeline
+/// start/teardown.
+const PROBE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Lock budget of a client-stats POST. Not a probe — waiting out a short
 /// teardown under the lock beats answering `Busy` (a 503 the stage console
@@ -372,6 +371,20 @@ async fn clone_active_sources(
             .map(|(id, src)| (id.clone(), std::sync::Arc::clone(&src.pipeline)))
             .collect(),
     )
+}
+
+/// One source's pipeline for `/ndi/snapshot/{id}`: `Ok(None)` when the source
+/// is not active, `NdiSessionError::Busy` when the probe wait expired.
+async fn clone_active_pipeline(
+    active: &ActiveMap,
+    source_id: &str,
+) -> Result<Option<std::sync::Arc<NdiPipeline>>, NdiSessionError> {
+    let guard = tokio::time::timeout(PROBE_LOCK_WAIT, active.lock())
+        .await
+        .map_err(|_| NdiSessionError::Busy)?;
+    Ok(guard
+        .get(source_id)
+        .map(|src| std::sync::Arc::clone(&src.pipeline)))
 }
 
 /// The active pipelines for a client-stats POST, or `NdiSessionError::Busy`

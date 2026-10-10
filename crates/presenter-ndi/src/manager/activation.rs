@@ -2,7 +2,8 @@
 //!
 //! `start_pipeline` / `rebuild_pipeline` used to hold the `active` mutex across
 //! their ~8 s streaming-ready wait, so EVERY contender — the status-snapshot
-//! reader (`pipeline_snapshots_checked`, → operator dashboard + `/healthz`),
+//! reader (`pipeline_snapshots_checked`, → operator dashboard; `/healthz` now
+//! reads `pipeline_health_snapshots`),
 //! `stop_*`, `periodic_reap`, `pipeline_snapshot(:id)`, and every WHEP
 //! POST/PATCH/DELETE — stalled up to 8 s behind each activation.
 //!

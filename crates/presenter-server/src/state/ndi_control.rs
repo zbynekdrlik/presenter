@@ -158,11 +158,13 @@ impl NdiManagerHandle {
         }
     }
 
-    /// Forward to [`NdiManager::pipeline_snapshot`].
+    /// Forward to [`NdiManager::pipeline_snapshot`] — `Err(Busy)` when the
+    /// manager's lock could not be taken in time (→ 503, never "not active").
     pub(crate) async fn pipeline_snapshot(
         &self,
         source_id: &str,
-    ) -> Option<presenter_ndi::PipelineSnapshot> {
+    ) -> Result<Option<presenter_ndi::PipelineSnapshot>, presenter_ndi::manager::NdiSessionError>
+    {
         match self {
             Self::Real(m) => m.pipeline_snapshot(source_id).await,
             #[cfg(test)]

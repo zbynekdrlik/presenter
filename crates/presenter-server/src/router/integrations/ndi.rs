@@ -88,7 +88,9 @@ pub(crate) async fn ndi_ice_servers(State(state): State<AppState>) -> Json<serde
 /// tailing logs.
 ///
 /// 404 — source is not currently active (no pipeline exists for this id).
-/// 503 — NDI SDK not available on this host.
+/// 503 — NDI SDK not available on this host, or the manager is busy (its
+/// lock is held by a pipeline start/teardown) — retry; says nothing about
+/// whether the source is active.
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn ndi_snapshot(
     axum::extract::Path(source_id): axum::extract::Path<String>,
@@ -100,10 +102,11 @@ pub(crate) async fn ndi_snapshot(
     let snap = manager
         .pipeline_snapshot(&source_id)
         .await
+        .map_err(|err| AppError::service_unavailable(format!("NDI snapshot not taken: {err}")))?
         .ok_or_else(|| AppError::not_found("NDI source not active"))?;
-    Ok(Json(
-        serde_json::to_value(snap).expect("PipelineSnapshot serializes"),
-    ))
+    let body = serde_json::to_value(snap)
+        .map_err(|err| AppError::internal(format!("NDI snapshot not serializable: {err}")))?;
+    Ok(Json(body))
 }
 
 #[derive(Debug, Deserialize)]
