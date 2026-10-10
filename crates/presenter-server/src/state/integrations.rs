@@ -1010,13 +1010,33 @@ mod tests {
         );
     }
 
+    fn drain(rx: &mut tokio::sync::broadcast::Receiver<LiveEvent>) -> Vec<LiveEvent> {
+        let mut published = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            published.push(ev);
+        }
+        published
+    }
+
+    /// Whether `published` is exactly the ticker's state heartbeat for `id`:
+    /// NdiSourceActivated (that source) + NdiConnectionStatus "connected".
+    fn is_heartbeat(published: &[LiveEvent], id: &str) -> bool {
+        matches!(
+            published,
+            [
+                LiveEvent::NdiSourceActivated { source_id, .. },
+                LiveEvent::NdiConnectionStatus { status },
+            ] if source_id == id && status == "connected"
+        )
+    }
+
     /// The 30 s reconnect ticker only REPAIRS: a source whose pipeline is
-    /// already streaming is not re-activated. Re-activating it every tick
-    /// logged "NDI auto-reconnect: source restored" ~2880x/day on SNV and
-    /// re-broadcast NdiSourceActivated to every live client. The "connected"
-    /// status IS still published each tick: the live hub never replays, so a
-    /// stage that missed an event (its socket was resetting) heals a stale
-    /// "failed"/"no-signal" overlay from this heartbeat.
+    /// already streaming is not re-activated (no start_pipeline, no DB
+    /// activate, no false "NDI auto-reconnect: source restored" — logged
+    /// ~2880x/day on SNV). It still re-announces the state: the live hub
+    /// never replays, so a stage whose socket lagged past a switch learns the
+    /// source from NdiSourceActivated, and one showing a stale
+    /// "failed"/"no-signal" overlay heals from the "connected" status.
     #[tokio::test]
     async fn reconnect_leaves_a_streaming_pipeline_alone() {
         let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
@@ -1042,17 +1062,52 @@ mod tests {
             calls_before,
             "no start_pipeline / reap for a pipeline that is already up"
         );
-        let mut published = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
-            published.push(ev);
-        }
+        let published = drain(&mut rx);
         assert!(
-            matches!(
-                published.as_slice(),
-                [LiveEvent::NdiConnectionStatus { status }] if status == "connected"
-            ),
-            "only the \"connected\" status heartbeat, never a re-activation; got {published:?}"
+            is_heartbeat(&published, &a_str),
+            "only the state heartbeat (activated + connected); got {published:?}"
         );
+    }
+
+    /// A streaming active source next to a LEFTOVER pipeline (a source switch
+    /// whose HTTP handler was dropped mid-start never ran its #370 reap) must
+    /// get the reap from the ticker — the per-tick re-activation used to be
+    /// the only cleanup for that leaked encoder.
+    #[tokio::test]
+    async fn reconnect_reaps_a_leftover_pipeline_next_to_a_streaming_source() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_pipeline(&a_str, presenter_ndi::pipeline::PipelineState::Streaming);
+        fake.set_pipeline(
+            "leftover-b",
+            presenter_ndi::pipeline::PipelineState::Streaming,
+        );
+        let calls_before = fake.calls();
+        let mut rx = state.live_hub().subscribe();
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert!(
+            result.is_none(),
+            "the active pipeline streams — no re-activation"
+        );
+        let mut expected = calls_before;
+        expected.push(NdiCall::StopOtherPipelines {
+            keep_id: a_str.clone(),
+        });
+        assert_eq!(
+            fake.calls(),
+            expected,
+            "exactly one reap keeping A, no start_pipeline"
+        );
+        let published = drain(&mut rx);
+        assert!(is_heartbeat(&published, &a_str), "got {published:?}");
     }
 
     /// A pipeline that is still STARTING belongs to an activation in flight
@@ -1098,6 +1153,7 @@ mod tests {
             .expect("activate A");
         fake.set_snapshots_unreadable();
         let calls_before = fake.calls();
+        let mut rx = state.live_hub().subscribe();
 
         let result = state
             .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
@@ -1106,21 +1162,27 @@ mod tests {
 
         assert!(result.is_none(), "busy must not trigger a re-activation");
         assert_eq!(fake.calls(), calls_before, "no start_pipeline while busy");
+        let published = drain(&mut rx);
+        assert!(
+            published.is_empty(),
+            "could not look, so nothing may be announced; got {published:?}"
+        );
     }
 
-    /// The repair still happens: a dead (errored) pipeline for the active
-    /// source is re-activated by the ticker.
-    #[tokio::test]
-    async fn reconnect_restarts_an_errored_pipeline() {
+    /// The repair still happens for every case without a live pipeline: none
+    /// at all (the sender came online after boot or after a silent spell), an
+    /// errored one, or a stopped one. Each is a full re-activation: one more
+    /// start_pipeline, the #370 reap, and the activation events.
+    async fn assert_reconnect_repairs(state_of_a: Option<presenter_ndi::pipeline::PipelineState>) {
         let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
         state
             .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
             .await
             .expect("activate A");
-        fake.set_pipeline(
-            &a_str,
-            presenter_ndi::pipeline::PipelineState::Errored("ndisrc EOS".to_string()),
-        );
+        if let Some(pipeline_state) = state_of_a.clone() {
+            fake.set_pipeline(&a_str, pipeline_state);
+        }
+        let mut rx = state.live_hub().subscribe();
 
         let result = state
             .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
@@ -1130,19 +1192,50 @@ mod tests {
         assert_eq!(
             result.map(|s| s.id),
             Some(a_id),
-            "a dead pipeline is restored"
+            "{state_of_a:?}: the source must be re-activated"
         );
+        let starts = fake
+            .calls()
+            .iter()
+            .filter(
+                |c| matches!(c, NdiCall::StartPipeline { source_id, .. } if *source_id == a_str),
+            )
+            .count();
+        assert_eq!(
+            starts,
+            2,
+            "{state_of_a:?}: the operator's start plus exactly one ticker start; calls = {:?}",
+            fake.calls()
+        );
+        let reaps = fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, NdiCall::StopOtherPipelines { keep_id } if *keep_id == a_str))
+            .count();
+        assert_eq!(reaps, 2, "{state_of_a:?}: the repair runs the #370 reap");
+        let published = drain(&mut rx);
         assert!(
-            fake.calls()
-                .iter()
-                .filter(
-                    |c| matches!(c, NdiCall::StartPipeline { source_id, .. } if *source_id == a_str)
-                )
-                .count()
-                >= 2,
-            "the ticker must start the dead source's pipeline again; calls = {:?}",
-            fake.calls()
+            is_heartbeat(&published, &a_str),
+            "{state_of_a:?}: a repair announces activated + connected; got {published:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn reconnect_restarts_a_missing_pipeline() {
+        assert_reconnect_repairs(None).await;
+    }
+
+    #[tokio::test]
+    async fn reconnect_restarts_an_errored_pipeline() {
+        assert_reconnect_repairs(Some(presenter_ndi::pipeline::PipelineState::Errored(
+            "ndisrc EOS".to_string(),
+        )))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn reconnect_restarts_a_stopped_pipeline() {
+        assert_reconnect_repairs(Some(presenter_ndi::pipeline::PipelineState::Stopped)).await;
     }
 
     // #747: the 30 s NDI auto-reconnect ticker (`background_tasks.rs`) reads the
