@@ -150,9 +150,10 @@ impl NdiManagerHandle {
     /// #546 status join must NOT read as "no pipelines".
     pub(crate) async fn pipeline_snapshots_checked(
         &self,
+        reader: &'static str,
     ) -> Option<Vec<(String, presenter_ndi::pipeline::PipelineState)>> {
         match self {
-            Self::Real(m) => m.pipeline_snapshots_checked().await,
+            Self::Real(m) => m.pipeline_snapshots_checked(reader).await,
             #[cfg(test)]
             Self::Fake(f) => f.pipeline_snapshots(),
         }

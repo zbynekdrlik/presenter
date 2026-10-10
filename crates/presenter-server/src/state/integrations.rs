@@ -335,8 +335,10 @@ impl AppState {
 
         // `None` = the manager's lock was held past our budget (it is busy building a
         // pipeline), which is NOT the same fact as "there are no pipelines".
-        let pipelines: Option<HashMap<String, (&'static str, Option<String>)>> =
-            manager.pipeline_snapshots_checked().await.map(|snapshots| {
+        let pipelines: Option<HashMap<String, (&'static str, Option<String>)>> = manager
+            .pipeline_snapshots_checked("video-source status")
+            .await
+            .map(|snapshots| {
                 snapshots
                     .into_iter()
                     .map(|(id, state)| (id, video_source_status::pipeline_state_str(&state)))
@@ -637,7 +639,10 @@ impl AppState {
         let Some(manager) = &self.ndi_manager else {
             return ReconnectAction::Repair;
         };
-        let Some(snapshots) = manager.pipeline_snapshots_checked().await else {
+        let Some(snapshots) = manager
+            .pipeline_snapshots_checked("NDI reconnect ticker")
+            .await
+        else {
             tracing::debug!(
                 source_id,
                 "NDI auto-reconnect: manager busy, re-checking on the next tick"
