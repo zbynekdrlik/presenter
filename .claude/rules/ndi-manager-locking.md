@@ -49,19 +49,28 @@ without libndi.
 ## The 30 s reconnect ticker repairs; it never re-activates a streaming source
 
 `reconnect_active_video_source` (`state/integrations.rs`, driven by `background_tasks.rs`) decides
-via `ReconnectAction` from `pipeline_snapshots_checked`. **Repair** (full re-activation) applies
-only to no pipeline, errored or stopped. **Heartbeat** applies to streaming: publish ONLY
-`NdiConnectionStatus "connected"`. **Wait** applies to starting or busy. It used to re-activate the
-DB-active source on every tick, so SNV logged a false "NDI auto-reconnect: source restored" every
-30 s and re-broadcast `NdiSourceActivated` to every client.
+via `ReconnectAction` from `pipeline_snapshots_checked("NDI reconnect ticker")`:
 
-Keep the heartbeat. The live hub never replays, and the stage's `sync_ndi_source_state` resets NDI
-status only on a source-id change, so a stage that missed an event heals a stale
-`failed: …`/`no-signal` overlay only from this periodic "connected". The UI comments that say
-"until the server's next ~30s status tick" refer to it.
+- **Repair** — no pipeline, errored or stopped: full re-activation, logged "re-activated the source's
+  pipeline". A silent broadcaster (#448) lands here too, so the log never says "restored".
+- **Heartbeat** — streaming: NO re-activation, only the state re-announcement
+  `NdiSourceActivated` + `NdiConnectionStatus "connected"`. `Heartbeat { leftovers }` additionally
+  reaps (WARN) any other pipeline still up.
+- **Wait** — starting or busy: nothing.
 
-Tests (FakeNdiControl `set_pipeline` / `set_snapshots_unreadable`) cover all four branches; assert
-on both `fake.calls()` and the drained live hub.
+It used to re-activate on every tick, so SNV logged a false "NDI auto-reconnect: source restored"
+every 30 s. Two things depended on that re-activation and must stay:
+
+- **The re-announcement.** The live hub never replays, a lagging socket skips events, and
+  `sync_ndi_source_state` resets status only on a source-id change. So a stage that missed a switch
+  learns the source here, and a stale `failed: …`/`no-signal` overlay heals from "connected".
+- **The leftover reap.** A switch whose HTTP handler is dropped mid-start never runs its #370
+  `stop_other_pipelines`, and the leaked encoder is otherwise cleaned up only on the next operator
+  switch.
+
+Tests (FakeNdiControl `set_pipeline` / `set_snapshots_unreadable`) cover streaming, streaming with
+a leftover, starting, busy, and the repairs (none, errored, stopped). They assert both
+`fake.calls()` and the drained live hub.
 
 ## The reservation pattern (`manager/activation.rs`, #741)
 

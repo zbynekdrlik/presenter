@@ -124,8 +124,10 @@ a second identical failure as real (CDN/egress), not as flake. Seen on run 38027
 
 Same family: `sudo apt-get update` on a GitHub-hosted job can hang with NO output (release v0.4.310's
 Build Release sat 60 min; normal is ~46 s). Every ubuntu-latest "Install system dependencies" step
-now carries `timeout-minutes: 10`, so a stall fails in 10 min instead of the 360-min job default —
-then cancel/rerun the same way. Keep that bound on any new apt step.
+(and the e2e "Install GStreamer runtime libraries" step) carries `timeout-minutes: 10` and runs apt
+with `-o Acquire::Retries=3 -o Acquire::http::Timeout=30`. A stalled mirror is retried inside the
+step, and a dead one fails in 10 min instead of the 360-min job default (then cancel or rerun as
+above). Keep both on any new apt step.
 
 ## Dead `deb.nodesource.com` apt source breaks `--with-deps` browser install (#610)
 
