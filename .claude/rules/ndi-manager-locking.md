@@ -24,11 +24,15 @@ tail moves the needed `Arc` out, or a helper that owns the whole lock scope).
 
 ## A bounded lock-wait timeout is "busy", never "not found"
 
-The 200 ms `active` waits (`pipeline_snapshots_checked`, `record_client_stats`, …) can expire
-during the remaining legitimate contention (reserve/finalize, `stop_*` teardown). Report that as
-its own outcome — `None` for the snapshot readers (#546), `NdiSessionError::Busy` (→ 503) for
-`record_client_stats` — never as an empty result or `SessionNotFound` (→ 404): a client that acts
-on "not found" (the stage stats reporter stops for good) turns a busy moment into permanent loss.
+The bounded `active` waits (200 ms for the probes `pipeline_snapshots_checked` /
+`pipeline_health_snapshots` / `pipeline_snapshot`, 2 s for `record_client_stats`, which is not a
+probe) can expire during the remaining legitimate contention (reserve/finalize, `stop_*` teardown).
+Report that as its own outcome — `None` for the snapshot readers (#546; `/healthz` adds
+`ndi_pipelines_busy`), `NdiSessionError::Busy` (→ 503) for `record_client_stats` — never as an
+empty result or `SessionNotFound` (→ 404): a reader that acts on "nothing there" (the stage reload
+guard skips the reload, the stats reporter stops for good) turns a busy moment into a wrong
+decision. The seams `clone_active_sources` / `clone_active_pipelines` (`manager/whep.rs`) take the
+bare map, so a test holds the lock and asserts the outcome without libndi.
 
 ## The reservation pattern (`manager/activation.rs`, #741)
 

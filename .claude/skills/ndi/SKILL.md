@@ -692,17 +692,17 @@ Clean up afterwards (`/deactivate`, `DELETE` the source, pid-targeted `kill` of 
 
 ## "No pipeline in the snapshot map" is NOT "the source is silent" (#546)
 
-`NdiManager::pipeline_snapshots()` gives up on the `active` mutex after **200 ms** and returns an
-**empty vec** — while `start_pipeline` HOLDS that same mutex across its **8 s caps-wait**. So during
-EVERY normal activation the map reads as empty. Any consumer that treats "no entry" as a fact about
-the SOURCE (rather than about our ability to LOOK) will report a perfectly healthy activation as
-"broadcaster silent" for those 8 seconds.
+The `active`-map readers give up on the mutex after a bounded wait (200 ms for the probes) while
+a pipeline start/teardown holds it. A consumer that treats "no entry" as a fact about the SOURCE
+(rather than about our ability to LOOK) reports a healthy activation as "broadcaster silent".
 
-Use **`pipeline_snapshots_checked() -> Option<Vec<..>>`** when the answer is shown to a human:
-`None` = the lock timed out (the manager is busy, almost always starting a pipeline) → say
-*Connecting*; `Some(vec![])` = we looked and there really is nothing → the silent-broadcaster case
-(#448). `pipeline_snapshots()` (the `unwrap_or_default()` wrapper) is fine for `/healthz`, which only
-wants a best-effort list and must never stall.
+So every reader returns "could not look" SEPARATELY: **`pipeline_snapshots_checked()` and
+`pipeline_health_snapshots()` return `Option<Vec<..>>`** — `None` = the lock timed out (the manager
+is busy) → say *Connecting*; `Some(vec![])` = we looked and there really is nothing → the
+silent-broadcaster case (#448). `/healthz` keeps `ndi_pipelines` an array but adds
+`ndi_pipelines_busy: true` on `None`, which the stage's last-resort reload guard reads as "unknown →
+reload" (an empty list from a busy manager used to veto the reload). The old empty-on-timeout
+`pipeline_snapshots()` wrapper was removed for exactly this reason; don't reintroduce one.
 
 Same shape one level up: a **discovery failure** (`discover_sources` errors, or the finder thread
 never came up because `NDIlib_find_create_v2` returned null) is NOT an empty network. Degrading it to

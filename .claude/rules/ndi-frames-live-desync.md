@@ -81,7 +81,9 @@ A client that stops for good on 404 makes 404 a CONTRACT on the server: it may m
 session is gone". `record_client_stats` used to answer `SessionNotFound` (→ 404) also when its
 200 ms `active` lock wait expired — e.g. a source switch, where `retain_only_active` tears the old
 pipeline down under the lock — which silently killed a healthy TV's stats for its whole session.
-It now returns `NdiSessionError::Busy` (→ 503, `client_stats_error` in `router/integrations/ndi.rs`),
-seam `clone_active_pipelines` tested against a held bare map. The wiring (one POST per session,
+It now waits up to 2 s for the lock (not a probe; a Busy 503 is itself one console error) and
+then returns `NdiSessionError::Busy` (→ 503, `client_stats_error` in `router/integrations/ndi.rs`;
+every refusal except `SessionNotFound` is 503), seam `clone_active_pipelines` tested against a
+held bare map. The wiring (one POST per session,
 then silence) is pinned by the 404-routed Test 8b in `ndi-webrtc-synthetic.spec.ts`; the reporter
 also re-checks `gone` after the `getStats` await, right before the POST.
