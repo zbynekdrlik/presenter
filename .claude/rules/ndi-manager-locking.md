@@ -39,7 +39,12 @@ streak-gated WARN naming the reader, #736). The seams `clone_active_sources` /
 holds the lock and asserts the outcome without libndi — on a PAUSED clock
 (`#[tokio::test(start_paused = true)]`, tokio `test-util` is a presenter-ndi dev-dependency): the
 2 s wait elapses instantly, and "the POST outlasts a hold the probe gives up on" is deterministic
-(`Arc::clone(&map).lock_owned()`, released by a spawned task after a 300 ms `sleep`).
+(`Arc::clone(&map).lock_owned()`, released by a spawned task after a 300 ms `sleep`). Start BOTH
+readers together (`tokio::join!`) against such a hold: run one after the other, the first eats
+part of the hold and the second passes with a wait it should fail on (a 200 ms client-stats wait
+stayed green that way). The router side maps the typed refusals in pure fns
+(`client_stats_error`, `snapshot_error` in `router/integrations/ndi.rs`) so the status is tested
+without libndi.
 
 ## The reservation pattern (`manager/activation.rs`, #741)
 
