@@ -122,6 +122,11 @@ chrome`, before any test ran (no blob report). Nothing in the diff can cause it:
 to finish, `gh run rerun <run-id> --failed` ONCE (the skipped deploy jobs rerun with it), and treat
 a second identical failure as real (CDN/egress), not as flake. Seen on run 38027267466 (v0.4.310).
 
+Same family: `sudo apt-get update` on a GitHub-hosted job can hang with NO output (release v0.4.310's
+Build Release sat 60 min; normal is ~46 s). Every ubuntu-latest "Install system dependencies" step
+now carries `timeout-minutes: 10`, so a stall fails in 10 min instead of the 360-min job default —
+then cancel/rerun the same way. Keep that bound on any new apt step.
+
 ## Dead `deb.nodesource.com` apt source breaks `--with-deps` browser install (#610)
 
 The `NDI WebRTC E2E` job's "Install Playwright (branded Chrome for H.264)" step runs
