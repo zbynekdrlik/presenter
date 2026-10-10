@@ -165,26 +165,22 @@ impl NdiManager {
     /// bounded, like the other snapshot readers) and records UNLOCKED, so it
     /// NEVER holds `active` across the per-pipeline sessions-lock await (the
     /// #741 stall). `NdiSessionError::SessionNotFound` when no active pipeline
-    /// has the session (unknown/expired → router maps to 404).
+    /// has the session (unknown/expired → router maps to 404);
+    /// `NdiSessionError::Busy` when the lock wait expired (→ 503) — the stage
+    /// reporter stops for good on a 404, so a busy manager must never say it.
     pub async fn record_client_stats(
         &self,
         session_id: &str,
         sample: crate::pipeline::client_stats::ClientStatsSample,
     ) -> Result<(), NdiSessionError> {
-        let pipelines: Vec<std::sync::Arc<NdiPipeline>> =
-            match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
-                .await
-            {
-                Ok(guard) => guard
-                    .values()
-                    .map(|src| std::sync::Arc::clone(&src.pipeline))
-                    .collect(),
-                Err(_) => {
-                    return Err(NdiSessionError::SessionNotFound {
-                        session_id: session_id.to_string(),
-                    })
-                }
-            };
+        let pipelines = clone_active_pipelines(&self.active)
+            .await
+            .inspect_err(|_| {
+                tracing::debug!(
+                    session_id,
+                    "ndi client-stats: active lock busy (200 ms), answering Busy"
+                );
+            })?;
         for pipeline in pipelines {
             if pipeline.record_client_stats(session_id, sample).await {
                 return Ok(());
@@ -377,6 +373,22 @@ impl NdiManager {
             PipelineState::Errored(e) => Err(anyhow!("pipeline errored: {e}")),
         }
     }
+}
+
+/// The active pipelines' Arcs, cloned out under the `active` lock with the
+/// same 200 ms bound as the snapshot readers, or `NdiSessionError::Busy` when
+/// that wait expired. Busy is NOT "session not found": the caller could not
+/// look. Takes the map directly so the bound is testable without libndi.
+async fn clone_active_pipelines(
+    active: &tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>>,
+) -> Result<Vec<std::sync::Arc<NdiPipeline>>, NdiSessionError> {
+    let guard = tokio::time::timeout(std::time::Duration::from_millis(200), active.lock())
+        .await
+        .map_err(|_| NdiSessionError::Busy)?;
+    Ok(guard
+        .values()
+        .map(|src| std::sync::Arc::clone(&src.pipeline))
+        .collect())
 }
 
 /// Translate the pipeline's OWN typed `AddConsumerError` into the shared

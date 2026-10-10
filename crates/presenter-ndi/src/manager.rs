@@ -63,6 +63,12 @@ pub enum NdiSessionError {
     /// stale candidate — see `NdiPipeline::add_ice_candidate`'s doc comment).
     #[error("session not found: {session_id}")]
     SessionNotFound { session_id: String },
+    /// The bounded (200 ms) `active` lock wait expired — the manager is busy
+    /// (a reserve/finalize section or a pipeline teardown under the lock), so
+    /// it could not look. Says nothing about the session: retry, never treat
+    /// it as unknown/expired.
+    #[error("NDI manager busy — try again")]
+    Busy,
 }
 
 /// One operation in the WHEP signaller protocol.

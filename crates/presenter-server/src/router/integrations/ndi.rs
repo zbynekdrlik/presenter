@@ -333,8 +333,9 @@ pub(crate) struct NdiClientStatsReport {
 /// `POST /ndi/sessions/:session_id/client-stats` — store the latest client
 /// frame-stats sample on the matching WHEP session (#768 D6).
 ///
-/// 204 — stored. 404 — no active pipeline has this session (unknown/expired).
-/// 503 — NDI SDK not available on this host.
+/// 204 — stored. 404 — no active pipeline has this session (unknown/expired);
+/// the stage reporter stops for good on it. 503 — NDI SDK not available on
+/// this host, or the manager was busy (the reporter retries next tick).
 #[instrument(skip_all, fields(session_id = %session_id))]
 pub(crate) async fn ndi_session_client_stats(
     axum::extract::Path(session_id): axum::extract::Path<String>,
@@ -352,11 +353,25 @@ pub(crate) async fn ndi_session_client_stats(
         frames_live: report.frames_live,
         received_at: std::time::Instant::now(),
     };
-    // record_client_stats returns a typed NdiSessionError whose only variant
-    // here is SessionNotFound → 404 (unknown or expired session).
     match manager.record_client_stats(&session_id, sample).await {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(_) => Err(AppError::not_found("NDI session not found")),
+        Err(err) => Err(client_stats_error(err)),
+    }
+}
+
+/// HTTP status for a refused client-stats sample. Only an unknown/expired
+/// session may answer 404 — the stage reporter stops for good on it — so a
+/// busy manager (`Busy`, the bounded lock wait expired) answers 503 and the
+/// reporter retries. Pure → unit-tested without libndi.
+fn client_stats_error(err: presenter_ndi::manager::NdiSessionError) -> AppError {
+    use presenter_ndi::manager::NdiSessionError;
+    match err {
+        NdiSessionError::Busy => AppError::service_unavailable("NDI manager busy — try again"),
+        NdiSessionError::SessionNotFound { .. }
+        | NdiSessionError::SourceNotActive
+        | NdiSessionError::ConsumerCapReached { .. } => {
+            AppError::not_found("NDI session not found")
+        }
     }
 }
 

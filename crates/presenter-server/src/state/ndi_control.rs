@@ -185,7 +185,8 @@ impl NdiManagerHandle {
 
     /// Forward to [`NdiManager::record_client_stats`] — store a client-reported
     /// frame-stats sample on the matching WHEP session (#768 D6).
-    /// `NdiSessionError::SessionNotFound` → the router maps to 404.
+    /// `NdiSessionError::SessionNotFound` → the router maps to 404,
+    /// `NdiSessionError::Busy` → 503.
     pub(crate) async fn record_client_stats(
         &self,
         session_id: &str,
