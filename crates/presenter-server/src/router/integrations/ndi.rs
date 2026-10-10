@@ -362,11 +362,40 @@ pub(crate) async fn ndi_session_client_stats(
     }
 }
 
+/// Render one NDI pipeline snapshot as a JSON object for the `/healthz`
+/// response. Stable schema:
+/// - `source_id`: UUID string identifying the video source
+/// - `state`: one of `starting | streaming | stopped | errored`
+/// - `last_error`: present ONLY when `state == "errored"`; never null
+///
+/// Extracted as a free function so the schema can be unit-tested without
+/// constructing a full NdiManager (which requires libndi-loadable runtime).
+fn render_ndi_pipeline_entry(
+    source_id: &str,
+    pipeline_state: &presenter_ndi::pipeline::PipelineState,
+) -> serde_json::Value {
+    use presenter_ndi::pipeline::PipelineState;
+    let (state_label, last_error) = match pipeline_state {
+        PipelineState::Starting => ("starting", None),
+        PipelineState::Streaming => ("streaming", None),
+        PipelineState::Stopped => ("stopped", None),
+        PipelineState::Errored(detail) => ("errored", Some(detail.as_str())),
+    };
+    let mut entry = serde_json::json!({
+        "source_id": source_id,
+        "state": state_label,
+    });
+    if let Some(err) = last_error {
+        entry["last_error"] = serde_json::Value::String(err.to_string());
+    }
+    entry
+}
+
 /// One `/healthz.ndi_pipelines[]` entry: state (+ last_error) and delivery health.
 pub(crate) fn render_ndi_health_entry(
     h: &presenter_ndi::pipeline::health::PipelineDropHealth,
 ) -> serde_json::Value {
-    let mut entry = crate::router::render_ndi_pipeline_entry(&h.source_id, &h.state);
+    let mut entry = render_ndi_pipeline_entry(&h.source_id, &h.state);
     // #768: per-pipeline delivery health so an external watchdog AND
     // the post-deploy self-heal gate detect a pipeline dropping most
     // of its encoded frames (the boot-restore incident: dropRatio
@@ -403,6 +432,42 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+
+    /// Schema regression for #333 item 7 (deep-review 🟡 #3): the snapshot
+    /// renderer must produce stable JSON for every PipelineState variant and
+    /// MUST include `last_error` only on the `errored` variant. Previously
+    /// the test only asserted the field name; this test pins the per-variant
+    /// shape so mutations to state labels or last_error inclusion are caught.
+    #[test]
+    fn render_ndi_pipeline_entry_emits_correct_shape_per_variant() {
+        use presenter_ndi::pipeline::PipelineState;
+
+        let starting = render_ndi_pipeline_entry("src-1", &PipelineState::Starting);
+        assert_eq!(starting["source_id"], "src-1");
+        assert_eq!(starting["state"], "starting");
+        assert!(
+            starting.get("last_error").is_none(),
+            "Starting must NOT include last_error: {starting:?}"
+        );
+
+        let streaming = render_ndi_pipeline_entry("src-2", &PipelineState::Streaming);
+        assert_eq!(streaming["state"], "streaming");
+        assert!(streaming.get("last_error").is_none());
+
+        let stopped = render_ndi_pipeline_entry("src-3", &PipelineState::Stopped);
+        assert_eq!(stopped["state"], "stopped");
+        assert!(stopped.get("last_error").is_none());
+
+        let errored = render_ndi_pipeline_entry(
+            "src-4",
+            &PipelineState::Errored("pipeline died: ndisrc EOS".to_string()),
+        );
+        assert_eq!(errored["state"], "errored");
+        assert_eq!(
+            errored["last_error"], "pipeline died: ndisrc EOS",
+            "Errored MUST carry last_error verbatim so dashboards surface the cause"
+        );
+    }
 
     /// The stage's session-stats reporter stops for good on a 404, so only an
     /// unknown/expired session may answer 404. A busy manager (the `active`
