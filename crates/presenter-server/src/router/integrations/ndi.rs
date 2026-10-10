@@ -366,6 +366,22 @@ mod tests {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
+    /// The stage's session-stats reporter stops for good on a 404, so only an
+    /// unknown/expired session may answer 404. A busy manager (the `active`
+    /// lock wait expired mid source switch) must answer 503 so the reporter
+    /// retries on its next tick.
+    #[test]
+    fn client_stats_busy_is_503_and_unknown_session_is_404() {
+        use presenter_ndi::manager::NdiSessionError;
+        let busy = client_stats_error(NdiSessionError::Busy).into_response();
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let gone = client_stats_error(NdiSessionError::SessionNotFound {
+            session_id: "s-1".to_string(),
+        })
+        .into_response();
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    }
+
     /// Build a fresh in-memory AppState that may or may not have a real NDI
     /// manager attached depending on whether libndi is loadable on the host.
     async fn fresh_state() -> AppState {

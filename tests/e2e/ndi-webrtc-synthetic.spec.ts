@@ -1253,6 +1253,115 @@ test("stage reports per-session client frame stats into /ndi/snapshot (synthetic
   }
 });
 
+// ── Test 8b: a 404 from client-stats STOPS that session's reporter.
+// The server answers 404 only for a session it no longer has (reaped, e.g. ICE
+// never connected), and that id never comes back — so the stage must stop
+// POSTing for it instead of logging "Failed to load resource … 404" every ~5s.
+// Pins the WIRING, not just the predicate: exactly one POST per session, then
+// silence for ~3 more reporter intervals, one "reporter stopped" log line per
+// session, and no console error beyond Chrome's own line for each single 404.
+test("stage stops the per-session client-stats reporter after a 404 (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-ClientStats404",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    const layoutResp = await request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "ndi-fullscreen" } },
+    );
+    expect(
+      layoutResp.ok(),
+      "switching stage layout to ndi-fullscreen must succeed",
+    ).toBe(true);
+
+    // Every client-stats POST answers 404, counted per session id.
+    const hitsBySession = new Map<string, number>();
+    await page.route("**/ndi/sessions/*/client-stats", async (route) => {
+      const match = /\/ndi\/sessions\/([^/]+)\/client-stats/.exec(
+        route.request().url(),
+      );
+      const id = match ? match[1] : "?";
+      hitsBySession.set(id, (hitsBySession.get(id) ?? 0) + 1);
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: '{"error":"NDI session not found"}',
+      });
+    });
+
+    const consoleErrors: string[] = [];
+    const stoppedLogs: string[] = [];
+    page.on("console", (msg) => {
+      const text = msg.text();
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleErrors.push(`[${msg.type()}] ${text}`);
+      } else if (/reporter stopped/.test(text)) {
+        stoppedLogs.push(text);
+      }
+    });
+
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+      timeout: 10_000,
+    });
+    await expect(page.locator('video[data-role="ndi-video"]')).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // The first POST lands ~5s after the session is up (plus getStats).
+    await expect
+      .poll(() => hitsBySession.size, {
+        timeout: 20_000,
+        intervals: [500],
+        message: "the stage never POSTed its per-session client stats",
+      })
+      .toBeGreaterThan(0);
+
+    // ~3 more reporter intervals: a reporter that ignores the 404 POSTs again.
+    await page.waitForTimeout(16_000);
+
+    for (const [id, hits] of hitsBySession) {
+      expect(
+        hits,
+        `session ${id} kept POSTing client stats after its 404 (${hits} POSTs)`,
+      ).toBe(1);
+    }
+    expect(
+      stoppedLogs.length,
+      `one "reporter stopped" log line per 404'd session, got: ${stoppedLogs.join("; ")}`,
+    ).toBe(hitsBySession.size);
+    const failedLoads = consoleErrors.filter((e) =>
+      /Failed to load resource.*404/i.test(e),
+    );
+    expect(
+      failedLoads.length,
+      `at most Chrome's own line for each single 404, got: ${failedLoads.join("; ")}`,
+    ).toBeLessThanOrEqual(hitsBySession.size);
+    expect(
+      consoleErrors.filter((e) => !failedLoads.includes(e)),
+      "browser console must have no other errors or warnings",
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
+});
+
 // ── Test 9 (#768 H4): SOURCE-INTERRUPTION mid-stream fan-out drop guard.
 //
 // H4: between 01:47 and 06:41 on the incident Sunday the Resolume/cg-obs NDI

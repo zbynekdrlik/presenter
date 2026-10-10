@@ -447,6 +447,29 @@ mod tests {
         }
     }
 
+    /// A client-stats POST that cannot get the `active` lock within 200 ms (a
+    /// source switch tearing the old pipeline down under the lock) must say
+    /// BUSY, not "session not found": the stage reporter stops for good on a
+    /// 404, so a busy manager answering 404 silenced a healthy TV's stats for
+    /// the rest of its session. Once the lock frees, the same call succeeds.
+    #[tokio::test]
+    async fn a_held_active_map_reads_as_busy_not_session_not_found() {
+        let active: tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>> =
+            tokio::sync::Mutex::new(std::collections::HashMap::new());
+        let guard = active.lock().await;
+        let busy = clone_active_pipelines(&active).await;
+        assert!(
+            matches!(busy, Err(NdiSessionError::Busy)),
+            "a lock wait that expired must be Busy (-> 503, the reporter retries)"
+        );
+        drop(guard);
+        let free = clone_active_pipelines(&active).await;
+        assert!(
+            matches!(free, Ok(ref pipelines) if pipelines.is_empty()),
+            "a free lock must yield the (empty) pipeline list"
+        );
+    }
+
     /// `Other(anyhow::Error)` must pass through UNCHANGED — the inner
     /// error is extracted and returned as-is, not wrapped in an
     /// `NdiSessionError` variant. The message text must survive verbatim.
