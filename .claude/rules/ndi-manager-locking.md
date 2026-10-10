@@ -46,6 +46,23 @@ stayed green that way). The router side maps the typed refusals in pure fns
 (`client_stats_error`, `snapshot_error` in `router/integrations/ndi.rs`) so the status is tested
 without libndi.
 
+## The 30 s reconnect ticker repairs; it never re-activates a streaming source
+
+`reconnect_active_video_source` (`state/integrations.rs`, driven by `background_tasks.rs`) decides
+via `ReconnectAction` from `pipeline_snapshots_checked`. **Repair** (full re-activation) applies
+only to no pipeline, errored or stopped. **Heartbeat** applies to streaming: publish ONLY
+`NdiConnectionStatus "connected"`. **Wait** applies to starting or busy. It used to re-activate the
+DB-active source on every tick, so SNV logged a false "NDI auto-reconnect: source restored" every
+30 s and re-broadcast `NdiSourceActivated` to every client.
+
+Keep the heartbeat. The live hub never replays, and the stage's `sync_ndi_source_state` resets NDI
+status only on a source-id change, so a stage that missed an event heals a stale
+`failed: …`/`no-signal` overlay only from this periodic "connected". The UI comments that say
+"until the server's next ~30s status tick" refer to it.
+
+Tests (FakeNdiControl `set_pipeline` / `set_snapshots_unreadable`) cover all four branches; assert
+on both `fake.calls()` and the drained live hub.
+
 ## The reservation pattern (`manager/activation.rs`, #741)
 
 `start_pipeline` / `rebuild_pipeline` do: **reserve under the lock** (check_active_entry →
