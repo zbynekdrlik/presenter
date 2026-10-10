@@ -46,7 +46,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         timeout-minutes: 10
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
+        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
 
       # No wasm32 target / nightly toolchain / trunk here, unlike pipeline.yml's
       # Build job: `ai_eval` is a server-side CLI binary only — it does not

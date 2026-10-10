@@ -26,8 +26,8 @@ jobs:
         #   "Package 'glib-2.0', required by 'virtual:world', not found"
         # at the glib-sys build script.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq \
             protobuf-compiler cmake nasm \
             libglib2.0-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
