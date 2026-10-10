@@ -701,7 +701,9 @@ So every reader returns "could not look" SEPARATELY: **`pipeline_snapshots_check
 is busy) → say *Connecting*; `Some(vec![])` = we looked and there really is nothing → the
 silent-broadcaster case (#448). `/healthz` keeps `ndi_pipelines` an array but adds
 `ndi_pipelines_busy: true` on `None`, which the stage's last-resort reload guard reads as "unknown →
-reload" (an empty list from a busy manager used to veto the reload). The old empty-on-timeout
+reload" (an empty list from a busy manager used to veto the reload). The single-source
+`pipeline_snapshot()` returns `Result<Option<_>, NdiSessionError>` — `Err(Busy)` → `/ndi/snapshot`
+503, only `Ok(None)` → 404 "NDI source not active". The old empty-on-timeout
 `pipeline_snapshots()` wrapper was removed for exactly this reason; don't reintroduce one.
 
 Same shape one level up: a **discovery failure** (`discover_sources` errors, or the finder thread

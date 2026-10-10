@@ -84,6 +84,6 @@ pipeline down under the lock — which silently killed a healthy TV's stats for 
 It now waits up to 2 s for the lock (not a probe; a Busy 503 is itself one console error) and
 then returns `NdiSessionError::Busy` (→ 503, `client_stats_error` in `router/integrations/ndi.rs`;
 every refusal except `SessionNotFound` is 503), seam `clone_active_pipelines` tested against a
-held bare map. The wiring (one POST per session,
-then silence) is pinned by the 404-routed Test 8b in `ndi-webrtc-synthetic.spec.ts`; the reporter
-also re-checks `gone` after the `getStats` await, right before the POST.
+held bare map. The wiring (one POST per session, then silence) is pinned by the 404-routed Test 8b
+in `ndi-webrtc-synthetic.spec.ts`; the reporter also re-checks `gone` after the `getStats` await,
+right before the POST.
