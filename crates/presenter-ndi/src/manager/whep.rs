@@ -454,12 +454,13 @@ mod tests {
         }
     }
 
-    /// A client-stats POST that cannot get the `active` lock within 200 ms (a
-    /// source switch tearing the old pipeline down under the lock) must say
-    /// BUSY, not "session not found": the stage reporter stops for good on a
-    /// 404, so a busy manager answering 404 silenced a healthy TV's stats for
-    /// the rest of its session. Once the lock frees, the same call succeeds.
-    #[tokio::test]
+    /// A client-stats POST that cannot get the `active` lock within its 2 s
+    /// budget (a source switch tearing the old pipeline down under the lock)
+    /// must say BUSY, not "session not found": the stage reporter stops for
+    /// good on a 404, so a busy manager answering 404 silenced a healthy TV's
+    /// stats for the rest of its session. Once the lock frees, the same call
+    /// succeeds. Paused clock: the 2 s wait elapses instantly.
+    #[tokio::test(start_paused = true)]
     async fn a_held_active_map_reads_as_busy_not_session_not_found() {
         let active: tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>> =
             tokio::sync::Mutex::new(std::collections::HashMap::new());
@@ -480,13 +481,13 @@ mod tests {
     /// `/healthz`'s pipeline reader must say "could not look" (`None`) when
     /// the `active` lock is held past its 200 ms budget — an empty list there
     /// reads as "source down" and vetoes the stage's last-resort reload.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_held_active_map_is_unreadable_for_the_health_snapshot() {
         let active: tokio::sync::Mutex<std::collections::HashMap<String, ActiveSource>> =
             tokio::sync::Mutex::new(std::collections::HashMap::new());
         let guard = active.lock().await;
         assert!(
-            clone_active_sources(&active, HEALTH_LOCK_WAIT)
+            clone_active_sources(&active, PROBE_LOCK_WAIT)
                 .await
                 .is_none(),
             "a lock wait that expired must read as unknown, not as no pipelines"
@@ -494,10 +495,56 @@ mod tests {
         drop(guard);
         assert!(
             matches!(
-                clone_active_sources(&active, HEALTH_LOCK_WAIT).await,
+                clone_active_sources(&active, PROBE_LOCK_WAIT).await,
                 Some(ref sources) if sources.is_empty()
             ),
             "a free lock must yield the (empty) source list"
+        );
+    }
+
+    /// `/ndi/snapshot/{id}` must say BUSY when the `active` lock is held past
+    /// its 200 ms budget: answering "not found" there told the operator an
+    /// active source was "not active" during every source switch.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_active_map_is_busy_for_the_single_source_snapshot() {
+        let active: ActiveMap = tokio::sync::Mutex::new(std::collections::HashMap::new());
+        let guard = active.lock().await;
+        assert!(
+            matches!(
+                clone_active_pipeline(&active, "src-1").await,
+                Err(NdiSessionError::Busy)
+            ),
+            "a lock wait that expired must be Busy (-> 503), never not-active (-> 404)"
+        );
+        drop(guard);
+        assert!(
+            matches!(clone_active_pipeline(&active, "src-1").await, Ok(None)),
+            "a free lock without that source must read as not active"
+        );
+    }
+
+    /// The client-stats POST waits out a short hold that the probes give up
+    /// on: a ~300 ms teardown under the lock must not turn a healthy TV's
+    /// sample into a 503, while a probe still answers within its 200 ms.
+    /// Pins CLIENT_STATS_LOCK_WAIT > PROBE_LOCK_WAIT, deterministic on a
+    /// paused clock.
+    #[tokio::test(start_paused = true)]
+    async fn client_stats_outlasts_a_hold_the_probes_give_up_on() {
+        let active = std::sync::Arc::new(ActiveMap::new(std::collections::HashMap::new()));
+        let guard = std::sync::Arc::clone(&active).lock_owned().await;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            drop(guard);
+        });
+        assert!(
+            clone_active_sources(&active, PROBE_LOCK_WAIT)
+                .await
+                .is_none(),
+            "a probe must give up on a hold longer than its 200 ms budget"
+        );
+        assert!(
+            matches!(clone_active_pipelines(&active).await, Ok(ref pipelines) if pipelines.is_empty()),
+            "a client-stats POST must wait out a 300 ms hold, not answer Busy"
         );
     }
 

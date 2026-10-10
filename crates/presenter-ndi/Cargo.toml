@@ -35,3 +35,7 @@ gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
 gst-plugin-rtp.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# Paused-clock tests for the bounded `active` lock waits (no real-time sleeps).
+tokio = { workspace = true, features = ["test-util"] }
