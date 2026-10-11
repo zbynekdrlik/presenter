@@ -56,6 +56,7 @@ pub(super) enum Push {
 #[derive(Debug, Clone, Copy)]
 enum StaleTarget {
     TextParameter,
+    OpacityParameter,
     Clip,
 }
 
@@ -76,6 +77,14 @@ impl StaleIdError {
         })
     }
 
+    /// #841: a clip's `video.opacity` parameter (the Bible clear's fade).
+    pub(super) fn opacity_parameter(id: i64) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            target: StaleTarget::OpacityParameter,
+            id,
+        })
+    }
+
     pub(super) fn clip(id: i64) -> anyhow::Error {
         anyhow::Error::new(Self {
             target: StaleTarget::Clip,
@@ -88,6 +97,7 @@ impl fmt::Display for StaleIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let what = match self.target {
             StaleTarget::TextParameter => "text parameter",
+            StaleTarget::OpacityParameter => "opacity parameter",
             StaleTarget::Clip => "clip",
         };
         write!(

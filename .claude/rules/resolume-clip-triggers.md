@@ -7,57 +7,69 @@ paths:
   - "crates/presenter-server/src/resolume/types.rs"
 ---
 
-# Resolume clip triggers — one batch is CONCURRENT; same-layer clips race (#807)
+# Resolume clip triggers: one batch is CONCURRENT; the Bible clear triggers nothing (#807, #841)
 
 ## `trigger_clips` POSTs every `/connect` of a batch at once
 
 `HostDriver::trigger_clips` (driver.rs) sends all `/connect` calls of one batch concurrently
 through a `FuturesUnordered`. The batch has NO ordering. If two clips in the batch sit in the
 SAME Resolume layer, their connects race inside that layer, and whichever Resolume handles
-LAST stays live. Real incident #807: SNV's layer 29 holds `#bible-reference-a/b` and
-`#bible-clear`. The clear path put the blanked reference clip and `#bible-clear` in one batch,
-so the clear clip showed only ~50% of the time.
-
-Rules:
+LAST stays live (#807: SNV layer 29 held `#bible-reference-a/b` and the old `#bible-clear`;
+the clear clip showed ~50% of the time).
 
 - **Never put two clips that must land in a fixed order into one `trigger_clips` batch.** Call
-  `trigger_clips` twice instead. It returns only after every connect of its batch completed,
-  so the second call can never race the first.
-- **A "clear"-style clip replaces its layer's content.** Do NOT also trigger a lane clip in the
-  same layer: it would race the clear clip, or cut to blank first. Blank that lane's TEXT anyway,
-  so the next verse starts clean. `bible_clear.rs` does this. `plan_bible_clear_triggers`
-  partitions the blanked lane clips by `ClipTarget::layer_index`. Phase 1 triggers the lane
-  clips, then phase 2 triggers `#bible-clear`.
-- **Run the second phase even when the first one failed. Do NOT write `phase1?` before
-  phase 2.** A single lane-connect timeout or 404 would otherwise drop the clear clip, and
-  showing that clip is the whole point of a clear. Phase 1 never holds a clip in a clear layer,
-  so the race cannot come back. Return `phase1.and(phase2)` (the first error), so
-  `record_error` / backoff still run. Covered by
-  `clear_clip_still_fires_when_a_lane_clip_trigger_fails`.
-- **`ClipTarget::layer_index`** is the clip's position in the composition's `layers[]` array,
-  recorded by `ClipMapping::from_composition`. Use it whenever trigger logic depends on the
-  layer. Never infer a layer from the clip name.
-- Keep the A/B lane flip tied to "lane text was blanked/filled", never to "clip was triggered".
-  The clear path skips a same-layer clip but still flips (`clear_flips_the_lanes_so_the_next_verse_lands_on_lane_b`).
+  `trigger_clips` twice. It returns only after every connect of its batch completed.
+- Keep the A/B lane flip tied to "lane text was filled", never to "clip was triggered".
 
-## Testing trigger ORDER — arrival gap ≥ response delay, never wall-clock
+## The Bible clear is a FADE, never a trigger (#841, owner 2026-10-11)
 
-To prove "B is sent only after A completed", mount a wiremock `Respond` impl that records
-`(clip_id, Instant::now())` at receipt and answers after a fixed `set_delay(D)`. Then assert
-`arrival(B) - max(arrival(A…)) >= D`. A correct sequential implementation cannot arrive
-earlier: the response delay sits between the two. So the GREEN side is deterministic, and
-machine load only widens the gap. A concurrent batch arrives within milliseconds, so the
-gap check is RED on racy code unless the machine stalls for at least `D`. For a RED that
-does not depend on timing at all, also assert something structural, such as the SET of
-connected clip ids. The SNV-topology test does this: the skipped same-layer clip must be
-absent. Copy `ConnectRecorder` / `assert_clear_after_lanes` from
-`resolume/bible_clear_tests.rs`. This is the sequencing counterpart of the #529
-`ArrivalRecorder` parallel-dispatch test in `tests.rs`.
+Owner: "bible clear chcem aby fungoval tak ze netrigeruje ziaden clip ale iba v tom clipe
+faduje opacitu". `#bible-clear` is no longer a tag (dropped from `clip_map.rs`; such a clip
+in a composition is ignored). `resolume/bible_clear.rs`:
 
-Note: `mount_full_composition` in `tests.rs` puts EVERY clip in ONE layer, together with
-`#bible-clear`. So on a clear in that fixture, all Bible lane clips are skipped and only the
-clear clip connects. Build per-layer compositions (as `bible_clear_tests.rs` does) for any
-test whose behaviour depends on layers.
+- **A clear PUTs `video.opacity` of every Bible lane clip (A AND B sides) down to 0.**
+  - Nothing is connected and no text is written.
+  - Both sides fade, because the live side is unknown after a restart. Fading a disconnected
+    clip is invisible.
+- **The fade length is the clip LAYER's `transition.duration`** (seconds, parsed per layer in
+  `ClipMapping::from_composition` into `ClipTarget::fade`, capped at `MAX_CLEAR_FADE` = 3 s:
+  the host worker is serial).
+  - SNV Bible layers are 0.5 s, PP 0.7 s.
+  - No transition means one step straight to 0.
+- **The fade is time-based** (`fade_level`), stepped every `FADE_STEP` (30 ms), all clips
+  concurrently each step.
+- **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
+  the layer crossfades it in from an invisible clip.
+- **Restore:** `handle_bible` calls `restore_opacity(&to_trigger)` AFTER the text PUTs and
+  BEFORE `trigger_clips`. The clip being connected is the non-live side, so the restore is
+  invisible.
+- **`DimmedClips` (on `HostDriver`, keyed by opacity param id) = "may be off its base
+  opacity".**
+  - A clip enters BEFORE its first fade PUT and leaves only after a successful restore PUT,
+    so a fade that fails halfway is still restored.
+  - Do not flip this to "insert after success", the dedup-payload order: that order would
+    leave a half-faded clip stuck.
+  - A clip the mapping shows at opacity 0 is adopted (base 1.0) once per fetch
+    (`adopt_invisible`, keyed on `last_mapping_refresh`). That covers a previous process that
+    faded it, and stops a stale cached mapping from re-restoring on every verse.
+  - A second clear sends nothing.
+- **404 on an opacity param = `StaleIdError::opacity_parameter`** (stale mapping → refetch +
+  retry, `.claude/rules/resolume-mapping-refresh.md`).
+- The opacity param and its mapped value come from `clip.video.opacity {id, value}`. Read
+  them live with `GET /api/v1/composition/layers/{n}` (one layer, ~200 KB), never the 16 MB
+  `/composition`.
+
+## Testing a fade
+
+`resolume/bible_clear_tests.rs`:
+
+- Read `server.received_requests()`, which keeps arrival order.
+- Assert values only go down and end at 0, and that there are at least 3 steps from near 1.0.
+- Assert the restore PUT index is below the first `/connect`.
+- Assert timing only as a LOWER bound (`took >= FADE`): the loop cannot end before the
+  duration, and load only lengthens it.
+- Fail one param with a priority-1 wiremock (`fail_param`: `with_priority(1)` +
+  `up_to_n_times`) to prove the half-failed-fade restore.
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small
 

@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::time::Duration;
 use tokio::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -74,15 +75,24 @@ impl SlotState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClipTarget {
     pub clip_id: i64,
     pub text_param_id: Option<i64>,
     pub transforms: Vec<TextTransform>,
-    /// #807: position of the clip's layer in the composition's `layers` array.
-    /// The Bible clear path uses it to skip lane clips that share a layer with
-    /// a `#bible-clear` clip, whose `/connect` they would otherwise race.
-    pub layer_index: usize,
+    /// #841: the clip's `video.opacity` parameter, which a Bible clear fades
+    /// to 0 instead of triggering a clip. `None` when the composition has none.
+    pub opacity: Option<ClipOpacity>,
+    /// #841: the transition duration of the clip's layer. A Bible clear fades
+    /// the opacity over the same time the layer crossfades a clip in.
+    pub fade: Duration,
+}
+
+/// #841: a clip's `video.opacity` parameter and the value it was mapped at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipOpacity {
+    pub param_id: i64,
+    pub base: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

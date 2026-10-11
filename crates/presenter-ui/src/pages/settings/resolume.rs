@@ -260,12 +260,12 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     <div><dt>"#bible-reference-a / #bible-reference-b"</dt><dd>"Bible reference with translation code (e.g. \"1 Samuel 1:4-5 (ROH)\")."</dd></div>
                     <div><dt>"#bible-translate-a / #bible-translate-b"</dt><dd>"Secondary-translation verse text, or empty if no secondary translation is configured."</dd></div>
                     <div><dt>"#bible-translate-reference-a / #bible-translate-reference-b"</dt><dd>"Secondary-translation reference with its translation code."</dd></div>
-                    <div><dt>"#bible-clear"</dt><dd>"Fired when a Bible verse is cleared — blanks the Bible clips and triggers this clip."</dd></div>
+                    <div data-role="resolume-bible-clear-note"><dt>"Bible clear"</dt><dd>"Clearing a Bible verse triggers no clip: it fades the opacity of every Bible clip to 0 over the clip layer's transition time. The next verse restores it."</dd></div>
                     <div><dt>"#timer"</dt><dd>"Receives the running countdown / preach timer text."</dd></div>
                     <div><dt>"#song-name"</dt><dd>"The active song title (numeric prefixes like \"001 \" are removed automatically)."</dd></div>
                     <div><dt>"#band-name"</dt><dd>"The library the current song belongs to."</dd></div>
                     <div><dt>"Suffixes: -u / -re"</dt><dd>"Append -u to force uppercase, or -re to collapse multi-line text into a single line."</dd></div>
-                    <div><dt>"Also accepted"</dt><dd>"Aliases: #translation (= #translate), #bibleclear (= #bible-clear); suffixes -upper (= -u) and -noenter / -singleline (= -re). Use the canonical forms above when naming new clips."</dd></div>
+                    <div><dt>"Also accepted"</dt><dd>"Aliases: #translation (= #translate); suffixes -upper (= -u) and -noenter / -singleline (= -re). Use the canonical forms above when naming new clips."</dd></div>
                 </dl>
             </section>
         </section>

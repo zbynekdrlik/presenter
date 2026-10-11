@@ -35,10 +35,10 @@
 //! - A host or deck that never had a kind (Bridge PP has no `#main`, SNV no
 //!   `#translate`) never refetches for it.
 
-use super::clip_map::{BIBLE_CLEAR_KIND, BIBLE_LANE_KINDS, MAIN_KINDS, TRANSLATION_KINDS};
+use super::clip_map::{MAIN_KINDS, TRANSLATION_KINDS};
 use super::driver::{duration_ms, FetchReason, HostDriver, MappingFetchOutcome, ACTION_TIMEOUT};
 use super::error_kind::{classify_error, ResolumeErrorKind};
-use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate};
+use super::{ResolumeConnectionSnapshot, StageUpdate};
 use anyhow::{anyhow, Context};
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -364,15 +364,6 @@ pub(super) fn stage_required_kinds(update: &StageUpdate) -> Vec<&'static str> {
     }
     if update.current_translation.is_some() {
         kinds.extend(TRANSLATION_KINDS);
-    }
-    kinds
-}
-
-/// The lanes a Bible push writes; a clear also triggers `#bible-clear`.
-pub(super) fn bible_required_kinds(update: &BibleUpdate) -> Vec<&'static str> {
-    let mut kinds = BIBLE_LANE_KINDS.to_vec();
-    if update.slide_output.is_none() && update.passage.is_none() {
-        kinds.push(BIBLE_CLEAR_KIND);
     }
     kinds
 }

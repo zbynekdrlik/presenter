@@ -29,7 +29,7 @@
 ## External Integrations
 - Manage multiple Resolume Arena connections (DNS hostnames on port 8090 by default) from a
   centralized settings surface.
-- Cache clip metadata and warn operators when expected `#main-a`, `#bible-clear`, etc. tokens are
+- Cache clip metadata and warn operators when expected `#main-a`, `#bible-a`, etc. tokens are
   missing so they can fix naming before service.
 - Stream countdown text into a dedicated `#timer` clip on each deck without triggering playback.
 - Allow clip name modifiers (e.g., `-u`, `-re`) so formatting tweaks happen directly in Resolume without duplicating slides.

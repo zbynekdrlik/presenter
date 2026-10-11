@@ -1,3 +1,4 @@
+use super::bible_clear::DimmedClips;
 use super::clip_map::{count_clips, ClipMapping};
 use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
@@ -274,6 +275,8 @@ pub(super) struct HostDriver {
     /// kinds, the follow-up schedule of a suspect mapping and the lane
     /// refetch state (`provisional_mapping.rs`). In memory only.
     pub(super) provisional: ProvisionalMapping,
+    /// #841: Bible clips a clear faded, restored before their next connect.
+    pub(super) dimmed: DimmedClips,
 }
 
 impl HostDriver {
@@ -300,6 +303,7 @@ impl HostDriver {
             missing_clips: Vec::new(),
             missing_clip_last_warn: HashMap::new(),
             provisional: ProvisionalMapping::default(),
+            dimmed: DimmedClips::default(),
         }
     }
 
@@ -321,6 +325,7 @@ impl HostDriver {
         self.missing_clip_last_warn.clear();
         // Another host or port may be another Arena: forget its decks.
         self.provisional = ProvisionalMapping::default();
+        self.dimmed = DimmedClips::default();
     }
 
     /// Drop the cached mapping so the next push or tick refetches it, logged
