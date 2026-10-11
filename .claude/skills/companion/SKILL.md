@@ -144,6 +144,14 @@ Pages match by number on both rigs (page 30 = SNV "strih-obs" / PP "STRIH 2ME").
   kept outside the repo (work-products `companion_copy_page30_buttons.py`).
 - **Before replacing, check what the target button already does.** PP page 30 row 1 still
   fired Resolume CG clips over OSC (`cg_resolume send_blank /composition/groups/2/columns/N/connect`).
+  A button whose connection is down shows Companion's red warning triangle, and the owner reads
+  that as "error". Moving a CG button to Presenter therefore needs:
+  - every overlay toggle with its own `stream_overlay_active` feedback. SNV "ucet dole" had none,
+    so it never lit;
+  - a "Clear" made of `stream_overlay_off` per overlay. `stream_clear` also clears the BASE scene,
+    which the old Resolume Clear never did.
+  - Presenter stream scenes have no video element, so a Resolume "CG VIDEO" clip has no
+    Presenter equivalent.
 - **Test without the UI:** the Companion HTTP API on `:8000`:
   - press a button: `POST /api/location/<page>/<row>/<col>/press`
   - read a variable: `GET /api/variable/<connection label>/<var>/value`, e.g. `presenter/stream_overlays`
