@@ -9,6 +9,7 @@ mod error_kind;
 mod handlers;
 #[cfg(test)]
 mod keepalive_tests;
+mod lane_seed;
 #[cfg(test)]
 mod latency_tests;
 #[cfg(test)]

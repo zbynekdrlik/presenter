@@ -489,6 +489,7 @@ impl HostDriver {
         self.reset_dedup_for_changed_ids(&mapping);
 
         let kinds = mapping.destination_kinds();
+        self.seed_lanes(&mapping);
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
         self.invalidation_reason = None;

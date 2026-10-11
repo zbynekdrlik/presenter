@@ -151,13 +151,14 @@ fn layer_fade(layer: &Value) -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
-/// What a clip's tags share: its id, text and opacity parameters, and its
-/// layer's fade.
+/// What a clip's tags share: its id, text and opacity parameters, its
+/// layer's fade, and whether it was connected.
 struct ClipFacts {
     clip_id: i64,
     text_param_id: Option<i64>,
     opacity: Option<ClipOpacity>,
     fade: Duration,
+    connected: bool,
 }
 
 fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
@@ -177,6 +178,7 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
         text_param_id: extract_text_param_id(clip),
         opacity: extract_opacity(clip),
         fade,
+        connected: is_connected(clip),
     };
 
     for fragment in name_lower.split_whitespace() {
@@ -298,6 +300,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
         transforms,
         opacity: facts.opacity,
         fade: facts.fade,
+        connected: facts.connected,
     };
 
     let destination = match (kind, lane) {
@@ -390,6 +393,15 @@ fn extract_opacity(clip: &Value) -> Option<ClipOpacity> {
     let param_id = opacity.get("id").and_then(Value::as_i64)?;
     let base = opacity.get("value").and_then(Value::as_f64).unwrap_or(1.0);
     Some(ClipOpacity { param_id, base })
+}
+
+/// Resolume's `connected` choice: `Empty`, `Disconnected`, `Previewing`,
+/// `Connected` or `Connected & previewing`. Only the last two are playing.
+fn is_connected(clip: &Value) -> bool {
+    clip.get("connected")
+        .and_then(|connected| connected.get("value"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.starts_with("Connected"))
 }
 
 fn extract_text_param_id(clip: &Value) -> Option<i64> {

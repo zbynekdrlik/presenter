@@ -1,5 +1,6 @@
 ---
 paths:
+  - "crates/presenter-server/src/resolume/lane_seed.rs"
   - "crates/presenter-server/src/resolume/handlers.rs"
   - "crates/presenter-server/src/resolume/bible_clear*.rs"
   - "crates/presenter-server/src/resolume/driver.rs"
@@ -83,6 +84,20 @@ in a composition is ignored). `resolume/bible_clear.rs`:
 - The opacity param and its mapped value come from `clip.video.opacity {id, value}`. Read
   them live with `GET /api/v1/composition/layers/{n}` (one layer, ~200 KB), never the 16 MB
   `/composition`.
+
+## The A/B lanes are seeded from the connected clips after a start (`lane_seed.rs`)
+
+The lane state resets to side A on every start and host config change. When side A is still
+the CONNECTED clip, the first push wrote into the live clip and connected it again: no
+crossfade, the text popped in. Since #841 the clear also leaves the reference clip connected at
+opacity 0, so its restore popped the reference in too. After the FIRST fetch that lists any lane
+clip (`ClipMapping` `has_lane_clips`, so a mid-load composition does not count),
+`HostDriver::seed_lanes` starts each slot on the side that is NOT connected when exactly one
+side is (`next_lane_from_connected`; a Bible slot's reference clips count for its side).
+Unknown (neither or both) keeps A. It runs once (`SlotState::seeded`, reset with the state).
+`ClipTarget::connected` = Resolume's `connected.value` starts with `Connected` (the choices are
+`Empty`, `Disconnected`, `Previewing`, `Connected`, `Connected & previewing`; SNV verified
+2026-10-11: `#bible-a` Connected on layer 30, `#bible-clear` Connected at opacity 0 on 29).
 
 ## Testing a fade
 
