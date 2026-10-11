@@ -502,20 +502,30 @@ async fn a_failed_step_still_records_the_puts_that_landed() {
         .await
         .expect_err("the failed opacity PUT fails the clear");
 
+    // serde_json parses floats without `float_roundtrip`, so a value read back
+    // from a request body can differ from the sent f64 by one ULP: compare
+    // with a tolerance far below the ~0.08 between two fade steps.
+    let tracked_level = |param: i64| {
+        driver
+            .opacities
+            .get(param)
+            .map(|tracked| tracked.level)
+            .expect("tracked")
+    };
     let requests = server.received_requests().await.expect("requests");
     let landed = opacities_put(&requests, 145);
     assert_eq!(landed.len(), 3, "{landed:?}");
-    assert_eq!(
-        driver.opacities.get(145).map(|tracked| tracked.level),
-        Some(landed[2]),
-        "the third step of 145 landed and is recorded"
+    assert!(
+        (tracked_level(145) - landed[2]).abs() < 1e-9,
+        "the third step of 145 landed and is recorded: {} vs {landed:?}",
+        tracked_level(145)
     );
     let failed = opacities_put(&requests, 135);
     assert_eq!(failed.len(), 3, "{failed:?}");
-    assert_eq!(
-        driver.opacities.get(135).map(|tracked| tracked.level),
-        Some(failed[1]),
-        "the failed third step of 135 is not recorded"
+    assert!(
+        (tracked_level(135) - failed[1]).abs() < 1e-9,
+        "the failed third step of 135 is not recorded: {} vs {failed:?}",
+        tracked_level(135)
     );
 }
 
