@@ -416,3 +416,23 @@ share one `name`, which is safe because only one property form is mounted. The c
 kept the old checkbox's `data-role`, so `.check()` in older specs still works; `.uncheck()` on a
 radio would throw. `transition_choice.rs` (pure) carries the duration between the two fades. A
 cut starts at `STREAM_DEFAULT_FADE_MS`.
+
+## Output bar: create / rename outputs + the OBS URL (#842, `output_manage.rs`)
+- „Nový výstup" asks for a NAME only. `presenter_core::slug_from_name` (`stream/slug.rs`, pure,
+  host-tested) derives the slug: diacritics folded with the same NFD fold search uses, ASCII
+  letters and digits kept, other runs become one `-`, cut at `STREAM_SLUG_MAX`. The form previews
+  `Adresa: /stream/{slug}`. `create_request` refuses empty / symbol-only / reserved / already
+  listed slugs INLINE before any request. A real 409 would log `Failed to load resource` (#598),
+  so the duplicate E2E relies on this client-side check; the server 409 is still mapped
+  (`refusal_message`) for a race with another operator.
+- A created output is selected at once (`reload_outputs` + `switch_output`, which keeps the
+  dirty-draft guard). The `<select>` options follow through `prop:selected` (#827), so the new
+  option arrives already selected.
+- „Premenovať" PATCHes `{name}` only. The slug NEVER changes, so Companion buttons (they store
+  the slug, default `stream`) and OBS sources (`/stream/{slug}`) keep working. That is how the
+  owner's "stream" output became "Strih" (2026-10-11).
+- The OBS URL is a read-only input that selects itself on focus. Do not add a copy button:
+  `navigator.clipboard` needs a secure context, and the LAN editor is plain HTTP.
+- E2E `stream-editor-outputs.spec.ts`: create (preview, selected, `?output=`, URL, server name),
+  duplicate refused inline, rename (prefilled, option text, slug + URL unchanged), 360 px no
+  horizontal overflow with the form open.

@@ -919,6 +919,63 @@ html[data-stream-editor="true"] {
 /* #829: phone width — tighter gutters, and the element panel / scene preview
  * drop their 20rem minimum, so the tabs and an open scene fit 320 px.
  * Kept LAST so it overrides the base rules above. */
+/* #842: the output bar under the header — the selected output's OBS URL and
+ * the create / rename form. Everything wraps, so it fits a phone. */
+.stream-editor__outputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid #2a2e3a;
+  background: #161922;
+  color: #b8c0d0;
+  font-size: 0.85rem;
+}
+
+.stream-editor__obs-url {
+  display: inline-flex;
+  flex: 1 1 18rem;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.stream-editor__obs-url input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #333c4f;
+  border-radius: 6px;
+  background: #12141b;
+  color: #e6eaf2;
+  font-family: ui-monospace, monospace;
+}
+
+.stream-editor__output-form {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stream-editor__output-form .stream-editor__add-name {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.stream-editor__output-slug {
+  color: #9aa1b1;
+  font-family: ui-monospace, monospace;
+}
+
+.stream-editor__output-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ff9aa6;
+}
+
 @media (max-width: 480px) {
     .stream-editor__header {
         padding: 0.75rem 1rem;

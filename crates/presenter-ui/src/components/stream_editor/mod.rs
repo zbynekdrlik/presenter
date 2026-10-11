@@ -26,6 +26,7 @@ pub mod font_faces;
 pub mod frame_math;
 pub mod gesture;
 pub mod number_field;
+pub mod output_manage;
 pub mod output_paths;
 pub mod percent_input;
 pub mod prop_error;
