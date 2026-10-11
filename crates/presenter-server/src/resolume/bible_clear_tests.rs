@@ -487,6 +487,38 @@ async fn a_failed_step_waits_for_its_other_puts_before_failing() {
     );
 }
 
+/// Re-review (#841): the PUTs of a failed step that landed are recorded, so the
+/// tracked levels match what Arena has (a later fetch must never read a half
+/// fade as a dim made in Arena). The PUT that failed is not recorded.
+#[tokio::test]
+async fn a_failed_step_still_records_the_puts_that_landed() {
+    let server = start_resolume(bible_layers(Some(FADE))).await;
+    answer_param(&server, 135, 200, 2, 1).await;
+    answer_param(&server, 135, 500, 1, 2).await;
+    let (mut driver, status) = driver_for(&server);
+
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect_err("the failed opacity PUT fails the clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    let landed = opacities_put(&requests, 145);
+    assert_eq!(landed.len(), 3, "{landed:?}");
+    assert_eq!(
+        driver.opacities.get(145).map(|tracked| tracked.level),
+        Some(landed[2]),
+        "the third step of 145 landed and is recorded"
+    );
+    let failed = opacities_put(&requests, 135);
+    assert_eq!(failed.len(), 3, "{failed:?}");
+    assert_eq!(
+        driver.opacities.get(135).map(|tracked| tracked.level),
+        Some(failed[1]),
+        "the failed third step of 135 is not recorded"
+    );
+}
+
 #[tokio::test]
 async fn a_missing_opacity_parameter_is_a_stale_mapping() {
     let server = start_resolume(bible_layers(None)).await;
