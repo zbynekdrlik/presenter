@@ -36,22 +36,30 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   the host worker is serial).
   - SNV Bible layers are 0.5 s, PP 0.7 s.
   - No transition means one step straight to 0.
-- **The fade is time-based** (`fade_level`), stepped every `FADE_STEP` (30 ms), all clips
-  concurrently each step.
+- **The fade is time-based** (`fade_level`), stepped every `FADE_STEP` (50 ms = 20 Hz), all
+  clips concurrently each step.
+  - Every step is 8 PUTs on fresh connections (#808, no pool), so do not raise the rate.
+  - The loop ends at the step where `elapsed >= longest duration`, a hard bound.
 - **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
   the layer crossfades it in from an invisible clip.
 - **Restore:** `handle_bible` calls `restore_opacity(&to_trigger)` AFTER the text PUTs and
   BEFORE `trigger_clips`. The clip being connected is the non-live side, so the restore is
   invisible.
-- **`DimmedClips` (on `HostDriver`, keyed by opacity param id) = "may be off its base
-  opacity".**
-  - A clip enters BEFORE its first fade PUT and leaves only after a successful restore PUT,
-    so a fade that fails halfway is still restored.
-  - Do not flip this to "insert after success", the dedup-payload order: that order would
-    leave a half-faded clip stuck.
-  - A clip the mapping shows at opacity 0 is adopted (base 1.0) once per fetch
-    (`adopt_invisible`, keyed on `last_mapping_refresh`). That covers a previous process that
-    faded it, and stops a stale cached mapping from re-restoring on every verse.
+- **`TrackedOpacities` (`HostDriver::opacities`, keyed by opacity param id) holds `{base,
+  level}` for every clip this process faded.**
+  - A clip is tracked BEFORE its first fade PUT, so a fade that fails halfway is still
+    restored. Do not flip this to "insert after success", the dedup-payload order: that order
+    would leave a half-faded clip stuck.
+  - The clip STAYS tracked after its restore (`level = base`). A composition fetched while it
+    was faded caches 0 (or a mid-fade value), and that cached number must never decide a
+    later fade or restore.
+  - The bug this prevents (review finding): with entries removed on restore, a refetch at 0
+    made the next clear skip the clip, and the verse stayed on the wall. The test is
+    `a_clip_restored_after_a_fetch_at_zero_is_faded_by_the_next_clear`.
+  - A restore is sent only while `level < base`, so the verse after next sends no extra PUT.
+  - An UNtracked clip the mapping shows at opacity 0 is adopted as `{1.0, 0.0}` once per
+    fetch (`adopt_invisible`, keyed on `last_mapping_refresh`). That covers a previous process
+    that faded it.
   - A second clear sends nothing.
 - **404 on an opacity param = `StaleIdError::opacity_parameter`** (stale mapping → refetch +
   retry, `.claude/rules/resolume-mapping-refresh.md`).

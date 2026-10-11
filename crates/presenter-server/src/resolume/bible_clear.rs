@@ -13,10 +13,11 @@
 //! crossfades it in from an invisible clip. Before a faded clip is connected
 //! again, [`HostDriver::restore_opacity`] puts its opacity back.
 //!
-//! [`TrackedOpacities`] remembers every clip that may be off its base opacity. A
-//! clip enters it BEFORE its first fade PUT and leaves it only after a
-//! successful restore, so a fade that fails halfway can never leave a clip
-//! stuck semi-transparent.
+//! [`TrackedOpacities`] remembers the opacity this process gave every clip it
+//! faded. A clip is tracked BEFORE its first fade PUT, so a fade that fails
+//! halfway is still restored, and it stays tracked after the restore: a
+//! composition fetched while it was faded shows 0 (or a mid-fade value), and
+//! that cached number must never decide a later fade or restore.
 
 use super::clip_map::ClipMapping;
 use super::driver::{duration_ms, HostDriver, ACTION_TIMEOUT};
@@ -33,21 +34,23 @@ use tracing::{debug, info};
 /// Upper bound of a clear's fade. The host worker is serial, so a fade holds
 /// every later push of this host for its whole length.
 pub(super) const MAX_CLEAR_FADE: Duration = Duration::from_secs(3);
-/// Time between two fade steps (about 33 opacity updates per second).
-const FADE_STEP: Duration = Duration::from_millis(30);
+/// Time between two fade steps (20 opacity updates per second). Every step
+/// PUTs each Bible clip on a fresh connection (#808 keeps no pool), so the
+/// rate stays modest for Arena.
+const FADE_STEP: Duration = Duration::from_millis(50);
 
-/// A clip whose opacity a clear lowered.
+/// The opacity this process last gave one clip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct TrackedOpacity {
     /// The opacity a restore puts back.
     pub(super) base: f64,
-    /// The last opacity Resolume accepted from us.
+    /// The last opacity Resolume accepted from us; below `base` while faded.
     pub(super) level: f64,
 }
 
-/// The clips that may be off their base opacity, keyed by opacity parameter
-/// id. Kept across mapping refetches (the ids survive them); reset with the
-/// host config.
+/// Every Bible clip this process has faded, keyed by opacity parameter id.
+/// Kept across mapping refetches (the ids survive them); reset with the host
+/// config.
 #[derive(Debug, Default)]
 pub(super) struct TrackedOpacities {
     clips: HashMap<i64, TrackedOpacity>,
@@ -111,8 +114,9 @@ fn bible_lane_clips(mapping: &ClipMapping) -> impl Iterator<Item = &ClipTarget> 
 }
 
 /// The fade a clear runs: each Bible lane clip with an opacity parameter that
-/// is still visible, from where it is now. A clip tagged twice fades once.
-/// Pure, so the selection is unit-tested without a mock Resolume.
+/// is still visible, from where it is now: the tracked level, else the
+/// mapped value. A clip tagged twice fades once. Pure, so the selection is
+/// unit-tested without a mock Resolume.
 pub(super) fn plan_clear_fade(
     mapping: &ClipMapping,
     tracked: &TrackedOpacities,
@@ -191,6 +195,11 @@ impl HostDriver {
                     level: target.from,
                 });
         }
+        let longest = fade
+            .iter()
+            .map(|target| target.duration)
+            .max()
+            .unwrap_or_default();
         let endpoint = self.endpoint().await?;
         let start = Instant::now();
         let mut steps = 0;
@@ -201,7 +210,7 @@ impl HostDriver {
                 .filter(|target| {
                     self.opacities
                         .get(target.param_id)
-                        .is_some_and(|c| c.level > 0.0)
+                        .is_some_and(|tracked| tracked.level > 0.0)
                 })
                 .map(|target| {
                     let level = fade_level(target.from, elapsed, target.duration);
@@ -213,18 +222,23 @@ impl HostDriver {
             }
             put_opacities(&self.client, &endpoint, &levels).await?;
             for (param_id, level) in levels {
-                if let Some(clip) = self.opacities.clips.get_mut(&param_id) {
-                    clip.level = level;
+                if let Some(tracked) = self.opacities.clips.get_mut(&param_id) {
+                    tracked.level = level;
                 }
             }
             steps += 1;
+            // Past the longest duration every level just sent was 0.
+            if elapsed >= longest {
+                return Ok(steps);
+            }
             sleep(FADE_STEP).await;
         }
     }
 
     /// Put back the base opacity of every clip in `targets` that a clear
     /// lowered, before those clips are connected again (their text is
-    /// already written, and the A/B side being connected is not live).
+    /// already written, and the A/B side being connected is not live). The
+    /// clip stays tracked at its base, so a later fade starts from there.
     pub(super) async fn restore_opacity(&mut self, targets: &[ClipTarget]) -> anyhow::Result<()> {
         let mut seen = HashSet::new();
         let restores: Vec<(i64, f64)> = targets
@@ -234,7 +248,8 @@ impl HostDriver {
             .filter_map(|opacity| {
                 self.opacities
                     .get(opacity.param_id)
-                    .map(|clip| (opacity.param_id, clip.base))
+                    .filter(|tracked| tracked.level < tracked.base)
+                    .map(|tracked| (opacity.param_id, tracked.base))
             })
             .collect();
         if restores.is_empty() {
@@ -242,8 +257,10 @@ impl HostDriver {
         }
         let endpoint = self.endpoint().await?;
         put_opacities(&self.client, &endpoint, &restores).await?;
-        for (param_id, _) in &restores {
-            self.opacities.clips.remove(param_id);
+        for &(param_id, base) in &restores {
+            if let Some(tracked) = self.opacities.clips.get_mut(&param_id) {
+                tracked.level = base;
+            }
         }
         debug!(
             host = %self.config.host,
