@@ -8,7 +8,9 @@
 //!   the clip layer's transition duration;
 //! - it fills no lane, so the A/B lanes do not flip;
 //! - the next verse restores a faded clip's opacity BEFORE connecting it;
-//! - a fade that fails halfway still gets its clips restored.
+//! - a fade that fails halfway still gets its clips restored;
+//! - a clip stays tracked after its restore, so a composition fetched while
+//!   it was faded (opacity 0) never makes a later clear skip it.
 //!
 //! The mock Arena accepts every PUT and `/connect`; assertions read
 //! `received_requests()`, which keeps arrival order. Timing is only ever
@@ -123,14 +125,14 @@ async fn start_resolume(layers: Vec<Value>) -> MockServer {
     server
 }
 
-/// Answer `status` to the next `times` PUTs of parameter `param_id`, ahead of
-/// the catch-all PUT route.
-async fn fail_param(server: &MockServer, param_id: i64, status: u16, times: u64) {
+/// Answer `status` to `times` PUTs of parameter `param_id` at `priority`,
+/// ahead of the catch-all PUT route (priority 5).
+async fn answer_param(server: &MockServer, param_id: i64, status: u16, times: u64, priority: u8) {
     Mock::given(method("PUT"))
         .and(path(format!("/api/v1/parameter/by-id/{param_id}")))
         .respond_with(ResponseTemplate::new(status))
         .up_to_n_times(times)
-        .with_priority(1)
+        .with_priority(priority)
         .mount(server)
         .await;
 }
@@ -393,7 +395,9 @@ async fn a_restored_clip_is_not_restored_twice() {
 #[tokio::test]
 async fn a_fade_that_fails_halfway_is_still_restored() {
     let server = start_resolume(bible_layers(Some(FADE))).await;
-    fail_param(&server, 135, 500, 1).await;
+    // Two fade steps of #bible-reference-a land, the third fails.
+    answer_param(&server, 135, 200, 2, 1).await;
+    answer_param(&server, 135, 500, 1, 2).await;
     let (mut driver, status) = driver_for(&server);
 
     let err = driver
@@ -401,7 +405,13 @@ async fn a_fade_that_fails_halfway_is_still_restored() {
         .await
         .expect_err("the failed opacity PUT fails the clear");
     assert!(!is_stale_id_error(&err), "a 500 is a host failure: {err:#}");
-    let after_clear = server.received_requests().await.expect("requests").len();
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&requests, 135).len(),
+        3,
+        "the fade stopped at its third step"
+    );
+    let after_clear = requests.len();
 
     driver.next_retry_at = None;
     driver
@@ -422,7 +432,7 @@ async fn a_fade_that_fails_halfway_is_still_restored() {
 #[tokio::test]
 async fn a_missing_opacity_parameter_is_a_stale_mapping() {
     let server = start_resolume(bible_layers(None)).await;
-    fail_param(&server, 130, 404, 10).await;
+    answer_param(&server, 130, 404, 10, 1).await;
     let (mut driver, _status) = driver_for(&server);
     driver.ensure_mapping().await.expect("mapping");
     let mapping = driver.mapping.clone().expect("mapping cached");
@@ -432,6 +442,46 @@ async fn a_missing_opacity_parameter_is_a_stale_mapping() {
         .await
         .expect_err("404 on an opacity parameter");
     assert!(is_stale_id_error(&err), "{err:#}");
+}
+
+/// Review finding (#841): a composition fetched while a clip sat at opacity 0
+/// cached 0 as its value. Once a verse restored the clip, a clear read that
+/// cached 0, skipped the clip, and the verse stayed on the wall.
+#[tokio::test]
+async fn a_clip_restored_after_a_fetch_at_zero_is_faded_by_the_next_clear() {
+    let mut layers = bible_layers(None);
+    // The A side as Arena reports it after a clear: invisible.
+    layers[1] = layer(
+        vec![
+            clip(BIBLE_A, "#bible-a", 30, 0.0),
+            clip(301, "#bible-b", 31, 1.0),
+        ],
+        None,
+    );
+    let server = start_resolume(layers).await;
+    let (mut driver, status) = driver_for(&server);
+
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+    let after_verse = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&after_verse, 130),
+        vec![1.0],
+        "restored to full"
+    );
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&requests[after_verse.len()..], 130),
+        vec![0.0],
+        "the clear fades the restored #bible-a, whatever the cached mapping says"
+    );
 }
 
 #[test]
@@ -445,6 +495,12 @@ fn the_composition_records_each_clips_opacity_and_layer_fade() {
         vec![json!({ "id": 901, "name": { "value": "#song-name" } })],
         None,
     ));
+    for (id, name, secs) in [(902, "#band-name", 0.0), (903, "#main-a", -1.0)] {
+        layers.push(json!({
+            "transition": { "duration": { "value": secs } },
+            "clips": [clip(id, name, id - 800, 1.0)],
+        }));
+    }
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
 
     let bible_a = &mapping.bible_a[0];
@@ -462,6 +518,16 @@ fn the_composition_records_each_clips_opacity_and_layer_fade() {
     let song = &mapping.song_name[0];
     assert_eq!(song.opacity, None);
     assert_eq!(song.fade, Duration::ZERO);
+    assert_eq!(
+        mapping.band_name[0].fade,
+        Duration::ZERO,
+        "a 0 s transition"
+    );
+    assert_eq!(
+        mapping.main_a[0].fade,
+        Duration::ZERO,
+        "a negative transition"
+    );
 }
 
 #[test]

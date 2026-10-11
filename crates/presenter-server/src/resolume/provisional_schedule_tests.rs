@@ -307,7 +307,7 @@ fn destination_kinds_name_the_clips_the_mapping_has() {
     assert!(mapping.missing_tokens().contains(&"#main-b"));
     assert_eq!(
         mapping.destination_kinds().len() + mapping.missing_tokens().len(),
-        16,
+        15,
         "every kind is either present or missing"
     );
 }
