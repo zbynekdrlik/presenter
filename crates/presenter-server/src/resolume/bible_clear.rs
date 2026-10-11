@@ -19,7 +19,7 @@
 //! - A clip is tracked BEFORE its first fade PUT, so a fade that fails halfway
 //!   is still restored. It stays tracked after the restore: a composition
 //!   fetched while it was faded cached 0 (or a mid-fade value), and that cached
-//!   number must never decide a later fade or restore.
+//!   number must never override a write made after that fetch.
 //! - Every clip a verse connects is remembered with its clip id and layer fade.
 //!   After a Resolume deck switch the layer keeps PLAYING that clip, while
 //!   `/composition` lists only the new deck, so a clear fades it from what was
@@ -101,7 +101,10 @@ impl TrackedOpacities {
     ///   process, and it goes back to full opacity before its next connect;
     /// - a tracked clip takes the fetched value as its level (no write runs
     ///   between a fetch and its sync, so a difference was made outside
-    ///   Presenter, e.g. in Arena, or by a step that failed halfway).
+    ///   Presenter, e.g. in Arena, or by a step that failed halfway). A clip
+    ///   that was visible also takes it as its base, so an opacity lowered in
+    ///   Arena survives the next verse; a faded clip keeps restoring to at
+    ///   least its old base.
     pub(super) fn sync_with_fetch(
         &mut self,
         mapping: &ClipMapping,
@@ -128,10 +131,16 @@ impl TrackedOpacities {
                     sync.adopted.push(opacity.param_id);
                 }
                 Some(tracked) if (tracked.level - shown).abs() > SAME_OPACITY => {
-                    let synced = TrackedOpacity {
-                        base: tracked.base.max(shown),
-                        level: shown,
+                    // A visible clip changed in Arena keeps that opacity as
+                    // its base; a faded one is still restored to at least
+                    // its old base.
+                    let visible = tracked.level >= tracked.base;
+                    let base = if visible && shown > 0.0 {
+                        shown
+                    } else {
+                        tracked.base.max(shown)
                     };
+                    let synced = TrackedOpacity { base, level: shown };
                     self.clips.insert(opacity.param_id, synced);
                     sync.corrected.push(opacity.param_id);
                 }
@@ -446,13 +455,16 @@ impl HostDriver {
         }
         let endpoint = self.endpoint().await?;
         let missing = put_opacities(&self.client, &endpoint, &restores).await?;
-        if let Some(&param_id) = missing.first() {
-            return Err(StaleIdError::opacity_parameter(param_id));
-        }
         for &(param_id, base) in &restores {
+            if missing.contains(&param_id) {
+                continue;
+            }
             if let Some(tracked) = self.opacities.clips.get_mut(&param_id) {
                 tracked.level = base;
             }
+        }
+        if let Some(&param_id) = missing.first() {
+            return Err(StaleIdError::opacity_parameter(param_id));
         }
         debug!(
             host = %self.config.host,

@@ -39,8 +39,9 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   - No transition means one step straight to 0.
 - **The fade is time-based** (`fade_level`), stepped every `FADE_STEP` (50 ms = 20 Hz), all
   clips concurrently each step.
-  - Every step is up to 8 PUTs (one per still-visible clip) on fresh connections (#808, no
-    pool), so do not raise the rate. A clip at 0 gets no further steps.
+  - Every step is one PUT per still-visible clip (the 8 mapped Bible clips plus any visible
+    unmapped connected clips) on fresh connections (#808, no pool), so do not raise the rate. A
+    clip at 0 gets no further steps.
   - The loop ends at the step where `elapsed >= longest duration`, a hard bound.
 - **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
   the layer crossfades it in from an invisible clip.
@@ -64,8 +65,12 @@ in a composition is ignored). `resolume/bible_clear.rs`:
     opacity 0 is adopted as `{1.0, 0.0}` (a previous process faded it, or an operator hid it:
     the two look the same, and the verse comes back at full opacity), and a tracked clip takes
     the fetched value as its level. Nothing writes Bible opacities between a fetch and its
-    sync, so a difference was made in Arena (or by a step that failed halfway). Test:
-    `a_clip_shown_again_in_arena_after_a_clear_is_faded_by_the_next_clear`.
+    sync, so a difference was made in Arena (or by a step that failed halfway). A VISIBLE clip
+    (level >= base) also takes a non-zero fetched value as its base, so a dim made in Arena
+    survives the next verse; a faded one keeps restoring to at least its old base. Tests:
+    `a_clip_shown_again_in_arena_after_a_clear_is_faded_by_the_next_clear`,
+    `a_clip_dimmed_in_arena_keeps_that_opacity_after_the_next_verse`
+    (`bible_clear_deck_tests.rs`).
   - A second clear sends nothing.
 - **A deck switch keeps the old deck's clip PLAYING** (final review finding): `/composition`
   then lists only the new deck, so fading only mapped clips left the verse on the wall (on main
@@ -76,6 +81,10 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   provisional follow-ups (2/5/15/30/60 s) refetch constantly, and a deck switch after that
   would lose the clip again. Test:
   `a_clear_after_a_deck_switch_fades_the_clips_the_verse_left_playing`.
+  - **Residual risk:** this memory lives in the process. A Presenter restart (a deploy counts)
+    or a host config change BETWEEN a verse and its clear, with a deck switch in between too,
+    loses it, and that verse stays on the wall until the next verse or a manual clear in
+    Arena. Main handled it because its clear connected a blank clip.
 - **404 on an opacity param:** a MAPPED one = `StaleIdError::opacity_parameter` (stale mapping
   → refetch + retry, `.claude/rules/resolume-mapping-refresh.md`). An UNMAPPED one (a connected
   clip from another deck that Resolume no longer knows) is forgotten and the fade goes on
@@ -101,7 +110,10 @@ Unknown (neither or both) keeps A. It runs once (`SlotState::seeded`, reset with
 
 ## Testing a fade
 
-`resolume/bible_clear_tests.rs`:
+`resolume/bible_clear_tests.rs` (core contract) and `bible_clear_deck_tests.rs` (deck switch,
+fetch sync, per-layer duration, lane seed through `handle_bible`; it imports the shared
+`pub(super)` helpers). A sibling `*_tests.rs` counts toward the 800/1000 file-size gate, so add
+new tests to the smaller file or a new sibling:
 
 - Read `server.received_requests()`, which keeps arrival order.
 - Assert values only go down and end at 0, and that there are at least 3 steps from near 1.0.
