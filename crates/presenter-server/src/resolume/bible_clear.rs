@@ -475,9 +475,9 @@ impl HostDriver {
     }
 }
 
-/// PUT each `(opacity param id, value)` concurrently. Returns the params
-/// Resolume answered 404 for (the caller decides what a missing clip means);
-/// any other failure is an error, and the first one wins.
+/// PUT each `(opacity param id, value)` concurrently and wait for all of them.
+/// Returns the params Resolume answered 404 for (the caller decides what a
+/// missing clip means); any other failure is an error, and the first one wins.
 async fn put_opacities(
     client: &Client,
     endpoint: &ResolvedEndpoint,
@@ -509,11 +509,23 @@ async fn put_opacities(
             Ok(None)
         });
     }
+    // Every request of the step is awaited, also after a failure: a request
+    // dropped mid-flight could still reach Arena after the clear returned.
     let mut missing = Vec::new();
+    let mut first_error = None;
     while let Some(result) = futures.next().await {
-        if let Some(param_id) = result? {
-            missing.push(param_id);
+        match result {
+            Ok(Some(param_id)) => missing.push(param_id),
+            Ok(None) => {}
+            Err(err) => {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
         }
     }
-    Ok(missing)
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(missing),
+    }
 }

@@ -43,6 +43,10 @@ in a composition is ignored). `resolume/bible_clear.rs`:
     unmapped connected clips) on fresh connections (#808, no pool), so do not raise the rate. A
     clip at 0 gets no further steps.
   - The loop ends at the step where `elapsed >= longest duration`, a hard bound.
+  - `put_opacities` awaits EVERY request of a step, also after one failed, and then returns
+    the first error. Returning early dropped the others mid-flight, and one landed after the
+    clear had returned (CI run 38176143346; test
+    `a_failed_step_waits_for_its_other_puts_before_failing`).
 - **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
   the layer crossfades it in from an invisible clip.
 - **Restore:** `handle_bible` calls `restore_before_connect(&to_trigger)` AFTER the text PUTs and
