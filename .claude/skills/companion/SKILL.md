@@ -123,6 +123,45 @@ definitions in `index.js` `_setupFeedbacks()`:
   `lib/stream.js`), case-insensitive/trimmed, exact (not substring) — not
   whole-string equality. Pure evaluators live in `lib/stream.js` + `node --test`.
 
+## Copying buttons between the SNV and PP Companions (2026-10-11)
+
+There is no shared profile: each rig's buttons live only in its own `v5.0/db.sqlite`
+(`pages` holds `{name, controls:{row:{col:controlId}}}`, `controls` holds the button JSON).
+Pages match by number on both rigs (page 30 = SNV "strih-obs" / PP "STRIH 2ME").
+
+- **Read first, read-only:** open the DB with `?mode=ro`. Labels are in
+  `style.layers[type=text].text.value`. Actions are in `steps.<n>.action_sets.down[]`,
+  with nested `children` for `logic_if`. Feedbacks are in `feedbacks[]`.
+- **Connection ids differ per rig and some labels too.** For example SNV `strih-obs` is PP
+  `2ME_obs`, and `presenter` is `presenter` on both. Remap every `connectionId` by label and
+  abort on an unmapped id. Regenerate every action/feedback `id` and `overrideId`.
+- **Module versions can differ.** SNV obs-studio is 3.15.3 (stores `upgradeIndex` 8), PP is
+  3.13.1 (index 7). Clamp `upgradeIndex` to the target rig's existing values for that
+  connection; never hand a module an index it does not know.
+- **Write with Companion STOPPED, as the `companion` user** (root-owned `-wal`/`-shm` files
+  would break it). Back up `db.sqlite` (+wal/shm) to `backups/pre-<what>-<ts>/` first,
+  `pragma wal_checkpoint(TRUNCATE)`, then start it again. The script used on 2026-10-11 is
+  kept outside the repo (work-products `companion_copy_page30_buttons.py`).
+- **Before replacing, check what the target button already does.** PP page 30 row 1 still
+  fired Resolume CG clips over OSC (`cg_resolume send_blank /composition/groups/2/columns/N/connect`).
+  A button whose connection is down shows Companion's red warning triangle, and the owner reads
+  that as "error". Moving a CG button to Presenter therefore needs:
+  - every overlay toggle with its own `stream_overlay_active` feedback. SNV "ucet dole" had none,
+    so it never lit;
+  - a "Clear" made of `stream_overlay_off` per overlay. `stream_clear` also clears the BASE scene,
+    which the old Resolume Clear never did.
+  - Presenter stream scenes have no video element, so a Resolume "CG VIDEO" clip has no
+    Presenter equivalent.
+- **Test without the UI:** the Companion HTTP API on `:8000`:
+  - press a button: `POST /api/location/<page>/<row>/<col>/press`
+  - read a variable: `GET /api/variable/<connection label>/<var>/value`, e.g. `presenter/stream_overlays`
+  - Press twice to restore. Read the full action list before pressing (#805).
+- **OBS state without the Windows MCP:** Companion bundles node 26 (global `WebSocket`) at
+  `/opt/companion/node-runtimes/main/bin/node`. obs-websocket v5 on `strih.lan:4455` has no
+  password: send `Identify` (op 1), then `GetSourceActive` / `GetSceneItemList`. The CG
+  button's "Show/Hide on CG" hotkeys change whether `CG-presenter` is ACTIVE in program
+  (`videoActive`), not its `sceneItemEnabled` inside "CG bridge".
+
 ## Module version pinning — connection must survive a deploy (#733)
 
 Companion stores each connection's module version as `moduleVersionId` in the `instances`

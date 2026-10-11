@@ -63,14 +63,18 @@ pub async fn spawn(log: Arc<RequestLog>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One clip of the mock composition: `name` carries the presenter tag, and
-/// `param_id` is its text parameter (a clear clip has none).
-fn mock_clip(id: i64, name: &str, param_id: Option<i64>) -> Value {
-    let sourceparams = match param_id {
-        Some(param_id) => json!({ "text": { "valuetype": "ParamText", "id": param_id } }),
-        None => json!({}),
-    };
-    json!({ "id": id, "name": { "value": name }, "video": { "sourceparams": sourceparams } })
+/// One clip of the mock composition: `name` carries the presenter tag,
+/// `param_id` is its text parameter, and its `video.opacity` parameter (the
+/// #841 Bible clear fades it) has the id `param_id + 1000`.
+fn mock_clip(id: i64, name: &str, param_id: i64) -> Value {
+    json!({
+        "id": id,
+        "name": { "value": name },
+        "video": {
+            "opacity": { "id": param_id + 1000, "value": 1.0 },
+            "sourceparams": { "text": { "valuetype": "ParamText", "id": param_id } },
+        },
+    })
 }
 
 fn mock_deck() -> Value {
@@ -83,17 +87,16 @@ fn mock_deck() -> Value {
 async fn get_composition(State(log): State<Arc<RequestLog>>) -> Json<Value> {
     log.record(MOCK_NAME, "GET", "/api/v1/composition", None);
     let clips = [
-        mock_clip(101, "#main-a", Some(1001)),
-        mock_clip(102, "#main-b", Some(1002)),
-        mock_clip(103, "#translate-a", Some(1003)),
-        mock_clip(104, "#translate-b", Some(1004)),
-        mock_clip(105, "#bible-a", Some(1005)),
-        mock_clip(106, "#bible-b", Some(1006)),
-        mock_clip(107, "#bible-reference-a", Some(1007)),
-        mock_clip(108, "#bible-reference-b", Some(1008)),
-        mock_clip(109, "#bible-clear", None),
-        mock_clip(110, "#song-name", Some(1010)),
-        mock_clip(111, "#band-name", Some(1011)),
+        mock_clip(101, "#main-a", 1001),
+        mock_clip(102, "#main-b", 1002),
+        mock_clip(103, "#translate-a", 1003),
+        mock_clip(104, "#translate-b", 1004),
+        mock_clip(105, "#bible-a", 1005),
+        mock_clip(106, "#bible-b", 1006),
+        mock_clip(107, "#bible-reference-a", 1007),
+        mock_clip(108, "#bible-reference-b", 1008),
+        mock_clip(110, "#song-name", 1010),
+        mock_clip(111, "#band-name", 1011),
     ];
     Json(json!({
         "name": "Mock Composition",
@@ -227,7 +230,7 @@ mod tests {
             .iter()
             .filter_map(|clip| clip["name"]["value"].as_str())
             .collect();
-        assert!(names.contains(&"#main-a") && names.contains(&"#bible-clear"));
+        assert!(names.contains(&"#main-a") && names.contains(&"#bible-reference-a"));
         assert!(!names.contains(&"#timer"));
     }
 

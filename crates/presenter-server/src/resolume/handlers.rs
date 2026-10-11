@@ -1,10 +1,11 @@
-use super::clip_map::ClipMapping;
+use super::batch::drain;
+use super::clip_map::{ClipMapping, BIBLE_LANE_KINDS};
 use super::driver::HostDriver;
 use super::mapping_refresh::StaleIdError;
-use super::provisional_mapping::{bible_required_kinds, stage_required_kinds};
+use super::provisional_mapping::stage_required_kinds;
 use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::stream::FuturesUnordered;
 use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::header::HOST;
 use std::sync::Arc;
@@ -347,9 +348,12 @@ impl HostDriver {
         if self.in_backoff() {
             return Ok(());
         }
-        self.ensure_mapping_for_push(&bible_required_kinds(&update))
-            .await?;
+        self.ensure_mapping_for_push(&BIBLE_LANE_KINDS).await?;
         if let Some(mapping) = self.mapping.clone() {
+            // #841: the tracked opacities take the latest fetch (clips a clear
+            // left invisible, also by an earlier process, and values changed in
+            // Arena) before a verse restores or a clear fades them.
+            self.sync_opacities(&mapping);
             let bible_lane = self.lane_state.current(SlotKind::Bible);
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);
             let mut to_trigger = Vec::new();
@@ -380,14 +384,17 @@ impl HostDriver {
                     )
                     .await?
                 } else {
-                    // Clear path (#807, `bible_clear.rs`): triggers its own two
-                    // phases — lane clips, then `#bible-clear` — so `to_trigger`
-                    // stays empty here.
-                    self.handle_bible_clear(&mapping, bible_lane, bible_translation_lane, status)
-                        .await?
+                    // Clear path (#841, `bible_clear.rs`): fades the Bible clips'
+                    // opacity, triggers nothing and fills no lane.
+                    self.handle_bible_clear(&mapping).await?;
+                    (false, false)
                 };
 
             if !to_trigger.is_empty() {
+                // #841: a clip a clear faded gets its opacity back before it is
+                // connected (its text is already written), and every connected
+                // clip is remembered for a clear after a deck switch.
+                self.restore_before_connect(&to_trigger).await?;
                 if TRIGGER_DELAY.as_millis() > 0 {
                     sleep(TRIGGER_DELAY).await;
                 }
@@ -594,7 +601,7 @@ impl HostDriver {
             }
 
             let endpoint = self.endpoint().await?;
-            let mut futures = FuturesUnordered::new();
+            let futures = FuturesUnordered::new();
             for target in &mapping.timer {
                 if let Some(fut) = put_text_param_future(
                     self.client.clone(),
@@ -606,14 +613,10 @@ impl HostDriver {
                     futures.push(fut);
                 }
             }
-            let mut latency_recorded = None;
-            while let Some(result) = futures.next().await {
-                let duration = result?;
-                if latency_recorded.is_none() {
-                    latency_recorded = Some(duration);
-                }
-            }
-            if let Some(latency) = latency_recorded {
+            // #841 review: every PUT finishes before a failure is reported; the
+            // first one to complete gives the latency.
+            let durations = drain(futures).await?;
+            if let Some(&latency) = durations.first() {
                 self.note_latency(status, latency).await;
             }
             self.last_timer_payload = Some(text);
@@ -656,7 +659,7 @@ impl HostDriver {
 
         if let Some(payload) = text {
             let endpoint = self.endpoint().await?;
-            let mut futures = FuturesUnordered::new();
+            let futures = FuturesUnordered::new();
             for target in selected {
                 if let Some(fut) = put_text_param_future(
                     self.client.clone(),
@@ -668,14 +671,10 @@ impl HostDriver {
                     futures.push(fut);
                 }
             }
-            let mut latency_recorded = None;
-            while let Some(result) = futures.next().await {
-                let duration = result?;
-                if latency_recorded.is_none() {
-                    latency_recorded = Some(duration);
-                }
-            }
-            if let Some(latency) = latency_recorded {
+            // #841 review: every PUT finishes before a failure is reported; the
+            // first one to complete gives the latency.
+            let durations = drain(futures).await?;
+            if let Some(&latency) = durations.first() {
                 self.note_latency(status, latency).await;
             }
         }
@@ -704,7 +703,7 @@ impl HostDriver {
         }
 
         let endpoint = self.endpoint().await?;
-        let mut futures = FuturesUnordered::new();
+        let futures = FuturesUnordered::new();
         for target in targets {
             if let Some(fut) = put_text_param_future(
                 self.client.clone(),
@@ -716,14 +715,10 @@ impl HostDriver {
                 futures.push(fut);
             }
         }
-        let mut latency_recorded = None;
-        while let Some(result) = futures.next().await {
-            let duration = result?;
-            if latency_recorded.is_none() {
-                latency_recorded = Some(duration);
-            }
-        }
-        if let Some(latency) = latency_recorded {
+        // #841 review: every PUT finishes before a failure is reported; the
+        // first one to complete gives the latency.
+        let durations = drain(futures).await?;
+        if let Some(&latency) = durations.first() {
             self.note_latency(status, latency).await;
         }
         match slot {

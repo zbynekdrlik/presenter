@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::time::Duration;
 use tokio::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,9 @@ pub(super) struct SlotState {
     translation_next: LaneTarget,
     bible_next: LaneTarget,
     bible_translation_next: LaneTarget,
+    /// The lanes were seeded from the clips' connected state (`lane_seed.rs`).
+    /// Reset with the state, i.e. on start and on every host config change.
+    pub(super) seeded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -60,13 +64,21 @@ impl SlotState {
         }
     }
 
-    pub(super) fn flip(&mut self, slot: SlotKind) {
-        let target = match slot {
+    pub(super) fn set(&mut self, slot: SlotKind, lane: LaneTarget) {
+        *self.lane_mut(slot) = lane;
+    }
+
+    fn lane_mut(&mut self, slot: SlotKind) -> &mut LaneTarget {
+        match slot {
             SlotKind::Main => &mut self.main_next,
             SlotKind::Translation => &mut self.translation_next,
             SlotKind::Bible => &mut self.bible_next,
             SlotKind::BibleTranslation => &mut self.bible_translation_next,
-        };
+        }
+    }
+
+    pub(super) fn flip(&mut self, slot: SlotKind) {
+        let target = self.lane_mut(slot);
         *target = match *target {
             LaneTarget::A => LaneTarget::B,
             LaneTarget::B => LaneTarget::A,
@@ -74,15 +86,27 @@ impl SlotState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClipTarget {
     pub clip_id: i64,
     pub text_param_id: Option<i64>,
     pub transforms: Vec<TextTransform>,
-    /// #807: position of the clip's layer in the composition's `layers` array.
-    /// The Bible clear path uses it to skip lane clips that share a layer with
-    /// a `#bible-clear` clip, whose `/connect` they would otherwise race.
-    pub layer_index: usize,
+    /// #841: the clip's `video.opacity` parameter, which a Bible clear fades
+    /// to 0 instead of triggering a clip. `None` when the composition has none.
+    pub opacity: Option<ClipOpacity>,
+    /// #841: the transition duration of the clip's layer. A Bible clear fades
+    /// the opacity over the same time the layer crossfades a clip in.
+    pub fade: Duration,
+    /// The clip was connected (playing) when the composition was fetched.
+    /// Seeds the A/B lanes after a start (`lane_seed.rs`).
+    pub connected: bool,
+}
+
+/// #841: a clip's `video.opacity` parameter and the value it was mapped at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipOpacity {
+    pub param_id: i64,
+    pub base: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

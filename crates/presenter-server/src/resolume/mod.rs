@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod backoff_tests;
+mod batch;
 mod bible_clear;
+#[cfg(test)]
+mod bible_clear_deck_tests;
 #[cfg(test)]
 mod bible_clear_tests;
 mod clip_map;
@@ -9,6 +12,7 @@ mod error_kind;
 mod handlers;
 #[cfg(test)]
 mod keepalive_tests;
+mod lane_seed;
 #[cfg(test)]
 mod latency_tests;
 #[cfg(test)]

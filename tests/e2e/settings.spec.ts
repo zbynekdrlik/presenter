@@ -649,8 +649,7 @@ test('resolume settings shows the static supported-clip-names reference panel (#
   await expect(legend.locator('h3')).toHaveText('Supported Clip Names');
 
   // Every supported magic clip name is documented — spot-check the full set,
-  // including #bible-clear (fired when a Bible verse is cleared) and #timer
-  // (which the pre-WASM-migration legend omitted).
+  // including #timer (which the pre-WASM-migration legend omitted).
   for (const token of [
     '#main-a',
     '#translate-a',
@@ -658,13 +657,18 @@ test('resolume settings shows the static supported-clip-names reference panel (#
     '#bible-reference-a',
     '#bible-translate-a',
     '#bible-translate-reference-a',
-    '#bible-clear',
     '#timer',
     '#song-name',
     '#band-name',
   ]) {
     await expect(legend).toContainText(token);
   }
+  // #841: a Bible clear fades the clips' opacity, so there is no #bible-clear
+  // clip any more and the legend says how a clear works instead.
+  await expect(legend).not.toContainText('#bible-clear');
+  await expect(legend.locator('[data-role="resolume-bible-clear-note"]')).toContainText(
+    'fades the opacity',
+  );
 
   expect(consoleMessages).toEqual([]);
 });

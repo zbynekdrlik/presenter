@@ -8,8 +8,8 @@ use super::clip_map::{ClipMapping, MAIN_KINDS, TRANSLATION_KINDS};
 use super::driver::{FetchReason, HostDriver};
 use super::mapping_refresh::Push;
 use super::provisional_mapping::{
-    bible_required_kinds, lane_refetch_retry_after, selected_deck_id, stage_required_kinds,
-    LaneRefetch, FOLLOW_UP_DELAYS, LANE_REFETCH_AFTER_TIMEOUT, LANE_REFETCH_RETRY,
+    lane_refetch_retry_after, selected_deck_id, stage_required_kinds, LaneRefetch,
+    FOLLOW_UP_DELAYS, LANE_REFETCH_AFTER_TIMEOUT, LANE_REFETCH_RETRY,
 };
 use super::provisional_mapping_tests::{
     backoff_elapsed, clip, connect, count, deck_path, driver_for, host_at, lyric_deck, lyric_line,
@@ -278,11 +278,6 @@ fn a_push_needs_the_lanes_it_writes() {
     let mut both = MAIN_KINDS.to_vec();
     both.extend(TRANSLATION_KINDS);
     assert_eq!(stage_required_kinds(&translated), both);
-    let verse_kinds = bible_required_kinds(&verse_update());
-    assert!(verse_kinds.contains(&"#bible-a") && verse_kinds.contains(&"#bible-reference-b"));
-    assert!(!verse_kinds.contains(&"#bible-clear"));
-    let clear = BibleUpdate::from_slide_output(None);
-    assert!(bible_required_kinds(&clear).contains(&"#bible-clear"));
 }
 
 #[test]
@@ -312,7 +307,7 @@ fn destination_kinds_name_the_clips_the_mapping_has() {
     assert!(mapping.missing_tokens().contains(&"#main-b"));
     assert_eq!(
         mapping.destination_kinds().len() + mapping.missing_tokens().len(),
-        16,
+        15,
         "every kind is either present or missing"
     );
 }

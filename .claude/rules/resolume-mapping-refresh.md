@@ -227,7 +227,7 @@ When you touch this area:
 - **Never treat a fetched mapping as final.** Every new fetch path must go
   through `refresh_mapping_with_reason`, so `note_fetched_mapping` sees it.
 - **A new stage/Bible-style push path calls `ensure_mapping_for_push`** with
-  the kinds it writes (`stage_required_kinds` / `bible_required_kinds`),
+  the kinds it writes (`stage_required_kinds` / `BIBLE_LANE_KINDS`),
   never the plain `ensure_mapping`.
 - **`fetched_before` (`dispatch_push`) is taken before the attempt.** Any
   fetch inside it (cold start, recovery, deck switch, lane refetch) makes

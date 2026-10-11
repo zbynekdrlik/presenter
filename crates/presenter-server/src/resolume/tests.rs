@@ -864,26 +864,16 @@ async fn handle_bible_routes_to_clear_when_no_passage() {
         .await
         .expect("bible clear");
 
+    // #841: a clear only fades the Bible clips' opacity (`bible_clear_tests.rs`).
+    // These fixture clips carry no opacity parameter, so it sends nothing: no
+    // blanked text, and no clip trigger (`#bible-clear` is no longer a tag).
     let requests = server.received_requests().await.expect("requests");
-    // Clear should send empty text to bible-a (param 30)
-    let bible_a_puts: Vec<_> = requests
-        .iter()
-        .filter(|req| {
-            req.method.as_str() == "PUT" && req.url.path() == "/api/v1/parameter/by-id/30"
-        })
-        .collect();
-    assert!(!bible_a_puts.is_empty());
-    let body: serde_json::Value = serde_json::from_slice(&bible_a_puts[0].body).expect("json");
-    assert_eq!(
-        body.get("value"),
-        Some(&serde_json::Value::String(String::new()))
+    assert!(
+        !requests
+            .iter()
+            .any(|req| req.method.as_str() == "PUT" || req.url.path().ends_with("/connect")),
+        "a clear writes no text and triggers no clip"
     );
-
-    // Clear should also trigger the bible-clear clip (clip 500)
-    assert!(requests.iter().any(|req| {
-        req.method.as_str() == "POST"
-            && req.url.path() == "/api/v1/composition/clips/by-id/500/connect"
-    }));
 }
 
 // ── record_error tests ──────────────────────────────────────────────

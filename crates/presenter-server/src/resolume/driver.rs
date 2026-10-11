@@ -1,3 +1,5 @@
+use super::batch::drain;
+use super::bible_clear::TrackedOpacities;
 use super::clip_map::{count_clips, ClipMapping};
 use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
@@ -10,7 +12,7 @@ use super::{
 };
 use anyhow::{anyhow, Context};
 use chrono::Utc;
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::stream::FuturesUnordered;
 use presenter_core::ResolumeHost;
 use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::{header::HOST, Client, RequestBuilder, StatusCode};
@@ -274,6 +276,8 @@ pub(super) struct HostDriver {
     /// kinds, the follow-up schedule of a suspect mapping and the lane
     /// refetch state (`provisional_mapping.rs`). In memory only.
     pub(super) provisional: ProvisionalMapping,
+    /// #841: Bible clips a clear faded, restored before their next connect.
+    pub(super) opacities: TrackedOpacities,
 }
 
 impl HostDriver {
@@ -300,6 +304,7 @@ impl HostDriver {
             missing_clips: Vec::new(),
             missing_clip_last_warn: HashMap::new(),
             provisional: ProvisionalMapping::default(),
+            opacities: TrackedOpacities::default(),
         }
     }
 
@@ -321,6 +326,7 @@ impl HostDriver {
         self.missing_clip_last_warn.clear();
         // Another host or port may be another Arena: forget its decks.
         self.provisional = ProvisionalMapping::default();
+        self.opacities = TrackedOpacities::default();
     }
 
     /// Drop the cached mapping so the next push or tick refetches it, logged
@@ -484,6 +490,7 @@ impl HostDriver {
         self.reset_dedup_for_changed_ids(&mapping);
 
         let kinds = mapping.destination_kinds();
+        self.seed_lanes(&mapping);
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
         self.invalidation_reason = None;
@@ -526,7 +533,7 @@ impl HostDriver {
         }
 
         let endpoint = self.endpoint().await?;
-        let mut futures = FuturesUnordered::new();
+        let futures = FuturesUnordered::new();
 
         for target in targets {
             let client = self.client.clone();
@@ -562,10 +569,8 @@ impl HostDriver {
             });
         }
 
-        while let Some(result) = futures.next().await {
-            result?;
-        }
-
+        // #841 review: every connect finishes before a failure is reported.
+        drain(futures).await?;
         Ok(())
     }
 
