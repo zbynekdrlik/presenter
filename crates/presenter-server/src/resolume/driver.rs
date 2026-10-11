@@ -533,7 +533,7 @@ impl HostDriver {
         }
 
         let endpoint = self.endpoint().await?;
-        let mut futures = FuturesUnordered::new();
+        let futures = FuturesUnordered::new();
 
         for target in targets {
             let client = self.client.clone();

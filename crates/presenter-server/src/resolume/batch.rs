@@ -58,12 +58,12 @@ mod tests {
     #[tokio::test]
     async fn a_batch_without_errors_returns_its_successes_in_completion_order() {
         let batch = FuturesUnordered::new();
-        for delay_ms in [60_u64, 0, 30] {
+        for delay_ms in [300_u64, 0, 150] {
             batch.push(async move {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 anyhow::Ok(delay_ms)
             });
         }
-        assert_eq!(drain(batch).await.expect("all succeed"), vec![0, 30, 60]);
+        assert_eq!(drain(batch).await.expect("all succeed"), vec![0, 150, 300]);
     }
 }

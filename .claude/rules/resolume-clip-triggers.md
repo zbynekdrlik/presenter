@@ -21,8 +21,9 @@ the clear clip showed ~50% of the time).
 
 - **Never put two clips that must land in a fixed order into one `trigger_clips` batch.** Call
   `trigger_clips` twice. It returns only after every connect of its batch completed, also when
-  one failed: every concurrent batch (connects, text PUTs, opacity PUTs) goes through
-  `batch::drain`, which awaits the whole batch before the first error wins. Returning early
+  one failed: the connect and text-PUT batches go through `batch::drain`, which awaits the
+  whole batch before the first error wins (`put_opacities` collects its batch the same way but
+  keeps every outcome, because a 404 there is not an error). Returning early
   dropped requests mid-flight, and one landed after its push had returned (CI run
   38176143346).
 - Keep the A/B lane flip tied to "lane text was filled", never to "clip was triggered".

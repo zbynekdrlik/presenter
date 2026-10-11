@@ -502,7 +502,7 @@ async fn put_opacities(
     endpoint: &ResolvedEndpoint,
     levels: &[(i64, f64)],
 ) -> OpacityPuts {
-    let mut futures = FuturesUnordered::new();
+    let futures = FuturesUnordered::new();
     for &(param_id, value) in levels {
         let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
         let mut request = client.put(&url);

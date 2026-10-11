@@ -601,7 +601,7 @@ impl HostDriver {
             }
 
             let endpoint = self.endpoint().await?;
-            let mut futures = FuturesUnordered::new();
+            let futures = FuturesUnordered::new();
             for target in &mapping.timer {
                 if let Some(fut) = put_text_param_future(
                     self.client.clone(),
@@ -659,7 +659,7 @@ impl HostDriver {
 
         if let Some(payload) = text {
             let endpoint = self.endpoint().await?;
-            let mut futures = FuturesUnordered::new();
+            let futures = FuturesUnordered::new();
             for target in selected {
                 if let Some(fut) = put_text_param_future(
                     self.client.clone(),
@@ -703,7 +703,7 @@ impl HostDriver {
         }
 
         let endpoint = self.endpoint().await?;
-        let mut futures = FuturesUnordered::new();
+        let futures = FuturesUnordered::new();
         for target in targets {
             if let Some(fut) = put_text_param_future(
                 self.client.clone(),
