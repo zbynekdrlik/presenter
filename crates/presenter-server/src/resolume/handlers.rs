@@ -351,7 +351,7 @@ impl HostDriver {
         if let Some(mapping) = self.mapping.clone() {
             // #841: Bible clips a clear left invisible (also by an earlier
             // process) are known before a verse restores or a clear fades them.
-            self.dimmed
+            self.opacities
                 .adopt_invisible(&mapping, self.last_mapping_refresh);
             let bible_lane = self.lane_state.current(SlotKind::Bible);
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);

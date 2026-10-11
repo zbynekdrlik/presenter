@@ -13,7 +13,7 @@
 //! crossfades it in from an invisible clip. Before a faded clip is connected
 //! again, [`HostDriver::restore_opacity`] puts its opacity back.
 //!
-//! [`DimmedClips`] remembers every clip that may be off its base opacity. A
+//! [`TrackedOpacities`] remembers every clip that may be off its base opacity. A
 //! clip enters it BEFORE its first fade PUT and leaves it only after a
 //! successful restore, so a fade that fails halfway can never leave a clip
 //! stuck semi-transparent.
@@ -38,7 +38,7 @@ const FADE_STEP: Duration = Duration::from_millis(30);
 
 /// A clip whose opacity a clear lowered.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct DimmedClip {
+pub(super) struct TrackedOpacity {
     /// The opacity a restore puts back.
     pub(super) base: f64,
     /// The last opacity Resolume accepted from us.
@@ -49,15 +49,15 @@ pub(super) struct DimmedClip {
 /// id. Kept across mapping refetches (the ids survive them); reset with the
 /// host config.
 #[derive(Debug, Default)]
-pub(super) struct DimmedClips {
-    clips: HashMap<i64, DimmedClip>,
+pub(super) struct TrackedOpacities {
+    clips: HashMap<i64, TrackedOpacity>,
     /// The mapping fetch (`last_mapping_refresh`) whose invisible clips were
     /// adopted, so a cached mapping is scanned once, not on every push.
     adopted_from: Option<Instant>,
 }
 
-impl DimmedClips {
-    pub(super) fn get(&self, param_id: i64) -> Option<DimmedClip> {
+impl TrackedOpacities {
+    pub(super) fn get(&self, param_id: i64) -> Option<TrackedOpacity> {
         self.clips.get(&param_id).copied()
     }
 
@@ -71,10 +71,12 @@ impl DimmedClips {
         self.adopted_from = fetched;
         for opacity in bible_lane_clips(mapping).filter_map(|target| target.opacity) {
             if opacity.base <= 0.0 {
-                self.clips.entry(opacity.param_id).or_insert(DimmedClip {
-                    base: 1.0,
-                    level: 0.0,
-                });
+                self.clips
+                    .entry(opacity.param_id)
+                    .or_insert(TrackedOpacity {
+                        base: 1.0,
+                        level: 0.0,
+                    });
             }
         }
     }
@@ -111,7 +113,10 @@ fn bible_lane_clips(mapping: &ClipMapping) -> impl Iterator<Item = &ClipTarget> 
 /// The fade a clear runs: each Bible lane clip with an opacity parameter that
 /// is still visible, from where it is now. A clip tagged twice fades once.
 /// Pure, so the selection is unit-tested without a mock Resolume.
-pub(super) fn plan_clear_fade(mapping: &ClipMapping, dimmed: &DimmedClips) -> Vec<FadeTarget> {
+pub(super) fn plan_clear_fade(
+    mapping: &ClipMapping,
+    tracked: &TrackedOpacities,
+) -> Vec<FadeTarget> {
     let mut seen = HashSet::new();
     bible_lane_clips(mapping)
         .filter_map(|target| {
@@ -119,7 +124,7 @@ pub(super) fn plan_clear_fade(mapping: &ClipMapping, dimmed: &DimmedClips) -> Ve
             if !seen.insert(opacity.param_id) {
                 return None;
             }
-            let (base, from) = match dimmed.get(opacity.param_id) {
+            let (base, from) = match tracked.get(opacity.param_id) {
                 Some(clip) => (clip.base, clip.level),
                 None => (opacity.base, opacity.base),
             };
@@ -148,7 +153,7 @@ impl HostDriver {
     /// Fade every visible Bible lane clip of this host to opacity 0, without
     /// triggering a clip or writing text (see the module docs).
     pub(super) async fn handle_bible_clear(&mut self, mapping: &ClipMapping) -> anyhow::Result<()> {
-        let fade = plan_clear_fade(mapping, &self.dimmed);
+        let fade = plan_clear_fade(mapping, &self.opacities);
         let fade_ms = fade
             .iter()
             .map(|target| duration_ms(target.duration))
@@ -178,10 +183,10 @@ impl HostDriver {
         // Tracked BEFORE the first PUT: a fade that fails halfway must still
         // be restored before these clips are connected again.
         for target in fade {
-            self.dimmed
+            self.opacities
                 .clips
                 .entry(target.param_id)
-                .or_insert(DimmedClip {
+                .or_insert(TrackedOpacity {
                     base: target.base,
                     level: target.from,
                 });
@@ -194,7 +199,7 @@ impl HostDriver {
             let levels: Vec<(i64, f64)> = fade
                 .iter()
                 .filter(|target| {
-                    self.dimmed
+                    self.opacities
                         .get(target.param_id)
                         .is_some_and(|c| c.level > 0.0)
                 })
@@ -208,7 +213,7 @@ impl HostDriver {
             }
             put_opacities(&self.client, &endpoint, &levels).await?;
             for (param_id, level) in levels {
-                if let Some(clip) = self.dimmed.clips.get_mut(&param_id) {
+                if let Some(clip) = self.opacities.clips.get_mut(&param_id) {
                     clip.level = level;
                 }
             }
@@ -227,7 +232,7 @@ impl HostDriver {
             .filter_map(|target| target.opacity)
             .filter(|opacity: &ClipOpacity| seen.insert(opacity.param_id))
             .filter_map(|opacity| {
-                self.dimmed
+                self.opacities
                     .get(opacity.param_id)
                     .map(|clip| (opacity.param_id, clip.base))
             })
@@ -238,7 +243,7 @@ impl HostDriver {
         let endpoint = self.endpoint().await?;
         put_opacities(&self.client, &endpoint, &restores).await?;
         for (param_id, _) in &restores {
-            self.dimmed.clips.remove(param_id);
+            self.opacities.clips.remove(param_id);
         }
         debug!(
             host = %self.config.host,

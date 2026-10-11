@@ -15,7 +15,9 @@
 //! asserted as a lower bound (a fade cannot end before its duration), so
 //! machine load cannot false-fail it.
 
-use super::bible_clear::{fade_level, plan_clear_fade, DimmedClip, DimmedClips, MAX_CLEAR_FADE};
+use super::bible_clear::{
+    fade_level, plan_clear_fade, TrackedOpacities, TrackedOpacity, MAX_CLEAR_FADE,
+};
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
 use super::mapping_refresh::is_stale_id_error;
@@ -506,10 +508,10 @@ fn the_plan_fades_visible_bible_clips_from_where_they_are() {
         None,
     ));
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
-    let mut dimmed = DimmedClips::default();
-    dimmed.adopt_invisible(&mapping, None);
+    let mut tracked = TrackedOpacities::default();
+    tracked.adopt_invisible(&mapping, None);
 
-    let plan = plan_clear_fade(&mapping, &dimmed);
+    let plan = plan_clear_fade(&mapping, &tracked);
     let mut params: Vec<i64> = plan.iter().map(|target| target.param_id).collect();
     params.sort_unstable();
     assert_eq!(params, vec![130, 131, 132, 135, 136, 140, 141, 145, 146]);
@@ -534,19 +536,19 @@ fn a_clip_mapped_invisible_is_adopted_once_per_fetch_and_restored_to_full() {
     );
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
     let fetched = Some(tokio::time::Instant::now());
-    let mut dimmed = DimmedClips::default();
+    let mut tracked = TrackedOpacities::default();
 
-    dimmed.adopt_invisible(&mapping, fetched);
+    tracked.adopt_invisible(&mapping, fetched);
     assert_eq!(
-        dimmed.get(130),
-        Some(DimmedClip {
+        tracked.get(130),
+        Some(TrackedOpacity {
             base: 1.0,
             level: 0.0
         }),
         "a Bible clip left at 0 (e.g. by a previous process) goes back to full"
     );
-    assert_eq!(dimmed.get(131), None);
-    let plan = plan_clear_fade(&mapping, &dimmed);
+    assert_eq!(tracked.get(131), None);
+    let plan = plan_clear_fade(&mapping, &tracked);
     assert!(
         plan.iter().all(|target| target.param_id != 130),
         "an invisible clip is not faded again"
