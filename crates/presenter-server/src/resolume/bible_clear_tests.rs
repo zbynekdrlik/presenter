@@ -48,6 +48,17 @@ const TRANS_REF_A: i64 = 450;
 const A_SIDE_OPACITY: [i64; 4] = [130, 135, 140, 145];
 const B_SIDE_OPACITY: [i64; 4] = [131, 136, 141, 146];
 
+/// The id shift of the second deck in the deck-switch tests.
+const DECK_TWO: i64 = 1000;
+
+/// Every Bible opacity parameter of the second deck.
+fn deck_two_opacity() -> impl Iterator<Item = i64> {
+    A_SIDE_OPACITY
+        .into_iter()
+        .chain(B_SIDE_OPACITY)
+        .map(|param| param + DECK_TWO)
+}
+
 fn clip(id: i64, name: &str, text_param: i64, opacity: f64) -> Value {
     json!({
         "id": id,
@@ -71,34 +82,30 @@ fn layer(clips: Vec<Value>, transition: Option<Duration>) -> Value {
 
 /// The SNV shape: one layer per Bible lane, each with its A/B pair.
 fn bible_layers(transition: Option<Duration>) -> Vec<Value> {
+    deck_layers(0, transition)
+}
+
+/// The Bible layers of one Resolume deck. Every clip id and parameter id is
+/// shifted by `offset`, because a deck switch changes every id (#808).
+fn deck_layers(offset: i64, transition: Option<Duration>) -> Vec<Value> {
+    let pair = |a: i64, a_name: &str, a_text: i64, b_name: &str| {
+        layer(
+            vec![
+                clip(a + offset, a_name, a_text + offset, 1.0),
+                clip(a + 1 + offset, b_name, a_text + 1 + offset, 1.0),
+            ],
+            transition,
+        )
+    };
     vec![
-        layer(
-            vec![
-                clip(REF_A, "#bible-reference-a", 35, 1.0),
-                clip(351, "#bible-reference-b", 36, 1.0),
-            ],
-            transition,
-        ),
-        layer(
-            vec![
-                clip(BIBLE_A, "#bible-a", 30, 1.0),
-                clip(301, "#bible-b", 31, 1.0),
-            ],
-            transition,
-        ),
-        layer(
-            vec![
-                clip(TRANS_A, "#bible-translate-a", 40, 1.0),
-                clip(401, "#bible-translate-b", 41, 1.0),
-            ],
-            transition,
-        ),
-        layer(
-            vec![
-                clip(TRANS_REF_A, "#bible-translate-reference-a", 45, 1.0),
-                clip(451, "#bible-translate-reference-b", 46, 1.0),
-            ],
-            transition,
+        pair(REF_A, "#bible-reference-a", 35, "#bible-reference-b"),
+        pair(BIBLE_A, "#bible-a", 30, "#bible-b"),
+        pair(TRANS_A, "#bible-translate-a", 40, "#bible-translate-b"),
+        pair(
+            TRANS_REF_A,
+            "#bible-translate-reference-a",
+            45,
+            "#bible-translate-reference-b",
         ),
     ]
 }
@@ -107,22 +114,51 @@ fn bible_layers(transition: Option<Duration>) -> Vec<Value> {
 /// connect.
 async fn start_resolume(layers: Vec<Value>) -> MockServer {
     let server = MockServer::start().await;
+    mount_arena(&server, layers).await;
+    server
+}
+
+/// (Re)mount the Arena routes on `server`: `/composition` lists `layers`, and
+/// every parameter PUT and clip connect succeeds. After `server.reset()` this
+/// models a deck switch: the composition lists other clips, while writes to
+/// the previous deck's clips still succeed (the clips still exist).
+async fn mount_arena(server: &MockServer, layers: Vec<Value>) {
     Mock::given(method("GET"))
         .and(path("/api/v1/composition"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "layers": layers })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("PUT"))
         .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
         .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("POST"))
         .and(path_regex(r"^/api/v1/composition/clips/by-id/\d+/connect$"))
         .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
+        .mount(server)
         .await;
-    server
+}
+
+/// Assert that every param in `params` was stepped down to 0 from near full
+/// opacity: a fade, not a cut and not skipped.
+fn assert_faded(requests: &[Request], params: impl IntoIterator<Item = i64>) {
+    for param in params {
+        let steps = opacities_put(requests, param);
+        assert_eq!(
+            steps.last(),
+            Some(&0.0),
+            "param {param} ends at 0: {steps:?}"
+        );
+        assert!(
+            steps.windows(2).all(|pair| pair[1] < pair[0]),
+            "param {param} only goes down: {steps:?}"
+        );
+        assert!(
+            steps.len() >= 3 && steps[0] > 0.5,
+            "param {param} is faded in steps from near full opacity: {steps:?}"
+        );
+    }
 }
 
 /// Answer `status` to `times` PUTs of parameter `param_id` at `priority`,
@@ -618,5 +654,150 @@ fn a_clip_mapped_invisible_is_adopted_once_per_fetch_and_restored_to_full() {
     assert!(
         plan.iter().all(|target| target.param_id != 130),
         "an invisible clip is not faded again"
+    );
+}
+
+/// Review finding (#841): after a deck switch Resolume keeps playing the
+/// previous deck's clip on its layer, but `/composition` lists only the new
+/// deck. A clear that fades only the mapped clips left the verse on the wall;
+/// on main the clear connected the new deck's clear clip on that layer, so this
+/// worked. The clear must also fade the clips the verse connected.
+#[tokio::test]
+async fn a_clear_after_a_deck_switch_fades_the_clips_the_verse_left_playing() {
+    let server = start_resolume(bible_layers(Some(FADE))).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+
+    server.reset().await;
+    mount_arena(&server, deck_layers(DECK_TWO, Some(FADE))).await;
+    driver.refresh_mapping().await.expect("deck 2 mapping");
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert!(connects(&requests).is_empty(), "a clear triggers no clip");
+    assert_faded(&requests, A_SIDE_OPACITY);
+    assert_faded(&requests, deck_two_opacity());
+}
+
+/// A verse clip that Resolume no longer knows (404) after a deck switch is
+/// dropped from the fade. It is outside the mapping, so its 404 says nothing
+/// about the mapping: no stale-mapping error, the clear still fades every other
+/// clip, and the forgotten clip gets no further writes.
+#[tokio::test]
+async fn a_verse_clip_gone_after_a_deck_switch_is_forgotten_not_a_stale_mapping() {
+    let server = start_resolume(bible_layers(Some(FADE))).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+
+    server.reset().await;
+    answer_param(&server, 130, 404, 10, 1).await;
+    mount_arena(&server, deck_layers(DECK_TWO, Some(FADE))).await;
+    driver.refresh_mapping().await.expect("deck 2 mapping");
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("a 404 outside the mapping does not fail the clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&requests, 130).len(),
+        1,
+        "the gone clip is tried once, then forgotten"
+    );
+    assert_faded(&requests, [135, 140, 145]);
+    assert_faded(&requests, deck_two_opacity());
+    let after_clear = requests.len();
+
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse on deck 2");
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("second clear");
+    let requests = server.received_requests().await.expect("requests");
+    assert!(
+        opacities_put(&requests[after_clear..], 130).is_empty(),
+        "a forgotten clip is not written again"
+    );
+}
+
+/// Review finding (#841): a fetch shows what Resolume really has, so the tracked
+/// level must follow it. Someone shows the faded clips again in Arena; the next
+/// fetch sees them at full opacity, and the next clear fades them instead of
+/// skipping them as already invisible.
+#[tokio::test]
+async fn a_clip_shown_again_in_arena_after_a_clear_is_faded_by_the_next_clear() {
+    let server = start_resolume(bible_layers(Some(FADE))).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("first clear");
+
+    // The mock composition still reports every clip at 1.0: shown again.
+    driver.refresh_mapping().await.expect("refetch");
+    let after_first = server.received_requests().await.expect("requests").len();
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("second clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_faded(
+        &requests[after_first..],
+        A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY),
+    );
+}
+
+/// Each clip fades over its OWN layer's transition, and a clip that reached 0
+/// gets no further steps while a slower layer is still fading.
+#[tokio::test]
+async fn each_layer_fades_over_its_own_transition() {
+    let mut layers = bible_layers(Some(FADE));
+    layers[1] = layer(
+        vec![
+            clip(BIBLE_A, "#bible-a", 30, 1.0),
+            clip(301, "#bible-b", 31, 1.0),
+        ],
+        Some(Duration::from_millis(150)),
+    );
+    let server = start_resolume(layers).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_faded(&requests, [135, 136, 140, 141, 145, 146]);
+    for param in [130, 131] {
+        let steps = opacities_put(&requests, param);
+        assert_eq!(steps.last(), Some(&0.0), "param {param}: {steps:?}");
+        assert_eq!(
+            steps.iter().filter(|level| **level == 0.0).count(),
+            1,
+            "param {param} gets no step after reaching 0: {steps:?}"
+        );
+    }
+    let first_zero = |param: i64| {
+        let wanted = param_path(param);
+        position(&requests, |req| {
+            req.url.path() == wanted && body_value(req).and_then(|v| v.as_f64()) == Some(0.0)
+        })
+    };
+    assert!(
+        first_zero(130) < first_zero(135),
+        "the faster text layer reaches 0 before the reference layer"
     );
 }
