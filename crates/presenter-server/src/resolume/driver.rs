@@ -1,3 +1,4 @@
+use super::batch::drain;
 use super::bible_clear::TrackedOpacities;
 use super::clip_map::{count_clips, ClipMapping};
 use super::error_kind::{classify_error, ResolumeErrorKind};
@@ -11,7 +12,7 @@ use super::{
 };
 use anyhow::{anyhow, Context};
 use chrono::Utc;
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::stream::FuturesUnordered;
 use presenter_core::ResolumeHost;
 use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::{header::HOST, Client, RequestBuilder, StatusCode};
@@ -568,10 +569,8 @@ impl HostDriver {
             });
         }
 
-        while let Some(result) = futures.next().await {
-            result?;
-        }
-
+        // #841 review: every connect finishes before a failure is reported.
+        drain(futures).await?;
         Ok(())
     }
 

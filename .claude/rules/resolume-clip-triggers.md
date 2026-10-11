@@ -1,5 +1,6 @@
 ---
 paths:
+  - "crates/presenter-server/src/resolume/batch.rs"
   - "crates/presenter-server/src/resolume/lane_seed.rs"
   - "crates/presenter-server/src/resolume/handlers.rs"
   - "crates/presenter-server/src/resolume/bible_clear*.rs"
@@ -19,7 +20,11 @@ LAST stays live (#807: SNV layer 29 held `#bible-reference-a/b` and the old `#bi
 the clear clip showed ~50% of the time).
 
 - **Never put two clips that must land in a fixed order into one `trigger_clips` batch.** Call
-  `trigger_clips` twice. It returns only after every connect of its batch completed.
+  `trigger_clips` twice. It returns only after every connect of its batch completed, also when
+  one failed: every concurrent batch (connects, text PUTs, opacity PUTs) goes through
+  `batch::drain`, which awaits the whole batch before the first error wins. Returning early
+  dropped requests mid-flight, and one landed after its push had returned (CI run
+  38176143346).
 - Keep the A/B lane flip tied to "lane text was filled", never to "clip was triggered".
 
 ## The Bible clear is a FADE, never a trigger (#841, owner 2026-10-11)
@@ -43,10 +48,12 @@ in a composition is ignored). `resolume/bible_clear.rs`:
     unmapped connected clips) on fresh connections (#808, no pool), so do not raise the rate. A
     clip at 0 gets no further steps.
   - The loop ends at the step where `elapsed >= longest duration`, a hard bound.
-  - `put_opacities` awaits EVERY request of a step, also after one failed, and then returns
-    the first error. Returning early dropped the others mid-flight, and one landed after the
-    clear had returned (CI run 38176143346; test
-    `a_failed_step_waits_for_its_other_puts_before_failing`).
+  - `put_opacities` awaits EVERY request of a step, also after one failed, and reports
+    `OpacityPuts {landed, missing, error}`. Returning early dropped the others mid-flight, and
+    one landed after the clear had returned (CI run 38176143346; test
+    `a_failed_step_waits_for_its_other_puts_before_failing`). The PUTs that landed are recorded
+    even in a failed step, so the tracked levels match Arena and `sync_with_fetch` never reads
+    a half fade as a dim made in Arena (`a_failed_step_still_records_the_puts_that_landed`).
 - **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
   the layer crossfades it in from an invisible clip.
 - **Restore:** `handle_bible` calls `restore_before_connect(&to_trigger)` AFTER the text PUTs and
@@ -58,8 +65,8 @@ in a composition is ignored). `resolume/bible_clear.rs`:
     restored. Do not flip this to "insert after success", the dedup-payload order: that order
     would leave a half-faded clip stuck.
   - The clip STAYS tracked after its restore (`level = base`). A composition fetched while it
-    was faded caches 0 (or a mid-fade value), and that cached number must never decide a
-    later fade or restore.
+    was faded caches 0 (or a mid-fade value), and that cached number must never override a
+    write made after that fetch.
   - The bug this prevents (review finding): with entries removed on restore, a refetch at 0
     made the next clear skip the clip, and the verse stayed on the wall. The test is
     `a_clip_restored_after_a_fetch_at_zero_is_faded_by_the_next_clear`.

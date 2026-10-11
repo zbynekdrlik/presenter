@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod backoff_tests;
+mod batch;
 mod bible_clear;
 #[cfg(test)]
 mod bible_clear_deck_tests;

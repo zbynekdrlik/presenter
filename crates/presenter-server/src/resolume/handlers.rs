@@ -1,10 +1,11 @@
+use super::batch::drain;
 use super::clip_map::{ClipMapping, BIBLE_LANE_KINDS};
 use super::driver::HostDriver;
 use super::mapping_refresh::StaleIdError;
 use super::provisional_mapping::stage_required_kinds;
 use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::stream::FuturesUnordered;
 use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::header::HOST;
 use std::sync::Arc;
@@ -612,14 +613,10 @@ impl HostDriver {
                     futures.push(fut);
                 }
             }
-            let mut latency_recorded = None;
-            while let Some(result) = futures.next().await {
-                let duration = result?;
-                if latency_recorded.is_none() {
-                    latency_recorded = Some(duration);
-                }
-            }
-            if let Some(latency) = latency_recorded {
+            // #841 review: every PUT finishes before a failure is reported; the
+            // first one to complete gives the latency.
+            let durations = drain(futures).await?;
+            if let Some(&latency) = durations.first() {
                 self.note_latency(status, latency).await;
             }
             self.last_timer_payload = Some(text);
@@ -674,14 +671,10 @@ impl HostDriver {
                     futures.push(fut);
                 }
             }
-            let mut latency_recorded = None;
-            while let Some(result) = futures.next().await {
-                let duration = result?;
-                if latency_recorded.is_none() {
-                    latency_recorded = Some(duration);
-                }
-            }
-            if let Some(latency) = latency_recorded {
+            // #841 review: every PUT finishes before a failure is reported; the
+            // first one to complete gives the latency.
+            let durations = drain(futures).await?;
+            if let Some(&latency) = durations.first() {
                 self.note_latency(status, latency).await;
             }
         }
@@ -722,14 +715,10 @@ impl HostDriver {
                 futures.push(fut);
             }
         }
-        let mut latency_recorded = None;
-        while let Some(result) = futures.next().await {
-            let duration = result?;
-            if latency_recorded.is_none() {
-                latency_recorded = Some(duration);
-            }
-        }
-        if let Some(latency) = latency_recorded {
+        // #841 review: every PUT finishes before a failure is reported; the
+        // first one to complete gives the latency.
+        let durations = drain(futures).await?;
+        if let Some(&latency) = durations.first() {
             self.note_latency(status, latency).await;
         }
         match slot {

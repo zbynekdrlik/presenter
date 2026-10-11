@@ -34,7 +34,7 @@ use super::mapping_refresh::StaleIdError;
 use super::types::{ClipTarget, ResolvedEndpoint};
 use anyhow::{anyhow, Context};
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, RequestBuilder, StatusCode};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::{sleep, Instant};
@@ -365,17 +365,23 @@ impl HostDriver {
             if levels.is_empty() {
                 return Ok(());
             }
-            let missing = put_opacities(&self.client, &endpoint, &levels).await?;
+            let puts = put_opacities(&self.client, &endpoint, &levels).await;
+            // Record every PUT that landed, also in a failed step, so the
+            // tracked levels match what Arena has.
             for (param_id, level) in levels {
-                if missing.contains(&param_id) {
+                if !puts.landed.contains(&param_id) {
                     continue;
                 }
                 if let Some(tracked) = self.opacities.clips.get_mut(&param_id) {
                     tracked.level = level;
                 }
             }
+            let stale = self.drop_missing(fade, &puts.missing);
+            if let Some(err) = puts.error {
+                return Err(err);
+            }
             *steps += 1;
-            self.drop_missing(fade, &missing)?;
+            stale?;
             // Past the longest duration every level just sent was 0.
             if elapsed >= longest {
                 return Ok(());
@@ -454,16 +460,19 @@ impl HostDriver {
             return Ok(());
         }
         let endpoint = self.endpoint().await?;
-        let missing = put_opacities(&self.client, &endpoint, &restores).await?;
+        let puts = put_opacities(&self.client, &endpoint, &restores).await;
         for &(param_id, base) in &restores {
-            if missing.contains(&param_id) {
+            if !puts.landed.contains(&param_id) {
                 continue;
             }
             if let Some(tracked) = self.opacities.clips.get_mut(&param_id) {
                 tracked.level = base;
             }
         }
-        if let Some(&param_id) = missing.first() {
+        if let Some(err) = puts.error {
+            return Err(err);
+        }
+        if let Some(&param_id) = puts.missing.first() {
             return Err(StaleIdError::opacity_parameter(param_id));
         }
         debug!(
@@ -475,14 +484,24 @@ impl HostDriver {
     }
 }
 
+/// What one batch of opacity PUTs did. Every request of the batch is awaited,
+/// also after a failure (`batch.rs`).
+#[derive(Debug, Default)]
+struct OpacityPuts {
+    /// Accepted by Resolume.
+    landed: Vec<i64>,
+    /// Answered 404; the caller decides what a missing clip means.
+    missing: Vec<i64>,
+    /// The first other failure, in completion order.
+    error: Option<anyhow::Error>,
+}
+
 /// PUT each `(opacity param id, value)` concurrently and wait for all of them.
-/// Returns the params Resolume answered 404 for (the caller decides what a
-/// missing clip means); any other failure is an error, and the first one wins.
 async fn put_opacities(
     client: &Client,
     endpoint: &ResolvedEndpoint,
     levels: &[(i64, f64)],
-) -> anyhow::Result<Vec<i64>> {
+) -> OpacityPuts {
     let mut futures = FuturesUnordered::new();
     for &(param_id, value) in levels {
         let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
@@ -490,42 +509,40 @@ async fn put_opacities(
         if let Some(host) = &endpoint.host_header {
             request = request.header(reqwest::header::HOST, host.clone());
         }
-        futures.push(async move {
-            let response = request
-                .json(&serde_json::json!({ "value": value }))
-                .timeout(ACTION_TIMEOUT)
-                .send()
-                .await
-                .with_context(|| format!("failed to update opacity parameter {param_id}"))?;
-            if response.status() == StatusCode::NOT_FOUND {
-                return Ok(Some(param_id));
-            }
-            if !response.status().is_success() {
-                return Err(anyhow!(
-                    "opacity parameter update failed with status {}",
-                    response.status()
-                ));
-            }
-            Ok(None)
-        });
+        futures.push(async move { (param_id, put_opacity(request, param_id, value).await) });
     }
-    // Every request of the step is awaited, also after a failure: a request
-    // dropped mid-flight could still reach Arena after the clear returned.
-    let mut missing = Vec::new();
-    let mut first_error = None;
-    while let Some(result) = futures.next().await {
-        match result {
-            Ok(Some(param_id)) => missing.push(param_id),
-            Ok(None) => {}
+    let mut puts = OpacityPuts::default();
+    let outcomes: Vec<(i64, anyhow::Result<bool>)> = futures.collect().await;
+    for (param_id, outcome) in outcomes {
+        match outcome {
+            Ok(true) => puts.landed.push(param_id),
+            Ok(false) => puts.missing.push(param_id),
             Err(err) => {
-                if first_error.is_none() {
-                    first_error = Some(err);
+                if puts.error.is_none() {
+                    puts.error = Some(err);
                 }
             }
         }
     }
-    match first_error {
-        Some(err) => Err(err),
-        None => Ok(missing),
+    puts
+}
+
+/// One opacity PUT: `Ok(true)` when Resolume accepted it, `Ok(false)` on 404.
+async fn put_opacity(request: RequestBuilder, param_id: i64, value: f64) -> anyhow::Result<bool> {
+    let response = request
+        .json(&serde_json::json!({ "value": value }))
+        .timeout(ACTION_TIMEOUT)
+        .send()
+        .await
+        .with_context(|| format!("failed to update opacity parameter {param_id}"))?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(false);
     }
+    if !response.status().is_success() {
+        return Err(anyhow!(
+            "opacity parameter update failed with status {}",
+            response.status()
+        ));
+    }
+    Ok(true)
 }
