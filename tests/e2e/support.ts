@@ -456,7 +456,6 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
               clip(301, "#bible-b", 31),
               clip(400, "#bible-translate-a", 40),
               clip(401, "#bible-translate-b", 41),
-              clip(500, "#bible-clear", undefined),
               clip(600, "#timer", 60),
               clip(700, "#song-name", undefined),
               clip(701, "#band-name", undefined),

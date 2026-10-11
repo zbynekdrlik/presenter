@@ -1,137 +1,111 @@
-//! #807 regression: on a Bible CLEAR, the `#bible-clear` clip must win its
-//! Resolume layer, every time.
+//! #841: a Bible CLEAR fades the Bible clips' opacity and triggers no clip.
 //!
-//! SNV's composition puts `#bible-clear` in the SAME layer as
-//! `#bible-reference-a/b` (layer 29 "L# SK miesto"). The clear path used to POST
-//! every `/connect` — the blanked lane clips AND `#bible-clear` — concurrently in
-//! one batch, so the reference-lane connect and the clear connect raced inside
-//! that one layer and whichever Resolume processed last stayed live: the clear
-//! clip showed only ~50% of the time. The fixed contract:
+//! Owner, 2026-10-11: "bible clear chcem aby fungoval tak ze netrigeruje ziaden
+//! clip ale iba v tom clipe faduje opacitu". The contract pinned here:
 //!
-//! - a lane clip whose layer also holds a `#bible-clear` clip is NOT triggered
-//!   (its text is still blanked; the clear clip replaces that layer anyway);
-//! - the remaining lane clips are triggered first, and `#bible-clear` only after
-//!   every one of those connects has COMPLETED (a strictly sequential phase 2).
+//! - a clear sends no `/connect` and writes no text;
+//! - it steps every Bible lane clip's `video.opacity` parameter down to 0 over
+//!   the clip layer's transition duration;
+//! - it fills no lane, so the A/B lanes do not flip;
+//! - the next verse restores a faded clip's opacity BEFORE connecting it;
+//! - a fade that fails halfway still gets its clips restored.
 //!
-//! The mock Resolume records the arrival instant of every `/connect` and delays
-//! each response by [`RESPONSE_DELAY`]. A connect sent only after the lane
-//! connects completed therefore arrives at least `RESPONSE_DELAY` after the last
-//! lane connect; a connect dispatched in the same concurrent batch arrives
-//! within a few milliseconds of it. Load can only widen the sequential gap, so
-//! the assertion cannot false-fail a correct implementation.
-//!
-//! Self-contained helpers (the `latency_tests.rs` pattern) so the oversized
-//! `tests.rs` does not grow.
+//! The mock Arena accepts every PUT and `/connect`; assertions read
+//! `received_requests()`, which keeps arrival order. Timing is only ever
+//! asserted as a lower bound (a fade cannot end before its duration), so
+//! machine load cannot false-fail it.
 
-use super::bible_clear::{clip_ids, plan_bible_clear_triggers, BibleClearTriggers};
+use super::bible_clear::{fade_level, plan_clear_fade, DimmedClip, DimmedClips, MAX_CLEAR_FADE};
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
-use super::types::ClipTarget;
+use super::mapping_refresh::is_stale_id_error;
+use super::types::ClipOpacity;
 use super::{BibleUpdate, ResolumeConnectionSnapshot, CONNECT_TIMEOUT};
 use chrono::Utc;
 use presenter_core::{BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use reqwest::Client;
-use std::sync::{Arc, Mutex};
+use serde_json::{json, Value};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-/// Delay applied to every `/connect` response by the mock Resolume.
-const RESPONSE_DELAY: Duration = Duration::from_millis(200);
+/// The layer transition of the SNV-like fixture: long enough for about 20
+/// steps, so a loaded machine still sends several.
+const FADE: Duration = Duration::from_millis(600);
 
-const CLEAR: i64 = 500;
 const BIBLE_A: i64 = 300;
-const BIBLE_B: i64 = 301;
 const REF_A: i64 = 350;
-const REF_B: i64 = 351;
 const TRANS_A: i64 = 400;
-const TRANS_B: i64 = 401;
 const TRANS_REF_A: i64 = 450;
-const TRANS_REF_B: i64 = 451;
 
-type ConnectLog = Arc<Mutex<Vec<(i64, Instant)>>>;
+/// Opacity parameter ids: the clip's text parameter id + 100.
+const A_SIDE_OPACITY: [i64; 4] = [130, 135, 140, 145];
+const B_SIDE_OPACITY: [i64; 4] = [131, 136, 141, 146];
 
-/// Records `(clip_id, arrival)` for every `/connect` POST, then answers 200
-/// after [`RESPONSE_DELAY`].
-#[derive(Clone)]
-struct ConnectRecorder {
-    log: ConnectLog,
-}
-
-impl wiremock::Respond for ConnectRecorder {
-    fn respond(&self, req: &Request) -> ResponseTemplate {
-        let clip_id = req
-            .url
-            .path()
-            .trim_start_matches("/api/v1/composition/clips/by-id/")
-            .trim_end_matches("/connect")
-            .parse::<i64>()
-            .expect("numeric clip id in /connect path");
-        self.log
-            .lock()
-            .expect("connect log lock")
-            .push((clip_id, Instant::now()));
-        ResponseTemplate::new(200).set_delay(RESPONSE_DELAY)
-    }
-}
-
-fn clip(id: i64, name: &str, param_id: Option<i64>) -> serde_json::Value {
-    let sourceparams = match param_id {
-        Some(value) => serde_json::json!({ "text": { "valuetype": "ParamText", "id": value } }),
-        None => serde_json::json!({}),
-    };
-    serde_json::json!({
+fn clip(id: i64, name: &str, text_param: i64, opacity: f64) -> Value {
+    json!({
         "id": id,
         "name": { "value": name },
-        "video": { "sourceparams": sourceparams },
+        "video": {
+            "opacity": { "id": text_param + 100, "value": opacity },
+            "sourceparams": { "text": { "valuetype": "ParamText", "id": text_param } },
+        },
     })
 }
 
-fn layer(clips: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({ "clips": clips })
+fn layer(clips: Vec<Value>, transition: Option<Duration>) -> Value {
+    match transition {
+        Some(fade) => json!({
+            "transition": { "duration": { "value": fade.as_secs_f64() } },
+            "clips": clips,
+        }),
+        None => json!({ "clips": clips }),
+    }
 }
 
-fn reference_clips() -> Vec<serde_json::Value> {
+/// The SNV shape: one layer per Bible lane, each with its A/B pair.
+fn bible_layers(transition: Option<Duration>) -> Vec<Value> {
     vec![
-        clip(REF_A, "#bible-reference-a", Some(35)),
-        clip(REF_B, "#bible-reference-b", Some(36)),
+        layer(
+            vec![
+                clip(REF_A, "#bible-reference-a", 35, 1.0),
+                clip(351, "#bible-reference-b", 36, 1.0),
+            ],
+            transition,
+        ),
+        layer(
+            vec![
+                clip(BIBLE_A, "#bible-a", 30, 1.0),
+                clip(301, "#bible-b", 31, 1.0),
+            ],
+            transition,
+        ),
+        layer(
+            vec![
+                clip(TRANS_A, "#bible-translate-a", 40, 1.0),
+                clip(401, "#bible-translate-b", 41, 1.0),
+            ],
+            transition,
+        ),
+        layer(
+            vec![
+                clip(TRANS_REF_A, "#bible-translate-reference-a", 45, 1.0),
+                clip(451, "#bible-translate-reference-b", 46, 1.0),
+            ],
+            transition,
+        ),
     ]
 }
 
-fn bible_layer() -> serde_json::Value {
-    layer(vec![
-        clip(BIBLE_A, "#bible-a", Some(30)),
-        clip(BIBLE_B, "#bible-b", Some(31)),
-    ])
-}
-
-fn translation_layer() -> serde_json::Value {
-    layer(vec![
-        clip(TRANS_A, "#bible-translate-a", Some(40)),
-        clip(TRANS_B, "#bible-translate-b", Some(41)),
-    ])
-}
-
-fn translate_reference_layer() -> serde_json::Value {
-    layer(vec![
-        clip(TRANS_REF_A, "#bible-translate-reference-a", Some(45)),
-        clip(TRANS_REF_B, "#bible-translate-reference-b", Some(46)),
-    ])
-}
-
-fn clear_clip() -> serde_json::Value {
-    clip(CLEAR, "#bible-clear", None)
-}
-
-/// Start a mock Resolume serving `layers`, accepting every text-param PUT and
-/// recording every `/connect` POST.
-async fn start_resolume(layers: Vec<serde_json::Value>) -> (MockServer, ConnectLog) {
+/// A mock Arena serving `layers` that accepts every parameter PUT and clip
+/// connect.
+async fn start_resolume(layers: Vec<Value>) -> MockServer {
     let server = MockServer::start().await;
-    let composition = serde_json::json!({ "layers": layers });
     Mock::given(method("GET"))
         .and(path("/api/v1/composition"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "layers": layers })))
         .mount(&server)
         .await;
     Mock::given(method("PUT"))
@@ -139,15 +113,24 @@ async fn start_resolume(layers: Vec<serde_json::Value>) -> (MockServer, ConnectL
         .respond_with(ResponseTemplate::new(200))
         .mount(&server)
         .await;
-    let log: ConnectLog = Arc::new(Mutex::new(Vec::new()));
     Mock::given(method("POST"))
         .and(path_regex(r"^/api/v1/composition/clips/by-id/\d+/connect$"))
-        .respond_with(ConnectRecorder {
-            log: Arc::clone(&log),
-        })
+        .respond_with(ResponseTemplate::new(200))
         .mount(&server)
         .await;
-    (server, log)
+    server
+}
+
+/// Answer `status` to the next `times` PUTs of parameter `param_id`, ahead of
+/// the catch-all PUT route.
+async fn fail_param(server: &MockServer, param_id: i64, status: u16, times: u64) {
+    Mock::given(method("PUT"))
+        .and(path(format!("/api/v1/parameter/by-id/{param_id}")))
+        .respond_with(ResponseTemplate::new(status))
+        .up_to_n_times(times)
+        .with_priority(1)
+        .mount(server)
+        .await;
 }
 
 fn driver_for(server: &MockServer) -> (HostDriver, Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -174,274 +157,208 @@ fn driver_for(server: &MockServer) -> (HostDriver, Arc<RwLock<ResolumeConnection
 
 /// A Bible update with no slide output and no passage = the CLEAR path.
 fn clear_update() -> BibleUpdate {
-    BibleUpdate {
-        passage: None,
-        secondary_text: None,
-        secondary_translation_code: None,
-        secondary_book: None,
-        slide_output: None,
-    }
+    BibleUpdate::from_slide_output(None)
 }
 
-/// Run one Bible clear against a fresh driver (lanes start on A) and return the
-/// mock server plus the recorded `/connect` log in arrival order.
-async fn clear_against(layers: Vec<serde_json::Value>) -> (MockServer, Vec<(i64, Instant)>) {
-    let (server, log) = start_resolume(layers).await;
+fn verse_update() -> BibleUpdate {
+    BibleUpdate::from_slide_output(Some(BibleSlideOutput {
+        main_text: "For God so loved".to_string(),
+        main_reference: "John 3:16 (KJV)".to_string(),
+        secondary_text: "Neboť Bůh tak miloval".to_string(),
+        secondary_reference: "Jan 3:16 (CEP)".to_string(),
+        triggered_at: Utc::now(),
+    }))
+}
+
+fn param_path(param_id: i64) -> String {
+    format!("/api/v1/parameter/by-id/{param_id}")
+}
+
+fn body_value(req: &Request) -> Option<Value> {
+    serde_json::from_slice::<Value>(&req.body)
+        .ok()
+        .and_then(|body| body.get("value").cloned())
+}
+
+/// The values PUT to parameter `param_id`, in arrival order.
+fn values_put(requests: &[Request], param_id: i64) -> Vec<Value> {
+    let wanted = param_path(param_id);
+    requests
+        .iter()
+        .filter(|req| req.method.as_str() == "PUT" && req.url.path() == wanted)
+        .filter_map(body_value)
+        .collect()
+}
+
+/// The numeric opacities PUT to parameter `param_id`, in arrival order.
+fn opacities_put(requests: &[Request], param_id: i64) -> Vec<f64> {
+    values_put(requests, param_id)
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect()
+}
+
+fn connects(requests: &[Request]) -> Vec<&Request> {
+    requests
+        .iter()
+        .filter(|req| req.method.as_str() == "POST" && req.url.path().ends_with("/connect"))
+        .collect()
+}
+
+fn position(requests: &[Request], predicate: impl Fn(&Request) -> bool) -> Option<usize> {
+    requests.iter().position(predicate)
+}
+
+#[tokio::test]
+async fn clear_fades_every_bible_clip_to_zero_and_triggers_nothing() {
+    let server = start_resolume(bible_layers(Some(FADE))).await;
     let (mut driver, status) = driver_for(&server);
+
+    let start = Instant::now();
     driver
         .handle_bible(clear_update(), &status)
         .await
         .expect("bible clear");
-    let connects = log.lock().expect("connect log lock").clone();
-    (server, connects)
-}
-
-fn connected_ids(connects: &[(i64, Instant)]) -> Vec<i64> {
-    let mut ids: Vec<i64> = connects.iter().map(|(id, _)| *id).collect();
-    ids.sort_unstable();
-    ids
-}
-
-/// `#bible-clear` was connected exactly once, and only after every connect in
-/// `lane_ids` had COMPLETED (arrived ≥ one response delay after the last one).
-fn assert_clear_after_lanes(connects: &[(i64, Instant)], lane_ids: &[i64]) {
-    let clear_at: Vec<Instant> = connects
-        .iter()
-        .filter(|(id, _)| *id == CLEAR)
-        .map(|(_, at)| *at)
-        .collect();
-    assert_eq!(clear_at.len(), 1, "#bible-clear connected exactly once");
-    let last_lane_at = connects
-        .iter()
-        .filter(|(id, _)| lane_ids.contains(id))
-        .map(|(_, at)| *at)
-        .max()
-        .expect("lane connects recorded");
-    let gap = clear_at[0].saturating_duration_since(last_lane_at);
-    assert!(
-        gap >= RESPONSE_DELAY,
-        "#bible-clear must be sent only after every lane connect completed: it arrived \
-         {gap:?} after the last lane connect, a sequential phase 2 needs >= {RESPONSE_DELAY:?}"
-    );
-}
-
-/// The SNV topology: `#bible-clear` shares its layer with `#bible-reference-a/b`.
-/// The reference-lane clip must NOT be connected (it would race the clear clip
-/// inside that layer), its text must still be blanked, and `#bible-clear` must
-/// fire after the other lane connects completed.
-#[tokio::test]
-async fn clear_skips_same_layer_lane_clip_and_fires_clear_after_lane_connects() {
-    let mut miesto = reference_clips();
-    miesto.push(clear_clip());
-    let (server, connects) = clear_against(vec![
-        layer(miesto),
-        bible_layer(),
-        translation_layer(),
-        translate_reference_layer(),
-    ])
-    .await;
-
-    assert_eq!(
-        connected_ids(&connects),
-        vec![BIBLE_A, TRANS_A, TRANS_REF_A, CLEAR],
-        "the reference-lane clip sharing #bible-clear's layer must not be connected"
-    );
-    assert_clear_after_lanes(&connects, &[BIBLE_A, TRANS_A, TRANS_REF_A]);
+    let took = start.elapsed();
 
     let requests = server.received_requests().await.expect("requests");
-    let reference_blanked = requests.iter().any(|req| {
-        req.method.as_str() == "PUT"
-            && req.url.path() == "/api/v1/parameter/by-id/35"
-            && serde_json::from_slice::<serde_json::Value>(&req.body)
-                .ok()
-                .and_then(|body| body.get("value").cloned())
-                == Some(serde_json::Value::String(String::new()))
-    });
+    assert!(connects(&requests).is_empty(), "a clear triggers no clip");
+    for text_param in [30, 31, 35, 36, 40, 41, 45, 46] {
+        assert!(
+            values_put(&requests, text_param).is_empty(),
+            "a clear writes no text (param {text_param})"
+        );
+    }
+    for param in A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY) {
+        let steps = opacities_put(&requests, param);
+        assert_eq!(
+            steps.last(),
+            Some(&0.0),
+            "param {param} ends at 0: {steps:?}"
+        );
+        assert!(
+            steps.windows(2).all(|pair| pair[1] < pair[0]),
+            "param {param} only goes down: {steps:?}"
+        );
+        assert!(
+            steps.len() >= 3 && steps[0] > 0.5,
+            "param {param} is faded in steps from near full opacity, not cut: {steps:?}"
+        );
+    }
     assert!(
-        reference_blanked,
-        "the skipped reference clip's text must still be blanked"
+        took >= FADE,
+        "the fade spans the layer transition ({FADE:?}), took {took:?}"
     );
 }
 
-/// `#bible-clear` in a layer of its own: every blanked lane clip is connected,
-/// and `#bible-clear` still fires strictly after all of them completed.
 #[tokio::test]
-async fn clear_in_own_layer_connects_all_lanes_then_clear_last() {
-    let (_server, connects) = clear_against(vec![
-        layer(reference_clips()),
-        bible_layer(),
-        translation_layer(),
-        translate_reference_layer(),
-        layer(vec![clear_clip()]),
-    ])
-    .await;
-
-    assert_eq!(
-        connected_ids(&connects),
-        vec![BIBLE_A, REF_A, TRANS_A, TRANS_REF_A, CLEAR],
-        "every blanked lane clip is connected when no lane shares #bible-clear's layer"
-    );
-    assert_clear_after_lanes(&connects, &[BIBLE_A, REF_A, TRANS_A, TRANS_REF_A]);
-}
-
-/// A failed lane-clip trigger must not swallow the clear clip. Phase 1 never
-/// holds a clip in a clear layer, so `#bible-clear` still fires, and the push
-/// still reports the lane failure (so the host's error/backoff handling runs).
-#[tokio::test]
-async fn clear_clip_still_fires_when_a_lane_clip_trigger_fails() {
-    let (server, log) = start_resolume(vec![
-        layer(reference_clips()),
-        bible_layer(),
-        translation_layer(),
-        translate_reference_layer(),
-        layer(vec![clear_clip()]),
-    ])
-    .await;
-    Mock::given(method("POST"))
-        .and(path(
-            format!("/api/v1/composition/clips/by-id/{BIBLE_A}/connect").as_str(),
-        ))
-        .respond_with(ResponseTemplate::new(500))
-        .with_priority(1)
-        .mount(&server)
-        .await;
+async fn a_layer_without_a_transition_goes_to_zero_in_one_step() {
+    let server = start_resolume(bible_layers(None)).await;
     let (mut driver, status) = driver_for(&server);
 
-    let result = driver.handle_bible(clear_update(), &status).await;
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
 
-    assert!(result.is_err(), "the failed lane trigger is still reported");
-    let connects = log.lock().expect("connect log lock").clone();
-    assert!(
-        connects.iter().any(|(id, _)| *id == CLEAR),
-        "#bible-clear must still be connected after a phase-1 trigger failure"
-    );
-}
-
-// ── Unit pins for the layer bookkeeping + the pure planner ─────────────
-
-fn target(clip_id: i64, layer_index: usize) -> ClipTarget {
-    ClipTarget {
-        clip_id,
-        text_param_id: None,
-        transforms: Vec::new(),
-        layer_index,
+    let requests = server.received_requests().await.expect("requests");
+    for param in A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY) {
+        assert_eq!(opacities_put(&requests, param), vec![0.0], "param {param}");
     }
 }
 
-/// The composition parse records each clip's layer position, and a clear clip
-/// never carries a text param (it is only ever triggered).
-#[test]
-fn composition_parse_records_each_clips_layer_index() {
-    let composition = serde_json::json!({ "layers": [
-        layer(reference_clips()),
-        bible_layer(),
-        layer(vec![clip(CLEAR, "#bible-clear", Some(99))]),
-    ]});
-    let mapping = ClipMapping::from_composition(&composition).expect("mapping");
-
-    assert_eq!(mapping.bible_reference_a[0].layer_index, 0);
-    assert_eq!(mapping.bible_reference_b[0].layer_index, 0);
-    assert_eq!(mapping.bible_a[0].layer_index, 1);
-    assert_eq!(mapping.bible_b[0].layer_index, 1);
-    assert_eq!(mapping.bible_clear[0].layer_index, 2);
-    assert_eq!(mapping.bible_clear[0].clip_id, CLEAR);
-    assert_eq!(mapping.bible_clear[0].text_param_id, None);
-}
-
-#[test]
-fn plan_skips_only_the_lane_clips_in_a_clear_layer() {
-    let plan = plan_bible_clear_triggers(
-        vec![
-            target(BIBLE_A, 1),
-            target(REF_A, 0),
-            target(TRANS_A, 2),
-            target(TRANS_REF_A, 3),
-        ],
-        &[target(CLEAR, 0), target(501, 3)],
-    );
-
-    assert_eq!(
-        plan,
-        BibleClearTriggers {
-            lanes: vec![target(BIBLE_A, 1), target(TRANS_A, 2)],
-            skipped: vec![target(REF_A, 0), target(TRANS_REF_A, 3)],
-            clear: vec![target(CLEAR, 0), target(501, 3)],
-        }
-    );
-}
-
-#[test]
-fn plan_without_a_clear_clip_triggers_every_lane_clip() {
-    let blanked = vec![target(BIBLE_A, 0), target(REF_A, 0)];
-    let plan = plan_bible_clear_triggers(blanked.clone(), &[]);
-
-    assert_eq!(
-        plan,
-        BibleClearTriggers {
-            lanes: blanked,
-            skipped: Vec::new(),
-            clear: Vec::new(),
-        }
-    );
-}
-
-#[test]
-fn clip_ids_lists_the_ids_in_order() {
-    assert_eq!(
-        clip_ids(&[target(REF_A, 0), target(BIBLE_A, 1)]),
-        vec![REF_A, BIBLE_A]
-    );
-    assert!(clip_ids(&[]).is_empty());
-}
-
-fn verse_update() -> BibleUpdate {
-    BibleUpdate {
-        passage: None,
-        secondary_text: None,
-        secondary_translation_code: None,
-        secondary_book: None,
-        slide_output: Some(BibleSlideOutput {
-            main_text: "For God so loved".to_string(),
-            main_reference: "John 3:16 (KJV)".to_string(),
-            secondary_text: "Neboť Bůh tak miloval".to_string(),
-            secondary_reference: "Jan 3:16 (CEP)".to_string(),
-            triggered_at: Utc::now(),
-        }),
-    }
-}
-
-/// Whether a `PUT /parameter/by-id/{param_id}` carried `{"value": value}`.
-fn put_sent(requests: &[Request], param_id: i64, value: &str) -> bool {
-    let wanted = format!("/api/v1/parameter/by-id/{param_id}");
-    requests.iter().any(|req| {
-        req.method.as_str() == "PUT"
-            && req.url.path() == wanted
-            && serde_json::from_slice::<serde_json::Value>(&req.body)
-                .ok()
-                .and_then(|body| {
-                    body.get("value")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_owned)
-                })
-                .as_deref()
-                == Some(value)
-    })
-}
-
-/// The clear keeps the A/B alternation unchanged: it blanks lane A (even the
-/// skipped same-layer reference clip) and flips, so the next verse lands on
-/// lane B of both the bible and the bible-translation slots.
 #[tokio::test]
-async fn clear_flips_the_lanes_so_the_next_verse_lands_on_lane_b() {
-    let mut miesto = reference_clips();
-    miesto.push(clear_clip());
-    let (server, _log) = start_resolume(vec![
-        layer(miesto),
-        bible_layer(),
-        translation_layer(),
-        translate_reference_layer(),
-    ])
-    .await;
+async fn a_second_clear_sends_nothing() {
+    let server = start_resolume(bible_layers(None)).await;
+    let (mut driver, status) = driver_for(&server);
+
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("first clear");
+    let after_first = server.received_requests().await.expect("requests").len();
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("second clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert!(
+        requests[after_first..]
+            .iter()
+            .all(|req| req.method.as_str() == "GET"),
+        "every Bible clip is already invisible, so the second clear sends no PUT"
+    );
+}
+
+/// The clear fills no lane, so the verse lands on lane A again: its opacity
+/// comes back before its connect, and lane B stays invisible.
+#[tokio::test]
+async fn the_next_verse_restores_the_opacity_before_connecting_and_lanes_do_not_flip() {
+    let server = start_resolume(bible_layers(None)).await;
+    let (mut driver, status) = driver_for(&server);
+
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+    let after_clear = server.received_requests().await.expect("requests").len();
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+
+    let requests = server.received_requests().await.expect("requests");
+    let verse = &requests[after_clear..];
+    assert_eq!(
+        values_put(verse, 30),
+        vec![json!("For God so loved")],
+        "the verse goes to #bible-a: the clear did not flip the lane"
+    );
+    assert_eq!(values_put(verse, 40), vec![json!("Neboť Bůh tak miloval")]);
+    for param in A_SIDE_OPACITY {
+        assert_eq!(
+            opacities_put(verse, param),
+            vec![1.0],
+            "param {param} restored"
+        );
+    }
+    for param in B_SIDE_OPACITY {
+        assert!(
+            opacities_put(verse, param).is_empty(),
+            "param {param} stays faded"
+        );
+    }
+    let first_connect = position(verse, |req| req.url.path().ends_with("/connect"))
+        .expect("the verse connects its clips");
+    let last_restore = A_SIDE_OPACITY
+        .iter()
+        .filter_map(|param| position(verse, |req| req.url.path() == param_path(*param)))
+        .max()
+        .expect("restores sent");
+    assert!(
+        last_restore < first_connect,
+        "every opacity is restored before the first connect"
+    );
+    let mut connected: Vec<i64> = connects(verse)
+        .iter()
+        .filter_map(|req| {
+            req.url
+                .path()
+                .trim_start_matches("/api/v1/composition/clips/by-id/")
+                .trim_end_matches("/connect")
+                .parse()
+                .ok()
+        })
+        .collect();
+    connected.sort_unstable();
+    assert_eq!(connected, vec![BIBLE_A, REF_A, TRANS_A, TRANS_REF_A]);
+}
+
+/// A restored clip is not restored again by the verse after next.
+#[tokio::test]
+async fn a_restored_clip_is_not_restored_twice() {
+    let server = start_resolume(bible_layers(None)).await;
     let (mut driver, status) = driver_for(&server);
 
     driver
@@ -451,15 +368,187 @@ async fn clear_flips_the_lanes_so_the_next_verse_lands_on_lane_b() {
     driver
         .handle_bible(verse_update(), &status)
         .await
+        .expect("verse 1 (lane A)");
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse 2 (lane B)");
+    let after_two = server.received_requests().await.expect("requests").len();
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse 3 (lane A)");
+
+    let requests = server.received_requests().await.expect("requests");
+    for param in A_SIDE_OPACITY {
+        assert!(
+            opacities_put(&requests[after_two..], param).is_empty(),
+            "param {param} was restored by verse 1 already"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_fade_that_fails_halfway_is_still_restored() {
+    let server = start_resolume(bible_layers(Some(FADE))).await;
+    fail_param(&server, 135, 500, 1).await;
+    let (mut driver, status) = driver_for(&server);
+
+    let err = driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect_err("the failed opacity PUT fails the clear");
+    assert!(!is_stale_id_error(&err), "a 500 is a host failure: {err:#}");
+    let after_clear = server.received_requests().await.expect("requests").len();
+
+    driver.next_retry_at = None;
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
         .expect("verse");
 
     let requests = server.received_requests().await.expect("requests");
-    assert!(
-        put_sent(&requests, 31, "For God so loved"),
-        "after a clear the verse goes to #bible-b"
+    for param in A_SIDE_OPACITY {
+        assert_eq!(
+            opacities_put(&requests[after_clear..], param),
+            vec![1.0],
+            "param {param} is put back although the fade stopped halfway"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_missing_opacity_parameter_is_a_stale_mapping() {
+    let server = start_resolume(bible_layers(None)).await;
+    fail_param(&server, 130, 404, 10).await;
+    let (mut driver, _status) = driver_for(&server);
+    driver.ensure_mapping().await.expect("mapping");
+    let mapping = driver.mapping.clone().expect("mapping cached");
+
+    let err = driver
+        .handle_bible_clear(&mapping)
+        .await
+        .expect_err("404 on an opacity parameter");
+    assert!(is_stale_id_error(&err), "{err:#}");
+}
+
+#[test]
+fn the_composition_records_each_clips_opacity_and_layer_fade() {
+    let mut layers = bible_layers(Some(FADE));
+    layers.push(layer(
+        vec![clip(900, "#timer", 90, 0.6)],
+        Some(Duration::from_secs(10)),
+    ));
+    layers.push(layer(
+        vec![json!({ "id": 901, "name": { "value": "#song-name" } })],
+        None,
+    ));
+    let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
+
+    let bible_a = &mapping.bible_a[0];
+    assert_eq!(
+        bible_a.opacity,
+        Some(ClipOpacity {
+            param_id: 130,
+            base: 1.0
+        })
     );
+    assert_eq!(bible_a.fade, FADE);
+    let timer = &mapping.timer[0];
+    assert_eq!(timer.opacity.map(|opacity| opacity.base), Some(0.6));
+    assert_eq!(timer.fade, MAX_CLEAR_FADE, "a 10 s transition is capped");
+    let song = &mapping.song_name[0];
+    assert_eq!(song.opacity, None);
+    assert_eq!(song.fade, Duration::ZERO);
+}
+
+#[test]
+fn bible_clear_is_no_longer_a_clip_tag() {
+    let mut layers = bible_layers(None);
+    layers.push(layer(
+        vec![
+            clip(500, "#bible-clear", 50, 0.0),
+            clip(501, "#bibleclear", 51, 0.0),
+        ],
+        None,
+    ));
+    let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
+
+    assert!(!mapping.destination_kinds().contains(&"#bible-clear"));
+    assert!(!mapping.missing_tokens().contains(&"#bible-clear"));
+    let lane_clip_ids: Vec<i64> = [&mapping.bible_a, &mapping.bible_reference_a]
+        .into_iter()
+        .flatten()
+        .map(|target| target.clip_id)
+        .collect();
+    assert_eq!(lane_clip_ids, vec![BIBLE_A, REF_A]);
+}
+
+#[test]
+fn fade_level_runs_linearly_from_the_start_value_to_zero() {
+    let duration = Duration::from_millis(500);
+    assert_eq!(fade_level(0.8, Duration::ZERO, duration), 0.8);
+    assert!((fade_level(0.8, Duration::from_millis(250), duration) - 0.4).abs() < 1e-9);
+    assert_eq!(fade_level(0.8, duration, duration), 0.0);
+    assert_eq!(fade_level(0.8, Duration::from_secs(9), duration), 0.0);
+    assert_eq!(fade_level(1.0, Duration::ZERO, Duration::ZERO), 0.0);
+}
+
+#[test]
+fn the_plan_fades_visible_bible_clips_from_where_they_are() {
+    let mut layers = bible_layers(Some(FADE));
+    // A clip tagged twice fades once; a lyric clip never fades.
+    layers.push(layer(
+        vec![
+            clip(302, "#bible-a #bible-b", 32, 1.0),
+            clip(100, "#main-a", 10, 1.0),
+        ],
+        None,
+    ));
+    let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
+    let mut dimmed = DimmedClips::default();
+    dimmed.adopt_invisible(&mapping, None);
+
+    let plan = plan_clear_fade(&mapping, &dimmed);
+    let mut params: Vec<i64> = plan.iter().map(|target| target.param_id).collect();
+    params.sort_unstable();
+    assert_eq!(params, vec![130, 131, 132, 135, 136, 140, 141, 145, 146]);
+    assert!(plan
+        .iter()
+        .all(|target| target.from == 1.0 && target.base == 1.0));
+    assert!(plan
+        .iter()
+        .filter(|t| t.param_id != 132)
+        .all(|t| t.duration == FADE));
+}
+
+#[test]
+fn a_clip_mapped_invisible_is_adopted_once_per_fetch_and_restored_to_full() {
+    let mut layers = bible_layers(None);
+    layers[1] = layer(
+        vec![
+            clip(BIBLE_A, "#bible-a", 30, 0.0),
+            clip(301, "#bible-b", 31, 1.0),
+        ],
+        None,
+    );
+    let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
+    let fetched = Some(tokio::time::Instant::now());
+    let mut dimmed = DimmedClips::default();
+
+    dimmed.adopt_invisible(&mapping, fetched);
+    assert_eq!(
+        dimmed.get(130),
+        Some(DimmedClip {
+            base: 1.0,
+            level: 0.0
+        }),
+        "a Bible clip left at 0 (e.g. by a previous process) goes back to full"
+    );
+    assert_eq!(dimmed.get(131), None);
+    let plan = plan_clear_fade(&mapping, &dimmed);
     assert!(
-        put_sent(&requests, 41, "Neboť Bůh tak miloval"),
-        "after a clear the secondary text goes to #bible-translate-b"
+        plan.iter().all(|target| target.param_id != 130),
+        "an invisible clip is not faded again"
     );
 }
