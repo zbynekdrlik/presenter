@@ -444,6 +444,49 @@ async fn a_fade_that_fails_halfway_is_still_restored() {
     }
 }
 
+/// CI run 38176143346: `a_fade_that_fails_halfway_is_still_restored` saw a PUT of
+/// the failed step arrive AFTER the clear had returned. `put_opacities` returned on
+/// the first failure and dropped the step's other requests, some already on the
+/// wire. A failed step must wait for all of its PUTs before it reports the
+/// failure, so nothing of a finished clear lands later.
+#[tokio::test]
+async fn a_failed_step_waits_for_its_other_puts_before_failing() {
+    const SLOW: Duration = Duration::from_millis(400);
+    let server = start_resolume(bible_layers(Some(FADE))).await;
+    // Step 3: #bible-reference-a fails at once, #bible-translate-reference-a
+    // answers slowly.
+    answer_param(&server, 135, 200, 2, 1).await;
+    answer_param(&server, 135, 500, 1, 2).await;
+    answer_param(&server, 145, 200, 2, 1).await;
+    Mock::given(method("PUT"))
+        .and(path(param_path(145)))
+        .respond_with(ResponseTemplate::new(200).set_delay(SLOW))
+        .up_to_n_times(1)
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    let (mut driver, status) = driver_for(&server);
+
+    let start = Instant::now();
+    let err = driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect_err("the failed opacity PUT fails the clear");
+    let took = start.elapsed();
+
+    assert!(!is_stale_id_error(&err), "{err:#}");
+    assert!(
+        took >= SLOW,
+        "the clear returned after {took:?}, before the slow PUT of its failed step ({SLOW:?})"
+    );
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&requests, 145).len(),
+        3,
+        "step 3 of 145 landed"
+    );
+}
+
 #[tokio::test]
 async fn a_missing_opacity_parameter_is_a_stale_mapping() {
     let server = start_resolume(bible_layers(None)).await;
