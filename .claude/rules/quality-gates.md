@@ -301,3 +301,12 @@ Fake-backed test (e.g. a `/healthz` assertion that needs `set_snapshots_unreadab
 `state/tests.rs` or a `state/*` test module (`use super::ndi_control::…`) and drive the router
 from there with `crate::router::build_router(state.clone())` — the existing validate-mode
 `/healthz` test does exactly this.
+
+## `FuturesUnordered::push` takes `&self`: drop the `mut` when the loop stops polling (#841)
+
+`let mut futures = FuturesUnordered::new();` needs `mut` only for `futures.next().await`
+(`StreamExt::next` takes `&mut self`); `push` takes `&self`. Replacing the `while let Some(..) =
+futures.next().await` loop with `futures.collect()` / a helper that takes the stream by value
+leaves the `mut` unused, and `-D warnings` fails Clippy on `unused_mut` (#841 lost a cycle on five
+such bindings). Also drop the now-unused `StreamExt` import from that file.
+
