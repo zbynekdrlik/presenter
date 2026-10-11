@@ -6,13 +6,15 @@
 //!   clip, so a clear must also fade the clips the verse connected;
 //! - a fetch shows what Resolume really has, so the tracked opacities follow
 //!   it (a clip shown again or dimmed in Arena);
-//! - each layer fades over its own transition.
+//! - each layer fades over its own transition;
+//! - after a start, the first verse lands on the side that is not live.
 
 use super::bible_clear_tests::{
     answer_param, bible_layers, body_value, clear_update, clip, connects, deck_layers, driver_for,
-    layer, mount_arena, opacities_put, param_path, position, start_resolume, verse_update,
-    A_SIDE_OPACITY, BIBLE_A, B_SIDE_OPACITY, FADE,
+    layer, mount_arena, opacities_put, param_path, position, start_resolume, values_put,
+    verse_update, A_SIDE_OPACITY, BIBLE_A, B_SIDE_OPACITY, FADE,
 };
+use serde_json::json;
 use std::time::Duration;
 use wiremock::Request;
 
@@ -190,5 +192,115 @@ async fn each_layer_fades_over_its_own_transition() {
     assert!(
         first_zero(130) < first_zero(135),
         "the faster text layer reaches 0 before the reference layer"
+    );
+}
+
+/// Final review (#841, Minor #1): an operator dims a visible Bible clip in Arena.
+/// The next fetch shows it, the clear fades it from there, and when that side
+/// is connected again it comes back at the dimmed opacity, not at full.
+#[tokio::test]
+async fn a_clip_dimmed_in_arena_keeps_that_opacity_after_the_next_verse() {
+    let server = start_resolume(bible_layers(None)).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse on A");
+
+    let mut dimmed = bible_layers(None);
+    dimmed[1] = layer(
+        vec![
+            clip(BIBLE_A, "#bible-a", 30, 0.5),
+            clip(301, "#bible-b", 31, 1.0),
+        ],
+        None,
+    );
+    server.reset().await;
+    mount_arena(&server, dimmed).await;
+    driver.refresh_mapping().await.expect("refetch");
+    for (update, what) in [
+        (clear_update(), "clear"),
+        (verse_update(), "verse on B"),
+        (verse_update(), "verse on A again"),
+    ] {
+        driver.handle_bible(update, &status).await.expect(what);
+    }
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&requests, 130),
+        vec![0.0, 0.5],
+        "faded from the dimmed value, then restored to it"
+    );
+}
+
+/// Final review (#841, Minor #5): a Bible clip whose composition opacity is
+/// below full is faded from that value and restored to it.
+#[tokio::test]
+async fn a_clip_mapped_below_full_opacity_is_restored_to_that_value() {
+    let mut layers = bible_layers(None);
+    layers[1] = layer(
+        vec![
+            clip(BIBLE_A, "#bible-a", 30, 0.6),
+            clip(301, "#bible-b", 31, 1.0),
+        ],
+        None,
+    );
+    let server = start_resolume(layers).await;
+    let (mut driver, status) = driver_for(&server);
+    for (update, what) in [
+        (verse_update(), "verse on A"),
+        (clear_update(), "clear"),
+        (verse_update(), "verse on B"),
+        (verse_update(), "verse on A again"),
+    ] {
+        driver.handle_bible(update, &status).await.expect(what);
+    }
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        opacities_put(&requests, 130),
+        vec![0.0, 0.6],
+        "no restore before the first verse, then faded and restored to 0.6"
+    );
+}
+
+/// Final review (#841, Minor #3): after a start the lanes follow the clip
+/// Resolume shows connected. `#bible-a` is live, so the first verse fills and
+/// connects the B side (a crossfade) instead of rewriting the live clip.
+#[tokio::test]
+async fn the_first_verse_after_a_start_lands_on_the_side_that_is_not_live() {
+    let mut layers = bible_layers(None);
+    let mut live = clip(BIBLE_A, "#bible-a", 30, 1.0);
+    live["connected"] = json!({ "value": "Connected" });
+    layers[1] = layer(vec![live, clip(301, "#bible-b", 31, 1.0)], None);
+    let server = start_resolume(layers).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert!(
+        values_put(&requests, 30).is_empty(),
+        "the live #bible-a text is not rewritten"
+    );
+    assert_eq!(
+        values_put(&requests, 31).len(),
+        1,
+        "the verse goes to #bible-b"
+    );
+    let connected: Vec<&str> = connects(&requests)
+        .iter()
+        .map(|req| req.url.path())
+        .collect();
+    assert!(
+        connected.contains(&"/api/v1/composition/clips/by-id/301/connect"),
+        "{connected:?}"
+    );
+    assert!(
+        !connected.contains(&"/api/v1/composition/clips/by-id/300/connect"),
+        "{connected:?}"
     );
 }

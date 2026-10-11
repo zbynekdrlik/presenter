@@ -225,10 +225,13 @@ mod tests {
 
         let config = driver.config.clone();
         driver.update_config(config);
-        driver.seed_lanes(&mapping(vec![
-            clip(1, "#bible-a", "Disconnected"),
-            clip(2, "#bible-b", "Connected"),
-        ]));
+        assert!(!driver.lane_state.seeded, "a config change resets the seed");
         assert_eq!(driver.lane_state.current(SlotKind::Bible), LaneTarget::A);
+        driver.seed_lanes(&mapping(vec![
+            clip(1, "#bible-a", "Connected"),
+            clip(2, "#bible-b", "Disconnected"),
+        ]));
+        assert!(driver.lane_state.seeded);
+        assert_eq!(driver.lane_state.current(SlotKind::Bible), LaneTarget::B);
     }
 }
