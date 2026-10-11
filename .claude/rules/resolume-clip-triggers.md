@@ -38,7 +38,8 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   - No transition means one step straight to 0.
 - **The fade is time-based** (`fade_level`), stepped every `FADE_STEP` (50 ms = 20 Hz), all
   clips concurrently each step.
-  - Every step is 8 PUTs on fresh connections (#808, no pool), so do not raise the rate.
+  - Every step is up to 8 PUTs (one per still-visible clip) on fresh connections (#808, no
+    pool), so do not raise the rate. A clip at 0 gets no further steps.
   - The loop ends at the step where `elapsed >= longest duration`, a hard bound.
 - **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
   the layer crossfades it in from an invisible clip.
@@ -46,7 +47,7 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   BEFORE `trigger_clips`. The clip being connected is the non-live side, so the restore is
   invisible.
 - **`TrackedOpacities` (`HostDriver::opacities`, keyed by opacity param id) holds `{base,
-  level}` for every clip this process faded.**
+  level}` for every clip this process faded or connected.**
   - A clip is tracked BEFORE its first fade PUT, so a fade that fails halfway is still
     restored. Do not flip this to "insert after success", the dedup-payload order: that order
     would leave a half-faded clip stuck.
@@ -57,12 +58,28 @@ in a composition is ignored). `resolume/bible_clear.rs`:
     made the next clear skip the clip, and the verse stayed on the wall. The test is
     `a_clip_restored_after_a_fetch_at_zero_is_faded_by_the_next_clear`.
   - A restore is sent only while `level < base`, so the verse after next sends no extra PUT.
-  - An UNtracked clip the mapping shows at opacity 0 is adopted as `{1.0, 0.0}` once per
-    fetch (`sync_with_fetch`, keyed on `last_mapping_refresh`). That covers a previous process
-    that faded it.
+  - Once per fetch (`sync_opacities` → `sync_with_fetch`, keyed on `last_mapping_refresh`, run
+    at the top of `handle_bible` before any write): an UNtracked clip the mapping shows at
+    opacity 0 is adopted as `{1.0, 0.0}` (a previous process faded it, or an operator hid it:
+    the two look the same, and the verse comes back at full opacity), and a tracked clip takes
+    the fetched value as its level. Nothing writes Bible opacities between a fetch and its
+    sync, so a difference was made in Arena (or by a step that failed halfway). Test:
+    `a_clip_shown_again_in_arena_after_a_clear_is_faded_by_the_next_clear`.
   - A second clear sends nothing.
-- **404 on an opacity param = `StaleIdError::opacity_parameter`** (stale mapping → refetch +
-  retry, `.claude/rules/resolume-mapping-refresh.md`).
+- **A deck switch keeps the old deck's clip PLAYING** (final review finding): `/composition`
+  then lists only the new deck, so fading only mapped clips left the verse on the wall (on main
+  the clear connected the new deck's clear clip on that layer). `restore_before_connect`
+  therefore remembers every clip a verse connects (`ConnectedClip {clip_id, fade}`), and
+  `plan_clear_fade` adds every still-visible connected clip the mapping no longer lists
+  (`FadeTarget::mapped = false`). Never drop these entries on a refetch of the SAME deck: the
+  provisional follow-ups (2/5/15/30/60 s) refetch constantly, and a deck switch after that
+  would lose the clip again. Test:
+  `a_clear_after_a_deck_switch_fades_the_clips_the_verse_left_playing`.
+- **404 on an opacity param:** a MAPPED one = `StaleIdError::opacity_parameter` (stale mapping
+  → refetch + retry, `.claude/rules/resolume-mapping-refresh.md`). An UNMAPPED one (a connected
+  clip from another deck that Resolume no longer knows) is forgotten and the fade goes on
+  (`drop_missing`); it says nothing about the mapping, so it must not cause a refetch or the
+  60 s pause. `put_opacities` returns the 404 params and lets the caller decide.
 - The opacity param and its mapped value come from `clip.video.opacity {id, value}`. Read
   them live with `GET /api/v1/composition/layers/{n}` (one layer, ~200 KB), never the 16 MB
   `/composition`.
@@ -76,8 +93,11 @@ in a composition is ignored). `resolume/bible_clear.rs`:
 - Assert the restore PUT index is below the first `/connect`.
 - Assert timing only as a LOWER bound (`took >= FADE`): the loop cannot end before the
   duration, and load only lengthens it.
-- Fail one param with a priority-1 wiremock (`fail_param`: `with_priority(1)` +
+- Fail one param with a priority-1 wiremock (`answer_param`: `with_priority(1)` +
   `up_to_n_times`) to prove the half-failed-fade restore.
+- Model a deck switch with `server.reset()` + `mount_arena(&server, deck_layers(DECK_TWO, ..))`
+  + `driver.refresh_mapping()`: the composition lists other ids, and writes to the old deck's
+  clips still succeed (the clips still exist).
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small
 
