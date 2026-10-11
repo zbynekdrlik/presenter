@@ -2,6 +2,8 @@
 mod backoff_tests;
 mod bible_clear;
 #[cfg(test)]
+mod bible_clear_deck_tests;
+#[cfg(test)]
 mod bible_clear_tests;
 mod clip_map;
 mod driver;
