@@ -11,7 +11,7 @@
 //! Nothing is connected and no text is written, so a clear fills no lane and
 //! flips nothing. The next verse lands on the other side, and the layer
 //! crossfades it in from an invisible clip. Before a faded clip is connected
-//! again, [`HostDriver::restore_opacity`] puts its opacity back.
+//! again, [`HostDriver::restore_before_connect`] puts its opacity back.
 //!
 //! [`TrackedOpacities`] remembers the opacity this process gave every clip it
 //! faded. A clip is tracked BEFORE its first fade PUT, so a fade that fails
@@ -67,7 +67,7 @@ impl TrackedOpacities {
     /// Adopt every Bible lane clip the mapping saw at opacity 0 that is not
     /// tracked yet: a clear left it invisible, possibly one of a previous
     /// process. It goes back to full opacity before its next connect.
-    pub(super) fn adopt_invisible(&mut self, mapping: &ClipMapping, fetched: Option<Instant>) {
+    pub(super) fn sync_with_fetch(&mut self, mapping: &ClipMapping, fetched: Option<Instant>) {
         if fetched.is_some() && self.adopted_from == fetched {
             return;
         }
@@ -239,7 +239,10 @@ impl HostDriver {
     /// lowered, before those clips are connected again (their text is
     /// already written, and the A/B side being connected is not live). The
     /// clip stays tracked at its base, so a later fade starts from there.
-    pub(super) async fn restore_opacity(&mut self, targets: &[ClipTarget]) -> anyhow::Result<()> {
+    pub(super) async fn restore_before_connect(
+        &mut self,
+        targets: &[ClipTarget],
+    ) -> anyhow::Result<()> {
         let mut seen = HashSet::new();
         let restores: Vec<(i64, f64)> = targets
             .iter()

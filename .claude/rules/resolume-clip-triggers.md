@@ -42,7 +42,7 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   - The loop ends at the step where `elapsed >= longest duration`, a hard bound.
 - **A clear fills no lane, so it flips nothing.** The next verse lands on the other side, and
   the layer crossfades it in from an invisible clip.
-- **Restore:** `handle_bible` calls `restore_opacity(&to_trigger)` AFTER the text PUTs and
+- **Restore:** `handle_bible` calls `restore_before_connect(&to_trigger)` AFTER the text PUTs and
   BEFORE `trigger_clips`. The clip being connected is the non-live side, so the restore is
   invisible.
 - **`TrackedOpacities` (`HostDriver::opacities`, keyed by opacity param id) holds `{base,
@@ -58,7 +58,7 @@ in a composition is ignored). `resolume/bible_clear.rs`:
     `a_clip_restored_after_a_fetch_at_zero_is_faded_by_the_next_clear`.
   - A restore is sent only while `level < base`, so the verse after next sends no extra PUT.
   - An UNtracked clip the mapping shows at opacity 0 is adopted as `{1.0, 0.0}` once per
-    fetch (`adopt_invisible`, keyed on `last_mapping_refresh`). That covers a previous process
+    fetch (`sync_with_fetch`, keyed on `last_mapping_refresh`). That covers a previous process
     that faded it.
   - A second clear sends nothing.
 - **404 on an opacity param = `StaleIdError::opacity_parameter`** (stale mapping → refetch +

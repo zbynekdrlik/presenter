@@ -352,7 +352,7 @@ impl HostDriver {
             // #841: Bible clips a clear left invisible (also by an earlier
             // process) are known before a verse restores or a clear fades them.
             self.opacities
-                .adopt_invisible(&mapping, self.last_mapping_refresh);
+                .sync_with_fetch(&mapping, self.last_mapping_refresh);
             let bible_lane = self.lane_state.current(SlotKind::Bible);
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);
             let mut to_trigger = Vec::new();
@@ -392,7 +392,7 @@ impl HostDriver {
             if !to_trigger.is_empty() {
                 // #841: a clip a clear faded gets its opacity back before it is
                 // connected (its text is already written).
-                self.restore_opacity(&to_trigger).await?;
+                self.restore_before_connect(&to_trigger).await?;
                 if TRIGGER_DELAY.as_millis() > 0 {
                     sleep(TRIGGER_DELAY).await;
                 }

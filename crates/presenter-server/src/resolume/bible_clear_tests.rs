@@ -575,7 +575,7 @@ fn the_plan_fades_visible_bible_clips_from_where_they_are() {
     ));
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
     let mut tracked = TrackedOpacities::default();
-    tracked.adopt_invisible(&mapping, None);
+    tracked.sync_with_fetch(&mapping, None);
 
     let plan = plan_clear_fade(&mapping, &tracked);
     let mut params: Vec<i64> = plan.iter().map(|target| target.param_id).collect();
@@ -604,7 +604,7 @@ fn a_clip_mapped_invisible_is_adopted_once_per_fetch_and_restored_to_full() {
     let fetched = Some(tokio::time::Instant::now());
     let mut tracked = TrackedOpacities::default();
 
-    tracked.adopt_invisible(&mapping, fetched);
+    tracked.sync_with_fetch(&mapping, fetched);
     assert_eq!(
         tracked.get(130),
         Some(TrackedOpacity {
