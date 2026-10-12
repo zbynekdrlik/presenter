@@ -191,6 +191,38 @@ body.stream {
     opacity: 0;
 }
 
+/* PLAYBACK (#843): a Drive folder's photos/videos in a loop. Each item is a
+ * `.stream-playback__layer` filling the frame; layers stack in DOM order (the
+ * incoming one on top). A `Fade`/`FadeThrough` layer fades IN on mount via
+ * `@starting-style` and OUT via `--leaving` (duration inline), exactly like
+ * the text crossfade; a `Cut` layer has neither class and swaps instantly. The
+ * media's `object-fit` comes inline from the element's fit. */
+.stream-element--playback {
+    pointer-events: none;
+}
+.stream-playback__layer {
+    position: absolute;
+    inset: 0;
+}
+.stream-playback__layer--fade {
+    opacity: 1;
+    transition-property: opacity;
+    transition-timing-function: ease;
+}
+@starting-style {
+    .stream-playback__layer--fade {
+        opacity: 0;
+    }
+}
+.stream-playback__layer--leaving {
+    opacity: 0;
+}
+.stream-playback__media {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
 /* #778: hide text elements until uploaded web fonts have loaded, so a scene
  * take never flashes a fallback font before the real face arrives. The output
  * page sets `data-fonts-ready="false"` on the canvas until `document.fonts`

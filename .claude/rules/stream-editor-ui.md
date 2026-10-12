@@ -459,7 +459,38 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB
   (0.9 % of 5.6 MB, measured dev vs prod 2026-10-12). Accepted; a hand-written fold table would
   save that if the bundle size ever matters.
+- `components/stream_editor/mod.rs` is at ~785 production lines (800 = warning). Move something
+  into a sibling module (the #742 split pattern) BEFORE the next addition there.
+- **Live check on SNV/PP: never press „Vytvoriť" with a fresh name.** The duplicate refusal
+  only fires for a name or slug that already exists, so a "test" name creates a real output, and
+  deleting prod data needs the owner (2026-10-12: a check created „Stream 2" / `stream-2` on SNV).
+  Check the preview, the prefill and a duplicate ("strih"), then Zrušiť.
 - E2E `stream-editor-outputs.spec.ts`: create (preview, selected, `?output=`, URL, server name),
   duplicate refused inline, rename (prefilled, option text, slug + URL unchanged), the rename form
   closes on an output switch, a click selects the whole URL, an empty rename is refused, 360 px no
   horizontal overflow with the form open.
+
+## Playback form (#843, `playback_fields.rs` + pure `playback_status.rs`)
+- The kind wiring follows "Adding a new element KIND" (stream-graphics.md): `+ Prehrávanie`
+  (`stream-add-element-playback`), `kind_label_sk` "Prehrávanie", `default_element_props("playback")`
+  BEFORE `_ => Verse` (empty link, centred 50 %×50 % box, contain, 5 s, muted, `Fade{300}`), the
+  frame / opacity / transition accessor arms, and the `TransitionFields` guard widened to playback.
+  Opacity reuses `PercentInput` because `read_opacity` now covers playback.
+- The link is a `Memo` over the draft: the status Effect re-runs only when the LINK changes, not on
+  every frame drag or keystroke elsewhere. An unusable link gets a Slovak inline hint
+  (`stream-playback-link-error`, `link_problem` per `DriveLinkError`) and NO request at all — a
+  GET of a bad link would 422 and log `Failed to load resource` in a zero-console spec.
+- Status (`stream-playback-status`, `data-state` = loading | syncing | error | synced | unsynced):
+  `N fotiek / M videí, synchronizované HH:MM` (Slovak plurals 1 / 2–4 / 5+, local time via
+  `chrono::Local`). It polls while `should_poll` (syncing, or a saved link the worker has not
+  reached — the save's `StreamConfigChanged` pass starts after a 2 s debounce, so the first status
+  after Save is still "unsynced"), backing off 2 s → 5 s → 15 s (`poll_delay_ms`) and NEVER giving
+  up (review finding: a fixed 60-poll cap left a slow sync stuck on "Synchronizujem…"). The status
+  Effect also tracks a `Memo` of `ctx.def`'s `config_revision`, so every Save reloads it (a new
+  link clears the line, a new revision keeps it while reloading). A request counter drops a late
+  response for an older link and ends an older poll chain.
+- „Obnoviť" (`stream-playback-refresh`) POSTs `{url}` to `/stream/api/playback/refresh`; the
+  server syncs that folder even before the element is saved and marks it `syncing` at once.
+- E2E (`stream-playback.spec.ts`, editor test): invalid / file link → inline hint and no status;
+  folder link → status; Save → props in the def; status reaches `synced` with
+  "2 fotky / 1 video"; Obnoviť → the mock serves one more listing.

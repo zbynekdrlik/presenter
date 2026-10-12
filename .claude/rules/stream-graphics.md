@@ -1,6 +1,10 @@
 ---
 paths:
   - "crates/presenter-core/src/stream.rs"
+  - "crates/presenter-core/src/stream/**"
+  - "crates/presenter-server/src/drive/**"
+  - "crates/presenter-server/src/playback/**"
+  - "tests/e2e/stream-playback.spec.ts"
   - "crates/presenter-persistence/src/repository/stream*.rs"
   - "crates/presenter-server/src/**/stream*.rs"
   - "crates/presenter-server/src/**/stream_*/**"
@@ -434,3 +438,146 @@ The old SSR `/overlays/timer` (a second, hand-styled renderer) is GONE. The OBS 
 - **`Countdown.box: Option<TextBox>`** — `TextBox { color, opacity, padding_pct, radius_pct }`. `box` is a Rust KEYWORD → the field is `r#box` with `#[serde(rename = "box")]`; serde would strip the `r#` anyway, but the explicit rename documents the wire key. It joins EVERY exhaustive `Countdown { … }` destructure/literal (core `validate_props`, `props_access` defaults, `scene_render`, and every test literal in core/persistence/server) — grep `Countdown {` before touching it. Validated by `validate_text_box` (reuses `validate_color`/`validate_opacity`/`validate_pct`). Rendered by `element_countdown` as an INNER `.stream-countdown-box` wrapper: its translucency is an `rgba()` background (opacity baked into the alpha via `style.rs::text_box_css` + `hex_rgb`), NEVER a CSS `opacity` — a wrapper `opacity` would fade the digits too (same rule as `element_lower_third::bar_background`).
 - **`element_countdown` now HONOURS `timer_id`** (reverses #709's "always countdown_to_start"): `1` = `countdown_to_start` (count-DOWN via `format_countdown`), `2` = `preach_timer` (count-UP via the NEW shared `presenter_core::format_elapsed`, `MM:SS`/`HH:MM:SS`); any other id renders empty. Both interpolate whole seconds since the server push only while `Running`. `format_elapsed` is the shared count-up sibling of `format_countdown` (camera-crew's private copy was consolidated onto it).
 - **Seed migration `m20260920_000001_seed_timer_output`** — NOTE the name is `_seed_`, NOT `_create_`, so it does NOT match the `m*_create_*.rs` size/fn-gate exemption and IS gated (keep it small). Additive + idempotent on top of `m20260820_000001`: `INSERT OR IGNORE` the output, `NOT EXISTS`-guarded scene + element, `IS NULL`-guarded active-scene set. The element `props` JSON is built from the REAL `StreamElementProps` via `serde_json::to_string` (typo-proof — a hand-written JSON that mis-shapes a field would be SILENTLY skipped by `load_output_def`'s per-element degrade). `timer` is NOT in `RESERVED_STREAM_SLUGS` — the seed simply owns it.
+
+## Playback element (#843) — a keyless Google Drive folder mirror
+
+`StreamElementProps::Playback { source_url, fit, frame, opacity, image_seconds, muted,
+content_transition }` plays a shared Drive folder's photos + videos in a loop. The design
+(issue #843 comments "Drive access research" + "Design before code") is binding.
+
+- **Core** lives in the `stream/playback.rs` submodule (`stream.rs` sat at 920 prod lines):
+  `parse_drive_folder_url` (pure; host `drive.google.com`, `/drive/(u/N/|mobile/)?folders/<ID>` or
+  `id=` on `/open|/folderview|/embeddedfolderview`, id `[-\w]{25,128}`, `resourcekey` from the
+  query, a `/file/d/…` link → `DriveLinkError::FileLink`), `is_valid_drive_{folder,file}_id`,
+  the playlist DTOs (`PlaybackPlaylist {folderId, items:[{fileId, kind, name, url}], syncedAt,
+  error, syncing}`), and `validate_playback` (called from `validate_props`; it reaches the
+  parent's private `validate_frame/opacity/transition` via `super::`). An EMPTY `source_url` is
+  VALID — the add button creates the element before the operator pastes a link.
+  `image_seconds` 1..=600 (serde default 5), `muted` serde default `true`. `"playback"` is a
+  RESERVED slug (`/stream/playback/{folder}/{file}`). No migration (free `kind` column).
+- **Drive client = ONE module, `presenter-server/src/drive/`** (an API-key path can replace it).
+  Listing `GET {PRESENTER_DRIVE_URL}/embeddedfolderview?id=&resourcekey=` → `listing.rs` splits
+  on the literal `<div class="flip-entry" id="entry-` and reads href / MIME icon
+  (`…googleusercontent.com/16/type/<mime>`) / title (entity-decoded) with `LazyLock<Option<Regex>>`
+  statics (`.ok()`, never `expect`). **A 200 page WITHOUT `class="flip-entries"` is
+  `DriveError::UnexpectedListing`, never "empty folder"** — otherwise a sign-in page or a format
+  change would prune the whole mirror. HEAD/GET `{PRESENTER_DRIVE_DOWNLOAD_URL}/download?id=&export=
+  download&confirm=t` (never the old `uc?export=download`: its redirect drops `confirm=t`). Read
+  `content-length` from the HEADER — `Response::content_length()` is the body size hint (0 for a
+  HEAD). A `text/html` answer is `HtmlPage` (error / virus-scan page), never cached. Downloads
+  stream with `Response::chunk()` (no reqwest `stream` feature needed) into
+  `.download-<uuid>.tmp`, then rename; `download_file(.., max_bytes)` refuses more than the
+  caller's cap (the mirror budget) or the 2 GiB per-file cap — before the first byte when the
+  `content-length` says so, else mid-stream (a chunked body has none). The client is built with
+  `.read_timeout(60 s)`: in reqwest 0.12 it also guards the wait for the RESPONSE HEADERS (the
+  `Pending` future), so a GET whose peer never answers cannot wedge the single worker (a
+  per-`chunk()` timeout alone did not cover that — review finding). A timeout names the bound that
+  fired (`is_connect()` → the 10 s connect timeout). `DriveError` text is SLOVAK: it is the
+  editor's status line. Live-verified 2026-10-12 with our User-Agent (`presenter/<ver>`): the
+  listing markup, a resource-key folder (200 with the key, 401 without), HEAD size +
+  last-modified; a file's download worked even without its own resource key.
+- **Types the mirror keeps** (`playback/manifest.rs::playable`): jpeg/png/webp/gif/avif/bmp and
+  `video/mp4|webm` — NOT `image/*` wholesale (HEIC does not render in Chromium/OBS; an
+  `image/svg+xml` served from our origin could run script when opened directly). MIME from the
+  LISTING icon, not the download. Subfolders skipped.
+- **Sync (`playback/sync.rs::sync_folder`)**: list → per playable file HEAD → download only when
+  missing / size / last-modified changed (`needs_download`; a field the HEAD did not send is not
+  compared) → write `manifest.json` (tmp + `sync_all` + rename; the tmp is removed on failure) →
+  prune. A failed HEAD/download keeps the cached copy with its OLD size/date; without one the file
+  is left out. A failed LISTING returns `Err` and touches nothing; the state glue records the error
+  in the manifest and the items keep playing.
+- **Per-file failures (review finding: a file that always fails used to be re-downloaded and
+  WARN-logged on every pass)**: each failure is a `FileFailure {streak, retry_at, reason}` in the
+  manifest. Until `retry_at` (`retry_backoff`: 5 min doubling to 6 h) the file gets no request at
+  all (`backed_off`); a WARN is logged only on #484 power-of-two streaks (DEBUG otherwise), one
+  INFO on recovery; `last_error` = `failure_summary` (count + the FIRST file's name and Slovak
+  reason). „Obnoviť" (`force`) retries at once.
+- **Mirror byte budget (review finding: only a per-file cap existed)**: `Budget {limit, used}` per
+  pass — `limit` from `PRESENTER_PLAYBACK_MAX_GB` (whole GiB, default 20), `used` = every
+  manifest's item + retired sizes. Files that left the listing count as free at once; replacing a
+  cached file frees its old size; a download whose HEAD size would pass the remainder is refused
+  before any GET (`DriveError::BudgetExceeded`, Slovak), and a size-less one is capped mid-stream.
+  There is NO free-space check: std has no `statvfs` and no libc crate is a direct dependency.
+- **Retired files (found while fixing the review)**: a file that left the folder is NOT deleted at
+  once — the manifest keeps it in `retired` and the file route still serves it for 5 min
+  (`RETIRE_GRACE_SECS`), because an output's playlist is up to 60 s old and would otherwise
+  request a pruned file (a 404 on the broadcast page). A retiree that comes back is played again.
+- **Worker (`state/stream_playback.rs`)**: spawned from `spawn_background_tasks`, so validate mode
+  (#771) never starts it. A tiny FORWARDER task reads the live hub and only bumps a
+  `tokio::sync::watch` counter on `StreamConfigChanged`, so the hub receiver is drained in
+  microseconds and never lags. (The first version read the hub inside the worker: every long
+  download pass lagged, and the `Lagged` started another pass at once, which lagged again —
+  review finding.) The worker's `select!`: the 5-min `interval` (first tick = startup pass), the
+  refresh `Notify` (a stored permit if busy → Forced) and `config.changed()`; non-periodic
+  triggers debounce 2 s, then `mark_unchanged()` swallows the changes the pass covers. The Drive
+  client is a `OnceLock` built (and INFO-logged) on the first sync, so a validate-mode boot or a
+  unit test never builds one.
+  A ConfigChanged pass skips folders synced < 60 s ago (an element drag must not re-HEAD every
+  file); a new folder, a periodic pass and „Obnoviť" always sync. Folders come from every
+  output's def (`load_output_def`); if ANY def fails to load the pass prunes nothing. A folder no
+  element names is deleted only 24 h after its last sync/error (`should_prune_unreferenced`) —
+  covers a refresh of an unsaved link and an element removed for a moment. Repeated failures of
+  one folder log on the #484 power-of-two gate, with ONE recovery line.
+- **`syncing`** = the folder is in `PlaybackSync.pending`: a refresh marks its folders at once
+  (so the API shows it before the worker wakes), a pass marks what it syncs and clears each after.
+  A Forced pass also clears the marks that existed when it STARTED but that it did not sync (the
+  element was deleted meanwhile) — never "clear all": a refresh clicked during a pass belongs to
+  the next pass (its `Notify` permit queues it), and wiping its mark made the editor stop polling
+  (review finding). Without a worker (tests) a mark stays set — tests call `run_playback_pass`
+  directly. Rust tests swap the client with `set_playback_drive_client` (never env:
+  process-global, parallel tests race).
+- **Clippy trap seen here**: a `loop { match x.try_recv() { … => {}, … => break } }` fails
+  `clippy::while_let_loop` under `-D warnings` — write `while let … = x.try_recv() {}`.
+- **Routes (`router/stream_playback.rs`)**: `GET /stream/api/playback?url=` (422 for a non-folder
+  link), `POST /stream/api/playback/refresh {url?}` → 202 (the url's folder joins the next pass
+  even unsaved; `Option<Json<_>>`, so a bare POST without Content-Type works too), `GET /stream/playback/{folder_id}/{file_id}` — both segments must be Drive ids
+  AND the file must be in the manifest's items or retirees (which supply ext + `Content-Type`). A small
+  single-range handler (`parse_range`: `a-b`, `a-`, `-n`; multi-range / other unit / reversed →
+  200 whole; past the end → 416 `bytes */len`), body streamed by `async_stream::try_stream!` in a
+  fn whose return type `impl Stream<Item = io::Result<Bytes>>` pins the macro's `e.into()` error
+  type. The playlist URL carries `?v=<12-hex of size|date>`, so `max-age=3600` never serves a
+  replaced file. The playlist leaves out items whose file is missing on disk (no 404 on air),
+  logged at DEBUG only — every playlist GET passes there, and the next sync re-downloads the file.
+- **Output (`components/stream/element_playback.rs` + pure `playback_model.rs`)**: fetch the
+  playlist (only for a parseable link — a 422 would log on the broadcast page), refetch every
+  60 s (every 5 s while empty) via a self-rescheduling `Timeout` that stops once the element is
+  disposed. A `Cursor` with
+  a TICKET per step: a photo's timer, a video's `ended`/`error` and a pending fade-through mount
+  act only while their ticket is current. Layers keyed on `seq`; `Cut` swaps; `Fade` fades the
+  new layer in over the old one, which stays OPAQUE (`held`, no `--leaving` class) until it is
+  dropped — two layers fading against each other dip a full-frame photo to ~75 % mid-fade (review
+  finding); `FadeThrough` fades the old out, then mounts the new (`settle`). The fade is clamped
+  to half a photo (`Change::clamped`) so layers never pile up. The CSS state is read reactively
+  by seq inside the keyed `<For>` child (`MediaLayer::fading_out`). Photos hold `image_seconds`,
+  plus the fade-out only when the photo had to WAIT for it. A ONE-item folder: the photo stays
+  put; its video gets `prop:loop` (reactive on the playlist length, so a folder that gains items
+  lets it end) instead of remounting each loop. Videos: `prop:muted` + bare `autoplay playsinline` + an explicit
+  `play()` on mount; an unmuted video the browser refuses (`NotAllowedError`) is retried muted, a
+  video that still will not start / errors is skipped after 1 s, and a STALLED one (neither
+  `ended` nor `error`) by a watchdog armed on `loadedmetadata` (`video_watchdog_ms`: duration +
+  15 s, so a late or buffering start is not cut; 10 min when the duration is unknown) or 30 s
+  without metadata. An image that fails to load
+  is skipped too. Media failures log with
+  `console.log`, NOT warn: the editor's preview iframe runs in open-source Chromium, which cannot
+  decode H.264 (`canPlayType` "", `play()` rejects `NotSupportedError`, no console line of its
+  own) — a warn there would red every zero-console editor spec.
+- **E2E (`stream-playback.spec.ts`)**: a Node mock Drive inside the spec (listing + HEAD/GET
+  download, fixtures `tests/e2e/fixtures/playback/` = two 64×64 PNGs + a 1 s 64×64 H.264
+  baseline MP4, `-movflags +faststart`). The output-loop test is `@video-codec` → the
+  `chrome-video` project (branded Chrome, H.264, `--autoplay-policy=user-gesture-required`; muted
+  `play()` is allowed there). It records layer mounts with a `MutationObserver` + `ended`/`error`
+  CAPTURE listeners on `document` (media events do not bubble) from an init script, and asserts
+  red → blue → clip → red back to back with the clip's `ended`. The editor test's Obnoviť step
+  first REMOVES a photo from the mock folder, so "1 fotka / 1 video" can only come from the
+  refresh (review finding: the old step passed even if refresh did nothing). `support.ts` defaults
+  both Drive URLs to a dead loopback.
+
+### Live check of the playback element on dev (2026-10-12)
+
+A real public Drive folder (5 JPEGs) through the editor on dev: „+ Prehrávanie", paste the link,
+seconds 3, Uložiť → the status line read „5 fotiek / 0 videí, synchronizované HH:MM" within a few
+seconds, the files sat in `/opt/presenter-dev/stream-assets/playback/<folder>/` with a
+`manifest.json`, and `/stream/<slug>` cycled three photos in playlist order with a transparent
+background and a clean console. Use a throwaway output on DEV for this (`POST
+/stream/api/outputs`), never an operator's output on SNV/PP.
+

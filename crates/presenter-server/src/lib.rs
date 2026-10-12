@@ -84,10 +84,12 @@ mod android_stage;
 mod bible_remote;
 mod companion;
 pub mod config;
+mod drive;
 mod live;
 #[cfg(feature = "mock-integrations")]
 pub mod mock_integrations;
 mod osc;
+mod playback;
 mod resolume;
 pub mod router;
 mod stage_connections;

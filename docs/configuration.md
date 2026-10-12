@@ -68,6 +68,31 @@ later loads degrade at once. Every other translation keeps working.
 | `PRESENTER_NLT_API_KEY` | `TEST`               | Tyndale NLT API key. `TEST` = anonymous: ≤50 verses per request, ≤500 requests per day. A registered key raises this to ≤500 verses, ≤5000 requests. |
 | `PRESENTER_NLT_API_URL` | `https://api.nlt.to` | API base URL. Tests point it at a mock; the E2E harness defaults it to a dead loopback. |
 
+### Stream playback — Google Drive folders (#843)
+
+A stream **playback** element plays a Google Drive folder's photos and videos
+in a loop. The operator shares the folder as "anyone with the link" and pastes
+the link — no Google Cloud project or API key. The server mirrors every
+referenced folder with Drive's keyless endpoints (listing
+`/embeddedfolderview`, download `/download?…&confirm=t`): at startup, every
+5 minutes, after a stream config change and on the editor's „Obnoviť". Only
+changed files are downloaded (HEAD size / last-modified), files that left the
+folder are deleted 5 minutes later (until then outputs with an older playlist
+still get them), and when Drive is unreachable the last mirrored playlist
+keeps playing. A file that keeps failing is retried with a growing pause
+(5 min … 6 h; „Obnoviť" retries at once) and its reason shows in the editor.
+The whole mirror stops at a byte budget (all folders together,
+`PRESENTER_PLAYBACK_MAX_GB`); a single file is capped at 2 GiB. There is no
+free-space check, so set the budget well below the free disk space next to
+`presenter.db` (the dev unit uses 2 GiB; the dev box is the CI runner host).
+Needs internet only to sync.
+
+| Variable                       | Default                                | Purpose |
+| ------------------------------ | -------------------------------------- | ------- |
+| `PRESENTER_DRIVE_URL`          | `https://drive.google.com`             | Folder-listing base URL. Tests point it at a mock; the E2E harness defaults it to a dead loopback. |
+| `PRESENTER_DRIVE_DOWNLOAD_URL` | `https://drive.usercontent.google.com` | File-download base URL (same test treatment). |
+| `PRESENTER_PLAYBACK_MAX_GB`    | `20`                                   | Byte budget of the whole playback mirror, in whole GiB. A download that would pass it is refused and the editor shows „úložisko prehrávania je plné". |
+
 ### Companion Integration
 
 | Variable                      | Default | Description                      |
@@ -124,6 +149,12 @@ upload handler); if ever lost, every asset is re-uploadable from the editor.
 | Production   | `/opt/presenter/stream-assets`     |
 | Dev          | `/opt/presenter-dev/stream-assets` |
 | PP (release) | `/opt/presenter/stream-assets`     |
+
+The playback element's Drive mirror (#843) lives in the same directory, under
+`stream-assets/playback/<folder_id>/` (`manifest.json` + `<file_id>.<ext>`). It
+is a cache the sync owns: it survives deploys like the assets, a folder no
+element uses any more is removed a day after its last sync, and if the directory
+is lost the next sync downloads everything again.
 
 #### Stream-graphics OBS browser source (#717)
 
