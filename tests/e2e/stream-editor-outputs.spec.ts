@@ -161,3 +161,56 @@ test("#842 the output bar with its form open fits a phone without horizontal scr
 
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });
+
+test("#842 the rename form closes when the operator switches output, so it never renames another one", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const n = Date.now() % 100_000;
+  const first = `sw-a-842-${n}`;
+  const second = `sw-b-842-${n}`;
+  for (const [slug, name] of [
+    [first, `Prvý ${n}`],
+    [second, `Druhý ${n}`],
+  ]) {
+    const res = await page.request.post(`${baseURL}/stream/api/outputs`, { data: { slug, name } });
+    expect(res.ok(), `create ${slug} -> ${res.status()}`).toBeTruthy();
+  }
+
+  await openEditor(page, first);
+  await page.locator('[data-role="stream-output-rename"]').click();
+  await expect(nameField(page)).toHaveValue(`Prvý ${n}`);
+  await outputSelect(page).selectOption(second);
+  await expect(outputSelect(page)).toHaveValue(second);
+  await expect(outputForm(page)).toHaveCount(0);
+
+  const outputs = await listOutputs(page);
+  expect(outputs.find((o) => o.slug === first)?.name).toBe(`Prvý ${n}`);
+  expect(outputs.find((o) => o.slug === second)?.name).toBe(`Druhý ${n}`);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#842 a click on the OBS URL selects all of it, and an empty rename is refused inline", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  await openEditor(page);
+
+  await urlField(page).click();
+  const selection = await urlField(page).evaluate((el) => {
+    const input = el as HTMLInputElement;
+    return { start: input.selectionStart, end: input.selectionEnd, length: input.value.length };
+  });
+  expect(selection.length).toBeGreaterThan(0);
+  expect(selection).toEqual({ start: 0, end: selection.length, length: selection.length });
+
+  await page.locator('[data-role="stream-output-rename"]').click();
+  await nameField(page).fill("   ");
+  await saveButton(page).click();
+  await expect(formError(page)).toHaveText("Zadaj názov výstupu.");
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
