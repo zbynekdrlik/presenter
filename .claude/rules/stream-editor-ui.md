@@ -449,9 +449,11 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - „Premenovať" PATCHes `{name}` only. The slug NEVER changes, so Companion buttons (they store
   the slug, default `stream`) and OBS sources (`/stream/{slug}`) keep working. That is how the
   owner's "stream" output became "Strih" (2026-10-11).
-- The OBS URL is a read-only input that selects itself on focus AND on click: a click on the
-  ALREADY focused field fires no focus event and collapses the selection to a caret, so a
-  focus-only `select()` worked only for the first click (measured on dev; the E2E clicks twice). Do
+- The OBS URL is a read-only input that stays fully selected on every click: `focus` selects
+  (first click / Tab), `mousedown` on the ALREADY focused field calls `preventDefault()` + `select()`
+  (no caret), and `mouseup` calls `preventDefault()` (keeps the focus selection). A click on the
+  focused field fires no focus event, and a `select()` in `click` is NOT enough: headless Chromium
+  still ended at 0..0 (CI run 38189219751, reproduced on a plain HTML page). The E2E clicks twice. Do
   not add a copy button: `navigator.clipboard` needs a secure context, and the LAN editor is plain
   HTTP.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB

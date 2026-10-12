@@ -14,7 +14,8 @@
 //!   this way, slug unchanged). The form remembers the output it opened for
 //!   and closes when the operator switches output.
 //! - The OBS URL of the selected output sits in a read-only field that selects
-//!   itself on focus and on click. There is no copy button:
+//!   itself on focus and keeps the selection on every click. There is no copy
+//!   button:
 //!   `navigator.clipboard` needs a secure context, and the LAN editor is plain
 //!   HTTP.
 
@@ -278,12 +279,32 @@ fn show_refusal(ctx: StreamEditorCtx, form: OutputForm, message: String) {
     }
 }
 
-/// Select the whole value of the input an event came from.
-fn select_target(ev: &web_sys::Event) {
-    if let Some(input) = ev
-        .target()
+/// The input element an event came from.
+fn input_of(ev: &web_sys::Event) -> Option<web_sys::HtmlInputElement> {
+    ev.target()
         .and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
-    {
+}
+
+/// Focus (the first click, or Tab) selects the whole URL.
+fn select_on_focus(ev: leptos::ev::FocusEvent) {
+    if let Some(input) = input_of(&ev) {
+        input.select();
+    }
+}
+
+/// A click on the ALREADY focused field fires no focus event and would place
+/// a caret: keep the field selected instead. Headless Chromium proved a
+/// select() in `click` is not enough (it still ended at 0..0).
+fn reselect_on_mousedown(ev: leptos::ev::MouseEvent) {
+    let Some(input) = input_of(&ev) else {
+        return;
+    };
+    let focused = leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.active_element())
+        .is_some_and(|active| active.is_same_node(Some(input.unchecked_ref())));
+    if focused {
+        ev.prevent_default();
         input.select();
     }
 }
@@ -355,8 +376,10 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                     readonly
                     data-role="stream-output-url"
                     prop:value=url
-                    on:focus=move |ev: leptos::ev::FocusEvent| select_target(&ev)
-                    on:click=move |ev: leptos::ev::MouseEvent| select_target(&ev)
+                    on:focus=select_on_focus
+                    on:mousedown=reselect_on_mousedown
+                    // Keep the selection the focus made on the first click.
+                    on:mouseup=move |ev: leptos::ev::MouseEvent| ev.prevent_default()
                 />
             </label>
             <button
