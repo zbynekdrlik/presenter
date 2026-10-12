@@ -16,10 +16,12 @@
 //!
 //! #848 fourth review: two titles of ONE deck on one layer are remembered
 //! alike whichever column the playing one is in (a worker test and a pure
-//! `remember_cover` test). Pure `remember_cover` tests also pin what the cap
-//! and layer-shift worker tests cannot see: a full layer keeps its playing
-//! title and drops the oldest that is not playing, and a title remembered on
-//! another layer leaves its old one in the map itself.
+//! `remember_mapping` test); fifth review: so are two PLAYING titles and a
+//! third one of one fetch, both playing titles kept. Pure `remember_cover`
+//! tests also pin what the cap and layer-shift worker tests cannot see: a
+//! full layer keeps its playing title and drops the oldest that is not
+//! playing, and a title remembered on another layer leaves its old one in the
+//! map itself.
 //!
 //! A deck switch is `server.reset()` + a new mount + "Refresh mapping": the
 //! composition lists only the new deck, while the other decks' titles still
@@ -338,6 +340,54 @@ fn a_fetchs_titles_are_remembered_alike_in_either_column_order() {
     assert_eq!(
         results[1], expected,
         "the playing title in the earlier column"
+    );
+}
+
+/// Three titles of the first deck for one layer, in column order: the sermon
+/// title (not playing), then two titles PLAYING.
+fn two_titles_playing() -> Vec<Value> {
+    let mut clips = titles_playing_second();
+    clips.push(playing(clip(
+        COVER + 2,
+        "TRETI NAZOV #bible-clear",
+        COVER_TEXT + 2,
+        0.0,
+    )));
+    clips
+}
+
+/// #848 fifth review, item 1: two titles PLAYING on one layer in one fetch.
+/// Both came first, and the second one's collapse discarded the first, so the
+/// later column won. A fetch collapses each layer at most once and keeps all
+/// of its playing titles, then adds the others: both column orders remember
+/// the same set, with both playing titles in it.
+#[test]
+fn a_fetchs_two_playing_titles_on_one_layer_are_both_remembered_in_either_column_order() {
+    let in_order = two_titles_playing();
+    let swapped: Vec<Value> = in_order.iter().rev().cloned().collect();
+    let results: Vec<Vec<(usize, Vec<i64>)>> = [in_order, swapped]
+        .into_iter()
+        .map(|clips| {
+            let composition = json!({ "layers": [layer(clips, None)] });
+            let mapping = ClipMapping::from_composition(&composition).expect("mapping");
+            let mut remembered = RememberedCovers::default();
+            remember_mapping(&mut remembered, &mapping);
+            let mut sets = layer_params(&remembered);
+            for (_, params) in &mut sets {
+                params.sort_unstable();
+            }
+            sets
+        })
+        .collect();
+
+    let expected = vec![(1, vec![COVER_OPACITY, COVER_OPACITY + 1, COVER_OPACITY + 2])];
+    assert_eq!(
+        results[0], expected,
+        "the playing titles in the later columns"
+    );
+    assert_eq!(
+        results[1], expected,
+        "the playing titles in the earlier columns"
     );
 }
 

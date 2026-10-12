@@ -14,15 +14,17 @@
 //! - every branch a cover 404 takes (refetch once, forget, paused, newer
 //!   mapping), a failed read, and a config change mid-fade;
 //! - third review: a failed step's final step is the LAST PUT, and a mapped
-//!   cover's 404 leaves only that cover out of the fade.
+//!   cover's 404 leaves only that cover out of the fade;
+//! - fifth review: two covers answering 404 in one mid-fade step are both
+//!   left out, and a 404 with a newer mapping cached leaves the id unmarked.
 //!
 //! Step counts are bounded by the step spacing (a step is due `FADE_STEP`
 //! after the previous one ended), never by wall-clock time.
 
 use super::bible_clear::FADE_STEP;
 use super::bible_clear_cover_tests::{
-    assert_hidden, cover_layer, cover_layers, timer_layer, BIBLE_FADE, COVER, COVER_FADE,
-    COVER_OPACITY, COVER_TEXT, SHORT_COVER_FADE, TIMER_TEXT,
+    assert_hidden, assert_shown, cover_layer, cover_layers, timer_layer, BIBLE_FADE, COVER,
+    COVER_FADE, COVER_OPACITY, COVER_TEXT, SHORT_COVER_FADE, TIMER_TEXT,
 };
 use super::bible_clear_cover_worker_tests::{
     answer_param_read, assert_healthy, compositions, cover_reads, is_connect, last_index,
@@ -404,6 +406,51 @@ async fn two_broken_mapped_covers_in_one_fade_refetch_the_mapping_once() {
     assert_healthy(&worker).await;
 }
 
+/// #848 fifth review, item 4: two mapped covers answer 404 in the SAME
+/// mid-fade PUT step. Both are left out of the fade (they were dropped one at
+/// a time, so the first one's stale WARN listed the second as a target), the
+/// third cover fades on up to its base, and the two cost ONE refetch.
+#[tokio::test]
+async fn two_covers_404_in_one_mid_fade_step_are_both_left_out_and_the_other_fades_on() {
+    let broken = [COVER_OPACITY + 1, COVER_OPACITY + 2];
+    let mut layers = cover_layers(None, Some(SHORT_COVER_FADE), 0.0);
+    for n in 1..=2 {
+        layers.push(layer(
+            vec![clip(COVER + n, "#bible-clear", COVER_TEXT + n, 0.0)],
+            Some(SHORT_COVER_FADE),
+        ));
+    }
+    let (server, _params) = start_arena(layers).await;
+    for param in broken {
+        answer_param(&server, param, 404, 100, 1).await;
+    }
+    let worker = Worker::spawn(&server);
+
+    worker.bible(clear_update()).await;
+    wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    let requests = worker.barrier(&server).await;
+
+    for param in broken {
+        assert_eq!(
+            param_requests(&requests, "GET", param),
+            1,
+            "cover {param} was read by the first step"
+        );
+        assert_eq!(
+            param_requests(&requests, "PUT", param),
+            1,
+            "cover {param}'s first PUT found nothing, so it is left out of the fade"
+        );
+    }
+    assert_shown(&opacities_put(&requests, COVER_OPACITY), 1.0);
+    assert_eq!(
+        compositions(&requests),
+        2,
+        "the cold fetch and ONE stale-id refetch for both (by the barrier's timer frame)"
+    );
+    assert_healthy(&worker).await;
+}
+
 /// Finding 2: a failed read (5xx) keeps the tracked level. The operator
 /// dimmed the shown title to 0.4, but the read could not report it, so the
 /// hide starts from the 1.0 Presenter tracks.
@@ -461,7 +508,10 @@ async fn a_mapped_cover_404_while_stale_refetches_are_paused_refetches_nothing()
 /// Finding 2: the operator's "Refresh mapping" ran between the clear and its
 /// first cover step (it waited for the clear's Bible fade, and commands go
 /// first), so the cover's 404 belongs to an older mapping: nothing is
-/// invalidated, the barrier's timer frame refetches nothing.
+/// invalidated, the barrier's timer frame refetches nothing. #848 fifth
+/// review, item 3: with the newer mapping cached no refetch was pending, so
+/// that 404 did not mark the id refetched: the next verse's 404, on the
+/// cached mapping, still refetches once.
 #[tokio::test]
 async fn a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing() {
     let (server, _params) = start_arena(cover_layers(Some(BIBLE_FADE), None, 0.0)).await;
@@ -486,6 +536,18 @@ async fn a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing(
         compositions(&requests),
         2,
         "the cold fetch and the manual refresh only"
+    );
+
+    worker.bible(verse_update()).await;
+    wait_for(&server, "the verse's cover read", |requests| {
+        cover_reads(requests) == 2
+    })
+    .await;
+    let requests = worker.barrier(&server).await;
+    assert_eq!(
+        compositions(&requests),
+        3,
+        "and ONE stale-id refetch for the verse's 404 on the cached mapping (by the barrier's timer frame)"
     );
     assert_healthy(&worker).await;
 }
