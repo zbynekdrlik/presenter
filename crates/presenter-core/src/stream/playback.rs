@@ -92,7 +92,8 @@ pub fn is_valid_drive_folder_id(id: &str) -> bool {
 /// Read the folder id (and `resourcekey`) from a pasted Google Drive link.
 ///
 /// Accepted (scheme optional, `http`/`https`, host `drive.google.com`):
-/// - `/drive/folders/<ID>` and `/drive/u/<N>/folders/<ID>`;
+/// - `/drive/folders/<ID>`, `/drive/u/<N>/folders/<ID>` and the older
+///   `/drive/mobile/folders/<ID>`;
 /// - `/open?id=<ID>`, `/folderview?id=<ID>`, `/embeddedfolderview?id=<ID>`.
 ///
 /// `resourcekey` comes from the query string; any other query parameter
@@ -156,7 +157,9 @@ fn is_drive_host(authority: &str) -> bool {
 /// The folder id named by the path segments (or the `id` query parameter).
 fn folder_id_from<'a>(segments: &[&'a str], query: &'a str) -> Result<&'a str, DriveLinkError> {
     match segments {
-        ["drive", "folders", id, ..] | ["drive", "u", _, "folders", id, ..] => Ok(*id),
+        ["drive", "folders", id, ..]
+        | ["drive", "u", _, "folders", id, ..]
+        | ["drive", "mobile", "folders", id, ..] => Ok(*id),
         ["open"] | ["folderview"] | ["embeddedfolderview"] => {
             query_param(query, "id").ok_or(DriveLinkError::NoFolderId)
         }
@@ -285,6 +288,8 @@ mod tests {
             format!("https://drive.google.com/drive/folders/{ID}"),
             format!("https://drive.google.com/drive/folders/{ID}?usp=sharing"),
             format!("https://drive.google.com/drive/u/1/folders/{ID}"),
+            // Older mobile share links.
+            format!("https://drive.google.com/drive/mobile/folders/{ID}?usp=sharing"),
             format!("http://DRIVE.google.com/drive/folders/{ID}/"),
             format!("drive.google.com/drive/folders/{ID}#grid"),
             format!("  https://drive.google.com/drive/folders/{ID}  "),

@@ -265,6 +265,53 @@ async fn files_are_id_addressed_only() {
 }
 
 #[tokio::test]
+async fn a_file_that_left_the_folder_is_still_served_for_a_while() {
+    let drive = MockServer::start().await;
+    mount_drive(&drive).await;
+    let (state, _dir) = test_state(&drive).await;
+    seed_element(&state, "t843-retire", &folder_link()).await;
+    state.run_playback_pass(SyncTrigger::Periodic).await;
+    let photo_url = playlist(&state, &folder_link()).await.items[0].url.clone();
+
+    // The photo leaves the folder: only the clip is listed now.
+    drive.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/embeddedfolderview"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<html><body><div class="flip-entries"><div class="flip-entry" id="entry-{CLIP}"><a href="https://drive.google.com/file/d/{CLIP}/view"><div class="flip-entry-list-icon"><img src="https://drive-thirdparty.googleusercontent.com/16/type/video/mp4" alt=""/></div><div class="flip-entry-title">clip.mp4</div></a></div></div></body></html>"#
+            )
+            .into_bytes(),
+            "text/html; charset=utf-8",
+        ))
+        .mount(&drive)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(query_param("id", CLIP))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "video/mp4")
+                .insert_header("content-length", CLIP_BYTES.len().to_string().as_str())
+                .insert_header("last-modified", LAST_MODIFIED),
+        )
+        .mount(&drive)
+        .await;
+    state.run_playback_pass(SyncTrigger::Periodic).await;
+
+    let names: Vec<String> = playlist(&state, &folder_link())
+        .await
+        .items
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    assert_eq!(names, ["clip.mp4"]);
+    // An output whose playlist is up to 60 s old still gets the photo.
+    let response = get(&state, &photo_url, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_bytes(response).await, b"png-photo-bytes");
+}
+
+#[tokio::test]
 async fn a_link_that_is_not_a_drive_folder_is_refused() {
     let drive = MockServer::start().await;
     let (state, _dir) = test_state(&drive).await;
@@ -308,6 +355,138 @@ async fn a_refresh_shows_syncing_until_the_pass_ran() {
     let list = playlist(&state, &folder_link()).await;
     assert!(!list.syncing);
     assert_eq!(list.items.len(), 2);
+}
+
+/// A JSON request through the real router.
+async fn send_json(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+#[tokio::test]
+async fn a_playback_element_is_created_and_patched_through_the_stream_api() {
+    let drive = MockServer::start().await;
+    let (state, _dir) = test_state(&drive).await;
+    let repo = state.repository();
+    repo.create_stream_output("t843-api", "Playback API")
+        .await
+        .expect("output");
+    let scene = repo
+        .create_stream_scene("t843-api", "Base", SceneKind::Base)
+        .await
+        .expect("scene");
+
+    // The element body is the flattened props enum (tag `kind`, snake_case).
+    let created = send_json(
+        &state,
+        "POST",
+        &format!("/stream/api/scenes/{}/elements", scene.id),
+        serde_json::json!({
+            "kind": "playback",
+            "source_url": folder_link(),
+            "fit": "cover",
+            "frame": { "xPct": 5, "yPct": 5, "wPct": 40, "hPct": 40 },
+            "opacity": 0.9
+        }),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let element: serde_json::Value =
+        serde_json::from_slice(&body_bytes(created).await).expect("element json");
+    assert_eq!(element["props"]["kind"], "playback");
+    // Omitted fields take their defaults.
+    assert_eq!(element["props"]["image_seconds"], 5);
+    assert_eq!(element["props"]["muted"], true);
+    let id = element["id"].as_i64().expect("element id");
+
+    let patched = send_json(
+        &state,
+        "PATCH",
+        &format!("/stream/api/elements/{id}"),
+        serde_json::json!({
+            "kind": "playback",
+            "source_url": folder_link(),
+            "fit": "contain",
+            "frame": { "xPct": 5, "yPct": 5, "wPct": 40, "hPct": 40 },
+            "opacity": 1.0,
+            "image_seconds": 12,
+            "muted": false,
+            "content_transition": { "mode": "fade_through", "duration_ms": 600 }
+        }),
+    )
+    .await;
+    assert_eq!(patched.status(), StatusCode::OK);
+    let def = state
+        .repository()
+        .load_output_def("t843-api")
+        .await
+        .expect("def");
+    match &def.scenes[0].elements[0].props {
+        StreamElementProps::Playback {
+            image_seconds,
+            muted,
+            fit,
+            ..
+        } => {
+            assert_eq!(
+                (*image_seconds, *muted, *fit),
+                (12, false, ImageFit::Contain)
+            );
+        }
+        other => panic!("expected playback, got {other:?}"),
+    }
+
+    // A link that is not a Drive folder: 422 from core validation.
+    let refused = send_json(
+        &state,
+        "PATCH",
+        &format!("/stream/api/elements/{id}"),
+        serde_json::json!({
+            "kind": "playback",
+            "source_url": "https://example.com/photos",
+            "fit": "contain",
+            "frame": { "xPct": 5, "yPct": 5, "wPct": 40, "hPct": 40 },
+            "opacity": 1.0
+        }),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn a_bare_refresh_post_marks_every_referenced_folder() {
+    let drive = MockServer::start().await;
+    mount_drive(&drive).await;
+    let (state, _dir) = test_state(&drive).await;
+    seed_element(&state, "t843-bare", &folder_link()).await;
+
+    let response = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/stream/api/playback/refresh")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(playlist(&state, &folder_link()).await.syncing);
 }
 
 #[tokio::test]

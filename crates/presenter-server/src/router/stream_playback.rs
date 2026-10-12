@@ -4,7 +4,8 @@
 //! Routes (mounted with one `.merge(routes())` in `router.rs::build_router`):
 //! - `GET  /stream/api/playback?url=<link>` → `PlaybackPlaylist` (422 for a
 //!   link that is not a Drive folder);
-//! - `POST /stream/api/playback/refresh` `{url?}` → 202, a sync pass is queued;
+//! - `POST /stream/api/playback/refresh` `{url?}` (or a bare POST) → 202, a
+//!   sync pass is queued;
 //! - `GET  /stream/playback/{folder_id}/{file_id}` → the cached file, with a
 //!   single `Range: bytes=…` honoured (206). `tower-http`'s `fs` feature is not
 //!   enabled here, and a moov-at-end MP4 needs ranges to play in Chromium/OBS.
@@ -83,8 +84,10 @@ async fn get_playlist(
 #[instrument(skip_all)]
 async fn refresh(
     State(state): State<AppState>,
-    Json(request): Json<RefreshRequest>,
+    request: Option<Json<RefreshRequest>>,
 ) -> Result<StatusCode, AppError> {
+    // A bare POST (no Content-Type, no body) refreshes every referenced folder.
+    let request = request.map(|Json(request)| request).unwrap_or_default();
     let extra = match request.url.as_deref().map(str::trim) {
         Some(url) if !url.is_empty() => Some(folder_of(url)?),
         _ => None,
