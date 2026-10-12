@@ -458,9 +458,7 @@ impl HostDriver {
                 self.opacities.record_level(param_id, level);
             }
         }
-        for param_id in &puts.missing {
-            self.drop_gone_cover(fade, *param_id, puts.error.as_ref());
-        }
+        self.drop_gone_covers(fade, &puts.missing, puts.error.as_ref());
         if let Some(err) = puts.error {
             return CoverStep::Failed(err);
         }
@@ -508,7 +506,7 @@ impl HostDriver {
             }
         }
         // Every gone cover leaves before the plan, and only then is it logged,
-        // so the stale WARN lists the covers this fade fades (fourth review).
+        // so the stale WARN lists the fade's targets (fourth review).
         fade.covers
             .retain(|kept| gone.iter().all(|cover| cover.param_id != kept.param_id));
         fade.targets = plan_cover_fade(&fade.covers, &self.opacities, fade.direction);
@@ -524,41 +522,51 @@ impl HostDriver {
         }
     }
 
-    /// The cover whose PUT answered 404 is left out ([`Self::drop_cover`]).
-    /// `other` is any other error of the same step, for the stale WARN.
-    fn drop_gone_cover(
+    /// The covers whose PUT answered 404 in one step all leave the fade's
+    /// covers and targets first, and only then is each logged
+    /// ([`Self::drop_cover`]), so no stale WARN lists another of them as a
+    /// target (#848 fifth review). `other` is any other error of the same
+    /// step, for the stale WARN.
+    fn drop_gone_covers(
         &mut self,
         fade: &mut CoverFade,
-        param_id: i64,
+        missing: &[i64],
         other: Option<&anyhow::Error>,
     ) {
-        let cover = fade
+        let gone: Vec<CoverClip> = fade
             .covers
             .iter()
-            .find(|cover| cover.param_id == param_id)
-            .copied();
-        match cover {
-            Some(cover) => self.drop_cover(fade, &cover, other),
-            None => debug!(
+            .filter(|cover| missing.contains(&cover.param_id))
+            .copied()
+            .collect();
+        if gone.len() < missing.len() {
+            debug!(
                 host = %self.config.host,
-                param_id,
+                param_ids = ?missing,
                 "resolume bible: a 404 for an opacity parameter that is not a cover of this fade"
-            ),
+            );
+        }
+        fade.covers
+            .retain(|cover| !missing.contains(&cover.param_id));
+        fade.targets
+            .retain(|target| !missing.contains(&target.param_id));
+        for cover in &gone {
+            self.drop_cover(fade, cover, other);
         }
     }
 
-    /// Leave a cover that answered 404 out of this fade; the others go on
+    /// A cover that answered 404 is left out of this fade; the others go on
     /// (#848 third review: one stale cover stopped them all, and a remembered
-    /// title still playing stayed over the verse). A remembered one is gone
-    /// and forgotten; a mapped one means a stale mapping ([`Self::cover_stale`]).
+    /// title still playing stayed over the verse). The caller took it, and
+    /// every other cover gone in the same step, out of the fade's covers and
+    /// targets already. A remembered one is gone and forgotten; a mapped one
+    /// means a stale mapping ([`Self::cover_stale`]).
     fn drop_cover(
         &mut self,
         fade: &mut CoverFade,
         cover: &CoverClip,
         other: Option<&anyhow::Error>,
     ) {
-        fade.covers.retain(|kept| kept.param_id != cover.param_id);
-        fade.targets.retain(|kept| kept.param_id != cover.param_id);
         if cover.mapped {
             fade.stale.push(cover.clip_id);
             self.cover_stale(fade, cover, other);
@@ -589,11 +597,12 @@ impl HostDriver {
     /// allows; otherwise the WARN goes through the #563h limiter, so a cover
     /// that stays broken is not a WARN on every clear and verse. A 404 while
     /// the refetch for this fade's mapping is pending counts as refetched.
-    /// The WARN lists the covers the fade still fades (its targets).
+    /// The WARN lists the fade's targets (`target_clip_ids`; mid-fade they
+    /// include covers already at their `to`).
     fn cover_stale(&mut self, fade: &CoverFade, cover: &CoverClip, other: Option<&anyhow::Error>) {
         let other_error = other.map_or_else(|| "none".to_owned(), |err| format!("{err:#}"));
         let first_error = fade.failed_step.as_deref().unwrap_or("none");
-        let fading: Vec<i64> = fade.targets.iter().map(|target| target.clip_id).collect();
+        let targets: Vec<i64> = fade.targets.iter().map(|target| target.clip_id).collect();
         let decision = self.cover_404_refetch(cover.param_id, fade.mapping_fetched);
         if decision == CoverRefetch::MappingChanged && self.cover_refetch_pending(fade) {
             // That refetch lists this id again (#848 fourth review: the next
@@ -607,7 +616,7 @@ impl HostDriver {
                 direction = fade.direction.as_str(),
                 clip_id = cover.clip_id,
                 param_id = cover.param_id,
-                fading_clip_ids = ?fading,
+                target_clip_ids = ?targets,
                 steps = fade.steps,
                 other_error = %other_error,
                 first_error,
@@ -623,7 +632,7 @@ impl HostDriver {
                 direction = fade.direction.as_str(),
                 clip_id = cover.clip_id,
                 param_id = cover.param_id,
-                fading_clip_ids = ?fading,
+                target_clip_ids = ?targets,
                 steps = fade.steps,
                 other_error = %other_error,
                 first_error,
@@ -660,7 +669,8 @@ impl HostDriver {
     }
 
     /// Whether the cover refetch for `fade`'s mapping is still pending: that
-    /// mapping was dropped for a cover's 404, and nothing was fetched since.
+    /// mapping was dropped for a cover's 404 and no mapping is cached now, so
+    /// a fetch is pending and the next mapping comes after this 404.
     fn cover_refetch_pending(&self, fade: &CoverFade) -> bool {
         self.last_mapping_refresh.is_none()
             && fade.mapping_fetched.is_some()

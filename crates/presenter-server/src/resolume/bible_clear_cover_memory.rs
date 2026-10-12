@@ -12,11 +12,13 @@
 //! fetch stayed over the verse after a switch back. So a layer keeps up to
 //! [`REMEMBERED_PER_LAYER`] covers:
 //!
-//! - a cover the fetch saw PLAYING collapses its layer to itself: Resolume
-//!   plays one clip per layer, so the others are no longer visible. A fetch's
-//!   playing covers are remembered before its others ([`mapped_covers`] lists
-//!   them first), so the result never depends on the column order (#848
-//!   fourth review: a title left of the playing one was lost);
+//! - a fetch collapses each layer at most ONCE, to the covers it saw PLAYING
+//!   there: Resolume plays one clip per layer, so the others are no longer
+//!   visible. Its playing covers are remembered before its others
+//!   ([`mapped_covers`] lists them first), all of them ([`remember_mapping`]),
+//!   so the result never depends on the column order (#848 fourth review: a
+//!   title left of the playing one was lost; fifth review: of two playing
+//!   ones, the later column won);
 //! - one that was not playing is added (each parameter once, the last seen
 //!   last); at the cap the oldest that is not playing goes;
 //! - a cover is kept on ONE layer: remembering it removes its parameter from
@@ -45,13 +47,24 @@ pub(super) const REMEMBERED_PER_LAYER: usize = 4;
 /// `/composition/layers/{n}`), the oldest first.
 pub(super) type RememberedCovers = HashMap<usize, Vec<CoverClip>>;
 
-/// Remember `cover` as a fetched mapping lists it (see the module doc).
+/// Remember `cover` as a fetched mapping lists it, alone (see the module
+/// doc): one PLAYING collapses its layer to itself, one that is not is added
+/// ([`add_cover`]).
 pub(super) fn remember_cover(remembered: &mut RememberedCovers, cover: CoverClip) {
+    if cover.connected {
+        forget_remembered_cover(remembered, cover.param_id);
+        remembered.insert(cover.layer, vec![cover]);
+    } else {
+        add_cover(remembered, cover);
+    }
+}
+
+/// Add `cover` to its layer: each parameter once and on one layer, the last
+/// seen last; at the cap the oldest that is not playing goes.
+fn add_cover(remembered: &mut RememberedCovers, cover: CoverClip) {
     forget_remembered_cover(remembered, cover.param_id);
     let layer = remembered.entry(cover.layer).or_default();
-    if cover.connected {
-        layer.clear();
-    } else if layer.len() >= REMEMBERED_PER_LAYER {
+    if layer.len() >= REMEMBERED_PER_LAYER {
         let oldest = layer.iter().position(|kept| !kept.connected).unwrap_or(0);
         layer.remove(oldest);
     }
@@ -59,10 +72,19 @@ pub(super) fn remember_cover(remembered: &mut RememberedCovers, cover: CoverClip
 }
 
 /// Remember every cover `mapping` lists, as each fade scheduled with it does
-/// (see the module doc).
+/// (see the module doc). The fetch collapses each layer at most ONCE: its
+/// playing covers come first ([`mapped_covers`]), the first one on a layer
+/// collapses it and the others are added beside it, so all of them are kept
+/// in any column order (#848 fifth review: the second one's collapse dropped
+/// the first, and the later column won). Then the others are added.
 pub(super) fn remember_mapping(remembered: &mut RememberedCovers, mapping: &ClipMapping) {
+    let mut collapsed = HashSet::new();
     for cover in mapped_covers(mapping) {
-        remember_cover(remembered, cover);
+        if cover.connected && collapsed.insert(cover.layer) {
+            remember_cover(remembered, cover);
+        } else {
+            add_cover(remembered, cover);
+        }
     }
 }
 
@@ -86,7 +108,7 @@ fn lane_params(mapping: &ClipMapping) -> HashSet<i64> {
 /// The `#bible-clear` clips of `mapping` with an opacity parameter, each
 /// once, none that is also a Bible lane clip (the lane owns its opacity).
 /// The playing ones come first, the others in composition order (layer,
-/// then column), so remembering them in this order ([`remember_cover`])
+/// then column), so remembering them in this order ([`remember_mapping`])
 /// never depends on the columns.
 pub(super) fn mapped_covers(mapping: &ClipMapping) -> Vec<CoverClip> {
     let mut seen = lane_params(mapping);
