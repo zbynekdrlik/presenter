@@ -455,3 +455,25 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   duplicate refused inline, rename (prefilled, option text, slug + URL unchanged), the rename form
   closes on an output switch, a click selects the whole URL, an empty rename is refused, 360 px no
   horizontal overflow with the form open.
+
+## Playback form (#843, `playback_fields.rs` + pure `playback_status.rs`)
+- The kind wiring follows "Adding a new element KIND" (stream-graphics.md): `+ Prehrávanie`
+  (`stream-add-element-playback`), `kind_label_sk` "Prehrávanie", `default_element_props("playback")`
+  BEFORE `_ => Verse` (empty link, centred 50 %×50 % box, contain, 5 s, muted, `Fade{300}`), the
+  frame / opacity / transition accessor arms, and the `TransitionFields` guard widened to playback.
+  Opacity reuses `PercentInput` because `read_opacity` now covers playback.
+- The link is a `Memo` over the draft: the status Effect re-runs only when the LINK changes, not on
+  every frame drag or keystroke elsewhere. An unusable link gets a Slovak inline hint
+  (`stream-playback-link-error`, `link_problem` per `DriveLinkError`) and NO request at all — a
+  GET of a bad link would 422 and log `Failed to load resource` in a zero-console spec.
+- Status (`stream-playback-status`, `data-state` = loading | syncing | error | synced | unsynced):
+  `N fotiek / M videí, synchronizované HH:MM` (Slovak plurals 1 / 2–4 / 5+, local time via
+  `chrono::Local`). It polls every 2 s while `should_poll` (syncing, or a saved link the worker has
+  not reached — the save's `StreamConfigChanged` pass starts after a 2 s debounce, so the first
+  status after Save is still "unsynced"), at most 60 polls per link; a request counter drops a
+  late response for an older link.
+- „Obnoviť" (`stream-playback-refresh`) POSTs `{url}` to `/stream/api/playback/refresh`; the
+  server syncs that folder even before the element is saved and marks it `syncing` at once.
+- E2E (`stream-playback.spec.ts`, editor test): invalid / file link → inline hint and no status;
+  folder link → status; Save → props in the def; status reaches `synced` with
+  "2 fotky / 1 video"; Obnoviť → the mock serves one more listing.

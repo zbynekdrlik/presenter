@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 | Database schema, migrations, settings audit, library import | `.claude/skills/database/SKILL.md` |
 | Repository refusal → HTTP 404/409/422 typed pattern (RepositoryError) | `.claude/rules/repository-error-pattern.md` (auto-loads on `repository/**`, `router/**`, `state/**`) |
-| Stream-graphics subsystem (epic #718): serde tag, i32/i64 ids, config_revision vs activation, error taxonomy, test idiom | `.claude/rules/stream-graphics.md` (auto-loads on `**/*stream*.rs`) |
+| Stream-graphics subsystem (epic #718): serde tag, i32/i64 ids, config_revision vs activation, error taxonomy, test idiom; playback element (#843) = a keyless Google Drive folder mirror (`drive/` client + `playback/` sync worker, id-addressed Range-served cache, H.264 E2E only in real Chrome `@video-codec`) | `.claude/rules/stream-graphics.md` (auto-loads on `**/*stream*.rs`, `drive/**`, `playback/**`) |
 | Stream-graphics WASM operator editor `/ui/stream` (#713): def+events client model, generic ws/api reuse, reorder full-id-set, untracked handler reads, canvas gesture state machine + output-switch def reset (#787), async-list `<select>` = `prop:selected` per option (#827), Scény/Menovky/Písma tabs = mounted panels + merged URL params (#829), output bar = create/rename outputs with the slug derived from the name + the OBS URL (#842), CI clippy-excludes presenter-ui | `.claude/rules/stream-editor-ui.md` (auto-loads on `pages/stream_editor.rs`, `components/stream_editor/**`) |
 | Adding a `LiveEvent` variant → the one exhaustive match (`companion/variables.rs`) that breaks (E0004) | `.claude/rules/live-events.md` (auto-loads on `live.rs`, `companion/variables.rs`) |
 | Sync/LWW invariants (synthetic tombstones, clock bumps, best-effort recon) | `.claude/rules/sync-lww.md` (auto-loads on `repository/sync*`, `library_sync*`, `state/sync.rs`) |
@@ -291,6 +291,8 @@ crates/
 | `PRESENTER_STARTUP_MODE`      | `normal`                | `normal` = full boot. `validate` (#771) = deploy schema-validation probe: migrate + open DB + serve `/healthz`, but start NO integration/background task (NDI restore, Companion, OSC, AbleSet, Resolume, sync, Android launcher, tickers) and no AI probe. Used by the "Validate database schema" step in deploy.yml/pipeline.yml/release.yml so the probe never collides with the live service. Unknown value → `normal` (WARN). |
 | `PRESENTER_NLT_API_KEY`       | `TEST`                  | Tyndale NLT API key for the remote `eng-nlt` translation (#826). `TEST` = anonymous: ≤50 verses/request, ≤500 requests/day; a registered key ≤500 verses, ≤5000 requests. |
 | `PRESENTER_NLT_API_URL`       | `https://api.nlt.to`    | NLT API base URL (tests point it at a mock; the E2E default is a dead loopback). |
+| `PRESENTER_DRIVE_URL`         | `https://drive.google.com` | Google Drive folder-listing base URL for the stream playback mirror (#843; tests/E2E point it at a mock, the E2E default is a dead loopback). |
+| `PRESENTER_DRIVE_DOWNLOAD_URL` | `https://drive.usercontent.google.com` | Google Drive download base URL for the playback mirror (#843; same test treatment). |
 | `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter                                                       |
 
 ---
