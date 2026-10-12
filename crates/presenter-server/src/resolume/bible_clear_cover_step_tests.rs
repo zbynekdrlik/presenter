@@ -5,7 +5,8 @@
 //!
 //! - a fade lasts for the share of its transition that the distance left is
 //!   of the cover's base, so a hide right after a short show is short;
-//! - the first step starts each cover where it is: it PUTs nothing;
+//! - the first step starts each cover where it is: it PUTs nothing, except
+//!   on a layer without a transition, where it sets the target;
 //! - a failed step jumps to ONE final step that PUTs the target, so one
 //!   transient error never leaves the cover halfway;
 //! - covers are remembered per layer: a newer cover PLAYING on the layer

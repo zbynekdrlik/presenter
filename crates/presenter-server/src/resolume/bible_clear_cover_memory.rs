@@ -23,9 +23,15 @@
 //!   every other layer (a layer inserted or deleted in Arena shifts every
 //!   index).
 //!
-//! Fading a cover that does not play is invisible, so a remembered cover too
-//! many costs one small GET per fade. The memory is reset with the host
-//! config, like `TrackedOpacities`.
+//! A remembered cover costs what a mapped one does: every clear shows it and
+//! every verse hides it, one GET at the first step, then one PUT per 50 ms
+//! step over its layer's transition (~46 PUTs over SNV's 2.3 s, each on a
+//! fresh connection, #808). Four titles plus a mapped one on another layer
+//! are 5 PUTs per step, below the #841 Bible fade's 8. Fading a cover that
+//! does not play is invisible. A title that drops out of the memory (a
+//! collapse or the cap) keeps the level the last fade left it at in Arena (0
+//! after a verse) until the next Bible push on its deck. The memory is reset
+//! with the host config, like `TrackedOpacities`.
 
 use super::bible_clear::bible_lane_clips;
 use super::bible_clear_cover::CoverClip;

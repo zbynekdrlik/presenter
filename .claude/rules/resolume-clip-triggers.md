@@ -145,9 +145,9 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     SHOWN cover dimmed in Arena keeps that as its base, 0 never becomes a base; an untracked
     cover at 0 is hidden from its mapped value, full when that is 0). A cover already at its
     target gets no PUT; a fade a replacement cut short goes on from the reached level (no jump).
-    A failed read (non-404) keeps the tracked level (DEBUG). So every verse costs one tiny GET
-    per cover. The first step PUTs nothing, except for a cover on a layer WITHOUT a transition:
-    its duration is 0, so the first step sets its target.
+    A failed read (non-404) keeps the tracked level (DEBUG). So every fade reads each cover
+    once (a tiny GET) before its PUT steps. The first step PUTs nothing, except for a cover on
+    a layer WITHOUT a transition: its duration is 0, so the first step sets its target.
   - Each step is one `put_opacities` batch at `fade_toward(from, to, elapsed, duration)`,
     landed PUTs recorded; it ends at the step where `elapsed >= longest duration` (exact `to`).
     Targets are tracked before the first PUT. The first step plans at elapsed 0, and every step
@@ -169,6 +169,10 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     - **A cover answering 404 (read or PUT) is left out of THIS fade; the others go on**
       (`drop_cover`; #848 third review: one stale cover stopped them all, and a remembered
       title still playing stayed over the verse). A remembered one is forgotten (below).
+      The first step leaves EVERY gone cover out before it plans and only then logs each,
+      so the stale WARN's `fading_clip_ids` lists the fade's targets (#848 fourth review:
+      dropped one at a time before the plan, it listed other 404'd covers and covers
+      already at their target).
     - A MAPPED cover's 404 also `invalidate_mapping(StaleId)` — only while the mapping it was
       scheduled with is still cached, at most once per fetched mapping, never again for an id
       that already refetched (the refetched mapping still lists it), and not while stale
@@ -176,7 +180,13 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
       kept until a config change (`CoverState::refetched_ids`), not only the last one: now that
       every mapped 404 is reached, two broken ids would otherwise take turns refetching on
       every fade. A broken cover id therefore costs ONE 16 MB refetch, never one per
-      clear/verse. The next push or tick does the refetch. A refetch invalidates the mapping,
+      clear/verse. A mapped 404 that comes while the refetch for the fade's mapping is
+      still pending (that mapping was dropped for another cover's 404 and nothing was
+      fetched since: `cover_refetch_pending`) is added too, since that refetch lists it
+      again (#848 fourth review: the second broken cover of a fade got `MappingChanged`
+      and cost the next fade a second refetch). Two broken covers in one fade cost ONE
+      refetch. An unlisted id cannot 404 as mapped; the set grows one `i64` per distinct
+      broken id. The next push or tick does the refetch. A refetch invalidates the mapping,
       so `MappingChanged` answers before `AlreadyForMapping` (a guard, reachable only if a
       refetch ever kept `last_mapping_refresh`).
     - Logs: the refetch is one WARN. Every later 404 WARNs with its reason (a newer mapping is
@@ -201,17 +211,31 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     (`remember_cover`):
     - one the fetch saw PLAYING (`connected`) collapses its layer to itself: Resolume plays
       one clip per layer, so the others are no longer visible;
+    - a fetch's playing covers are remembered FIRST (`mapped_covers` lists them first, a
+      stable sort, composition order otherwise), so the set never depends on the column
+      order (#848 fourth review: T1 in column 1 and T2 playing in column 2 left only T2;
+      T1, triggered in Arena before a deck switch, stayed over the verse);
     - one not playing is ADDED (each param id once, the last seen last); at the cap
       (`REMEMBERED_PER_LAYER` = 4) the oldest not playing goes;
     - remembering a cover removes its param id from every other layer (a layer inserted or
-      deleted in Arena shifts every index; it was kept on both and faded twice per step).
-    - A remembered cover too many costs one tiny GET per fade (fading a cover that does not
-      play is invisible).
+      deleted in Arena shifts every index; it was kept on both, holding a slot of each;
+      `cover_candidates` dedups by param id, so it was never faded twice).
+    - A remembered cover costs what a mapped one does (#848 fourth review): every clear
+      shows it and every verse hides it, one GET at the first step, then one PUT per 50 ms
+      step over its layer's transition (~46 PUTs over SNV's 2.3 s, each on a fresh
+      connection, #808). Four titles plus a mapped one on another layer are 5 PUTs per
+      step, below the #841 Bible fade's 8. Fading a cover that does not play is invisible.
+    - Residual: a title that drops out of the memory (a collapse or the cap) keeps the
+      level the last fade left it at in Arena (0 after a verse) until the next Bible push
+      on its deck.
     - A remembered cover answering 404 is forgotten (`forget_cover`, INFO) in this fade and
       later ones, no refetch; the other covers keep fading.
     - Tests: `bible_clear_cover_memory_tests.rs` (A→B→A with deck B's title set to 1.0 in
       Arena after B's fetch: the verse on deck A hides it; the mirror at 0: a clear on deck A
-      shows it; collapse on playing; cap eviction; layer shift).
+      shows it; collapse on playing; cap eviction; layer shift; a title left of a playing
+      one hidden after a deck switch; pure `remember_cover` tests for both column orders,
+      the cap with a playing title kept, and the cross-layer forget on the map itself,
+      which the worker tests cannot see: `cover_candidates` dedups by parameter).
     - Residual: the memory is per process (a restart between a show and a deck switch loses
       it), and it is updated only when a fade is scheduled, from the cached mapping. Switches
       no push saw (the operator goes B→A, triggers deck A's title, and back to B between two
@@ -232,8 +256,9 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
   the hide plan + lane dedup through `cover_candidates` + `plan_cover_fade`, the length share,
   a clear/verse sends the cover nothing inside its push), `bible_clear_cover_worker_tests.rs`
   (the real worker, see "Testing a fade"), `bible_clear_cover_step_tests.rs` (length, first
-  and final step, every 404 branch incl. one cover left out and one refetch per broken id, a
-  failed read, a config change), `bible_clear_cover_memory_tests.rs` (the per-layer set) and
+  and final step, every 404 branch incl. one cover left out, one refetch per broken id and
+  one for two broken covers in one fade, a failed read, a config change),
+  `bible_clear_cover_memory_tests.rs` (the per-layer set) and
   `bible_clear_cover_refetch_tests.rs` (`cover_404_refetch` branches and the #563h limiter,
   direct unit tests on a paused clock).
 
@@ -290,7 +315,9 @@ the smaller file or a new sibling:
   and assert the exact count (#848 third review).
 - **To fail the N-th PUT of a param, mount the answers by priority before the push:**
   `answer_param(.., 200, N-1, 1)` + `answer_param(.., 500, 1, 2)`; the rest falls through to
-  the stateful route. Mounting a failure mid-fade cannot tell which PUT it hit.
+  the stateful route. Mounting a failure mid-fade cannot tell which PUT it hit. The N−1 200s
+  are answered by the priority route, so they never reach `ArenaParams`: the store keeps the
+  value from before them, and a later read (`GET /parameter/by-id`) does not see them.
 
 - Read `server.received_requests()`, which keeps arrival order.
 - Assert values only go down and end at 0, and that there are at least 3 steps from near 1.0

@@ -10,7 +10,7 @@
 //! - a title not playing at its deck's fetch is still remembered, so a verse
 //!   on another deck hides it and a clear there shows it;
 //! - a title seen PLAYING drops every other title remembered on its layer;
-//! - a layer keeps at most four titles, the oldest goes first;
+//! - a layer keeps at most four titles, the oldest not playing goes first;
 //! - a title moved to another layer (a layer inserted in Arena) is remembered
 //!   once.
 //!

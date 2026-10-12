@@ -255,7 +255,8 @@ When you touch this area:
     its 404 never becomes an error and leaves only that cover out of the
     fade. A mapped cover id calls `invalidate_mapping(StaleId)` itself, at
     most once per fetched mapping and once per id (every id that refetched is
-    kept until a config change), never while stale refetches are paused or
+    kept until a config change, and so is one whose 404 came while that
+    refetch was still pending), never while stale refetches are paused or
     once a newer mapping is cached (`cover_404_refetch`), and the next push
     or tick refetches. Its later 404s WARN through the #563h limiter
     (`cover-404:<id>`). An unmapped (remembered) cover's 404 is forgotten,

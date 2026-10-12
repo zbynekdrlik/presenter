@@ -274,7 +274,8 @@ pub(super) fn plan_cover_fade(
 /// Whether a target is still short of its `to`, and the level to PUT for
 /// each such target `elapsed` into the fade. A level equal to the tracked
 /// one is left out, so the first step (at 0) PUTs nothing (#848 second
-/// review: it re-sent the level each fade starts from).
+/// review: it re-sent the level each fade starts from), except for a cover
+/// on a layer without a transition: its duration is 0, so it gets its `to`.
 fn cover_levels(
     targets: &[FadeTarget],
     tracked: &TrackedOpacities,
