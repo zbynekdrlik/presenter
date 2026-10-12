@@ -126,15 +126,21 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     nothing to fade), `handle_bible` calls `schedule_cover_fade(Show)`; a connected verse calls
     `schedule_cover_fade(Hide)` after `trigger_clips` and the lane flips. A schedule REPLACES
     the pending fade (INFO line when a started fade is replaced). Show = up to the base, hide =
-    down to 0, each cover over its OWN layer transition (capped by `MAX_CLEAR_FADE`).
+    down to 0.
+  - **Length = the distance left** (#848 second review): each cover fades over
+    `fade × |to − from| / base` of its OWN layer transition (capped by `MAX_CLEAR_FADE`;
+    `cover_duration`). A whole show or hide is the whole transition; a hide that replaces a
+    show cut short at 0.1 takes a tenth of it. A full fade from a replacement's start level
+    stretched quick verses: the title stayed partly visible behind the verse ~2.3 s on SNV.
   - **Worker branch:** `run_host_worker`'s biased `select!` has
     `cover_fade_deadline(driver.cover_fade_due()) => driver.step_cover_fade()` right AFTER the
     commands branch (then the follow-up deadline, then the tick). The deadline is pending while
     nothing is scheduled. Every waiting command runs before the next 50 ms step; a command only
     waits for a step already in flight.
-  - **First step reads Arena:** `GET /parameter/by-id/{id}` per cover (Resolume REST
-    `get_parameter_by_id`: an opacity is a `RangeParameter`, the level is `value`; verified in
-    `resolume.com/docs/restapi/swagger.yaml`), `ACTION_TIMEOUT`, concurrently. The read value
+  - **First step reads Arena and PUTs nothing:** `GET /parameter/by-id/{id}` per cover
+    (Resolume REST `get_parameter_by_id`: an opacity is a `RangeParameter`, the level is
+    `value`; verified in `resolume.com/docs/restapi/swagger.yaml`; SNV Arena 7.27.1 answers
+    200 `ParamRange`, an unknown id 404), `ACTION_TIMEOUT`, concurrently. The read value
     becomes the tracked state with the fetch-sync base rules (`TrackedOpacity::observe`: a
     SHOWN cover dimmed in Arena keeps that as its base, 0 never becomes a base; an untracked
     cover at 0 is hidden from its mapped value, full when that is 0). A cover already at its
@@ -143,27 +149,62 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     per cover.
   - Each step is one `put_opacities` batch at `fade_toward(from, to, elapsed, duration)`,
     landed PUTs recorded; it ends at the step where `elapsed >= longest duration` (exact `to`).
-    Targets are tracked before the first PUT.
+    Targets are tracked before the first PUT. The first step plans at elapsed 0, and every step
+    skips a cover whose level would not move (`cover_levels`, within `SAME_OPACITY`), so no
+    fade re-sends the level it starts from; the first PUT is one step into the fade.
   - **Best-effort:** a cover error never fails a push, never calls `record_error`, never
-    touches the host status or backoff: one WARN, the fade stops (no INFO+WARN pair). A MAPPED
-    cover's 404 (read or PUT) also `invalidate_mapping(StaleId)` — only while the mapping it was
-    scheduled with is still cached, at most once per fetched mapping, never again for the same
-    param id (the refetched mapping still lists it), and not while stale refetches are paused
-    (`cover_404_refetches`, `CoverState::stale_refetch`). A broken cover id therefore costs ONE
-    16 MB refetch, never one per clear/verse. The next push or tick does the refetch.
-  - **Remembered covers:** every cover a push's mapping listed stays in
-    `CoverState::remembered` (reset with the host config, like `TrackedOpacities`), because a
-    deck switch keeps the old deck's cover playing on its layer. Later shows and hides include
-    covers the mapping no longer lists (`mapped: false`); one answering 404 is forgotten
-    (`forget_cover`, INFO), no refetch. Residual: the memory is per process (a restart between
-    a show and a deck switch loses it).
+    touches the host status or backoff.
+    - A failed step (5xx, timeout, refused) does not leave the cover halfway: the next step,
+      `FADE_STEP` later, is ONE final step that PUTs each target (`CoverFade::failed_step`).
+      If that fails too: one WARN, the fade stops. At most 2 failed requests per cover, never a
+      retry loop that holds the worker. A recovered fade logs the first error in its done line
+      (`error_before_final_step`).
+    - A MAPPED cover's 404 (read or PUT) stops the fade and `invalidate_mapping(StaleId)` —
+      only while the mapping it was scheduled with is still cached, at most once per fetched
+      mapping, never again for the same param id (the refetched mapping still lists it), and
+      not while stale refetches are paused (`cover_404_refetch` → `CoverRefetch`,
+      `CoverState::stale_refetch`). A broken cover id therefore costs ONE 16 MB refetch, never
+      one per clear/verse. The next push or tick does the refetch.
+    - Logs: the refetch is one WARN. Every later 404 WARNs with its reason (a newer mapping is
+      cached / the mapping is dropped / refetched for this id already / refetched for another
+      cover already / stale refetches paused) through the #563h limiter, key `cover-404:<id>`
+      (`CoverState::warned_404`, `MISSING_CLIP_WARN_INTERVAL`, DEBUG in between), so a cover
+      that stays broken is not a WARN per clear/verse. The 404 WARN carries any other PUT error
+      of the same step (`other_error`). The done line lists faded covers (`clip_ids`, `from`,
+      `to`) apart from forgotten ones (`forgotten_clip_ids`).
+  - **Remembered covers, one per layer:** `CoverState::remembered` is keyed by the cover's
+    layer (`ClipTarget::layer`, 1-based as in `/composition/layers/{n}`) and reset with the
+    host config, like `TrackedOpacities`. A deck switch keeps the old deck's cover playing on
+    its layer, so later shows and hides include remembered covers the mapping no longer lists
+    (`mapped: false`).
+    - A cover the fetch saw PLAYING (`connected`) replaces the one remembered on its layer:
+      Resolume plays one clip per layer, so the old one is no longer visible. One that is not
+      playing only takes an empty layer or refreshes its own entry, because the remembered
+      cover may still be on air (`a_remembered_cover_is_hidden_after_a_deck_switch`). The
+      memory is bounded by the layer count (it used to grow with every deck visited).
+    - Rejected "remember only connected covers": a cover connected after the fetch would be
+      lost on a deck switch, and the title would stay over the verse.
+    - A remembered cover answering 404 is forgotten (`forget_cover`, INFO) in this fade and
+      later ones, no refetch; the other covers keep fading.
+    - Residual: the memory is per process (a restart between a show and a deck switch loses
+      it). A cover connected in Arena after the last fetch does not count as playing, so the
+      older remembered cover keeps its layer (fading it is harmless) until a fetch sees the new
+      one play.
+  - **Residual: a restart or host config change mid-fade.** It drops the fade and the tracked
+    state (`update_config` resets `CoverState`). The next fade reads the cover where the
+    dropped one left it and adopts that partial value as its base, so a later clear shows the
+    title only that far. It needs a restart (a deploy counts) inside the ~2.3 s fade window;
+    the operator fixes it by setting the opacity in Arena. Preferring the mapped base would
+    not help: the composition fetched after the restart reads the same partial value.
 - **`sync_with_fetch` skips the covers:** the deferred fade can write between a fetch and its
   sync, so a fetch may cache a mid-fade value; the first-step read is fresher.
 - A clip tagged both cover and Bible lane is left to the lane (`cover_candidates` dedups by
   param id).
 - Tests: `bible_clear_cover_tests.rs` (mapping, `fade_toward`, the clear plan without covers,
-  the hide plan + lane dedup, clear/verse return before `COVER_FADE`) and
-  `bible_clear_cover_worker_tests.rs` (the real worker, see "Testing a fade").
+  the hide plan + lane dedup through `cover_candidates` + `plan_cover_fade`, the length share,
+  a clear/verse sends the cover nothing inside its push), `bible_clear_cover_worker_tests.rs`
+  (the real worker, see "Testing a fade") and `bible_clear_cover_step_tests.rs` (length, first
+  and final step, per-layer memory, every 404 branch, a failed read, a config change).
 
 ## The A/B lanes are seeded from the connected clips after a start (`lane_seed.rs`)
 
@@ -184,9 +225,10 @@ Unknown (neither or both) keeps A. It runs once (`SlotState::seeded`, reset with
 
 `resolume/bible_clear_tests.rs` (core contract), `bible_clear_deck_tests.rs` (deck switch,
 fetch sync, per-layer duration, lane seed through `handle_bible`),
-`bible_clear_cover_tests.rs` (#848 cover planners, push side) and
-`bible_clear_cover_worker_tests.rs` (#848 deferred fade); the siblings import the shared
-`pub(super)` helpers (`assert_faded` lives in the deck file). A sibling `*_tests.rs` counts
+`bible_clear_cover_tests.rs` (#848 cover planners, push side),
+`bible_clear_cover_worker_tests.rs` (#848 deferred fade; its `Worker` and waits are shared) and
+`bible_clear_cover_step_tests.rs` (#848 second review: the fade's steps); the siblings import
+the shared `pub(super)` helpers (`assert_faded` lives in the deck file). A sibling `*_tests.rs` counts
 toward the 800/1000 file-size gate (`bible_clear_tests.rs` sits at 800), so add new tests to
 the smaller file or a new sibling:
 
@@ -201,6 +243,15 @@ the smaller file or a new sibling:
 - **Prove a cover step ran by its opacity READ (a GET), then a timer-frame barrier.** A command
   sent right after a push runs BEFORE that push's first cover step (commands win the biased
   `select!`), so a barrier alone proves nothing; after the GET it waits for the step in flight.
+- **Bound a fade's length by its step COUNT, not the clock.** A step is due `FADE_STEP` after
+  the previous one ended, so a fade of length `d` sends at most `floor(d / FADE_STEP) + 1`
+  PUTs (`a_hide_right_after_a_short_show_lasts_only_for_the_distance_left`). Load only lowers
+  the count.
+- **Push-level tests prove "not inside the push" by the requests, never by `took <`**: seed the
+  cover where a synchronous fade WOULD send a PUT (shown at 1.0 for a verse's hide), then
+  assert no cover PUT after the direct `handle_bible` call.
+- Proving an ABSENCE (no step after a config change) needs a bounded wait past the time the
+  dropped fade would have run; it is the one wait that is not a poll for a request.
 
 - Read `server.received_requests()`, which keeps arrival order.
 - Assert values only go down and end at 0, and that there are at least 3 steps from near 1.0
@@ -230,13 +281,14 @@ the smaller file or a new sibling:
   `{mainText, mainReference, secondaryText, secondaryReference}`), then `POST /bible/clear`.
   Sample the layers about 0.3 s into the clear (mid-fade value, same on both sides) and after
   1.5 s (all 0, the connected clip unchanged = nothing triggered). The journal line
-  `resolume bible clear: faded … shown_clip_ids=[…] steps=N ok=true` and, after a start,
+  `resolume bible clear: faded … faded_clip_ids=[…] steps=N ok=true` and, after a start,
   `resolume lanes seeded … seeded=[...]` confirm the server side.
 - #848 on SNV: also read layer 12 (`NAZOV #bible-clear`). After a clear its opacity rises to
   its base over ~2.3 s while the push has already returned; after the next verse it falls to 0
   over ~2.3 s (`resolume bible: faded the #bible-clear cover … direction="show"|"hide" … ok=true`),
-  and its `connected.value` never changes. A cover error is one WARN `the #bible-clear cover
-  fade failed and stops`, never a host error.
+  and its `connected.value` never changes. A transient cover error ends in that line with
+  `error_before_final_step=…`; a second failure is one WARN `a #bible-clear cover fade step
+  failed and so did its final step`, never a host error.
 - End with a clear, so the wall is left empty.
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small

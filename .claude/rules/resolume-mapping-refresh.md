@@ -254,9 +254,11 @@ When you touch this area:
   - The one exception is the deferred #848 cover fade, which is not a push:
     its 404 never becomes an error. A mapped cover id calls
     `invalidate_mapping(StaleId)` itself, at most once per fetched mapping and
-    once per id (`cover_404_refetches`), and the next push or tick refetches.
-    An unmapped (remembered) cover's 404 is forgotten, like a #841 connected
-    clip's.
+    once per id, never while stale refetches are paused or once a newer
+    mapping is cached (`cover_404_refetch`), and the next push or tick
+    refetches. Its later 404s WARN through the #563h limiter
+    (`cover-404:<id>`). An unmapped (remembered) cover's 404 is forgotten,
+    like a #841 connected clip's.
 - **Keep the push idempotent up to the point it succeeds.** The retry runs
   the whole push again. That is safe only because lane flips
   (`lane_state.flip`) and dedup payloads (`last_*_payload`) change only after
