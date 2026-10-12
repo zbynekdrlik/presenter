@@ -7,6 +7,8 @@ mod bible_clear_cover_memory;
 #[cfg(test)]
 mod bible_clear_cover_memory_tests;
 #[cfg(test)]
+mod bible_clear_cover_refetch_tests;
+#[cfg(test)]
 mod bible_clear_cover_step_tests;
 #[cfg(test)]
 mod bible_clear_cover_tests;
