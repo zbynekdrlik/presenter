@@ -555,7 +555,8 @@ content_transition }` plays a shared Drive folder's photos + videos in a loop. T
   `play()` on mount; an unmuted video the browser refuses (`NotAllowedError`) is retried muted, a
   video that still will not start / errors is skipped after 1 s, and a STALLED one (neither
   `ended` nor `error`) by a watchdog armed on `loadedmetadata` (`video_watchdog_ms`: duration +
-  5 s, 10 min when the duration is unknown) or 30 s without metadata. An image that fails to load
+  15 s, so a late or buffering start is not cut; 10 min when the duration is unknown) or 30 s
+  without metadata. An image that fails to load
   is skipped too. Media failures log with
   `console.log`, NOT warn: the editor's preview iframe runs in open-source Chromium, which cannot
   decode H.264 (`canPlayType` "", `play()` rejects `NotSupportedError`, no console line of its
@@ -570,3 +571,13 @@ content_transition }` plays a shared Drive folder's photos + videos in a loop. T
   first REMOVES a photo from the mock folder, so "1 fotka / 1 video" can only come from the
   refresh (review finding: the old step passed even if refresh did nothing). `support.ts` defaults
   both Drive URLs to a dead loopback.
+
+### Live check of the playback element on dev (2026-10-12)
+
+A real public Drive folder (5 JPEGs) through the editor on dev: „+ Prehrávanie", paste the link,
+seconds 3, Uložiť → the status line read „5 fotiek / 0 videí, synchronizované HH:MM" within a few
+seconds, the files sat in `/opt/presenter-dev/stream-assets/playback/<folder>/` with a
+`manifest.json`, and `/stream/<slug>` cycled three photos in playlist order with a transparent
+background and a clean console. Use a throwaway output on DEV for this (`POST
+/stream/api/outputs`), never an operator's output on SNV/PP.
+
