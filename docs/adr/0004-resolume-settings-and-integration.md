@@ -82,7 +82,9 @@ Operators require:
   "1 Samuel 1:4-5 (ROH)"). `#bible-translate-reference-a/b` does the same for the secondary
   translation. A Bible clear triggers no clip: it fades the Bible clips' opacity to 0 (#841)
   and fades an optional clip tagged `#bible-clear` (e.g. a sermon title) up to its opacity; the
-  next verse fades `#bible-clear` back to 0 (#848).
+  next verse fades `#bible-clear` back to 0 (#848). The `#bible-clear` fade runs after the push,
+  deferred and best-effort, in 50 ms steps between the host worker's other commands, so its long
+  layer transition never delays a push and its errors never fail one.
 - Single-slot metadata clips – `#song-name` and `#band-name` – display the active song title and
   library/band name respectively. Presenter updates both alongside slide advances so overlays can show
   contextual text without lane juggling.
