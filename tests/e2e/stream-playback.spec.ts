@@ -60,6 +60,8 @@ let mockDrive: http.Server | undefined;
 let baseURL = "";
 /** Folder listings the mock answered (Obnoviť must add one). */
 let listingRequests = 0;
+/** The blue photo was removed from the mock folder (the Obnoviť step). */
+let blueRemoved = false;
 
 /** One entry of the listing, in Drive's `flip-entry` markup. */
 function fileEntry(id: string, mime: string, name: string): string {
@@ -84,7 +86,7 @@ function listingPage(): string {
     '<div id="flip-contents" class="flip-contents flip-list-view"><div class="flip-entries">' +
     fileEntry(RED, "image/png", "red.png") +
     folder +
-    fileEntry(BLUE, "image/png", "blue.png") +
+    (blueRemoved ? "" : fileEntry(BLUE, "image/png", "blue.png")) +
     fileEntry(PDF, "application/pdf", "program.pdf") +
     fileEntry(CLIP, "video/mp4", "clip.mp4") +
     "</div></div></body></html>"
@@ -119,6 +121,8 @@ function startMockDrive(): Promise<http.Server> {
 }
 
 test.beforeAll(async ({}, testInfo) => {
+  blueRemoved = false;
+  listingRequests = 0;
   mockDrive = await startMockDrive();
   const mockUrl = `http://127.0.0.1:${(mockDrive.address() as AddressInfo).port}`;
   const cfg = deriveTestConfig(testInfo);
@@ -295,11 +299,21 @@ test("#843 editor: a playback element takes a Drive folder link and shows its sy
   const server = await playlist(page.request);
   expect(server.items.map((i) => i.name)).toEqual(["red.png", "blue.png", "clip.mp4"]);
 
-  // Obnoviť lists the folder again and settles back on "synced".
+  // The blue photo leaves the folder on Drive. Nothing re-lists it by itself
+  // within this test (the periodic sync is 5 min away), so only Obnoviť can
+  // make the status line show the new folder content.
+  blueRemoved = true;
   const before = listingRequests;
   await page.locator(sel.refresh).click();
   await expect.poll(() => listingRequests, { timeout: 30_000 }).toBeGreaterThan(before);
-  await expect(status).toHaveAttribute("data-state", "synced", { timeout: 30_000 });
+  await expect(status).toContainText(/1 fotka \/ 1 video, synchronizované \d\d:\d\d/, {
+    timeout: 30_000,
+  });
+  await expect(status).toHaveAttribute("data-state", "synced");
+  expect((await playlist(page.request)).items.map((i) => i.name)).toEqual([
+    "red.png",
+    "clip.mp4",
+  ]);
 
   expect(errors).toEqual([]);
 });
