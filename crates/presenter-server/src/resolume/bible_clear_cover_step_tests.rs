@@ -20,16 +20,16 @@
 
 use super::bible_clear::FADE_STEP;
 use super::bible_clear_cover_tests::{
-    assert_hidden, cover_layer, cover_layers, timer_layer, BIBLE_FADE, COVER_FADE, COVER_OPACITY,
-    SHORT_COVER_FADE, TIMER_TEXT,
+    assert_hidden, cover_layer, cover_layers, timer_layer, BIBLE_FADE, COVER, COVER_FADE,
+    COVER_OPACITY, COVER_TEXT, SHORT_COVER_FADE, TIMER_TEXT,
 };
 use super::bible_clear_cover_worker_tests::{
     answer_param_read, assert_healthy, compositions, cover_reads, is_connect, last_index,
     param_requests, settled, wait_for, wait_for_opacity, Worker, DECK_TWO,
 };
 use super::bible_clear_tests::{
-    answer_param, clear_update, deck_layers, mount_arena, opacities_put, param_path, start_arena,
-    verse_update,
+    answer_param, clear_update, clip, deck_layers, layer, mount_arena, opacities_put, param_path,
+    start_arena, verse_update,
 };
 use super::driver::HostCommand;
 use chrono::Utc;
@@ -354,6 +354,47 @@ async fn a_mapped_cover_put_404_mid_fade_leaves_the_other_covers_fading() {
         compositions(&requests),
         2,
         "the manual refresh and ONE stale-id refetch (by the barrier's timer frame)"
+    );
+    assert_healthy(&worker).await;
+}
+
+/// #848 third review, finding 4: a mapped cover's 404 no longer stops the
+/// fade, so a second broken cover is reached too. Each broken id refetches
+/// the mapping ONCE (the refetched mapping lists it again), so two of them
+/// cost two refetches in all and never take turns refetching on every fade.
+#[tokio::test]
+async fn two_broken_mapped_covers_refetch_the_mapping_once_each() {
+    let second = COVER_OPACITY + 1;
+    let mut layers = cover_layers(None, None, 0.0);
+    layers.push(layer(
+        vec![clip(COVER + 1, "#bible-clear", COVER_TEXT + 1, 0.0)],
+        None,
+    ));
+    let (server, _params) = start_arena(layers).await;
+    answer_param_read(&server, COVER_OPACITY, 404, 100).await;
+    answer_param_read(&server, second, 404, 100).await;
+    let worker = Worker::spawn(&server);
+
+    let pushes = [
+        clear_update(),
+        verse_update(),
+        verse_update(),
+        verse_update(),
+    ];
+    for (fade, push) in pushes.into_iter().enumerate() {
+        worker.bible(push).await;
+        wait_for(&server, "both covers read", |requests| {
+            cover_reads(requests) > fade && param_requests(requests, "GET", second) > fade
+        })
+        .await;
+        worker.barrier(&server).await;
+    }
+    let requests = server.received_requests().await.expect("requests");
+
+    assert_eq!(
+        compositions(&requests),
+        3,
+        "the cold fetch and ONE stale-id refetch per broken cover"
     );
     assert_healthy(&worker).await;
 }
