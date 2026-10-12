@@ -19,16 +19,23 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod playback;
 mod slug;
+pub use playback::{
+    is_valid_drive_file_id, is_valid_drive_folder_id, parse_drive_folder_url, DriveFolder,
+    DriveLinkError, PlaybackItem, PlaybackItemKind, PlaybackPlaylist,
+    STREAM_PLAYBACK_DEFAULT_IMAGE_SECONDS, STREAM_PLAYBACK_IMAGE_SECONDS_MAX,
+    STREAM_PLAYBACK_IMAGE_SECONDS_MIN,
+};
 pub use slug::slug_from_name;
 
 /// Fixed v1 font whitelist (arch §4). Custom-font upload is deferred to v2.
 pub const STREAM_FONT_FAMILIES: &[&str] = &["system-ui", "Arial", "Inter", "Bebas Neue", "Oswald"];
 
 /// Slugs that collide with the static route prefixes `/stream/api`,
-/// `/stream/assets` (arch §9), and `/stream/fonts` + `/stream/fonts.css`
-/// (#778) — never usable as an output slug.
-pub const RESERVED_STREAM_SLUGS: &[&str] = &["api", "assets", "fonts"];
+/// `/stream/assets` (arch §9), `/stream/fonts` + `/stream/fonts.css` (#778)
+/// and `/stream/playback/…` (#843) — never usable as an output slug.
+pub const RESERVED_STREAM_SLUGS: &[&str] = &["api", "assets", "fonts", "playback"];
 
 /// Maximum scene-name length, in characters.
 pub const STREAM_SCENE_NAME_MAX: usize = 100;
@@ -110,6 +117,10 @@ pub enum StreamValidationError {
     UnknownFontFamily { family: String },
     #[error("{ref_kind} reference must be a positive id (got {value})")]
     InvalidRef { ref_kind: &'static str, value: i64 },
+    #[error("invalid Google Drive folder link: {reason}")]
+    InvalidDriveLink { reason: DriveLinkError },
+    #[error("photo duration {value}s out of range (expected 1..=600)")]
+    ImageSecondsOutOfRange { value: u32 },
 }
 
 /// Horizontal text alignment.
@@ -382,6 +393,23 @@ pub enum StreamElementProps {
         out_ms: u32,
         auto_hide_s: u32,
     },
+    /// A Google Drive folder of photos and videos played in a loop (#843).
+    /// `source_url` is the pasted folder link (empty = plays nothing yet; see
+    /// [`parse_drive_folder_url`]). Photos stay `image_seconds`, videos play
+    /// to their end (`muted` by default); `content_transition` animates the
+    /// change between items. The server mirrors the folder (`playback` sync).
+    Playback {
+        source_url: String,
+        fit: ImageFit,
+        frame: Frame,
+        opacity: f32,
+        #[serde(default = "playback::default_image_seconds")]
+        image_seconds: u32,
+        #[serde(default = "playback::default_muted")]
+        muted: bool,
+        #[serde(default)]
+        content_transition: ContentTransition,
+    },
 }
 
 impl StreamElementProps {
@@ -395,6 +423,7 @@ impl StreamElementProps {
             StreamElementProps::Verse { .. } => "verse",
             StreamElementProps::Color { .. } => "color",
             StreamElementProps::LowerThird { .. } => "lower_third",
+            StreamElementProps::Playback { .. } => "playback",
         }
     }
 
@@ -405,7 +434,9 @@ impl StreamElementProps {
     /// a `TextStyle` must add its families here (see stream-graphics.md).
     pub fn font_families(&self) -> Vec<&str> {
         match self {
-            StreamElementProps::Image { .. } | StreamElementProps::Color { .. } => Vec::new(),
+            StreamElementProps::Image { .. }
+            | StreamElementProps::Color { .. }
+            | StreamElementProps::Playback { .. } => Vec::new(),
             StreamElementProps::Countdown { style, .. } => vec![style.font_family.as_str()],
             StreamElementProps::Lyrics {
                 main_style,
@@ -731,6 +762,7 @@ pub fn validate_props(
         props @ StreamElementProps::LowerThird { .. } => {
             validate_lower_third(props, extra_families)?;
         }
+        props @ StreamElementProps::Playback { .. } => playback::validate_playback(props)?,
     }
     Ok(())
 }
@@ -1114,6 +1146,11 @@ mod tests {
         ));
         assert!(matches!(
             validate_slug("fonts"),
+            Err(StreamValidationError::ReservedSlug { .. })
+        ));
+        // #843: `/stream/playback/{folder}/{file}` serves the Drive mirror.
+        assert!(matches!(
+            validate_slug("playback"),
             Err(StreamValidationError::ReservedSlug { .. })
         ));
     }

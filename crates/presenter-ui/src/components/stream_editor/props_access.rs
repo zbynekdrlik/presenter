@@ -10,7 +10,7 @@
 
 use presenter_core::{
     AnimationPreset, ContentTransition, Frame, ImageFit, Shadow, StreamElementProps, TextAlign,
-    TextBox, TextStyle,
+    TextBox, TextStyle, STREAM_PLAYBACK_DEFAULT_IMAGE_SECONDS,
 };
 
 /// Which of an element's `TextStyle` fields a `TextStyleForm` edits. Copy so it
@@ -109,8 +109,8 @@ pub fn with_ts_mut(props: &mut StreamElementProps, slot: TsSlot, f: impl FnOnce(
     }
 }
 
-/// The `ContentTransition` of a kind that has one (countdown / lyrics / verse);
-/// `None` for image.
+/// The `ContentTransition` of a kind that has one (countdown / lyrics / verse /
+/// playback); `None` for image.
 pub fn read_transition(props: &StreamElementProps) -> Option<ContentTransition> {
     match props {
         StreamElementProps::Countdown {
@@ -120,6 +120,9 @@ pub fn read_transition(props: &StreamElementProps) -> Option<ContentTransition> 
             content_transition, ..
         }
         | StreamElementProps::Verse {
+            content_transition, ..
+        }
+        | StreamElementProps::Playback {
             content_transition, ..
         } => Some(content_transition.clone()),
         // LowerThird has no content_transition — its enter/leave IS the animation.
@@ -140,6 +143,9 @@ pub fn with_transition_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut C
         }
         | StreamElementProps::Verse {
             content_transition, ..
+        }
+        | StreamElementProps::Playback {
+            content_transition, ..
         } => f(content_transition),
         StreamElementProps::Image { .. }
         | StreamElementProps::Color { .. }
@@ -155,7 +161,8 @@ pub fn read_frame(props: &StreamElementProps) -> Frame {
         | StreamElementProps::Lyrics { frame, .. }
         | StreamElementProps::Verse { frame, .. }
         | StreamElementProps::Color { frame, .. }
-        | StreamElementProps::LowerThird { frame, .. } => frame.clone(),
+        | StreamElementProps::LowerThird { frame, .. }
+        | StreamElementProps::Playback { frame, .. } => frame.clone(),
     }
 }
 
@@ -167,18 +174,20 @@ pub fn with_frame_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut Frame)
         | StreamElementProps::Lyrics { frame, .. }
         | StreamElementProps::Verse { frame, .. }
         | StreamElementProps::Color { frame, .. }
-        | StreamElementProps::LowerThird { frame, .. } => f(frame),
+        | StreamElementProps::LowerThird { frame, .. }
+        | StreamElementProps::Playback { frame, .. } => f(frame),
     }
 }
 
-/// The `opacity` (0..=1) of a kind that has one (image / color); `None` for the
-/// text kinds, which express transparency through their `TextStyle` color's
-/// alpha byte instead. Used by the shared percent-input control (#776).
+/// The `opacity` (0..=1) of a kind that has one (image / color / playback);
+/// `None` for the text kinds, which express transparency through their
+/// `TextStyle` color's alpha byte instead. Used by the shared percent-input
+/// control (#776).
 pub fn read_opacity(props: &StreamElementProps) -> Option<f32> {
     match props {
-        StreamElementProps::Image { opacity, .. } | StreamElementProps::Color { opacity, .. } => {
-            Some(*opacity)
-        }
+        StreamElementProps::Image { opacity, .. }
+        | StreamElementProps::Color { opacity, .. }
+        | StreamElementProps::Playback { opacity, .. } => Some(*opacity),
         // LowerThird's transparency control is `bar_opacity` (a distinct field),
         // not this top-level `opacity`, so the shared PercentInput never edits it.
         StreamElementProps::Countdown { .. }
@@ -191,9 +200,9 @@ pub fn read_opacity(props: &StreamElementProps) -> Option<f32> {
 /// Mutate the (0..=1) `opacity` in place (no-op for a kind without one).
 pub fn with_opacity_mut(props: &mut StreamElementProps, f: impl FnOnce(&mut f32)) {
     match props {
-        StreamElementProps::Image { opacity, .. } | StreamElementProps::Color { opacity, .. } => {
-            f(opacity)
-        }
+        StreamElementProps::Image { opacity, .. }
+        | StreamElementProps::Color { opacity, .. }
+        | StreamElementProps::Playback { opacity, .. } => f(opacity),
         StreamElementProps::Countdown { .. }
         | StreamElementProps::Lyrics { .. }
         | StreamElementProps::Verse { .. }
@@ -336,8 +345,25 @@ pub fn default_element_props(kind: &str) -> StreamElementProps {
             out_ms: 400,
             auto_hide_s: 0,
         },
+        // A Drive photo/video loop (#843): a centred 16:9 box (50 % × 50 % of
+        // the 16:9 canvas), whole photos (contain), muted, crossfading. No link
+        // yet — it plays nothing until the operator pastes one.
+        "playback" => StreamElementProps::Playback {
+            source_url: String::new(),
+            fit: ImageFit::Contain,
+            frame: Frame {
+                x_pct: 25.0,
+                y_pct: 25.0,
+                w_pct: 50.0,
+                h_pct: 50.0,
+            },
+            opacity: 1.0,
+            image_seconds: STREAM_PLAYBACK_DEFAULT_IMAGE_SECONDS,
+            muted: true,
+            content_transition: ContentTransition::default(),
+        },
         // "verse" (the only remaining valid kind) + a defensive default — the
-        // panel's add-buttons only ever pass the five valid kind strings.
+        // panel's add-buttons only ever pass the seven valid kind strings.
         _ => StreamElementProps::Verse {
             show_secondary: false,
             text_style: default_text_style(),
@@ -346,5 +372,45 @@ pub fn default_element_props(kind: &str) -> StreamElementProps {
             frame: default_frame(),
             content_transition: ContentTransition::default(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_playback_button_creates_a_playback_element() {
+        // A missing arm would silently fall through to `_ => Verse`.
+        let props = default_element_props("playback");
+        assert_eq!(props.kind_str(), "playback");
+        match &props {
+            StreamElementProps::Playback {
+                source_url,
+                image_seconds,
+                muted,
+                ..
+            } => {
+                assert!(source_url.is_empty(), "no link yet");
+                assert_eq!(*image_seconds, STREAM_PLAYBACK_DEFAULT_IMAGE_SECONDS);
+                assert!(*muted);
+            }
+            other => panic!("expected playback, got {other:?}"),
+        }
+        assert!(
+            presenter_core::validate_props(&props, &[]).is_ok(),
+            "the default saves"
+        );
+    }
+
+    #[test]
+    fn playback_frame_opacity_and_transition_are_editable() {
+        let mut props = default_element_props("playback");
+        with_frame_mut(&mut props, |f| f.x_pct = 5.0);
+        assert_eq!(read_frame(&props).x_pct, 5.0);
+        with_opacity_mut(&mut props, |o| *o = 0.4);
+        assert_eq!(read_opacity(&props), Some(0.4));
+        with_transition_mut(&mut props, |t| *t = ContentTransition::Cut);
+        assert_eq!(read_transition(&props), Some(ContentTransition::Cut));
     }
 }

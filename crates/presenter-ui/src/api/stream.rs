@@ -10,7 +10,7 @@
 //!   `GET /stream/api/outputs/{slug}/def` -> `StreamOutputDef` (JSON).
 
 use super::{get_json, ApiError};
-use presenter_core::{ActiveNameplate, StreamOutputDef};
+use presenter_core::{ActiveNameplate, PlaybackPlaylist, StreamOutputDef};
 
 /// Fetch the full definition + active state of one output by slug.
 ///
@@ -26,4 +26,20 @@ pub async fn get_output_def(slug: &str) -> Result<StreamOutputDef, ApiError> {
 /// reconnect (parity with the countdown/lyrics/verse cold-loads).
 pub async fn get_active_nameplate(slug: &str) -> Result<Option<ActiveNameplate>, ApiError> {
     get_json(&format!("/stream/api/outputs/{slug}/nameplates/active")).await
+}
+
+/// The path of a Drive folder's cached playlist (#843) — the link travels as
+/// one url-encoded query parameter.
+pub fn playback_playlist_path(source_url: &str) -> String {
+    format!(
+        "/stream/api/playback?url={}",
+        urlencoding::encode(source_url.trim())
+    )
+}
+
+/// The cached playlist of the Drive folder a playback element names (#843):
+/// the items in Drive's order, the last sync time / error, and whether a sync
+/// is running. The output page plays it; the editor shows its status.
+pub async fn get_playback_playlist(source_url: &str) -> Result<PlaybackPlaylist, ApiError> {
+    get_json(&playback_playlist_path(source_url)).await
 }
