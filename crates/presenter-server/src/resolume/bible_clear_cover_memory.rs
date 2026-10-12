@@ -32,8 +32,11 @@
 //! are 5 PUTs per step, below the #841 Bible fade's 8. Fading a cover that
 //! does not play is invisible. A title that drops out of the memory (a
 //! collapse or the cap) keeps the level the last fade left it at in Arena (0
-//! after a verse) until the next Bible push on its deck. The memory is reset
-//! with the host config, like `TrackedOpacities`.
+//! after a verse) until the next Bible push on its deck. That is visible when
+//! the cap drops a title while it is at its base after a clear: triggered in
+//! Arena before a deck switch, it stays over the next verse until a Bible
+//! push on its own deck. The memory is reset with the host config, like
+//! `TrackedOpacities`.
 
 use super::bible_clear::bible_lane_clips;
 use super::bible_clear_cover::CoverClip;
