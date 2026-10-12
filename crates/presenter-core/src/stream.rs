@@ -19,6 +19,9 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod slug;
+pub use slug::slug_from_name;
+
 /// Fixed v1 font whitelist (arch §4). Custom-font upload is deferred to v2.
 pub const STREAM_FONT_FAMILIES: &[&str] = &["system-ui", "Arial", "Inter", "Bebas Neue", "Oswald"];
 

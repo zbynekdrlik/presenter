@@ -416,3 +416,50 @@ share one `name`, which is safe because only one property form is mounted. The c
 kept the old checkbox's `data-role`, so `.check()` in older specs still works; `.uncheck()` on a
 radio would throw. `transition_choice.rs` (pure) carries the duration between the two fades. A
 cut starts at `STREAM_DEFAULT_FADE_MS`.
+
+## Output bar: create / rename outputs + the OBS URL (#842, `output_manage.rs`)
+- „Nový výstup" asks for a NAME only. `presenter_core::slug_from_name` (`stream/slug.rs`, pure,
+  host-tested) derives the slug: diacritics folded with the same NFD fold search uses, ASCII
+  letters and digits kept, other runs become one `-`, cut at `STREAM_SLUG_MAX`. The form previews
+  `Adresa: /stream/{slug}`. `create_request` refuses empty / symbol-only / reserved / already
+  listed slugs INLINE before any request. A real 409 would log `Failed to load resource` (#598),
+  so the duplicate E2E relies on this client-side check; the server 409 is still mapped
+  (`refusal_message`) for a race with another operator.
+- A created output is pushed into `ctx.outputs` (sorted by slug, like the server list) BEFORE
+  `switch_output`, then `reload_outputs` confirms the list. Switching first left the select
+  without a matching option for a moment (the #827 symptom). The dirty-draft guard still applies.
+- Names are capped at 100 characters on BOTH sides (`maxlength` + `checked_name`; the repository's
+  `output_name` refuses longer ones with 422) and refused when another output already shows the
+  same name (case-insensitive; a rename may keep its own name). Two "Strih" entries in the select
+  and the Companion catalog would be indistinguishable.
+- **The rename form belongs to the output it was opened for.** It stores that slug
+  (`OutputForm::slug`), and an `Effect` on `ctx.output_slug` closes the form on any switch. Before
+  the review fix, `submit_rename` read the slug at submit time, so a name typed for one output
+  landed on another (E2E: open Premenovať, switch the select, the form is gone).
+- While a request is in flight, the bar buttons and „Zrušiť" are disabled. Escape cancels; the name
+  field is focused when the form opens.
+- Every `StreamConfigChanged` (any output) calls `reload_outputs`, so a second editor sees outputs
+  created or renamed elsewhere. Its client-side duplicate check would otherwise use a stale list;
+  the server 409 still guards the slug. Only the NEWEST list request installs its response
+  (`next_outputs_request` / `is_latest_outputs_request`): an older one could lack an output
+  created since, and its fallback would switch the editor away. An unchanged list (same slugs +
+  names; `config_revision` bumps on every write) is not set again, so an open `<select>` is not
+  rebuilt.
+- A refusal that arrives after the form was closed (output switched meanwhile) shows as a toast.
+- „Premenovať" PATCHes `{name}` only. The slug NEVER changes, so Companion buttons (they store
+  the slug, default `stream`) and OBS sources (`/stream/{slug}`) keep working. That is how the
+  owner's "stream" output became "Strih" (2026-10-11).
+- The OBS URL is a read-only input that stays fully selected on every click: `focus` selects
+  (first click / Tab), `mousedown` on the ALREADY focused field calls `preventDefault()` + `select()`
+  (no caret), and `mouseup` calls `preventDefault()` (keeps the focus selection). A click on the
+  focused field fires no focus event, and a `select()` in `click` is NOT enough: headless Chromium
+  still ended at 0..0 (CI run 38189219751, reproduced on a plain HTML page). The E2E clicks twice. Do
+  not add a copy button: `navigator.clipboard` needs a secure context, and the LAN editor is plain
+  HTTP.
+- `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB
+  (0.9 % of 5.6 MB, measured dev vs prod 2026-10-12). Accepted; a hand-written fold table would
+  save that if the bundle size ever matters.
+- E2E `stream-editor-outputs.spec.ts`: create (preview, selected, `?output=`, URL, server name),
+  duplicate refused inline, rename (prefilled, option text, slug + URL unchanged), the rename form
+  closes on an output switch, a click selects the whole URL, an empty rename is refused, 360 px no
+  horizontal overflow with the form open.

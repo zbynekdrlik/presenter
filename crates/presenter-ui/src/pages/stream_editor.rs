@@ -21,6 +21,7 @@ use crate::components::stream_editor::editor_scenes::EditorScenes;
 use crate::components::stream_editor::editor_tabs::{
     initial_tab, mirror_tab_to_url, EditorTab, EditorTabs, TabPanel,
 };
+use crate::components::stream_editor::output_manage::OutputManage;
 use crate::components::stream_editor::output_paths::{initial_output_slug, OutputSelect};
 use crate::components::stream_editor::StreamEditorCtx;
 use crate::components::version_label::VersionLabel;
@@ -117,13 +118,16 @@ pub fn StreamEditorPage() -> impl IntoView {
             LiveEvent::StreamConfigChanged {
                 output,
                 config_revision,
-            } if output == ctx.output_slug.get_untracked() => {
+            } => {
+                // #842: outputs are created and renamed from any editor, so
+                // every config change refreshes the output list (a small GET).
+                ctx.reload_outputs();
                 let current = ctx
                     .def
                     .get_untracked()
                     .map(|d| d.config_revision)
                     .unwrap_or(0);
-                if config_revision > current {
+                if output == ctx.output_slug.get_untracked() && config_revision > current {
                     ctx.refresh();
                 }
             }
@@ -163,6 +167,8 @@ pub fn StreamEditorPage() -> impl IntoView {
                     <span class="stream-editor__version"><VersionLabel /></span>
                 </nav>
             </header>
+            // #842: the selected output's OBS URL + create / rename outputs.
+            <OutputManage ctx=ctx />
             // #829: one area at a time. Every panel stays mounted (hidden, not
             // unmounted), so unsaved work survives a tab switch.
             <EditorTabs ctx=ctx />

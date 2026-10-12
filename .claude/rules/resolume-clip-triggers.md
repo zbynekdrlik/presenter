@@ -137,6 +137,26 @@ new tests to the smaller file or a new sibling:
 - Model a deck switch with `server.reset()` + `mount_arena(&server, deck_layers(DECK_TWO, ..))`
   + `driver.refresh_mapping()`: the composition lists other ids, and writes to the old deck's
   clips still succeed (the clips still exist).
+- **Never compare a read-back fade level with `==`.** The values come back through
+  `serde_json::from_slice`, and the workspace has no `float_roundtrip` feature, so a long
+  fraction can be one ULP off the f64 that was sent (CI run 38178528722: `…3333` vs `…3332`).
+  Compare with a tolerance (`< 1e-9`, far below the ~0.08 between two steps). Short decimals
+  (`0.0`, `0.5`, `0.6`, `1.0`) parse exactly, so `vec![0.0, 0.5]` checks are fine.
+
+## Live verification on the rig (no Arena GUI needed)
+
+- Read only the Bible layers: `GET {arena}/api/v1/composition/layers/{n}` and print each
+  `#bible*` clip's `connected.value` + `video.opacity.value`. SNV main wall `10.77.9.201:8090`,
+  layers 29 (reference) / 30 (verse), transition 0.5 s. PP Arena-Bridge `10.77.8.201:8090`,
+  layers 20-23, 0.7 s. PP's Arena is reachable only from the PP box: pipe the probe through
+  `ssh newlevel@companion-pp.lan "python3 -I -" < probe.py`.
+- Drive the cycle through the presenter API: `POST /bible/trigger-slide` (camelCase
+  `{mainText, mainReference, secondaryText, secondaryReference}`), then `POST /bible/clear`.
+  Sample the layers about 0.3 s into the clear (mid-fade value, same on both sides) and after
+  1.5 s (all 0, the connected clip unchanged = nothing triggered). The journal line
+  `resolume bible clear: faded … steps=N ok=true` and, after a start,
+  `resolume lanes seeded … seeded=[...]` confirm the server side.
+- End with a clear, so the wall is left empty.
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small
 

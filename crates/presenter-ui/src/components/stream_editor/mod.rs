@@ -26,6 +26,7 @@ pub mod font_faces;
 pub mod frame_math;
 pub mod gesture;
 pub mod number_field;
+pub mod output_manage;
 pub mod output_paths;
 pub mod percent_input;
 pub mod prop_error;
@@ -253,13 +254,30 @@ impl StreamEditorCtx {
     /// change that might add/rename an output). #827: when the slug being edited
     /// is not in the list (deleted / a stale bookmark), switch to the first
     /// listed output, so the select and the editor agree.
+    ///
+    /// #842: the list is reloaded on every config change, so only the newest
+    /// request may install its response (an older one could lack an output
+    /// created since and trigger that fallback), and an unchanged list is not
+    /// set again (that would rebuild an open `<select>`).
     pub fn reload_outputs(self) {
+        let request = output_paths::next_outputs_request();
         leptos::task::spawn_local(async move {
-            match crate::api::get_json::<Vec<StreamOutputSummary>>("/stream/api/outputs").await {
+            let result =
+                crate::api::get_json::<Vec<StreamOutputSummary>>("/stream/api/outputs").await;
+            if !output_paths::is_latest_outputs_request(request) {
+                leptos::logging::log!("stream editor: dropping an outdated output list");
+                return;
+            }
+            match result {
                 Ok(list) => {
                     let current = self.output_slug.get_untracked();
                     let fallback = output_paths::fallback_output(&current, &list);
-                    self.outputs.set(list);
+                    if !self
+                        .outputs
+                        .with_untracked(|shown| output_paths::same_entries(shown, &list))
+                    {
+                        self.outputs.set(list);
+                    }
                     if let Some(slug) = fallback {
                         leptos::logging::log!(
                             "stream editor: output {current:?} does not exist; switching to {slug:?}"

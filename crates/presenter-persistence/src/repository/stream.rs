@@ -21,7 +21,7 @@ use chrono::Utc;
 use presenter_core::stream::{
     validate_props, validate_scene_name, validate_slug, SceneKind, StreamElementDef,
     StreamElementProps, StreamOutputDef, StreamOutputSummary, StreamSceneDef, StreamShowState,
-    STREAM_TRANSITION_MAX_MS,
+    STREAM_SCENE_NAME_MAX, STREAM_TRANSITION_MAX_MS,
 };
 use sea_orm::{
     sea_query::Expr, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
@@ -44,7 +44,7 @@ impl Repository {
         name: &str,
     ) -> anyhow::Result<StreamOutputSummary> {
         validate_slug(slug).map_err(|e| RepositoryError::Invalid(e.to_string()))?;
-        let trimmed = non_empty_name(name)?;
+        let trimmed = output_name(name)?;
         if stream_output::Entity::find()
             .filter(stream_output::Column::Slug.eq(slug))
             .one(&self.db)
@@ -92,7 +92,7 @@ impl Repository {
         slug: &str,
         name: &str,
     ) -> anyhow::Result<StreamOutputSummary> {
-        let trimmed = non_empty_name(name)?;
+        let trimmed = output_name(name)?;
         let txn = self.db.begin().await?;
         let output = Self::output_by_slug(&txn, slug).await?;
         let next_revision = output.config_revision + 1;
@@ -758,10 +758,16 @@ impl Repository {
     }
 }
 
-fn non_empty_name(name: &str) -> anyhow::Result<String> {
+/// An output name, trimmed: 1..=100 characters, the scene-name cap (#842: the
+/// editor creates and renames outputs, and the name shows in the output
+/// select and the Companion catalog).
+fn output_name(name: &str) -> anyhow::Result<String> {
     let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(RepositoryError::Invalid("output name must be non-empty".to_string()).into());
+    if trimmed.is_empty() || trimmed.chars().count() > STREAM_SCENE_NAME_MAX {
+        return Err(RepositoryError::Invalid(format!(
+            "output name must be 1..={STREAM_SCENE_NAME_MAX} characters"
+        ))
+        .into());
     }
     Ok(trimmed.to_string())
 }
