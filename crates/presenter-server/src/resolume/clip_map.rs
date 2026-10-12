@@ -37,6 +37,11 @@ pub struct ClipMapping {
     pub timer: Vec<ClipTarget>,
     pub song_name: Vec<ClipTarget>,
     pub band_name: Vec<ClipTarget>,
+    /// #848: clips tagged `#bible-clear` (the sermon title on SNV). A Bible
+    /// clear fades their opacity up, a verse fades it down; never triggered.
+    /// Optional (PP has none), so not in [`Self::destinations`]: never a
+    /// missing clip, never a destination kind.
+    pub bible_clear: Vec<ClipTarget>,
     missing_tokens: Vec<&'static str>,
 }
 
@@ -219,6 +224,7 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
                     ClipDestination::Timer(target) => mapping.timer.push(target),
                     ClipDestination::SongName(target) => mapping.song_name.push(target),
                     ClipDestination::BandName(target) => mapping.band_name.push(target),
+                    ClipDestination::BibleClear(target) => mapping.bible_clear.push(target),
                 }
             }
         }
@@ -235,6 +241,7 @@ enum ClipDestination {
     Timer(ClipTarget),
     SongName(ClipTarget),
     BandName(ClipTarget),
+    BibleClear(ClipTarget),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -248,6 +255,7 @@ enum ClipKind {
     Timer,
     SongName,
     BandName,
+    BibleClear,
 }
 
 fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination> {
@@ -271,7 +279,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
 
     let transforms_start;
     let lane = match kind {
-        ClipKind::Timer | ClipKind::SongName | ClipKind::BandName => {
+        ClipKind::Timer | ClipKind::SongName | ClipKind::BandName | ClipKind::BibleClear => {
             transforms_start = index;
             None
         }
@@ -315,6 +323,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
         (ClipKind::Timer, _) => ClipDestination::Timer(target),
         (ClipKind::SongName, _) => ClipDestination::SongName(target),
         (ClipKind::BandName, _) => ClipDestination::BandName(target),
+        (ClipKind::BibleClear, _) => ClipDestination::BibleClear(target),
         _ => return result,
     };
     result.push(destination);
@@ -341,10 +350,14 @@ fn parse_clip_kind(tokens: &[&str]) -> Option<(ClipKind, usize)> {
             } else if tokens.get(index) == Some(&"reference") {
                 index += 1;
                 ClipKind::BibleReference
+            } else if tokens.get(index) == Some(&"clear") {
+                index += 1;
+                ClipKind::BibleClear
             } else {
                 ClipKind::Bible
             }
         }
+        "#bibleclear" => ClipKind::BibleClear,
         "#timer" => ClipKind::Timer,
         "#song" if tokens.get(index) == Some(&"name") => {
             index += 1;

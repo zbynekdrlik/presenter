@@ -384,8 +384,8 @@ impl HostDriver {
                     )
                     .await?
                 } else {
-                    // Clear path (#841, `bible_clear.rs`): fades the Bible clips'
-                    // opacity, triggers nothing and fills no lane.
+                    // Clear path (#841/#848, `bible_clear.rs`): fades the Bible clips
+                    // out and `#bible-clear` in, triggers nothing, fills no lane.
                     self.handle_bible_clear(&mapping).await?;
                     (false, false)
                 };
@@ -405,6 +405,10 @@ impl HostDriver {
             }
             if bible_translation_lane_filled {
                 self.lane_state.flip(SlotKind::BibleTranslation);
+            }
+            if !to_trigger.is_empty() {
+                // #848: the verse is on air; fade `#bible-clear` out, last and best-effort.
+                self.hide_bible_clear_clips(&mapping).await;
             }
         }
         self.mark_connected(status).await;
