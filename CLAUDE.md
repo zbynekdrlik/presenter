@@ -293,6 +293,7 @@ crates/
 | `PRESENTER_NLT_API_URL`       | `https://api.nlt.to`    | NLT API base URL (tests point it at a mock; the E2E default is a dead loopback). |
 | `PRESENTER_DRIVE_URL`         | `https://drive.google.com` | Google Drive folder-listing base URL for the stream playback mirror (#843; tests/E2E point it at a mock, the E2E default is a dead loopback). |
 | `PRESENTER_DRIVE_DOWNLOAD_URL` | `https://drive.usercontent.google.com` | Google Drive download base URL for the playback mirror (#843; same test treatment). |
+| `PRESENTER_PLAYBACK_MAX_GB`   | `20`                    | Byte budget of the whole playback mirror in GiB (#843); a download that would pass it is refused with a Slovak status error. |
 | `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter                                                       |
 
 ---

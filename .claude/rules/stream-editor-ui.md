@@ -468,10 +468,13 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   GET of a bad link would 422 and log `Failed to load resource` in a zero-console spec.
 - Status (`stream-playback-status`, `data-state` = loading | syncing | error | synced | unsynced):
   `N fotiek / M videí, synchronizované HH:MM` (Slovak plurals 1 / 2–4 / 5+, local time via
-  `chrono::Local`). It polls every 2 s while `should_poll` (syncing, or a saved link the worker has
-  not reached — the save's `StreamConfigChanged` pass starts after a 2 s debounce, so the first
-  status after Save is still "unsynced"), at most 60 polls per link; a request counter drops a
-  late response for an older link.
+  `chrono::Local`). It polls while `should_poll` (syncing, or a saved link the worker has not
+  reached — the save's `StreamConfigChanged` pass starts after a 2 s debounce, so the first status
+  after Save is still "unsynced"), backing off 2 s → 5 s → 15 s (`poll_delay_ms`) and NEVER giving
+  up (review finding: a fixed 60-poll cap left a slow sync stuck on "Synchronizujem…"). The status
+  Effect also tracks a `Memo` of `ctx.def`'s `config_revision`, so every Save reloads it (a new
+  link clears the line, a new revision keeps it while reloading). A request counter drops a late
+  response for an older link and ends an older poll chain.
 - „Obnoviť" (`stream-playback-refresh`) POSTs `{url}` to `/stream/api/playback/refresh`; the
   server syncs that folder even before the element is saved and marks it `syncing` at once.
 - E2E (`stream-playback.spec.ts`, editor test): invalid / file link → inline hint and no status;

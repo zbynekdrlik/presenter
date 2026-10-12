@@ -77,13 +77,19 @@ referenced folder with Drive's keyless endpoints (listing
 `/embeddedfolderview`, download `/download?…&confirm=t`): at startup, every
 5 minutes, after a stream config change and on the editor's „Obnoviť". Only
 changed files are downloaded (HEAD size / last-modified), files that left the
-folder are deleted, and when Drive is unreachable the last mirrored playlist
-keeps playing. Needs internet only to sync.
+folder are deleted 5 minutes later (until then outputs with an older playlist
+still get them), and when Drive is unreachable the last mirrored playlist
+keeps playing. A file that keeps failing is retried with a growing pause
+(5 min … 6 h; „Obnoviť" retries at once) and its reason shows in the editor.
+The whole mirror stops at a byte budget (all folders together) so it never
+fills the disk next to `presenter.db`; a single file is capped at 2 GiB.
+Needs internet only to sync.
 
 | Variable                       | Default                                | Purpose |
 | ------------------------------ | -------------------------------------- | ------- |
 | `PRESENTER_DRIVE_URL`          | `https://drive.google.com`             | Folder-listing base URL. Tests point it at a mock; the E2E harness defaults it to a dead loopback. |
 | `PRESENTER_DRIVE_DOWNLOAD_URL` | `https://drive.usercontent.google.com` | File-download base URL (same test treatment). |
+| `PRESENTER_PLAYBACK_MAX_GB`    | `20`                                   | Byte budget of the whole playback mirror, in whole GiB. A download that would pass it is refused and the editor shows „úložisko prehrávania je plné". |
 
 ### Companion Integration
 
