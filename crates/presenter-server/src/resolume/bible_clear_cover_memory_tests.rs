@@ -17,11 +17,12 @@
 //! #848 fourth review: two titles of ONE deck on one layer are remembered
 //! alike whichever column the playing one is in (a worker test and a pure
 //! `remember_mapping` test); fifth review: so are two PLAYING titles and a
-//! third one of one fetch, both playing titles kept. Pure `remember_cover`
-//! tests also pin what the cap and layer-shift worker tests cannot see: a
-//! full layer keeps its playing title and drops the oldest that is not
-//! playing, and a title remembered on another layer leaves its old one in the
-//! map itself.
+//! third one of one fetch, both playing titles kept. Pure `remember_mapping`
+//! tests on small compositions also pin what the cap and layer-shift worker
+//! tests cannot see: a full layer keeps its playing title and drops the
+//! oldest that is not playing, and a title remembered on another layer
+//! leaves its old one in the map itself (sixth review: through the fetch
+//! path, since a lone-cover entry point existed only for these tests).
 //!
 //! A deck switch is `server.reset()` + a new mount + "Refresh mapping": the
 //! composition lists only the new deck, while the other decks' titles still

@@ -171,12 +171,13 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
       title still playing stayed over the verse). A remembered one is forgotten (below).
       The first step leaves EVERY gone cover out before it plans and only then logs each
       (#848 fourth review: dropped one at a time before the plan, it listed other 404'd
-      covers and covers already at their target). A later step does the same with every
-      cover its PUTs found gone (`drop_gone_covers` takes all of `puts.missing` out of the
-      covers AND targets, then `drop_cover` logs each; #848 fifth review: one at a time,
-      X's stale WARN listed Y). So the stale WARN's `target_clip_ids` is the fade's
-      targets (mid-fade they include covers already at their `to`), never another cover
-      gone in the same step.
+      covers and covers already at their target). A no-transition cover's first-step PUT
+      and every later step's PUTs go through `drop_gone_covers` on a 404: it takes all of
+      the step's `puts.missing` out of the covers AND targets, then `drop_cover` logs each
+      (#848 fifth review: one at a time, X's stale WARN listed Y). A 404 for a parameter
+      that is not a cover of the fade is one DEBUG line listing only those ids. So the
+      stale WARN's `target_clip_ids` is the fade's targets (mid-fade they include covers
+      already at their `to`), never another cover gone in the same step.
     - A MAPPED cover's 404 also `invalidate_mapping(StaleId)` — only while the mapping it was
       scheduled with is still cached, at most once per fetched mapping, never again for an id
       that already refetched (the refetched mapping still lists it), and not while stale
@@ -191,8 +192,15 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
       fourth review: the second broken cover of a fade got `MappingChanged` and cost the
       next fade a second refetch). Two broken covers in one fade cost ONE refetch. A 404
       that gets `MappingChanged` with a NEWER mapping cached is not added: nothing is
-      pending, and the id's 404 on that mapping still refetches once (#848 fifth review,
-      pinned by `a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing`).
+      pending, and the id's 404 on that mapping still refetches once (#848 fifth review).
+      Pinned by the unit test `a_cached_newer_mapping_ends_a_pending_cover_refetch`
+      (`bible_clear_cover_refetch_tests.rs`, #848 sixth review): after the cover refetch
+      for a mapping, a newer mapping cached ends it, and only the
+      `last_mapping_refresh.is_none()` check sees that (the refetched mapping is still
+      the fade's). The worker test
+      `a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing` is the
+      end-to-end check of the case with no cover refetch for the fade's mapping (a newer
+      mapping cached → the id stays free); it passes without that check.
       An unlisted id cannot 404 as mapped; the set grows one `i64` per distinct broken id.
       The next push or tick does the refetch. A refetch invalidates the mapping,
       so `MappingChanged` answers before `AlreadyForMapping` (a guard, reachable only if a
@@ -219,7 +227,7 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     (`remember_mapping`):
     - a fetch collapses each layer at most ONCE, to the covers it saw PLAYING
       (`connected`) there: Resolume plays one clip per layer, so the others are no longer
-      visible. The first playing cover on a layer collapses it (`remember_cover`), every
+      visible. The first playing cover on a layer collapses it (`collapse_layer`), every
       further playing one of that fetch is added beside it (`add_cover`), so ALL of them
       are kept (#848 fifth review: two playing titles on one layer, the second one's
       collapse dropped the first, and the later column won);
@@ -249,9 +257,9 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
       shows it; collapse on playing; cap eviction; layer shift; a title left of a playing
       one hidden after a deck switch; pure `remember_mapping` tests for both column
       orders, with one playing title and with two playing titles plus one not playing;
-      pure `remember_cover` tests for the cap with a playing title kept, and the
-      cross-layer forget on the map itself, which the worker tests cannot see:
-      `cover_candidates` dedups by parameter).
+      pure `remember_mapping` tests on small compositions for the cap with a playing title
+      kept (one fetch), and the cross-layer forget on the map itself (three fetches), which
+      the worker tests cannot see: `cover_candidates` dedups by parameter).
     - Residual: the memory is per process (a restart between a show and a deck switch loses
       it), and it is updated only when a fade is scheduled, from the cached mapping. Switches
       no push saw (the operator goes B→A, triggers deck A's title, and back to B between two
@@ -277,8 +285,8 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
   newer mapping cached that leaves the id free to refetch once, a failed read, a config
   change),
   `bible_clear_cover_memory_tests.rs` (the per-layer set) and
-  `bible_clear_cover_refetch_tests.rs` (`cover_404_refetch` branches and the #563h limiter,
-  direct unit tests on a paused clock).
+  `bible_clear_cover_refetch_tests.rs` (`cover_404_refetch` branches, `cover_refetch_pending`
+  and the #563h limiter, direct unit tests on a paused clock).
 
 ## The A/B lanes are seeded from the connected clips after a start (`lane_seed.rs`)
 

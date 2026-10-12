@@ -511,7 +511,12 @@ async fn a_mapped_cover_404_while_stale_refetches_are_paused_refetches_nothing()
 /// invalidated, the barrier's timer frame refetches nothing. #848 fifth
 /// review, item 3: with the newer mapping cached no refetch was pending, so
 /// that 404 did not mark the id refetched: the next verse's 404, on the
-/// cached mapping, still refetches once.
+/// cached mapping, still refetches once. This is the end-to-end check of the
+/// case "no cover refetch for the fade's mapping, a newer mapping cached →
+/// the id stays free". No cover refetched here, so it passes without the
+/// `last_mapping_refresh.is_none()` check of `cover_refetch_pending`;
+/// `a_cached_newer_mapping_ends_a_pending_cover_refetch`
+/// (`bible_clear_cover_refetch_tests.rs`) pins that check (sixth review).
 #[tokio::test]
 async fn a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing() {
     let (server, _params) = start_arena(cover_layers(Some(BIBLE_FADE), None, 0.0)).await;

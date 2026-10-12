@@ -4,6 +4,8 @@
 //! `cover-404:<id>`), on a paused clock like `backoff_tests.rs`
 //! `should_warn_missing_clip_rate_limits_repeats_of_the_same_clip`. The worker
 //! tests cannot see which branch a 404 took, only the refetches it caused.
+//! Sixth review: whether a cover refetch is still pending
+//! (`cover_refetch_pending`), every check of it.
 
 use super::bible_clear_cover::CoverRefetch;
 use super::bible_clear_cover_tests::COVER_OPACITY;
