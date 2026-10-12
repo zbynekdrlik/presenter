@@ -118,13 +118,16 @@ pub fn StreamEditorPage() -> impl IntoView {
             LiveEvent::StreamConfigChanged {
                 output,
                 config_revision,
-            } if output == ctx.output_slug.get_untracked() => {
+            } => {
+                // #842: outputs are created and renamed from any editor, so
+                // every config change refreshes the output list (a small GET).
+                ctx.reload_outputs();
                 let current = ctx
                     .def
                     .get_untracked()
                     .map(|d| d.config_revision)
                     .unwrap_or(0);
-                if config_revision > current {
+                if output == ctx.output_slug.get_untracked() && config_revision > current {
                     ctx.refresh();
                 }
             }

@@ -11,13 +11,15 @@
 //!   A new output is selected straight away.
 //! - „Premenovať" changes the name only. The slug never changes, so Companion
 //!   buttons and OBS sources keep working (the "stream" output became "Strih"
-//!   this way, slug unchanged).
+//!   this way, slug unchanged). The form remembers the output it opened for
+//!   and closes when the operator switches output.
 //! - The OBS URL of the selected output sits in a read-only field that selects
-//!   itself on focus. There is no copy button: `navigator.clipboard` needs a
-//!   secure context, and the LAN editor is plain HTTP.
+//!   itself on focus and on click. There is no copy button:
+//!   `navigator.clipboard` needs a secure context, and the LAN editor is plain
+//!   HTTP.
 
 use leptos::prelude::*;
-use presenter_core::{slug_from_name, validate_slug, StreamOutputSummary};
+use presenter_core::{slug_from_name, validate_slug, StreamOutputSummary, STREAM_SCENE_NAME_MAX};
 use serde::Serialize;
 use wasm_bindgen::JsCast;
 
@@ -26,11 +28,23 @@ use super::StreamEditorCtx;
 use crate::api::ApiError;
 
 const OUTPUTS_PATH: &str = "/stream/api/outputs";
+/// The server caps output names like scene names (`repository/stream.rs`).
+const OUTPUT_NAME_MAX: usize = STREAM_SCENE_NAME_MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManageMode {
     Create,
     Rename,
+}
+
+impl ManageMode {
+    /// The noun for a failed request („Vytvorenie zlyhalo").
+    fn action(self) -> &'static str {
+        match self {
+            ManageMode::Create => "Vytvorenie",
+            ManageMode::Rename => "Premenovanie",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -48,6 +62,8 @@ struct RenameOutputBody<'a> {
 #[derive(Clone, Copy)]
 struct OutputForm {
     mode: RwSignal<Option<ManageMode>>,
+    /// The output a rename was opened for.
+    slug: RwSignal<String>,
     name: RwSignal<String>,
     error: RwSignal<Option<String>>,
     busy: RwSignal<bool>,
@@ -57,13 +73,15 @@ impl OutputForm {
     fn new() -> Self {
         Self {
             mode: RwSignal::new(None),
+            slug: RwSignal::new(String::new()),
             name: RwSignal::new(String::new()),
             error: RwSignal::new(None),
             busy: RwSignal::new(false),
         }
     }
 
-    fn open(self, mode: ManageMode, name: String) {
+    fn open(self, mode: ManageMode, slug: String, name: String) {
+        self.slug.set(slug);
         self.name.set(name);
         self.error.set(None);
         self.mode.set(Some(mode));
@@ -75,26 +93,61 @@ impl OutputForm {
     }
 }
 
-/// The `(slug, trimmed name)` a create would send, or the inline message
-/// that explains why it cannot. Pure, so it is host-tested.
-fn create_request(name: &str, existing_slugs: &[&str]) -> Result<(String, String), String> {
+/// A trimmed output name within the server's cap, or the inline message.
+fn checked_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Zadaj názov výstupu.".to_string());
     }
+    if name.chars().count() > OUTPUT_NAME_MAX {
+        return Err(format!("Názov môže mať najviac {OUTPUT_NAME_MAX} znakov."));
+    }
+    Ok(name)
+}
+
+/// Whether another output (any but `except_slug`) already shows `name`.
+fn name_taken(name: &str, outputs: &[StreamOutputSummary], except_slug: Option<&str>) -> bool {
+    let wanted = name.to_lowercase();
+    outputs
+        .iter()
+        .filter(|output| Some(output.slug.as_str()) != except_slug)
+        .any(|output| output.name.trim().to_lowercase() == wanted)
+}
+
+/// The `(slug, trimmed name)` a create would send, or the inline message
+/// that explains why it cannot. Pure, so it is host-tested.
+fn create_request(name: &str, outputs: &[StreamOutputSummary]) -> Result<(String, String), String> {
+    let name = checked_name(name)?;
     let slug = slug_from_name(name);
     if slug.is_empty() {
-        return Err("Názov musí obsahovať aspoň jedno písmeno alebo číslo.".to_string());
+        return Err("Názov musí obsahovať aspoň jedno písmeno a–z alebo číslo.".to_string());
     }
     if validate_slug(&slug).is_err() {
         return Err(format!(
             "Adresa /stream/{slug} je vyhradená, zvoľ iný názov."
         ));
     }
-    if existing_slugs.contains(&slug.as_str()) {
+    if outputs.iter().any(|output| output.slug == slug) {
         return Err(format!("Výstup s adresou /stream/{slug} už existuje."));
     }
+    if name_taken(name, outputs, None) {
+        return Err(format!("Výstup s názvom {name} už existuje."));
+    }
     Ok((slug, name.to_string()))
+}
+
+/// The trimmed name a rename of output `slug` would send, or the inline
+/// message. Pure, so it is host-tested.
+fn rename_request(
+    name: &str,
+    slug: &str,
+    outputs: &[StreamOutputSummary],
+) -> Result<String, String> {
+    let name = checked_name(name)?;
+    if name_taken(name, outputs, Some(slug)) {
+        return Err(format!("Výstup s názvom {name} už existuje."));
+    }
+    Ok(name.to_string())
 }
 
 /// The OBS browser-source URL of output `slug`.
@@ -103,11 +156,15 @@ fn obs_url(origin: &str, slug: &str) -> String {
 }
 
 /// The inline message for a refused create / rename.
-fn refusal_message(err: &ApiError) -> String {
+fn refusal_message(mode: ManageMode, err: &ApiError) -> String {
+    let action = mode.action();
     match err {
         ApiError::Status(409, _) => "Výstup s touto adresou už existuje.".to_string(),
-        ApiError::Status(_, detail) => format!("Uloženie zlyhalo: {detail}"),
-        other => format!("Uloženie zlyhalo: {other}"),
+        ApiError::Status(404, _) => "Výstup už neexistuje.".to_string(),
+        ApiError::Status(422, detail) => format!("Server názov odmietol ({detail})."),
+        ApiError::Status(code, _) => format!("{action} zlyhalo (HTTP {code})."),
+        ApiError::Network(_) => "Server nie je dostupný, skús to znova.".to_string(),
+        other => format!("{action} zlyhalo: {other}"),
     }
 }
 
@@ -117,8 +174,7 @@ fn window_origin() -> String {
         .unwrap_or_default()
 }
 
-fn current_name(ctx: StreamEditorCtx) -> String {
-    let slug = ctx.slug();
+fn current_name(ctx: StreamEditorCtx, slug: &str) -> String {
     ctx.outputs
         .get_untracked()
         .into_iter()
@@ -127,11 +183,12 @@ fn current_name(ctx: StreamEditorCtx) -> String {
         .unwrap_or_default()
 }
 
-/// POST the new output, then refresh the list and switch the editor to it.
+/// POST the new output, then put it in the list and switch the editor to it.
 fn submit_create(ctx: StreamEditorCtx, form: OutputForm) {
-    let outputs = ctx.outputs.get_untracked();
-    let existing: Vec<&str> = outputs.iter().map(|output| output.slug.as_str()).collect();
-    let (slug, name) = match create_request(&form.name.get_untracked(), &existing) {
+    let request = ctx
+        .outputs
+        .with_untracked(|outputs| create_request(&form.name.get_untracked(), outputs));
+    let (slug, name) = match request {
         Ok(request) => request,
         Err(message) => {
             form.error.set(Some(message));
@@ -151,23 +208,41 @@ fn submit_create(ctx: StreamEditorCtx, form: OutputForm) {
             Ok(created) => {
                 leptos::logging::log!("stream editor: created output {:?}", created.slug);
                 form.close();
-                ctx.reload_outputs();
-                ctx.show_toast(&format!("Výstup {} vytvorený.", created.name), "success");
+                // In the list BEFORE the switch, so the select already has an
+                // option for it (#827); the reload then confirms the list.
+                ctx.outputs.update(|outputs| {
+                    if !outputs.iter().any(|output| output.slug == created.slug) {
+                        outputs.push(created.clone());
+                        outputs.sort_by(|a, b| a.slug.cmp(&b.slug));
+                    }
+                });
+                ctx.show_toast(
+                    &format!("Výstup {} bol vytvorený.", created.name),
+                    "success",
+                );
                 ctx.switch_output(created.slug);
+                ctx.reload_outputs();
             }
-            Err(err) => form.error.set(Some(refusal_message(&err))),
+            Err(err) => form
+                .error
+                .set(Some(refusal_message(ManageMode::Create, &err))),
         }
     });
 }
 
-/// PATCH the selected output's name; the slug stays.
+/// PATCH the name of the output the form was opened for; the slug stays.
 fn submit_rename(ctx: StreamEditorCtx, form: OutputForm) {
-    let name = form.name.get_untracked().trim().to_string();
-    if name.is_empty() {
-        form.error.set(Some("Zadaj názov výstupu.".to_string()));
-        return;
-    }
-    let slug = ctx.slug();
+    let slug = form.slug.get_untracked();
+    let request = ctx
+        .outputs
+        .with_untracked(|outputs| rename_request(&form.name.get_untracked(), &slug, outputs));
+    let name = match request {
+        Ok(name) => name,
+        Err(message) => {
+            form.error.set(Some(message));
+            return;
+        }
+    };
     form.busy.set(true);
     leptos::task::spawn_local(async move {
         let body = RenameOutputBody { name: &name };
@@ -189,12 +264,15 @@ fn submit_rename(ctx: StreamEditorCtx, form: OutputForm) {
                     "success",
                 );
             }
-            Err(err) => form.error.set(Some(refusal_message(&err))),
+            Err(err) => form
+                .error
+                .set(Some(refusal_message(ManageMode::Rename, &err))),
         }
     });
 }
 
-fn select_all_on_focus(ev: leptos::ev::FocusEvent) {
+/// Select the whole value of the input an event came from.
+fn select_target(ev: &web_sys::Event) {
     if let Some(input) = ev
         .target()
         .and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
@@ -208,10 +286,33 @@ fn select_all_on_focus(ev: leptos::ev::FocusEvent) {
 #[component]
 pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
     let form = OutputForm::new();
+    let name_input = NodeRef::<leptos::html::Input>::new();
     let origin = window_origin();
     let url = move || obs_url(&origin, &ctx.output_slug.get());
-    let open_create = move |_| form.open(ManageMode::Create, String::new());
-    let open_rename = move |_| form.open(ManageMode::Rename, current_name(ctx));
+
+    // A form opened for one output must never act on another one.
+    Effect::new(move |previous: Option<String>| {
+        let slug = ctx.output_slug.get();
+        if previous.is_some_and(|previous| previous != slug) {
+            form.close();
+        }
+        slug
+    });
+    // Focus the name field when the form opens (the node mounts later).
+    Effect::new(move |_| {
+        if form.mode.get().is_some() {
+            if let Some(input) = name_input.get() {
+                let _ = input.focus();
+            }
+        }
+    });
+
+    let open_create = move |_| form.open(ManageMode::Create, String::new(), String::new());
+    let open_rename = move |_| {
+        let slug = ctx.slug();
+        let name = current_name(ctx, &slug);
+        form.open(ManageMode::Rename, slug, name);
+    };
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         if form.busy.get_untracked() {
@@ -223,7 +324,13 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             None => {}
         }
     };
+    let on_key = move |ev: leptos::ev::KeyboardEvent| {
+        if ev.key() == "Escape" && !form.busy.get_untracked() {
+            form.close();
+        }
+    };
     let is_create = move || form.mode.get() == Some(ManageMode::Create);
+    let busy = move || form.busy.get();
     let slug_preview = move || {
         let slug = slug_from_name(&form.name.get());
         if slug.is_empty() {
@@ -241,13 +348,15 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                     readonly
                     data-role="stream-output-url"
                     prop:value=url
-                    on:focus=select_all_on_focus
+                    on:focus=move |ev: leptos::ev::FocusEvent| select_target(&ev)
+                    on:click=move |ev: leptos::ev::MouseEvent| select_target(&ev)
                 />
             </label>
             <button
                 type="button"
                 class="stream-editor__btn"
                 data-role="stream-output-new"
+                prop:disabled=busy
                 on:click=open_create
             >
                 "Nový výstup"
@@ -256,6 +365,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                 type="button"
                 class="stream-editor__btn"
                 data-role="stream-output-rename"
+                prop:disabled=busy
                 on:click=open_rename
             >
                 "Premenovať"
@@ -271,9 +381,13 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                         type="text"
                         class="stream-editor__add-name"
                         data-role="stream-output-name"
+                        node_ref=name_input
                         placeholder="Názov výstupu"
+                        aria-label="Názov výstupu"
+                        maxlength=OUTPUT_NAME_MAX.to_string()
                         prop:value=move || form.name.get()
                         on:input=move |ev| form.name.set(event_target_value(&ev))
+                        on:keydown=on_key
                     />
                     <Show when=is_create>
                         <span class="stream-editor__output-slug" data-role="stream-output-slug">
@@ -284,7 +398,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                         type="submit"
                         class="stream-editor__btn stream-editor__btn--primary"
                         data-role="stream-output-save"
-                        prop:disabled=move || form.busy.get()
+                        prop:disabled=busy
                     >
                         {move || if is_create() { "Vytvoriť" } else { "Uložiť názov" }}
                     </button>
@@ -292,6 +406,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                         type="button"
                         class="stream-editor__btn stream-editor__btn--ghost"
                         data-role="stream-output-cancel"
+                        prop:disabled=busy
                         on:click=move |_| form.close()
                     >
                         "Zrušiť"
@@ -311,31 +426,82 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
 mod tests {
     use super::*;
 
+    fn output(slug: &str, name: &str) -> StreamOutputSummary {
+        StreamOutputSummary {
+            id: 1,
+            slug: slug.to_string(),
+            name: name.to_string(),
+            default_transition_ms: 300,
+            base_transition_ms: None,
+            overlay_transition_ms: None,
+            active_scene_id: None,
+            config_revision: 0,
+        }
+    }
+
+    fn outputs() -> Vec<StreamOutputSummary> {
+        vec![output("stream", "Strih"), output("timer", "Timer")]
+    }
+
     #[test]
     fn a_create_sends_the_trimmed_name_and_its_derived_slug() {
         assert_eq!(
-            create_request("  Moderátor 2 ", &["stream", "timer"]),
+            create_request("  Moderátor 2 ", &outputs()),
             Ok(("moderator-2".to_string(), "Moderátor 2".to_string()))
         );
     }
 
     #[test]
     fn a_create_is_refused_inline_before_any_request() {
+        let outputs = outputs();
+        let refused = |name: &str| create_request(name, &outputs).unwrap_err();
+        assert_eq!(refused("   "), "Zadaj názov výstupu.");
         assert_eq!(
-            create_request("   ", &[]),
+            refused(&"x".repeat(OUTPUT_NAME_MAX + 1)),
+            "Názov môže mať najviac 100 znakov."
+        );
+        assert_eq!(
+            refused("***"),
+            "Názov musí obsahovať aspoň jedno písmeno a–z alebo číslo."
+        );
+        assert_eq!(
+            refused("API"),
+            "Adresa /stream/api je vyhradená, zvoľ iný názov."
+        );
+        assert_eq!(
+            refused("Timer"),
+            "Výstup s adresou /stream/timer už existuje."
+        );
+        assert_eq!(
+            refused("strih"),
+            "Výstup s názvom strih už existuje.",
+            "the name of output `stream` is taken, whatever the case"
+        );
+    }
+
+    #[test]
+    fn a_rename_keeps_its_own_name_and_refuses_another_outputs() {
+        let outputs = outputs();
+        assert_eq!(
+            rename_request(" Strih  ", "stream", &outputs),
+            Ok("Strih".to_string())
+        );
+        assert_eq!(
+            rename_request("Nový", "stream", &outputs),
+            Ok("Nový".to_string())
+        );
+        assert_eq!(
+            rename_request("TIMER", "stream", &outputs),
+            Err("Výstup s názvom TIMER už existuje.".to_string())
+        );
+        assert_eq!(
+            rename_request("  ", "stream", &outputs),
             Err("Zadaj názov výstupu.".to_string())
         );
         assert_eq!(
-            create_request("***", &[]),
-            Err("Názov musí obsahovať aspoň jedno písmeno alebo číslo.".to_string())
-        );
-        assert_eq!(
-            create_request("API", &[]),
-            Err("Adresa /stream/api je vyhradená, zvoľ iný názov.".to_string())
-        );
-        assert_eq!(
-            create_request("Stream", &["stream", "timer"]),
-            Err("Výstup s adresou /stream/stream už existuje.".to_string())
+            rename_request(&"é".repeat(OUTPUT_NAME_MAX), "stream", &outputs).map(|n| n.len()),
+            Ok(OUTPUT_NAME_MAX * 2),
+            "the cap counts characters, not bytes"
         );
     }
 
@@ -348,17 +514,30 @@ mod tests {
     }
 
     #[test]
-    fn a_conflict_reads_as_a_duplicate_address() {
+    fn refusals_read_in_slovak_for_each_action() {
+        let status = |code: u16, detail: &str| ApiError::Status(code, detail.to_string());
         assert_eq!(
-            refusal_message(&ApiError::Status(
-                409,
-                "stream output slug already exists".into()
-            )),
+            refusal_message(ManageMode::Create, &status(409, "exists")),
             "Výstup s touto adresou už existuje."
         );
         assert_eq!(
-            refusal_message(&ApiError::Status(422, "invalid name".into())),
-            "Uloženie zlyhalo: invalid name"
+            refusal_message(ManageMode::Rename, &status(404, "stream output not found")),
+            "Výstup už neexistuje."
+        );
+        assert_eq!(
+            refusal_message(
+                ManageMode::Rename,
+                &status(422, "output name must be 1..=100 characters")
+            ),
+            "Server názov odmietol (output name must be 1..=100 characters)."
+        );
+        assert_eq!(
+            refusal_message(ManageMode::Create, &status(500, "boom")),
+            "Vytvorenie zlyhalo (HTTP 500)."
+        );
+        assert_eq!(
+            refusal_message(ManageMode::Rename, &status(503, "busy")),
+            "Premenovanie zlyhalo (HTTP 503)."
         );
     }
 }

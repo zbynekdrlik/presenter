@@ -916,9 +916,6 @@ html[data-stream-editor="true"] {
     margin: 0 0 0.75rem;
 }
 
-/* #829: phone width — tighter gutters, and the element panel / scene preview
- * drop their 20rem minimum, so the tabs and an open scene fit 320 px.
- * Kept LAST so it overrides the base rules above. */
 /* #842: the output bar under the header — the selected output's OBS URL and
  * the create / rename form. Everything wraps, so it fits a phone. */
 .stream-editor__outputs {
@@ -976,7 +973,14 @@ html[data-stream-editor="true"] {
   color: #ff9aa6;
 }
 
+/* #829: phone width — tighter gutters, and the element panel / scene preview
+ * drop their 20rem minimum, so the tabs and an open scene fit 320 px.
+ * Kept LAST so it overrides the base rules above. */
 @media (max-width: 480px) {
+    .stream-editor__outputs {
+        padding: 0.6rem 1rem;
+    }
+
     .stream-editor__header {
         padding: 0.75rem 1rem;
     }
