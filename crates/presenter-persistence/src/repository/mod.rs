@@ -33,6 +33,8 @@ mod stream_nameplates;
 #[cfg(test)]
 mod stream_output_name_tests;
 #[cfg(test)]
+mod stream_playback_tests;
+#[cfg(test)]
 mod stream_tests;
 mod sync;
 mod sync_apply;

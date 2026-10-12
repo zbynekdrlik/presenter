@@ -559,6 +559,29 @@ html[data-stream-editor="true"] {
   font-size: 0.85rem;
 }
 
+/* #843: the playback element's Drive link needs the full width (a field's
+ * input is capped at 9rem for numbers), and its sync status line sits next to
+ * „Obnoviť". */
+.stream-editor__field--wide {
+  width: 100%;
+}
+.stream-editor__field--wide input {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.stream-editor__playback-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+.stream-editor__playback-status [data-state="error"] {
+  color: #ffb4bf;
+}
+
 /* Inline hint under a field (e.g. the opacity percent clamp notice, #776). */
 .stream-editor__field-hint {
   color: #ffd18a;

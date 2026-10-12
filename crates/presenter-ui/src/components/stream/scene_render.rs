@@ -35,6 +35,7 @@ use super::element_countdown::ElementCountdown;
 use super::element_image::ElementImage;
 use super::element_lower_third::ElementLowerThird;
 use super::element_lyrics::ElementLyrics;
+use super::element_playback::ElementPlayback;
 use super::element_verse::ElementVerse;
 
 /// Render one element (already resolved through any draft override) to its
@@ -139,6 +140,28 @@ fn render_element(id: i64, z: i32, props: StreamElementProps) -> AnyView {
                 animation=animation
                 in_ms=in_ms
                 out_ms=out_ms
+                z=z
+            />
+        }
+        .into_any(),
+        StreamElementProps::Playback {
+            source_url,
+            fit,
+            frame,
+            opacity,
+            image_seconds,
+            muted,
+            content_transition,
+        } => view! {
+            <ElementPlayback
+                id=id
+                source_url=source_url
+                fit=fit
+                frame=frame
+                opacity=opacity
+                image_seconds=image_seconds
+                muted=muted
+                content_transition=content_transition
                 z=z
             />
         }

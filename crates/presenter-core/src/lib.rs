@@ -69,14 +69,17 @@ pub use stage_display::{
 };
 pub use stage_text_mode::{StageTextMode, UnknownStageTextMode};
 pub use stream::{
-    slug_from_name, validate_props, validate_scene_name, validate_slug, ActiveNameplate,
-    AnimationPreset, ContentTransition, Frame, ImageFit, Nameplate, NameplateKind, NameplateSource,
-    SceneKind, Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamFont,
-    StreamOutputDef, StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError,
-    TextAlign, TextBox, TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS,
-    STREAM_FONT_FAMILIES, STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT,
-    STREAM_FRAME_SIZE_MAX_PCT, STREAM_LETTER_SPACING_MAX_EM, STREAM_LETTER_SPACING_MIN_EM,
-    STREAM_NAMEPLATE_AUTO_HIDE_MAX_S, STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX,
+    is_valid_drive_file_id, is_valid_drive_folder_id, parse_drive_folder_url, slug_from_name,
+    validate_props, validate_scene_name, validate_slug, ActiveNameplate, AnimationPreset,
+    ContentTransition, DriveFolder, DriveLinkError, Frame, ImageFit, Nameplate, NameplateKind,
+    NameplateSource, PlaybackItem, PlaybackItemKind, PlaybackPlaylist, SceneKind, Shadow,
+    StreamAsset, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
+    StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
+    TextBox, TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
+    STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,
+    STREAM_LETTER_SPACING_MAX_EM, STREAM_LETTER_SPACING_MIN_EM, STREAM_NAMEPLATE_AUTO_HIDE_MAX_S,
+    STREAM_PLAYBACK_DEFAULT_IMAGE_SECONDS, STREAM_PLAYBACK_IMAGE_SECONDS_MAX,
+    STREAM_PLAYBACK_IMAGE_SECONDS_MIN, STREAM_SCENE_NAME_MAX, STREAM_SLUG_MAX,
     STREAM_TRANSITION_MAX_MS,
 };
 pub use sync::{sync_id_for_name, SYNC_ID_NAMESPACE};

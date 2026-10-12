@@ -341,6 +341,13 @@ export async function startTestServer(
     // api.nlt.to. `bible-nlt-translation.spec.ts` points it at its own mock.
     PRESENTER_NLT_API_URL:
       process.env.PRESENTER_NLT_API_URL ?? "http://127.0.0.1:1",
+    // #843: same for Google Drive (the playback element's folder mirror):
+    // listing + download hosts default to a dead loopback, so no spec ever
+    // egresses to Google. `stream-playback.spec.ts` points both at its mock.
+    PRESENTER_DRIVE_URL:
+      process.env.PRESENTER_DRIVE_URL ?? "http://127.0.0.1:1",
+    PRESENTER_DRIVE_DOWNLOAD_URL:
+      process.env.PRESENTER_DRIVE_DOWNLOAD_URL ?? "http://127.0.0.1:1",
     RUST_LOG:
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };

@@ -123,6 +123,10 @@ impl AppState {
 
         self.spawn_trash_prune_task();
 
+        // #843: the playback element's Drive mirror (startup pass, every 5 min,
+        // on stream config changes and on refresh).
+        self.spawn_playback_sync_task();
+
         // NDI auto-reconnect: if a source is marked active in DB but no stream
         // is running, retry activation every 30 seconds. Handles the case where
         // the NDI source comes online after server startup.
