@@ -173,6 +173,30 @@ fn fade_toward_runs_linearly_up_or_down_to_its_target() {
     assert_eq!(fade_toward(0.0, 1.0, Duration::ZERO, Duration::ZERO), 1.0);
 }
 
+/// CI run 38288218234: a hide that replaced a show cut short lasts as long as
+/// the show had run, and its steps repeat the show's timing, so a step landed
+/// 1.4 µs before the end at 9.3e-7. Within `SAME_OPACITY` of 0, the fade
+/// counted the cover as arrived and never sent the 0. A level that close to
+/// the target IS the target.
+#[test]
+fn a_fade_level_within_same_opacity_of_its_target_is_the_target() {
+    let duration = Duration::from_nanos(102_382_405);
+    let almost = duration - Duration::from_nanos(1_400);
+    assert_eq!(
+        fade_toward(0.068_254_936_666_666_67, 0.0, almost, duration),
+        0.0
+    );
+    assert_eq!(
+        fade_toward(0.931_745_063_333_333_3, 1.0, almost, duration),
+        1.0
+    );
+    let half = fade_toward(0.068_254_936_666_666_67, 0.0, duration / 2, duration);
+    assert!(
+        (half - 0.034_127_468_333_333_33).abs() < 1e-9,
+        "halfway is still on the way: {half}"
+    );
+}
+
 /// #848 review, finding 1: the cover's 2.3 s fade ran inside the clear and
 /// held the serial host worker. The clear's own fade is only the Bible clips
 /// (#841); the cover is the deferred fade's job.

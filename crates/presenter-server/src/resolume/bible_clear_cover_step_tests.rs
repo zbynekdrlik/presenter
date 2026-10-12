@@ -393,5 +393,10 @@ async fn a_config_change_mid_fade_drops_the_cover_fade() {
         shown.last().is_some_and(|last| *last < 1.0 - 1e-9),
         "the cover stays where the dropped fade got: {shown:?}"
     );
-    assert_healthy(&worker).await;
+    // A config change leaves the host `Connecting` until a stage/Bible push
+    // or a tick (timer frames never mark it connected), so only no failure
+    // and no backoff window are asserted.
+    let snap = worker.status().await;
+    assert_eq!(snap.consecutive_failures, 0, "{snap:?}");
+    assert!(snap.next_retry_at.is_none(), "no backoff window: {snap:?}");
 }
