@@ -332,8 +332,16 @@ async fn mirror_bytes(root: &Path) -> u64 {
             continue;
         }
         if let Some(manifest) = read_manifest(&entry.path()).await {
-            let playing: u64 = manifest.items.iter().filter_map(|item| item.size).sum();
-            let retired: u64 = manifest.retired.iter().filter_map(|r| r.size).sum();
+            let playing = manifest
+                .items
+                .iter()
+                .filter_map(|item| item.size)
+                .fold(0, u64::saturating_add);
+            let retired = manifest
+                .retired
+                .iter()
+                .filter_map(|r| r.size)
+                .fold(0, u64::saturating_add);
             total = total.saturating_add(playing).saturating_add(retired);
         }
     }

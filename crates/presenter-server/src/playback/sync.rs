@@ -132,7 +132,7 @@ fn bytes_leaving(old: &Manifest, entries: &[DriveEntry]) -> u64 {
         .iter()
         .filter(|item| !entries.iter().any(|entry| entry.id == item.file_id))
         .filter_map(|item| item.size)
-        .sum()
+        .fold(0, u64::saturating_add)
 }
 
 /// One folder sync in progress.
@@ -170,12 +170,28 @@ impl FolderSync<'_> {
         };
         let path = self.dir.join(format!("{}.{ext}", entry.id));
         let cached = tokio::fs::metadata(&path).await.is_ok();
+        // A file back within its grace period still has its cached copy.
         let previous = self
             .old
             .items
             .iter()
             .find(|item| item.file_id == entry.id && item.ext == ext)
-            .cloned();
+            .cloned()
+            .or_else(|| {
+                self.old
+                    .retired
+                    .iter()
+                    .find(|retired| retired.file_id == entry.id && retired.ext == ext)
+                    .map(|retired| ManifestItem {
+                        file_id: retired.file_id.clone(),
+                        name: entry.name.clone(),
+                        mime: retired.mime.clone(),
+                        kind,
+                        ext: retired.ext.clone(),
+                        size: retired.size,
+                        last_modified: retired.last_modified.clone(),
+                    })
+            });
         let prior = self
             .old
             .failures

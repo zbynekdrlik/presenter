@@ -365,5 +365,7 @@ async fn a_peer_that_never_answers_times_out() {
         .expect_err("no headers within the idle timeout");
 
     assert!(matches!(err, DriveError::Timeout { secs: 1 }), "{err:?}");
-    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    // Generous: it only proves the 1 s bound ended the wait (a loaded runner
+    // may be slow), never that it was precise.
+    assert!(started.elapsed() < std::time::Duration::from_secs(15));
 }

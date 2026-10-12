@@ -81,6 +81,9 @@ pub(crate) struct RetiredFile {
     pub(crate) ext: String,
     pub(crate) mime: String,
     pub(crate) size: Option<u64>,
+    /// Kept so a file that comes back can be matched without a re-download.
+    #[serde(default)]
+    pub(crate) last_modified: Option<String>,
     pub(crate) retired_at: DateTime<Utc>,
 }
 
@@ -114,6 +117,7 @@ pub(crate) fn retire(
             ext: item.ext.clone(),
             mime: item.mime.clone(),
             size: item.size,
+            last_modified: item.last_modified.clone(),
             retired_at: now,
         });
     let mut seen = std::collections::HashSet::new();

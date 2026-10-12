@@ -81,8 +81,10 @@ folder are deleted 5 minutes later (until then outputs with an older playlist
 still get them), and when Drive is unreachable the last mirrored playlist
 keeps playing. A file that keeps failing is retried with a growing pause
 (5 min … 6 h; „Obnoviť" retries at once) and its reason shows in the editor.
-The whole mirror stops at a byte budget (all folders together) so it never
-fills the disk next to `presenter.db`; a single file is capped at 2 GiB.
+The whole mirror stops at a byte budget (all folders together,
+`PRESENTER_PLAYBACK_MAX_GB`); a single file is capped at 2 GiB. There is no
+free-space check, so set the budget well below the free disk space next to
+`presenter.db` (the dev unit uses 2 GiB; the dev box is the CI runner host).
 Needs internet only to sync.
 
 | Variable                       | Default                                | Purpose |

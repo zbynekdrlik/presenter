@@ -21,7 +21,7 @@ pub(super) const FADE_REMOVE_BUFFER_MS: u32 = 80;
 const REFETCH_MS: u32 = 60_000;
 const REFETCH_EMPTY_MS: u32 = 5_000;
 /// Margin after a video's own duration before the watchdog skips it.
-const VIDEO_END_MARGIN_MS: f64 = 5_000.0;
+const VIDEO_END_MARGIN_MS: f64 = 15_000.0;
 /// Watchdog for a video whose duration is unknown (or absurd).
 const VIDEO_UNKNOWN_LENGTH_MS: u32 = 10 * 60_000;
 /// Longest watchdog a known duration can ask for.
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn the_video_watchdog_follows_the_duration() {
-        assert_eq!(video_watchdog_ms(12.5), 17_500);
+        assert_eq!(video_watchdog_ms(12.5), 27_500);
         assert_eq!(video_watchdog_ms(f64::INFINITY), 600_000);
         assert_eq!(video_watchdog_ms(f64::NAN), 600_000);
         assert_eq!(video_watchdog_ms(0.0), 600_000);
