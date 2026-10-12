@@ -539,10 +539,15 @@ impl HostDriver {
             .filter(|cover| missing.contains(&cover.param_id))
             .copied()
             .collect();
-        if gone.len() < missing.len() {
+        let strangers: Vec<i64> = missing
+            .iter()
+            .copied()
+            .filter(|id| gone.iter().all(|cover| cover.param_id != *id))
+            .collect();
+        if !strangers.is_empty() {
             debug!(
                 host = %self.config.host,
-                param_ids = ?missing,
+                param_ids = ?strangers,
                 "resolume bible: a 404 for an opacity parameter that is not a cover of this fade"
             );
         }
