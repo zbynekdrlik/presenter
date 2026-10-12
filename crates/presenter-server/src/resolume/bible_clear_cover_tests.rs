@@ -13,8 +13,9 @@
 //! real host worker.
 
 use super::bible_clear::{
-    fade_toward, plan_clear_fade, plan_cover_hide, FadeTarget, TrackedOpacities,
+    fade_toward, plan_clear_fade, FadeTarget, TrackedOpacities, TrackedOpacity,
 };
+use super::bible_clear_cover::{cover_candidates, plan_cover_fade, CoverClip, CoverDirection};
 use super::bible_clear_deck_tests::assert_faded;
 use super::bible_clear_tests::{
     bible_layers, clear_update, clip, connects, deck_layers, driver_for, layer, opacities_put,
@@ -23,8 +24,8 @@ use super::bible_clear_tests::{
 use super::clip_map::ClipMapping;
 use super::types::ClipOpacity;
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
-use wiremock::Request;
+use std::collections::HashMap;
+use std::time::Duration;
 
 /// The cover clip, its text parameter and its opacity parameter (text + 100).
 pub(super) const COVER: i64 = 500;
@@ -195,7 +196,9 @@ fn the_clear_fade_leaves_the_covers_to_the_deferred_cover_fade() {
 
 /// The hide plan: each cover once, from its mapped opacity down to 0. A cover
 /// that is already invisible gets nothing, and a clip tagged as a cover AND a
-/// Bible lane clip is left to the lane (the verse just showed it).
+/// Bible lane clip is left to the lane (the verse just showed it). Planned by
+/// `cover_candidates` + `plan_cover_fade` themselves (#848 second review,
+/// finding 10: no test-only wrapper).
 #[test]
 fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
     let mut layers = bible_layers(None);
@@ -209,7 +212,8 @@ fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
     ));
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
 
-    let plan = plan_cover_hide(&mapping, &TrackedOpacities::default());
+    let covers = cover_candidates(&mapping, &HashMap::new());
+    let plan = plan_cover_fade(&covers, &TrackedOpacities::default(), CoverDirection::Hide);
     assert_eq!(
         plan,
         vec![FadeTarget {
@@ -224,26 +228,84 @@ fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
     );
 }
 
+/// The planned duration of the one cover in `covers`.
+fn planned_duration(
+    covers: &[CoverClip],
+    tracked: &TrackedOpacities,
+    direction: CoverDirection,
+) -> Duration {
+    let plan = plan_cover_fade(covers, tracked, direction);
+    assert_eq!(plan.len(), 1, "one cover to fade: {plan:?}");
+    plan[0].duration
+}
+
+fn assert_duration(actual: Duration, expected: Duration) {
+    assert!(
+        (actual.as_secs_f64() - expected.as_secs_f64()).abs() < 1e-6,
+        "fades over {actual:?}, expected {expected:?}"
+    );
+}
+
+/// #848 second review, finding 1: a fade that replaced one cut short ran over
+/// the cover's WHOLE transition from where it was, so quick verses stretched
+/// the hide (the title stayed partly visible behind the verse ~2.3 s on SNV).
+/// A cover now fades over the share of its transition that the distance left
+/// is of its base: `fade × |to − from| / base`.
+#[test]
+fn a_cover_fades_over_the_share_of_its_transition_left_to_go() {
+    let mapping = ClipMapping::from_composition(
+        &json!({ "layers": cover_layers(None, Some(COVER_FADE), 0.0) }),
+    )
+    .expect("mapping");
+    let covers = cover_candidates(&mapping, &HashMap::new());
+    let mut tracked = TrackedOpacities::default();
+
+    // A show cut short at 0.2 of a 0.8 base: a quarter of the way up.
+    tracked.set(
+        COVER_OPACITY,
+        TrackedOpacity {
+            base: 0.8,
+            level: 0.2,
+        },
+    );
+    assert_duration(
+        planned_duration(&covers, &tracked, CoverDirection::Hide),
+        COVER_FADE.mul_f64(0.25),
+    );
+    assert_duration(
+        planned_duration(&covers, &tracked, CoverDirection::Show),
+        COVER_FADE.mul_f64(0.75),
+    );
+
+    // Shown at its base: the hide is the whole way down.
+    tracked.set(
+        COVER_OPACITY,
+        TrackedOpacity {
+            base: 0.8,
+            level: 0.8,
+        },
+    );
+    assert_duration(
+        planned_duration(&covers, &tracked, CoverDirection::Hide),
+        COVER_FADE,
+    );
+}
+
 /// #848 review, finding 1: the clear held the worker for the cover's whole
 /// transition, so the `#timer` countdown froze and the next verse waited. The
-/// push returns once the Bible clips are faded; the cover is not touched
-/// inside it.
+/// push ends once the Bible clips are faded; it sends the cover nothing (the
+/// cover is shown afterwards by the worker). No wall-clock bound (#848 second
+/// review, finding 6).
 #[tokio::test]
-async fn a_clear_returns_before_the_cover_has_faded() {
+async fn a_clear_sends_the_cover_nothing_inside_its_push() {
     let server = start_resolume(cover_layers(Some(BIBLE_FADE), Some(COVER_FADE), 0.0)).await;
     let (mut driver, status) = driver_for(&server);
 
-    let start = Instant::now();
     driver
         .handle_bible(clear_update(), &status)
         .await
         .expect("bible clear");
-    let took = start.elapsed();
 
-    assert!(
-        took < COVER_FADE,
-        "the clear returned after {took:?}, it must not wait for the cover's {COVER_FADE:?}"
-    );
     let requests = server.received_requests().await.expect("requests");
     assert_faded(&requests, A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY));
     assert!(connects(&requests).is_empty(), "a clear triggers no clip");
@@ -254,28 +316,28 @@ async fn a_clear_returns_before_the_cover_has_faded() {
     );
 }
 
-/// The verse after a clear is on air at once: it does not wait for the cover
-/// to fade out either.
+/// The verse after a clear is on air without waiting for the cover either:
+/// the title is fully visible (#848 second review, finding 6: seeded at 0, a
+/// hide inside the push sent nothing and this test could not fail), yet the
+/// push sends it nothing; the worker hides it afterwards.
 #[tokio::test]
-async fn a_verse_returns_before_the_cover_has_faded() {
-    let server = start_resolume(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+async fn a_verse_sends_the_cover_nothing_inside_its_push() {
+    let server = start_resolume(cover_layers(None, Some(COVER_FADE), 1.0)).await;
     let (mut driver, status) = driver_for(&server);
     driver
         .handle_bible(clear_update(), &status)
         .await
         .expect("bible clear");
 
-    let start = Instant::now();
     driver
         .handle_bible(verse_update(), &status)
         .await
         .expect("verse");
-    let took = start.elapsed();
 
-    assert!(
-        took < COVER_FADE,
-        "the verse returned after {took:?}, it must not wait for the cover's {COVER_FADE:?}"
-    );
-    let requests: Vec<Request> = server.received_requests().await.expect("requests");
+    let requests = server.received_requests().await.expect("requests");
     assert_eq!(connects(&requests).len(), 4, "the verse is on air");
+    assert!(
+        opacities_put(&requests, COVER_OPACITY).is_empty(),
+        "the shown cover is hidden after the push, not inside it"
+    );
 }

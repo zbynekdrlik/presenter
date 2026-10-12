@@ -33,6 +33,7 @@ use super::bible_clear_tests::{
 use super::driver::{run_host_worker, HostCommand};
 use super::port_claims::PortClaims;
 use super::{BibleUpdate, ResolumeConnectionSnapshot, ResolumeConnectionState, TimerFrame};
+use presenter_core::ResolumeHost;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -44,17 +45,19 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 /// How long a test waits for the worker before it fails.
 const WAIT_LIMIT: Duration = Duration::from_secs(10);
 /// The second deck's id shift in the deck-switch tests.
-const DECK_TWO: i64 = 1000;
+pub(super) const DECK_TWO: i64 = 1000;
 
 /// A host worker running against `server`, as `ResolumeRegistry` spawns it.
-struct Worker {
+pub(super) struct Worker {
     commands: mpsc::Sender<HostCommand>,
     status: Arc<RwLock<ResolumeConnectionSnapshot>>,
     timer_frames: AtomicU32,
+    /// The host config it runs with (a `RefreshConfig` resends it).
+    pub(super) config: ResolumeHost,
 }
 
 impl Worker {
-    fn spawn(server: &MockServer) -> Self {
+    pub(super) fn spawn(server: &MockServer) -> Self {
         let (driver, _) = driver_for(server);
         let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
         let (commands, receiver) = mpsc::channel(16);
@@ -71,19 +74,20 @@ impl Worker {
             commands,
             status,
             timer_frames: AtomicU32::new(0),
+            config: driver.config.clone(),
         }
     }
 
-    async fn send(&self, command: HostCommand) {
+    pub(super) async fn send(&self, command: HostCommand) {
         self.commands.send(command).await.expect("the worker runs");
     }
 
-    async fn bible(&self, update: BibleUpdate) {
+    pub(super) async fn bible(&self, update: BibleUpdate) {
         self.send(HostCommand::Bible(update)).await;
     }
 
     /// Send a timer frame with a new text and return that text.
-    async fn timer(&self) -> serde_json::Value {
+    pub(super) async fn timer(&self) -> serde_json::Value {
         let n = self.timer_frames.fetch_add(1, Ordering::Relaxed);
         let text = format!("00:{n:02}");
         self.send(HostCommand::Timer(TimerFrame::new(text.clone())))
@@ -94,7 +98,7 @@ impl Worker {
     /// A timer frame, waited for: every command sent before it, and the cover
     /// step that was running when it arrived, are done. Matched by its unique
     /// text, so it works on any deck (a deck switch shifts the timer's ids).
-    async fn barrier(&self, server: &MockServer) -> Vec<Request> {
+    pub(super) async fn barrier(&self, server: &MockServer) -> Vec<Request> {
         let text = self.timer().await;
         wait_for(server, "the barrier timer frame", |requests| {
             requests
@@ -105,19 +109,19 @@ impl Worker {
     }
 
     /// The operator's "Refresh mapping", waited for.
-    async fn refresh_mapping(&self) {
+    pub(super) async fn refresh_mapping(&self) {
         let (reply, answer) = oneshot::channel();
         self.send(HostCommand::RefreshMapping(reply)).await;
         assert!(answer.await.expect("reply").success, "mapping refreshed");
     }
 
-    async fn status(&self) -> ResolumeConnectionSnapshot {
+    pub(super) async fn status(&self) -> ResolumeConnectionSnapshot {
         self.status.read().await.clone()
     }
 }
 
 /// Poll the mock until `done` holds for the requests it received.
-async fn wait_for(
+pub(super) async fn wait_for(
     server: &MockServer,
     what: &str,
     done: impl Fn(&[Request]) -> bool,
@@ -139,7 +143,7 @@ async fn wait_for(
 }
 
 /// Wait until the last opacity PUT of `param` is `value`.
-async fn wait_for_opacity(server: &MockServer, param: i64, value: f64) -> Vec<Request> {
+pub(super) async fn wait_for_opacity(server: &MockServer, param: i64, value: f64) -> Vec<Request> {
     wait_for(server, &format!("param {param} at {value}"), |requests| {
         opacities_put(requests, param)
             .last()
@@ -149,7 +153,7 @@ async fn wait_for_opacity(server: &MockServer, param: i64, value: f64) -> Vec<Re
 }
 
 /// Requests of `method` to parameter `param`, any answer.
-fn param_requests(requests: &[Request], method: &str, param: i64) -> usize {
+pub(super) fn param_requests(requests: &[Request], method: &str, param: i64) -> usize {
     let wanted = param_path(param);
     requests
         .iter()
@@ -158,11 +162,11 @@ fn param_requests(requests: &[Request], method: &str, param: i64) -> usize {
 }
 
 /// The cover's opacity reads: one per cover fade's first step.
-fn cover_reads(requests: &[Request]) -> usize {
+pub(super) fn cover_reads(requests: &[Request]) -> usize {
     param_requests(requests, "GET", COVER_OPACITY)
 }
 
-fn compositions(requests: &[Request]) -> usize {
+pub(super) fn compositions(requests: &[Request]) -> usize {
     requests
         .iter()
         .filter(|req| req.method.as_str() == "GET" && req.url.path() == "/api/v1/composition")
@@ -170,11 +174,14 @@ fn compositions(requests: &[Request]) -> usize {
 }
 
 /// Index of the last request matching `predicate`.
-fn last_index(requests: &[Request], predicate: impl Fn(&Request) -> bool) -> Option<usize> {
+pub(super) fn last_index(
+    requests: &[Request],
+    predicate: impl Fn(&Request) -> bool,
+) -> Option<usize> {
     requests.iter().rposition(predicate)
 }
 
-fn is_connect(req: &Request) -> bool {
+pub(super) fn is_connect(req: &Request) -> bool {
     req.url.path().ends_with("/connect")
 }
 
@@ -184,7 +191,7 @@ fn is_cover_put(req: &Request) -> bool {
 
 /// Answer `status` to `times` GETs of parameter `param_id`, ahead of the
 /// stateful catch-all route.
-async fn answer_param_read(server: &MockServer, param_id: i64, status: u16, times: u64) {
+pub(super) async fn answer_param_read(server: &MockServer, param_id: i64, status: u16, times: u64) {
     Mock::given(method("GET"))
         .and(path(param_path(param_id)))
         .respond_with(ResponseTemplate::new(status))
@@ -195,7 +202,7 @@ async fn answer_param_read(server: &MockServer, param_id: i64, status: u16, time
 }
 
 /// The host stayed healthy: no failure counted, no backoff window.
-async fn assert_healthy(worker: &Worker) {
+pub(super) async fn assert_healthy(worker: &Worker) {
     let snap = worker.status().await;
     assert_eq!(snap.state, ResolumeConnectionState::Connected, "{snap:?}");
     assert_eq!(snap.consecutive_failures, 0, "{snap:?}");
@@ -414,8 +421,10 @@ async fn a_clear_while_the_bible_clips_are_invisible_still_shows_the_cover() {
 
 /// #848 review, finding 2: a cover 5xx failed the clear, which opened a #484
 /// backoff window that silently dropped the next verse. Now the Bible clips
-/// still reach 0, the push succeeds and the host stays healthy; the failed
-/// fade stops after its one failed step.
+/// still reach 0, the push succeeds and the host stays healthy. A failed step
+/// gets ONE final step that PUTs the target (#848 second review, finding 3);
+/// when that fails too, the fade stops: at most 2 failed requests, the clear
+/// itself is not retried.
 #[tokio::test]
 async fn a_failed_cover_put_during_a_clear_fails_nothing() {
     let (server, _params) = start_arena(cover_layers(None, None, 0.0)).await;
@@ -423,8 +432,8 @@ async fn a_failed_cover_put_during_a_clear_fails_nothing() {
     let worker = Worker::spawn(&server);
 
     worker.bible(clear_update()).await;
-    wait_for(&server, "the cover PUT", |requests| {
-        param_requests(requests, "PUT", COVER_OPACITY) == 1
+    wait_for(&server, "the cover PUT and its final step", |requests| {
+        param_requests(requests, "PUT", COVER_OPACITY) == 2
     })
     .await;
     let requests = worker.barrier(&server).await;
@@ -433,9 +442,9 @@ async fn a_failed_cover_put_during_a_clear_fails_nothing() {
         assert_eq!(opacities_put(&requests, param), vec![0.0], "param {param}");
     }
     assert_eq!(
-        param_requests(&requests, "PUT", COVER_OPACITY),
-        1,
-        "the failed fade stops; the clear is not retried"
+        opacities_put(&requests, COVER_OPACITY),
+        vec![1.0, 1.0],
+        "the failed step, then one final step at the target; then the fade stops"
     );
     assert_healthy(&worker).await;
 }
@@ -451,8 +460,9 @@ async fn a_failed_cover_fade_does_not_fail_the_verse() {
     answer_param(&server, COVER_OPACITY, 500, 100, 1).await;
 
     worker.bible(verse_update()).await;
+    // The failed step's final step may follow (#848 second review, finding 3).
     wait_for(&server, "the cover hide tried", |requests| {
-        param_requests(requests, "PUT", COVER_OPACITY) == 2
+        param_requests(requests, "PUT", COVER_OPACITY) >= 2
     })
     .await;
     worker.barrier(&server).await;
