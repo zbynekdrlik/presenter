@@ -604,7 +604,9 @@ impl HostDriver {
         let first_error = fade.failed_step.as_deref().unwrap_or("none");
         let targets: Vec<i64> = fade.targets.iter().map(|target| target.clip_id).collect();
         let decision = self.cover_404_refetch(cover.param_id, fade.mapping_fetched);
-        if decision == CoverRefetch::MappingChanged && self.cover_refetch_pending(fade) {
+        if decision == CoverRefetch::MappingChanged
+            && self.cover_refetch_pending(fade.mapping_fetched)
+        {
             // That refetch lists this id again (#848 fourth review: the next
             // fade spent another 16 MB refetch on it).
             self.cover.refetched_ids.insert(cover.param_id);
@@ -668,13 +670,13 @@ impl HostDriver {
         self.cover.refetched_mapping = mapping_fetched;
     }
 
-    /// Whether the cover refetch for `fade`'s mapping is still pending: that
-    /// mapping was dropped for a cover's 404 and no mapping is cached now, so
-    /// a fetch is pending and the next mapping comes after this 404.
-    fn cover_refetch_pending(&self, fade: &CoverFade) -> bool {
+    /// Whether the cover refetch for a fade's mapping (`mapping_fetched`) is
+    /// pending: that mapping was dropped for a cover's 404 and none is cached
+    /// now, so a fetch is pending and the next mapping comes after this 404.
+    pub(super) fn cover_refetch_pending(&self, mapping_fetched: Option<Instant>) -> bool {
         self.last_mapping_refresh.is_none()
-            && fade.mapping_fetched.is_some()
-            && self.cover.refetched_mapping == fade.mapping_fetched
+            && mapping_fetched.is_some()
+            && self.cover.refetched_mapping == mapping_fetched
     }
 
     /// Whether a mapped cover's 404 refetches the mapping: only while the

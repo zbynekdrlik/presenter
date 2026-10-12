@@ -27,10 +27,7 @@
 //! composition lists only the new deck, while the other decks' titles still
 //! exist in Arena (their parameters are kept in the new mount).
 
-use super::bible_clear_cover::CoverClip;
-use super::bible_clear_cover_memory::{
-    remember_cover, remember_mapping, RememberedCovers, REMEMBERED_PER_LAYER,
-};
+use super::bible_clear_cover_memory::{remember_mapping, RememberedCovers, REMEMBERED_PER_LAYER};
 use super::bible_clear_cover_tests::{
     cover_layers, cover_layers_on, timer_layer, COVER, COVER_OPACITY, COVER_TEXT,
 };
@@ -43,7 +40,6 @@ use super::bible_clear_tests::{
 use super::clip_map::ClipMapping;
 use super::BibleUpdate;
 use serde_json::{json, Value};
-use std::time::Duration;
 use wiremock::{MockServer, Request};
 
 /// Switch the mock to the deck `layers`; each `(param, opacity)` in `kept` is
@@ -262,17 +258,18 @@ fn titles_playing_second() -> Vec<Value> {
     ]
 }
 
-/// A cover on `layer` as a fetch lists it.
-fn cover_on(param_id: i64, layer: usize, connected: bool) -> CoverClip {
-    CoverClip {
-        clip_id: param_id * 10,
-        param_id,
-        mapped_base: 0.0,
-        fade: Duration::ZERO,
-        layer,
-        connected,
-        mapped: true,
-    }
+/// Title `n` of one deck (opacity parameter `COVER_OPACITY + n`), not
+/// playing.
+fn title_clip(n: i64) -> Value {
+    clip(COVER + n, "NAZOV #bible-clear", COVER_TEXT + n, 0.0)
+}
+
+/// Remember the covers of one fetch of `layers`, as every fade scheduled
+/// with that mapping does ([`remember_mapping`]).
+fn remember_fetch(remembered: &mut RememberedCovers, layers: Vec<Value>) {
+    let composition = json!({ "layers": layers });
+    let mapping = ClipMapping::from_composition(&composition).expect("mapping");
+    remember_mapping(remembered, &mapping);
 }
 
 /// Each layer's remembered opacity parameters, the oldest first, by layer.
@@ -392,47 +389,55 @@ fn a_fetchs_two_playing_titles_on_one_layer_are_both_remembered_in_either_column
 }
 
 /// #848 fourth review, finding 3: the cap worker test has no playing title,
-/// so dropping the first title unconditionally would pass it. A full layer
-/// whose first title PLAYS keeps it and drops the oldest one not playing.
+/// so dropping the first title unconditionally would pass it. A fetch whose
+/// layer holds a PLAYING title and four others keeps the playing one and
+/// drops the oldest one not playing.
 #[test]
 fn a_full_layer_keeps_its_playing_title_and_drops_the_oldest_other() {
+    let others: Vec<i64> = (1..).take(REMEMBERED_PER_LAYER).collect();
+    let mut clips = vec![playing(title_clip(0))];
+    clips.extend(others.iter().map(|&n| title_clip(n)));
     let mut remembered = RememberedCovers::default();
-    remember_cover(&mut remembered, cover_on(COVER_OPACITY, 12, true));
-    let others: Vec<i64> = (COVER_OPACITY + 1..).take(REMEMBERED_PER_LAYER).collect();
-    for &param in &others {
-        remember_cover(&mut remembered, cover_on(param, 12, false));
-    }
+    remember_fetch(&mut remembered, vec![layer(clips, None)]);
 
     let mut kept = vec![COVER_OPACITY];
-    kept.extend_from_slice(&others[1..]);
+    kept.extend(others[1..].iter().map(|&n| COVER_OPACITY + n));
     assert_eq!(
         layer_params(&remembered),
-        vec![(12, kept)],
+        vec![(1, kept)],
         "the playing title stays, the oldest one not playing ({}) goes",
-        others[0]
+        COVER_OPACITY + others[0]
     );
 }
 
 /// #848 fourth review, finding 3: `cover_candidates` dedups by parameter, so
 /// the layer-shift worker test reads the title once with or without the
-/// cross-layer forget. On the map itself: a title remembered on another layer
-/// leaves its old one, and a layer left empty is gone.
+/// cross-layer forget. On the map itself, over three fetches: a title
+/// remembered on another layer leaves its old one, and a layer left empty is
+/// gone.
 #[test]
 fn a_title_remembered_on_another_layer_leaves_its_old_layer() {
     let mut remembered = RememberedCovers::default();
-    remember_cover(&mut remembered, cover_on(COVER_OPACITY, 12, false));
-    remember_cover(&mut remembered, cover_on(COVER_OPACITY + 1, 12, false));
-
-    remember_cover(&mut remembered, cover_on(COVER_OPACITY, 13, false));
-    assert_eq!(
-        layer_params(&remembered),
-        vec![(12, vec![COVER_OPACITY + 1]), (13, vec![COVER_OPACITY])]
+    remember_fetch(
+        &mut remembered,
+        vec![layer(vec![title_clip(0), title_clip(1)], None)],
     );
 
-    remember_cover(&mut remembered, cover_on(COVER_OPACITY + 1, 13, true));
+    let empty = || layer(Vec::new(), None);
+    remember_fetch(
+        &mut remembered,
+        vec![empty(), layer(vec![title_clip(0)], None)],
+    );
     assert_eq!(
         layer_params(&remembered),
-        vec![(13, vec![COVER_OPACITY + 1])],
+        vec![(1, vec![COVER_OPACITY + 1]), (2, vec![COVER_OPACITY])]
+    );
+
+    let moved_playing = layer(vec![playing(title_clip(1))], None);
+    remember_fetch(&mut remembered, vec![empty(), moved_playing]);
+    assert_eq!(
+        layer_params(&remembered),
+        vec![(2, vec![COVER_OPACITY + 1])],
         "playing, it collapses its new layer, and its emptied old layer is gone"
     );
 }

@@ -50,16 +50,12 @@ pub(super) const REMEMBERED_PER_LAYER: usize = 4;
 /// `/composition/layers/{n}`), the oldest first.
 pub(super) type RememberedCovers = HashMap<usize, Vec<CoverClip>>;
 
-/// Remember `cover` as a fetched mapping lists it, alone (see the module
-/// doc): one PLAYING collapses its layer to itself, one that is not is added
-/// ([`add_cover`]).
-pub(super) fn remember_cover(remembered: &mut RememberedCovers, cover: CoverClip) {
-    if cover.connected {
-        forget_remembered_cover(remembered, cover.param_id);
-        remembered.insert(cover.layer, vec![cover]);
-    } else {
-        add_cover(remembered, cover);
-    }
+/// Collapse the layer of `cover`, the first PLAYING cover a fetch lists on
+/// it, to that cover alone: its parameter leaves every other layer, and the
+/// covers remembered on its layer are no longer visible (see the module doc).
+fn collapse_layer(remembered: &mut RememberedCovers, cover: CoverClip) {
+    forget_remembered_cover(remembered, cover.param_id);
+    remembered.insert(cover.layer, vec![cover]);
 }
 
 /// Add `cover` to its layer: each parameter once and on one layer, the last
@@ -77,14 +73,15 @@ fn add_cover(remembered: &mut RememberedCovers, cover: CoverClip) {
 /// Remember every cover `mapping` lists, as each fade scheduled with it does
 /// (see the module doc). The fetch collapses each layer at most ONCE: its
 /// playing covers come first ([`mapped_covers`]), the first one on a layer
-/// collapses it and the others are added beside it, so all of them are kept
-/// in any column order (#848 fifth review: the second one's collapse dropped
-/// the first, and the later column won). Then the others are added.
+/// collapses it ([`collapse_layer`]) and the others are added beside it
+/// ([`add_cover`]), so all of them are kept in any column order (#848 fifth
+/// review: the second one's collapse dropped the first, and the later column
+/// won). Then the others are added.
 pub(super) fn remember_mapping(remembered: &mut RememberedCovers, mapping: &ClipMapping) {
     let mut collapsed = HashSet::new();
     for cover in mapped_covers(mapping) {
         if cover.connected && collapsed.insert(cover.layer) {
-            remember_cover(remembered, cover);
+            collapse_layer(remembered, cover);
         } else {
             add_cover(remembered, cover);
         }
