@@ -18,6 +18,7 @@ mod stream_assets;
 mod stream_fonts;
 mod stream_nameplates;
 mod stream_page;
+mod stream_playback;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -433,6 +434,11 @@ pub fn build_router(state: AppState) -> Router {
         // them priority over `/stream/{slug}`, and "fonts" is a reserved slug —
         // collision-free regardless of merge order.
         .merge(stream_fonts::routes())
+        // #843: playback element — Drive mirror playlist / refresh / cached
+        // files. Static `/stream/api/playback*` + `/stream/playback/*`
+        // prefixes; "playback" is a reserved slug, so `/stream/{slug}` never
+        // collides.
+        .merge(stream_playback::routes())
         .with_state(state)
 }
 

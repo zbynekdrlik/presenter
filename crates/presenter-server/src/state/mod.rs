@@ -66,6 +66,7 @@ mod stream;
 pub(crate) mod stream_assets;
 pub(crate) mod stream_fonts;
 pub(crate) mod stream_nameplates;
+mod stream_playback;
 pub(crate) mod sync;
 #[cfg(test)]
 mod sync_integration_breaker_tests;
@@ -208,6 +209,8 @@ pub struct AppState {
     stream_font_verdicts: Arc<stream_fonts::FontVerdictCache>,
     /// #830: serialises the font-face re-derive passes (startup + per upload).
     stream_font_rederive_lock: Arc<tokio::sync::Mutex<()>>,
+    /// #843: the playback element's Drive mirror (client, queue, sync state).
+    playback: crate::playback::PlaybackSync,
     /// #771: how this process booted. In [`StartupMode::Validate`] the
     /// constructor + `from_config` skip every integration/background task and
     /// `/healthz` skips the live AI probe. Defaults to `Normal` for every
@@ -382,6 +385,7 @@ impl AppState {
             stream_assets_dir: stream_assets::resolve_dir(),
             stream_font_verdicts: Arc::new(stream_fonts::FontVerdictCache::default()),
             stream_font_rederive_lock: Arc::new(tokio::sync::Mutex::new(())),
+            playback: crate::playback::PlaybackSync::new(crate::drive::DriveClient::from_env()),
             startup_mode,
         };
         // #771: heartbeat broadcasting is a background task — skip it in the
