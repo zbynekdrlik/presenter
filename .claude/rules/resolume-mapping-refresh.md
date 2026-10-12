@@ -252,11 +252,12 @@ When you touch this area:
   A plain `anyhow!` makes a composition change look like a host failure:
   Error, backoff, and no refetch.
   - The one exception is the deferred #848 cover fade, which is not a push:
-    its 404 never becomes an error. A mapped cover id calls
-    `invalidate_mapping(StaleId)` itself, at most once per fetched mapping and
-    once per id, never while stale refetches are paused or once a newer
-    mapping is cached (`cover_404_refetch`), and the next push or tick
-    refetches. Its later 404s WARN through the #563h limiter
+    its 404 never becomes an error and leaves only that cover out of the
+    fade. A mapped cover id calls `invalidate_mapping(StaleId)` itself, at
+    most once per fetched mapping and once per id (every id that refetched is
+    kept until a config change), never while stale refetches are paused or
+    once a newer mapping is cached (`cover_404_refetch`), and the next push
+    or tick refetches. Its later 404s WARN through the #563h limiter
     (`cover-404:<id>`). An unmapped (remembered) cover's 404 is forgotten,
     like a #841 connected clip's.
 - **Keep the push idempotent up to the point it succeeds.** The retry runs
