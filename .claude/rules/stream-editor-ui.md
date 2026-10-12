@@ -459,6 +459,12 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB
   (0.9 % of 5.6 MB, measured dev vs prod 2026-10-12). Accepted; a hand-written fold table would
   save that if the bundle size ever matters.
+- `components/stream_editor/mod.rs` is at ~785 production lines (800 = warning). Move something
+  into a sibling module (the #742 split pattern) BEFORE the next addition there.
+- **Live check on SNV/PP: never press „Vytvoriť" with a fresh name.** The duplicate refusal
+  only fires for a name or slug that already exists, so a "test" name creates a real output, and
+  deleting prod data needs the owner (2026-10-12: a check created „Stream 2" / `stream-2` on SNV).
+  Check the preview, the prefill and a duplicate ("strih"), then Zrušiť.
 - E2E `stream-editor-outputs.spec.ts`: create (preview, selected, `?output=`, URL, server name),
   duplicate refused inline, rename (prefilled, option text, slug + URL unchanged), the rename form
   closes on an output switch, a click selects the whole URL, an empty rename is refused, 360 px no
