@@ -20,6 +20,7 @@
 //! ran" is proven by the cover's opacity READ (a GET), never by a sleep.
 //! Timing is asserted as a lower bound only.
 
+use super::bible_clear::FADE_STEP;
 use super::bible_clear_cover_tests::{
     assert_hidden, assert_shown, cover_layer, cover_layers, cover_layers_on, timer_layer,
     BIBLE_FADE, COVER, COVER_FADE, COVER_OPACITY, SHORT_COVER_FADE,
@@ -140,6 +141,15 @@ pub(super) async fn wait_for(
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+/// Wait a bounded `5 × FADE_STEP`, then return every request received.
+/// Proving an ABSENCE (no step after a fade's last one) is the one wait that
+/// is not a poll for a request: a 20 Hz retry loop would send several steps
+/// in that time (#848 third review, finding 2).
+pub(super) async fn settled(server: &MockServer) -> Vec<Request> {
+    tokio::time::sleep(FADE_STEP * 5).await;
+    server.received_requests().await.expect("requests")
 }
 
 /// Wait until the last opacity PUT of `param` is `value`.
@@ -423,8 +433,10 @@ async fn a_clear_while_the_bible_clips_are_invisible_still_shows_the_cover() {
 /// backoff window that silently dropped the next verse. Now the Bible clips
 /// still reach 0, the push succeeds and the host stays healthy. A failed step
 /// gets ONE final step that PUTs the target (#848 second review, finding 3);
-/// when that fails too, the fade stops: at most 2 failed requests, the clear
-/// itself is not retried.
+/// when that fails too, the fade stops: at most 2 failed PUTs, the clear
+/// itself is not retried. The barrier frame runs before a third step could be
+/// due, so the requests are read again `5 × FADE_STEP` later (#848 third
+/// review, finding 2: a retry storm would pass a read at the barrier).
 #[tokio::test]
 async fn a_failed_cover_put_during_a_clear_fails_nothing() {
     let (server, _params) = start_arena(cover_layers(None, None, 0.0)).await;
@@ -436,7 +448,8 @@ async fn a_failed_cover_put_during_a_clear_fails_nothing() {
         param_requests(requests, "PUT", COVER_OPACITY) == 2
     })
     .await;
-    let requests = worker.barrier(&server).await;
+    worker.barrier(&server).await;
+    let requests = settled(&server).await;
 
     for param in A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY) {
         assert_eq!(opacities_put(&requests, param), vec![0.0], "param {param}");
@@ -444,7 +457,7 @@ async fn a_failed_cover_put_during_a_clear_fails_nothing() {
     assert_eq!(
         opacities_put(&requests, COVER_OPACITY),
         vec![1.0, 1.0],
-        "the failed step, then one final step at the target; then the fade stops"
+        "exactly the failed step and one final step at the target; then the fade stops"
     );
     assert_healthy(&worker).await;
 }

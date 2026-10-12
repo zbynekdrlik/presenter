@@ -11,7 +11,9 @@
 //! - covers are remembered per layer: a newer cover PLAYING on the layer
 //!   replaces the remembered one;
 //! - every branch a cover 404 takes (refetch once, forget, paused, newer
-//!   mapping), a failed read, and a config change mid-fade.
+//!   mapping), a failed read, and a config change mid-fade;
+//! - third review: a failed step's final step is the LAST PUT, and a mapped
+//!   cover's 404 leaves only that cover out of the fade.
 //!
 //! Step counts are bounded by the step spacing (a step is due `FADE_STEP`
 //! after the previous one ended), never by wall-clock time.
@@ -23,7 +25,7 @@ use super::bible_clear_cover_tests::{
 };
 use super::bible_clear_cover_worker_tests::{
     answer_param_read, assert_healthy, compositions, cover_reads, is_connect, last_index,
-    param_requests, wait_for, wait_for_opacity, Worker, DECK_TWO,
+    param_requests, settled, wait_for, wait_for_opacity, Worker, DECK_TWO,
 };
 use super::bible_clear_tests::{
     answer_param, clear_update, deck_layers, mount_arena, opacities_put, param_path, start_arena,
@@ -154,24 +156,35 @@ async fn a_cover_fade_never_puts_the_opacity_it_starts_from() {
 
 /// Finding 3: one transient PUT error stopped the fade and left the cover
 /// halfway (the title half visible). A failed step now jumps to ONE final
-/// step that PUTs the target `FADE_STEP` later.
+/// step that PUTs the target `FADE_STEP` later. The third PUT is the one that
+/// fails (the first two land on a route ahead of the stateful one), so the
+/// PUT right after it must be the target and the LAST one: the requests are
+/// read again `5 × FADE_STEP` after the barrier (#848 third review, finding
+/// 2: the barrier runs before a further step could be due).
 #[tokio::test]
 async fn one_failed_cover_step_jumps_to_a_final_step_at_the_target() {
     let (server, _params) = start_arena(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+    answer_param(&server, COVER_OPACITY, 200, 2, 1).await;
+    answer_param(&server, COVER_OPACITY, 500, 1, 2).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
-    wait_for(&server, "the show under way", |requests| {
-        param_requests(requests, "PUT", COVER_OPACITY) >= 2
-    })
-    .await;
-    answer_param(&server, COVER_OPACITY, 500, 1, 1).await;
-
-    let requests = wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    worker.barrier(&server).await;
+    let requests = settled(&server).await;
 
     let shown = opacities_put(&requests, COVER_OPACITY);
+    assert_eq!(
+        shown.len(),
+        4,
+        "two steps, the one that failed, then ONE final step: {shown:?}"
+    );
     assert!(
-        shown.windows(2).all(|pair| pair[1] > pair[0]),
-        "the cover only goes up, to its base: {shown:?}"
+        shown[..3].windows(2).all(|pair| pair[1] > pair[0]),
+        "the cover only goes up: {shown:?}"
+    );
+    assert!(
+        (shown[3] - 1.0).abs() < 1e-9,
+        "the PUT after the failed one is the target, and the last: {shown:?}"
     );
     assert_healthy(&worker).await;
 }
@@ -268,6 +281,79 @@ async fn a_remembered_cover_gone_mid_fade_is_forgotten_and_the_others_keep_fadin
         compositions(&requests),
         1,
         "only the manual refresh: a gone remembered cover refetches nothing"
+    );
+    assert_healthy(&worker).await;
+}
+
+/// #848 third review, finding 4: a mapped cover's 404 stopped EVERY cover in
+/// the fade, so a remembered title still playing stayed over the verse. The
+/// second deck's title (mapped, on another layer) has no opacity parameter on
+/// its READ: it alone is left out, the first deck's remembered title is still
+/// hidden, and the mapping is refetched once.
+#[tokio::test]
+async fn a_mapped_cover_read_404_leaves_the_other_covers_fading() {
+    let (server, _params) = start_arena(cover_layers(None, None, 0.0)).await;
+    let worker = Worker::spawn(&server);
+    worker.bible(clear_update()).await;
+    wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    switch_to(&server, &worker, deck_two_title_elsewhere(None, 1.0)).await;
+    answer_param_read(&server, COVER_OPACITY + DECK_TWO, 404, 100).await;
+
+    worker.bible(verse_update()).await;
+    wait_for(&server, "the verse's cover reads", |requests| {
+        cover_reads(requests) == 1 && param_requests(requests, "GET", COVER_OPACITY + DECK_TWO) == 1
+    })
+    .await;
+    let requests = worker.barrier(&server).await;
+
+    assert_eq!(
+        opacities_put(&requests, COVER_OPACITY),
+        vec![0.0],
+        "the remembered title is still hidden"
+    );
+    assert_eq!(
+        param_requests(&requests, "PUT", COVER_OPACITY + DECK_TWO),
+        0
+    );
+    assert_eq!(
+        compositions(&requests),
+        2,
+        "the manual refresh and ONE stale-id refetch (by the barrier's timer frame)"
+    );
+    assert_healthy(&worker).await;
+}
+
+/// #848 third review, finding 4: the same in the middle of a fade. The second
+/// deck's title answers its first PUT with 404; it alone is left out and the
+/// first deck's remembered title fades on down to 0.
+#[tokio::test]
+async fn a_mapped_cover_put_404_mid_fade_leaves_the_other_covers_fading() {
+    let (server, _params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let worker = Worker::spawn(&server);
+    worker.bible(clear_update()).await;
+    wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    switch_to(
+        &server,
+        &worker,
+        deck_two_title_elsewhere(Some(SHORT_COVER_FADE), 1.0),
+    )
+    .await;
+    answer_param(&server, COVER_OPACITY + DECK_TWO, 404, 100, 1).await;
+
+    worker.bible(verse_update()).await;
+    wait_for_opacity(&server, COVER_OPACITY, 0.0).await;
+    let requests = worker.barrier(&server).await;
+
+    assert_hidden(&opacities_put(&requests, COVER_OPACITY));
+    assert_eq!(
+        param_requests(&requests, "PUT", COVER_OPACITY + DECK_TWO),
+        1,
+        "its first PUT found nothing, so it is left out of the fade"
+    );
+    assert_eq!(
+        compositions(&requests),
+        2,
+        "the manual refresh and ONE stale-id refetch (by the barrier's timer frame)"
     );
     assert_healthy(&worker).await;
 }
