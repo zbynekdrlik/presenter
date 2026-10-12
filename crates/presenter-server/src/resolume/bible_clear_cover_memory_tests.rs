@@ -14,19 +14,34 @@
 //! - a title moved to another layer (a layer inserted in Arena) is remembered
 //!   once.
 //!
+//! #848 fourth review: two titles of ONE deck on one layer are remembered
+//! alike whichever column the playing one is in (a worker test and a pure
+//! `remember_cover` test). Pure `remember_cover` tests also pin what the cap
+//! and layer-shift worker tests cannot see: a full layer keeps its playing
+//! title and drops the oldest that is not playing, and a title remembered on
+//! another layer leaves its old one in the map itself.
+//!
 //! A deck switch is `server.reset()` + a new mount + "Refresh mapping": the
 //! composition lists only the new deck, while the other decks' titles still
 //! exist in Arena (their parameters are kept in the new mount).
 
-use super::bible_clear_cover_tests::{cover_layers, cover_layers_on, COVER_OPACITY};
+use super::bible_clear_cover::CoverClip;
+use super::bible_clear_cover_memory::{
+    mapped_covers, remember_cover, RememberedCovers, REMEMBERED_PER_LAYER,
+};
+use super::bible_clear_cover_tests::{
+    cover_layers, cover_layers_on, timer_layer, COVER, COVER_OPACITY, COVER_TEXT,
+};
 use super::bible_clear_cover_worker_tests::{
     cover_reads, param_requests, wait_for, wait_for_opacity, Worker, DECK_TWO,
 };
 use super::bible_clear_tests::{
-    clear_update, layer, mount_arena, opacities_put, start_arena, verse_update,
+    clear_update, clip, deck_layers, layer, mount_arena, opacities_put, start_arena, verse_update,
 };
+use super::clip_map::ClipMapping;
 use super::BibleUpdate;
 use serde_json::{json, Value};
+use std::time::Duration;
 use wiremock::{MockServer, Request};
 
 /// Switch the mock to the deck `layers`; each `(param, opacity)` in `kept` is
@@ -155,8 +170,10 @@ async fn a_title_seen_playing_drops_every_other_title_remembered_on_its_layer() 
     assert_eq!(opacities_put(&requests, title_c), vec![0.0]);
 }
 
-/// A layer remembers at most four titles; a fifth drops the oldest that is
-/// not playing. Five decks, each title on the same layer, none playing.
+/// A layer remembers at most four titles; a fifth drops the oldest. Five
+/// decks, each title on the same layer, none playing, so this cannot tell
+/// "the oldest not playing" from "the first":
+/// `a_full_layer_keeps_its_playing_title_and_drops_the_oldest_other` does.
 #[tokio::test]
 async fn a_layer_remembers_at_most_four_titles_and_drops_the_oldest() {
     let (server, _params) = start_arena(cover_layers(None, None, 0.0)).await;
@@ -197,8 +214,9 @@ async fn a_layer_remembers_at_most_four_titles_and_drops_the_oldest() {
 }
 
 /// A layer inserted in Arena shifts every layer index: the same title, now on
-/// the next layer, is remembered ONCE (it was kept on both layers, so a later
-/// fade read and PUT it twice per step).
+/// the next layer, is read and hidden once. `cover_candidates` dedups by
+/// parameter too, so this passes without the cross-layer forget;
+/// `a_title_remembered_on_another_layer_leaves_its_old_layer` pins the map.
 #[tokio::test]
 async fn a_title_moved_to_another_layer_is_remembered_once() {
     let (server, _params) = start_arena(cover_layers(None, None, 0.0)).await;
@@ -219,5 +237,153 @@ async fn a_title_moved_to_another_layer_is_remembered_once() {
         opacities_put(&requests, COVER_OPACITY),
         vec![0.0],
         "and hidden once"
+    );
+}
+
+/// `clip` PLAYING (Resolume `connected`).
+fn playing(mut clip: Value) -> Value {
+    clip["connected"] = json!({ "value": "Connected" });
+    clip
+}
+
+/// Two titles of the first deck for one layer, in column order: the sermon
+/// title (not playing), then a second title PLAYING.
+fn titles_playing_second() -> Vec<Value> {
+    vec![
+        clip(COVER, "NAZOV #bible-clear", COVER_TEXT, 0.0),
+        playing(clip(
+            COVER + 1,
+            "INY NAZOV #bible-clear",
+            COVER_TEXT + 1,
+            0.0,
+        )),
+    ]
+}
+
+/// A cover on `layer` as a fetch lists it.
+fn cover_on(param_id: i64, layer: usize, connected: bool) -> CoverClip {
+    CoverClip {
+        clip_id: param_id * 10,
+        param_id,
+        mapped_base: 0.0,
+        fade: Duration::ZERO,
+        layer,
+        connected,
+        mapped: true,
+    }
+}
+
+/// Each layer's remembered opacity parameters, the oldest first, by layer.
+fn layer_params(remembered: &RememberedCovers) -> Vec<(usize, Vec<i64>)> {
+    let mut layers: Vec<(usize, Vec<i64>)> = remembered
+        .iter()
+        .map(|(index, covers)| (*index, covers.iter().map(|cover| cover.param_id).collect()))
+        .collect();
+    layers.sort_unstable_by_key(|(index, _)| *index);
+    layers
+}
+
+/// #848 fourth review, finding 1: two titles of the first deck on one layer,
+/// the second one PLAYING at the fetch. Remembered in column order, it
+/// collapsed the layer after the first title was added, so the first was
+/// lost. The operator then triggers the first title in Arena and switches to
+/// the second deck: the verse there must hide it.
+#[tokio::test]
+async fn a_title_beside_a_later_playing_one_is_hidden_after_a_deck_switch() {
+    let mut deck_a = deck_layers(0, None);
+    deck_a.push(layer(titles_playing_second(), None));
+    deck_a.push(timer_layer(0));
+    let (server, _params) = start_arena(deck_a).await;
+    let worker = Worker::spawn(&server);
+    push_and_read(&server, &worker, clear_update(), COVER_OPACITY).await;
+
+    // Both titles were shown; the first one now plays in Arena.
+    let kept = [(COVER_OPACITY, 1.0), (COVER_OPACITY + 1, 1.0)];
+    let deck_b = cover_layers_on(DECK_TWO, None, None, 0.0);
+    switch_deck(&server, &worker, deck_b, &kept).await;
+    let requests = push_and_read(&server, &worker, verse_update(), COVER_OPACITY + DECK_TWO).await;
+
+    assert_eq!(
+        opacities_put(&requests, COVER_OPACITY),
+        vec![0.0],
+        "the first title plays over the second deck, so the verse hides it"
+    );
+}
+
+/// #848 fourth review, finding 1, pure: `schedule_cover_fade` remembers a
+/// fetch's covers in [`mapped_covers`] order, and a playing one collapses its
+/// layer when it is reached, so a title in a column BEFORE the playing one was
+/// lost and the result depended on the columns. Both orders remember the same.
+#[test]
+fn a_fetchs_titles_are_remembered_alike_in_either_column_order() {
+    let in_order = titles_playing_second();
+    let swapped: Vec<Value> = in_order.iter().rev().cloned().collect();
+    let results: Vec<Vec<(usize, Vec<i64>)>> = [in_order, swapped]
+        .into_iter()
+        .map(|clips| {
+            let composition = json!({ "layers": [layer(clips, None)] });
+            let mapping = ClipMapping::from_composition(&composition).expect("mapping");
+            let mut remembered = RememberedCovers::default();
+            for cover in mapped_covers(&mapping) {
+                remember_cover(&mut remembered, cover);
+            }
+            layer_params(&remembered)
+        })
+        .collect();
+
+    let expected = vec![(1, vec![COVER_OPACITY + 1, COVER_OPACITY])];
+    assert_eq!(
+        results[0], expected,
+        "the playing title in the later column"
+    );
+    assert_eq!(
+        results[1], expected,
+        "the playing title in the earlier column"
+    );
+}
+
+/// #848 fourth review, finding 3: the cap worker test has no playing title,
+/// so dropping the first title unconditionally would pass it. A full layer
+/// whose first title PLAYS keeps it and drops the oldest one not playing.
+#[test]
+fn a_full_layer_keeps_its_playing_title_and_drops_the_oldest_other() {
+    let mut remembered = RememberedCovers::default();
+    remember_cover(&mut remembered, cover_on(COVER_OPACITY, 12, true));
+    let others: Vec<i64> = (COVER_OPACITY + 1..).take(REMEMBERED_PER_LAYER).collect();
+    for &param in &others {
+        remember_cover(&mut remembered, cover_on(param, 12, false));
+    }
+
+    let mut kept = vec![COVER_OPACITY];
+    kept.extend_from_slice(&others[1..]);
+    assert_eq!(
+        layer_params(&remembered),
+        vec![(12, kept)],
+        "the playing title stays, the oldest one not playing ({}) goes",
+        others[0]
+    );
+}
+
+/// #848 fourth review, finding 3: `cover_candidates` dedups by parameter, so
+/// the layer-shift worker test reads the title once with or without the
+/// cross-layer forget. On the map itself: a title remembered on another layer
+/// leaves its old one, and a layer left empty is gone.
+#[test]
+fn a_title_remembered_on_another_layer_leaves_its_old_layer() {
+    let mut remembered = RememberedCovers::default();
+    remember_cover(&mut remembered, cover_on(COVER_OPACITY, 12, false));
+    remember_cover(&mut remembered, cover_on(COVER_OPACITY + 1, 12, false));
+
+    remember_cover(&mut remembered, cover_on(COVER_OPACITY, 13, false));
+    assert_eq!(
+        layer_params(&remembered),
+        vec![(12, vec![COVER_OPACITY + 1]), (13, vec![COVER_OPACITY])]
+    );
+
+    remember_cover(&mut remembered, cover_on(COVER_OPACITY + 1, 13, true));
+    assert_eq!(
+        layer_params(&remembered),
+        vec![(13, vec![COVER_OPACITY + 1])],
+        "playing, it collapses its new layer, and its emptied old layer is gone"
     );
 }

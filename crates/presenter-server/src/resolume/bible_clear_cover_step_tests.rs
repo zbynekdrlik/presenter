@@ -359,11 +359,15 @@ async fn a_mapped_cover_put_404_mid_fade_leaves_the_other_covers_fading() {
 }
 
 /// #848 third review, finding 4: a mapped cover's 404 no longer stops the
-/// fade, so a second broken cover is reached too. Each broken id refetches
-/// the mapping ONCE (the refetched mapping lists it again), so two of them
-/// cost two refetches in all and never take turns refetching on every fade.
+/// fade, so a second broken cover is reached too. Fourth review, finding 5:
+/// its 404 comes while the refetch the first one started is still pending,
+/// and that refetch lists it again, so it counts for both: ONE refetch in
+/// all, and no later fade refetches for either (it cost a second 16 MB read).
+/// A mapping that no longer lists an id cannot 404 it as mapped; the set of
+/// refetched ids grows one `i64` per distinct broken id, reset on a config
+/// change.
 #[tokio::test]
-async fn two_broken_mapped_covers_refetch_the_mapping_once_each() {
+async fn two_broken_mapped_covers_in_one_fade_refetch_the_mapping_once() {
     let second = COVER_OPACITY + 1;
     let mut layers = cover_layers(None, None, 0.0);
     layers.push(layer(
@@ -393,8 +397,8 @@ async fn two_broken_mapped_covers_refetch_the_mapping_once_each() {
 
     assert_eq!(
         compositions(&requests),
-        3,
-        "the cold fetch and ONE stale-id refetch per broken cover"
+        2,
+        "the cold fetch and ONE stale-id refetch for both broken covers"
     );
     assert_healthy(&worker).await;
 }
