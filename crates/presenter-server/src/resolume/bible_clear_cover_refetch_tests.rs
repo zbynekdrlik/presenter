@@ -104,6 +104,54 @@ async fn a_mapped_cover_404_refetches_once_per_id_and_per_mapping() {
     );
 }
 
+/// #848 sixth review, item 1: a cover refetch is pending only while no
+/// mapping is cached. After the refetch for `first`, a NEWER mapping cached
+/// ends it; there the refetched mapping is still `first`, so only the
+/// `last_mapping_refresh.is_none()` check says so (the worker test
+/// `a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing`
+/// refetched nothing for a cover, so it passes without that check). Never
+/// pending for a fade scheduled without a mapping, nor with a mapping no
+/// cover refetched (an older one while the refetch is pending, a newer one
+/// after it).
+#[tokio::test(start_paused = true)]
+async fn a_cached_newer_mapping_ends_a_pending_cover_refetch() {
+    let mut driver = idle_driver();
+    assert!(
+        !driver.cover_refetch_pending(None),
+        "no mapping and no refetch yet"
+    );
+    let older = fetch_mapping(&mut driver).await;
+    let first = fetch_mapping(&mut driver).await;
+    assert!(
+        !driver.cover_refetch_pending(first),
+        "no cover refetched the cached mapping"
+    );
+
+    driver.refetch_for_cover_404(COVER_OPACITY, first);
+    assert!(
+        driver.cover_refetch_pending(first),
+        "the mapping was dropped for a cover's 404 and none is cached"
+    );
+    assert!(
+        !driver.cover_refetch_pending(None),
+        "a fade scheduled without a mapping"
+    );
+    assert!(
+        !driver.cover_refetch_pending(older),
+        "a fade scheduled with an older mapping: no cover refetched that one"
+    );
+
+    let second = fetch_mapping(&mut driver).await;
+    assert!(
+        !driver.cover_refetch_pending(first),
+        "a newer mapping is cached, so the refetch for the first is done"
+    );
+    assert!(
+        !driver.cover_refetch_pending(second),
+        "no cover refetched the newer mapping"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_mapped_cover_404_warns_once_per_interval_per_id() {
     let mut driver = idle_driver();
