@@ -3,6 +3,7 @@ mod backoff_tests;
 mod batch;
 mod bible_clear;
 mod bible_clear_cover;
+mod bible_clear_cover_memory;
 #[cfg(test)]
 mod bible_clear_cover_memory_tests;
 #[cfg(test)]

@@ -21,28 +21,36 @@
 //!   50 ms step.
 //! - The first step reads each cover's opacity in Arena
 //!   (`GET /parameter/by-id/{id}`, a `RangeParameter` whose `value` is the
-//!   opacity), plans from it and PUTs nothing: a change made in Arena counts,
-//!   a fade that a replacement cut short goes on from where it got, and a
-//!   cover already at its target gets nothing. A failed read keeps the
-//!   tracked value.
+//!   opacity) and plans from it: a change made in Arena counts, a fade that a
+//!   replacement cut short goes on from where it got, and a cover already at
+//!   its target gets nothing. It PUTs nothing, except on a layer without a
+//!   transition, where it sets the target. A failed read keeps the tracked
+//!   value.
 //! - Each cover fades over the share of its layer's transition that the
 //!   distance left is of its base (`fade × |to − from| / base`), so a hide
 //!   right after a short show is short too (#848 second review).
 //! - It is best-effort. An error never fails a push and never touches the host
 //!   status or the #484 backoff. A failed step jumps to ONE final step that
 //!   PUTs each target `FADE_STEP` later; if that fails too, one WARN and the
-//!   fade stops. A mapped cover's 404 stops the fade and invalidates the
-//!   mapping as `stale-id`, at most once per fetched mapping and once per id,
-//!   so a cover that stays broken cannot pull the 16 MB composition on every
-//!   clear and verse; its later 404s WARN through the #563h limiter.
-//! - Covers are remembered per layer (like the clips a verse connected,
-//!   #841): after a deck switch the old deck's cover still plays on its
-//!   layer, so later fades include it until a newer cover is seen PLAYING on
-//!   that layer. One answering 404 is forgotten.
+//!   fade stops: at most 2 failed PUTs per cover, plus the first step's read.
+//! - A cover answering 404 is left out of the fade and the others go on
+//!   (#848 third review). A mapped one invalidates the mapping as `stale-id`,
+//!   at most once per fetched mapping and once per id, so a cover that stays
+//!   broken cannot pull the 16 MB composition on every clear and verse; its
+//!   later 404s WARN through the #563h limiter. A remembered one is forgotten.
+//! - Covers are remembered across a deck switch (like the clips a verse
+//!   connected, #841), a small set per layer (`bible_clear_cover_memory.rs`):
+//!   the old deck's cover still plays on its layer, so later fades include
+//!   it.
 
 use super::bible_clear::{
-    bible_lane_clips, fade_toward, put_opacities, FadeTarget, TrackedOpacities, TrackedOpacity,
-    FADE_STEP, MAX_CLEAR_FADE, SAME_OPACITY,
+    fade_toward, put_opacities, FadeTarget, TrackedOpacities, TrackedOpacity, FADE_STEP,
+    MAX_CLEAR_FADE, SAME_OPACITY,
+};
+// Re-exported: the planner tests import `cover_candidates` from here.
+pub(super) use super::bible_clear_cover_memory::cover_candidates;
+use super::bible_clear_cover_memory::{
+    forget_remembered_cover, mapped_covers, remember_cover, RememberedCovers,
 };
 use super::clip_map::ClipMapping;
 use super::driver::{
@@ -114,43 +122,38 @@ pub(super) struct CoverFade {
     failed_step: Option<String>,
     /// Clip ids of the remembered covers this fade found gone (404).
     forgotten: Vec<i64>,
-}
-
-/// The mapped cover 404 that last invalidated the mapping.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct StaleCoverRefetch {
-    param_id: i64,
-    mapping_fetched: Option<Instant>,
+    /// Clip ids of the mapped covers this fade left out (404: stale mapping).
+    stale: Vec<i64>,
 }
 
 /// One host's cover fade state; reset with its config.
 #[derive(Debug, Default)]
 pub(super) struct CoverState {
     fade: Option<CoverFade>,
-    /// The cover remembered on each layer (Resolume plays one clip per
-    /// layer), so the memory is bounded by the layer count.
-    remembered: HashMap<usize, CoverClip>,
-    stale_refetch: Option<StaleCoverRefetch>,
+    /// A small set of covers per layer (`bible_clear_cover_memory.rs`).
+    remembered: RememberedCovers,
+    /// Every mapped cover id whose 404 refetched the mapping (until a config
+    /// change): the refetched mapping lists it again, so it never refetches
+    /// again, and two broken ids cannot take turns refetching on every fade.
+    refetched_ids: HashSet<i64>,
+    /// The mapping the last cover refetch was scheduled with.
+    refetched_mapping: Option<Instant>,
     /// #563h: when a mapped cover's 404 that refetched nothing last WARNed,
     /// per opacity parameter id (the `cover-404:<id>` key).
     warned_404: HashMap<i64, Instant>,
 }
 
-/// How one step ended.
+/// How one step ended. A cover answering 404 does not end it: it is left out
+/// of the fade and the others go on.
 enum CoverStep {
     Continue,
     Done,
-    /// A mapped cover answered 404; `other` is any other error of the step.
-    Stale {
-        param_id: i64,
-        other: Option<anyhow::Error>,
-    },
     Failed(anyhow::Error),
 }
 
 /// What a mapped cover's 404 does to the mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CoverRefetch {
+pub(super) enum CoverRefetch {
     /// Invalidate it as `stale-id`; the next push or tick refetches it.
     Refetch,
     /// The fade was scheduled with another mapping than the cached one.
@@ -184,76 +187,6 @@ pub(super) async fn cover_fade_deadline(due: Option<Instant>) {
         Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending::<()>().await,
     }
-}
-
-/// The opacity parameter ids of the mapping's Bible lane clips.
-fn lane_params(mapping: &ClipMapping) -> HashSet<i64> {
-    bible_lane_clips(mapping)
-        .filter_map(|target| target.opacity)
-        .map(|opacity| opacity.param_id)
-        .collect()
-}
-
-/// The `#bible-clear` clips of `mapping` with an opacity parameter, each
-/// once, none that is also a Bible lane clip (the lane owns its opacity).
-fn mapped_covers(mapping: &ClipMapping) -> Vec<CoverClip> {
-    let mut seen = lane_params(mapping);
-    mapping
-        .bible_clear
-        .iter()
-        .filter_map(|target| {
-            let opacity = target.opacity?;
-            seen.insert(opacity.param_id).then_some(CoverClip {
-                clip_id: target.clip_id,
-                param_id: opacity.param_id,
-                mapped_base: opacity.base,
-                fade: target.fade,
-                layer: target.layer,
-                connected: target.connected,
-                mapped: true,
-            })
-        })
-        .collect()
-}
-
-/// Remember the covers `mapping` lists, one per layer: Resolume plays one
-/// clip per layer. A cover the fetch saw PLAYING replaces the one remembered
-/// on its layer, which is then no longer visible. One that was not playing
-/// only takes an empty layer or refreshes its own entry: after a deck switch
-/// the cover remembered there may still be playing (#841), and the next
-/// verse must still hide it.
-fn remember_covers(remembered: &mut HashMap<usize, CoverClip>, mapping: &ClipMapping) {
-    for cover in mapped_covers(mapping) {
-        let replace = remembered
-            .get(&cover.layer)
-            .is_none_or(|old| old.param_id == cover.param_id || cover.connected);
-        if replace {
-            remembered.insert(cover.layer, cover);
-        }
-    }
-}
-
-/// The covers a fade scheduled with `mapping` works on: the mapping's own
-/// ([`mapped_covers`]), then each remembered cover the mapping no longer
-/// lists (`mapped: false`), none that is a Bible lane clip of the mapping.
-pub(super) fn cover_candidates(
-    mapping: &ClipMapping,
-    remembered: &HashMap<usize, CoverClip>,
-) -> Vec<CoverClip> {
-    let mut covers = mapped_covers(mapping);
-    let mut listed = lane_params(mapping);
-    listed.extend(covers.iter().map(|cover| cover.param_id));
-    let mut gone: Vec<CoverClip> = remembered
-        .values()
-        .filter(|cover| !listed.contains(&cover.param_id))
-        .map(|cover| CoverClip {
-            mapped: false,
-            ..*cover
-        })
-        .collect();
-    gone.sort_unstable_by_key(|cover| cover.param_id);
-    covers.extend(gone);
-    covers
 }
 
 /// The opacity a show brings a cover to when nothing tracked says otherwise:
@@ -431,7 +364,9 @@ impl HostDriver {
     /// push's own writes landed; the worker runs the first step as soon as no
     /// command waits.
     pub(super) fn schedule_cover_fade(&mut self, mapping: &ClipMapping, direction: CoverDirection) {
-        remember_covers(&mut self.cover.remembered, mapping);
+        for cover in mapped_covers(mapping) {
+            remember_cover(&mut self.cover.remembered, cover);
+        }
         let covers = cover_candidates(mapping, &self.cover.remembered);
         if let Some(replaced) = self.cover.fade.take() {
             self.log_cover_replaced(&replaced, direction);
@@ -449,13 +384,14 @@ impl HostDriver {
             steps: 0,
             failed_step: None,
             forgotten: Vec::new(),
+            stale: Vec::new(),
         });
     }
 
     /// The worker's deadline branch: one step of the scheduled cover fade.
     /// A failed step gets ONE final step at each target `FADE_STEP` later;
-    /// a second failure stops the fade (at most 2 failed requests per cover,
-    /// never a retry loop that holds the worker).
+    /// a second failure stops the fade (at most 2 failed PUTs per cover, plus
+    /// the first step's read; never a retry loop that holds the worker).
     pub(super) async fn step_cover_fade(&mut self) {
         let Some(mut fade) = self.cover.fade.take() else {
             return;
@@ -466,9 +402,6 @@ impl HostDriver {
         match self.cover_step(&mut fade).await {
             CoverStep::Continue => self.next_cover_step(fade),
             CoverStep::Done => self.log_cover_done(&fade),
-            CoverStep::Stale { param_id, other } => {
-                self.cover_stale(&fade, param_id, other.as_ref());
-            }
             CoverStep::Failed(err) if fade.failed_step.is_none() => {
                 let error = format!("{err:#}");
                 debug!(
@@ -490,11 +423,12 @@ impl HostDriver {
         self.cover.fade = Some(fade);
     }
 
-    /// One step. The first reads Arena, plans and PUTs nothing; each later
-    /// one PUTs every cover's level for the time since the first step, and
-    /// the step after a failed one is the final one, at each target. The
-    /// fade ends at the step where that time reaches the longest duration
-    /// (every level sent then is its target).
+    /// One step. The first reads Arena and plans (it PUTs only a cover on a
+    /// layer without a transition: its target); each later one PUTs every
+    /// cover's level for the time since the first step, and the step after a
+    /// failed one is the final one, at each target. The fade ends at the step
+    /// where that time reaches the longest duration (every level sent then
+    /// is its target). A cover answering 404 is left out, the others go on.
     async fn cover_step(&mut self, fade: &mut CoverFade) -> CoverStep {
         let endpoint = match self.endpoint().await {
             Ok(endpoint) => endpoint,
@@ -502,12 +436,7 @@ impl HostDriver {
         };
         let first = fade.started.is_none();
         if first {
-            if let Some(param_id) = self.plan_cover_from_arena(fade, &endpoint).await {
-                return CoverStep::Stale {
-                    param_id,
-                    other: None,
-                };
-            }
+            self.plan_cover_from_arena(fade, &endpoint).await;
             fade.started = Some(Instant::now());
         }
         let elapsed = match fade.started {
@@ -528,11 +457,8 @@ impl HostDriver {
                 self.opacities.record_level(param_id, level);
             }
         }
-        if let Some(param_id) = self.drop_gone_covers(fade, &puts.missing) {
-            return CoverStep::Stale {
-                param_id,
-                other: puts.error,
-            };
+        for param_id in &puts.missing {
+            self.drop_gone_cover(fade, *param_id, puts.error.as_ref());
         }
         if let Some(err) = puts.error {
             return CoverStep::Failed(err);
@@ -552,15 +478,10 @@ impl HostDriver {
     }
 
     /// The first step: read every cover's opacity in Arena and track it, then
-    /// plan. A cover outside the mapping answering 404 is forgotten; a mapped
-    /// one is returned (the mapping is stale). A failed read keeps the
-    /// tracked value. The targets are tracked BEFORE the first PUT, so a fade
-    /// cut short is continued from where it stopped.
-    async fn plan_cover_from_arena(
-        &mut self,
-        fade: &mut CoverFade,
-        endpoint: &ResolvedEndpoint,
-    ) -> Option<i64> {
+    /// plan. A cover answering 404 is left out ([`Self::drop_cover`]); a
+    /// failed read keeps the tracked value. The targets are tracked BEFORE
+    /// the first PUT, so a fade cut short is continued from where it stopped.
+    async fn plan_cover_from_arena(&mut self, fade: &mut CoverFade, endpoint: &ResolvedEndpoint) {
         let client = &self.client;
         let reads = join_all(
             fade.covers
@@ -576,7 +497,6 @@ impl HostDriver {
                         cover_read(self.opacities.get(cover.param_id), shown, cover.mapped_base);
                     self.opacities.set(cover.param_id, now);
                 }
-                Ok(None) if cover.mapped => return Some(cover.param_id),
                 Ok(None) => gone.push(*cover),
                 Err(err) => debug!(
                     host = %self.config.host,
@@ -587,7 +507,7 @@ impl HostDriver {
             }
         }
         for cover in &gone {
-            self.forget_cover(fade, cover);
+            self.drop_cover(fade, cover, None);
         }
         fade.targets = plan_cover_fade(&fade.covers, &self.opacities, fade.direction);
         for target in &fade.targets {
@@ -597,26 +517,49 @@ impl HostDriver {
             };
             self.opacities.track_if_absent(target.param_id, start);
         }
-        None
     }
 
-    /// Forget every cover outside the mapping that answered 404 (it is gone,
-    /// the fade goes on without it). Returns a mapped one: a stale mapping.
-    fn drop_gone_covers(&mut self, fade: &mut CoverFade, missing: &[i64]) -> Option<i64> {
-        let mut stale = None;
-        for &param_id in missing {
-            let cover = fade
-                .covers
-                .iter()
-                .find(|cover| cover.param_id == param_id)
-                .copied();
-            match cover {
-                Some(cover) if !cover.mapped => self.forget_cover(fade, &cover),
-                _ if stale.is_none() => stale = Some(param_id),
-                _ => {}
-            }
+    /// The cover whose PUT answered 404 is left out ([`Self::drop_cover`]).
+    /// `other` is any other error of the same step, for the stale WARN.
+    fn drop_gone_cover(
+        &mut self,
+        fade: &mut CoverFade,
+        param_id: i64,
+        other: Option<&anyhow::Error>,
+    ) {
+        let cover = fade
+            .covers
+            .iter()
+            .find(|cover| cover.param_id == param_id)
+            .copied();
+        match cover {
+            Some(cover) => self.drop_cover(fade, &cover, other),
+            None => debug!(
+                host = %self.config.host,
+                param_id,
+                "resolume bible: a 404 for an opacity parameter that is not a cover of this fade"
+            ),
         }
-        stale
+    }
+
+    /// Leave a cover that answered 404 out of this fade; the others go on
+    /// (#848 third review: one stale cover stopped them all, and a remembered
+    /// title still playing stayed over the verse). A remembered one is gone
+    /// and forgotten; a mapped one means a stale mapping ([`Self::cover_stale`]).
+    fn drop_cover(
+        &mut self,
+        fade: &mut CoverFade,
+        cover: &CoverClip,
+        other: Option<&anyhow::Error>,
+    ) {
+        fade.covers.retain(|kept| kept.param_id != cover.param_id);
+        fade.targets.retain(|kept| kept.param_id != cover.param_id);
+        if cover.mapped {
+            fade.stale.push(cover.clip_id);
+            self.cover_stale(fade, cover, other);
+        } else {
+            self.forget_cover(fade, cover);
+        }
     }
 
     /// Stop fading a remembered cover Resolume no longer knows (404), in this
@@ -624,11 +567,7 @@ impl HostDriver {
     /// refetched.
     fn forget_cover(&mut self, fade: &mut CoverFade, cover: &CoverClip) {
         self.opacities.forget(cover.param_id);
-        self.cover
-            .remembered
-            .retain(|_, kept| kept.param_id != cover.param_id);
-        fade.covers.retain(|kept| kept.param_id != cover.param_id);
-        fade.targets.retain(|kept| kept.param_id != cover.param_id);
+        forget_remembered_cover(&mut self.cover.remembered, cover.param_id);
         fade.forgotten.push(cover.clip_id);
         info!(
             host = %self.config.host,
@@ -639,80 +578,105 @@ impl HostDriver {
         );
     }
 
-    /// A mapped cover answered 404: the fade stops. The mapping is
-    /// invalidated as `stale-id` (the next push or tick refetches it) when
-    /// [`Self::cover_404_refetch`] allows; otherwise the WARN goes through the
-    /// #563h limiter, so a cover that stays broken is not a WARN on every
-    /// clear and verse.
-    fn cover_stale(&mut self, fade: &CoverFade, param_id: i64, other: Option<&anyhow::Error>) {
+    /// A mapped cover answered 404 and is left out of the fade
+    /// ([`Self::drop_cover`]). The mapping is invalidated as `stale-id` (the
+    /// next push or tick refetches it) when [`Self::cover_404_refetch`]
+    /// allows; otherwise the WARN goes through the #563h limiter, so a cover
+    /// that stays broken is not a WARN on every clear and verse.
+    fn cover_stale(&mut self, fade: &CoverFade, cover: &CoverClip, other: Option<&anyhow::Error>) {
         let other_error = other.map_or_else(|| "none".to_owned(), |err| format!("{err:#}"));
-        let decision = self.cover_404_refetch(param_id, fade.mapping_fetched);
+        let first_error = fade.failed_step.as_deref().unwrap_or("none");
+        let decision = self.cover_404_refetch(cover.param_id, fade.mapping_fetched);
         if decision == CoverRefetch::Refetch {
-            self.invalidate_mapping(FetchReason::StaleId);
-            self.cover.stale_refetch = Some(StaleCoverRefetch {
-                param_id,
-                mapping_fetched: fade.mapping_fetched,
-            });
+            self.refetch_for_cover_404(cover.param_id, fade.mapping_fetched);
             warn!(
                 host = %self.config.host,
                 direction = fade.direction.as_str(),
-                clip_ids = ?fade_clip_ids(fade),
-                param_id,
+                clip_id = cover.clip_id,
+                param_id = cover.param_id,
+                fading_clip_ids = ?fade_clip_ids(fade),
                 steps = fade.steps,
                 other_error = %other_error,
+                first_error,
                 ok = false,
-                "resolume bible: Resolume has no opacity parameter for a mapped #bible-clear clip (404); the cover fade stops and the composition is refetched (stale-id)"
+                "resolume bible: Resolume has no opacity parameter for a mapped #bible-clear clip (404); it is left out of the cover fade, the others go on, and the composition is refetched (stale-id)"
             );
             return;
         }
         let reason = decision.reason(self.last_mapping_refresh.is_some());
-        if self.should_warn_cover_404(param_id) {
+        if self.should_warn_cover_404(cover.param_id) {
             warn!(
                 host = %self.config.host,
                 direction = fade.direction.as_str(),
-                clip_ids = ?fade_clip_ids(fade),
-                param_id,
+                clip_id = cover.clip_id,
+                param_id = cover.param_id,
+                fading_clip_ids = ?fade_clip_ids(fade),
                 steps = fade.steps,
                 other_error = %other_error,
+                first_error,
                 ok = false,
-                "resolume bible: Resolume has no opacity parameter for a mapped #bible-clear clip (404); the cover fade stops and nothing is refetched: {}",
+                "resolume bible: Resolume has no opacity parameter for a mapped #bible-clear clip (404); it is left out of the cover fade, the others go on, and nothing is refetched: {}",
                 reason
             );
         } else {
             debug!(
                 host = %self.config.host,
                 direction = fade.direction.as_str(),
-                param_id,
+                clip_id = cover.clip_id,
+                param_id = cover.param_id,
                 other_error = %other_error,
-                "resolume bible: a mapped #bible-clear clip still has no opacity parameter (404); the cover fade stops and nothing is refetched: {}",
+                first_error,
+                "resolume bible: a mapped #bible-clear clip still has no opacity parameter (404); it is left out of the cover fade, nothing is refetched: {}",
                 reason
             );
         }
+    }
+
+    /// Invalidate the mapping as `stale-id` for the mapped cover `param_id`
+    /// (the next push or tick refetches it) and remember that this id and
+    /// this mapping did, so neither refetches again
+    /// ([`Self::cover_404_refetch`]).
+    pub(super) fn refetch_for_cover_404(
+        &mut self,
+        param_id: i64,
+        mapping_fetched: Option<Instant>,
+    ) {
+        self.invalidate_mapping(FetchReason::StaleId);
+        self.cover.refetched_ids.insert(param_id);
+        self.cover.refetched_mapping = mapping_fetched;
     }
 
     /// Whether a mapped cover's 404 refetches the mapping: only while the
     /// mapping it came from is still the cached one, never again for an id
     /// that already did (the refetched mapping still lists it, so another
     /// refetch cannot help), at most once per fetched mapping, and not while
-    /// stale-id refetches are paused (#808).
-    fn cover_404_refetch(&self, param_id: i64, mapping_fetched: Option<Instant>) -> CoverRefetch {
+    /// stale-id refetches are paused (#808). A refetch invalidates the
+    /// mapping, so "once per fetched mapping" is already kept by the first
+    /// check; `AlreadyForMapping` stays as the guard should a refetch ever
+    /// keep `last_mapping_refresh`.
+    pub(super) fn cover_404_refetch(
+        &self,
+        param_id: i64,
+        mapping_fetched: Option<Instant>,
+    ) -> CoverRefetch {
         if mapping_fetched.is_none() || mapping_fetched != self.last_mapping_refresh {
             return CoverRefetch::MappingChanged;
         }
-        match self.cover.stale_refetch {
-            Some(last) if last.param_id == param_id => CoverRefetch::AlreadyForId,
-            Some(last) if last.mapping_fetched == mapping_fetched => {
-                CoverRefetch::AlreadyForMapping
-            }
-            _ if self.stale_refetch_paused() => CoverRefetch::Paused,
-            _ => CoverRefetch::Refetch,
+        if self.cover.refetched_ids.contains(&param_id) {
+            CoverRefetch::AlreadyForId
+        } else if self.cover.refetched_mapping == mapping_fetched {
+            CoverRefetch::AlreadyForMapping
+        } else if self.stale_refetch_paused() {
+            CoverRefetch::Paused
+        } else {
+            CoverRefetch::Refetch
         }
     }
 
     /// #563h: whether a mapped cover's 404 that refetched nothing WARNs now
     /// (key `cover-404:<id>`): at most once per [`MISSING_CLIP_WARN_INTERVAL`]
     /// per id, DEBUG in between.
-    fn should_warn_cover_404(&mut self, param_id: i64) -> bool {
+    pub(super) fn should_warn_cover_404(&mut self, param_id: i64) -> bool {
         let now = Instant::now();
         let warn_now = self
             .cover
@@ -732,6 +696,7 @@ impl HostDriver {
                 direction = fade.direction.as_str(),
                 clip_ids = ?fade_clip_ids(fade),
                 forgotten_clip_ids = ?fade.forgotten,
+                stale_clip_ids = ?fade.stale,
                 "resolume bible: no #bible-clear clip to fade (each is at its target opacity already, or gone)"
             );
             return;
@@ -743,6 +708,7 @@ impl HostDriver {
             from = ?fade_levels(fade, |target| target.from),
             to = ?fade_levels(fade, |target| target.to),
             forgotten_clip_ids = ?fade.forgotten,
+            stale_clip_ids = ?fade.stale,
             steps = fade.steps,
             t_ms = fade_ms(fade),
             error_before_final_step = fade.failed_step.as_deref().unwrap_or("none"),
@@ -769,8 +735,10 @@ impl HostDriver {
             from = ?fade_levels(replaced, |target| target.from),
             to = ?fade_levels(replaced, |target| target.to),
             forgotten_clip_ids = ?replaced.forgotten,
+            stale_clip_ids = ?replaced.stale,
             steps = replaced.steps,
             t_ms = fade_ms(replaced),
+            first_error = replaced.failed_step.as_deref().unwrap_or("none"),
             ok = true,
             "resolume bible: a new #bible-clear cover fade replaced this one before it ended; the new one starts where it got"
         );
