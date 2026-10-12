@@ -58,6 +58,14 @@ pub(super) fn remember_cover(remembered: &mut RememberedCovers, cover: CoverClip
     layer.push(cover);
 }
 
+/// Remember every cover `mapping` lists, as each fade scheduled with it does
+/// (see the module doc).
+pub(super) fn remember_mapping(remembered: &mut RememberedCovers, mapping: &ClipMapping) {
+    for cover in mapped_covers(mapping) {
+        remember_cover(remembered, cover);
+    }
+}
+
 /// Stop remembering the cover with opacity parameter `param_id`, on every
 /// layer.
 pub(super) fn forget_remembered_cover(remembered: &mut RememberedCovers, param_id: i64) {

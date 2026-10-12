@@ -50,7 +50,7 @@ use super::bible_clear::{
 // Re-exported: the planner tests import `cover_candidates` from here.
 pub(super) use super::bible_clear_cover_memory::cover_candidates;
 use super::bible_clear_cover_memory::{
-    forget_remembered_cover, mapped_covers, remember_cover, RememberedCovers,
+    forget_remembered_cover, remember_mapping, RememberedCovers,
 };
 use super::clip_map::ClipMapping;
 use super::driver::{
@@ -367,9 +367,7 @@ impl HostDriver {
     /// push's own writes landed; the worker runs the first step as soon as no
     /// command waits.
     pub(super) fn schedule_cover_fade(&mut self, mapping: &ClipMapping, direction: CoverDirection) {
-        for cover in mapped_covers(mapping) {
-            remember_cover(&mut self.cover.remembered, cover);
-        }
+        remember_mapping(&mut self.cover.remembered, mapping);
         let covers = cover_candidates(mapping, &self.cover.remembered);
         if let Some(replaced) = self.cover.fade.take() {
             self.log_cover_replaced(&replaced, direction);

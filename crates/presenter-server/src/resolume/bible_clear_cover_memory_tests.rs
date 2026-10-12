@@ -27,7 +27,7 @@
 
 use super::bible_clear_cover::CoverClip;
 use super::bible_clear_cover_memory::{
-    mapped_covers, remember_cover, RememberedCovers, REMEMBERED_PER_LAYER,
+    remember_cover, remember_mapping, RememberedCovers, REMEMBERED_PER_LAYER,
 };
 use super::bible_clear_cover_tests::{
     cover_layers, cover_layers_on, timer_layer, COVER, COVER_OPACITY, COVER_TEXT,
@@ -311,9 +311,10 @@ async fn a_title_beside_a_later_playing_one_is_hidden_after_a_deck_switch() {
 }
 
 /// #848 fourth review, finding 1, pure: `schedule_cover_fade` remembers a
-/// fetch's covers in [`mapped_covers`] order, and a playing one collapses its
-/// layer when it is reached, so a title in a column BEFORE the playing one was
-/// lost and the result depended on the columns. Both orders remember the same.
+/// fetch's covers ([`remember_mapping`]), and a playing one collapsed its
+/// layer when it was reached, so a title in a column BEFORE the playing one
+/// was lost and the result depended on the columns. Both orders remember the
+/// same.
 #[test]
 fn a_fetchs_titles_are_remembered_alike_in_either_column_order() {
     let in_order = titles_playing_second();
@@ -324,9 +325,7 @@ fn a_fetchs_titles_are_remembered_alike_in_either_column_order() {
             let composition = json!({ "layers": [layer(clips, None)] });
             let mapping = ClipMapping::from_composition(&composition).expect("mapping");
             let mut remembered = RememberedCovers::default();
-            for cover in mapped_covers(&mapping) {
-                remember_cover(&mut remembered, cover);
-            }
+            remember_mapping(&mut remembered, &mapping);
             layer_params(&remembered)
         })
         .collect();
