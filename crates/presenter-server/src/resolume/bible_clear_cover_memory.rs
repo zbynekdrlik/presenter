@@ -13,7 +13,10 @@
 //! [`REMEMBERED_PER_LAYER`] covers:
 //!
 //! - a cover the fetch saw PLAYING collapses its layer to itself: Resolume
-//!   plays one clip per layer, so the others are no longer visible;
+//!   plays one clip per layer, so the others are no longer visible. A fetch's
+//!   playing covers are remembered before its others ([`mapped_covers`] lists
+//!   them first), so the result never depends on the column order (#848
+//!   fourth review: a title left of the playing one was lost);
 //! - one that was not playing is added (each parameter once, the last seen
 //!   last); at the cap the oldest that is not playing goes;
 //! - a cover is kept on ONE layer: remembering it removes its parameter from
@@ -68,9 +71,12 @@ fn lane_params(mapping: &ClipMapping) -> HashSet<i64> {
 
 /// The `#bible-clear` clips of `mapping` with an opacity parameter, each
 /// once, none that is also a Bible lane clip (the lane owns its opacity).
+/// The playing ones come first, the others in composition order (layer,
+/// then column), so remembering them in this order ([`remember_cover`])
+/// never depends on the columns.
 pub(super) fn mapped_covers(mapping: &ClipMapping) -> Vec<CoverClip> {
     let mut seen = lane_params(mapping);
-    mapping
+    let mut covers: Vec<CoverClip> = mapping
         .bible_clear
         .iter()
         .filter_map(|target| {
@@ -85,7 +91,10 @@ pub(super) fn mapped_covers(mapping: &ClipMapping) -> Vec<CoverClip> {
                 mapped: true,
             })
         })
-        .collect()
+        .collect();
+    // A stable sort: the playing covers first, the rest keep their order.
+    covers.sort_by_key(|cover| !cover.connected);
+    covers
 }
 
 /// The covers a fade scheduled with `mapping` works on: the mapping's own

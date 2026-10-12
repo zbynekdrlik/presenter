@@ -132,9 +132,11 @@ pub(super) struct CoverState {
     fade: Option<CoverFade>,
     /// A small set of covers per layer (`bible_clear_cover_memory.rs`).
     remembered: RememberedCovers,
-    /// Every mapped cover id whose 404 refetched the mapping (until a config
-    /// change): the refetched mapping lists it again, so it never refetches
-    /// again, and two broken ids cannot take turns refetching on every fade.
+    /// Every mapped cover id whose 404 refetched the mapping, or came while
+    /// that refetch was pending: the refetched mapping lists it again, so it
+    /// never refetches again, and two broken ids cannot take turns refetching
+    /// on every fade. An unlisted id cannot 404 as mapped; the set grows one
+    /// `i64` per distinct broken id and is reset on a config change.
     refetched_ids: HashSet<i64>,
     /// The mapping the last cover refetch was scheduled with.
     refetched_mapping: Option<Instant>,
@@ -506,9 +508,10 @@ impl HostDriver {
                 ),
             }
         }
-        for cover in &gone {
-            self.drop_cover(fade, cover, None);
-        }
+        // Every gone cover leaves before the plan, and only then is it logged,
+        // so the stale WARN lists the covers this fade fades (fourth review).
+        fade.covers
+            .retain(|kept| gone.iter().all(|cover| cover.param_id != kept.param_id));
         fade.targets = plan_cover_fade(&fade.covers, &self.opacities, fade.direction);
         for target in &fade.targets {
             let start = TrackedOpacity {
@@ -516,6 +519,9 @@ impl HostDriver {
                 level: target.from,
             };
             self.opacities.track_if_absent(target.param_id, start);
+        }
+        for cover in &gone {
+            self.drop_cover(fade, cover, None);
         }
     }
 
@@ -582,11 +588,19 @@ impl HostDriver {
     /// ([`Self::drop_cover`]). The mapping is invalidated as `stale-id` (the
     /// next push or tick refetches it) when [`Self::cover_404_refetch`]
     /// allows; otherwise the WARN goes through the #563h limiter, so a cover
-    /// that stays broken is not a WARN on every clear and verse.
+    /// that stays broken is not a WARN on every clear and verse. A 404 while
+    /// the refetch for this fade's mapping is pending counts as refetched.
+    /// The WARN lists the covers the fade still fades (its targets).
     fn cover_stale(&mut self, fade: &CoverFade, cover: &CoverClip, other: Option<&anyhow::Error>) {
         let other_error = other.map_or_else(|| "none".to_owned(), |err| format!("{err:#}"));
         let first_error = fade.failed_step.as_deref().unwrap_or("none");
+        let fading: Vec<i64> = fade.targets.iter().map(|target| target.clip_id).collect();
         let decision = self.cover_404_refetch(cover.param_id, fade.mapping_fetched);
+        if decision == CoverRefetch::MappingChanged && self.cover_refetch_pending(fade) {
+            // That refetch lists this id again (#848 fourth review: the next
+            // fade spent another 16 MB refetch on it).
+            self.cover.refetched_ids.insert(cover.param_id);
+        }
         if decision == CoverRefetch::Refetch {
             self.refetch_for_cover_404(cover.param_id, fade.mapping_fetched);
             warn!(
@@ -594,7 +608,7 @@ impl HostDriver {
                 direction = fade.direction.as_str(),
                 clip_id = cover.clip_id,
                 param_id = cover.param_id,
-                fading_clip_ids = ?fade_clip_ids(fade),
+                fading_clip_ids = ?fading,
                 steps = fade.steps,
                 other_error = %other_error,
                 first_error,
@@ -610,7 +624,7 @@ impl HostDriver {
                 direction = fade.direction.as_str(),
                 clip_id = cover.clip_id,
                 param_id = cover.param_id,
-                fading_clip_ids = ?fade_clip_ids(fade),
+                fading_clip_ids = ?fading,
                 steps = fade.steps,
                 other_error = %other_error,
                 first_error,
@@ -644,6 +658,14 @@ impl HostDriver {
         self.invalidate_mapping(FetchReason::StaleId);
         self.cover.refetched_ids.insert(param_id);
         self.cover.refetched_mapping = mapping_fetched;
+    }
+
+    /// Whether the cover refetch for `fade`'s mapping is still pending: that
+    /// mapping was dropped for a cover's 404, and nothing was fetched since.
+    fn cover_refetch_pending(&self, fade: &CoverFade) -> bool {
+        self.last_mapping_refresh.is_none()
+            && fade.mapping_fetched.is_some()
+            && self.cover.refetched_mapping == fade.mapping_fetched
     }
 
     /// Whether a mapped cover's 404 refetches the mapping: only while the
