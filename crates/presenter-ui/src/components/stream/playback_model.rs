@@ -6,14 +6,47 @@
 //!   fade-through mount only act while their ticket is still current, so a
 //!   late event of an old item can never skip the item on screen.
 //! - The layer list mirrors the text crossfade (#716/#834): `Cut` swaps
-//!   atomically, `Fade` keeps the old layer while it fades out under the new
-//!   one, `FadeThrough` mounts the new item only after the old one is gone.
+//!   atomically, `Fade` fades the new item in over the old one — which stays
+//!   OPAQUE underneath (`held`) until it is dropped, because two layers fading
+//!   against each other dip a full-frame photo to ~75 % mid-fade —, and
+//!   `FadeThrough` mounts the new item only after the old one faded out.
 
 use presenter_core::{ContentTransition, PlaybackItem, PlaybackItemKind};
 
 /// Extra wait after a fade before a leaving layer is dropped, so the opacity
 /// transition has fully finished (same as the text crossfade).
 pub(super) const FADE_REMOVE_BUFFER_MS: u32 = 80;
+/// Playlist refetch period while it has items / while it is empty (a fresh
+/// link or a first sync shows up within seconds).
+const REFETCH_MS: u32 = 60_000;
+const REFETCH_EMPTY_MS: u32 = 5_000;
+/// Margin after a video's own duration before the watchdog skips it.
+const VIDEO_END_MARGIN_MS: f64 = 5_000.0;
+/// Watchdog for a video whose duration is unknown (or absurd).
+const VIDEO_UNKNOWN_LENGTH_MS: u32 = 10 * 60_000;
+/// Longest watchdog a known duration can ask for.
+const VIDEO_MAX_WATCHDOG_MS: f64 = 6.0 * 3600.0 * 1000.0;
+
+/// When the output refetches the playlist next.
+pub(super) fn refetch_delay_ms(playlist_empty: bool) -> u32 {
+    if playlist_empty {
+        REFETCH_EMPTY_MS
+    } else {
+        REFETCH_MS
+    }
+}
+
+/// How long a video may play before it is skipped even without `ended`
+/// (a stalled stream fires neither `ended` nor `error`): its duration plus a
+/// margin, or a fixed bound when the duration is unknown / infinite.
+pub(super) fn video_watchdog_ms(duration_secs: f64) -> u32 {
+    if duration_secs.is_finite() && duration_secs > 0.0 {
+        let ms = (duration_secs * 1000.0 + VIDEO_END_MARGIN_MS).min(VIDEO_MAX_WATCHDOG_MS);
+        ms as u32
+    } else {
+        VIDEO_UNKNOWN_LENGTH_MS
+    }
+}
 
 /// How an item change animates (the element's content transition).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,18 +76,30 @@ impl Change {
     pub(super) fn fades(self) -> bool {
         self != Self::Cut
     }
+
+    /// The fade, at most half a photo's time — a fade longer than the photo
+    /// would start the next change mid-fade and pile layers up.
+    pub(super) fn clamped(self, image_seconds: u32) -> Self {
+        let max = image_seconds.max(1).saturating_mul(1000) / 2;
+        match self {
+            Self::Cut => Self::Cut,
+            Self::Fade(ms) => Self::Fade(ms.min(max)),
+            Self::FadeThrough(ms) => Self::FadeThrough(ms.min(max)),
+        }
+    }
 }
 
-/// How long a photo stays before the next item. Under `FadeThrough` the photo
-/// only appears after the previous item has faded out, so that wait is added
-/// and the photo is still visible for the full `image_seconds`.
-pub(super) fn hold_ms(image_seconds: u32, change: Change) -> u32 {
+/// How long a photo stays before the next item. When a `FadeThrough` photo
+/// had to WAIT for the previous item to fade out (`mounted_now == false`),
+/// that wait is added, so the photo is still visible for the full
+/// `image_seconds`; a photo that appeared at once gets exactly that.
+pub(super) fn hold_ms(image_seconds: u32, change: Change, mounted_now: bool) -> u32 {
     let shown = image_seconds.max(1).saturating_mul(1000);
     match change {
-        Change::FadeThrough(ms) => shown
+        Change::FadeThrough(ms) if !mounted_now => shown
             .saturating_add(ms)
             .saturating_add(FADE_REMOVE_BUFFER_MS),
-        Change::Cut | Change::Fade(_) => shown,
+        Change::Cut | Change::Fade(_) | Change::FadeThrough(_) => shown,
     }
 }
 
@@ -128,7 +173,18 @@ pub(super) struct MediaLayer {
     pub(super) ticket: u64,
     /// Fades in on mount / out when leaving (`Fade`, `FadeThrough`).
     pub(super) fade: bool,
+    /// Scheduled for removal.
     pub(super) leaving: bool,
+    /// A leaving layer that stays OPAQUE under the incoming one until it is
+    /// dropped (`Fade`) instead of fading out.
+    pub(super) held: bool,
+}
+
+impl MediaLayer {
+    /// Whether the layer is fading out right now (the CSS `--leaving` class).
+    pub(super) fn fading_out(&self) -> bool {
+        self.leaving && !self.held
+    }
 }
 
 /// What [`show`] did.
@@ -151,7 +207,9 @@ pub(super) fn show(layers: &mut Vec<MediaLayer>, layer: MediaLayer, change: Chan
             mounted: true,
         };
     }
-    let leaving = start_leaving(layers);
+    // A crossfade keeps the old item opaque underneath; a fade-through fades
+    // it out first.
+    let leaving = start_leaving(layers, matches!(change, Change::Fade(_)));
     let wait = matches!(change, Change::FadeThrough(_)) && !layers.is_empty();
     if !wait {
         layers.push(layer);
@@ -169,7 +227,7 @@ pub(super) fn clear(layers: &mut Vec<MediaLayer>, change: Change) -> Vec<u64> {
         layers.clear();
         return Vec::new();
     }
-    start_leaving(layers)
+    start_leaving(layers, false)
 }
 
 /// A fade-out ended: drop the `seqs` layers and, when nothing visible is left,
@@ -212,10 +270,13 @@ pub(super) fn replay_of(layers: &[MediaLayer], item: &PlaybackItem) -> Replay {
     }
 }
 
-fn start_leaving(layers: &mut [MediaLayer]) -> Vec<u64> {
+/// Schedule every visible layer for removal (`held`: keep it opaque until
+/// then); returns their seqs.
+fn start_leaving(layers: &mut [MediaLayer], held: bool) -> Vec<u64> {
     let mut started = Vec::new();
     for layer in layers.iter_mut().filter(|l| !l.leaving) {
         layer.leaving = true;
+        layer.held = held;
         started.push(layer.seq);
     }
     started
@@ -247,6 +308,7 @@ mod tests {
             ticket: seq,
             fade: change.fades(),
             leaving: false,
+            held: false,
         }
     }
 
@@ -312,10 +374,43 @@ mod tests {
 
     #[test]
     fn photo_hold_times() {
-        assert_eq!(hold_ms(5, Change::Cut), 5_000);
-        assert_eq!(hold_ms(5, Change::Fade(400)), 5_000);
-        assert_eq!(hold_ms(5, Change::FadeThrough(400)), 5_480);
-        assert_eq!(hold_ms(0, Change::Cut), 1_000, "never below one second");
+        assert_eq!(hold_ms(5, Change::Cut, true), 5_000);
+        assert_eq!(hold_ms(5, Change::Fade(400), true), 5_000);
+        // A fade-through photo that waited for the fade-out gets that time back…
+        assert_eq!(hold_ms(5, Change::FadeThrough(400), false), 5_480);
+        // …one that appeared at once (first item, after a clear) does not.
+        assert_eq!(hold_ms(5, Change::FadeThrough(400), true), 5_000);
+        assert_eq!(
+            hold_ms(0, Change::Cut, true),
+            1_000,
+            "never below one second"
+        );
+    }
+
+    #[test]
+    fn a_fade_never_outlasts_half_a_photo() {
+        assert_eq!(Change::Fade(3_000).clamped(2), Change::Fade(1_000));
+        assert_eq!(
+            Change::FadeThrough(800).clamped(5),
+            Change::FadeThrough(800)
+        );
+        assert_eq!(Change::Fade(900).clamped(0), Change::Fade(500));
+        assert_eq!(Change::Cut.clamped(1), Change::Cut);
+    }
+
+    #[test]
+    fn an_empty_playlist_is_refetched_sooner() {
+        assert_eq!(refetch_delay_ms(true), 5_000);
+        assert_eq!(refetch_delay_ms(false), 60_000);
+    }
+
+    #[test]
+    fn the_video_watchdog_follows_the_duration() {
+        assert_eq!(video_watchdog_ms(12.5), 17_500);
+        assert_eq!(video_watchdog_ms(f64::INFINITY), 600_000);
+        assert_eq!(video_watchdog_ms(f64::NAN), 600_000);
+        assert_eq!(video_watchdog_ms(0.0), 600_000);
+        assert_eq!(video_watchdog_ms(1e9), 21_600_000, "capped at 6 h");
     }
 
     #[test]
@@ -341,11 +436,13 @@ mod tests {
     }
 
     #[test]
-    fn a_fade_keeps_the_old_layer_leaving_under_the_new_one() {
+    fn a_fade_keeps_the_old_layer_opaque_under_the_new_one() {
         let change = Change::Fade(300);
         let mut layers = vec![layer(1, "a", change)];
         let shown = show(&mut layers, layer(2, "b", change), change);
         assert_eq!(visible(&layers), [("a", true), ("b", false)]);
+        // Held: it does not fade out, the new photo fades in over it.
+        assert!(layers[0].held && !layers[0].fading_out());
         assert_eq!(shown.leaving, [1]);
         assert!(shown.mounted);
         assert!(!settle(&mut layers, &shown.leaving, None));
@@ -359,6 +456,7 @@ mod tests {
         let next = layer(2, "b", change);
         let shown = show(&mut layers, next.clone(), change);
         assert_eq!(visible(&layers), [("a", true)], "b waits");
+        assert!(layers[0].fading_out(), "a fades out first");
         assert!(!shown.mounted);
         assert!(settle(&mut layers, &shown.leaving, Some(next)));
         assert_eq!(visible(&layers), [("b", false)]);
@@ -379,6 +477,10 @@ mod tests {
         let mut layers = vec![layer(1, "a", Change::Fade(200))];
         assert_eq!(clear(&mut layers, Change::Fade(200)), [1]);
         assert_eq!(visible(&layers), [("a", true)]);
+        assert!(
+            layers[0].fading_out(),
+            "a clear fades out, nothing replaces it"
+        );
         let mut cut = vec![layer(1, "a", Change::Cut)];
         assert!(clear(&mut cut, Change::Cut).is_empty());
         assert!(cut.is_empty());
@@ -395,6 +497,7 @@ mod tests {
                 ticket: 1,
                 fade: true,
                 leaving: false,
+                held: false,
             }]
         };
         assert_eq!(replay_of(&showing(&photo), &photo), Replay::KeepImage);

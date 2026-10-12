@@ -3,15 +3,18 @@
 //!
 //! The server mirrors the folder (`GET /stream/api/playback?url=<link>` lists
 //! the cached items in Drive's order); this component plays that list and
-//! refetches it every 60 s, so a folder change reaches the output without a
-//! reload. A photo stays `image_seconds`; a video plays to its `ended` (muted
-//! unless the operator turned sound on — a browser that refuses autoplay with
-//! sound gets it muted, OBS plays it with sound). A video that errors or will
-//! not start is skipped after a second. Items change with the element's
-//! content transition (cut / crossfade / fade through empty) using the same
-//! `@starting-style` + `--leaving` layers as the text crossfade (#716/#834).
-//! An empty playlist (no link yet, nothing synced, an empty folder) renders an
-//! empty, transparent frame.
+//! refetches it every 60 s (every 5 s while it is empty), so a folder change
+//! reaches the output without a reload. A photo stays `image_seconds`; a video
+//! plays to its `ended` (muted unless the operator turned sound on — a browser
+//! that refuses autoplay with sound gets it muted, OBS plays it with sound).
+//! A video that errors or will not start is skipped after a second; one that
+//! stalls (no `ended`, no `error`) is skipped by a watchdog of its duration
+//! plus a margin. A folder with ONE video loops it natively (`loop`), so it
+//! never remounts. Items change with the element's content transition (cut /
+//! crossfade over an opaque base / fade through empty, the fade clamped to
+//! half a photo) using the same `@starting-style` + `--leaving` layers as the
+//! text crossfade (#716/#834). An empty playlist (no link yet, nothing synced,
+//! an empty folder) renders an empty, transparent frame.
 //!
 //! Timers are `gloo` timeouts that are never cancelled; every callback goes
 //! through `try_` accessors and a cursor ticket, so a timer that fires after
@@ -25,16 +28,16 @@ use presenter_core::{ContentTransition, Frame, ImageFit, PlaybackItem, PlaybackI
 use wasm_bindgen_futures::JsFuture;
 
 use super::playback_model::{
-    clear, hold_ms, replay_of, settle, show, Change, Cursor, MediaLayer, Replay,
-    FADE_REMOVE_BUFFER_MS,
+    clear, hold_ms, refetch_delay_ms, replay_of, settle, show, video_watchdog_ms, Change, Cursor,
+    MediaLayer, Replay, FADE_REMOVE_BUFFER_MS,
 };
 use crate::api;
 
-/// How often the playlist is refetched.
-const PLAYLIST_REFRESH_MS: u32 = 60_000;
 /// A video that errors (or will not start) is skipped after this long — a
 /// pause instead of a tight loop when every item of a folder is broken.
 const VIDEO_SKIP_MS: u32 = 1_000;
+/// A video whose metadata has not loaded within this long is skipped.
+const VIDEO_METADATA_TIMEOUT_MS: u32 = 30_000;
 
 /// The element's reactive state, `Copy` so every timer and handler can own it.
 #[derive(Clone, Copy)]
@@ -63,6 +66,13 @@ impl Player {
     fn is_current(self, ticket: u64) -> bool {
         self.cursor
             .try_with_value(|c| c.is_current(ticket))
+            .unwrap_or(false)
+    }
+
+    /// One item only: a video then loops natively and never "ends".
+    fn single_item(self) -> bool {
+        self.items
+            .try_with_untracked(|items| items.len() == 1)
             .unwrap_or(false)
     }
 }
@@ -96,7 +106,7 @@ pub fn ElementPlayback(
         layers: RwSignal::new(Vec::new()),
         cursor: StoredValue::new(Cursor::default()),
         next_seq: StoredValue::new(0),
-        change: Change::of(&content_transition),
+        change: Change::of(&content_transition).clamped(image_seconds),
         image_seconds,
     };
     // Only a link that names a Drive folder is fetched (the server would 422
@@ -156,15 +166,16 @@ fn PlaybackLayer(
     // A keyed `<For>` never re-runs this child when only `leaving` flips, so
     // read it REACTIVELY by seq (#496/#693/#716).
     let class = move || {
-        let leaving = player
+        // A crossfade's old layer is `held`: it stays opaque until dropped.
+        let fading_out = player
             .layers
-            .with(|ls| ls.iter().find(|l| l.seq == seq).map(|l| l.leaving))
+            .with(|ls| ls.iter().find(|l| l.seq == seq).map(MediaLayer::fading_out))
             .unwrap_or(true);
         let mut class = String::from("stream-playback__layer");
         if fade {
             class.push_str(" stream-playback__layer--fade");
         }
-        if leaving {
+        if fading_out {
             class.push_str(" stream-playback__layer--leaving");
         }
         class
@@ -186,6 +197,7 @@ fn PlaybackLayer(
                 src=url
                 alt=""
                 style=media_style
+                on:error=move |_| skip_later(player, ticket)
             />
         }
         .into_any(),
@@ -214,7 +226,9 @@ fn PlaybackLayer(
     }
 }
 
-/// A video item: plays once to `ended`, then the loop moves on.
+/// A video item: plays once to `ended`, then the loop moves on. The only item
+/// of a folder loops natively instead (`loop`, read reactively, so a folder
+/// that gains items lets the video end and the loop move on).
 #[component]
 fn PlaybackVideo(
     player: Player,
@@ -225,9 +239,10 @@ fn PlaybackVideo(
     media_style: String,
 ) -> impl IntoView {
     let video_ref = NodeRef::<leptos::html::Video>::new();
+    let metadata_seen = StoredValue::new(false);
     // Start playback once the element is in the DOM (the `autoplay` attribute
     // alone is not enough under a strict autoplay policy, and an unmuted video
-    // needs the muted fallback).
+    // needs the muted fallback), and arm the no-metadata watchdog.
     Effect::new(move |started: Option<bool>| {
         if started == Some(true) {
             return true;
@@ -235,11 +250,36 @@ fn PlaybackVideo(
         match video_ref.get() {
             Some(video) => {
                 start_video(&video, muted, player, ticket);
+                Timeout::new(VIDEO_METADATA_TIMEOUT_MS, move || {
+                    if metadata_seen.try_get_value() == Some(false) {
+                        leptos::logging::log!(
+                            "stream playback: video metadata never loaded — skipping"
+                        );
+                        item_done(player, ticket);
+                    }
+                })
+                .forget();
                 true
             }
             None => false,
         }
     });
+    // A stalled video fires neither `ended` nor `error`: skip it after its own
+    // duration plus a margin (a natively looping only item is left alone).
+    let on_metadata = move |_| {
+        let _ = metadata_seen.try_set_value(true);
+        let duration = video_ref
+            .get_untracked()
+            .map(|video| video.duration())
+            .unwrap_or(f64::NAN);
+        Timeout::new(video_watchdog_ms(duration), move || {
+            if !player.single_item() {
+                item_done(player, ticket);
+            }
+        })
+        .forget();
+    };
+    let looping = move || player.items.with(|items| items.len() == 1);
     view! {
         <video
             node_ref=video_ref
@@ -252,6 +292,8 @@ fn PlaybackVideo(
             playsinline
             preload="auto"
             prop:muted=muted
+            prop:loop=looping
+            on:loadedmetadata=on_metadata
             on:ended=move |_| item_done(player, ticket)
             on:error=move |_| skip_later(player, ticket)
         />
@@ -266,7 +308,11 @@ fn fetch_playlist(player: Player, source_url: String) {
             Ok(playlist) => apply_playlist(player, playlist.items),
             Err(err) => leptos::logging::log!("stream playback: playlist fetch failed: {err}"),
         }
-        Timeout::new(PLAYLIST_REFRESH_MS, move || {
+        let empty = player
+            .items
+            .try_with_untracked(|items| items.is_empty())
+            .unwrap_or(true);
+        Timeout::new(refetch_delay_ms(empty), move || {
             if player.alive() {
                 fetch_playlist(player, source_url);
             }
@@ -329,6 +375,8 @@ fn show_item(player: Player, item: PlaybackItem, ticket: u64) {
         Replay::New => player.change,
         Replay::KeepImage | Replay::RestartVideo => Change::Cut,
     };
+    // A kept photo is on screen already.
+    let mut mounted_now = true;
     if replay != Replay::KeepImage {
         let Some(seq) = player.bump_seq() else {
             return;
@@ -339,16 +387,18 @@ fn show_item(player: Player, item: PlaybackItem, ticket: u64) {
             ticket,
             fade: change.fades(),
             leaving: false,
+            held: false,
         };
         let pending = layer.clone();
         let Some(shown) = player.layers.try_update(|ls| show(ls, layer, change)) else {
             return;
         };
+        mounted_now = shown.mounted;
         let pending = (!shown.mounted).then_some(pending);
         schedule_settle(player, shown.leaving, pending);
     }
     if kind == PlaybackItemKind::Image {
-        let hold = hold_ms(player.image_seconds, change);
+        let hold = hold_ms(player.image_seconds, change, mounted_now);
         Timeout::new(hold, move || item_done(player, ticket)).forget();
     }
 }

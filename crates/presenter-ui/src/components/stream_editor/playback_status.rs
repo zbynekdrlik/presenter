@@ -104,6 +104,17 @@ pub fn should_poll(playlist: &PlaybackPlaylist) -> bool {
     playlist.syncing || (playlist.synced_at.is_none() && playlist.error.is_none())
 }
 
+/// The wait before status poll number `polls` (0-based): every 2 s for the
+/// first half minute, then every 5 s for two minutes, then every 15 s — it
+/// backs off, but never gives up while the status can still change.
+pub fn poll_delay_ms(polls: u32) -> u32 {
+    match polls {
+        0..=14 => 2_000,
+        15..=38 => 5_000,
+        _ => 15_000,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +192,16 @@ mod tests {
         assert!(line.text.contains("nie je verejný") && line.text.contains("2 fotky"));
 
         assert_eq!(status_line(Some(&playlist(0, 0)), fixed).state, "unsynced");
+    }
+
+    #[test]
+    fn polling_backs_off_but_never_stops() {
+        assert_eq!(poll_delay_ms(0), 2_000);
+        assert_eq!(poll_delay_ms(14), 2_000);
+        assert_eq!(poll_delay_ms(15), 5_000);
+        assert_eq!(poll_delay_ms(38), 5_000);
+        assert_eq!(poll_delay_ms(39), 15_000);
+        assert_eq!(poll_delay_ms(u32::MAX), 15_000);
     }
 
     #[test]

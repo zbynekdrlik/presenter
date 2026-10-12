@@ -4,11 +4,13 @@
 //!
 //! The status comes from `GET /stream/api/playback?url=<link>` for the link in
 //! the draft (a `Memo`, so typing in another field never refetches it). It is
-//! polled every 2 s while it can still change on its own (a sync queued or
-//! running, or a saved link the worker has not reached yet), at most
-//! `MAX_POLLS` times per link. „Obnoviť" posts `/stream/api/playback/refresh`
-//! with the link — the server syncs it even before the element is saved.
-//! The content transition is the shared `TransitionFields` (element_form.rs).
+//! polled while it can still change on its own (a sync queued or running, or a
+//! saved link the worker has not reached yet), backing off from every 2 s to
+//! every 15 s without ever giving up, and reloaded on every config revision
+//! (a Save starts the worker's sync). „Obnoviť" posts
+//! `/stream/api/playback/refresh` with the link — the server syncs it even
+//! before the element is saved. The content transition is the shared
+//! `TransitionFields` (element_form.rs).
 
 use chrono::{DateTime, Local, Utc};
 use gloo_timers::callback::Timeout;
@@ -19,13 +21,8 @@ use presenter_core::{
 };
 use serde::Serialize;
 
-use super::playback_status::{link_problem, should_poll, status_line};
+use super::playback_status::{link_problem, poll_delay_ms, should_poll, status_line};
 use super::StreamEditorCtx;
-
-/// Status poll period while a sync is pending.
-const POLL_MS: u32 = 2_000;
-/// Polls per link before the form stops asking (2 minutes).
-const MAX_POLLS: u32 = 60;
 
 #[derive(Serialize)]
 struct RefreshReq {
@@ -76,16 +73,27 @@ pub fn PlaybackFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx)
         request: StoredValue::new(0),
     };
     let refreshing = RwSignal::new(false);
-    // A new (valid) link: forget the old status and load the new one.
-    Effect::new(move |_| {
+    // The output's config revision: a Save (or any config write) bumps it and
+    // starts the worker's sync, so the status is loaded — and polled — again.
+    let revision = Memo::new(move |_| {
+        ctx.def
+            .with(|def| def.as_ref().map(|def| def.config_revision))
+    });
+    // A new link forgets the old status; a new revision keeps it on screen
+    // while it reloads.
+    Effect::new(move |previous: Option<String>| {
         let url = link.get();
-        status.playlist.set(None);
+        revision.track();
+        if previous.as_deref() != Some(url.as_str()) {
+            status.playlist.set(None);
+        }
         if parse_drive_folder_url(&url).is_ok() {
-            load_status(status, url, 0);
+            load_status(status, url.clone(), 0);
         } else {
             // Invalidate any in-flight request of the previous link.
             status.request.update_value(|r| *r += 1);
         }
+        url
     });
     let line = move || {
         status
@@ -245,12 +253,14 @@ fn load_status(status: StatusState, url: String, polls: u32) {
                 return;
             }
         };
-        let poll = should_poll(&playlist) && polls < MAX_POLLS;
+        let poll = should_poll(&playlist);
         let _ = status.playlist.try_set(Some(playlist));
         if poll {
-            Timeout::new(POLL_MS, move || {
+            // Stops once the form is gone (the stored request is disposed) or a
+            // newer request superseded this chain.
+            Timeout::new(poll_delay_ms(polls), move || {
                 if status.request.try_get_value() == Some(request) {
-                    load_status(status, url, polls + 1);
+                    load_status(status, url, polls.saturating_add(1));
                 }
             })
             .forget();
