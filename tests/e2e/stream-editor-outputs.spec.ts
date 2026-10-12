@@ -199,6 +199,9 @@ test("#842 a click on the OBS URL selects all of it, and an empty rename is refu
   attachEditorConsoleCollector(page, errors);
   await openEditor(page);
 
+  // The second click lands on the already focused field: no focus event, and
+  // the click alone would collapse the selection to a caret.
+  await urlField(page).click();
   await urlField(page).click();
   const selection = await urlField(page).evaluate((el) => {
     const input = el as HTMLInputElement;
