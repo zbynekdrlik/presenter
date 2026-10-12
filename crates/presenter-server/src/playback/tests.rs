@@ -10,10 +10,14 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::manifest::{
-    needs_download, playable, read_manifest, to_playlist, version_token, Manifest, ManifestItem,
+    failure_summary, needs_download, playable, read_manifest, to_playlist, version_token,
+    write_manifest, FileFailure, Manifest, ManifestItem,
 };
 use super::sync::{sync_folder, SyncReport};
-use super::{should_log_failure, should_prune_unreferenced, should_sync, SyncTrigger};
+use super::{
+    budget_gib, retry_backoff, should_log_failure, should_prune_unreferenced, should_sync, Budget,
+    SyncTrigger,
+};
 use crate::drive::{DriveClient, DriveError, RemoteFile};
 
 const FOLDER_ID: &str = "1SynthRootFolderZZZZZZZZZZZZZZZZ9";
@@ -24,6 +28,14 @@ const SUBFOLDER: &str = "1SynthFolderBBBBBBBBBBBBBBBBBBBB2";
 const PDF: &str = "1SynthPdfEEEEEEEEEEEEEEEEEEEEEEE5";
 const DAY_1: &str = "Mon, 14 Sep 2026 10:09:42 GMT";
 const DAY_2: &str = "Tue, 15 Sep 2026 08:00:00 GMT";
+
+/// A budget that never refuses.
+fn unlimited() -> Budget {
+    Budget {
+        limit: u64::MAX,
+        used: 0,
+    }
+}
 
 fn folder() -> DriveFolder {
     DriveFolder {
@@ -162,7 +174,9 @@ async fn a_sync_mirrors_the_playable_files_in_listing_order() {
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
 
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("sync");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("sync");
 
     assert_eq!(ids(&manifest), [PHOTO, CLIP, LOGO]);
     let kinds: Vec<PlaybackItemKind> = manifest.items.iter().map(|i| i.kind).collect();
@@ -188,6 +202,7 @@ async fn a_sync_mirrors_the_playable_files_in_listing_order() {
             kept: 0,
             skipped: 3,
             failed: 0,
+            backed_off: 0,
             pruned: 0,
             bytes: 12 + 21 + 9,
         }
@@ -211,9 +226,13 @@ async fn an_unchanged_file_is_not_downloaded_again() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
-    sync_folder(&client, &dir, &folder()).await.expect("first");
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
 
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("second");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
 
     assert_eq!(ids(&manifest), [PHOTO, CLIP, LOGO]);
     assert_eq!((report.downloaded, report.kept), (0, 3));
@@ -230,7 +249,9 @@ async fn a_changed_file_is_downloaded_again() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
-    sync_folder(&client, &dir, &folder()).await.expect("first");
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
 
     // The photo is replaced on Drive: a new date and new bytes.
     server.reset().await;
@@ -238,7 +259,9 @@ async fn a_changed_file_is_downloaded_again() {
     mount_file(&server, PHOTO, "image/jpeg", b"jpeg-bytes-2-new", DAY_2).await;
     mount_file(&server, CLIP, "video/mp4", b"mp4-bytes-of-the-clip", DAY_1).await;
     mount_file(&server, LOGO, "image/png", b"png-bytes", DAY_1).await;
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("second");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
 
     assert_eq!((report.downloaded, report.kept), (1, 2));
     assert_eq!(read(&dir, &format!("{PHOTO}.jpg")), b"jpeg-bytes-2-new");
@@ -271,7 +294,9 @@ async fn an_html_error_page_is_never_cached() {
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
 
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("sync");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("sync");
 
     assert!(manifest.items.is_empty());
     assert_eq!(report.failed, 1);
@@ -291,7 +316,9 @@ async fn a_failed_listing_leaves_the_mirror_untouched() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
-    let (good, _) = sync_folder(&client, &dir, &folder()).await.expect("first");
+    let (good, _) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
 
     // The folder stops being public.
     server.reset().await;
@@ -300,7 +327,7 @@ async fn a_failed_listing_leaves_the_mirror_untouched() {
         .respond_with(ResponseTemplate::new(401))
         .mount(&server)
         .await;
-    let err = sync_folder(&client, &dir, &folder())
+    let err = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
         .await
         .expect_err("401");
 
@@ -320,18 +347,78 @@ async fn files_that_left_the_folder_are_pruned() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
-    sync_folder(&client, &dir, &folder()).await.expect("first");
+    let mut budget = unlimited();
+    sync_folder(&client, &dir, &folder(), false, &mut budget)
+        .await
+        .expect("first");
+    assert_eq!(budget.used, 12 + 21 + 9);
 
     server.reset().await;
     mount_listing(&server, &[(LOGO, "image/png", "logo.png")]).await;
     mount_all_files(&server, DAY_1).await;
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("second");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut budget)
+        .await
+        .expect("second");
 
     assert_eq!(ids(&manifest), [LOGO]);
+    assert_eq!(budget.used, 9, "the leaving files' bytes count as free");
+    // Retired first: still on disk (and served) while outputs may still list them.
+    assert_eq!(report.pruned, 0);
+    assert_eq!(manifest.retired.len(), 2);
+    assert!(dir.join(format!("{PHOTO}.jpg")).exists());
+
+    // After the grace period the next sync deletes them.
+    age_retired(&dir, 10).await;
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut budget)
+        .await
+        .expect("third");
     assert_eq!(report.pruned, 2);
+    assert!(manifest.retired.is_empty());
     assert!(!dir.join(format!("{PHOTO}.jpg")).exists());
     assert!(!dir.join(format!("{CLIP}.mp4")).exists());
     assert_eq!(read(&dir, &format!("{LOGO}.png")), b"png-bytes");
+}
+
+/// Move every retiree's `retired_at` `minutes` into the past.
+async fn age_retired(dir: &Path, minutes: i64) {
+    let mut manifest = read_manifest(dir).await.expect("manifest");
+    for retired in &mut manifest.retired {
+        retired.retired_at -= ChronoDuration::minutes(minutes);
+    }
+    write_manifest(dir, &manifest)
+        .await
+        .expect("write manifest");
+}
+
+#[tokio::test]
+async fn a_retired_file_that_comes_back_is_played_again() {
+    let server = MockServer::start().await;
+    mount_listing(&server, &FULL).await;
+    mount_all_files(&server, DAY_1).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join(FOLDER_ID);
+    let client = DriveClient::for_test(&server.uri());
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
+    server.reset().await;
+    mount_listing(&server, &[(LOGO, "image/png", "logo.png")]).await;
+    mount_all_files(&server, DAY_1).await;
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
+
+    // The photo is put back on Drive within the grace period.
+    server.reset().await;
+    mount_listing(&server, &FULL).await;
+    mount_all_files(&server, DAY_1).await;
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("third");
+
+    assert_eq!(ids(&manifest), [PHOTO, CLIP, LOGO]);
+    assert!(manifest.retired.is_empty());
+    assert_eq!(report.pruned, 0);
 }
 
 #[tokio::test]
@@ -342,7 +429,9 @@ async fn a_failed_refresh_keeps_the_cached_copy() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
-    sync_folder(&client, &dir, &folder()).await.expect("first");
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
 
     // The photo changed on Drive, but its download now fails.
     server.reset().await;
@@ -364,13 +453,193 @@ async fn a_failed_refresh_keeps_the_cached_copy() {
         .await;
     mount_file(&server, CLIP, "video/mp4", b"mp4-bytes-of-the-clip", DAY_1).await;
     mount_file(&server, LOGO, "image/png", b"png-bytes", DAY_1).await;
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("second");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
 
     assert_eq!(ids(&manifest), [PHOTO, CLIP, LOGO]);
     assert_eq!((report.kept, report.failed), (3, 0));
     assert_eq!(read(&dir, &format!("{PHOTO}.jpg")), b"jpeg-bytes-1");
-    // The old date stays, so the next sync tries again.
+    // The old date stays, so the next sync tries again…
     assert_eq!(manifest.items[0].last_modified.as_deref(), Some(DAY_1));
+    // …and the failure is recorded with its reason.
+    assert_eq!(manifest.failures.len(), 1);
+    let error = manifest.last_error.unwrap_or_default();
+    assert!(
+        error.contains("leto.jpg") && error.contains("HTTP 500"),
+        "{error}"
+    );
+}
+
+/// How many `method` requests for file `id` the mock received.
+async fn requests_of(server: &MockServer, method_name: &str, id: &str) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| {
+            r.method.as_str() == method_name
+                && r.url.path() == "/download"
+                && r.url.query_pairs().any(|(k, v)| k == "id" && v == id)
+        })
+        .count()
+}
+
+/// The listing has the photo; its HEAD works, its download answers 500.
+async fn mount_failing_photo(server: &MockServer) {
+    mount_listing(server, &[(PHOTO, "image/jpeg", "leto.jpg")]).await;
+    Mock::given(method("HEAD"))
+        .and(query_param("id", PHOTO))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/jpeg")
+                .insert_header("content-length", "12"),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/download"))
+        .and(query_param("id", PHOTO))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn a_failing_file_waits_for_its_backoff_and_a_refresh_retries_it() {
+    let server = MockServer::start().await;
+    mount_failing_photo(&server).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join(FOLDER_ID);
+    let client = DriveClient::for_test(&server.uri());
+
+    let (first, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
+    assert_eq!(report.failed, 1);
+    let failure: &FileFailure = first.failures.first().expect("failure recorded");
+    assert_eq!((failure.file_id.as_str(), failure.streak), (PHOTO, 1));
+    assert!(failure.retry_at > Utc::now() + ChronoDuration::minutes(4));
+    let error = first.last_error.clone().unwrap_or_default();
+    assert!(
+        error.contains("leto.jpg") && error.contains("HTTP 500"),
+        "{error}"
+    );
+
+    // The next periodic sync does not touch the file before its retry time.
+    let (second, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
+    assert_eq!(report.backed_off, 1);
+    assert_eq!(requests_of(&server, "HEAD", PHOTO).await, 1);
+    assert_eq!(requests_of(&server, "GET", PHOTO).await, 1);
+    assert_eq!(
+        second.failures, first.failures,
+        "the failure is carried over"
+    );
+
+    // "Obnoviť" retries at once; the streak grows and the backoff doubles.
+    let (third, _) = sync_folder(&client, &dir, &folder(), true, &mut unlimited())
+        .await
+        .expect("forced");
+    assert_eq!(requests_of(&server, "GET", PHOTO).await, 2);
+    assert_eq!(third.failures.first().map(|f| f.streak), Some(2));
+}
+
+#[tokio::test]
+async fn a_recovered_file_clears_its_failure() {
+    let server = MockServer::start().await;
+    mount_failing_photo(&server).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join(FOLDER_ID);
+    let client = DriveClient::for_test(&server.uri());
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("failing");
+
+    server.reset().await;
+    mount_listing(&server, &[(PHOTO, "image/jpeg", "leto.jpg")]).await;
+    mount_file(&server, PHOTO, "image/jpeg", b"jpeg-bytes-1", DAY_1).await;
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), true, &mut unlimited())
+        .await
+        .expect("recovered");
+
+    assert_eq!(report.downloaded, 1);
+    assert!(manifest.failures.is_empty());
+    assert_eq!(manifest.last_error, None);
+    assert_eq!(ids(&manifest), [PHOTO]);
+}
+
+#[tokio::test]
+async fn the_budget_refuses_a_download_that_would_overfill_the_mirror() {
+    let server = MockServer::start().await;
+    mount_listing(&server, &FULL).await;
+    mount_all_files(&server, DAY_1).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join(FOLDER_ID);
+    let client = DriveClient::for_test(&server.uri());
+    // 25 bytes: the photo (12) fits, the clip (21) would not, the logo (9) does.
+    let mut budget = Budget { limit: 25, used: 0 };
+
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut budget)
+        .await
+        .expect("sync");
+
+    assert_eq!(ids(&manifest), [PHOTO, LOGO]);
+    assert_eq!((report.downloaded, report.failed), (2, 1));
+    assert_eq!(budget.used, 12 + 9);
+    assert_eq!(
+        requests_of(&server, "GET", CLIP).await,
+        0,
+        "refused before downloading"
+    );
+    let failure = manifest.failures.first().expect("clip failure");
+    assert_eq!(failure.file_id, CLIP);
+    assert!(
+        failure.reason.contains("úložisko prehrávania je plné"),
+        "{}",
+        failure.reason
+    );
+}
+
+#[test]
+fn the_retry_backoff_doubles_up_to_six_hours() {
+    let minutes: Vec<i64> = [1, 2, 3, 4, 7, 8, 40]
+        .iter()
+        .map(|streak| retry_backoff(*streak).num_minutes())
+        .collect();
+    assert_eq!(minutes, [5, 10, 20, 40, 320, 360, 360]);
+}
+
+#[test]
+fn the_budget_comes_from_whole_gib() {
+    assert_eq!(budget_gib(None), 20);
+    assert_eq!(budget_gib(Some("5")), 5);
+    assert_eq!(budget_gib(Some(" 100 ")), 100);
+    assert_eq!(budget_gib(Some("0")), 20);
+    assert_eq!(budget_gib(Some("lots")), 20);
+    let budget = Budget {
+        limit: 10,
+        used: 12,
+    };
+    assert_eq!(budget.remaining(), 0);
+}
+
+#[test]
+fn the_failure_summary_names_the_first_file() {
+    assert_eq!(failure_summary(&[]), None);
+    let failure = |name: &str| FileFailure {
+        file_id: "f".to_string(),
+        name: name.to_string(),
+        streak: 1,
+        retry_at: Utc::now(),
+        reason: "Google Drive vrátil HTTP 403".to_string(),
+    };
+    assert_eq!(
+        failure_summary(&[failure("a.jpg"), failure("b.jpg")]).as_deref(),
+        Some("2 súbor(ov) sa nepodarilo stiahnuť — a.jpg: Google Drive vrátil HTTP 403")
+    );
 }
 
 #[tokio::test]
@@ -381,14 +650,19 @@ async fn an_empty_folder_empties_the_playlist() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(FOLDER_ID);
     let client = DriveClient::for_test(&server.uri());
-    sync_folder(&client, &dir, &folder()).await.expect("first");
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
 
     server.reset().await;
     mount_listing(&server, &[]).await;
-    let (manifest, report) = sync_folder(&client, &dir, &folder()).await.expect("second");
+    let (manifest, report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
 
     assert!(manifest.items.is_empty());
-    assert_eq!(report.pruned, 3);
+    assert_eq!(manifest.retired.len(), 3);
+    assert_eq!(report.pruned, 0, "kept for the grace period");
 }
 
 fn item(size: Option<u64>, last_modified: Option<&str>) -> ManifestItem {
@@ -489,6 +763,8 @@ fn the_playlist_lists_items_with_their_cache_urls() {
         synced_at: Some(Utc::now()),
         last_error: Some("chyba".to_string()),
         error_at: None,
+        failures: Vec::new(),
+        retired: Vec::new(),
     };
     let playlist = to_playlist(FOLDER_ID, Some(&manifest), &manifest.items, true);
     assert_eq!(playlist.items.len(), 1);

@@ -232,7 +232,7 @@ async fn download_file_streams_the_bytes_to_disk() {
     let dest = dir.path().join("photo.part");
     let client = DriveClient::for_test(&server.uri());
     let written = client
-        .download_file(PHOTO, None, &dest)
+        .download_file(PHOTO, None, &dest, u64::MAX)
         .await
         .expect("download");
     assert_eq!(written.size, Some(bytes.len() as u64));
@@ -258,13 +258,112 @@ async fn download_file_refuses_an_html_page_and_an_oversized_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let client = DriveClient::for_test_with_max_bytes(&server.uri(), 32);
     let err = client
-        .download_file(PHOTO, None, &dir.path().join("a"))
+        .download_file(PHOTO, None, &dir.path().join("a"), u64::MAX)
         .await
         .expect_err("html");
     assert!(matches!(err, DriveError::HtmlPage), "{err:?}");
     let err = client
-        .download_file(CLIP, None, &dir.path().join("b"))
+        .download_file(CLIP, None, &dir.path().join("b"), u64::MAX)
         .await
         .expect_err("too large");
     assert!(matches!(err, DriveError::TooLarge { .. }), "{err:?}");
+    // The caller's own cap (the mirror budget) applies below the client's.
+    let roomy = DriveClient::for_test(&server.uri());
+    let err = roomy
+        .download_file(CLIP, None, &dir.path().join("c"), 16)
+        .await
+        .expect_err("over the caller's cap");
+    assert!(matches!(err, DriveError::TooLarge { .. }), "{err:?}");
+}
+
+/// A one-shot raw HTTP/1.1 server answering every request with `response`
+/// (bytes as given), then closing — for answers wiremock cannot produce
+/// (chunked without a length, a body shorter than its Content-Length).
+async fn raw_server(response: Vec<u8>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            // One read takes the whole (small) request; its content is ignored.
+            let mut request = vec![0u8; 4096];
+            let read = socket.read(&mut request).await.unwrap_or_default();
+            request.truncate(read);
+            let _ = socket.write_all(&response).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn a_body_without_content_length_is_capped_while_streaming() {
+    let mut response = b"HTTP/1.1 200 OK\r\ncontent-type: video/mp4\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n".to_vec();
+    for _ in 0..3 {
+        response.extend_from_slice(b"20\r\n");
+        response.extend_from_slice(&[9u8; 32]);
+        response.extend_from_slice(b"\r\n");
+    }
+    response.extend_from_slice(b"0\r\n\r\n");
+    let base = raw_server(response).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = DriveClient::for_test(&base);
+
+    let err = client
+        .download_file(CLIP, None, &dir.path().join("chunked"), 40)
+        .await
+        .expect_err("96 bytes over a 40-byte cap");
+
+    assert!(matches!(err, DriveError::TooLarge { .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn a_body_shorter_than_its_content_length_fails() {
+    let mut response = b"HTTP/1.1 200 OK\r\ncontent-type: video/mp4\r\ncontent-length: 100\r\nconnection: close\r\n\r\n".to_vec();
+    response.extend_from_slice(&[5u8; 40]);
+    let base = raw_server(response).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = DriveClient::for_test(&base);
+
+    let err = client
+        .download_file(CLIP, None, &dir.path().join("short"), u64::MAX)
+        .await
+        .expect_err("40 of 100 bytes");
+
+    // hyper reports the early close itself; `Truncated` is the backstop.
+    assert!(
+        matches!(
+            err,
+            DriveError::Network { .. } | DriveError::Truncated { .. }
+        ),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_peer_that_never_answers_times_out() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(query_param("id", CLIP))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(vec![1u8; 8], "video/mp4")
+                .set_delay(std::time::Duration::from_secs(5)),
+        )
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client =
+        DriveClient::for_test_with_idle_timeout(&server.uri(), std::time::Duration::from_secs(1));
+
+    let started = std::time::Instant::now();
+    let err = client
+        .download_file(CLIP, None, &dir.path().join("slow"), u64::MAX)
+        .await
+        .expect_err("no headers within the idle timeout");
+
+    assert!(matches!(err, DriveError::Timeout { secs: 1 }), "{err:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
 }

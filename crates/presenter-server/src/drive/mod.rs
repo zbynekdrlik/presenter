@@ -39,7 +39,10 @@ const DEFAULT_DOWNLOAD_URL: &str = "https://drive.usercontent.google.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Bound on opening a connection (downloads have no total timeout).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// A download that delivers no byte for this long is abandoned.
+/// Any request that receives nothing for this long — no response headers, or
+/// no body byte — is abandoned (reqwest's `read_timeout` covers both the wait
+/// for the headers and each body read), so a peer that never answers cannot
+/// wedge the single sync worker.
 const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Largest file the mirror stores (2 GiB) — a guard for the venue PC's disk.
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -104,6 +107,9 @@ pub(crate) enum DriveError {
     Network { detail: String },
     #[error("súbor je väčší ako {max_mib} MiB")]
     TooLarge { max_mib: u64 },
+    /// The mirror-wide byte budget would be exceeded (all folders together).
+    #[error("úložisko prehrávania je plné (limit {limit_mib} MiB) — zmenši priečinok alebo zvýš PRESENTER_PLAYBACK_MAX_GB")]
+    BudgetExceeded { limit_mib: u64 },
     #[error("sťahovanie skončilo predčasne ({got} z {expected} B)")]
     Truncated { got: u64, expected: u64 },
     #[error("zápis na disk zlyhal: {detail}")]
@@ -147,6 +153,7 @@ impl DriveClient {
     pub(crate) fn new(config: DriveConfig) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(config.chunk_idle_timeout)
             .user_agent(concat!("presenter/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_else(|err| {
@@ -176,6 +183,23 @@ impl DriveClient {
         client
     }
 
+    /// Same as [`Self::for_test`] with a custom idle (read) timeout.
+    #[cfg(test)]
+    pub(crate) fn for_test_with_idle_timeout(base_url: &str, idle: Duration) -> Self {
+        Self::new(DriveConfig {
+            list_base_url: base_url.to_string(),
+            download_base_url: base_url.to_string(),
+            request_timeout: Duration::from_secs(30),
+            chunk_idle_timeout: idle,
+            max_file_bytes: MAX_FILE_BYTES,
+        })
+    }
+
+    /// The largest single file this client downloads.
+    pub(crate) fn max_file_bytes(&self) -> u64 {
+        self.config.max_file_bytes
+    }
+
     /// The folder's entries, in Drive's listing order.
     pub(crate) async fn list_folder(
         &self,
@@ -189,19 +213,20 @@ impl DriveClient {
         if let Some(key) = folder.resource_key.as_deref() {
             query.push(("resourcekey", key));
         }
+        let bound = self.config.request_timeout;
         let response = self
             .http
             .get(url)
             .query(&query)
-            .timeout(self.config.request_timeout)
+            .timeout(bound)
             .send()
             .await
-            .map_err(|err| self.transport_error(err))?;
+            .map_err(|err| self.transport_error(err, bound))?;
         check_status(response.status().as_u16(), DriveError::FolderNotFound)?;
         let page = response
             .text()
             .await
-            .map_err(|err| self.transport_error(err))?;
+            .map_err(|err| self.transport_error(err, bound))?;
         if !is_listing_page(&page) {
             return Err(DriveError::UnexpectedListing);
         }
@@ -214,14 +239,15 @@ impl DriveClient {
         file_id: &str,
         resource_key: Option<&str>,
     ) -> Result<RemoteFile, DriveError> {
+        let bound = self.config.request_timeout;
         let response = self
             .http
             .head(self.download_url())
             .query(&download_query(file_id, resource_key))
-            .timeout(self.config.request_timeout)
+            .timeout(bound)
             .send()
             .await
-            .map_err(|err| self.transport_error(err))?;
+            .map_err(|err| self.transport_error(err, bound))?;
         check_status(response.status().as_u16(), DriveError::FileNotFound)?;
         let headers = response.headers();
         if is_html(headers) {
@@ -230,46 +256,50 @@ impl DriveClient {
         Ok(remote_file(headers))
     }
 
-    /// Stream a file into `dest` (created/truncated). On error `dest` may hold
-    /// a partial file — the caller removes it. Returns the written size and the
-    /// download's `last-modified`.
+    /// Stream a file into `dest` (created/truncated), refusing more than
+    /// `max_bytes` (further capped by the client's own per-file limit) — before
+    /// the first byte when the `content-length` already says so, otherwise the
+    /// moment the body passes it. On error `dest` may hold a partial file — the
+    /// caller removes it. Returns the written size and the download's
+    /// `last-modified`. There is no total timeout (big videos); the client's
+    /// read timeout ends a download that stalls, before or after the headers.
     pub(crate) async fn download_file(
         &self,
         file_id: &str,
         resource_key: Option<&str>,
         dest: &Path,
+        max_bytes: u64,
     ) -> Result<RemoteFile, DriveError> {
+        let idle = self.config.chunk_idle_timeout;
         let mut response = self
             .http
             .get(self.download_url())
             .query(&download_query(file_id, resource_key))
             .send()
             .await
-            .map_err(|err| self.transport_error(err))?;
+            .map_err(|err| self.transport_error(err, idle))?;
         check_status(response.status().as_u16(), DriveError::FileNotFound)?;
         if is_html(response.headers()) {
             return Err(DriveError::HtmlPage);
         }
         let declared = remote_file(response.headers());
-        let max = self.config.max_file_bytes;
+        let max = max_bytes.min(self.config.max_file_bytes);
         if declared.size.is_some_and(|size| size > max) {
-            return Err(self.too_large());
+            return Err(too_large(max));
         }
         let mut file = tokio::fs::File::create(dest)
             .await
             .map_err(|err| DriveError::io(&err))?;
         let mut written: u64 = 0;
         loop {
-            let chunk = tokio::time::timeout(self.config.chunk_idle_timeout, response.chunk())
+            let chunk = response
+                .chunk()
                 .await
-                .map_err(|_| DriveError::Timeout {
-                    secs: self.config.chunk_idle_timeout.as_secs(),
-                })?
-                .map_err(|err| self.transport_error(err))?;
+                .map_err(|err| self.transport_error(err, idle))?;
             let Some(chunk) = chunk else { break };
             written = written.saturating_add(chunk.len() as u64);
             if written > max {
-                return Err(self.too_large());
+                return Err(too_large(max));
             }
             file.write_all(&chunk)
                 .await
@@ -298,22 +328,30 @@ impl DriveClient {
         )
     }
 
-    fn too_large(&self) -> DriveError {
-        DriveError::TooLarge {
-            max_mib: self.config.max_file_bytes / (1024 * 1024),
-        }
-    }
-
-    fn transport_error(&self, err: reqwest::Error) -> DriveError {
+    /// A transport failure; a timeout names the bound that actually fired:
+    /// the connect timeout for a connect failure, else the operation's `bound`
+    /// (the listing/HEAD total, or the download's idle timeout).
+    fn transport_error(&self, err: reqwest::Error, bound: Duration) -> DriveError {
         if err.is_timeout() {
+            let fired = if err.is_connect() {
+                CONNECT_TIMEOUT
+            } else {
+                bound
+            };
             DriveError::Timeout {
-                secs: self.config.request_timeout.as_secs(),
+                secs: fired.as_secs(),
             }
         } else {
             DriveError::Network {
                 detail: describe(err),
             }
         }
+    }
+}
+
+fn too_large(max_bytes: u64) -> DriveError {
+    DriveError::TooLarge {
+        max_mib: max_bytes / (1024 * 1024),
     }
 }
 

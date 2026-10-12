@@ -15,7 +15,7 @@ use presenter_core::{
     is_valid_drive_folder_id, parse_drive_folder_url, DriveFolder, PlaybackPlaylist,
     StreamElementProps,
 };
-use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{interval, MissedTickBehavior};
 
 use super::AppState;
@@ -29,7 +29,7 @@ use crate::playback::sync::sync_folder;
 #[cfg(test)]
 use crate::playback::PlaybackSync;
 use crate::playback::{
-    should_log_failure, should_prune_unreferenced, should_sync, SyncTrigger, PLAYBACK_DIR,
+    should_log_failure, should_prune_unreferenced, should_sync, Budget, SyncTrigger, PLAYBACK_DIR,
     SYNC_INTERVAL, TRIGGER_DEBOUNCE,
 };
 
@@ -42,14 +42,35 @@ impl AppState {
     /// Point the playback sync at a mock Drive (test isolation only).
     #[cfg(test)]
     pub(crate) fn set_playback_drive_client(&mut self, client: DriveClient) {
-        self.playback = PlaybackSync::new(client);
+        self.playback = PlaybackSync::with_client(client);
     }
 
     /// Spawn the sync worker: a pass at startup, then every 5 min, after a
     /// `StreamConfigChanged` and on a refresh nudge (bursts debounced).
+    ///
+    /// A tiny forwarder task reads the live hub and only bumps the sync's
+    /// config-change counter (a `watch`), so the hub receiver is always drained
+    /// in microseconds and never lags — even while the worker spends minutes in
+    /// a download pass. (Reading the hub in the worker itself made every long
+    /// pass lag and start another pass at once.)
     pub(super) fn spawn_playback_sync_task(&self) {
-        let app = self.clone();
+        let forwarder = self.playback.clone();
         let mut events = self.live_hub.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    // A lag here means the runtime was starved; a lost event
+                    // may have been a config change.
+                    Ok(LiveEvent::StreamConfigChanged { .. }) | Err(RecvError::Lagged(_)) => {
+                        forwarder.note_config_change();
+                    }
+                    Ok(_) => {}
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+        let app = self.clone();
+        let mut config_changes = self.playback.config_changes();
         tokio::spawn(async move {
             let mut ticker = interval(SYNC_INTERVAL);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -57,21 +78,19 @@ impl AppState {
                 let trigger = tokio::select! {
                     _ = ticker.tick() => SyncTrigger::Periodic,
                     () = app.playback.nudged() => SyncTrigger::Forced,
-                    event = events.recv() => match event {
-                        Ok(LiveEvent::StreamConfigChanged { .. }) => SyncTrigger::ConfigChanged,
-                        Ok(_) => continue,
-                        // Missed events may have held a config change.
-                        Err(RecvError::Lagged(_)) => SyncTrigger::ConfigChanged,
-                        Err(RecvError::Closed) => break,
+                    changed = config_changes.changed() => match changed {
+                        Ok(()) => SyncTrigger::ConfigChanged,
+                        Err(_) => break,
                     },
                 };
                 if trigger != SyncTrigger::Periodic {
                     tokio::time::sleep(TRIGGER_DEBOUNCE).await;
-                    drain_config_events(&mut events);
+                    // The pass below covers the changes of the debounce window.
+                    config_changes.mark_unchanged();
                 }
                 app.run_playback_pass(trigger).await;
             }
-            tracing::warn!("playback: live hub closed — sync worker stopped");
+            tracing::warn!("playback: config-change channel closed — sync worker stopped");
         });
     }
 
@@ -100,16 +119,24 @@ impl AppState {
             }
         }
         self.playback.mark_pending(due.iter().map(|f| f.id.clone()));
+        let mut budget = Budget {
+            limit: self.playback.budget_limit(),
+            used: mirror_bytes(&root).await,
+        };
         if !due.is_empty() {
             tracing::info!(
                 trigger = trigger.as_str(),
                 folders = folders.len(),
                 due = due.len(),
+                mirror_mib = budget.used / (1024 * 1024),
+                budget_mib = budget.limit / (1024 * 1024),
                 "playback: sync pass started"
             );
         }
+        let force = trigger == SyncTrigger::Forced;
         for folder in &due {
-            self.sync_playback_folder(&root, folder).await;
+            self.sync_playback_folder(&root, folder, force, &mut budget)
+                .await;
             self.playback.clear_pending(&folder.id);
         }
         if trigger == SyncTrigger::Forced {
@@ -145,10 +172,16 @@ impl AppState {
     }
 
     /// Sync one folder and log the outcome (#484 gate on repeated failures).
-    async fn sync_playback_folder(&self, root: &Path, folder: &DriveFolder) {
+    async fn sync_playback_folder(
+        &self,
+        root: &Path,
+        folder: &DriveFolder,
+        force: bool,
+        budget: &mut Budget,
+    ) {
         let dir = root.join(&folder.id);
         let started = Instant::now();
-        match sync_folder(self.playback.client(), &dir, folder).await {
+        match sync_folder(self.playback.client(), &dir, folder, force, budget).await {
             Ok((_, report)) => {
                 let ended = self.playback.record_success(&folder.id);
                 if ended > 0 {
@@ -162,6 +195,7 @@ impl AppState {
                     kept = report.kept,
                     skipped = report.skipped,
                     failed = report.failed,
+                    backed_off = report.backed_off,
                     pruned = report.pruned,
                     bytes = report.bytes,
                     elapsed_ms = started.elapsed().as_millis() as u64,
@@ -234,11 +268,16 @@ impl AppState {
     ) -> Option<(PathBuf, String)> {
         let dir = self.playback_dir().join(folder_id);
         let manifest = read_manifest(&dir).await?;
-        let item = manifest
-            .items
-            .into_iter()
-            .find(|item| item.file_id == file_id)?;
-        Some((dir.join(item.file_name()), item.mime))
+        if let Some(item) = manifest.items.iter().find(|item| item.file_id == file_id) {
+            return Some((dir.join(item.file_name()), item.mime.clone()));
+        }
+        // A file that just left the folder is still served for its grace
+        // period: an output's playlist can be up to 60 s old.
+        let retired = manifest
+            .retired
+            .iter()
+            .find(|retired| retired.file_id == file_id)?;
+        Some((dir.join(retired.file_name()), retired.mime.clone()))
     }
 
     /// „Obnoviť": queue a full pass now. `extra` (the editor's link) is synced
@@ -281,11 +320,24 @@ fn add_folder(folders: &mut Vec<DriveFolder>, source_url: &str) {
     }
 }
 
-/// Drop the config-change events that queued up during the debounce — the
-/// coming pass covers them.
-fn drain_config_events(events: &mut broadcast::Receiver<LiveEvent>) {
-    // Stops at `Empty` (drained) or `Closed` (the worker loop then ends).
-    while let Ok(_) | Err(TryRecvError::Lagged(_)) = events.try_recv() {}
+/// Cached bytes of the whole mirror (every folder's manifest sizes) — the
+/// starting point of a pass's byte budget.
+async fn mirror_bytes(root: &Path) -> u64 {
+    let Ok(mut entries) = tokio::fs::read_dir(root).await else {
+        return 0;
+    };
+    let mut total: u64 = 0;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        if let Some(manifest) = read_manifest(&entry.path()).await {
+            let playing: u64 = manifest.items.iter().filter_map(|item| item.size).sum();
+            let retired: u64 = manifest.retired.iter().filter_map(|r| r.size).sum();
+            total = total.saturating_add(playing).saturating_add(retired);
+        }
+    }
+    total
 }
 
 /// The manifest items whose cached file exists. A missing file is logged at

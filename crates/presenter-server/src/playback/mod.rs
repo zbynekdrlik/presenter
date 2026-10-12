@@ -24,7 +24,7 @@ pub(crate) mod sync;
 mod tests;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -101,6 +101,49 @@ pub(crate) fn should_log_failure(consecutive_failures: u32) -> bool {
     consecutive_failures > 0 && consecutive_failures.is_power_of_two()
 }
 
+/// First retry delay of a file that failed; doubles per consecutive failure.
+const FILE_RETRY_BASE_SECS: i64 = 300;
+/// Longest wait before a failing file is tried again.
+const FILE_RETRY_MAX_SECS: i64 = 6 * 3600;
+
+/// How long a file that failed `streak` syncs in a row waits before the next
+/// try: 5 min, 10, 20, … capped at 6 h. ("Obnoviť" retries at once.)
+pub(crate) fn retry_backoff(streak: u32) -> chrono::Duration {
+    let shift = streak.saturating_sub(1).min(16);
+    let secs = FILE_RETRY_BASE_SECS
+        .saturating_mul(1_i64 << shift)
+        .min(FILE_RETRY_MAX_SECS);
+    chrono::Duration::seconds(secs)
+}
+
+/// Default byte budget of the whole mirror (all folders together), in GiB.
+const DEFAULT_BUDGET_GIB: u64 = 20;
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// `PRESENTER_PLAYBACK_MAX_GB` as whole GiB (a positive integer), else 20.
+pub(crate) fn budget_gib(value: Option<&str>) -> u64 {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|gib| *gib > 0)
+        .unwrap_or(DEFAULT_BUDGET_GIB)
+}
+
+/// The mirror-wide byte budget: the mirror shares the disk with
+/// `presenter.db`, so a huge folder (or refreshes of many folders) must stop
+/// at a limit instead of filling the disk. `used` is the cached bytes of every
+/// folder; a download that would pass `limit` is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Budget {
+    pub(crate) limit: u64,
+    pub(crate) used: u64,
+}
+
+impl Budget {
+    pub(crate) fn remaining(self) -> u64 {
+        self.limit.saturating_sub(self.used)
+    }
+}
+
 /// Shared sync state, cheap to clone (one `Arc`).
 #[derive(Clone)]
 pub(crate) struct PlaybackSync {
@@ -108,7 +151,14 @@ pub(crate) struct PlaybackSync {
 }
 
 struct Inner {
-    client: DriveClient,
+    /// Built (and logged) on the first sync, so a validate-mode boot or a unit
+    /// test that never syncs never builds one.
+    client: OnceLock<DriveClient>,
+    /// The mirror-wide byte budget (`PRESENTER_PLAYBACK_MAX_GB`).
+    budget_limit: u64,
+    /// Bumped by the live-hub forwarder on every `StreamConfigChanged`; the
+    /// worker waits on `changed()`, so a burst coalesces and nothing lags.
+    config_changes: tokio::sync::watch::Sender<u64>,
     /// Wakes the worker for a refresh pass (a stored permit if it is busy).
     nudge: tokio::sync::Notify,
     /// Folders queued or being synced right now (the API's `syncing`).
@@ -122,10 +172,14 @@ struct Inner {
 }
 
 impl PlaybackSync {
-    pub(crate) fn new(client: DriveClient) -> Self {
+    pub(crate) fn new() -> Self {
+        let gib = budget_gib(std::env::var("PRESENTER_PLAYBACK_MAX_GB").ok().as_deref());
+        let (config_changes, _) = tokio::sync::watch::channel(0_u64);
         Self {
             inner: Arc::new(Inner {
-                client,
+                client: OnceLock::new(),
+                budget_limit: gib.saturating_mul(GIB),
+                config_changes,
                 nudge: tokio::sync::Notify::new(),
                 pending: Mutex::new(HashSet::new()),
                 extra: Mutex::new(HashMap::new()),
@@ -135,8 +189,33 @@ impl PlaybackSync {
         }
     }
 
+    /// A sync over a given client (a mock Drive in tests).
+    #[cfg(test)]
+    pub(crate) fn with_client(client: DriveClient) -> Self {
+        let sync = Self::new();
+        let _ = sync.inner.client.set(client);
+        sync
+    }
+
+    /// The Drive client — built from the env (and logged) on first use.
     pub(crate) fn client(&self) -> &DriveClient {
-        &self.inner.client
+        self.inner.client.get_or_init(DriveClient::from_env)
+    }
+
+    pub(crate) fn budget_limit(&self) -> u64 {
+        self.inner.budget_limit
+    }
+
+    /// A stream config changed (called by the live-hub forwarder).
+    pub(crate) fn note_config_change(&self) {
+        self.inner
+            .config_changes
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    /// The worker's view of [`Self::note_config_change`].
+    pub(crate) fn config_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.config_changes.subscribe()
     }
 
     /// Ask the worker for a refresh pass.
@@ -194,6 +273,12 @@ impl PlaybackSync {
         lock(&self.inner.failures)
             .remove(folder_id)
             .unwrap_or_default()
+    }
+}
+
+impl Default for PlaybackSync {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

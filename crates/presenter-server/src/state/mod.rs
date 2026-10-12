@@ -385,7 +385,7 @@ impl AppState {
             stream_assets_dir: stream_assets::resolve_dir(),
             stream_font_verdicts: Arc::new(stream_fonts::FontVerdictCache::default()),
             stream_font_rederive_lock: Arc::new(tokio::sync::Mutex::new(())),
-            playback: crate::playback::PlaybackSync::new(crate::drive::DriveClient::from_env()),
+            playback: crate::playback::PlaybackSync::new(),
             startup_mode,
         };
         // #771: heartbeat broadcasting is a background task — skip it in the

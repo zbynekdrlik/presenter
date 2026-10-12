@@ -13,6 +13,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use presenter_core::{PlaybackItem, PlaybackItemKind, PlaybackPlaylist};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 
 use crate::drive::RemoteFile;
 
@@ -58,6 +59,94 @@ pub(crate) struct Manifest {
     pub(crate) last_error: Option<String>,
     #[serde(default)]
     pub(crate) error_at: Option<DateTime<Utc>>,
+    /// Files of the folder that the last syncs could not fetch.
+    #[serde(default)]
+    pub(crate) failures: Vec<FileFailure>,
+    /// Files that left the folder: still on disk and still SERVED for
+    /// [`RETIRE_GRACE_SECS`], because an output page refetches its playlist
+    /// only every 60 s and would otherwise request a pruned file (a 404 on
+    /// the broadcast page).
+    #[serde(default)]
+    pub(crate) retired: Vec<RetiredFile>,
+}
+
+/// How long a file that left the folder stays on disk and is served.
+pub(crate) const RETIRE_GRACE_SECS: i64 = 300;
+
+/// A cached file that left the folder (see [`Manifest::retired`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RetiredFile {
+    pub(crate) file_id: String,
+    pub(crate) ext: String,
+    pub(crate) mime: String,
+    pub(crate) size: Option<u64>,
+    pub(crate) retired_at: DateTime<Utc>,
+}
+
+impl RetiredFile {
+    pub(crate) fn file_name(&self) -> String {
+        format!("{}.{}", self.file_id, self.ext)
+    }
+}
+
+/// The retired list after a sync: the previous retirees still inside their
+/// grace period, plus the old items that left the new playlist (or changed
+/// their cache name). A retiree that came back is not retired any more.
+pub(crate) fn retire(
+    old: &Manifest,
+    items: &[ManifestItem],
+    now: DateTime<Utc>,
+) -> Vec<RetiredFile> {
+    let current: Vec<String> = items.iter().map(ManifestItem::file_name).collect();
+    let still_in_grace = old
+        .retired
+        .iter()
+        .filter(|r| (now - r.retired_at).num_seconds() < RETIRE_GRACE_SECS)
+        .filter(|r| !current.contains(&r.file_name()))
+        .cloned();
+    let newly_retired = old
+        .items
+        .iter()
+        .filter(|item| !current.contains(&item.file_name()))
+        .map(|item| RetiredFile {
+            file_id: item.file_id.clone(),
+            ext: item.ext.clone(),
+            mime: item.mime.clone(),
+            size: item.size,
+            retired_at: now,
+        });
+    let mut seen = std::collections::HashSet::new();
+    still_in_grace
+        .chain(newly_retired)
+        .filter(|retired| seen.insert(retired.file_name()))
+        .collect()
+}
+
+/// A file that keeps failing (HEAD or download): how many syncs in a row
+/// failed, when it is tried again (exponential backoff — a file that always
+/// fails is neither re-fetched nor logged on every pass) and why, in Slovak
+/// for the editor's status line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileFailure {
+    pub(crate) file_id: String,
+    pub(crate) name: String,
+    pub(crate) streak: u32,
+    pub(crate) retry_at: DateTime<Utc>,
+    pub(crate) reason: String,
+}
+
+/// The manifest's `last_error` for its failing files: how many, and the first
+/// one's name + reason. `None` when nothing fails.
+pub(crate) fn failure_summary(failures: &[FileFailure]) -> Option<String> {
+    let first = failures.first()?;
+    Some(format!(
+        "{} súbor(ov) sa nepodarilo stiahnuť — {}: {}",
+        failures.len(),
+        first.name,
+        first.reason
+    ))
 }
 
 /// The item kind + cache extension of a playable MIME type, `None` for anything
@@ -166,12 +255,26 @@ pub(crate) async fn read_manifest(dir: &Path) -> Option<Manifest> {
     }
 }
 
-/// Write a folder's manifest atomically (unique tmp file + rename), so a
-/// reader never sees half a file.
+/// Write a folder's manifest atomically: a unique tmp file, flushed to disk
+/// (`sync_all`, so a power cut never leaves an empty manifest behind the
+/// rename), then renamed over the old one. The tmp file is removed when the
+/// write or the rename fails.
 pub(crate) async fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
     let json = serde_json::to_vec_pretty(manifest).map_err(std::io::Error::other)?;
     tokio::fs::create_dir_all(dir).await?;
     let tmp = dir.join(format!(".manifest-{}.tmp", uuid::Uuid::new_v4()));
-    tokio::fs::write(&tmp, &json).await?;
-    tokio::fs::rename(&tmp, dir.join(MANIFEST_FILE)).await
+    let result = match write_synced(&tmp, &json).await {
+        Ok(()) => tokio::fs::rename(&tmp, dir.join(MANIFEST_FILE)).await,
+        Err(err) => Err(err),
+    };
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    result
+}
+
+async fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = tokio::fs::File::create(path).await?;
+    file.write_all(bytes).await?;
+    file.sync_all().await
 }
