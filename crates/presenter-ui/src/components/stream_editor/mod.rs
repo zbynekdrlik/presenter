@@ -29,6 +29,8 @@ pub mod number_field;
 pub mod output_manage;
 pub mod output_paths;
 pub mod percent_input;
+pub mod playback_fields;
+pub mod playback_status;
 pub mod prop_error;
 pub mod props_access;
 pub mod selection_intent;

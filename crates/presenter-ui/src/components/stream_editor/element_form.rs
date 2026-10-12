@@ -78,6 +78,9 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
             <Show when=move || kind() == "lower_third">
                 <LowerThirdFields draft=draft ctx=ctx />
             </Show>
+            <Show when=move || kind() == "playback">
+                <super::playback_fields::PlaybackFields draft=draft ctx=ctx />
+            </Show>
             <Show when=move || kind() == "countdown">
                 <div class="stream-editor__kind-fields" data-role="stream-countdown-fields">
                     <label class="stream-editor__field">
@@ -164,10 +167,11 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                 </div>
             </Show>
 
-            // Content-transition control: lyrics + verse only. Image/color have
-            // no content_transition; countdown carries one in the model but ignores
+            // Content-transition control: lyrics, verse and playback (#843: the
+            // change between photos/videos). Image/color have no
+            // content_transition; countdown carries one in the model but ignores
             // it (a per-tick fade flickers — #776), so the control is hidden for it.
-            <Show when=move || kind() == "lyrics" || kind() == "verse">
+            <Show when=move || kind() == "lyrics" || kind() == "verse" || kind() == "playback">
                 <TransitionFields draft=draft />
             </Show>
 
