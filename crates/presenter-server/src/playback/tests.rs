@@ -421,6 +421,43 @@ async fn a_retired_file_that_comes_back_is_played_again() {
     assert_eq!(report.pruned, 0);
 }
 
+/// Re-review (#843): a file put back on Drive within its grace period still
+/// has its cached copy, so the next sync must reuse it (a HEAD, no GET) and not
+/// count it twice against the budget.
+#[tokio::test]
+async fn a_file_that_comes_back_is_not_downloaded_again() {
+    let server = MockServer::start().await;
+    mount_listing(&server, &FULL).await;
+    mount_all_files(&server, DAY_1).await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join(FOLDER_ID);
+    let client = DriveClient::for_test(&server.uri());
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("first");
+    server.reset().await;
+    mount_listing(&server, &[(LOGO, "image/png", "logo.png")]).await;
+    mount_all_files(&server, DAY_1).await;
+    sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("second");
+
+    server.reset().await;
+    mount_listing(&server, &FULL).await;
+    mount_all_files(&server, DAY_1).await;
+    let (manifest, _report) = sync_folder(&client, &dir, &folder(), false, &mut unlimited())
+        .await
+        .expect("third");
+
+    assert_eq!(ids(&manifest), [PHOTO, CLIP, LOGO]);
+    assert_eq!(
+        downloads_of(&server, PHOTO).await,
+        0,
+        "the retired copy of the photo is reused"
+    );
+    assert_eq!(downloads_of(&server, CLIP).await, 0);
+}
+
 #[tokio::test]
 async fn a_failed_refresh_keeps_the_cached_copy() {
     let server = MockServer::start().await;
