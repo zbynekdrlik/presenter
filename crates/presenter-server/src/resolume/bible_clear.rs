@@ -33,8 +33,6 @@
 //!   takes the fetched value. An opacity changed in Arena counts from the
 //!   next fetch on.
 
-#[cfg(test)]
-use super::bible_clear_cover::{cover_candidates, plan_cover_fade, CoverDirection};
 use super::clip_map::ClipMapping;
 use super::driver::{duration_ms, HostDriver, ACTION_TIMEOUT};
 use super::mapping_refresh::StaleIdError;
@@ -280,19 +278,6 @@ pub(super) fn plan_clear_fade(
     unmapped.sort_unstable_by_key(|target| target.param_id);
     plan.extend(unmapped);
     plan
-}
-
-/// #848: the hide a verse schedules, planned from the mapping and the tracked
-/// opacities alone (the deferred fade also reads Arena first and adds the
-/// covers it remembers): each `#bible-clear` cover that is not invisible,
-/// down to 0, none that is also a Bible lane clip.
-#[cfg(test)]
-pub(super) fn plan_cover_hide(
-    mapping: &ClipMapping,
-    tracked: &TrackedOpacities,
-) -> Vec<FadeTarget> {
-    let covers = cover_candidates(mapping, &HashMap::new());
-    plan_cover_fade(&covers, tracked, CoverDirection::Hide)
 }
 
 /// The opacity of a fading clip `elapsed` into its fade: linear from `from`

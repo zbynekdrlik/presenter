@@ -53,11 +53,11 @@ impl ClipMapping {
             .ok_or_else(|| anyhow!("composition has no layers"))?;
 
         let mut mapping = ClipMapping::default();
-        for layer in layers {
+        for (index, layer) in layers.iter().enumerate() {
             let fade = layer_fade(layer);
             if let Some(clips) = layer.get("clips").and_then(Value::as_array) {
                 for clip in clips {
-                    ingest_clip(&mut mapping, clip, fade);
+                    ingest_clip(&mut mapping, clip, fade, index + 1);
                 }
             }
         }
@@ -157,16 +157,17 @@ fn layer_fade(layer: &Value) -> Duration {
 }
 
 /// What a clip's tags share: its id, text and opacity parameters, its
-/// layer's fade, and whether it was connected.
+/// layer's fade, whether it was connected, and its layer (1-based).
 struct ClipFacts {
     clip_id: i64,
     text_param_id: Option<i64>,
     opacity: Option<ClipOpacity>,
     fade: Duration,
     connected: bool,
+    layer: usize,
 }
 
-fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
+fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration, layer: usize) {
     let clip_id = clip.get("id").and_then(Value::as_i64);
     let Some(clip_id) = clip_id else {
         return;
@@ -184,6 +185,7 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
         opacity: extract_opacity(clip),
         fade,
         connected: is_connected(clip),
+        layer,
     };
 
     for fragment in name_lower.split_whitespace() {
@@ -309,6 +311,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
         opacity: facts.opacity,
         fade: facts.fade,
         connected: facts.connected,
+        layer: facts.layer,
     };
 
     let destination = match (kind, lane) {

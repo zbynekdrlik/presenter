@@ -63,7 +63,7 @@ const CACHE_INVALIDATION_THRESHOLD: u32 = 3;
 /// for the SAME clip on the SAME host — unthrottled, a per-push warning
 /// (e.g. the #timer clip, re-checked every countdown tick) floods at one
 /// line per second (507/hour observed in the field for a single host).
-const MISSING_CLIP_WARN_INTERVAL: Duration = Duration::from_secs(300);
+pub(super) const MISSING_CLIP_WARN_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Minimum spacing before the next retry for a host with `consecutive_failures`
 /// recorded failures (1-based). Exponential (1 s, 2 s, 4 s, …) capped at
