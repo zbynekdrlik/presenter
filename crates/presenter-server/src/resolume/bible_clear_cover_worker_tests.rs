@@ -22,7 +22,7 @@
 
 use super::bible_clear_cover_tests::{
     assert_hidden, assert_shown, cover_layer, cover_layers, cover_layers_on, timer_layer,
-    BIBLE_FADE, COVER, COVER_FADE, COVER_OPACITY, SHORT_COVER_FADE, TIMER_TEXT,
+    BIBLE_FADE, COVER, COVER_FADE, COVER_OPACITY, SHORT_COVER_FADE,
 };
 use super::bible_clear_deck_tests::assert_faded;
 use super::bible_clear_tests::{
@@ -92,11 +92,14 @@ impl Worker {
     }
 
     /// A timer frame, waited for: every command sent before it, and the cover
-    /// step that was running when it arrived, are done.
+    /// step that was running when it arrived, are done. Matched by its unique
+    /// text, so it works on any deck (a deck switch shifts the timer's ids).
     async fn barrier(&self, server: &MockServer) -> Vec<Request> {
         let text = self.timer().await;
         wait_for(server, "the barrier timer frame", |requests| {
-            values_put(requests, TIMER_TEXT).contains(&text)
+            requests
+                .iter()
+                .any(|req| req.method.as_str() == "PUT" && body_value(req).as_ref() == Some(&text))
         })
         .await
     }
