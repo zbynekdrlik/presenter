@@ -120,6 +120,36 @@ pub(super) fn fallback_output(current: &str, outputs: &[StreamOutputSummary]) ->
     outputs.first().map(|o| o.slug.clone())
 }
 
+thread_local! {
+    /// #842: the number of the newest output-list request (`reload_outputs`).
+    static OUTPUTS_REQUEST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Start a new output-list request and return its number.
+pub(super) fn next_outputs_request() -> u64 {
+    OUTPUTS_REQUEST.with(|newest| {
+        let request = newest.get() + 1;
+        newest.set(request);
+        request
+    })
+}
+
+/// Whether `request` is still the newest output-list request.
+pub(super) fn is_latest_outputs_request(request: u64) -> bool {
+    OUTPUTS_REQUEST.with(|newest| newest.get() == request)
+}
+
+/// Whether two output lists show the same entries (slug + name, in order).
+/// The switcher, the rename prefill and the duplicate checks read only those,
+/// while `config_revision` changes on every config write.
+pub(super) fn same_entries(shown: &[StreamOutputSummary], fetched: &[StreamOutputSummary]) -> bool {
+    shown.len() == fetched.len()
+        && shown
+            .iter()
+            .zip(fetched)
+            .all(|(a, b)| a.slug == b.slug && a.name == b.name)
+}
+
 // ---- The output switcher ---------------------------------------------------
 
 /// Header `<select>` listing every output (`GET /stream/api/outputs`); changing
@@ -204,6 +234,34 @@ mod tests {
         assert_eq!(
             fallback_output("gone", &list),
             Some("moderator".to_string())
+        );
+    }
+
+    #[test]
+    fn only_the_newest_output_list_request_counts() {
+        let first = next_outputs_request();
+        let second = next_outputs_request();
+        assert!(
+            !is_latest_outputs_request(first),
+            "an older request is outdated"
+        );
+        assert!(is_latest_outputs_request(second));
+    }
+
+    #[test]
+    fn lists_with_the_same_slugs_and_names_are_the_same_entries() {
+        let shown = [output("stream"), output("timer")];
+        let mut fetched = shown.clone();
+        fetched[0].config_revision = 9;
+        assert!(
+            same_entries(&shown, &fetched),
+            "a revision bump is not a change"
+        );
+        fetched[1].name = "Hodiny".to_string();
+        assert!(!same_entries(&shown, &fetched), "a rename is a change");
+        assert!(
+            !same_entries(&shown, &shown[..1]),
+            "a removed output is a change"
         );
     }
 

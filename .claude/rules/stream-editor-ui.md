@@ -440,12 +440,18 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   field is focused when the form opens.
 - Every `StreamConfigChanged` (any output) calls `reload_outputs`, so a second editor sees outputs
   created or renamed elsewhere. Its client-side duplicate check would otherwise use a stale list;
-  the server 409 still guards the slug.
+  the server 409 still guards the slug. Only the NEWEST list request installs its response
+  (`next_outputs_request` / `is_latest_outputs_request`): an older one could lack an output
+  created since, and its fallback would switch the editor away. An unchanged list (same slugs +
+  names; `config_revision` bumps on every write) is not set again, so an open `<select>` is not
+  rebuilt.
+- A refusal that arrives after the form was closed (output switched meanwhile) shows as a toast.
 - „Premenovať" PATCHes `{name}` only. The slug NEVER changes, so Companion buttons (they store
   the slug, default `stream`) and OBS sources (`/stream/{slug}`) keep working. That is how the
   owner's "stream" output became "Strih" (2026-10-11).
-- The OBS URL is a read-only input that selects itself on focus AND on click: in Chromium a
-  mouse click places the caret after the focus handler ran, undoing a focus-only `select()`. Do
+- The OBS URL is a read-only input that selects itself on focus AND on click: a click on the
+  ALREADY focused field fires no focus event and collapses the selection to a caret, so a
+  focus-only `select()` worked only for the first click (measured on dev; the E2E clicks twice). Do
   not add a copy button: `navigator.clipboard` needs a secure context, and the LAN editor is plain
   HTTP.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB

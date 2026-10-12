@@ -223,9 +223,7 @@ fn submit_create(ctx: StreamEditorCtx, form: OutputForm) {
                 ctx.switch_output(created.slug);
                 ctx.reload_outputs();
             }
-            Err(err) => form
-                .error
-                .set(Some(refusal_message(ManageMode::Create, &err))),
+            Err(err) => show_refusal(ctx, form, refusal_message(ManageMode::Create, &err)),
         }
     });
 }
@@ -264,11 +262,20 @@ fn submit_rename(ctx: StreamEditorCtx, form: OutputForm) {
                     "success",
                 );
             }
-            Err(err) => form
-                .error
-                .set(Some(refusal_message(ManageMode::Rename, &err))),
+            Err(err) => show_refusal(ctx, form, refusal_message(ManageMode::Rename, &err)),
         }
     });
+}
+
+/// Show a refused request inline, or as a toast when the operator closed the
+/// form meanwhile (e.g. by switching output), so the refusal is never lost.
+fn show_refusal(ctx: StreamEditorCtx, form: OutputForm, message: String) {
+    leptos::logging::log!("stream editor: output request refused: {message}");
+    if form.mode.get_untracked().is_some() {
+        form.error.set(Some(message));
+    } else {
+        ctx.show_toast(&message, "error");
+    }
 }
 
 /// Select the whole value of the input an event came from.
