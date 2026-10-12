@@ -1,5 +1,6 @@
 use super::batch::drain;
 use super::bible_clear::TrackedOpacities;
+use super::bible_clear_cover::{cover_fade_deadline, CoverState};
 use super::clip_map::{count_clips, ClipMapping};
 use super::error_kind::{classify_error, ResolumeErrorKind};
 use super::mapping_refresh::{is_stale_id_error, MappingRefreshResult, Push, StaleIdError};
@@ -208,9 +209,9 @@ pub(super) async fn run_host_worker(
                     }
                 }
             }
-            // #808 regression: a suspect mapping's next follow-up fetch.
-            // Event-driven: a deadline only while one is scheduled, never a
-            // timer that reads the composition.
+            // Deadlines, pending while unscheduled (never a composition timer): a
+            // #848 `#bible-clear` cover step (50 ms), a #808 follow-up fetch.
+            _ = cover_fade_deadline(driver.cover_fade_due()) => driver.step_cover_fade().await,
             _ = follow_up_deadline(driver.follow_up_due()) => driver.run_follow_up(&status).await,
             _ = liveness_timer.tick() => driver.tick(&status).await,
         }
@@ -278,6 +279,8 @@ pub(super) struct HostDriver {
     pub(super) provisional: ProvisionalMapping,
     /// #841: Bible clips a clear faded, restored before their next connect.
     pub(super) opacities: TrackedOpacities,
+    /// #848: the deferred `#bible-clear` cover fade (`bible_clear_cover.rs`).
+    pub(super) cover: CoverState,
 }
 
 impl HostDriver {
@@ -305,6 +308,7 @@ impl HostDriver {
             missing_clip_last_warn: HashMap::new(),
             provisional: ProvisionalMapping::default(),
             opacities: TrackedOpacities::default(),
+            cover: CoverState::default(),
         }
     }
 
@@ -327,6 +331,7 @@ impl HostDriver {
         // Another host or port may be another Arena: forget its decks.
         self.provisional = ProvisionalMapping::default();
         self.opacities = TrackedOpacities::default();
+        self.cover = CoverState::default();
     }
 
     /// Drop the cached mapping so the next push or tick refetches it, logged

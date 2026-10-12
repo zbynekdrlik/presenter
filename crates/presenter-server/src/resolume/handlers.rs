@@ -1,4 +1,5 @@
 use super::batch::drain;
+use super::bible_clear_cover::CoverDirection;
 use super::clip_map::{ClipMapping, BIBLE_LANE_KINDS};
 use super::driver::HostDriver;
 use super::mapping_refresh::StaleIdError;
@@ -385,8 +386,9 @@ impl HostDriver {
                     .await?
                 } else {
                     // Clear path (#841/#848, `bible_clear.rs`): fades the Bible clips
-                    // out and `#bible-clear` in, triggers nothing, fills no lane.
+                    // out, triggers nothing, fills no lane; `#bible-clear` fades in later.
                     self.handle_bible_clear(&mapping).await?;
+                    self.schedule_cover_fade(&mapping, CoverDirection::Show);
                     (false, false)
                 };
 
@@ -407,8 +409,8 @@ impl HostDriver {
                 self.lane_state.flip(SlotKind::BibleTranslation);
             }
             if !to_trigger.is_empty() {
-                // #848: the verse is on air; fade `#bible-clear` out, last and best-effort.
-                self.hide_bible_clear_clips(&mapping).await;
+                // #848: the verse is on air; `#bible-clear` fades out after this push.
+                self.schedule_cover_fade(&mapping, CoverDirection::Hide);
             }
         }
         self.mark_connected(status).await;
