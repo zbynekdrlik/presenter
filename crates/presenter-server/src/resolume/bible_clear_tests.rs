@@ -29,7 +29,8 @@ use chrono::Utc;
 use presenter_core::{BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use wiremock::matchers::{method, path, path_regex};
@@ -102,24 +103,95 @@ pub(super) fn deck_layers(offset: i64, transition: Option<Duration>) -> Vec<Valu
 /// A mock Arena serving `layers` that accepts every parameter PUT and clip
 /// connect.
 pub(super) async fn start_resolume(layers: Vec<Value>) -> MockServer {
+    start_arena(layers).await.0
+}
+
+/// [`start_resolume`] plus the handle on what its parameters hold.
+pub(super) async fn start_arena(layers: Vec<Value>) -> (MockServer, ArenaParams) {
     let server = MockServer::start().await;
-    mount_arena(&server, layers).await;
-    server
+    let params = mount_arena(&server, layers).await;
+    (server, params)
+}
+
+/// The mock Arena's parameter values: seeded from the composition's
+/// opacities, updated by every PUT the catch-all route accepts, and served by
+/// `GET /parameter/by-id/{id}` (#848: a cover fade reads the real opacity
+/// before it plans). [`ArenaParams::set`] models a change made in Arena.
+#[derive(Clone, Default)]
+pub(super) struct ArenaParams(Arc<Mutex<HashMap<i64, Value>>>);
+
+impl ArenaParams {
+    fn seeded(layers: &[Value]) -> Self {
+        let params = Self::default();
+        let opacities = layers
+            .iter()
+            .filter_map(|layer| layer["clips"].as_array())
+            .flatten()
+            .map(|clip| &clip["video"]["opacity"]);
+        for opacity in opacities {
+            if let (Some(id), Some(value)) = (opacity["id"].as_i64(), opacity.get("value")) {
+                params.store(id, value.clone());
+            }
+        }
+        params
+    }
+
+    /// Arena now shows parameter `param_id` at `value` (an operator change).
+    pub(super) fn set(&self, param_id: i64, value: f64) {
+        self.store(param_id, json!(value));
+    }
+
+    fn store(&self, param_id: i64, value: Value) {
+        self.0.lock().expect("params").insert(param_id, value);
+    }
+
+    fn get(&self, param_id: i64) -> Option<Value> {
+        self.0.lock().expect("params").get(&param_id).cloned()
+    }
+}
+
+fn param_id_of(req: &Request) -> Option<i64> {
+    req.url
+        .path()
+        .strip_prefix("/api/v1/parameter/by-id/")?
+        .parse()
+        .ok()
 }
 
 /// (Re)mount the Arena routes on `server`: `/composition` lists `layers`, and
-/// every parameter PUT and clip connect succeeds. After `server.reset()` this
-/// models a deck switch: the composition lists other clips, while writes to
-/// the previous deck's clips still succeed (the clips still exist).
-pub(super) async fn mount_arena(server: &MockServer, layers: Vec<Value>) {
+/// every parameter PUT and clip connect succeeds. A parameter GET answers the
+/// value Arena holds (404 for an id it does not know). After `server.reset()`
+/// this models a deck switch: the composition lists other clips, while writes
+/// to the previous deck's clips still succeed (the clips still exist).
+pub(super) async fn mount_arena(server: &MockServer, layers: Vec<Value>) -> ArenaParams {
+    let params = ArenaParams::seeded(&layers);
     Mock::given(method("GET"))
         .and(path("/api/v1/composition"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "layers": layers })))
         .mount(server)
         .await;
+    let written = params.clone();
     Mock::given(method("PUT"))
         .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(move |req: &Request| {
+            if let (Some(id), Some(value)) = (param_id_of(req), body_value(req)) {
+                written.store(id, value);
+            }
+            ResponseTemplate::new(200)
+        })
+        .mount(server)
+        .await;
+    let read = params.clone();
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
+        .respond_with(move |req: &Request| {
+            match param_id_of(req).and_then(|id| read.get(id).map(|value| (id, value))) {
+                Some((id, value)) => ResponseTemplate::new(200).set_body_json(json!({
+                    "id": id, "valuetype": "ParamRange", "min": 0.0, "max": 1.0, "value": value,
+                })),
+                None => ResponseTemplate::new(404),
+            }
+        })
         .mount(server)
         .await;
     Mock::given(method("POST"))
@@ -127,6 +199,7 @@ pub(super) async fn mount_arena(server: &MockServer, layers: Vec<Value>) {
         .respond_with(ResponseTemplate::new(200))
         .mount(server)
         .await;
+    params
 }
 
 /// Answer `status` to `times` PUTs of parameter `param_id` at `priority`,

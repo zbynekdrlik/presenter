@@ -4,27 +4,21 @@
 //!
 //! Owner, 2026-10-12: "ked sa clearne v presentery vers alebo je clearnuty tak
 //! ma sa zapnut opacita bible clear a ked sa zapne vers tak sa ma stiahnut
-//! opacita bible clear aby bol vers vyditelny". The contract pinned here:
-//!
-//! - `#bible-clear` / `#bibleclear` map to `ClipMapping::bible_clear`, an
-//!   optional kind (PP has none): never a missing clip, never a destination
-//!   kind;
-//! - a clear fades the cover up over its OWN layer's transition while the
-//!   Bible clips still fade down (#841), and connects nothing;
-//! - a clear while the Bible clips are already invisible still shows the
-//!   cover;
-//! - a verse fades the cover down only after its clips are connected, and a
-//!   failed cover PUT never fails the verse (the retry of a failed push would
-//!   connect the verse again);
-//! - the verse after that sends no cover PUT;
-//! - a fetch shows what Arena has, for the cover too.
+//! opacita bible clear aby bol vers vyditelny". The cover fades over its OWN
+//! layer's transition (SNV 2.3 s), so it is NOT part of the push (#848
+//! review): the push returns after the Bible fade and the connects, and the
+//! host worker steps the cover afterwards, between its other commands. This
+//! file pins the mapping, the planners and the push side;
+//! `bible_clear_cover_worker_tests.rs` drives the deferred fade through the
+//! real host worker.
 
-use super::bible_clear::fade_toward;
+use super::bible_clear::{
+    fade_toward, plan_clear_fade, plan_cover_hide, FadeTarget, TrackedOpacities,
+};
 use super::bible_clear_deck_tests::assert_faded;
 use super::bible_clear_tests::{
-    answer_param, bible_layers, clear_update, clip, connects, driver_for, layer, mount_arena,
-    opacities_put, param_path, position, start_resolume, values_put, verse_update, A_SIDE_OPACITY,
-    BIBLE_A, B_SIDE_OPACITY, FADE,
+    bible_layers, clear_update, clip, connects, deck_layers, driver_for, layer, opacities_put,
+    start_resolume, values_put, verse_update, A_SIDE_OPACITY, BIBLE_A, B_SIDE_OPACITY, FADE,
 };
 use super::clip_map::ClipMapping;
 use super::types::ClipOpacity;
@@ -33,36 +27,69 @@ use std::time::{Duration, Instant};
 use wiremock::Request;
 
 /// The cover clip, its text parameter and its opacity parameter (text + 100).
-const COVER: i64 = 500;
-const COVER_TEXT: i64 = 50;
-const COVER_OPACITY: i64 = 150;
-/// The cover layer's transition: longer than the Bible layers' [`FADE`], as
-/// on SNV (2.3 s against 0.5 s).
-const COVER_FADE: Duration = Duration::from_millis(900);
+pub(super) const COVER: i64 = 500;
+pub(super) const COVER_TEXT: i64 = 50;
+pub(super) const COVER_OPACITY: i64 = 150;
+/// The cover layer's transition where the length matters: far longer than the
+/// Bible layers' [`BIBLE_FADE`], as on SNV (2.3 s against 0.5 s), so "the
+/// push returned before the cover faded" has a wide margin on a loaded runner.
+pub(super) const COVER_FADE: Duration = Duration::from_millis(1500);
+/// A shorter cover transition for tests about the fade's shape, not its length.
+pub(super) const SHORT_COVER_FADE: Duration = Duration::from_millis(450);
+/// The Bible layers' transition in the timing tests.
+pub(super) const BIBLE_FADE: Duration = Duration::from_millis(300);
+/// The `#timer` clip and its text parameter: the worker tests use timer frames
+/// as commands that must not wait for a cover fade.
+const TIMER: i64 = 600;
+pub(super) const TIMER_TEXT: i64 = 60;
 
-/// The layer of the sermon title, named like the SNV clip, at `opacity`.
-fn cover_layer(transition: Option<Duration>, opacity: f64) -> Value {
-    layer(
-        vec![clip(COVER, "NAZOV #bible-clear", COVER_TEXT, opacity)],
-        transition,
-    )
-}
-
-/// The SNV shape: the Bible layers plus the cover on a layer of its own.
-fn cover_layers(
+/// The SNV shape on deck `offset` (every id shifted by it, as a deck switch
+/// does): the Bible layers, the sermon title on a layer of its own at
+/// `cover_opacity`, and a `#timer` clip.
+pub(super) fn cover_layers_on(
+    offset: i64,
     transition: Option<Duration>,
     cover_transition: Option<Duration>,
     cover_opacity: f64,
 ) -> Vec<Value> {
-    let mut layers = bible_layers(transition);
-    layers.push(cover_layer(cover_transition, cover_opacity));
+    let mut layers = deck_layers(offset, transition);
+    layers.push(cover_layer(offset, cover_transition, cover_opacity));
+    layers.push(timer_layer(offset));
     layers
 }
 
-/// Assert that the cover was stepped UP to full opacity from near 0: a fade,
-/// not a cut.
-fn assert_shown(requests: &[Request]) {
-    let steps = opacities_put(requests, COVER_OPACITY);
+/// [`cover_layers_on`] the first deck.
+pub(super) fn cover_layers(
+    transition: Option<Duration>,
+    cover_transition: Option<Duration>,
+    cover_opacity: f64,
+) -> Vec<Value> {
+    cover_layers_on(0, transition, cover_transition, cover_opacity)
+}
+
+/// The layer of the sermon title, named like the SNV clip, at `opacity`.
+pub(super) fn cover_layer(offset: i64, transition: Option<Duration>, opacity: f64) -> Value {
+    layer(
+        vec![clip(
+            COVER + offset,
+            "NAZOV #bible-clear",
+            COVER_TEXT + offset,
+            opacity,
+        )],
+        transition,
+    )
+}
+
+pub(super) fn timer_layer(offset: i64) -> Value {
+    layer(
+        vec![clip(TIMER + offset, "#timer", TIMER_TEXT + offset, 1.0)],
+        None,
+    )
+}
+
+/// Assert that the cover opacities `steps` went only up, in at least three
+/// steps from near 0, and ended at `base`: a fade, not a cut.
+pub(super) fn assert_shown(steps: &[f64], base: f64) {
     assert!(
         steps.len() >= 3 && steps[0] < 0.5,
         "the cover is faded in steps from near 0, not cut: {steps:?}"
@@ -73,9 +100,23 @@ fn assert_shown(requests: &[Request]) {
     );
     let last = steps.last().copied().unwrap_or_default();
     assert!(
-        (last - 1.0).abs() < 1e-9,
-        "the cover ends at full opacity: {steps:?}"
+        (last - base).abs() < 1e-9,
+        "the cover ends at {base}: {steps:?}"
     );
+}
+
+/// Assert that the cover opacities `steps` went only down, in at least three
+/// steps, and ended at 0.
+pub(super) fn assert_hidden(steps: &[f64]) {
+    assert!(
+        steps.len() >= 3,
+        "the cover is faded out in steps, not cut: {steps:?}"
+    );
+    assert!(
+        steps.windows(2).all(|pair| pair[1] < pair[0]),
+        "the cover only goes down: {steps:?}"
+    );
+    assert_eq!(steps.last(), Some(&0.0), "the cover ends at 0: {steps:?}");
 }
 
 #[test]
@@ -131,9 +172,65 @@ fn fade_toward_runs_linearly_up_or_down_to_its_target() {
     assert_eq!(fade_toward(0.0, 1.0, Duration::ZERO, Duration::ZERO), 1.0);
 }
 
+/// #848 review, finding 1: the cover's 2.3 s fade ran inside the clear and
+/// held the serial host worker. The clear's own fade is only the Bible clips
+/// (#841); the cover is the deferred fade's job.
+#[test]
+fn the_clear_fade_leaves_the_covers_to_the_deferred_cover_fade() {
+    let mapping = ClipMapping::from_composition(
+        &json!({ "layers": cover_layers(Some(FADE), Some(COVER_FADE), 0.0) }),
+    )
+    .expect("mapping");
+    let mut tracked = TrackedOpacities::default();
+    tracked.sync_with_fetch(&mapping, None);
+
+    let plan = plan_clear_fade(&mapping, &tracked);
+    let mut params: Vec<i64> = plan.iter().map(|target| target.param_id).collect();
+    params.sort_unstable();
+    let mut bible: Vec<i64> = A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY).collect();
+    bible.sort_unstable();
+    assert_eq!(params, bible, "only the Bible clips, no cover: {plan:?}");
+    assert!(plan.iter().all(|target| target.to == 0.0), "{plan:?}");
+}
+
+/// The hide plan: each cover once, from its mapped opacity down to 0. A cover
+/// that is already invisible gets nothing, and a clip tagged as a cover AND a
+/// Bible lane clip is left to the lane (the verse just showed it).
+#[test]
+fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
+    let mut layers = bible_layers(None);
+    layers.push(layer(
+        vec![
+            clip(COVER, "NAZOV #bible-clear", COVER_TEXT, 0.7),
+            clip(501, "#bible-clear", 51, 0.0),
+            clip(302, "#bible-a #bible-clear", 32, 1.0),
+        ],
+        Some(SHORT_COVER_FADE),
+    ));
+    let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
+
+    let plan = plan_cover_hide(&mapping, &TrackedOpacities::default());
+    assert_eq!(
+        plan,
+        vec![FadeTarget {
+            clip_id: COVER,
+            param_id: COVER_OPACITY,
+            base: 0.7,
+            from: 0.7,
+            to: 0.0,
+            duration: SHORT_COVER_FADE,
+            mapped: true,
+        }]
+    );
+}
+
+/// #848 review, finding 1: the clear held the worker for the cover's whole
+/// transition, so the `#timer` countdown froze and the next verse waited. The
+/// push returns once the Bible clips are faded; the cover is not touched
+/// inside it.
 #[tokio::test]
-async fn a_clear_fades_the_cover_up_over_its_layer_and_the_bible_clips_down() {
-    let server = start_resolume(cover_layers(Some(FADE), Some(COVER_FADE), 0.0)).await;
+async fn a_clear_returns_before_the_cover_has_faded() {
+    let server = start_resolume(cover_layers(Some(BIBLE_FADE), Some(COVER_FADE), 0.0)).await;
     let (mut driver, status) = driver_for(&server);
 
     let start = Instant::now();
@@ -143,32 +240,30 @@ async fn a_clear_fades_the_cover_up_over_its_layer_and_the_bible_clips_down() {
         .expect("bible clear");
     let took = start.elapsed();
 
+    assert!(
+        took < COVER_FADE,
+        "the clear returned after {took:?}, it must not wait for the cover's {COVER_FADE:?}"
+    );
     let requests = server.received_requests().await.expect("requests");
-    assert!(
-        connects(&requests).is_empty(),
-        "a clear triggers no clip, not even the cover"
-    );
-    assert!(
-        values_put(&requests, COVER_TEXT).is_empty(),
-        "the cover's text is never written"
-    );
-    assert_shown(&requests);
     assert_faded(&requests, A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY));
+    assert!(connects(&requests).is_empty(), "a clear triggers no clip");
+    assert!(values_put(&requests, COVER_TEXT).is_empty());
     assert!(
-        took >= COVER_FADE,
-        "the cover fades over its own layer's transition ({COVER_FADE:?}), took {took:?}"
+        opacities_put(&requests, COVER_OPACITY).is_empty(),
+        "the cover is faded after the push, not inside it"
     );
 }
 
+/// The verse after a clear is on air at once: it does not wait for the cover
+/// to fade out either.
 #[tokio::test]
-async fn a_verse_fades_the_cover_down_after_connecting_its_clips() {
+async fn a_verse_returns_before_the_cover_has_faded() {
     let server = start_resolume(cover_layers(None, Some(COVER_FADE), 0.0)).await;
     let (mut driver, status) = driver_for(&server);
     driver
         .handle_bible(clear_update(), &status)
         .await
         .expect("bible clear");
-    let after_clear = server.received_requests().await.expect("requests").len();
 
     let start = Instant::now();
     driver
@@ -177,189 +272,10 @@ async fn a_verse_fades_the_cover_down_after_connecting_its_clips() {
         .expect("verse");
     let took = start.elapsed();
 
-    let requests = server.received_requests().await.expect("requests");
-    let verse = &requests[after_clear..];
-    let steps = opacities_put(verse, COVER_OPACITY);
     assert!(
-        steps.len() >= 3 && steps[0] > 0.5,
-        "the cover is faded out in steps from full opacity: {steps:?}"
+        took < COVER_FADE,
+        "the verse returned after {took:?}, it must not wait for the cover's {COVER_FADE:?}"
     );
-    assert!(
-        steps.windows(2).all(|pair| pair[1] < pair[0]),
-        "the cover only goes down: {steps:?}"
-    );
-    assert_eq!(steps.last(), Some(&0.0), "the cover ends at 0: {steps:?}");
-    let last_connect = verse
-        .iter()
-        .rposition(|req| req.url.path().ends_with("/connect"))
-        .expect("the verse connects its clips");
-    let first_cover = position(verse, |req| req.url.path() == param_path(COVER_OPACITY))
-        .expect("the verse fades the cover");
-    assert!(
-        last_connect < first_cover,
-        "the verse is on air before the cover starts to fade"
-    );
-    assert!(
-        took >= COVER_FADE,
-        "the cover fades over its layer's transition ({COVER_FADE:?}), took {took:?}"
-    );
-    for param in A_SIDE_OPACITY {
-        assert_eq!(
-            opacities_put(verse, param),
-            vec![1.0],
-            "param {param} is restored before the connect, as before (#841)"
-        );
-    }
-}
-
-#[tokio::test]
-async fn the_verse_after_that_sends_no_cover_put() {
-    let server = start_resolume(cover_layers(None, None, 0.0)).await;
-    let (mut driver, status) = driver_for(&server);
-    for (update, what) in [(clear_update(), "clear"), (verse_update(), "verse 1")] {
-        driver.handle_bible(update, &status).await.expect(what);
-    }
-    let after_first = server.received_requests().await.expect("requests").len();
-    driver
-        .handle_bible(verse_update(), &status)
-        .await
-        .expect("verse 2");
-
-    let requests = server.received_requests().await.expect("requests");
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![1.0, 0.0],
-        "shown by the clear, hidden by the first verse, then left alone"
-    );
-    assert_eq!(
-        connects(&requests[after_first..]).len(),
-        4,
-        "the second verse is connected"
-    );
-}
-
-#[tokio::test]
-async fn a_clear_while_the_bible_clips_are_invisible_still_shows_the_cover() {
-    let mut layers = bible_layers(None);
-    for clip in layers
-        .iter_mut()
-        .filter_map(|layer| layer["clips"].as_array_mut())
-        .flatten()
-    {
-        clip["video"]["opacity"]["value"] = json!(0.0);
-    }
-    layers.push(cover_layer(None, 0.0));
-    let server = start_resolume(layers).await;
-    let (mut driver, status) = driver_for(&server);
-
-    for what in ["clear", "second clear"] {
-        driver
-            .handle_bible(clear_update(), &status)
-            .await
-            .expect(what);
-    }
-
-    let requests = server.received_requests().await.expect("requests");
-    for param in A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY) {
-        assert!(
-            opacities_put(&requests, param).is_empty(),
-            "param {param} is already invisible"
-        );
-    }
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![1.0],
-        "the clear shows the cover although no verse was visible; the second sends nothing"
-    );
-    assert!(connects(&requests).is_empty());
-}
-
-/// The cover fade runs after the verse is connected and the lanes flipped. A
-/// failure there must not fail the push: `dispatch_push` retries a failed push
-/// whole, which would connect the verse again on the other side.
-#[tokio::test]
-async fn a_failed_cover_fade_does_not_fail_the_verse() {
-    let server = start_resolume(cover_layers(None, None, 0.0)).await;
-    let (mut driver, status) = driver_for(&server);
-    driver
-        .handle_bible(clear_update(), &status)
-        .await
-        .expect("bible clear");
-    answer_param(&server, COVER_OPACITY, 500, 10, 1).await;
-    let after_clear = server.received_requests().await.expect("requests").len();
-
-    driver
-        .handle_bible(verse_update(), &status)
-        .await
-        .expect("a failed cover fade does not fail the verse");
-    let requests = server.received_requests().await.expect("requests");
-    let verse = &requests[after_clear..];
-    assert_eq!(connects(verse).len(), 4, "the verse is on air");
-    assert_eq!(
-        opacities_put(verse, COVER_OPACITY),
-        vec![0.0],
-        "the cover fade was tried"
-    );
-
-    let after_verse = requests.len();
-    driver
-        .handle_bible(verse_update(), &status)
-        .await
-        .expect("verse 2");
-    let requests = server.received_requests().await.expect("requests");
-    assert_eq!(
-        values_put(&requests[after_verse..], 31).len(),
-        1,
-        "the next verse lands on #bible-b: the lanes flipped despite the failed cover fade"
-    );
-}
-
-/// The operator dims the shown sermon title in Arena. The next fetch shows it,
-/// the verse fades it from there, and the clear after that brings it back to
-/// the dimmed opacity, not to full.
-#[tokio::test]
-async fn a_cover_dimmed_in_arena_comes_back_at_that_opacity() {
-    let server = start_resolume(cover_layers(None, None, 0.0)).await;
-    let (mut driver, status) = driver_for(&server);
-    driver
-        .handle_bible(clear_update(), &status)
-        .await
-        .expect("clear shows the cover");
-
-    server.reset().await;
-    mount_arena(&server, cover_layers(None, None, 0.6)).await;
-    driver.refresh_mapping().await.expect("refetch");
-    for (update, what) in [(verse_update(), "verse"), (clear_update(), "clear")] {
-        driver.handle_bible(update, &status).await.expect(what);
-    }
-
-    let requests = server.received_requests().await.expect("requests");
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![0.0, 0.6],
-        "hidden from the dimmed value, then shown at it"
-    );
-}
-
-/// A cover a previous process (or the operator) left at a lower opacity is
-/// already shown: the clear leaves it, the verse hides it, and the next clear
-/// brings it back to that opacity.
-#[tokio::test]
-async fn a_cover_mapped_below_full_opacity_is_shown_at_that_value() {
-    let server = start_resolume(cover_layers(None, None, 0.6)).await;
-    let (mut driver, status) = driver_for(&server);
-    for (update, what) in [
-        (clear_update(), "clear"),
-        (verse_update(), "verse"),
-        (clear_update(), "clear again"),
-    ] {
-        driver.handle_bible(update, &status).await.expect(what);
-    }
-
-    let requests = server.received_requests().await.expect("requests");
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![0.0, 0.6],
-        "nothing for the first clear, then hidden and shown at 0.6"
-    );
+    let requests: Vec<Request> = server.received_requests().await.expect("requests");
+    assert_eq!(connects(&requests).len(), 4, "the verse is on air");
 }
