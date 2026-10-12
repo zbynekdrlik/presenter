@@ -630,8 +630,11 @@ fn the_composition_records_each_clips_opacity_and_layer_fade() {
     );
 }
 
+/// #848 (owner, 2026-10-12) reverses #841's "no longer a tag": both spellings
+/// map to the optional cover kind, never to a Bible lane
+/// (`bible_clear_cover_tests.rs`).
 #[test]
-fn bible_clear_is_no_longer_a_clip_tag() {
+fn bible_clear_is_a_cover_tag_not_a_lane() {
     let mut layers = bible_layers(None);
     layers.push(layer(
         vec![
@@ -642,6 +645,8 @@ fn bible_clear_is_no_longer_a_clip_tag() {
     ));
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
 
+    let cover_ids: Vec<i64> = mapping.bible_clear.iter().map(|t| t.clip_id).collect();
+    assert_eq!(cover_ids, vec![500, 501]);
     assert!(!mapping.destination_kinds().contains(&"#bible-clear"));
     assert!(!mapping.missing_tokens().contains(&"#bible-clear"));
     let lane_clip_ids: Vec<i64> = [&mapping.bible_a, &mapping.bible_reference_a]
