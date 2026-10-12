@@ -9,7 +9,7 @@ paths:
   - "crates/presenter-server/src/resolume/types.rs"
 ---
 
-# Resolume clip triggers: one batch is CONCURRENT; the Bible clear triggers nothing (#807, #841)
+# Resolume clip triggers: one batch is CONCURRENT; the Bible clear triggers nothing (#807, #841, #848)
 
 ## `trigger_clips` POSTs every `/connect` of a batch at once
 
@@ -31,8 +31,8 @@ the clear clip showed ~50% of the time).
 ## The Bible clear is a FADE, never a trigger (#841, owner 2026-10-11)
 
 Owner: "bible clear chcem aby fungoval tak ze netrigeruje ziaden clip ale iba v tom clipe
-faduje opacitu". `#bible-clear` is no longer a tag (dropped from `clip_map.rs`; such a clip
-in a composition is ignored). `resolume/bible_clear.rs`:
+faduje opacitu". #841 read "v tom clipe" as the Bible text clip and dropped the `#bible-clear`
+tag; #848 restored it as a COVER (next section). `resolume/bible_clear.rs`:
 
 - **A clear PUTs `video.opacity` of every Bible lane clip (A AND B sides) down to 0.**
   - Nothing is connected and no text is written.
@@ -106,6 +106,46 @@ in a composition is ignored). `resolume/bible_clear.rs`:
   them live with `GET /api/v1/composition/layers/{n}` (one layer, ~200 KB), never the 16 MB
   `/composition`.
 
+## `#bible-clear` is a COVER: a clear fades it UP, a verse fades it DOWN (#848)
+
+Owner, 2026-10-12: "ked sa clearne v presentery vers alebo je clearnuty tak ma sa zapnut
+opacita bible clear a ked sa zapne vers tak sa ma stiahnut opacita bible clear aby bol vers
+vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBlock, layer 12
+"L# Fit", transition 2.3 s, `Connected & previewing`, the tag after other words). PP has none.
+
+- **Mapping:** `#bible-clear` (tokens `#bible`, `clear`) and `#bibleclear` are the lane-less
+  `ClipKind::BibleClear` → `ClipMapping::bible_clear`. It is NOT in `destinations()`: the kind
+  is optional, so it never shows in the missing-clip list, `destination_kinds()` or the
+  provisional suspect logic, and no lane refetch waits for it.
+- **Never triggered, never written.** Only its `video.opacity` is PUT.
+- **A clear** (`plan_clear_fade`) adds every cover whose level is below its base, `to = base`,
+  after the Bible clips it fades to 0. So a clear while the Bible clips are already invisible
+  ("alebo je clearnuty") still shows the cover. Base = the tracked base, else the mapped value
+  when > 0, else 1.0 (`cover_opacity`). The covers fade in the SAME `run_fade` as the Bible
+  clips, each over its OWN layer transition: the clear lasts as long as the longest layer
+  (SNV 2.3 s, capped by `MAX_CLEAR_FADE`).
+- **A verse** (`HostDriver::hide_bible_clear_clips`, `plan_cover_hide`) fades every cover above
+  0 down to 0. `handle_bible` calls it AFTER `trigger_clips` AND after the lane flips, only when
+  the verse was connected:
+  - the verse is never delayed by the cover fade (the next queued push waits for it, up to the
+    cover layer's transition, but only the first verse after a clear has a cover to hide);
+  - it is BEST-EFFORT: an error is logged at WARN and the push still returns `Ok`. A failed
+    push is retried whole by `dispatch_push`, which would connect the verse again on the other
+    side. A stale cover id (404) therefore does not refetch here; the next clear meets the same
+    404 inside its own fade, and that one refetches and retries.
+- **`FadeTarget::to`** is the level a fade ends at (0 for Bible clips, the base for a cover a
+  clear shows). `run_fade` steps a target while `|tracked.level - to| > SAME_OPACITY`, with
+  `fade_toward(from, to, elapsed, duration)` (linear, exactly `to` at the duration).
+  `fade_level` is kept `#[cfg(test)]` only, as `fade_toward(from, 0.0, ..)`.
+- **`sync_with_fetch` covers the covers too**, same rules: an untracked cover at 0 is adopted
+  as `{1.0, 0.0}`; a dim made in Arena on a SHOWN cover becomes its base.
+- A cover that is also a Bible lane clip is skipped by both plans (deduped by param id).
+- Residual: after a deck switch the old deck's cover keeps playing on its layer, and only the
+  new deck's cover is mapped; Presenter does not remember covers across decks.
+- Tests: `bible_clear_cover_tests.rs` (mapping, clear up, verse down after the connects,
+  second verse silent, clear on invisible lanes, failed cover PUT keeps the verse `Ok` and the
+  flip, dimmed / mapped-below-full covers, `fade_toward`).
+
 ## The A/B lanes are seeded from the connected clips after a start (`lane_seed.rs`)
 
 The lane state resets to side A on every start and host config change. When side A is still
@@ -118,17 +158,20 @@ side is (`next_lane_from_connected`; a Bible slot's reference clips count for it
 Unknown (neither or both) keeps A. It runs once (`SlotState::seeded`, reset with the state).
 `ClipTarget::connected` = Resolume's `connected.value` starts with `Connected` (the choices are
 `Empty`, `Disconnected`, `Previewing`, `Connected`, `Connected & previewing`; SNV verified
-2026-10-11: `#bible-a` Connected on layer 30, `#bible-clear` Connected at opacity 0 on 29).
+2026-10-11: `#bible-a` Connected on layer 30, the old blank `#bible-clear` Connected at opacity
+0 on 29; since 2026-10-12 the SNV `#bible-clear` is the sermon title on layer 12).
 
 ## Testing a fade
 
-`resolume/bible_clear_tests.rs` (core contract) and `bible_clear_deck_tests.rs` (deck switch,
-fetch sync, per-layer duration, lane seed through `handle_bible`; it imports the shared
-`pub(super)` helpers). A sibling `*_tests.rs` counts toward the 800/1000 file-size gate, so add
-new tests to the smaller file or a new sibling:
+`resolume/bible_clear_tests.rs` (core contract), `bible_clear_deck_tests.rs` (deck switch,
+fetch sync, per-layer duration, lane seed through `handle_bible`) and
+`bible_clear_cover_tests.rs` (#848 cover); the siblings import the shared `pub(super)` helpers
+(`assert_faded` lives in the deck file). A sibling `*_tests.rs` counts toward the 800/1000
+file-size gate, so add new tests to the smaller file or a new sibling:
 
 - Read `server.received_requests()`, which keeps arrival order.
-- Assert values only go down and end at 0, and that there are at least 3 steps from near 1.0.
+- Assert values only go down and end at 0, and that there are at least 3 steps from near 1.0
+  (a cover a clear shows: only up, from near 0, ending within `1e-9` of its base).
 - Assert the restore PUT index is below the first `/connect`.
 - Assert timing only as a LOWER bound (`took >= FADE`): the loop cannot end before the
   duration, and load only lengthens it.
@@ -154,8 +197,12 @@ new tests to the smaller file or a new sibling:
   `{mainText, mainReference, secondaryText, secondaryReference}`), then `POST /bible/clear`.
   Sample the layers about 0.3 s into the clear (mid-fade value, same on both sides) and after
   1.5 s (all 0, the connected clip unchanged = nothing triggered). The journal line
-  `resolume bible clear: faded … steps=N ok=true` and, after a start,
+  `resolume bible clear: faded … shown_clip_ids=[…] steps=N ok=true` and, after a start,
   `resolume lanes seeded … seeded=[...]` confirm the server side.
+- #848 on SNV: also read layer 12 (`NAZOV #bible-clear`). After a clear its opacity rises to
+  1.0 over ~2.3 s; after the next verse it falls to 0 over ~2.3 s
+  (`resolume bible: faded the #bible-clear clips to 0 for the verse … ok=true`), and its
+  `connected.value` never changes.
 - End with a clear, so the wall is left empty.
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small
