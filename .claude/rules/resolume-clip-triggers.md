@@ -152,6 +152,11 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     Targets are tracked before the first PUT. The first step plans at elapsed 0, and every step
     skips a cover whose level would not move (`cover_levels`, within `SAME_OPACITY`), so no
     fade re-sends the level it starts from; the first PUT is one step into the fade.
+  - **A level within `SAME_OPACITY` of `to` IS `to`** (`fade_toward`, shared with the #841
+    Bible fade): both fades stop counting a clip once it is that close, so a step landing a
+    rounding short of the end must send `to` itself. CI run 38288218234: a replacement hide
+    lasts exactly as long as the show had run, and its steps repeat the show's timing, so a
+    step came 1.4 µs before the end, sent 9.3e-7, and the cover never got its 0.
   - **Best-effort:** a cover error never fails a push, never calls `record_error`, never
     touches the host status or backoff.
     - A failed step (5xx, timeout, refused) does not leave the cover halfway: the next step,
