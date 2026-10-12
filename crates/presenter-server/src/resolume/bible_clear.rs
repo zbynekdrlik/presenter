@@ -289,13 +289,21 @@ pub(super) fn fade_level(from: f64, elapsed: Duration, duration: Duration) -> f6
 
 /// The opacity of a fading clip `elapsed` into its fade: linear from `from`
 /// to `to` (up or down), reached exactly at `duration` (at once for a zero
-/// duration).
+/// duration). A level within [`SAME_OPACITY`] of `to` IS `to`: the fades stop
+/// once a clip is that close, so a step landing there must send `to` itself
+/// (#848 CI run 38288218234: a hide's step 1.4 µs before its end sent 9.3e-7
+/// and the cover was never set to 0).
 pub(super) fn fade_toward(from: f64, to: f64, elapsed: Duration, duration: Duration) -> f64 {
     if elapsed >= duration {
         return to;
     }
     let progress = elapsed.as_secs_f64() / duration.as_secs_f64();
-    from + (to - from) * progress
+    let level = from + (to - from) * progress;
+    if (level - to).abs() <= SAME_OPACITY {
+        to
+    } else {
+        level
+    }
 }
 
 /// The longest fade of `fade` in milliseconds, for the logs.
