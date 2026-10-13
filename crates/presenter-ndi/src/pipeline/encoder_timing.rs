@@ -802,7 +802,7 @@ mod tests {
         const GAP: i64 = 4 * MS;
         const LATENCY: i64 = 5 * MS;
         let mut g = TimestampGuard::default();
-        let mut rng = XorShift(0x854_B5);
+        let mut rng = XorShift(0x0008_54B5);
         let mut prev: Option<i64> = None;
         let mut pulled_back = Vec::new();
         let mut correction_after_burst = 0;
