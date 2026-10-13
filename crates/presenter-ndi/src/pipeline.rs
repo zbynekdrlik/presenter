@@ -57,6 +57,7 @@ use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 mod build;
 pub mod client_stats;
 mod consumers;
+pub mod encoder_timing;
 pub mod health;
 pub mod health_window;
 mod ingest_timing;
@@ -65,6 +66,7 @@ mod lifecycle;
 pub mod link_probe;
 mod negotiation;
 mod reaper;
+mod time_window;
 
 /// Pipeline lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +258,10 @@ pub struct NdiPipeline {
     /// shared encoder with a keyframe per join (#768 D5). Interior-mutable so
     /// the decision is made behind `&self` in `add_consumer`.
     keyframe_throttle: keyframe_throttle::KeyframeThrottle,
+    /// #854: the shared encoder's timestamp guard + lead meter state (the two
+    /// pad probes hold clones). Read by `/healthz`, `/ndi/snapshot` and the
+    /// supervisor's drift self-heal check.
+    encoder_timing: Arc<encoder_timing::EncoderTiming>,
 }
 
 impl Drop for NdiPipeline {
