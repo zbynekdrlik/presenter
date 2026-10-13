@@ -68,22 +68,27 @@ async function resetStage() {
   await send("POST", "/stage/state", { presentationId: presIds[23], currentSlideId: slideIds[presIds[23]][0] });
 }
 
-/** AbleSet-like churn: `count` stage slide changes of `pres`, 0.7 s apart. */
-async function churnStage(pres: string, count: number) {
-  for (let i = 0; i < count; i++) {
+/** AbleSet-like churn: `count` stage slide changes of `pres` from slide `from`, 0.7 s apart. */
+async function churnStage(pres: string, count: number, from = 0) {
+  for (let i = from; i < from + count; i++) {
     await send("POST", "/stage/state", { presentationId: pres, currentSlideId: slideIds[pres][i % 16] });
     await new Promise((r) => setTimeout(r, 700));
   }
 }
 
-/** Counts the `stage` frames the operator page's own live socket receives (not the preview iframe's). */
+/**
+ * Counts the `stage` frames the operator page's own live socket receives (not the preview iframe's),
+ * one per stage change: the always-on camera-crew snapshot each change also sends is skipped.
+ */
 function countStageFrames(page: Page): { count: number } {
   const seen = { count: 0 };
   page.on("websocket", (ws) => {
     if (ws.url().includes("preview")) return;
     ws.on("framereceived", (frame) => {
       try {
-        if (JSON.parse(String(frame.payload)).type === "stage") seen.count += 1;
+        const msg = JSON.parse(String(frame.payload));
+        const snapshot = msg.snapshot ?? msg;
+        if (msg.type === "stage" && snapshot.layout?.code !== "camera-crew") seen.count += 1;
       } catch {
         // binary or non-JSON frame
       }
@@ -133,7 +138,7 @@ async function editSlide(page: Page, songNumber: number) {
   const area = page.locator(`.operator__slides [data-slide-id="${target}"] textarea`).first();
   await area.scrollIntoViewIfNeeded();
   await area.click();
-  await page.keyboard.press("End");
+  await page.keyboard.press("Control+End");
   await page.keyboard.type(" typing");
   return { target, area };
 }
@@ -163,12 +168,25 @@ for (const source of ["library", "playlist"] as const) {
     expect(before.list, "the song list must be scrollable for this test").toBeGreaterThan(0);
     expect(before.slides, "the slide list must be scrollable for this test").toBeGreaterThan(0);
 
+    // The stage moves to song 2 (one song change: the list re-highlights) ...
     const framesBefore = frames.count;
-    await churnStage(presIds[1], 8);
+    await churnStage(presIds[1], 1);
+    const song2Row = page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 02" }).first();
+    await expect(song2Row, "the stage song is highlighted").toHaveClass(/is-stage-active/);
+    await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 24" }).first()).not.toHaveClass(/is-stage-active/);
+    await page.evaluate(() => {
+      (document.querySelector('[data-role="presentation-item"]') as any).__churnTag = 1;
+    });
+    // ... then AbleSet walks its slides: slide changes must not rebuild the rows.
+    await churnStage(presIds[1], 7, 1);
     await expect.poll(() => frames.count - framesBefore, { message: "stage events reach the page" }).toBeGreaterThanOrEqual(8);
     const after = await scrollTops(page);
-    console.log(`[churn ${source}] before ${JSON.stringify(before)} after ${JSON.stringify(after)}`);
+    const sameRows = await page.evaluate(
+      () => (document.querySelector('[data-role="presentation-item"]') as any)?.__churnTag === 1,
+    );
+    console.log(`[churn ${source}] before ${JSON.stringify(before)} after ${JSON.stringify(after)} sameRows ${sameRows}`);
     expect(after.marker, "the page must not reload").toBe(true);
+    expect(sameRows, "slide changes must not rebuild the song list").toBe(true);
     expect(after.list, "song list keeps its scroll").toBe(before.list);
     expect(after.slides, "slide list keeps its scroll").toBe(before.slides);
     expect(consoleMessages).toEqual([]);
@@ -215,8 +233,17 @@ for (const which of ["live", "other"] as const) {
     console.log(`[edit ${which}] before ${JSON.stringify(before)} after ${JSON.stringify(after)} focused ${focused}`);
     expect(after.marker, "the page must not reload").toBe(true);
     expect(focused, "the slide being edited keeps focus").toBe(true);
+    await expect(page.locator(`.operator__slides [data-slide-id="${target}"]`), "the edited card stays marked").toHaveClass(/is-focused/);
     await expect(area).toHaveValue(/ typing$/);
     expect(after.slides, "the slide list must not move away from the edited slide").toBe(before.slides);
+    if (which === "live") {
+      // AbleSet reaches the very slide being edited: its card turns active and must stay marked
+      // as the edited one (the old DOM-poked class was dropped when the card's class changed).
+      await send("POST", "/stage/state", { presentationId: live, currentSlideId: target });
+      const card = page.locator(`.operator__slides [data-slide-id="${target}"]`);
+      await expect(card).toHaveClass(/is-active/);
+      await expect(card, "the edited card stays marked while it is the stage slide").toHaveClass(/is-focused/);
+    }
     expect(consoleMessages).toEqual([]);
   });
 }
@@ -229,6 +256,7 @@ test("editing with AbleSet Follow on: a stage song change does not replace the s
   await send("POST", "/integrations/ableset/follow", { enabled: true });
   try {
     await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
     await openTestLibrary(page);
     const { target, area } = await editSlide(page, 3);
     await page.evaluate(() => {
@@ -252,6 +280,42 @@ test("editing with AbleSet Follow on: a stage song change does not replace the s
     expect(state.focused, "the slide being edited keeps focus").toBe(true);
     await expect(area).toHaveValue(/ typing$/);
     expect(after.slides, "the slide list keeps its scroll").toBe(before.slides);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("back to Live with AbleSet Follow on: the operator catches up with the stage song at once", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const frames = countStageFrames(page);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    // Edit mode, song 3 open, nothing typed (so leaving Edit saves nothing and sends no stage event).
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    // AbleSet moves on to song 2 while the operator is in Edit mode: nothing switches yet.
+    const framesBefore = frames.count;
+    await churnStage(presIds[1], 3);
+    await expect.poll(() => frames.count - framesBefore, { message: "stage events reach the page" }).toBeGreaterThanOrEqual(3);
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).toBeVisible();
+
+    // Back to Live: Follow opens song 2 without waiting for another stage event, so an arrow key
+    // never sends a slide of the song that was open in Edit mode.
+    const framesAtSwitch = frames.count;
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').first().click();
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "Live mode opens the stage song",
+    ).toBeVisible({ timeout: 3_000 });
+    expect(frames.count, "no stage event was needed to catch up").toBe(framesAtSwitch);
     expect(consoleMessages).toEqual([]);
   } finally {
     await send("POST", "/integrations/ableset/follow", { enabled: false });
