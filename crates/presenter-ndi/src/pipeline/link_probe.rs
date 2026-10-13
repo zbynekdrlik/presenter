@@ -93,7 +93,9 @@ const LATENESS_NOT_FUTURE_MS: i64 = 0;
 /// overflows once per GOP. Calibrated on the segment-aware lateness: healthy
 /// links read +5…+40 ms, a join transient ≈ +250 ms, the PP incident −1532 ms
 /// — so −100 ms is three frames below any healthy value and far above the
-/// failure.
+/// failure. The encoder guard lets a frame lead by up to its deadband
+/// (`encoder_timing::TIMESTAMP_DEADBAND_MS`, 50 ms), so a guarded PP link can
+/// read down to −50 ms: still above this threshold, by design.
 const FUTURE_TIMESTAMP_MS: i64 = -100;
 
 /// How a consumer link's drops are best explained (#768). Computed over the
