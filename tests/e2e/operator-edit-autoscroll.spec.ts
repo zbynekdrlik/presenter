@@ -117,6 +117,26 @@ async function scrollTops(page: Page) {
   );
 }
 
+/** True when the slide card is fully inside the visible part of the slide list. */
+async function cardInView(page: Page, slideId: string): Promise<boolean> {
+  return page.evaluate((sid) => {
+    const list = document.querySelector(".operator__slides") as HTMLElement | null;
+    const card = document.querySelector(`.operator__slides [data-slide-id="${sid}"]`) as HTMLElement | null;
+    if (!list || !card) return false;
+    const l = list.getBoundingClientRect();
+    const c = card.getBoundingClientRect();
+    return c.top >= l.top - 1 && c.bottom <= l.bottom + 1;
+  }, slideId);
+}
+
+/** Holds every matching GET for `ms` before letting it through (a slow network). */
+async function delayRoute(page: Page, url: string, ms: number) {
+  await page.route(url, async (route) => {
+    await new Promise((r) => setTimeout(r, ms));
+    await route.continue();
+  });
+}
+
 async function openOperator(page: Page) {
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
@@ -303,7 +323,7 @@ test("back to Live with AbleSet Follow on: the operator catches up with the stag
 
     // AbleSet moves on to song 2 while the operator is in Edit mode: nothing switches yet.
     const framesBefore = frames.count;
-    await churnStage(presIds[1], 3);
+    await churnStage(presIds[1], 3, 11); // slides 12–14 of song 2
     await expect.poll(() => frames.count - framesBefore, { message: "stage events reach the page" }).toBeGreaterThanOrEqual(3);
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).toBeVisible();
 
@@ -314,8 +334,76 @@ test("back to Live with AbleSet Follow on: the operator catches up with the stag
     await expect(
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
       "Live mode opens the stage song",
-    ).toBeVisible({ timeout: 3_000 });
+    ).toBeAttached();
     expect(frames.count, "no stage event was needed to catch up").toBe(framesAtSwitch);
+    // ... scrolled to the slide that is on stage (slide 14), not left at the top.
+    await expect.poll(() => cardInView(page, slideIds[presIds[1]][13]), { message: "the stage slide is in view" }).toBe(true);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("Follow: switching to Edit while the stage song is still loading keeps Edit on its song, and Live catches up", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    // Song 2's detail answers slowly; the stage moves to song 2 and the operator clicks Edit meanwhile.
+    await delayRoute(page, `**/presentations/${presIds[1]}`, 2_000);
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await page.waitForTimeout(300);
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+    await page.waitForTimeout(2_500); // the slow fetch lands while in Edit mode
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`),
+      "Edit mode keeps song 3",
+    ).toBeAttached();
+
+    await page.unroute(`**/presentations/${presIds[1]}`);
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').first().click();
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "back in Live the stage song opens",
+    ).toBeAttached();
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("Follow: a song the operator clicks while the stage song's library is loading stays open", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    // The library list (`GET /libraries/summary`, where Follow reads the song list) answers slowly; the stage moves to song 2 and the
+    // operator clicks song 5 meanwhile.
+    await delayRoute(page, "**/libraries/summary", 3_000);
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    // Click inside the 3 s window, while Follow still waits for that library.
+    await page.waitForTimeout(700);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().click();
+    await page.waitForTimeout(3_500); // the slow library lands after the click
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[4]][0]}"]`),
+      "the clicked song stays open",
+    ).toBeAttached();
+    await page.unroute("**/libraries/summary");
     expect(consoleMessages).toEqual([]);
   } finally {
     await send("POST", "/integrations/ableset/follow", { enabled: false });
