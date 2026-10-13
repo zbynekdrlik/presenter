@@ -11,7 +11,7 @@ use anyhow::{anyhow, Result};
 use crate::pipeline::NdiPipeline;
 
 use super::activation::{finalize_reservation, wait_for_streaming, Finalize, WaitOutcome};
-use super::drift_guard::{log_drift_action, DriftAction, DriftGuard};
+use super::drift_guard::{log_drift_action, DriftAction, DriftGuard, ObservedPipeline};
 use super::{check_active_entry, NdiManager, StateCheckOutcome};
 
 /// #388 periodic RTCP-liveness sweep cadence: how often each source's
@@ -390,12 +390,15 @@ impl NdiManager {
         if pipeline.state() != crate::pipeline::PipelineState::Streaming {
             return;
         }
-        let lead = pipeline
-            .encoder_timing()
-            .lead_window_ms(crate::pipeline::health_window::WINDOW);
+        let timing = pipeline.encoder_timing();
+        let lead = timing.lead_window_ms(crate::pipeline::health_window::WINDOW);
+        let observed = ObservedPipeline {
+            generation: timing.generation(),
+            age: timing.age(),
+        };
         let now = std::time::Instant::now();
         let action = self.with_drift_guard(source_id, |guard| {
-            guard.on_tick(now, lead.map(|(min, _)| min))
+            guard.on_tick(now, observed, lead.map(|(min, _)| min))
         });
         if let DriftAction::Rebuild { lead_min_ms } = action {
             let reason = format!(

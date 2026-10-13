@@ -74,6 +74,15 @@ pub(in crate::manager) enum DriftAction {
     Recovered,
 }
 
+/// The pipeline a tick's lead was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::manager) struct ObservedPipeline {
+    /// `EncoderTiming::generation`: unique per built pipeline.
+    pub(in crate::manager) generation: u64,
+    /// Time since that pipeline was built.
+    pub(in crate::manager) age: Duration,
+}
+
 /// Per-source drift memory.
 #[derive(Debug, Default)]
 pub(in crate::manager) struct DriftGuard {
@@ -90,8 +99,11 @@ impl DriftGuard {
     pub(in crate::manager) fn on_tick(
         &mut self,
         now: Instant,
+        pipeline: ObservedPipeline,
         lead_min_ms: Option<i64>,
     ) -> DriftAction {
+        // #854 RED stub: the pipeline identity is not used yet.
+        let _ = pipeline;
         let Some(lead) = lead_min_ms else {
             return DriftAction::Idle;
         };
@@ -255,11 +267,24 @@ mod tests {
         matches!(action, DriftAction::Rebuild { .. })
     }
 
-    /// One tick whose due rebuild the pipeline confirms
+    /// A pipeline older than the lead window, the same one on every tick.
+    const LONG_LIVED: ObservedPipeline = ObservedPipeline {
+        generation: 1,
+        age: Duration::from_secs(60 * 60),
+    };
+
+    fn pipeline(generation: u64, age_s: u64) -> ObservedPipeline {
+        ObservedPipeline {
+            generation,
+            age: Duration::from_secs(age_s),
+        }
+    }
+
+    /// One tick on [`LONG_LIVED`] whose due rebuild the pipeline confirms
     /// (`request_self_heal_rebuild` returned true, the normal case), recorded
     /// the way the supervisor records it.
     fn tick(g: &mut DriftGuard, at: Instant, lead_min_ms: Option<i64>) -> DriftAction {
-        let action = g.on_tick(at, lead_min_ms);
+        let action = g.on_tick(at, LONG_LIVED, lead_min_ms);
         if is_rebuild(action) {
             g.record_rebuild(at);
         }
@@ -273,9 +298,9 @@ mod tests {
         // Streaming first is not rebuilt, so nothing may be spent on it.
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(400)), DriftAction::Idle);
+        assert_eq!(g.on_tick(t0, LONG_LIVED, Some(400)), DriftAction::Idle);
         assert_eq!(
-            g.on_tick(t0 + TICK, Some(400)),
+            g.on_tick(t0 + TICK, LONG_LIVED, Some(400)),
             DriftAction::Rebuild { lead_min_ms: 400 }
         );
         assert_eq!(g.total_fires(), 0, "unconfirmed rebuild in driftRebuilds");
@@ -286,7 +311,7 @@ mod tests {
         );
         // Neither the 5 min spacing nor the budget was consumed: still due.
         assert_eq!(
-            g.on_tick(t0 + 2 * TICK, Some(400)),
+            g.on_tick(t0 + 2 * TICK, LONG_LIVED, Some(400)),
             DriftAction::Rebuild { lead_min_ms: 400 }
         );
         // Confirmed this time.
@@ -294,14 +319,98 @@ mod tests {
         assert_eq!(g.total_fires(), 1);
         assert_eq!(g.fires_in_last_hour(), 1);
         // A confirmed rebuild restarts the count and starts the spacing.
-        assert_eq!(g.on_tick(t0 + 3 * TICK, Some(400)), DriftAction::Idle);
+        assert_eq!(
+            g.on_tick(t0 + 3 * TICK, LONG_LIVED, Some(400)),
+            DriftAction::Idle
+        );
         assert!(matches!(
-            g.on_tick(t0 + 4 * TICK, Some(400)),
+            g.on_tick(t0 + 4 * TICK, LONG_LIVED, Some(400)),
             DriftAction::Suppressed {
                 reason: SuppressReason::Spacing { .. },
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_replaced_pipeline_restarts_the_window_count() {
+        // One over window on the old pipeline, then the pipeline is replaced
+        // (an operator reactivate, a supervisor rebuild): one over window on
+        // the new pipeline is not two consecutive windows of the same one.
+        let t0 = Instant::now();
+        let mut g = DriftGuard::default();
+        assert_eq!(
+            g.on_tick(t0, pipeline(1, 600), Some(400)),
+            DriftAction::Idle
+        );
+        assert_eq!(
+            g.on_tick(t0 + TICK, pipeline(2, 40), Some(400)),
+            DriftAction::Idle
+        );
+        assert!(is_rebuild(g.on_tick(
+            t0 + 2 * TICK,
+            pipeline(2, 70),
+            Some(400)
+        )));
+    }
+
+    #[test]
+    fn a_tick_younger_than_the_lead_window_is_neutral() {
+        // A new supervisor's first tick fires at once (tokio interval), and a
+        // tick missed during a rebuild fires as soon as the loop is back, so
+        // two ticks can land seconds apart on a pipeline seconds old. A window
+        // that short never counts, let alone triggers a rebuild.
+        let t0 = Instant::now();
+        let secs = Duration::from_secs;
+        let mut g = DriftGuard::default();
+        for age_s in [1u64, 2, 29] {
+            assert_eq!(
+                g.on_tick(t0 + secs(age_s), pipeline(7, age_s), Some(900)),
+                DriftAction::Idle,
+                "age {age_s} s"
+            );
+        }
+        // The first full window counts once; a rebuild needs a second one.
+        assert_eq!(
+            g.on_tick(t0 + secs(30), pipeline(7, 30), Some(900)),
+            DriftAction::Idle
+        );
+        assert!(is_rebuild(g.on_tick(
+            t0 + secs(60),
+            pipeline(7, 60),
+            Some(900)
+        )));
+    }
+
+    #[test]
+    fn the_spacing_and_budget_outlive_the_pipeline() {
+        // A rebuild replaces the pipeline (a new generation), but the 5 min
+        // spacing and the hourly budget belong to the source.
+        let t0 = Instant::now();
+        let mut g = DriftGuard::default();
+        assert_eq!(
+            g.on_tick(t0, pipeline(1, 600), Some(400)),
+            DriftAction::Idle
+        );
+        assert!(is_rebuild(g.on_tick(
+            t0 + TICK,
+            pipeline(1, 630),
+            Some(400)
+        )));
+        g.record_rebuild(t0 + TICK);
+        // The rebuilt pipeline leads again (the guard is broken).
+        assert_eq!(
+            g.on_tick(t0 + 3 * TICK, pipeline(2, 31), Some(400)),
+            DriftAction::Idle
+        );
+        assert!(matches!(
+            g.on_tick(t0 + 4 * TICK, pipeline(2, 61), Some(400)),
+            DriftAction::Suppressed {
+                reason: SuppressReason::Spacing { .. },
+                ..
+            }
+        ));
+        assert_eq!(g.total_fires(), 1);
     }
 
     #[test]

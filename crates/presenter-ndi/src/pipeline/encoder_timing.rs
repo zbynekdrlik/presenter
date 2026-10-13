@@ -312,6 +312,9 @@ pub struct LeadWindow {
     pub max: i64,
 }
 
+/// Source of [`EncoderTiming::generation`]: one number per built pipeline.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 /// Per-pipeline timing state shared by the two probes and the readers
 /// (`/healthz`, `/ndi/snapshot`, the supervisor's drift check). Counters are
 /// atomics; the two small mutexes are taken by one streaming thread each
@@ -323,6 +326,8 @@ pub struct EncoderTiming {
     label: String,
     installed: AtomicBool,
     origin: Instant,
+    /// Unique per built pipeline (one `EncoderTiming` per `NdiPipeline`).
+    generation: u64,
     guard: Mutex<GuardState>,
     lead: Mutex<LeadState>,
     frames_seen: AtomicU64,
@@ -347,6 +352,7 @@ impl EncoderTiming {
             label,
             installed: AtomicBool::new(false),
             origin: Instant::now(),
+            generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
             guard: Mutex::new(GuardState::default()),
             lead: Mutex::new(LeadState::default()),
             frames_seen: AtomicU64::new(0),
@@ -364,6 +370,18 @@ impl EncoderTiming {
     /// Both probes are installed.
     pub(crate) fn is_installed(&self) -> bool {
         self.installed.load(Ordering::Relaxed)
+    }
+
+    /// Identity of the pipeline this timing belongs to, unique per build: the
+    /// drift self-heal keys its consecutive-window count on it, so windows of a
+    /// replaced pipeline never add up with the new pipeline's.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Time since the pipeline was built; its lead window cannot cover more.
+    pub(crate) fn age(&self) -> Duration {
+        self.origin.elapsed()
     }
 
     /// Current guard correction in ms (`/healthz` `encoderTimestampCorrectionMs`).
@@ -1110,6 +1128,17 @@ mod tests {
         timing.on_guard_buffer(&mut headers, Some(gst::ClockTime::from_seconds(22)));
         assert_eq!(headers.pts(), None);
         assert_eq!(timing.snapshot().frames_seen, 2);
+    }
+
+    #[test]
+    fn every_pipeline_gets_its_own_generation() {
+        let a = EncoderTiming::new("vah264enc".into(), "a".into());
+        let b = EncoderTiming::new("vah264enc".into(), "b".into());
+        assert_ne!(a.generation(), b.generation());
+        assert!(
+            a.age() < Duration::from_secs(30),
+            "a fresh pipeline is young"
+        );
     }
 
     #[test]
