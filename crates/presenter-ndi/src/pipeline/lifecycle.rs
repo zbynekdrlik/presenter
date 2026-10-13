@@ -176,9 +176,13 @@ impl NdiPipeline {
     /// is starting, stopped or already errored. The production twin of
     /// `simulate_error_for_test`.
     pub(crate) fn request_self_heal_rebuild(&self, reason: &str) -> bool {
-        // #854 RED stub: the request does nothing yet.
-        let _ = reason;
-        false
+        self.state_tx.send_if_modified(|state| {
+            if *state != PipelineState::Streaming {
+                return false;
+            }
+            *state = PipelineState::Errored(reason.to_string());
+            true
+        })
     }
 
     /// #854: the shared encoder's timestamp guard + lead meter state.

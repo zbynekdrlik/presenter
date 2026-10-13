@@ -407,7 +407,13 @@ pub(crate) fn render_ndi_health_entry(
     // pipeline). Always present; `null` until a window exists.
     entry["dropRatio30s"] = serde_json::json!(h.drop_ratio_30s);
     entry["pushedFps30s"] = serde_json::json!(h.pushed_fps_30s);
-    // #854 RED stub: the timestamp health keys are not rendered yet.
+    // #854: shared-encoder timestamp health — the lead that overflowed the PP
+    // consumer queues (`null` without frames), the guard's correction, whether
+    // the guard is installed, and drift self-heal rebuilds. Always present.
+    entry["timestampLeadMs30s"] = serde_json::json!(h.timestamp_lead_ms_30s);
+    entry["encoderTimestampCorrectionMs"] = serde_json::json!(h.encoder_timestamp_correction_ms);
+    entry["encoderTimestampGuard"] = serde_json::json!(h.encoder_timestamp_guard);
+    entry["driftRebuilds"] = serde_json::json!(h.drift_rebuilds);
     entry
 }
 

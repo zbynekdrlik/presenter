@@ -90,16 +90,62 @@ impl DriftGuard {
         now: Instant,
         lead_min_ms: Option<i64>,
     ) -> DriftAction {
-        // #854 RED stub: the drift self-heal never acts yet.
-        let _ = (
-            now,
-            lead_min_ms,
-            MAX_REBUILDS_PER_HOUR,
-            BUDGET_WINDOW,
-            MIN_SPACING,
-            SUSTAIN_TICKS,
-        );
-        DriftAction::Idle
+        let Some(lead) = lead_min_ms else {
+            return DriftAction::Idle;
+        };
+        if lead < LEAD_CLEAR_MS {
+            let was_over = self.over_ticks > 0;
+            self.over_ticks = 0;
+            self.suppressed_streak = 0;
+            return if was_over {
+                DriftAction::Recovered
+            } else {
+                DriftAction::Idle
+            };
+        }
+        if lead < LEAD_TRIGGER_MS {
+            // Hysteresis band: hold the count, neither clear nor advance.
+            return DriftAction::Idle;
+        }
+        self.over_ticks = self.over_ticks.saturating_add(1);
+        if self.over_ticks < SUSTAIN_TICKS {
+            return DriftAction::Idle;
+        }
+        while self
+            .fires
+            .front()
+            .is_some_and(|at| now.saturating_duration_since(*at) >= BUDGET_WINDOW)
+        {
+            self.fires.pop_front();
+        }
+        let since_last = self
+            .fires
+            .back()
+            .map(|at| now.saturating_duration_since(*at));
+        let reason = match since_last {
+            Some(since) if since < MIN_SPACING => Some(SuppressReason::Spacing {
+                remaining: MIN_SPACING - since,
+            }),
+            _ if self.fires.len() >= MAX_REBUILDS_PER_HOUR => Some(SuppressReason::HourlyBudget),
+            _ => None,
+        };
+        match reason {
+            None => {
+                self.fires.push_back(now);
+                self.total_fires = self.total_fires.saturating_add(1);
+                self.over_ticks = 0;
+                self.suppressed_streak = 0;
+                DriftAction::Rebuild { lead_min_ms: lead }
+            }
+            Some(reason) => {
+                self.suppressed_streak = self.suppressed_streak.saturating_add(1);
+                DriftAction::Suppressed {
+                    lead_min_ms: lead,
+                    reason,
+                    log: self.suppressed_streak.is_power_of_two(),
+                }
+            }
+        }
     }
 
     /// Drift rebuilds for this source since process start (`/healthz`
