@@ -149,6 +149,13 @@ impl DriftGuard {
         }
     }
 
+    /// Record a drift rebuild the pipeline CONFIRMED
+    /// (`request_self_heal_rebuild` returned true).
+    pub(in crate::manager) fn record_rebuild(&mut self, now: Instant) {
+        // #854 RED stub: `on_tick` still records the rebuild itself.
+        let _ = now;
+    }
+
     /// Drift rebuilds for this source since process start (`/healthz`
     /// `driftRebuilds`).
     pub(in crate::manager) fn total_fires(&self) -> u32 {
@@ -242,20 +249,69 @@ mod tests {
         matches!(action, DriftAction::Rebuild { .. })
     }
 
+    /// One tick whose due rebuild the pipeline confirms
+    /// (`request_self_heal_rebuild` returned true, the normal case), recorded
+    /// the way the supervisor records it.
+    fn tick(g: &mut DriftGuard, at: Instant, lead_min_ms: Option<i64>) -> DriftAction {
+        let action = g.on_tick(at, lead_min_ms);
+        if is_rebuild(action) {
+            g.record_rebuild(at);
+        }
+        action
+    }
+
+    #[test]
+    fn a_due_rebuild_is_recorded_only_once_confirmed() {
+        // `on_tick` only reports a rebuild as due; the supervisor records it
+        // after `request_self_heal_rebuild` confirms it. A pipeline that left
+        // Streaming first is not rebuilt, so nothing may be spent on it.
+        let t0 = Instant::now();
+        let mut g = DriftGuard::default();
+        assert_eq!(g.on_tick(t0, Some(400)), DriftAction::Idle);
+        assert_eq!(
+            g.on_tick(t0 + TICK, Some(400)),
+            DriftAction::Rebuild { lead_min_ms: 400 }
+        );
+        assert_eq!(g.total_fires(), 0, "unconfirmed rebuild in driftRebuilds");
+        assert_eq!(
+            g.fires_in_last_hour(),
+            0,
+            "unconfirmed rebuild spent the hourly budget"
+        );
+        // Neither the 5 min spacing nor the budget was consumed: still due.
+        assert_eq!(
+            g.on_tick(t0 + 2 * TICK, Some(400)),
+            DriftAction::Rebuild { lead_min_ms: 400 }
+        );
+        // Confirmed this time.
+        g.record_rebuild(t0 + 2 * TICK);
+        assert_eq!(g.total_fires(), 1);
+        assert_eq!(g.fires_in_last_hour(), 1);
+        // A confirmed rebuild restarts the count and starts the spacing.
+        assert_eq!(g.on_tick(t0 + 3 * TICK, Some(400)), DriftAction::Idle);
+        assert!(matches!(
+            g.on_tick(t0 + 4 * TICK, Some(400)),
+            DriftAction::Suppressed {
+                reason: SuppressReason::Spacing { .. },
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn a_lead_sustained_over_two_windows_rebuilds() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(300)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0, Some(300)), DriftAction::Idle);
         assert_eq!(
-            g.on_tick(t0 + TICK, Some(300)),
+            tick(&mut g, t0 + TICK, Some(300)),
             DriftAction::Rebuild { lead_min_ms: 300 }
         );
         assert_eq!(g.total_fires(), 1);
         assert_eq!(g.fires_in_last_hour(), 1);
         // The count restarts after a rebuild: the fresh pipeline needs two
         // new over windows.
-        assert_eq!(g.on_tick(t0 + 2 * TICK, Some(400)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + 2 * TICK, Some(400)), DriftAction::Idle);
     }
 
     #[test]
@@ -263,7 +319,7 @@ mod tests {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
         for k in 0..10u32 {
-            assert_eq!(g.on_tick(t0 + TICK * k, Some(299)), DriftAction::Idle);
+            assert_eq!(tick(&mut g, t0 + TICK * k, Some(299)), DriftAction::Idle);
         }
         assert_eq!(g.total_fires(), 0);
     }
@@ -276,10 +332,10 @@ mod tests {
         let d = crate::pipeline::encoder_timing::TIMESTAMP_DEADBAND_MS;
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(400)), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + TICK, Some(d)), DriftAction::Recovered);
+        assert_eq!(tick(&mut g, t0, Some(400)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + TICK, Some(d)), DriftAction::Recovered);
         for k in 2..20u32 {
-            assert_eq!(g.on_tick(t0 + TICK * k, Some(d)), DriftAction::Idle);
+            assert_eq!(tick(&mut g, t0 + TICK * k, Some(d)), DriftAction::Idle);
         }
         assert_eq!(g.total_fires(), 0);
     }
@@ -288,50 +344,50 @@ mod tests {
     fn a_single_over_window_followed_by_a_clear_one_does_not_count() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(800)), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + TICK, Some(-20)), DriftAction::Recovered);
-        assert_eq!(g.on_tick(t0 + 2 * TICK, Some(800)), DriftAction::Idle);
-        assert!(is_rebuild(g.on_tick(t0 + 3 * TICK, Some(800))));
+        assert_eq!(tick(&mut g, t0, Some(800)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + TICK, Some(-20)), DriftAction::Recovered);
+        assert_eq!(tick(&mut g, t0 + 2 * TICK, Some(800)), DriftAction::Idle);
+        assert!(is_rebuild(tick(&mut g, t0 + 3 * TICK, Some(800))));
     }
 
     #[test]
     fn the_hysteresis_band_holds_the_count() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(400)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0, Some(400)), DriftAction::Idle);
         // 100 ms is inside the band (only < 100 clears).
-        assert_eq!(g.on_tick(t0 + TICK, Some(100)), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + 2 * TICK, Some(299)), DriftAction::Idle);
-        assert!(is_rebuild(g.on_tick(t0 + 3 * TICK, Some(400))));
+        assert_eq!(tick(&mut g, t0 + TICK, Some(100)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + 2 * TICK, Some(299)), DriftAction::Idle);
+        assert!(is_rebuild(tick(&mut g, t0 + 3 * TICK, Some(400))));
     }
 
     #[test]
     fn ninety_nine_ms_clears_the_count() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(400)), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + TICK, Some(99)), DriftAction::Recovered);
-        assert_eq!(g.on_tick(t0 + 2 * TICK, Some(400)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0, Some(400)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + TICK, Some(99)), DriftAction::Recovered);
+        assert_eq!(tick(&mut g, t0 + 2 * TICK, Some(400)), DriftAction::Idle);
     }
 
     #[test]
     fn recovered_is_reported_only_after_being_over() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, Some(-5)), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + TICK, Some(150)), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + 2 * TICK, Some(10)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0, Some(-5)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + TICK, Some(150)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + 2 * TICK, Some(10)), DriftAction::Idle);
     }
 
     #[test]
     fn no_frames_in_the_window_is_neutral() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();
-        assert_eq!(g.on_tick(t0, None), DriftAction::Idle);
-        assert_eq!(g.on_tick(t0 + TICK, Some(400)), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0, None), DriftAction::Idle);
+        assert_eq!(tick(&mut g, t0 + TICK, Some(400)), DriftAction::Idle);
         // A stall between two over windows neither clears nor advances.
-        assert_eq!(g.on_tick(t0 + 2 * TICK, None), DriftAction::Idle);
-        assert!(is_rebuild(g.on_tick(t0 + 3 * TICK, Some(400))));
+        assert_eq!(tick(&mut g, t0 + 2 * TICK, None), DriftAction::Idle);
+        assert!(is_rebuild(tick(&mut g, t0 + 3 * TICK, Some(400))));
     }
 
     #[test]
@@ -339,11 +395,11 @@ mod tests {
         // Shifted forward so `t0 - TICK` can never underflow the clock.
         let t0 = Instant::now() + TICK;
         let mut g = DriftGuard::default();
-        g.on_tick(t0 - TICK, Some(400));
-        assert!(is_rebuild(g.on_tick(t0, Some(400))));
-        assert_eq!(g.on_tick(t0 + TICK, Some(400)), DriftAction::Idle);
+        tick(&mut g, t0 - TICK, Some(400));
+        assert!(is_rebuild(tick(&mut g, t0, Some(400))));
+        assert_eq!(tick(&mut g, t0 + TICK, Some(400)), DriftAction::Idle);
         assert_eq!(
-            g.on_tick(t0 + 2 * TICK, Some(400)),
+            tick(&mut g, t0 + 2 * TICK, Some(400)),
             DriftAction::Suppressed {
                 lead_min_ms: 400,
                 reason: SuppressReason::Spacing {
@@ -354,15 +410,17 @@ mod tests {
         );
         let just_before = t0 + Duration::from_secs(4 * 60 + 59);
         assert!(matches!(
-            g.on_tick(just_before, Some(400)),
+            tick(&mut g, just_before, Some(400)),
             DriftAction::Suppressed {
                 reason: SuppressReason::Spacing { remaining },
                 ..
             } if remaining == Duration::from_secs(1)
         ));
-        assert!(is_rebuild(
-            g.on_tick(t0 + Duration::from_secs(5 * 60), Some(400))
-        ));
+        assert!(is_rebuild(tick(
+            &mut g,
+            t0 + Duration::from_secs(5 * 60),
+            Some(400)
+        )));
         assert_eq!(g.total_fires(), 2);
     }
 
@@ -373,24 +431,24 @@ mod tests {
         let mut g = DriftGuard::default();
         for m in [0u64, 5, 10] {
             assert_eq!(
-                g.on_tick(minute(m) - TICK / 2, Some(500)),
+                tick(&mut g, minute(m) - TICK / 2, Some(500)),
                 DriftAction::Idle
             );
             assert!(
-                is_rebuild(g.on_tick(minute(m), Some(500))),
+                is_rebuild(tick(&mut g, minute(m), Some(500))),
                 "rebuild at {m} min"
             );
         }
         assert_eq!(g.fires_in_last_hour(), 3);
         // From 15 min on, a rebuild is due every tick but the hour is spent.
         assert_eq!(
-            g.on_tick(minute(15) - TICK / 2, Some(500)),
+            tick(&mut g, minute(15) - TICK / 2, Some(500)),
             DriftAction::Idle
         );
         let mut logged = Vec::new();
         let mut at = minute(15);
         while at < minute(60) {
-            match g.on_tick(at, Some(500)) {
+            match tick(&mut g, at, Some(500)) {
                 DriftAction::Suppressed {
                     reason: SuppressReason::HourlyBudget,
                     log,
@@ -406,7 +464,7 @@ mod tests {
             &[true, true, false, true, false, false, false, true, false]
         );
         // The first rebuild ages out of the hour exactly at 60 min.
-        assert!(is_rebuild(g.on_tick(minute(60), Some(500))));
+        assert!(is_rebuild(tick(&mut g, minute(60), Some(500))));
         assert_eq!(g.total_fires(), 4);
     }
 }
