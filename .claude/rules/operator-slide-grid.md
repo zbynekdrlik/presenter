@@ -178,4 +178,8 @@ paths:
   changed" check wait for the late answer's BODY (`landed()` =
   `response.finished()`) and `settle`; a network failure is a MALFORMED 200
   (`not-json`), never a 5xx (Chrome logs every non-2xx and the specs assert a
-  clean console).
+  clean console). Remove a route only after every request it holds has ANSWERED (`landed()`
+  on its response first): a handler still waiting when `page.unroute` runs
+  fails the test with "Route is already handled" (CI run 38419895785). A
+  route whose request must never answer (a hung load) is simply left in
+  place; the page closing cancels it.
