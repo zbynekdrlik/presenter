@@ -1697,3 +1697,61 @@ test("Edit: a Follow ON open of the song that ends up shown never replaces it wi
     await send("POST", "/integrations/ableset/follow", { enabled: false });
   }
 });
+
+// Guard (the page-load seed of Follow's stage shipped in 97d7bbbe without a failing test first).
+test("Follow, API layout: right after the page loads, Follow ON opens the stage song", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  const previousLayout = (await (await fetch(new URL("/stage/layout", baseURL))).json()).code as string;
+  try {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+    await send("POST", "/stage/layout", { code: "api" });
+    // On an API layout the page's own snapshot carries no song; the stage is on song 2.
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await openOperator(page);
+    const follow = page.locator('[data-role="ableset-follow"]');
+    await expect(follow, "Follow is off").toHaveAttribute("data-state", "off");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+    // No stage frame since the page loaded: Follow ON must still know the stage song.
+    await follow.first().click();
+    await expect(follow).toHaveAttribute("data-state", "on");
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "Follow ON opens the stage song",
+    ).toBeAttached();
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+    await send("POST", "/stage/layout", { code: previousLayout });
+  }
+});
+
+test("a double-click whose first load fails still shows the song", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await openOperator(page);
+  await openTestLibrary(page);
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+  // Song 5's first request fails at once; the second (the double-click's) is answered.
+  let requests = 0;
+  await page.route(`**/presentations/${presIds[4]}`, async (route) => {
+    requests += 1;
+    if (requests === 1) return route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    return route.continue();
+  });
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().dblclick();
+  await expect.poll(() => requests, { message: "both clicks load the song" }).toBe(2);
+  await expect(
+    page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[4]][0]}"]`),
+    "the second load shows song 5",
+  ).toBeAttached();
+  await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first()).toHaveClass(/is-active/);
+  await page.unroute(`**/presentations/${presIds[4]}`);
+  expect(consoleMessages).toEqual([]);
+});
