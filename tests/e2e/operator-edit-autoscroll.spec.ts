@@ -129,7 +129,7 @@ async function cardInView(page: Page, slideId: string): Promise<boolean> {
   }, slideId);
 }
 
-/** Holds every matching GET until the returned `release` is called. */
+/** Holds every matching request until the returned `release` is called. */
 async function gateRoute(page: Page, url: string): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
@@ -138,6 +138,11 @@ async function gateRoute(page: Page, url: string): Promise<() => void> {
     await route.continue();
   });
   return release;
+}
+
+/** Waits until a response's body has fully arrived (headers alone resolve `waitForResponse`). */
+async function landed(response: Promise<import("@playwright/test").Response>) {
+  await (await response).finished();
 }
 
 /** Lets the WASM handle what just arrived: a 0 ms timeout, then two animation frames. */
@@ -378,7 +383,7 @@ test("Follow: switching to Edit while the stage song is still loading keeps Edit
     await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
     await expect(page.locator("body")).toHaveAttribute("data-mode", "edit");
     releaseSong2();
-    await songAnswered; // ... and it lands while in Edit mode
+    await landed(songAnswered); // ... and it lands while in Edit mode
     await settle(page);
     await expect(
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`),
@@ -423,7 +428,7 @@ test("Follow: a song the operator clicks while the stage song's library is loadi
     await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().click();
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[4]][0]}"]`)).toBeAttached();
     releaseLibrary();
-    await libraryAnswered; // the held library lands after the click
+    await landed(libraryAnswered); // the held library lands after the click
     await settle(page);
     await expect(
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[4]][0]}"]`),
@@ -459,7 +464,7 @@ test("Follow: a stage song that fails to load is opened on the next stage change
     });
     const failedAnswer = page.waitForResponse(`**/presentations/${presIds[1]}`);
     await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
-    await failedAnswer;
+    await landed(failedAnswer);
     await settle(page);
     await expect(
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`),
@@ -511,7 +516,7 @@ test("Follow: the selection stays on the shown song while the stage song loads, 
       "the stage is back on song 3",
     ).toHaveClass(/is-active/);
     releaseSong2();
-    await songAnswered;
+    await landed(songAnswered);
     await settle(page);
     await expect(song3Row, "song 3 is still selected after song 2 arrived").toHaveClass(/is-active/);
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).toBeAttached();
@@ -569,7 +574,7 @@ test("Follow: a song clicked just before the stage changed does not replace the 
 
     // Song 5's late answer must not replace it.
     releaseSong5();
-    await clickAnswered;
+    await landed(clickAnswered);
     await settle(page);
     await expect(song2First, "song 2 stays shown").toBeAttached();
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[4]][0]}"]`)).not.toBeAttached();
@@ -676,7 +681,7 @@ test("Follow turned on and straight off again does not open the stage song", asy
     await follow.first().click();
     await expect(follow).toHaveAttribute("data-state", "off");
     releaseSong2();
-    await answered;
+    await landed(answered);
     await settle(page);
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`), "song 3 stays").toBeAttached();
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`)).not.toBeAttached();
@@ -709,7 +714,7 @@ test("Follow: a playlist the operator opens while the stage song's library loads
     await playlistButton.click();
     await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Churn Set");
     releaseLibrary();
-    await libraryAnswered;
+    await landed(libraryAnswered);
     await settle(page);
     await expect(page.locator('[data-role="context-title"]'), "the playlist stays open").toHaveText("_E2E Churn Set");
     await expect(playlistButton).toHaveAttribute("data-active", "true");
@@ -777,7 +782,7 @@ test("Edit: the refetch after a raced slide duplicate does not replace a song op
   await duplicate.click();
   await expect.poll(() => duplicates).toBe(1);
   await duplicate.click();
-  await secondAnswered;
+  await landed(secondAnswered);
   await expect(page.locator(".operator__slides [data-slide-id]")).toHaveCount(17);
 
   // The refetch is held; the operator opens song 8 meanwhile.
@@ -790,7 +795,7 @@ test("Edit: the refetch after a raced slide duplicate does not replace a song op
   const song8First = page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[7]][0]}"]`);
   await expect(song8First).toBeAttached();
   releaseRefetch();
-  await refetchAnswered;
+  await landed(refetchAnswered);
   await settle(page);
   await expect(song8First, "song 8 stays shown").toBeAttached();
   await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[song7][0]}"]`)).not.toBeAttached();
@@ -821,7 +826,7 @@ test("Edit: a slide duplicate answered after another song was opened leaves that
   const song10First = page.locator(`.operator__slides [data-slide-id="${slideIds[song10][0]}"]`);
   await expect(song10First).toBeAttached();
   releaseDuplicate();
-  await duplicateAnswered;
+  await landed(duplicateAnswered);
   await settle(page);
   await expect(song10First, "song 10 stays shown").toBeAttached();
   await expect(page.locator(".operator__slides [data-slide-id]"), "with its own 16 slides").toHaveCount(16);
@@ -857,7 +862,7 @@ test("Follow: a slow stage song still opens when a later stage change re-request
     // The FIRST answer arrives: it must open the song (the second is still held).
     const firstAnswered = page.waitForResponse(`**/presentations/${presIds[1]}`);
     gates[0]();
-    await firstAnswered;
+    await landed(firstAnswered);
     await expect(
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
       "the first answer opens song 2",
@@ -901,7 +906,7 @@ test("Edit: a Follow ON open whose stage song changed before it arrived does not
       page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 04" }).first(),
     ).toHaveClass(/is-stage-active/);
     releaseSong2();
-    await answered;
+    await landed(answered);
     await settle(page);
     await expect(
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`),
@@ -931,7 +936,7 @@ test("a song that fails to load keeps the shown song selected", async ({ page })
   );
   const failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
   await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().click();
-  await failed;
+  await landed(failed);
   await expect(song3Row, "the selection returns to the song still shown").toHaveClass(/is-active/);
   await expect(
     page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first(),
@@ -939,4 +944,149 @@ test("a song that fails to load keeps the shown song selected", async ({ page })
   await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).toBeAttached();
   await page.unroute(`**/presentations/${presIds[4]}`);
   expect(consoleMessages).toEqual([]);
+});
+
+test("Follow: a songplayer push to the API layout does not cancel the stage song Follow is loading", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const frames = countStageFrames(page);
+  await resetStage();
+  const previousLayout = (await (await fetch(new URL("/stage/layout", baseURL))).json()).code as string;
+  await send("POST", "/stage/layout", { code: "api" });
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    const releaseSong2 = await gateRoute(page, `**/presentations/${presIds[1]}`);
+    const requested = page.waitForRequest(`**/presentations/${presIds[1]}`);
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await requested;
+    // songplayer pushes text to the API layout while song 2 loads (a stage frame with no song).
+    const framesBefore = frames.count;
+    const push = await fetch(new URL("/api/stage", baseURL), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentText: "Amazing grace", currentSong: "Amazing Grace" }),
+    });
+    expect(push.status).toBe(204);
+    await expect.poll(() => frames.count - framesBefore, { message: "the API push reached the page" }).toBeGreaterThanOrEqual(1);
+    releaseSong2();
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "song 2 still opens",
+    ).toBeAttached();
+    await page.unroute(`**/presentations/${presIds[1]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+    await send("POST", "/stage/layout", { code: previousLayout });
+  }
+});
+
+test("Follow: a playlist the operator opens while the stage song itself loads stays open", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    const releaseSong2 = await gateRoute(page, `**/presentations/${presIds[1]}`);
+    const requested = page.waitForRequest(`**/presentations/${presIds[1]}`);
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await requested;
+    const playlistButton = page.locator(`[data-role="playlist-item"][data-playlist-id="${playlistId}"]`).first();
+    await playlistButton.click();
+    await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Churn Set");
+    const libraryAnswered = page.waitForResponse("**/libraries/summary");
+    releaseSong2();
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`), "song 2 opens").toBeAttached();
+    await landed(libraryAnswered);
+    await settle(page);
+    await expect(page.locator('[data-role="context-title"]'), "the playlist stays open").toHaveText("_E2E Churn Set");
+    await expect(playlistButton).toHaveAttribute("data-active", "true");
+    await page.unroute(`**/presentations/${presIds[1]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("Follow: a search result whose answer comes late does not replace the stage song Follow opened", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    const releaseSong6 = await gateRoute(page, `**/presentations/${presIds[5]}`);
+    const searchRequested = page.waitForRequest(`**/presentations/${presIds[5]}`);
+    const searchAnswered = page.waitForResponse(`**/presentations/${presIds[5]}`);
+    await page.locator('[data-role="global-search-query"]').fill("Churn Song 06");
+    await page
+      .locator('[data-role="search-result-item"][data-kind="presentation"]', { hasText: "Churn Song 06" })
+      .first()
+      .click();
+    await searchRequested;
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    const song2First = page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`);
+    await expect(song2First, "Follow opens the stage song").toBeAttached();
+    releaseSong6();
+    await landed(searchAnswered);
+    await settle(page);
+    await expect(song2First, "song 2 stays shown").toBeAttached();
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[5]][0]}"]`)).not.toBeAttached();
+    await page.unroute(`**/presentations/${presIds[5]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("Follow: the session song restored after a reload does not replace a stage song Follow opened first", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+    // The stage is on the session song, so the reload itself opens nothing new.
+    await send("POST", "/stage/state", { presentationId: presIds[2], currentSlideId: slideIds[presIds[2]][0] });
+
+    const releaseSong3 = await gateRoute(page, `**/presentations/${presIds[2]}`);
+    const restoreRequested = page.waitForRequest(`**/presentations/${presIds[2]}`);
+    const restoreAnswered = page.waitForResponse(`**/presentations/${presIds[2]}`);
+    await page.reload();
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await restoreRequested;
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    const song2First = page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`);
+    await expect(song2First, "Follow opens the stage song").toBeAttached();
+    releaseSong3();
+    await landed(restoreAnswered);
+    await settle(page);
+    await expect(song2First, "song 2 stays shown").toBeAttached();
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).not.toBeAttached();
+    await page.unroute(`**/presentations/${presIds[2]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
 });
