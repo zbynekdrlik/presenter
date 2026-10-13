@@ -60,7 +60,8 @@ pub(in crate::manager) enum SuppressReason {
 pub(in crate::manager) enum DriftAction {
     /// Nothing to do.
     Idle,
-    /// Rebuild the pipeline now.
+    /// A rebuild is due: request it, and [`DriftGuard::record_rebuild`] it only
+    /// once the pipeline confirmed the request.
     Rebuild { lead_min_ms: i64 },
     /// A rebuild is due but rate-limited; `log` is the power-of-two gate over
     /// the suppression streak (`log-flood-backoff.md`).
@@ -132,9 +133,9 @@ impl DriftGuard {
         };
         match reason {
             None => {
-                self.fires.push_back(now);
-                self.total_fires = self.total_fires.saturating_add(1);
-                self.over_ticks = 0;
+                // Due, not yet done: nothing is recorded until the pipeline
+                // confirms the request (`record_rebuild`), so a refused one
+                // spends neither the spacing nor the budget.
                 self.suppressed_streak = 0;
                 DriftAction::Rebuild { lead_min_ms: lead }
             }
@@ -150,10 +151,15 @@ impl DriftGuard {
     }
 
     /// Record a drift rebuild the pipeline CONFIRMED
-    /// (`request_self_heal_rebuild` returned true).
+    /// (`request_self_heal_rebuild` returned true): it starts the 5 min
+    /// spacing, spends one of the hour's rebuilds and counts in
+    /// `driftRebuilds`, and the fresh pipeline needs two new over windows. A
+    /// refused request (the pipeline left Streaming first) is never recorded.
     pub(in crate::manager) fn record_rebuild(&mut self, now: Instant) {
-        // #854 RED stub: `on_tick` still records the rebuild itself.
-        let _ = now;
+        self.fires.push_back(now);
+        self.total_fires = self.total_fires.saturating_add(1);
+        self.over_ticks = 0;
+        self.suppressed_streak = 0;
     }
 
     /// Drift rebuilds for this source since process start (`/healthz`

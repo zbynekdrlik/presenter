@@ -372,11 +372,13 @@ impl NdiManager {
     /// tick. Reads the shared encoder's trailing-30s lead — a PIPELINE-level
     /// signal, never consumer drop ratios (join drops and reconnect churn
     /// would loop rebuilds, the #263 lesson) — and feeds the source's
-    /// `DriftGuard` (memory in the manager). On `Rebuild` it marks the
+    /// `DriftGuard` (memory in the manager). When a rebuild is due it marks the
     /// pipeline Errored; the next loop turn then rebuilds through the normal
     /// `handle_dead_state` → `rebuild_pipeline` path (#741 reservation, #745c
-    /// carried supervisor, 2 s rate limit). The `active` lock is held only to
-    /// clone the pipeline Arc.
+    /// carried supervisor, 2 s rate limit). Only a CONFIRMED request (the
+    /// pipeline was still Streaming) is recorded in the guard: a refused one
+    /// spends no spacing, no budget and no `driftRebuilds`. The `active` lock
+    /// is held only to clone the pipeline Arc.
     async fn drift_check(&self, source_id: &str) {
         let pipeline = {
             let active = self.active.lock().await;
@@ -391,13 +393,10 @@ impl NdiManager {
         let lead = pipeline
             .encoder_timing()
             .lead_window_ms(crate::pipeline::health_window::WINDOW);
-        let (action, fires_last_hour, total_fires) = {
-            let mut guards = self.drift_guards.lock().unwrap_or_else(|p| p.into_inner());
-            let guard = guards.entry(source_id.to_string()).or_default();
-            let action = guard.on_tick(std::time::Instant::now(), lead.map(|(min, _)| min));
-            (action, guard.fires_in_last_hour(), guard.total_fires())
-        };
-        log_drift_action(source_id, lead, action, fires_last_hour, total_fires);
+        let now = std::time::Instant::now();
+        let action = self.with_drift_guard(source_id, |guard| {
+            guard.on_tick(now, lead.map(|(min, _)| min))
+        });
         if let DriftAction::Rebuild { lead_min_ms } = action {
             let reason = format!(
                 "self-heal: shared encoder timestamps lead the clock by {lead_min_ms} ms (#854)"
@@ -405,10 +404,24 @@ impl NdiManager {
             if !pipeline.request_self_heal_rebuild(&reason) {
                 tracing::debug!(
                     source_id = %source_id,
-                    "NDI self-heal: the pipeline left Streaming before the rebuild request (#854)"
+                    "NDI self-heal: the pipeline left Streaming before the rebuild request — \
+                     not rebuilt, not recorded (#854)"
                 );
+                return;
             }
+            self.with_drift_guard(source_id, |guard| guard.record_rebuild(now));
         }
+        let (fires_last_hour, total_fires) = self.with_drift_guard(source_id, |guard| {
+            (guard.fires_in_last_hour(), guard.total_fires())
+        });
+        log_drift_action(source_id, lead, action, fires_last_hour, total_fires);
+    }
+
+    /// Run `f` on `source_id`'s drift memory (created on first use). The std
+    /// mutex is held only for `f`, never across an `.await`.
+    fn with_drift_guard<R>(&self, source_id: &str, f: impl FnOnce(&mut DriftGuard) -> R) -> R {
+        let mut guards = self.drift_guards.lock().unwrap_or_else(|p| p.into_inner());
+        f(guards.entry(source_id.to_string()).or_default())
     }
 
     /// #854: drift self-heal rebuilds for `source_id` since process start
