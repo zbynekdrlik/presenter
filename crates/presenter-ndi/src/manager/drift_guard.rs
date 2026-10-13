@@ -268,6 +268,22 @@ mod tests {
     }
 
     #[test]
+    fn a_lead_capped_at_the_guard_deadband_never_counts() {
+        // #854 deadband: with the timestamp guard working the shared encoder's
+        // lead is at most D = 50 ms — under the 100 ms clear level, so it
+        // clears an over count and never starts one.
+        let d = crate::pipeline::encoder_timing::TIMESTAMP_DEADBAND_MS;
+        let t0 = Instant::now();
+        let mut g = DriftGuard::default();
+        assert_eq!(g.on_tick(t0, Some(400)), DriftAction::Idle);
+        assert_eq!(g.on_tick(t0 + TICK, Some(d)), DriftAction::Recovered);
+        for k in 2..20u32 {
+            assert_eq!(g.on_tick(t0 + TICK * k, Some(d)), DriftAction::Idle);
+        }
+        assert_eq!(g.total_fires(), 0);
+    }
+
+    #[test]
     fn a_single_over_window_followed_by_a_clear_one_does_not_count() {
         let t0 = Instant::now();
         let mut g = DriftGuard::default();

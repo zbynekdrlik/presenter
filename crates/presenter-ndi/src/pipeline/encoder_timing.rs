@@ -51,6 +51,22 @@ const NS_PER_MS: i64 = 1_000_000;
 /// where the encoder keeps the input PTS.
 const CORRECTION_LOG_STEP_MS: i64 = 100;
 
+/// The guard's deadband D (#854 ROZHODNUTÉ): a frame may leave the shared
+/// encoder stamped at most this many ms LATER than the pipeline clock; only the
+/// part of a lead above D is pulled back.
+///
+/// Why 50 ms: SNV's vah264enc 1.24 frame counter leads the clock by up to the
+/// NDI arrival jitter (≤ ~40 ms, minus the encode latency), so with D above
+/// that the guard never touches a frame on SNV, by construction. On PP it caps
+/// the drift lead at D: a clocksync hold of ≤ D (~1.5 frames), far below the
+/// 500 ms consumer queue that overflowed. The drift self-heal trigger (300 ms
+/// lead) and the `futureTimestamps` verdict (≤ −100 ms lateness) both stay
+/// above it, so neither can fire on a lead the guard allows.
+pub(crate) const TIMESTAMP_DEADBAND_MS: i64 = 50;
+
+/// [`TIMESTAMP_DEADBAND_MS`] in nanoseconds (the guard's running-time unit).
+pub(crate) const TIMESTAMP_DEADBAND_NS: i64 = TIMESTAMP_DEADBAND_MS * NS_PER_MS;
+
 /// What the guard did with one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GuardKind {
@@ -590,20 +606,32 @@ mod tests {
 
     const FRAME_NS: i64 = 33_333_333;
     const MS: i64 = NS_PER_MS;
+    /// The deadband D: how far a frame may leave ahead of the clock.
+    const D: i64 = TIMESTAMP_DEADBAND_NS;
 
     /// Deterministic xorshift for jitter (no RNG dependency).
     struct XorShift(u64);
     impl XorShift {
-        fn next_jitter_ns(&mut self, max_abs_ns: i64) -> i64 {
+        fn next_u64(&mut self) -> u64 {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
             self.0 ^= self.0 << 17;
-            (self.0 % (2 * max_abs_ns as u64 + 1)) as i64 - max_abs_ns
+            self.0
+        }
+
+        /// Uniform in `-max_abs_ns..=max_abs_ns`.
+        fn next_jitter_ns(&mut self, max_abs_ns: i64) -> i64 {
+            (self.next_u64() % (2 * max_abs_ns as u64 + 1)) as i64 - max_abs_ns
+        }
+
+        /// Uniform in `lo_ns..=hi_ns`.
+        fn next_range_ns(&mut self, lo_ns: i64, hi_ns: i64) -> i64 {
+            lo_ns + (self.next_u64() % ((hi_ns - lo_ns) as u64 + 1)) as i64
         }
     }
 
     #[test]
-    fn fast_frame_counter_never_leaves_ahead_of_the_clock() {
+    fn fast_frame_counter_never_leads_the_clock_by_more_than_the_deadband() {
         // vah264enc 1.24 on a source delivering 40 fps against a 30 fps counter:
         // the counter gains 8.3 ms per frame on the clock.
         let mut g = TimestampGuard::default();
@@ -613,22 +641,65 @@ mod tests {
             let now = n * 25 * MS + 5 * MS;
             let d = g.apply(enc, now, FRAME_NS);
             assert!(
-                d.out_ns <= now,
-                "frame {n}: out {} ahead of now {now}",
+                d.out_ns <= now + D,
+                "frame {n}: out {} more than D ahead of now {now}",
                 d.out_ns
             );
             if let Some(p) = prev {
                 assert!(d.out_ns > p, "frame {n}: output not strictly increasing");
             }
             prev = Some(d.out_ns);
-            if n >= 1 {
-                assert_eq!(d.kind, GuardKind::PulledBack, "frame {n}");
-            }
+            // Frames 0..=6 lead by at most 45 ms (n × 8.33 ms − 5 ms): inside
+            // D, left exactly as the encoder stamped them.
+            let expected = if n < 7 {
+                GuardKind::Kept
+            } else {
+                GuardKind::PulledBack
+            };
+            assert_eq!(d.kind, expected, "frame {n}");
         }
-        // The correction is the lead the unguarded pipeline would have built:
-        // 399 frames × 8.33 ms − 5 ms encode latency ≈ 3.32 s.
+        // The correction is the lead the unguarded pipeline would have built,
+        // minus D: 399 frames × 8.33 ms − 5 ms encode latency − 50 ms ≈ 3.27 s.
         let corr_ms = g.correction_ns() / MS;
-        assert!((3300..=3340).contains(&corr_ms), "correction {corr_ms} ms");
+        assert!((3250..=3290).contains(&corr_ms), "correction {corr_ms} ms");
+    }
+
+    #[test]
+    fn snv_arrival_jitter_inside_the_deadband_is_an_exact_identity() {
+        // SNV (prod, Intel N100) runs vah264enc 1.24 too. Its counter is
+        // anchored at the FIRST frame's arrival, so when that frame arrived
+        // late, every frame that arrives earlier than it leads the clock by up
+        // to the arrival jitter (0–40 ms) minus the encode latency (3–8 ms).
+        // Source on the server clock (0 ppm), one hour at 30 fps. With D the
+        // guard must leave every frame exactly as the encoder stamped it: SNV
+        // stays bit-identical to the pipeline it had before the guard.
+        let mut g = TimestampGuard::default();
+        let mut rng = XorShift(0x854_5A1);
+        // The worst case: the first frame arrived as late as the jitter gets.
+        let first_arrival = 40 * MS;
+        let mut max_lead = i64::MIN;
+        for n in 0..108_000i64 {
+            let arrival = if n == 0 {
+                first_arrival
+            } else {
+                n * FRAME_NS + rng.next_range_ns(0, 40 * MS)
+            };
+            let enc = first_arrival + n * FRAME_NS;
+            let now = arrival + rng.next_range_ns(3 * MS, 8 * MS);
+            max_lead = max_lead.max(enc - now);
+            let d = g.apply(enc, now, FRAME_NS);
+            assert_eq!(d.out_ns, enc, "frame {n} re-stamped");
+            assert_eq!(d.kind, GuardKind::Kept, "frame {n}");
+        }
+        assert_eq!(g.correction_ns(), 0);
+        // The input really carried SNV's early-frame lead (≈ 40 − 3 ms), so
+        // the identity above is not vacuous: without the deadband those
+        // frames would have been pulled back.
+        assert!(
+            (35 * MS..D).contains(&max_lead),
+            "max lead {} µs",
+            max_lead / 1_000
+        );
     }
 
     #[test]
@@ -663,24 +734,26 @@ mod tests {
     }
 
     #[test]
-    fn ppm_drift_with_jitter_keeps_the_encoder_cadence() {
-        // PP today: +48 ppm (1.6 µs/frame) with ±5 ms arrival jitter over
-        // 100 000 frames (~56 min). Never ahead of the clock; every Kept frame
-        // is exactly one counter period after its predecessor; only
-        // record-breaking (earliest-ever) frames are pulled back, and once the
-        // jitter envelope is learnt (first minute) each of them is shortened by
-        // well under 1 ms of its 33.3 ms — the cadence the TVs always received.
+    fn pp_drift_lead_is_capped_at_the_deadband() {
+        // PP: +48 ppm (1.6 µs/frame) with ±5 ms arrival jitter over 100 000
+        // frames (~56 min). Every frame is left alone until the drift brings
+        // the lead to D (~15 min in); from then on the lead is capped at D:
+        // never more than D ahead of the clock, every Kept frame exactly one
+        // counter period after its predecessor, and each pulled-back frame
+        // (a new earliest arrival) shortened by well under 1 ms of its 33.3 ms.
         let mut g = TimestampGuard::default();
         let mut rng = XorShift(0x2026_1013);
         let real_period = FRAME_NS - 1_600;
         let first_arrival = rng.next_jitter_ns(5 * MS);
         let mut prev: Option<i64> = None;
         let mut pulled_back = 0u32;
+        let mut first_pulled_back: Option<i64> = None;
+        let mut max_out_lead = i64::MIN;
         for n in 0..100_000i64 {
             let enc = first_arrival + n * FRAME_NS;
             let now = n * real_period + rng.next_jitter_ns(5 * MS) + 3 * MS;
             let d = g.apply(enc, now, FRAME_NS);
-            assert!(d.out_ns <= now, "frame {n} ahead of the clock");
+            max_out_lead = max_out_lead.max(d.out_ns - now);
             if let Some(p) = prev {
                 let interval = d.out_ns - p;
                 match d.kind {
@@ -689,32 +762,40 @@ mod tests {
                     }
                     GuardKind::PulledBack => {
                         pulled_back += 1;
-                        if n >= 1_800 {
-                            assert!(
-                                interval >= FRAME_NS - MS,
-                                "frame {n}: pulled back by {} µs",
-                                (FRAME_NS - interval) / 1_000
-                            );
-                        }
+                        first_pulled_back = first_pulled_back.or(Some(n));
+                        assert!(
+                            interval >= FRAME_NS - MS,
+                            "frame {n}: pulled back by {} µs",
+                            (FRAME_NS - interval) / 1_000
+                        );
                     }
                     GuardKind::Reanchored => panic!("frame {n}: unexpected re-anchor"),
                 }
             }
             prev = Some(d.out_ns);
         }
-        // The correction tracks the drift (100 000 × 1.6 µs = 160 ms) plus the
-        // early-jitter envelope.
-        let corr_ms = g.correction_ns() / MS;
-        assert!((145..=172).contains(&corr_ms), "correction {corr_ms} ms");
+        // Capped AT D (the drift really reached it), never above it.
+        assert_eq!(max_out_lead, D, "max output lead {max_out_lead} ns");
+        // Untouched while the lead (4 ms first-frame jitter + n × 1.6 µs +
+        // ≤ 5 ms jitter − 3 ms encode latency) is still under D.
         assert!(
-            pulled_back < 2_500,
+            first_pulled_back.is_some_and(|n| n > 27_000),
+            "first pulled-back frame {first_pulled_back:?}"
+        );
+        // drift (100 000 × 1.6 µs = 160 ms) + 4 ms first-frame jitter + the
+        // ≤ 5 ms early-jitter envelope − 3 ms encode latency − D ≈ 116 ms.
+        let corr_ms = g.correction_ns() / MS;
+        assert!((108..=122).contains(&corr_ms), "correction {corr_ms} ms");
+        assert!(
+            pulled_back < 1_500,
             "{pulled_back} of 100000 frames pulled back — cadence not preserved"
         );
     }
 
     #[test]
     fn forward_jump_is_absorbed_into_the_correction() {
-        // The 1.24 framerate-rescale bug: the counter jumps +10 s.
+        // The 1.24 framerate-rescale bug after a framerate DROP (a longer
+        // frame duration × the whole frame count): the counter jumps +10 s.
         let mut g = TimestampGuard::default();
         for n in 0..30i64 {
             g.apply(n * FRAME_NS, n * FRAME_NS + 5 * MS, FRAME_NS);
@@ -725,7 +806,7 @@ mod tests {
             let enc = n * FRAME_NS + jump;
             let now = n * FRAME_NS + 5 * MS;
             let d = g.apply(enc, now, FRAME_NS);
-            assert!(d.out_ns <= now, "frame {n} ahead");
+            assert!(d.out_ns <= now + D, "frame {n} more than D ahead");
             assert!(d.out_ns > prev, "frame {n} not monotonic");
             if n > 30 {
                 assert_eq!(
@@ -736,12 +817,14 @@ mod tests {
             }
             prev = d.out_ns;
         }
-        // The jump minus the 5 ms the frame spent in the encoder.
-        assert_eq!(g.correction_ns(), jump - 5 * MS);
+        // The jump minus the 5 ms the frame spent in the encoder, minus D.
+        assert_eq!(g.correction_ns(), jump - 5 * MS - D);
     }
 
     #[test]
     fn backward_jump_reanchors_and_stays_monotonic() {
+        // A framerate RISE rescales the counter backwards: the output is
+        // re-anchored and the correction goes NEGATIVE.
         let mut g = TimestampGuard::default();
         for n in 0..30i64 {
             g.apply(n * FRAME_NS, n * FRAME_NS + 5 * MS, FRAME_NS);
@@ -767,17 +850,17 @@ mod tests {
     #[test]
     fn equal_clock_readings_still_increase() {
         let mut g = TimestampGuard::default();
-        let a = g.apply(100 * MS, 50 * MS, FRAME_NS);
-        let b = g.apply(200 * MS, 50 * MS, FRAME_NS);
-        assert_eq!(a.out_ns, 50 * MS);
-        assert_eq!(b.out_ns, 50 * MS + 1, "monotonic nudge");
+        let a = g.apply(200 * MS, 50 * MS, FRAME_NS);
+        let b = g.apply(300 * MS, 50 * MS, FRAME_NS);
+        assert_eq!(a.out_ns, 50 * MS + D);
+        assert_eq!(b.out_ns, 50 * MS + D + 1, "monotonic nudge");
     }
 
     #[test]
     fn reset_forgets_the_correction() {
         let mut g = TimestampGuard::default();
         g.apply(500 * MS, 100 * MS, FRAME_NS);
-        assert_eq!(g.correction_ns(), 400 * MS);
+        assert_eq!(g.correction_ns(), 400 * MS - D);
         g.reset();
         assert_eq!(g.correction_ns(), 0);
         let d = g.apply(10 * MS, 20 * MS, FRAME_NS);
@@ -821,14 +904,18 @@ mod tests {
         };
         assert_eq!(kind, GuardKind::PulledBack);
         assert_eq!(raw_lead_ns, 2_000 * MS);
-        assert_eq!(correction_ns, 2_000 * MS);
-        // Running time 10 s mapped back through the SAME segment.
-        assert_eq!(new_pts, gst::ClockTime::from_seconds(3_600_000 + 5 + 10));
-        assert_eq!(seg.to_running_time(Some(new_pts)), Some(now));
+        assert_eq!(correction_ns, 2_000 * MS - D);
+        // Running time 10 s + D mapped back through the SAME segment.
+        let out_rt = now + gst::ClockTime::from_nseconds(D as u64);
+        assert_eq!(
+            new_pts,
+            gst::ClockTime::from_seconds(3_600_000 + 5) + out_rt
+        );
+        assert_eq!(seg.to_running_time(Some(new_pts)), Some(out_rt));
         assert_eq!(new_dts, Some(new_pts), "pts − dts preserved (0)");
         // The #768 trap: a raw copy of a running-time/receive-time value would
         // land exactly the 1000 h time_adjustment away from the right PTS.
-        let raw_copy = gst::ClockTime::from_seconds(5 + 10);
+        let raw_copy = gst::ClockTime::from_seconds(5) + out_rt;
         assert_eq!(
             new_pts.nseconds() - raw_copy.nseconds(),
             gst::ClockTime::from_seconds(3_600_000).nseconds()
@@ -902,9 +989,13 @@ mod tests {
             b.set_duration(gst::ClockTime::from_mseconds(33));
         }
         timing.on_guard_buffer(&mut buffer, Some(gst::ClockTime::from_seconds(11)));
+        // 1 s ahead of the clock: pulled back to clock + D.
         assert_eq!(
             buffer.pts(),
-            Some(gst::ClockTime::from_seconds(3_600_000 + 5 + 11))
+            Some(
+                gst::ClockTime::from_seconds(3_600_000 + 5 + 11)
+                    + gst::ClockTime::from_nseconds(D as u64)
+            )
         );
         assert_eq!(buffer.dts(), buffer.pts());
 
@@ -912,7 +1003,7 @@ mod tests {
         assert!(!snap.installed, "no pads → not installed");
         assert_eq!(snap.frames_seen, 1);
         assert_eq!(snap.frames_pulled_back, 1);
-        assert_eq!(snap.correction_ms, 1_000);
+        assert_eq!(snap.correction_ms, 1_000 - TIMESTAMP_DEADBAND_MS);
         assert_eq!(snap.raw_lead_max_ms, Some(1_000));
         assert_eq!(snap.raw_lead_last_ms, Some(1_000));
 

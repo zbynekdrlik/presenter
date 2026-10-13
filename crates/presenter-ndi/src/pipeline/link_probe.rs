@@ -1184,6 +1184,21 @@ mod tests {
     }
 
     #[test]
+    fn classify_a_lead_inside_the_guard_deadband_is_not_future() {
+        // #854 deadband: the shared-encoder guard lets a frame leave up to
+        // D = 50 ms ahead of the clock, so a consumer can read lateness down to
+        // −D (the trip to the appsrc only adds lateness). Even with drops in
+        // the window that must never read `futureTimestamps`: the existing
+        // logic decides (here: the DISCONT in the window → keyframe wait).
+        let d = crate::pipeline::encoder_timing::TIMESTAMP_DEADBAND_MS;
+        let inputs = VerdictInputs {
+            lateness_window_min_ms: Some(-d),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&inputs), LinkVerdict::KeyframeWait);
+    }
+
+    #[test]
     fn classify_healthy_lateness_or_no_window_is_not_future() {
         let healthy = VerdictInputs {
             lateness_window_min_ms: Some(33),

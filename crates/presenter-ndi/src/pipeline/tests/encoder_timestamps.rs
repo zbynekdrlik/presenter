@@ -209,7 +209,8 @@ fn run_with_consumer(side: &EncoderSide, settle: Duration, measure: Duration) ->
 }
 
 /// THE #854 regression: a vah264enc-1.24-style frame counter on a source
-/// faster than the counter must never turn into a consumer hold.
+/// faster than the counter must never turn into a consumer hold beyond the
+/// guard's deadband D (a ≤ 50 ms clocksync hold, never a queue overflow).
 #[test]
 fn frame_counter_stamping_never_becomes_a_consumer_hold() {
     let side = build_encoder_side(40, true);
@@ -231,10 +232,15 @@ fn frame_counter_stamping_never_becomes_a_consumer_hold() {
         "only {} frames reached the consumer in 3.5 s at 40 fps",
         run.pushed_after_settle
     );
+    // The guard lets a frame lead the clock by at most the deadband D (50 ms,
+    // #854 ROZHODNUTÉ: SNV's arrival jitter stays untouched), plus the 5 ms
+    // tolerance this bound always had (the lead only shrinks on the way from
+    // the encoder to the producer appsink).
     let (_, lead_max) = run.lead_30s.expect("the lead meter saw frames");
+    let bound = encoder_timing::TIMESTAMP_DEADBAND_MS + 5;
     assert!(
-        lead_max <= 5,
-        "shared encoder output stamped {lead_max} ms ahead of the clock"
+        lead_max <= bound,
+        "shared encoder output stamped {lead_max} ms ahead of the clock (bound: D + 5 = {bound} ms)"
     );
     // The emulated PP condition really happened (the harness is not vacuous):
     // unguarded, these stamps would have been >= 500 ms in the future.
