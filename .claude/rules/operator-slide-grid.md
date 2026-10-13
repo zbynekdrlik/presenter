@@ -44,3 +44,11 @@ paths:
   hidden grid's computed `gridTemplateColumns` is the specified `repeat(…)`
   text, not resolved tracks. The control renders in both the worship and the
   Bible toolbar — select it with `:visible`.
+- **Auto-scroll to the active stage slide is Live-mode only (#853).** The
+  `slide_list.rs` effect that calls `scroll_slide_into_view` on every stage
+  slide change reads `ctx.mode` UNTRACKED and does nothing in Edit mode: AbleSet
+  advances the stage every few seconds during a rehearsal, and editing the song
+  on stage used to drag the list away from the slide being typed into ("the page
+  refreshes and jumps to the top" on SNV). Pinned by
+  `operator-edit-autoscroll.spec.ts` (stage changes every 0.7 s while editing
+  the song on stage / another song, and while browsing a library or playlist).

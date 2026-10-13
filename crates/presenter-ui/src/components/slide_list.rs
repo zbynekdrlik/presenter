@@ -45,14 +45,20 @@ pub fn SlideList() -> impl IntoView {
     let slide_stage_markers =
         crate::components::slide_stage_layout_picker::use_slide_stage_markers(&ctx);
 
-    // Scroll active slide into view when stage's current slide changes.
+    // Scroll active slide into view when stage's current slide changes —
+    // in Live mode only. #853: in Edit mode the operator owns the scroll; AbleSet
+    // advancing the stage every few seconds must not drag the list away from the
+    // slide being edited. The mode is read untracked, so switching modes never
+    // scrolls by itself.
     {
         let stage_snapshot = ctx.stage_snapshot;
+        let mode = ctx.mode;
         Effect::new(move |prev_id: Option<Option<String>>| {
             let current_id = stage_snapshot
                 .get()
                 .and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-            if current_id != prev_id.flatten() {
+            let is_live = mode.get_untracked() == "live";
+            if is_live && current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
                     gloo_timers::callback::Timeout::new(0, move || {
