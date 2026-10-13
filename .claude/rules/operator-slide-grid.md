@@ -103,9 +103,10 @@ paths:
   frame.
   A stage frame with no song opens nothing and keeps the operator's picked
   occurrence. An open whose song is already SHOWN when its answer arrives
-  (a failed click returned to it) only moves the selection there — its
-  answer may predate an edit (#515), so it never replaces the content; a
-  failed load that would re-point an open at its own song drops it. The decisions are pure functions with host unit tests: `sync_step`,
+  (it stayed on screen while a click or search of another song loaded, or a
+  failed load moved the selection back to it) moves the selection, the
+  occurrence and the library context there, but NEVER the content — its
+  answer may predate an edit (#515). The decisions are pure functions with host unit tests: `sync_step`,
   `may_navigate`, `songless_api_frame`, `stage_left_open`,
   `answer_ends_open`.
   The library context (library id, playlist clear, `activeLibraryId`,
@@ -126,11 +127,13 @@ paths:
   stage mirror that came during the load), and the stage mirror updates it
   only while its song is shown — never the occurrence of a click still
   loading, #496; `ClearSelection` empties the session
-  restore's selection but keeps its session key, so Follow can open it;
-  only the LATEST load may give up — a double-click loads twice and the
-  first failing must not undo the second (`next_load_seq`); a
-  Follow open that started while the failing song was selected is re-pointed
-  at the new selection — the move is not an operator pick);
+  restore's selection but keeps its session key, so Follow can open it; a
+  load gives up only while no other load of the same song is in flight — a
+  double-click loads twice and either failing must not undo the other
+  (`IN_FLIGHT`) — and never for a re-click of the song already shown (its
+  clicked occurrence stays); a Follow open that started while the failing
+  song was selected is re-pointed at the new selection — the move is not an
+  operator pick);
   every structural edit (insert / duplicate / delete /
   paste via `slide_save::apply_structural_slides`, reorder and the reconcile
   refetch via `is_shown`) applies only while its song is still SHOWN.
@@ -161,7 +164,7 @@ paths:
   reorder, the raced-duplicate reconcile refetch), failed manual / search /
   session loads (incl. the playlist occurrence after a failed click, with a
   click still loading, mirrored during a load, and after a songless
-  catch-up, #496), a double-click whose first load fails, an old Follow ON
+  catch-up, #496), a double-click whose first or second load fails, a failed re-click of the shown song, Follow back to the shown stage song from a playlist that lacks it, an old Follow ON
   answer for the song that ends up shown, Follow ON right after a reload on
   an API layout, and the manual-open-starts-at-the-top cases. Idioms: hold a request with
   `gateRoute` (+ `waitForRequest`) and release it only after the competing

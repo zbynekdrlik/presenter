@@ -1,8 +1,8 @@
 //! Showing a song the operator opened (a song-list click, a search result,
 //! the session restore) once its content arrives (#515, #556 F6, #853).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use leptos::prelude::*;
 use presenter_core::{Presentation, Slide};
@@ -10,18 +10,50 @@ use presenter_core::{Presentation, Slide};
 use super::operator::{await_saves_quiescent, SaveStatus};
 use super::{is_still_selected, session, FollowPending};
 
-static LATEST_LOAD: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    /// Loads in flight per song id: a double-click loads a song twice, and
+    /// one failing must not undo the other, whichever answers first.
+    static IN_FLIGHT: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+}
 
-/// A number for a new load (`SongLoad::seq`); the newest one is the latest.
-pub fn next_load_seq() -> u64 {
-    LATEST_LOAD.fetch_add(1, Ordering::Relaxed) + 1
+/// One load of a song counted in `IN_FLIGHT` until it is dropped.
+struct InFlight(String);
+
+impl InFlight {
+    fn start(id: &str) -> Self {
+        IN_FLIGHT.with(|loads| *loads.borrow_mut().entry(id.to_string()).or_default() += 1);
+        Self(id.to_string())
+    }
+
+    /// Other loads of the same song still on their way.
+    fn others(&self) -> u32 {
+        IN_FLIGHT.with(|loads| {
+            loads
+                .borrow()
+                .get(&self.0)
+                .copied()
+                .unwrap_or(1)
+                .saturating_sub(1)
+        })
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        IN_FLIGHT.with(|loads| {
+            let mut loads = loads.borrow_mut();
+            if let Some(count) = loads.get_mut(&self.0) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    loads.remove(&self.0);
+                }
+            }
+        });
+    }
 }
 
 /// One song being opened. The caller sets `selected_id` first.
 pub struct SongLoad {
-    /// From `next_load_seq`: only the latest load may give up (a double-click
-    /// loads the song twice; the first failing must not undo the second).
-    pub seq: u64,
     pub id: String,
     pub selected_id: RwSignal<Option<String>>,
     pub shown: RwSignal<Option<Presentation>>,
@@ -72,10 +104,11 @@ pub enum OnFailure {
 /// have committed (`await_saves_quiescent`): a retry issued at once can be
 /// served from pre-save state and blank the just-typed edit.
 pub async fn show_when_loaded(load: SongLoad) {
+    let flight = InFlight::start(&load.id);
     let mut seq_at_fetch = load.seq_at_select;
     for attempt in 0..2 {
         let Ok(detail) = crate::api::presentations::get_presentation(&load.id).await else {
-            give_up(&load);
+            give_up(&load, &flight);
             return;
         };
         if !is_still_selected(load.selected_id, &load.id) {
@@ -94,18 +127,21 @@ pub async fn show_when_loaded(load: SongLoad) {
         }
         // Still saving after the bounded wait: keep the always-safe drop.
         if attempt == 1 || !await_saves_quiescent(load.save_status, 3_000).await {
-            give_up(&load);
+            give_up(&load, &flight);
             return;
         }
         seq_at_fetch = load.slide_edit_seq.get_untracked();
     }
 }
 
-/// The song could not be shown: if it is still selected, apply `on_failure`.
-fn give_up(load: &SongLoad) {
-    if LATEST_LOAD.load(Ordering::Relaxed) != load.seq
-        || !is_still_selected(load.selected_id, &load.id)
-    {
+/// The song could not be shown: if it is still selected, not shown already
+/// (a re-click of the shown song: nothing to undo, its clicked occurrence
+/// stays) and no other load of it is on its way, apply `on_failure`.
+fn give_up(load: &SongLoad, flight: &InFlight) {
+    let already_shown = load
+        .shown
+        .with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == load.id));
+    if already_shown || flight.others() > 0 || !is_still_selected(load.selected_id, &load.id) {
         return;
     }
     let selection = match &load.on_failure {
@@ -115,19 +151,14 @@ fn give_up(load: &SongLoad) {
         OnFailure::ClearSelection => None,
     };
     // A Follow open that started while this song was selected follows the
-    // selection — unless the selection becomes the open's own song, which is
-    // then already shown (its answer could only bring older content, #515).
+    // selection (the move is no operator pick). If the selection becomes the
+    // open's own song, its answer only moves the selection and occurrence —
+    // `stage_follow` never replaces the content of a song already shown.
     load.follow_pending.update_value(|pending| {
-        let Some(open) = pending else {
-            return;
-        };
-        if open.selected_at_start.as_deref() != Some(load.id.as_str()) {
-            return;
-        }
-        if selection.as_deref() == Some(open.presentation_id.as_str()) {
-            *pending = None;
-        } else {
-            open.selected_at_start = selection.clone();
+        if let Some(open) = pending {
+            if open.selected_at_start.as_deref() == Some(load.id.as_str()) {
+                open.selected_at_start = selection.clone();
+            }
         }
     });
     if let OnFailure::SelectShown = load.on_failure {

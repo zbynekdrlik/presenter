@@ -122,7 +122,6 @@ pub fn SearchResults() -> impl IntoView {
             ctx.selected_presentation_id.set(Some(pid.clone()));
             crate::state::session::set("currentPresentationId", &pid);
             let load = crate::state::song_load::SongLoad {
-                seq: crate::state::song_load::next_load_seq(),
                 id: pid,
                 selected_id: ctx.selected_presentation_id,
                 shown: ctx.selected_presentation,

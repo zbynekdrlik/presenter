@@ -52,7 +52,6 @@ pub fn PresentationList() -> impl IntoView {
         // #515 / #556 F6 / #853: the seq is captured here, synchronously
         // (see `SongLoad::seq_at_select`).
         let load = crate::state::song_load::SongLoad {
-            seq: crate::state::song_load::next_load_seq(),
             id,
             selected_id: ctx.selected_presentation_id,
             shown: ctx.selected_presentation,
