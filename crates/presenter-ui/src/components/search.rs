@@ -123,6 +123,7 @@ pub fn SearchResults() -> impl IntoView {
         let context_title = ctx.context_title;
         let libraries = ctx.libraries;
         let selected_pres = ctx.selected_presentation;
+        let selected_id = ctx.selected_presentation_id;
         let pres_id_clone = pres_id;
 
         leptos::task::spawn_local(async move {
@@ -135,7 +136,10 @@ pub fn SearchResults() -> impl IntoView {
             }
             if let Some(pid) = pres_id_clone {
                 if let Ok(detail) = crate::api::presentations::get_presentation(&pid).await {
-                    selected_pres.set(Some(detail.presentation));
+                    // #853: a song selected since (a click, a Follow open) wins.
+                    if crate::state::is_still_selected(selected_id, &pid) {
+                        selected_pres.set(Some(detail.presentation));
+                    }
                 }
             }
         });

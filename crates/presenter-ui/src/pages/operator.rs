@@ -477,6 +477,7 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
         // would bump the counter first and make a stale pre-save response
         // look "fresh" (see `PresentationList::select_presentation`).
         let seq_at_load = op.slide_edit_seq.get_untracked();
+        let selected_id = ctx.selected_presentation_id;
         leptos::task::spawn_local(async move {
             // #556 F6: reorder/insert/duplicate/delete now ALSO bump
             // `slide_edit_seq` (#552/#553), widening the window in which
@@ -496,7 +497,10 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
                     return;
                 };
                 if slide_edit_seq.get_untracked() == seq_at_fetch {
-                    selected.set(Some(detail.presentation));
+                    // #853: a song selected since (a click, a Follow open) wins.
+                    if crate::state::is_still_selected(selected_id, &pres_id) {
+                        selected.set(Some(detail.presentation));
+                    }
                     return;
                 }
                 if remaining_attempts == 0 {

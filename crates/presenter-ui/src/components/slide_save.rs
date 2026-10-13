@@ -377,7 +377,11 @@ pub(super) async fn reconcile_after_seq_mismatch(
     }
     let seq_at_refetch = slide_edit_seq.get_untracked();
     if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
-        if slide_edit_seq.get_untracked() == seq_at_refetch {
+        // #853: only while this song is still the one shown — the operator
+        // (or Follow) may have opened another song during the wait.
+        let still_shown = selected_pres
+            .with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == pres_id));
+        if still_shown && slide_edit_seq.get_untracked() == seq_at_refetch {
             selected_pres.set(Some(detail.presentation));
         }
     }

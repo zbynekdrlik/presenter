@@ -8,9 +8,9 @@ pub mod tablet;
 
 use leptos::prelude::*;
 use presenter_core::{
-    BibleBroadcast, LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult,
-    Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, StageTextMode,
-    TimersOverview,
+    BibleBroadcast, LibrarySummary, Playlist, Presentation, PresentationId, PresentationSummary,
+    SearchResult, Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot,
+    StageTextMode, TimersOverview,
 };
 
 use crate::api::bible::BibleSearchHit;
@@ -48,6 +48,15 @@ pub struct FollowPending {
     pub forced: bool,
     /// The stage's playlist occurrence (#496), applied with the song.
     pub entry_index: Option<u32>,
+    /// `Date.now()` when the open started; an open still waiting long after
+    /// (a hung request) is retried by the next stage change.
+    pub started_ms: f64,
+}
+
+/// Whether `id` is still the selected song. A late fetch for a song the
+/// operator or Follow has since replaced must not be shown (#853).
+pub fn is_still_selected(selected: RwSignal<Option<String>>, id: &str) -> bool {
+    selected.get_untracked().as_deref() == Some(id)
 }
 
 #[derive(Clone)]
@@ -68,6 +77,9 @@ pub struct AppContext {
     /// selection came from a library (no playlist position).
     pub selected_entry_index: RwSignal<Option<u32>>,
     pub follow_pending: StoredValue<Option<FollowPending>>,
+    /// The song a Follow open just showed: its slide list lands on the stage
+    /// slide, every other newly shown song opens at the top (#271, #853).
+    pub follow_landing: StoredValue<Option<PresentationId>>,
     pub stage_snapshot: RwSignal<Option<StageDisplaySnapshot>>,
     pub stage_layout_code: RwSignal<String>,
     pub stage_layouts: RwSignal<Vec<StageDisplayLayout>>,
@@ -125,6 +137,7 @@ impl AppContext {
             selected_playlist: RwSignal::new(None),
             selected_entry_index: RwSignal::new(None),
             follow_pending: StoredValue::new(None),
+            follow_landing: StoredValue::new(None),
             stage_snapshot: RwSignal::new(None),
             stage_layout_code: RwSignal::new(String::new()),
             stage_layouts: RwSignal::new(Vec::new()),

@@ -66,6 +66,7 @@ pub fn PresentationList() -> impl IntoView {
         // the counter BEFORE an inside-the-task capture ran, making the
         // stale pre-save response look "fresh" and blanking the edit.
         let seq_at_select = op.slide_edit_seq.get_untracked();
+        let selected_id = ctx.selected_presentation_id;
         leptos::task::spawn_local(async move {
             // #556 F6: reorder/insert/duplicate/delete now ALSO bump
             // `slide_edit_seq` (#552/#553), widening the window in which
@@ -86,6 +87,10 @@ pub fn PresentationList() -> impl IntoView {
                 else {
                     return;
                 };
+                // #853: a song selected since (another click, a Follow open) wins.
+                if !crate::state::is_still_selected(selected_id, &id_clone) {
+                    return;
+                }
                 if slide_edit_seq.get_untracked() == seq_at_fetch {
                     // Cache slides
                     slides_cache_signal.update(|cache| {

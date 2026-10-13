@@ -8,7 +8,6 @@ use leptos::prelude::*;
 use presenter_core::PresentationId;
 use wasm_bindgen::JsCast;
 
-use crate::components::stage_follow::follow_navigation;
 use crate::state::AppContext;
 
 /// Columns of a `.operator__slides` grid when its layout cannot be read (the
@@ -177,6 +176,43 @@ pub(super) fn handle_wheel_event(ev: web_sys::WheelEvent) {
     container.set_scroll_top((container.scroll_top() as f64 + capped) as i32);
 }
 
+/// Scroll when a different song is SHOWN (its content arrived, not when the
+/// selection id moves): to the top, so a new song starts at its first slide
+/// (#271 concern 3) — or, for a song a Follow open just showed
+/// (`AppContext::follow_landing`), to the stage's current slide when it is in
+/// that song (#853). Opening a song by hand, from search, a playlist or a
+/// reload always starts at the top, Follow on or off.
+pub(super) fn setup_scroll_on_song_shown(ctx: &AppContext) {
+    let selected_presentation = ctx.selected_presentation;
+    let stage_snapshot = ctx.stage_snapshot;
+    let follow_landing = ctx.follow_landing;
+    Effect::new(move |prev_id: Option<Option<PresentationId>>| {
+        let current_id = selected_presentation.with(|p| p.as_ref().map(|p| p.id));
+        // Consumed on every run, so a Follow open never marks a later one.
+        let follow_opened =
+            current_id.is_some() && follow_landing.with_value(|id| *id == current_id);
+        follow_landing.set_value(None);
+        if current_id.is_some() && current_id != prev_id.flatten() {
+            let stage_slide = if follow_opened {
+                stage_snapshot.with_untracked(|snapshot| {
+                    snapshot
+                        .as_ref()
+                        .filter(|s| s.presentation_id == current_id)
+                        .and_then(|s| s.current_slide_id.map(|id| id.to_string()))
+                })
+            } else {
+                None
+            };
+            gloo_timers::callback::Timeout::new(0, move || match stage_slide {
+                Some(slide_id) => scroll_slide_into_view(&slide_id),
+                None => scroll_slides_to_top(),
+            })
+            .forget();
+        }
+        current_id
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::cap_wheel_delta;
@@ -215,38 +251,4 @@ mod tests {
     fn large_negative_delta_is_capped_at_negative_step() {
         assert_eq!(cap_wheel_delta(-500.0, 90.0), -90.0);
     }
-}
-
-/// Scroll when a different song is SHOWN (its content arrived, not when the
-/// selection id moves): to the top, so a new song starts at its first slide
-/// (#271 concern 3) — or, while Follow navigates (Follow on, Live mode), to the
-/// stage's current slide when it is in this song, so a Follow open lands on the
-/// slide on stage (#853). A manual click of the stage song with Follow off
-/// opens at the top like any other song.
-pub(super) fn setup_scroll_on_song_shown(ctx: &AppContext) {
-    let selected_presentation = ctx.selected_presentation;
-    let stage_snapshot = ctx.stage_snapshot;
-    let ableset_status = ctx.ableset_status;
-    let mode = ctx.mode;
-    Effect::new(move |prev_id: Option<Option<PresentationId>>| {
-        let current_id = selected_presentation.with(|p| p.as_ref().map(|p| p.id));
-        if current_id.is_some() && current_id != prev_id.flatten() {
-            let stage_slide = if follow_navigation(ableset_status, mode) {
-                stage_snapshot.with_untracked(|snapshot| {
-                    snapshot
-                        .as_ref()
-                        .filter(|s| s.presentation_id == current_id)
-                        .and_then(|s| s.current_slide_id.map(|id| id.to_string()))
-                })
-            } else {
-                None
-            };
-            gloo_timers::callback::Timeout::new(0, move || match stage_slide {
-                Some(slide_id) => scroll_slide_into_view(&slide_id),
-                None => scroll_slides_to_top(),
-            })
-            .forget();
-        }
-        current_id
-    });
 }
