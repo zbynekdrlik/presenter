@@ -407,6 +407,7 @@ pub(crate) fn render_ndi_health_entry(
     // pipeline). Always present; `null` until a window exists.
     entry["dropRatio30s"] = serde_json::json!(h.drop_ratio_30s);
     entry["pushedFps30s"] = serde_json::json!(h.pushed_fps_30s);
+    // #854 RED stub: the timestamp health keys are not rendered yet.
     entry
 }
 
@@ -475,6 +476,45 @@ mod tests {
             errored["last_error"], "pipeline died: ndisrc EOS",
             "Errored MUST carry last_error verbatim so dashboards surface the cause"
         );
+    }
+
+    /// #854: every `/healthz.ndi_pipelines[]` entry carries the shared-encoder
+    /// timestamp health, and `timestampLeadMs30s` stays present as `null`
+    /// (never omitted) when no frame was in the window.
+    #[test]
+    fn render_ndi_health_entry_emits_encoder_timestamp_fields() {
+        use presenter_ndi::pipeline::health::PipelineDropHealth;
+        use presenter_ndi::pipeline::PipelineState;
+
+        let mut h = PipelineDropHealth {
+            source_id: "src-1".to_string(),
+            state: PipelineState::Streaming,
+            drop_ratio: 0.0,
+            consumers: 2,
+            drop_ratio_30s: Some(0.0),
+            pushed_fps_30s: Some(60.0),
+            timestamp_lead_ms_30s: Some(-3),
+            encoder_timestamp_correction_ms: 173,
+            encoder_timestamp_guard: true,
+            drift_rebuilds: 1,
+        };
+        let entry = render_ndi_health_entry(&h);
+        assert_eq!(entry["timestampLeadMs30s"], -3);
+        assert_eq!(entry["encoderTimestampCorrectionMs"], 173);
+        assert_eq!(entry["encoderTimestampGuard"], true);
+        assert_eq!(entry["driftRebuilds"], 1);
+        assert_eq!(entry["state"], "streaming");
+
+        h.timestamp_lead_ms_30s = None;
+        h.encoder_timestamp_guard = false;
+        let entry = render_ndi_health_entry(&h);
+        assert!(
+            entry
+                .get("timestampLeadMs30s")
+                .is_some_and(serde_json::Value::is_null),
+            "a window without frames must render null, not vanish: {entry}"
+        );
+        assert_eq!(entry["encoderTimestampGuard"], false);
     }
 
     /// A busy manager is not "source not active": `/ndi/snapshot` answers

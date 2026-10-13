@@ -168,6 +168,9 @@ pub struct PipelineSnapshot {
     /// (#768 D3): the SUM of the consumers' windowed FPS. `null` until a window
     /// exists.
     pub pushed_fps_30s: Option<f64>,
+    /// #854: the shared encoder's timestamp guard + lead meter (guard
+    /// correction, pulled-back frames, raw lead, trailing-30s lead).
+    pub encoder_timing: encoder_timing::EncoderTimingSnapshot,
     pub sessions: Vec<SessionSnapshot>,
 }
 

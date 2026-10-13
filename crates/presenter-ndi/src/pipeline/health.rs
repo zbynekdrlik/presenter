@@ -72,6 +72,18 @@ pub struct PipelineDropHealth {
     pub drop_ratio_30s: Option<f64>,
     /// Trailing-30s aggregate pushed FPS (#768 D3), `None` until a window exists.
     pub pushed_fps_30s: Option<f64>,
+    /// #854: maximum lead (ms) of the shared encoder's output over the trailing
+    /// 30 s, measured at the producer appsink after the timestamp guard. `None`
+    /// without frames in the window. Healthy: <= 0.
+    pub timestamp_lead_ms_30s: Option<i64>,
+    /// #854: how far the timestamp guard has pulled the encoder's own timeline
+    /// back (ms). On a fast-drifting vah264enc 1.24 source it IS the lead the
+    /// unguarded pipeline would have built; 0 on PTS-preserving encoders.
+    pub encoder_timestamp_correction_ms: i64,
+    /// #854: the timestamp guard + lead meter are installed.
+    pub encoder_timestamp_guard: bool,
+    /// #854: drift self-heal rebuilds for this source since process start.
+    pub drift_rebuilds: u32,
 }
 
 #[cfg(test)]

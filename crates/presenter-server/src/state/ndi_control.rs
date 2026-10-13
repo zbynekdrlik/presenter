@@ -138,6 +138,11 @@ impl NdiManagerHandle {
                             // #768 D3: no window on the Fake (no real counters) → null.
                             drop_ratio_30s: None,
                             pushed_fps_30s: None,
+                            // #854: no real encoder on the Fake.
+                            timestamp_lead_ms_30s: None,
+                            encoder_timestamp_correction_ms: 0,
+                            encoder_timestamp_guard: false,
+                            drift_rebuilds: 0,
                         },
                     )
                     .collect()

@@ -170,6 +170,22 @@ impl NdiPipeline {
         self.state_rx.borrow().clone()
     }
 
+    /// #854 drift self-heal: mark a STREAMING pipeline `Errored(reason)` so its
+    /// supervisor rebuilds it through the normal dead-state path. A no-op
+    /// returning `false` from any other state — never re-errors a pipeline that
+    /// is starting, stopped or already errored. The production twin of
+    /// `simulate_error_for_test`.
+    pub(crate) fn request_self_heal_rebuild(&self, reason: &str) -> bool {
+        // #854 RED stub: the request does nothing yet.
+        let _ = reason;
+        false
+    }
+
+    /// #854: the shared encoder's timestamp guard + lead meter state.
+    pub(crate) fn encoder_timing(&self) -> &super::encoder_timing::EncoderTiming {
+        &self.encoder_timing
+    }
+
     pub fn state_watcher(&self) -> watch::Receiver<PipelineState> {
         self.state_rx.clone()
     }

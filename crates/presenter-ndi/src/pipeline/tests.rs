@@ -892,6 +892,34 @@ fn ndi_pipeline_build_installs_the_timestamp_guard() {
     assert_eq!(snap.frames_seen, 0, "nothing flows before PLAYING");
 }
 
+/// #854 self-heal request: only a STREAMING pipeline is flipped to
+/// `Errored(reason)` (which its supervisor then rebuilds); a pipeline that is
+/// stopped, starting or already errored is left alone.
+#[test]
+fn self_heal_rebuild_request_only_flips_a_streaming_pipeline() {
+    let mut p = NdiPipeline::stopped_for_test();
+    assert!(!p.request_self_heal_rebuild("lead 400 ms"));
+    assert_eq!(p.state(), PipelineState::Stopped);
+
+    p.set_state_for_test(PipelineState::Starting);
+    assert!(!p.request_self_heal_rebuild("lead 400 ms"));
+    assert_eq!(p.state(), PipelineState::Starting);
+
+    p.set_state_for_test(PipelineState::Streaming);
+    let watcher = p.state_watcher();
+    let reason = "self-heal: shared encoder timestamps lead the clock by 400 ms (#854)";
+    assert!(p.request_self_heal_rebuild(reason));
+    assert_eq!(p.state(), PipelineState::Errored(reason.to_string()));
+    assert!(
+        watcher.has_changed().expect("sender alive"),
+        "the supervisor's watcher must be notified"
+    );
+
+    // Already errored: a second request changes nothing.
+    assert!(!p.request_self_heal_rebuild("again"));
+    assert_eq!(p.state(), PipelineState::Errored(reason.to_string()));
+}
+
 /// webrtcsink parity: rtph264pay must aggregate in zero-latency mode
 /// (default "none" can hold NALs; webrtcsink sets this on every payloader).
 #[test]
