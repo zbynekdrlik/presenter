@@ -5,7 +5,7 @@
  * list away from the slide being edited, even when that song is the one on stage or AbleSet Follow
  * switches the stage to another song.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Route } from "@playwright/test";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
@@ -143,6 +143,30 @@ async function gateRoute(page: Page, url: string): Promise<() => void> {
 /** Waits until a response's body has fully arrived (headers alone resolve `waitForResponse`). */
 async function landed(response: Promise<import("@playwright/test").Response>) {
   await (await response).finished();
+}
+
+/** Drags a slide card onto another with dispatched DragEvents (as wasm-drag-drop.spec.ts). */
+async function dragSlide(page: Page, draggedSlideId: string, targetSlideId: string) {
+  await page.evaluate(
+    ({ draggedSlideId, targetSlideId }) => {
+      const handle = document.querySelector(`[data-slide-id="${draggedSlideId}"] [data-role="slide-drag-handle"]`);
+      const target = document.querySelector(`[data-slide-id="${targetSlideId}"]`);
+      if (!handle || !target) throw new Error("drag handle or target card not found");
+      const dataTransfer = new DataTransfer();
+      const opts = { bubbles: true, cancelable: true, dataTransfer };
+      handle.dispatchEvent(new DragEvent("dragstart", opts));
+      if (target.dispatchEvent(new DragEvent("dragover", opts))) throw new Error("dragover was not accepted");
+      target.dispatchEvent(new DragEvent("drop", opts));
+      handle.dispatchEvent(new DragEvent("dragend", opts));
+    },
+    { draggedSlideId, targetSlideId },
+  );
+}
+
+/** Follow's status has loaded as ON and the live socket is connected (a stage frame will arrive). */
+async function followReady(page: Page) {
+  await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
+  await page.waitForFunction(() => (window as any).__presenterLiveConnected?.() === true);
 }
 
 /** Lets the WASM handle what just arrived: a 0 ms timeout, then two animation frames. */
@@ -952,9 +976,9 @@ test("Follow: a songplayer push to the API layout does not cancel the stage song
   const frames = countStageFrames(page);
   await resetStage();
   const previousLayout = (await (await fetch(new URL("/stage/layout", baseURL))).json()).code as string;
-  await send("POST", "/stage/layout", { code: "api" });
-  await send("POST", "/integrations/ableset/follow", { enabled: true });
   try {
+    await send("POST", "/stage/layout", { code: "api" });
+    await send("POST", "/integrations/ableset/follow", { enabled: true });
     await openOperator(page);
     await expect(page.locator('[data-role="ableset-follow"]'), "Follow is on").toHaveAttribute("data-state", "on");
     await openTestLibrary(page);
@@ -1020,6 +1044,7 @@ test("Follow: a playlist the operator opens while the stage song itself loads st
   }
 });
 
+// Guard (the fix shipped in 08105c2f without a failing test first).
 test("Follow: a search result whose answer comes late does not replace the stage song Follow opened", async ({ page }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
@@ -1056,6 +1081,7 @@ test("Follow: a search result whose answer comes late does not replace the stage
   }
 });
 
+// Guard (the fix shipped in 08105c2f without a failing test first).
 test("Follow: the session song restored after a reload does not replace a stage song Follow opened first", async ({ page }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
@@ -1076,6 +1102,7 @@ test("Follow: the session song restored after a reload does not replace a stage 
     await page.reload();
     await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
     await restoreRequested;
+    await followReady(page);
     await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
     const song2First = page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`);
     await expect(song2First, "Follow opens the stage song").toBeAttached();
@@ -1089,4 +1116,310 @@ test("Follow: the session song restored after a reload does not replace a stage 
   } finally {
     await send("POST", "/integrations/ableset/follow", { enabled: false });
   }
+});
+
+test("Follow, API layout: back to Live opens the stage song even after a songplayer push", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const frames = countStageFrames(page);
+  await resetStage();
+  const previousLayout = (await (await fetch(new URL("/stage/layout", baseURL))).json()).code as string;
+  try {
+    await send("POST", "/stage/layout", { code: "api" });
+    await send("POST", "/integrations/ableset/follow", { enabled: true });
+    await openOperator(page);
+    await followReady(page);
+    await openTestLibrary(page);
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    // In Edit mode AbleSet moves the stage to song 2, then songplayer pushes text (a frame with no song).
+    let before = frames.count;
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await expect.poll(() => frames.count - before, { message: "the stage change reached the page" }).toBeGreaterThanOrEqual(1);
+    before = frames.count;
+    const push = await fetch(new URL("/api/stage", baseURL), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentText: "Amazing grace", currentSong: "Amazing Grace" }),
+    });
+    expect(push.status).toBe(204);
+    await expect.poll(() => frames.count - before, { message: "the push reached the page" }).toBeGreaterThanOrEqual(1);
+
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').first().click();
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "back in Live the stage song opens",
+    ).toBeAttached();
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+    await send("POST", "/stage/layout", { code: previousLayout });
+  }
+});
+
+test("Follow: a song from another library opened right after Follow's previous library switch gets its own library", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const otherLib = await send("POST", "/libraries", { name: "_E2E Follow Other" });
+  const other = await send("POST", `/libraries/${otherLib.id}/presentations`, {
+    name: "Other Library Song",
+    slides: [{ main: "Other slide 1" }, { main: "Other slide 2" }],
+  });
+  const otherSong = other.presentation.id as string;
+  const otherFirst = other.presentation.slides[0].id as string;
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await followReady(page);
+    // From the playlist, so every Follow library switch is a visible context change.
+    await page.locator(`[data-role="playlist-item"][data-playlist-id="${playlistId}"]`).first().click();
+    await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Churn Set");
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    // Each library read is held on its own gate; the other song's detail too.
+    const libraryGates: Array<() => void> = [];
+    await page.route("**/libraries/summary", async (route) => {
+      await new Promise<void>((resolve) => libraryGates.push(resolve));
+      await route.continue();
+    });
+    const releaseOther = await gateRoute(page, `**/presentations/${otherSong}`);
+    const otherRequested = page.waitForRequest(`**/presentations/${otherSong}`);
+
+    // Song 2 opens and waits for its library; the stage moves on to the other library's song.
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`)).toBeAttached();
+    await expect.poll(() => libraryGates.length).toBe(1);
+    await send("POST", "/stage/state", { presentationId: otherSong, currentSlideId: otherFirst });
+    await otherRequested;
+    // Song 2's library step lands (Follow switches to its library) ...
+    libraryGates[0]();
+    await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Stage Churn");
+    // ... then the other song arrives, and its library step must not mistake that switch for an operator pick.
+    releaseOther();
+    await expect(page.locator(`.operator__slides [data-slide-id="${otherFirst}"]`)).toBeAttached();
+    await expect.poll(() => libraryGates.length).toBe(2);
+    libraryGates[1]();
+    await expect(page.locator('[data-role="context-title"]'), "the other song's library opens").toHaveText("_E2E Follow Other");
+    await page.unroute("**/libraries/summary");
+    await page.unroute(`**/presentations/${otherSong}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("Follow: an older request failing after the song was re-requested does not lose the open", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await followReady(page);
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    const held: Route[] = [];
+    await page.route(`**/presentations/${presIds[1]}`, (route) => {
+      held.push(route);
+    });
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await expect.poll(() => held.length).toBe(1);
+    await page.waitForTimeout(5_500); // past `STALE_OPEN_MS`
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][1] });
+    await expect.poll(() => held.length, { message: "the song is requested again" }).toBe(2);
+    // The OLD request fails (a malformed answer: no console noise), then the new one answers.
+    const oldFailed = page.waitForResponse(`**/presentations/${presIds[1]}`);
+    await held[0].fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    await landed(oldFailed);
+    await settle(page);
+    await held[1].continue();
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "the new request's answer still opens song 2",
+    ).toBeAttached();
+    await page.unroute(`**/presentations/${presIds[1]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("a failed open in a playlist keeps the shown occurrence for the next trigger (#496)", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const repeat = await send("POST", "/playlists", { name: "_E2E Repeat Set", showInDashboard: true });
+  await send("PUT", `/playlists/${repeat.id}/entries`, {
+    entries: [presIds[2], presIds[4], presIds[2]].map((id) => ({ type: "presentation", presentationId: id })),
+  });
+  await resetStage();
+  await openOperator(page);
+  await page.locator(`[data-role="playlist-item"][data-playlist-id="${repeat.id}"]`).first().click();
+  await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Repeat Set");
+  const rows = page.locator('[data-role="presentation-item"]');
+  await expect(rows).toHaveCount(3);
+  // The second occurrence of song 3 (entry index 2).
+  await rows.nth(2).click();
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+  // Song 5 (entry index 1) fails to load.
+  await page.route(`**/presentations/${presIds[4]}`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+  );
+  const failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
+  await rows.nth(1).click();
+  await landed(failed);
+  await settle(page);
+  // A slide of the shown song goes to the stage: it must carry song 3's occurrence, not song 5's.
+  await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
+  await expect
+    .poll(async () => {
+      const snap = await (await fetch(new URL("/stage/snapshot", baseURL))).json();
+      return { song: snap.presentationId, entry: snap.activeEntryIndex };
+    }, { message: "the stage marks the occurrence that is shown" })
+    .toEqual({ song: presIds[2], entry: 2 });
+  await page.unroute(`**/presentations/${presIds[4]}`);
+  expect(consoleMessages).toEqual([]);
+});
+
+test("Edit: a song clicked while a Follow ON open loads cancels that open, even if the click fails", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: false });
+  try {
+    await openOperator(page);
+    const follow = page.locator('[data-role="ableset-follow"]');
+    await expect(follow, "Follow is off").toHaveAttribute("data-state", "off");
+    await openTestLibrary(page);
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 02" }).first()).toHaveClass(/is-stage-active/);
+
+    // Follow ON opens the stage song (held) ...
+    const releaseSong2 = await gateRoute(page, `**/presentations/${presIds[1]}`);
+    const requested = page.waitForRequest(`**/presentations/${presIds[1]}`);
+    const answered = page.waitForResponse(`**/presentations/${presIds[1]}`);
+    await follow.first().click();
+    await expect(follow).toHaveAttribute("data-state", "on");
+    await requested;
+    // ... the operator clicks song 5, which fails (the selection returns to song 3) ...
+    await page.route(`**/presentations/${presIds[4]}`, (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+    );
+    const failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().click();
+    await landed(failed);
+    await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first()).toHaveClass(/is-active/);
+    // ... so the Follow open is no longer wanted.
+    releaseSong2();
+    await landed(answered);
+    await settle(page);
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`), "song 3 stays").toBeAttached();
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`)).not.toBeAttached();
+    await page.unroute(`**/presentations/${presIds[1]}`);
+    await page.unroute(`**/presentations/${presIds[4]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("a search result that fails to load keeps the shown song selected", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await openOperator(page);
+  await openTestLibrary(page);
+  const song3Row = page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first();
+  await song3Row.click();
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+  await page.route(`**/presentations/${presIds[5]}`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+  );
+  const failed = page.waitForResponse(`**/presentations/${presIds[5]}`);
+  await page.locator('[data-role="global-search-query"]').fill("Churn Song 06");
+  await page
+    .locator('[data-role="search-result-item"][data-kind="presentation"]', { hasText: "Churn Song 06" })
+    .first()
+    .click();
+  await landed(failed);
+  await expect(song3Row, "the selection returns to the song still shown").toHaveClass(/is-active/);
+  await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).toBeAttached();
+  await page.unroute(`**/presentations/${presIds[5]}`);
+  expect(consoleMessages).toEqual([]);
+});
+
+test("Follow: a session song that fails to load after a reload is opened by the next stage change", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await followReady(page);
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+    await send("POST", "/stage/state", { presentationId: presIds[2], currentSlideId: slideIds[presIds[2]][0] });
+
+    // After the reload the session song's first request fails; later ones answer.
+    let failedOnce = false;
+    await page.route(`**/presentations/${presIds[2]}`, async (route) => {
+      if (failedOnce) return route.continue();
+      failedOnce = true;
+      return route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    });
+    const restoreFailed = page.waitForResponse(`**/presentations/${presIds[2]}`);
+    await page.reload();
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await landed(restoreFailed);
+    await followReady(page);
+    await send("POST", "/stage/state", { presentationId: presIds[2], currentSlideId: slideIds[presIds[2]][1] });
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`),
+      "Follow opens the stage song the session could not load",
+    ).toBeAttached();
+    await page.unroute(`**/presentations/${presIds[2]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+// Guard (the reorder check shipped in f5da384b without a failing test first).
+test("Edit: a slide reorder answered after another song was opened leaves that song alone", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await openOperator(page);
+  await openTestLibrary(page);
+  await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 11" }).first().click();
+  const song11 = presIds[10];
+  const song12 = presIds[11];
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[song11][0]}"]`);
+
+  const releaseReorder = await gateRoute(page, `**/presentations/${song11}/slides/reorder`);
+  const reorderRequested = page.waitForRequest((req) => req.url().endsWith("/slides/reorder"));
+  const reorderAnswered = page.waitForResponse((resp) => resp.url().endsWith("/slides/reorder"));
+  await dragSlide(page, slideIds[song11][0], slideIds[song11][2]);
+  await reorderRequested;
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 12" }).first().click();
+  const song12First = page.locator(`.operator__slides [data-slide-id="${slideIds[song12][0]}"]`);
+  await expect(song12First).toBeAttached();
+  releaseReorder();
+  await landed(reorderAnswered);
+  await settle(page);
+  await expect(song12First, "song 12 stays shown").toBeAttached();
+  await expect(page.locator(".operator__slides [data-slide-id]"), "with its own 16 slides").toHaveCount(16);
+  await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[song11][0]}"]`)).not.toBeAttached();
+  await page.unroute(`**/presentations/${song11}/slides/reorder`);
+  expect(consoleMessages).toEqual([]);
 });
