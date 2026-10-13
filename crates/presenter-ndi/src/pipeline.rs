@@ -218,8 +218,10 @@ pub struct SessionSnapshot {
     /// `need-data` event counts, DISCONT/keyframe buffer counts, max appsrc
     /// queue depth, buffer lateness (min/max/last ms) vs the consumer clock,
     /// and a `verdict` classifying the drop signature over the trailing 30s
-    /// window (#768 lane 7): `queueOverflow` / `keyframeWait` / `healthy` /
-    /// `unknown` (window too young, or an unrecognized drop signature). Keyed
+    /// window (#768 lane 7): `futureTimestamps` (#854: drops while buffers were
+    /// stamped >= 100 ms in the future) / `queueOverflow` / `keyframeWait` /
+    /// `healthy` / `unknown` (window too young, or an unrecognized drop
+    /// signature). Keyed
     /// off drops IN THE WINDOW, so an aged-out join transient reads `healthy`,
     /// never a permanent fault. Always present — the probe exists for every
     /// consumer from join; the counters make the NEXT prod occurrence
