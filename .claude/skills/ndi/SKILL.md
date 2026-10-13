@@ -42,17 +42,27 @@ clock+base_time. Code: `crates/presenter-ndi/src/pipeline/consumers.rs`.
 ### Low-Latency Invariants (PR #378 — also do NOT simplify away)
 
 4. `ndisrc timestamp-mode=receive-time` — Auto mode couples PTS to Resolume's clock with drift
-   correction via DISCONT → "lag builds then jumps".
+   correction via DISCONT → "lag builds then jumps". **The receive-time PTS reaches the consumers
+   only through an encoder that KEEPS the input PTS** (x264enc on CI, NVENC on dev2, vah264enc
+   ≥ 1.26). Prod's vah264enc **1.24.2** replaces it with a frame counter — see invariant 9 and the
+   #854 chapter below. So "receive-time removes drift" was never true on prod.
 5. `StreamProducer::with(.., ProducerSettings { sync: false })` — default sync=true holds every
    encoded frame to its clock deadline (~40ms).
-6. GOP 240 + `request_keyframe()` (upstream ForceKeyUnit) on consumer join — GOP 30 caused 1s
-   IDR pulses; long GOP REQUIRES the join keyframe.
+6. GOP **60** (2 s @30fps; since 0dd403d5, 2026-06-15 — PR #378 had 240) + `request_keyframe()`
+   (upstream ForceKeyUnit) on consumer join — GOP 30 caused 1s IDR pulses; a GOP longer than the
+   join tolerance REQUIRES the join keyframe. Locked by `pipeline_tuning_properties_are_low_latency`.
 7. **Encoder pinned to `constrained-baseline` H264 (capsfilter "profile_caps")** — High profile
    (encoder default) is rejected by strict TV HW decoders (Vestel sd2-4, 1GB RAM):
    Chromium falls back to NullVideoDecoder → black while RTP flows + endless watchdog reconnect.
    Diagnostic: logcat `NullVideoDecoder doesn't support decoding` + server sessions with
    `buffers_pushed>0` deleted every 10-30s.
 8. Stage UI sets `jitterBufferTarget=0` + `playoutDelayHint=0` per receiver.
+9. **Shared-encoder timestamp guard (#854)** — a pad probe on the encoder `src` pad
+   (`pipeline/encoder_timing.rs`, installed by `build.rs::install_timing_probes`) guarantees no
+   frame leaves the encoder stamped later than the pipeline clock, with a correction that only
+   grows (the encoder's own cadence is kept). It is an exact identity on PTS-preserving encoders,
+   so it costs nothing there — **do not remove it**; on prod it is the fix. Rules for touching it:
+   `.claude/rules/ndi-encoder-timestamps.md`.
 
 ### GStreamer Tee Fanout Rule
 
@@ -146,7 +156,10 @@ Check transport-level `bytesReceived` vs `inbound-rtp`:
 
 ### Dev Encoder Note
 
-Dev encoder is `nvh264enc` (RTX 5060); `vah264enc` is NOT registered on this NVIDIA box.
+Dev encoder on dev2 (RTX 5050) is the MODERN `nvcudah264enc`/`nvautogpuh264enc` (#541 — current
+drivers reject the legacy `nvh264enc` preset API; `nvh264enc` is used only on hosts with an old
+driver). `vah264enc` is NOT registered on this NVIDIA box, and CI's GitHub runners fall back to
+`x264enc` — **neither CI nor dev2 runs prod's encoder**, which is why #854 hid for four months.
 `GST_PLUGIN_FEATURE_RANK=nvh264enc:NONE` only affects autoplug rank, not `ElementFactory::find`.
 
 **Encoder selection probes LOADABILITY, not name-presence (#443).** `hw_h264_encoder()`
@@ -236,10 +249,22 @@ Verified 2026-06-29 on prod: `selectedLocalCandidateType=relay`, 256 frames, var
   + `dropRatio30s`/`pushedFps30s` (#768 D3, trailing 30s) + RTCP rtt/jitter/loss, plus a
   per-pipeline aggregate `dropRatio` + `dropRatio30s`/`pushedFps30s`
 - `/healthz.ndi_pipelines[]` — per-pipeline `{source_id, state, dropRatio, consumers,
-  dropRatio30s, pushedFps30s}` (#768; the `*30s` keys added in D3) so an external watchdog
-  can see a degraded fan-out — and its CURRENT health, not diluted history — without RTCP
-  get-stats. `dropRatio30s`/`pushedFps30s` are `null` until >=2 in-window samples exist
-  (always present as a key — stable schema)
+  dropRatio30s, pushedFps30s, timestampLeadMs30s, encoderTimestampCorrectionMs,
+  encoderTimestampGuard, driftRebuilds}` (#768; the `*30s` keys added in D3; the last four in
+  #854) so an external watchdog can see a degraded fan-out — and its CURRENT health, not diluted
+  history — without RTCP get-stats. `dropRatio30s`/`pushedFps30s` are `null` until >=2 in-window
+  samples exist (always present as a key — stable schema). #854 keys:
+  - `timestampLeadMs30s` — max(output running time − clock) at the producer appsink over the
+    trailing 30 s, AFTER the guard. Healthy `<= 0`; `null` without frames in the window.
+  - `encoderTimestampCorrectionMs` — how far the guard pulled the encoder's own timeline back. On
+    PP (vah264enc 1.24, source +48 ppm) it grows ~173 ms/h: that IS the lead the old code would
+    have held. A few ms at SNV; 0 on dev2/CI.
+  - `encoderTimestampGuard` — guard + lead meter installed (`false` = a pad was missing: ERROR log).
+  - `driftRebuilds` — drift self-heal rebuilds since process start. Must stay 0; anything else is
+    a regression signal (the guard failed).
+- `/ndi/snapshot/{id}` also carries `encoderTiming` `{installed, encoderFactory, framesSeen,
+  framesPulledBack, framesReanchored, framesUnmeasured, correctionMs, rawLeadLastMs, rawLeadMaxMs,
+  leadMs30s:{min,max}}` and per session `link.latenessMs.windowMin/windowMax` (#854)
 - Stage UI beacons `getStats` to `POST /ndi/client-stats` every 15s (→ journald)
 - Stage ALSO POSTs a compact per-session sample to
   `POST /ndi/sessions/{session_id}/client-stats` every ~5s (#768 D6); the server stores the
@@ -273,8 +298,8 @@ decodes immediately). A TV re-creating its WHEP session every ~24-45s (incident:
 most ONE forced IDR per GOP (2s); a join inside the window rides the next scheduled keyframe
 (a `debug!` "join-time IDR coalesced" logs it). The browser-PLI path is unchanged (StreamProducer
 forwards force-key-unit internally, not via `request_keyframe`). Note: the incident's 75% DROP is
-a SEPARATE mechanism (timeline offset, D2) — keyframe churn is not its cause, so D5 is a
-load-reduction, not the drop fix.
+a SEPARATE mechanism (the encoder frame-counter lead, #854) — keyframe churn is not its cause, so
+D5 is a load-reduction, not the drop fix.
 
 ### Boot-restore fan-out drop bug — dropRatio + self-heal (#768)
 
@@ -288,8 +313,9 @@ is dropped until the next IDR. **A pipeline built by API `deactivate`+`activate`
 healthy (0 drops, 30 fps); the SAME server code builds both — the only difference is TIMING
 (source-live-at-build + hours of encoder uptime before join) and synthetic-vs-real source, NOT
 a different build path (`restore_active_ndi_source` calls the SAME `activate_video_source`).**
-See **D2 root-cause finding** below — the originally-suspected base_time timeline offset is
-REFUTED by code; do not re-chase it.
+**Root cause found in #854** (see the chapter below): the shared vah264enc 1.24 output is stamped
+by a frame counter that runs ahead of the clock on a fast source; "hours of encoder uptime before
+the join" is exactly the time the lead needs to pass 500 ms. A fresh pipeline has no lead.
 
 **Reading the drop ratio (the diagnostic the incident lacked):**
 ```bash
@@ -321,43 +347,64 @@ LIVE session's own (monotonic) windowed delta — a consumer leaving never corru
 The 3 deploy workflows do this ONE time automatically when a post-deploy `/healthz` poll shows
 `dropRatio > 0.2` with `consumers >= 1` (owner-visible `::error::`, never fails the deploy).
 
-**Root-cause FIX status:** deferred (D2 open). Do NOT band-aid it by enlarging `max-time`
-(`no-timeout-band-aids.md`).
+**Root-cause FIX status:** fixed by #854 (the encoder timestamp guard + a guarded drift self-heal
+backstop). Never band-aid it by enlarging `max-time` (`no-timeout-band-aids.md`).
 
-**D2 root-cause finding (2026-09-13, code-evidence — proven-negative for the base_time
-hypothesis):** the originally-suspected mechanism (consumer sink holds "future" timestamps →
-500 ms overflow from a base_time/timeline offset) is **STRUCTURALLY IMPOSSIBLE** under this
-code — do NOT re-chase it:
-- ndisrc `timestamp-mode=receive-time` sets PTS = `clock.time() - element.base_time()` = the
-  pipeline running-time at frame arrival (`gst-plugin-ndi-0.15.2/src/ndisrc/receiver.rs:327-335`,
-  `imp.rs:767`). Every frame's PTS tracks the CURRENT running-time.
-- The encoder pipeline is pinned to the system monotonic clock, never slaving to NDI
-  (`build.rs:60-62`).
-- `adopt_encoder_timeline` gives each consumer pipeline the SAME clock AND the SAME
-  `enc_base_time` (read at join, `consumers.rs:165-166,624-646`) with `set_start_time(NONE)`.
-- ⟹ consumer running-time-now == producer running-time-now, and every forwarded buffer's
-  running-time (= its PTS) ≈ now — regardless of uptime or source-live-at-boot. No base_time
-  future-hold is possible.
+**#854 root cause (2026-10-13) — a future-timestamp hold IS possible (the old "structurally
+impossible" D2 note was wrong):** the D2 lane-3 reasoning was right up to ndisrc (receive-time PTS =
+running time at arrival, consumers share clock + base time) but assumed the ENCODER keeps that PTS.
+GStreamer **1.24.2 `vah264enc`** (SNV + PP, Ubuntu 24.04) stamps its output
+`pts = start_pts + frame_duration × frame_count` (`gstvah264enc.c:3051`, upstream fixed in 1.26):
+- A source slightly faster than its declared rate by THIS server's clock makes that counter run
+  ahead of the clock: PP +48 ppm (NTP off, −61…+106 ppm day to day) = **+173 ms per hour**. A
+  source framerate change rescales the counter into a forward jump.
+- webrtcbin 1.24 inserts `clocksync sync=TRUE` on every input stream (`gstwebrtcbin.c:5266`), so
+  future-stamped buffers are HELD there; the consumer appsrc queue fills, and once the lead passes
+  the 500 ms `max-time` every consumer overflows once per 2 s GOP: ~17 frames pushed, the rest
+  dropped until the next IDR → broken GOPs (macroblocks), ~2 presented fps on PP SD1.
+- Live evidence (PP): `latenessMs.max = −16` for a whole 50-min session (healthy ≈ +33),
+  `min` −1532 ms matching the predicted 1518 ms lead, `maxQueueLevelMs` 1466; a headless desktop
+  Chrome on the same pipeline degraded identically. The lead resets only on a rebuild — that is
+  why a fresh pipeline (deploy, service restart, a source-stall rebuild) is always healthy.
+- It is invisible on dev2/CI: their encoders keep the input PTS and the synthetic sender runs on
+  the server's own clock (0 ppm). The regression test therefore emulates the frame counter on
+  x264enc (`pipeline/tests/encoder_timestamps.rs`).
 
-Why the synthetic e2e-ndi lane can't reproduce it (and the D1 guard stays green): the D1 guard
-ALREADY reproduces the SNV ordering (synthetic source live when the restored pipeline is built)
-and passes — so the test↔prod gap is NOT the ordering. The un-reproduced factors are real
-ndisrc receive-time jitter from a real network sender (Resolume/LAN) vs the local
-`ndi_test_sender`, hours of real VA-API encoding on the prod N100, and real uptime. The drop
-counter over-count in the incident (38.5 events/s > 30 fps) is the `enough_data` queue-thrash
-signature, not a keyframe-wait transient.
+**The fix (#854):**
+- **Guard** (invariant 9): `out = enc_rt − correction`, clamped to the clock if it would be later
+  (the correction grows by the excess), converted through the encoder's OUTPUT segment (1000 h
+  `time_adjustment`). Identity on PTS-preserving encoders; on vah264enc 1.24 the regular RTP
+  cadence the TVs always received is kept and only the lead is removed. Deliberately NOT "copy the
+  raw input PTS" (GStreamer 1.26 behaviour): that would hand every TV the NDI arrival jitter
+  (10–60 ms) as RTP timestamps, a risk to the weak SNV TVs' baseline.
+- **`futureTimestamps` verdict** on a time-windowed lateness minimum (below).
+- **Guarded drift self-heal** (`manager/drift_guard.rs`): on the supervisor's 30 s tick, when the
+  lead meter's 30 s MINIMUM lead is >= 300 ms for two consecutive windows, the pipeline is marked
+  Errored and rebuilt by the normal supervisor path. >= 5 min apart, <= 3 per hour, memory in
+  `NdiManager`. Triggered by the pipeline-level lead ONLY — never `dropRatio30s` (join drops and
+  reconnect churn would loop rebuilds, the #263 lesson). With the guard working it never fires.
 
-**Next concrete step to actually pin D2:** on the live box during the next incident (source
-live at boot), capture per-consumer-link at overflow the ONE discriminator lane 1's
-dropRatio/pushedFps lacks: (a) buffer running-time vs consumer running-time
-(`pipeline.clock().time() - pipeline.base_time()`), and (b) whether the drop is `enough_data`
-(queue overflow) vs `needs_keyframe` (DISCONT/keyframe-wait). NOTE: (b) is INTERNAL to
-`gstreamer-utils::StreamProducer` and NOT exposed via `ConsumptionLink` (only the `dropped()`/
-`pushed()` totals) — capturing it needs either a patched/forked StreamProducer or a pad probe
-that classifies buffers on the consumer appsrc. That measurement distinguishes
-"downstream draining slower than realtime" from "producer emitting DISCONT bursts" and turns
-D2 into a fixable, review-verifiable ticket. It must be done where the code can be compiled +
-deployed (not a fleet/Tier-0 worktree).
+**Verifying on a prod site (read-only):**
+```bash
+curl -s http://<host>/healthz | jq '.ndi_pipelines[] | {source_id, state, consumers, dropRatio30s,
+  timestampLeadMs30s, encoderTimestampCorrectionMs, encoderTimestampGuard, driftRebuilds}'
+curl -s http://<host>/ndi/snapshot/<id> | jq '{encoderTiming, s: [.sessions[] | {id,
+  dropRatio30s, v: .link.verdict, l: .link.latenessMs, c: .client}]}'
+journalctl -u presenter --since -1h | grep -E '#854|ndi_client_stats'
+```
+Expect: guard `true`, lead `<= 0`, `driftRebuilds` 0, consumers `dropRatio30s ≈ 0`, verdict
+`healthy`. On PP after >= 1 h with a fast source, `encoderTimestampCorrectionMs ≈ ppm × age`
+(≈ 173 ms/h at +48 ppm) — the direct proof the guard is absorbing the lead; INFO lines
+`encoder timeline would be +N ms ahead of the clock — held back (#854)` every ~100 ms of growth.
+On a slow-source day the correction stays ≈ 0 (the counter falls behind, which was always
+harmless) — re-check on a fast day. SNV: per-display presented fps from the `ndi_client_stats`
+beacons must stay at its baseline (LEAP-S1 ≈ 30, Android TVs ≈ 25.1 / 24.8 / 22.9).
+
+**Receive-time drift note.** On vah264enc 1.24 the consumers' RTP cadence is the frame counter
+(perfectly regular) minus the guard's correction; a slow source makes the stamps fall
+progressively behind real time until a rebuild (existing, harmless). After a GStreamer >= 1.26
+upgrade vah264enc keeps the input PTS: the guard becomes an identity and the TVs receive raw
+receive-time stamps (NDI arrival jitter) — **re-measure the TVs' beacons at that upgrade.**
 
 **D2b — that discriminator IS now instrumented (#768 D2b): read `sessions[].link.verdict`.**
 `ConsumptionLink` exposes only `pushed()`/`dropped()` totals, so the discriminator is measured
@@ -380,7 +427,7 @@ curl -s http://<host>/ndi/snapshot/<source_id> | python3 -c 'import json,sys; \
 ```
 Each `link` block carries `droppedBuffers` (== the session's `buffersDropped`, the ground-truth
 overflow count), `needDataEvents`, `discontBuffers`, `keyframeBuffers`, `maxQueueLevelMs`,
-`latenessMs:{min,max,last}` and `verdict`.
+`latenessMs:{min,max,last,windowMin,windowMax}` (`window*` = trailing 30 s, #854) and `verdict`.
 
 **`verdict` is a TRAILING-30s WINDOW judgement since #768 lane 7 — NOT since-join cumulative.**
 It keys off drops IN THE TRAILING WINDOW (the lane-5 `dropRatio30s` / `HealthWindow`), so an old
@@ -391,6 +438,13 @@ the math:
   historical join-time drops. The normal steady state; this link is not the source of any current
   drop. A session hours past its join with `droppedBuffers` in the tens (join drops) still reads
   `healthy` — that is correct.
+- **`futureTimestamps`** (#854) — drops in the window while the trailing-30s lateness minimum
+  (`latenessMs.windowMin`) was <= −100 ms: forwarded buffers were stamped in the FUTURE, a sync
+  element (webrtcbin's clocksync) held them and the queue overflowed. Checked BEFORE both
+  `keyframeWait` branches (each such overflow forwards a DISCONT; a session joining a led pipeline
+  forwards its first IDR in the future). Cause: the shared encoder's timeline leads the clock —
+  read `/healthz` `timestampLeadMs30s` / `encoderTiming`. Calibrated on the segment-aware
+  lateness: healthy +5…+40 ms, join transient ≈ +250 ms, PP incident −1532 ms.
 - **`keyframeWait`** — drops in the window while the session was still pre-first-IDR
   (`keyframeBuffers <= 1`) OR a DISCONT landed within the window: forwarding was IDR-gated (the
   producer re-armed `needs_keyframe` and resumed at a keyframe). Points at producer keyframe cadence
@@ -426,8 +480,7 @@ The deploy self-heal step (all 3 workflows) already prints each session's `link`
 job log right before its one-shot deactivate/activate — a deploy restart reproduces the
 source-live-at-boot ordering, so that log is the natural place the next occurrence is captured.
 The probe changes NO drop/timeline mechanism; it is pure instrumentation so the next prod
-occurrence is self-explaining. The D2 root-cause FIX itself stays open (it needs the live
-`verdict` reading during an actual incident).
+occurrence is self-explaining. The D2 root cause was found and fixed in #854 (chapter above).
 
 **Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
 `python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST
@@ -475,8 +528,8 @@ NDI name holds the same receiver, no timestamp jump. Guard: `ndi-webrtc-syntheti
 (`@synthetic-ndi`) spawns a DEDICATED sender (unique ndi-name, isolated from the shared lane sender),
 kills it ~20 s mid-stream with 0 consumers, restarts it, attaches 2 WHEP consumers, and asserts
 `dropRatio30s`/cumulative `dropRatio` < 0.2 — printing `link.verdict` so a red is attributable
-(queueOverflow = H4 reproduced; keyframeWait = join transient). The D2 root-cause FIX stays open: it
-needs the live `verdict` reading during an ACTUAL incident (the synthetic guard cannot force it).
+(queueOverflow = H4 reproduced; keyframeWait = join transient). The #768 D2 root cause turned out to
+be the vah264enc 1.24 frame-counter lead (#854), not a source interruption.
 
 ### Stage status-bar readouts (#479)
 

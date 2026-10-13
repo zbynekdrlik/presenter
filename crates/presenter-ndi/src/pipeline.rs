@@ -105,9 +105,9 @@ impl StreamProfile {
     /// old WASM watchdog state) resolves to [`Self::Default`] — an unknown
     /// profile string must never break a display's join.
     pub fn from_query(value: Option<&str>) -> Self {
-        // ALL clients get Default = 720p hardware H264. Proven 2026-06-15: the
-        // standalone com.tcl.browser HW-decodes H264 on every stage TV incl. the
-        // weak Hyundais (the old "HW H264 = black" was the system WebView only).
+        // ALL clients get Default = 720p hardware H264. The stage TVs run our own
+        // APK WebView (#472/#477), which HW-decodes H264 on every stage TV incl.
+        // the weak Hyundais (the old "HW H264 = black" was the system WebView only).
         let _ = value;
         Self::Default
     }
