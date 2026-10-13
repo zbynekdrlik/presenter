@@ -31,9 +31,11 @@ pub struct SongLoad {
     /// song was selected follows the selection when it moves on failure (the
     /// move is not an operator pick).
     pub follow_pending: StoredValue<Option<FollowPending>>,
-    /// The playlist occurrence this song is shown as (#496), recorded in
-    /// `shown_entry_index` once it is shown.
-    pub entry_index: Option<u32>,
+    /// `AppContext::selected_entry_index` / `shown_entry_index`: when the
+    /// song is shown, the occurrence selected at that moment (the click's, or
+    /// a stage mirror that came during the load) is recorded as the shown
+    /// one (#496).
+    pub selected_entry_index: RwSignal<Option<u32>>,
     pub shown_entry_index: StoredValue<Option<u32>>,
 }
 
@@ -43,7 +45,7 @@ pub enum OnFailure {
     /// A click: select the shown song again, with the playlist occurrence it
     /// is shown as (`shown_entry_index`, #496) — not the one of a click that
     /// is still loading.
-    SelectShown { entry_index: RwSignal<Option<u32>> },
+    SelectShown,
     /// The session restore: nothing is shown yet, so clear the selection but
     /// keep the session key for the next load.
     ClearSelection,
@@ -74,7 +76,8 @@ pub async fn show_when_loaded(load: SongLoad) {
                     cache.insert(load.id.clone(), detail.presentation.slides.clone());
                 });
             }
-            load.shown_entry_index.set_value(load.entry_index);
+            load.shown_entry_index
+                .set_value(load.selected_entry_index.get_untracked());
             load.shown.set(Some(detail.presentation));
             return;
         }
@@ -93,24 +96,34 @@ fn give_up(load: &SongLoad) {
         return;
     }
     let selection = match &load.on_failure {
-        OnFailure::SelectShown { .. } => load
+        OnFailure::SelectShown => load
             .shown
             .with_untracked(|p| p.as_ref().map(|p| p.id.to_string())),
         OnFailure::ClearSelection => None,
     };
-    load.follow_pending.update_value(|open| {
-        if let Some(open) = open {
-            if open.selected_at_start.as_deref() == Some(load.id.as_str()) {
-                open.selected_at_start = selection.clone();
-            }
+    // A Follow open that started while this song was selected follows the
+    // selection — unless the selection becomes the open's own song, which is
+    // then already shown (its answer could only bring older content, #515).
+    load.follow_pending.update_value(|pending| {
+        let Some(open) = pending else {
+            return;
+        };
+        if open.selected_at_start.as_deref() != Some(load.id.as_str()) {
+            return;
+        }
+        if selection.as_deref() == Some(open.presentation_id.as_str()) {
+            *pending = None;
+        } else {
+            open.selected_at_start = selection.clone();
         }
     });
-    if let OnFailure::SelectShown { entry_index } = &load.on_failure {
+    if let OnFailure::SelectShown = load.on_failure {
         match &selection {
             Some(id) => session::set("currentPresentationId", id),
             None => session::remove("currentPresentationId"),
         }
-        entry_index.set(load.shown_entry_index.get_value());
+        load.selected_entry_index
+            .set(load.shown_entry_index.get_value());
     }
     load.selected_id.set(selection);
 }

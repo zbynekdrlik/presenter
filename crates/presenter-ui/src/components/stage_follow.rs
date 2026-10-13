@@ -183,7 +183,14 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
             // An open of another song still loading is stale (stage A → S → A).
             ctx.follow_pending.set_value(None);
             ctx.selected_entry_index.set(entry_index);
-            ctx.shown_entry_index.set_value(entry_index);
+            // Only once the song is shown (a click may still be loading it;
+            // `song_load` records the mirrored occurrence when it shows).
+            let shown = ctx
+                .selected_presentation
+                .with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == pres_id));
+            if shown {
+                ctx.shown_entry_index.set_value(entry_index);
+            }
         }
         SyncStep::AlreadyOpening | SyncStep::Retry => {
             let mut retry = None;
@@ -241,11 +248,20 @@ fn fetch_stage_song(ctx: &AppContext, token: u64, request: u32, pres_id: String)
         ) {
             return;
         }
-        let lib_id = detail.library_id.to_string();
         ctx.selected_presentation_id.set(Some(pres_id.clone()));
         crate::state::session::set("currentPresentationId", &pres_id);
         ctx.selected_entry_index.set(open.entry_index);
         ctx.shown_entry_index.set_value(open.entry_index);
+        // Already shown (a failed click returned to it meanwhile): its answer
+        // can only bring older content than what may have been edited since
+        // (#515) — keep the shown song.
+        let already_shown = ctx
+            .selected_presentation
+            .with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == pres_id));
+        if already_shown {
+            return;
+        }
+        let lib_id = detail.library_id.to_string();
         ctx.slides_cache.update(|cache| {
             cache.insert(pres_id.clone(), detail.presentation.slides.clone());
         });

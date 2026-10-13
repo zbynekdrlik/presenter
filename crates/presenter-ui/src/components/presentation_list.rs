@@ -59,11 +59,9 @@ pub fn PresentationList() -> impl IntoView {
             slide_edit_seq: op.slide_edit_seq,
             save_status: op.save_status,
             seq_at_select: op.slide_edit_seq.get_untracked(),
-            on_failure: crate::state::song_load::OnFailure::SelectShown {
-                entry_index: ctx.selected_entry_index,
-            },
+            on_failure: crate::state::song_load::OnFailure::SelectShown,
             follow_pending: ctx.follow_pending,
-            entry_index,
+            selected_entry_index: ctx.selected_entry_index,
             shown_entry_index: ctx.shown_entry_index,
         };
         leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));

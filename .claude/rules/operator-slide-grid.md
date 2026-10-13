@@ -101,8 +101,11 @@ paths:
   never `ctx.stage_snapshot`, which during songplayer playback holds the
   push. On an API layout a presenter trigger publishes ONLY the camera-crew
   frame.
-  A stage frame with no song changes nothing (the operator's picked
-  occurrence stays). The decisions are pure functions with host unit tests: `sync_step`,
+  A stage frame with no song opens nothing and keeps the operator's picked
+  occurrence. An open whose song is already SHOWN when its answer arrives
+  (a failed click returned to it) only moves the selection there — its
+  answer may predate an edit (#515), so it never replaces the content; a
+  failed load that would re-point an open at its own song drops it. The decisions are pure functions with host unit tests: `sync_step`,
   `may_navigate`, `songless_api_frame`, `stage_left_open`,
   `answer_ends_open`.
   The library context (library id, playlist clear, `activeLibraryId`,
@@ -118,9 +121,11 @@ paths:
   `state::song_load::show_when_loaded` (the #515 seq guard, the #556 F6
   retry, `is_still_selected`); a song that cannot be shown never stays
   selected (`OnFailure::SelectShown` puts a click back on the shown song AND
-  its playlist occurrence — `AppContext::shown_entry_index`, recorded
-  whenever a song is shown, never the occurrence of a click still loading,
-  #496; `ClearSelection` empties the session
+  its playlist occurrence — `AppContext::shown_entry_index`: when a song is
+  shown it records the occurrence selected at that moment (the click's, or a
+  stage mirror that came during the load), and the stage mirror updates it
+  only while its song is shown — never the occurrence of a click still
+  loading, #496; `ClearSelection` empties the session
   restore's selection but keeps its session key, so Follow can open it; a
   Follow open that started while the failing song was selected is re-pointed
   at the new selection — the move is not an operator pick);
