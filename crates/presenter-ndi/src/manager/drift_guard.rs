@@ -18,7 +18,12 @@
 //!   - drift rebuilds are >= 5 min apart (the #337 `COOL_OFF_WINDOW`) and at
 //!     most 3 per rolling hour; after that it is alarm-only;
 //!   - the memory lives in `NdiManager` (keyed by source), so it survives a
-//!     supervisor being replaced by the reconnect ticker.
+//!     supervisor being replaced by the reconnect ticker;
+//!   - the over-window count belongs to ONE pipeline generation (a replaced
+//!     pipeline starts from zero) and a tick counts only once the pipeline is
+//!     as old as the 30 s lead window, so a seconds-long window never acts;
+//!   - a rebuild is recorded (spacing, budget, `driftRebuilds`) only once the
+//!     pipeline confirmed the request.
 //!
 //! Pure data, synthetic `Instant`s, no I/O: unit-tested on any CI host.
 
@@ -45,6 +50,12 @@ const BUDGET_WINDOW: Duration = Duration::from_secs(60 * 60);
 
 /// Minimum spacing between two drift rebuilds — the #337 cool-off window.
 const MIN_SPACING: Duration = SupervisorState::COOL_OFF_WINDOW;
+
+/// A tick counts only once its pipeline is at least as old as the lead window
+/// it reads (30 s). A new supervisor's first tick fires at once, and a tick
+/// missed during a rebuild fires as soon as the loop is back: both read a
+/// pipeline only seconds old, whose window is only seconds long.
+const MIN_PIPELINE_AGE: Duration = crate::pipeline::health_window::WINDOW;
 
 /// Why a due rebuild was not done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +97,8 @@ pub(in crate::manager) struct ObservedPipeline {
 /// Per-source drift memory.
 #[derive(Debug, Default)]
 pub(in crate::manager) struct DriftGuard {
+    /// The pipeline generation `over_ticks` belongs to.
+    generation: Option<u64>,
     over_ticks: u32,
     fires: VecDeque<Instant>,
     suppressed_streak: u32,
@@ -93,17 +106,20 @@ pub(in crate::manager) struct DriftGuard {
 }
 
 impl DriftGuard {
-    /// One supervisor tick. `lead_min_ms` is the window minimum of the shared
-    /// encoder's lead; `None` (no frames in the window — a source stall, or a
-    /// fresh pipeline) is neutral: a stall is not drift.
+    /// One supervisor tick. `pipeline` is the pipeline the lead was read from;
+    /// `lead_min_ms` is the window minimum of its shared encoder's lead. `None`
+    /// (no frames in the window — a source stall, or a fresh pipeline) is
+    /// neutral: a stall is not drift. So is a pipeline younger than the lead
+    /// window, and a replaced pipeline starts its over count from zero.
     pub(in crate::manager) fn on_tick(
         &mut self,
         now: Instant,
         pipeline: ObservedPipeline,
         lead_min_ms: Option<i64>,
     ) -> DriftAction {
-        // #854 RED stub: the pipeline identity is not used yet.
-        let _ = pipeline;
+        if !self.observe(pipeline) {
+            return DriftAction::Idle;
+        }
         let Some(lead) = lead_min_ms else {
             return DriftAction::Idle;
         };
@@ -160,6 +176,20 @@ impl DriftGuard {
                 }
             }
         }
+    }
+
+    /// Track which pipeline the ticks come from. A new generation (the
+    /// pipeline was replaced) restarts the over-window count, so windows of two
+    /// different pipelines never add up; the spacing and the hourly budget stay
+    /// (they belong to the source). Returns whether this tick may count: not
+    /// while the pipeline is younger than [`MIN_PIPELINE_AGE`].
+    fn observe(&mut self, pipeline: ObservedPipeline) -> bool {
+        if self.generation != Some(pipeline.generation) {
+            self.generation = Some(pipeline.generation);
+            self.over_ticks = 0;
+            self.suppressed_streak = 0;
+        }
+        pipeline.age >= MIN_PIPELINE_AGE
     }
 
     /// Record a drift rebuild the pipeline CONFIRMED
