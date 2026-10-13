@@ -190,8 +190,15 @@ pub fn classify(inputs: &VerdictInputs) -> LinkVerdict {
         // a fault).
         return LinkVerdict::Healthy;
     }
-    // #854 RED stub: the futureTimestamps branch is not wired yet.
-    let _ = FUTURE_TIMESTAMP_MS;
+    // #854: drops while buffers were stamped in the future — the cause is the
+    // shared encoder's timeline leading the clock, not the keyframe wait the
+    // resulting DISCONT (or a led join's first IDR) would otherwise suggest.
+    if inputs
+        .lateness_window_min_ms
+        .is_some_and(|min| min <= FUTURE_TIMESTAMP_MS)
+    {
+        return LinkVerdict::FutureTimestamps;
+    }
     // Drops IN the window while still pre-first-IDR — unambiguously a keyframe
     // wait (there is no established stream to overflow yet).
     if inputs.keyframe_buffers <= 1 {
@@ -390,7 +397,10 @@ impl LinkProbe {
         self.lateness_max_ms
             .fetch_max(lateness_ms, Ordering::Relaxed);
         self.lateness_last_ms.store(lateness_ms, Ordering::Relaxed);
-        // #854 RED stub: the lateness window is not recorded yet.
+        self.lateness_window
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .record(self.origin.elapsed().as_secs(), lateness_ms);
     }
 
     /// `(min, max)` lateness (ms) over the trailing 30 s ending at `now`;
