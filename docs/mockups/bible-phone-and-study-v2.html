@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Biblia v Presenteri</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,500;7..72,650&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: reading column for the text; phone mockups in a wrapping strip; mockups use the app's own dark UI palette so they look like Presenter. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --ink: #17202e; --muted: #5a6577; --line: #dde1e8;
+  --accent: #2f5d8a; --accent-soft: #e4ecf5; --code-bg: #eef1f5;
+  /* app palette for the mockups (same in both page themes) */
+  --app-bg: #0f172a; --app-panel: #1e293b; --app-panel2: #273449; --app-line: #334155;
+  --app-ink: #e2e8f0; --app-muted: #94a3b8; --app-blue: #3b82f6; --app-live: #dc2626; --app-live-soft: #3b1418;
+  --app-chip: #1d3a5f; --app-ok: #22c55e;
+  --display: "Literata", Georgia, "Times New Roman", serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #11161f; --surface: #182030; --ink: #e6eaf1; --muted: #9aa5b6; --line: #2a3446; --accent: #8fb5dc; --accent-soft: #1f2d42; --code-bg: #1e2738; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #11161f; --surface: #182030; --ink: #e6eaf1; --muted: #9aa5b6; --line: #2a3446; --accent: #8fb5dc; --accent-soft: #1f2d42; --code-bg: #1e2738; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; padding-inline: 16px; padding-block: 0 64px; }
+.wrap { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.col { max-width: 720px; display: flex; flex-direction: column; gap: 14px; }
+header.top { padding-block: 40px 0; display: flex; flex-direction: column; gap: 12px; max-width: 720px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-family: var(--display); font-weight: 650; font-size: clamp(30px, 6vw, 44px); line-height: 1.12; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 650; font-size: 26px; line-height: 1.2; margin: 0; text-wrap: balance; }
+h3 { font-size: 17px; font-weight: 600; margin: 0; }
+p { margin: 0; max-width: 68ch; }
+.lede { font-size: 18px; }
+.meta { font-size: 14px; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 18px; }
+code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+ul.plain { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 4px 12px; width: fit-content; }
+
+/* Phone mockups */
+.phones { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 22px; align-items: start; }
+.phone-fig { margin: 0; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.phone { width: 100%; max-width: 300px; aspect-ratio: 390 / 780; background: var(--app-bg); color: var(--app-ink); border-radius: 30px; border: 8px solid #0b0f19; box-shadow: 0 1px 0 var(--line); display: flex; flex-direction: column; overflow: hidden; font-family: var(--body); font-size: 12px; line-height: 1.35; position: relative; }
+.ph-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 8px; }
+.ph-head b { font-size: 14px; }
+.dot { display: inline-flex; align-items: center; gap: 5px; color: var(--app-muted); font-size: 11px; }
+.dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--app-ok); }
+.ph-more { color: var(--app-muted); font-size: 11px; border: 1px solid var(--app-line); border-radius: 8px; padding: 3px 8px; }
+.tr { display: flex; align-items: center; gap: 5px; margin: 6px 12px 0; }
+.tlab { width: 46px; flex: none; font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--app-muted); }
+.tchip { flex: 1; text-align: center; padding: 6px 0; border-radius: 9px; background: var(--app-panel); border: 1px solid var(--app-line); color: var(--app-ink); font-size: 11.5px; font-weight: 600; }
+.tchip.on { background: var(--app-blue); border-color: var(--app-blue); color: #fff; }
+.tchip.on2 { background: #1e3a5f; border-color: #3b82f6; color: #cfe2ff; }
+.onwall { margin: 0 12px; padding: 7px 10px; border-radius: 10px; background: var(--app-panel); color: var(--app-muted); font-size: 11px; display: flex; justify-content: space-between; gap: 8px; }
+.onwall.live { background: var(--app-live-soft); color: #fecaca; border: 1px solid var(--app-live); }
+.onwall.live b { color: #fff; }
+.field { margin: 10px 12px 6px; background: var(--app-panel); border: 1.5px solid var(--app-line); border-radius: 12px; padding: 10px 12px; font-size: 14px; color: var(--app-muted); display: flex; justify-content: space-between; align-items: center; }
+.field.typing { border-color: var(--app-blue); color: var(--app-ink); }
+.field .x { color: var(--app-muted); font-size: 13px; }
+.ph-body { flex: 1; padding: 0 12px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.label { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--app-muted); font-weight: 600; margin-top: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { background: var(--app-chip); color: #cfe2ff; border-radius: 999px; padding: 6px 10px; font-size: 11.5px; }
+.chip.ghost { background: transparent; border: 1px dashed var(--app-line); color: var(--app-muted); }
+.row { background: var(--app-panel); border-radius: 10px; padding: 9px 10px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.row.sel { background: #1e3a8a; outline: 1.5px solid var(--app-blue); }
+.row small { color: var(--app-muted); font-size: 10.5px; }
+.card { background: var(--app-panel2); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.card .ref { font-family: var(--display); font-size: 15px; font-weight: 650; }
+.card .main { font-size: 13.5px; line-height: 1.45; }
+.card .sec { font-size: 12px; color: #9cc3ff; font-style: italic; line-height: 1.4; border-top: 1px solid var(--app-line); padding-top: 7px; }
+.hint { background: #3a2a10; color: #fcd9a0; border-radius: 10px; padding: 8px 10px; font-size: 11.5px; }
+.bar { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 6px; padding: 8px 12px; }
+.bar.two { grid-template-columns: 1fr 2fr; }
+.btn { border-radius: 12px; padding: 12px 4px; text-align: center; font-weight: 600; font-size: 12.5px; background: var(--app-panel); color: var(--app-ink); border: 1px solid var(--app-line); }
+.btn.go { background: var(--app-blue); border-color: var(--app-blue); color: #fff; font-size: 14px; letter-spacing: .03em; }
+.btn.off { opacity: .45; }
+.clear { margin: 0 12px 6px; text-align: center; font-size: 12px; color: #fca5a5; border: 1px solid #7f1d1d; border-radius: 12px; padding: 9px; }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--app-line); background: #0b1222; }
+.tabs span { text-align: center; padding: 9px 2px 12px; font-size: 10px; color: var(--app-muted); }
+.tabs span.on { color: #fff; font-weight: 600; box-shadow: inset 0 2px 0 var(--app-blue); }
+.kbd { height: 64px; background: #20283a; border-top: 1px solid var(--app-line); display: grid; place-items: center; color: var(--app-muted); font-size: 10.5px; }
+figcaption { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+figcaption b { color: var(--ink); }
+
+/* Compare table */
+.tablebox { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 560px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+.cards2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.box p, .box li { font-size: 15px; }
+footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+<style>body{margin:0} img{max-width:100%}</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">Presenter · návrh k #850 · verzia 2 (doplnený výber prekladu)</span>
+    <h1>Verš na stene do pár sekúnd, z akéhokoľvek zariadenia</h1>
+    <p class="lede">Návrh častí A (jedno pole, ktoré pochopí akýkoľvek zápis odkazu) a B (telefón ako plnohodnotný ovládač). Makety ukazujú obrazovku telefónu; na počítači je to tá istá obrazovka, len širšia.</p>
+    <span class="status">A + B schválené s doplnením výberu prekladu · ďalší krok: spec</span>
+  </header>
+
+  <section id="makety">
+    <h2>Ako to bude vyzerať na telefóne</h2>
+    <div class="phones">
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: prázdna obrazovka veršov s poľom na odkaz, vlastnými veršami bohoslužby a spodnými kartami">
+          <div class="ph-head"><b>Presenter</b><span class="dot">pripojené</span><span class="ph-more">Viac</span></div>
+          <div class="onwall"><span>Na stene: nič</span></div><div class="tr"><span class="tlab">Preklad</span><span class="tchip on">SEB</span><span class="tchip">ROH</span><span class="tchip">SEVP</span><span class="tchip">KJV</span></div><div class="tr"><span class="tlab">Pod ním</span><span class="tchip on2">NLT</span><span class="tchip">KJV</span><span class="tchip">žiadny</span></div>
+          <div class="field">Odkaz alebo slová…<span class="x">⌕</span></div>
+          <div class="ph-body">
+            <span class="label">Táto bohoslužba</span>
+            <div class="chips"><span class="chip">Rimanom 8:28</span><span class="chip">Žalm 23:1</span></div>
+            <span class="label">Pripravené kazateľom</span>
+            <div class="chips"><span class="chip ghost">príde s #851</span></div>
+            <span class="label">Návrhy AI</span>
+            <div class="chips"><span class="chip ghost">príde s časťou C</span></div>
+          </div>
+          <div class="bar"><span class="btn off">◀</span><span class="btn go off">ZOBRAZIŤ</span><span class="btn off">▶</span></div>
+          <div class="tabs"><span>Piesne</span><span class="on">Biblia</span><span>Časovače</span><span>AI</span><span>Nastav.</span></div>
+        </div>
+        <figcaption><b>1. Otvoríš Bibliu.</b> Žiadne burger menu: sekcie sú dole ako karty. Hneď hore vidíš a jedným ťuknutím meníš preklad (SEB, Roháček, evanjelický, KJV) aj preklad pod ním (NLT, KJV alebo žiadny). Platí pre stenu aj pre všetkých operátorov naraz.</figcaption>
+      </figure>
+
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: napísané zid 11 1, vybraný výsledok Židom 11:1 a veľký náhľad verša s tlačidlom Zobraziť">
+          <div class="ph-head"><b>Presenter</b><span class="dot">pripojené</span><span class="ph-more">Viac</span></div>
+          <div class="onwall"><span>Na stene: nič</span></div><div class="tr"><span class="tlab">Preklad</span><span class="tchip on">SEB</span><span class="tchip">ROH</span><span class="tchip">SEVP</span><span class="tchip">KJV</span></div><div class="tr"><span class="tlab">Pod ním</span><span class="tchip on2">NLT</span><span class="tchip">KJV</span><span class="tchip">žiadny</span></div>
+          <div class="field typing">zid 11 1<span class="x">✕</span></div>
+          <div class="ph-body">
+            <div class="row sel"><span><b>Hebrejom 11:1</b></span><small>Židom · SEB</small></div>
+            <div class="card">
+              <span class="ref">Hebrejom 11:1</span>
+              <span class="main">Viera je zárukou toho, v čo dúfame, a zdôvodnením toho, čo nevidíme,</span>
+              <span class="sec">Faith shows the reality of what we hope for; it is the evidence of things we cannot see.</span>
+            </div>
+          </div>
+          <div class="bar"><span class="btn">◀ 10:39</span><span class="btn go">ZOBRAZIŤ</span><span class="btn">11:2 ▶</span></div>
+          <div class="kbd">klávesnica telefónu</div>
+        </div>
+        <figcaption><b>2. Napíšeš „zid 11 1“.</b> Bez diakritiky, s medzerami, akoukoľvek skratkou. Okamžite vidíš celý verš na kontrolu vo vybranom preklade; keď prepneš preklad, náhľad sa hneď zmení. Veľké „Zobraziť“ je v dosahu palca, nad klávesnicou.</figcaption>
+      </figure>
+
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: verš je na stene, červený pás Na stene Hebrejom 11:1, tlačidlá predošlý a ďalší verš a oddelené tlačidlo Zhasnúť">
+          <div class="ph-head"><b>Presenter</b><span class="dot">pripojené</span><span class="ph-more">Viac</span></div>
+          <div class="onwall live"><span>Na stene: <b>Hebrejom 11:1</b></span><span>SEB + NLT ●</span></div>
+          <div class="field">Odkaz alebo slová…<span class="x">⌕</span></div>
+          <div class="ph-body">
+            <span class="label">Ďalší verš</span>
+            <div class="card">
+              <span class="ref">Hebrejom 11:2</span>
+              <span class="main" style="color: var(--app-muted)">náhľad nasledujúceho verša, pripravený na jedno ťuknutie</span>
+            </div>
+            <span class="label">Táto bohoslužba</span>
+            <div class="chips"><span class="chip">Hebrejom 11:1</span><span class="chip">Rimanom 8:28</span><span class="chip">Žalm 23:1</span></div>
+          </div>
+          <div class="clear">Zhasnúť verš</div>
+          <div class="bar two"><span class="btn">◀ 10:39</span><span class="btn go">ĎALŠÍ: 11:2 ▶</span></div>
+          <div class="tabs"><span>Piesne</span><span class="on">Biblia</span><span>Časovače</span><span>AI</span><span>Nastav.</span></div>
+        </div>
+        <figcaption><b>3. Verš je na stene.</b> Červený pás hore vždy ukazuje, čo je práve vonku. Kazateľ číta ďalej, tak stačí jedno ťuknutie na ďalší verš. Zhasnúť je oddelené, aby sa nestlačilo omylom.</figcaption>
+      </figure>
+
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: napísané jan 3 16, predvolený výsledok Ján 3:16 a čipy s 1 Ján 3:16, ďalej upozornenie pre neexistujúcu kapitolu">
+          <div class="ph-head"><b>Presenter</b><span class="dot">pripojené</span><span class="ph-more">Viac</span></div>
+          <div class="onwall"><span>Na stene: nič</span><span>SEB + NLT</span></div>
+          <div class="field typing">jan 3 16<span class="x">✕</span></div>
+          <div class="ph-body">
+            <div class="row sel"><span><b>Ján 3:16</b></span><small>predvolené</small></div>
+            <span class="label">Alebo</span>
+            <div class="chips"><span class="chip">1 Ján 3:16</span></div>
+            <span class="label">Keď kapitola neexistuje</span>
+            <div class="hint">„zid 14 1“ — Židom má 13 kapitol. Ťukni pre Židom 13.</div>
+            <span class="label">Keď nie je odkaz, ale slová</span>
+            <div class="row"><span>„viera je zárukou“</span><small>hľadá v texte · SEB</small></div>
+          </div>
+          <div class="kbd">klávesnica telefónu</div>
+        </div>
+        <figcaption><b>4. Keď to nie je jasné.</b> Najčastejšia kniha je predvolená, ostatné sú hneď vedľa. Chyba nikdy nie je ticho: vždy povie, čo je zle. A keď si pamätáš len slová verša, hľadá v texte.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="a">
+    <div class="col">
+      <h2>A — jedno pole, ktoré rozumie odkazom</h2>
+      <p>Jeden prekladač odkazov pre celý Presenter: pole na telefóne aj počítači, Companion aj AI. Beží priamo v prehliadači, takže výsledok je okamžite, bez čakania na server.</p>
+      <ul class="plain">
+        <li>Pozná 66 kníh v 767 zápisoch: slovenské, české aj anglické názvy, všetky štyri slovenské systémy skratiek (ekumenický, evanjelický, katolícky, Roháček), bez diakritiky.</li>
+        <li>Rozumie „11:1“, „11,1“, „11.1“, „11 1“, „1kor13:4“, rozsahom „3,16-18“ aj zoznamom „5:3.5.7“ (ukážu sa ako rad veršov na postupné zobrazenie).</li>
+        <li>Kontroluje kapitolu a verš voči hlavnému prekladu. To zároveň rozlíši nejasné skratky: „fil 4:13“ môže byť len Filipanom.</li>
+        <li>Verš z AI alebo Companionu pôjde konečne všade: Resolume, stage obrazovky, kamera aj stream.</li>
+        <li>Testovaných je 100 reálnych zápisov vrátane „zid 11:1“ v 17 podobách. Pracovný prototyp pravidiel prešiel všetkých 100.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="b">
+    <div class="col">
+      <h2>B — telefón ako plnohodnotný ovládač</h2>
+      <p>Nie zmenšený počítač, ale rozloženie navrhnuté pre palec a pre stres. Platí pre celého operátora, nielen pre Bibliu.</p>
+    </div>
+    <div class="cards2">
+      <div class="box"><h3>Ovládanie</h3><p>Sekcie ako karty dole namiesto burger menu. Kompaktná hlavička, ostatné odkazy a stav pod „Viac“. Na šírku vlastné rozloženie.</p></div>
+      <div class="box"><h3>Žiadne omyly</h3><p>Slajd piesne sa spustí až ťuknutím, nie dotykom pri posúvaní. Zmena stage rozloženia z telefónu sa pýta na potvrdenie. Zhasnúť je oddelené od Zobraziť.</p></div>
+      <div class="box"><h3>Preklad na očiach</h3><p>Hlavný preklad a preklad pod ním sú priamo na obrazovke veršov, nie schované v nastaveniach. Kniha sa ukáže tak, ako ju volá vybraný preklad (Hebrejom v SEB, Židom v Roháčkovi).</p></div>
+      <div class="box"><h3>Žiadne približovanie</h3><p>Všetky polia aspoň 16 px, takže iPhone stránku nezväčší. Tlačidlá aspoň 44 px. Nič nepresahuje za okraj.</p></div>
+      <div class="box"><h3>Rýchle otvorenie</h3><p>Aplikácia zostavená s optimalizáciou a posielaná skomprimovaná, skrytý náhľad stage sa na telefóne nenačítava. Cieľ: Biblia použiteľná do 3 s aj na 4G.</p></div>
+    </div>
+    <div class="tablebox">
+      <table>
+        <thead><tr><th>Situácia</th><th>Dnes</th><th>Po zmene</th></tr></thead>
+        <tbody>
+          <tr><td>Verš z telefónu, keď poznáš presný názov knihy</td><td>7 ťuknutí, 7 znakov, 2 posunutia</td><td>1 pole, 2 ťuknutia</td></tr>
+          <tr><td>„zid 11:1“</td><td>nenájde nič, bez hlásenia</td><td>Hebrejom 11:1 hneď pri písaní</td></tr>
+          <tr><td>Ďalší verš, keď kazateľ číta ďalej</td><td>znova kapitola a verš</td><td>1 ťuknutie</td></tr>
+          <tr><td>Otvorenie na telefóne cez 4G (lokálna adresa)</td><td>7,1 až 7,3 s</td><td>do 3,5 s</td></tr>
+          <tr><td>Verš na počítači</td><td>3 polia + klik</td><td>napíšeš, Enter, Enter</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="studium">
+    <div class="col">
+      <span class="status">Pracovný návrh k #851, súbežne s A + B</span>
+      <h2>Štúdium a príprava kázne namiesto MySwordu</h2>
+      <p>Samostatná stránka pre kazateľa na telefóne a tablete. Nemá žiadne tlačidlá, ktoré by niečo poslali na stenu, takže je bezpečná aj doma. Robí len to, čo z MySwordu naozaj používaš: čítanie a porovnanie v SEB, Roháčkovi, evanjelickom preklade aj KJV, detail slova cez Strongove čísla v KJV a krížové odkazy pri verši. Pripravené verše sa rovno stanú prezentáciou na bohoslužbu.</p>
+    </div>
+    <div class="phones">
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: čítanie kapitoly Hebrews 11 v KJV s obľúbenými prekladmi hore a tlačidlami späť a dopredu">
+          <div class="ph-head"><b>Štúdium</b><span class="ph-more">◀ ▶</span></div>
+          <div class="field">Odkaz alebo slová…<span class="x">⌕</span></div>
+          <div class="chips" style="padding: 0 12px 6px"><span class="chip">SEB</span><span class="chip">ROH</span><span class="chip">SEVP</span><span class="chip" style="background: var(--app-blue); color: #fff">KJV</span><span class="chip">NLT</span></div>
+          <div class="ph-body">
+            <span class="label">Hebrews 11 · KJV</span>
+            <div class="card" style="background: transparent; padding: 0 2px">
+              <span class="main"><sup>1</sup> Now <u>faith</u> is the substance of things <i>hoped for</i>, the evidence of things not seen.</span>
+              <span class="main"><sup>2</sup> For by it the elders obtained a good report.</span>
+              <span class="main"><sup>3</sup> Through faith we understand that the worlds were framed by the word of God, so that things which are seen were not made of things which do appear.</span>
+            </div>
+          </div>
+          <div class="bar"><span class="btn">◀ kap. 10</span><span class="btn">Porovnať</span><span class="btn">kap. 12 ▶</span></div>
+        </div>
+        <figcaption><b>Čítanie.</b> Päť prekladov na jedno ťuknutie, kapitoly sa listujú potiahnutím. Späť a dopredu fungujú ako v prehliadači, aj gestom.</figcaption>
+      </figure>
+
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: po ťuknutí na slovo faith sa zdola vysunie karta so Strongovým číslom G4102, gréckym slovom pistis a významom">
+          <div class="ph-head"><b>Štúdium</b><span class="ph-more">◀ ▶</span></div>
+          <div class="ph-body" style="padding-top: 4px">
+            <span class="label">Hebrews 11 · KJV</span>
+            <div class="card" style="background: transparent; padding: 0 2px; opacity: .55">
+              <span class="main"><sup>1</sup> Now <u>faith</u> is the substance of things hoped for, the evidence of things not seen.</span>
+            </div>
+          </div>
+          <div style="background: var(--app-panel2); border-radius: 18px 18px 0 0; padding: 12px 14px 16px; display: flex; flex-direction: column; gap: 7px; border-top: 1px solid var(--app-line)">
+            <span style="width: 36px; height: 4px; border-radius: 4px; background: var(--app-line); align-self: center"></span>
+            <span><b style="font-size: 15px">faith</b> · <span style="font-family: var(--mono); color: #9cc3ff">G4102</span></span>
+            <span style="font-family: var(--display); font-size: 15px">πίστις <span style="color: var(--app-muted); font-family: var(--body); font-size: 12px">pístis</span></span>
+            <span class="main" style="font-size: 12.5px">persuasion, i.e. credence; moral conviction (of religious truth…); assurance, belief, faith, fidelity</span>
+            <span style="color: var(--app-muted); font-size: 11px">V KJV: faith, assurance, belief, fidelity</span>
+            <div class="chips"><span class="chip">Všetky výskyty</span><span class="chip">Celé heslo</span><span class="chip">◀ ▶ slovo</span></div>
+          </div>
+        </div>
+        <figcaption><b>Výklad slova z KJV.</b> Ťukneš na slovo a zdola sa vysunie Strongovo číslo, pôvodné slovo a význam. Dáta sú voľne použiteľné, KJV so Strongovými číslami už v Presenteri dokonca je, len sa dnes pri importe zahadzujú.</figcaption>
+      </figure>
+
+      <figure class="phone-fig">
+        <div class="phone" role="img" aria-label="Maketa: úprava kázne, v Hebrejom 11:1 je koniec verša preškrtnutý a odkaz sa sám zmenil na 11:1a, slovo VIERA je zvýraznené">
+          <div class="ph-head"><b>Kázeň · ne 19. 10.</b><span class="ph-more">Náhľad</span></div>
+          <div class="ph-body" style="padding-top: 4px">
+            <div class="card">
+              <span class="ref">Hebrejom 11:1a <span style="font-size: 11px; color: var(--app-muted); font-family: var(--body)">SEB</span></span>
+              <span class="main"><b>VIERA</b> je zárukou toho, v čo dúfame<s style="color: var(--app-muted)">, a zdôvodnením toho, čo nevidíme,</s></span>
+              <span style="font-size: 11px; color: var(--app-muted)">ťuknutím na slová ich vyškrtneš · dlhým podržaním zvýrazníš</span>
+            </div>
+            <div class="card">
+              <span class="ref">Romans 8:28 <span style="font-size: 11px; color: var(--app-muted); font-family: var(--body)">KJV</span></span>
+              <span class="main">And we know that all things work together for good to them that love God, to them who are the called according to his purpose.</span>
+            </div>
+            <div class="row"><span>+ Pridať verš</span><small>3 položky · 4 slajdy</small></div>
+          </div>
+          <div class="bar two"><span class="btn">Poradie</span><span class="btn go">HOTOVO</span></div>
+        </div>
+        <figcaption><b>Príprava kázne.</b> Žiadny Gmail ani Discord. Vyškrtneš, čo nechceš, odkaz sa sám zmení na „11:1a“, zvýrazníš slovo a „Hotovo“ znamená, že kázeň je hneď u operátora v sekcii „Pripravené kazateľom“ aj na tablete.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="pocuvanie">
+    <div class="col">
+      <span class="status">Pracovný návrh k #850, časť C</span>
+      <h2>AI počúva kázeň</h2>
+      <p>Kazateľ alebo tlmočník hovorí, Presenter prepisuje reč a keď zachytí odkaz alebo citát, ukáže kartu v sekcii „Návrhy AI“. Jedno ťuknutie a verš je na stene. Zlý návrh nič nepokazí, je to len karta.</p>
+      <ul class="plain">
+        <li><b>Zvuk: dva samostatné mikrofóny cez VBAN.</b> Kazateľ aj tlmočník prídu po sieti každý zvlášť; Presenter prepisuje oba mikrofóny osobitne, porovnáva oba prepisy a z nich navrhne miesto, ktoré má ísť na LED.</li>
+        <li><b>Najprv tvoje pripravené verše:</b> ak je kázeň pripravená v Presenteri, AI vie, čo príde, a ponúkne to ako prvé. Pri „čítame ďalej“ ponúkne ďalší pripravený verš.</li>
+        <li><b>Spustí sa samo:</b> počúvanie by sa zaplo, keď sa stage prepne na kázeň, a vyplo pri návrate na piesne.</li>
+        <li><b>Najprv skúška naostro:</b> 3 až 5 kázní zo SNV porovnáme na viacerých motoroch prepisu a vyberieme podľa toho, koľko veršov trafil a ako rýchlo.</li>
+        <li><b>Náklady:</b> odhadom 0,24 až 0,48 $ za prepis jednej bohoslužby.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="dalej">
+    <div class="col">
+      <h2>Čo sa pripravuje súbežne</h2>
+      <ul class="plain">
+        <li><b>C — AI počúva kázeň:</b> návrhy veršov sa objavia v sekcii „Návrhy AI“ na tej istej obrazovke, jedno ťuknutie na zobrazenie.</li>
+        <li><b>#851 — štúdium a príprava kázne:</b> verše, ktoré si pripravíš, sa objavia v sekcii „Pripravené kazateľom“ a zároveň budú očakávaným zoznamom pre AI.</li>
+        <li><b>Bezpečnosť:</b> pred verejné adresy prihlásenie, skôr než sa telefón začne bežne používať mimo siete v kostole.</li>
+        <li><b>Kvalita dát:</b> oprava chýb z importu (nadpisy zlepené do veršov v Roháčkovi, poznámky v KJV) a vyriešenie licencie SEB.</li>
+      </ul>
+      <p class="meta">Technický návrh v angličtine je v tickete #850 na GitHube (repozitár presenter).</p>
+    </div>
+  </section>
+
+  <footer>Pracovná verzia z 13. 10. 2026. Kód začne vznikať až po schválení návrhu.</footer>
+</div>
+
+</body>
+</html>
