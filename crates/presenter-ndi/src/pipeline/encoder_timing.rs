@@ -770,6 +770,65 @@ mod tests {
     }
 
     #[test]
+    fn snv_start_up_burst_lead_is_cut_to_the_deadband_once() {
+        // SNV, 0 ppm: 3 of 104 starts (7.–13.10.) began with a 6–8 frame NDI
+        // burst. vah264enc anchors its counter on the first frame, so the
+        // burst becomes a CONSTANT lead for the pipeline's lifetime. Here the
+        // first frame plus 8 burst frames 4 ms apart (each gains 29.3 ms on
+        // the clock), a 5 ms encode latency, then 10 min of the 33.333 ms
+        // cadence with every frame 0–8 ms later than the burst's last one
+        // (SNV's steady intervals stay within ±0.24 frames).
+        const BURST: i64 = 8;
+        const GAP: i64 = 4 * MS;
+        const LATENCY: i64 = 5 * MS;
+        let mut g = TimestampGuard::default();
+        let mut rng = XorShift(0x854_B5);
+        let mut prev: Option<i64> = None;
+        let mut pulled_back = Vec::new();
+        let mut correction_after_burst = 0;
+        let mut max_raw_lead = i64::MIN;
+        for n in 0..18_000i64 {
+            let arrival = if n <= BURST {
+                n * GAP
+            } else {
+                BURST * GAP + (n - BURST) * FRAME_NS + rng.next_range_ns(0, 8 * MS)
+            };
+            let enc = n * FRAME_NS;
+            let now = arrival + LATENCY;
+            max_raw_lead = max_raw_lead.max(enc - now);
+            let d = g.apply(enc, now, FRAME_NS);
+            assert!(d.out_ns <= now + D, "frame {n}: more than D ahead");
+            if d.kind == GuardKind::PulledBack {
+                pulled_back.push(n);
+            }
+            if n == BURST {
+                correction_after_burst = g.correction_ns();
+            }
+            if n > BURST {
+                let p = prev.expect("the burst frames came first");
+                assert_eq!(
+                    d.kind,
+                    GuardKind::Kept,
+                    "frame {n}: touched after the burst"
+                );
+                assert_eq!(d.out_ns - p, FRAME_NS, "frame {n}: cadence changed");
+                assert_eq!(g.correction_ns(), correction_after_burst, "frame {n}");
+            }
+            prev = Some(d.out_ns);
+        }
+        // Frames 0 and 1 lead by less than D; every later burst frame is
+        // pulled back, nothing after the burst.
+        assert_eq!(pulled_back, (2..=BURST).collect::<Vec<_>>());
+        // The constant start-up lead: 8 × 33.333 − 32 − 5 ≈ 229.7 ms.
+        assert_eq!(max_raw_lead, BURST * FRAME_NS - BURST * GAP - LATENCY);
+        // Cut to D once: from then on every frame is stamped (and released by
+        // clocksync) ≈ 179.7 ms earlier than the unguarded counter, with the
+        // same cadence: that much less latency for the pipeline's lifetime.
+        assert_eq!(correction_after_burst, max_raw_lead - D);
+        assert_eq!(correction_after_burst, 179_666_664);
+    }
+
+    #[test]
     fn pts_preserving_encoder_is_an_exact_identity() {
         // x264enc / NVENC / vah264enc ≥ 1.26: the stamp IS the receive time,
         // always earlier than the clock — the guard must change nothing.
