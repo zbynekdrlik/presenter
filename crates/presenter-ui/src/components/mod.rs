@@ -21,6 +21,7 @@ mod slide_selection;
 mod slide_selection_logic;
 pub mod slide_stage_layout_picker;
 pub mod stage;
+pub mod stage_follow;
 pub mod stage_preview;
 pub mod stage_text_mode_picker;
 pub mod stream;

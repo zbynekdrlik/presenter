@@ -10,7 +10,8 @@ paths:
   - "tests/e2e/operator-edit-autoscroll.spec.ts"
   - "crates/presenter-ui/src/components/presentation_list.rs"
   - "crates/presenter-ui/src/pages/operator.rs"
-  - "crates/presenter-ui/src/pages/operator_follow.rs"
+  - "crates/presenter-ui/src/components/stage_follow.rs"
+  - "crates/presenter-ui/src/components/stage_preview.rs"
 ---
 
 # Operator slide grids — per-browser slides per row (#832)
@@ -55,13 +56,19 @@ paths:
   - the `slide_list.rs` effect that calls `scroll_slide_into_view` reads
     `ctx.mode` UNTRACKED and scrolls only in Live mode (it still returns the
     current id, so going back to Live never replays an old change);
-  - AbleSet Follow (`pages/operator_follow.rs`): stage events never switch
-    songs in Edit mode (the snapshot is still stored for the preview); on the
-    switch back to Live the operator syncs to the stage at once, so an arrow
-    key never sends a slide of the song that was being edited; an explicit
-    Follow ON click (`stage_preview.rs`) still syncs in any mode; Follow counts
-    as OFF until its status loads; the async song fetch applies only while that
-    song is still selected and Follow may still navigate;
+  - AbleSet Follow (`components/stage_follow.rs`, used by the operator page
+    and the header's Follow button): stage events never switch songs in Edit
+    mode (the snapshot is still stored for the preview); on the switch back to
+    Live the operator syncs to the stage at once, so an arrow key never sends
+    a slide of the song that was being edited; an explicit Follow ON click
+    syncs in any mode (`forced`); Follow counts as OFF until its status loads.
+    The async open applies each step only while that song is still selected,
+    and if Follow may no longer navigate when the song arrives it points the
+    selection back at the song actually shown (id and shown song never
+    disagree);
+  - the slide list scrolls when a different song is SHOWN (content arrived):
+    to the top, or in Live mode to the stage's current slide when it is in
+    that song, so a Follow navigation lands on the slide on stage;
   - per-card state that a stage event re-renders (the card `class` closure)
     derives everything it shows, `is-focused` included, from signals — never
     poke a class into the DOM, the next stage event rewrites `class`.
@@ -70,7 +77,8 @@ paths:
   closure (tachys already patched the rows in place, so this is CPU, not DOM:
   the "same row node" assertion passes on the old code too).
   `operator-edit-autoscroll.spec.ts`: the "editing the song on stage" case
-  (1605 → 806, and the edited card losing `is-focused` once it is the stage
-  slide), the "Follow on" case (the edited song closed) and its "back to Live"
-  step fail on the code they fix; the library / playlist / other-song cases
-  guard against reloads, jumps and row rebuilds.
+  (1605 → 806), the "Follow on" case (the edited song closed), the "back to
+  Live" test, and the two network-delay tests (Edit clicked while the stage
+  song loads; another song clicked while its library loads) each fail on the
+  code they fix; the library / playlist / other-song cases guard against
+  reloads, jumps and row rebuilds.

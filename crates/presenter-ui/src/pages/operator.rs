@@ -3,7 +3,6 @@ use presenter_core::LiveEvent;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use super::operator_follow::{follow_navigation, setup_follow_on_live, sync_to_stage};
 use crate::components::header::Header;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
@@ -13,6 +12,7 @@ use crate::components::presentation_list::PresentationList;
 use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
+use crate::components::stage_follow::{follow_navigation, setup_follow_on_live, sync_to_stage};
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;
@@ -348,7 +348,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                     // AbleSet Follow: Live mode opens the stage's song (#853: never
                     // in Edit mode). The stage preview always updates.
                     if follow_navigation(ableset_status, mode) {
-                        sync_to_stage(&follow_ctx, &snapshot);
+                        sync_to_stage(&follow_ctx, &snapshot, false);
                     }
                     stage_snapshot.set(Some(snapshot));
                 }

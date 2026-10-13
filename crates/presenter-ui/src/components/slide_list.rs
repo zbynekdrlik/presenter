@@ -71,15 +71,33 @@ pub fn SlideList() -> impl IntoView {
         });
     }
 
-    // Scroll to top when the operator opens a different presentation.
-    // Issue #271 concern 3: new song should load with the first slide
-    // visible, not at the previous song's scroll position.
+    // Scroll when a different presentation is SHOWN (its content arrived, not
+    // when the selection id moves): to the top so the new song starts at its
+    // first slide (#271 concern 3) — or, in Live mode, to the stage's current
+    // slide when that slide is in this song, so a Follow navigation lands on
+    // the slide on stage (#853).
     {
-        let selected_presentation_id = ctx.selected_presentation_id;
+        let selected_presentation = ctx.selected_presentation;
+        let stage_snapshot = ctx.stage_snapshot;
+        let mode = ctx.mode;
         Effect::new(move |prev_id: Option<Option<String>>| {
-            let current_id = selected_presentation_id.get();
+            let current_id = selected_presentation.with(|p| p.as_ref().map(|p| p.id.to_string()));
             if current_id != prev_id.flatten() && current_id.is_some() {
-                gloo_timers::callback::Timeout::new(0, scroll_slides_to_top).forget();
+                let stage_slide = if mode.get_untracked() == "live" {
+                    stage_snapshot.with_untracked(|snapshot| {
+                        snapshot
+                            .as_ref()
+                            .filter(|s| s.presentation_id.map(|id| id.to_string()) == current_id)
+                            .and_then(|s| s.current_slide_id.map(|id| id.to_string()))
+                    })
+                } else {
+                    None
+                };
+                gloo_timers::callback::Timeout::new(0, move || match stage_slide {
+                    Some(slide_id) => scroll_slide_into_view(&slide_id),
+                    None => scroll_slides_to_top(),
+                })
+                .forget();
             }
             current_id
         });
@@ -266,7 +284,8 @@ pub fn SlideList() -> impl IntoView {
                         .zip(resolved.into_iter())
                         .enumerate()
                         .map(|(i, (raw_slide, resolved_slide))| {
-                        let slide_id = resolved_slide.id.to_string();
+                        let card_slide_id = resolved_slide.id;
+                        let slide_id = card_slide_id.to_string();
                         let main_text = resolved_slide.main.value().to_string();
                         let translation_text = resolved_slide.translation.value().to_string();
                         let stage_text = resolved_slide.stage.value().to_string();
@@ -399,7 +418,7 @@ pub fn SlideList() -> impl IntoView {
                                     let is_active = ctx.stage_snapshot.with(|snap| {
                                         snap.as_ref()
                                             .and_then(|s| s.current_slide_id)
-                                            .is_some_and(|id| id.to_string() == slide_id_class)
+                                            == Some(card_slide_id)
                                     });
                                     if is_active {
                                         c.push_str(" is-active");

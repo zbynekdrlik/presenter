@@ -6,7 +6,6 @@ pub mod bible_reference;
 pub mod bible_slides;
 pub mod camera;
 pub mod operator;
-mod operator_follow;
 pub mod settings;
 pub mod stage;
 pub mod stage_events;
