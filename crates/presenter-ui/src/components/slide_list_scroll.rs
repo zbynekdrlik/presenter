@@ -180,11 +180,12 @@ pub(super) fn handle_wheel_event(ev: web_sys::WheelEvent) {
 /// selection id moves): to the top, so a new song starts at its first slide
 /// (#271 concern 3) — or, for a song a Follow open just showed
 /// (`AppContext::follow_landing`), to the stage's current slide when it is in
-/// that song (#853). Opening a song by hand, from search, a playlist or a
-/// reload always starts at the top, Follow on or off.
+/// that song (`AppContext::follow_stage`, never a songless API push) (#853).
+/// Opening a song by hand, from search, a playlist or a reload always starts
+/// at the top, Follow on or off.
 pub(super) fn setup_scroll_on_song_shown(ctx: &AppContext) {
     let selected_presentation = ctx.selected_presentation;
-    let stage_snapshot = ctx.stage_snapshot;
+    let follow_stage = ctx.follow_stage;
     let follow_landing = ctx.follow_landing;
     Effect::new(move |prev_id: Option<Option<PresentationId>>| {
         let current_id = selected_presentation.with(|p| p.as_ref().map(|p| p.id));
@@ -194,7 +195,7 @@ pub(super) fn setup_scroll_on_song_shown(ctx: &AppContext) {
         follow_landing.set_value(None);
         if current_id.is_some() && current_id != prev_id.flatten() {
             let stage_slide = if follow_opened {
-                stage_snapshot.with_untracked(|snapshot| {
+                follow_stage.with_value(|snapshot| {
                     snapshot
                         .as_ref()
                         .filter(|s| s.presentation_id == current_id)

@@ -55,8 +55,13 @@ pub struct FollowPending {
     /// long after (a hung or very slow request) is requested again by the
     /// next stage change, under the same token.
     pub started_ms: f64,
+    /// Bumped each time the song is requested again: only a failure of the
+    /// latest request ends the open (an older one may fail while the newer
+    /// one is still on its way).
+    pub request: u32,
     /// The selected library and playlist when the open started: a pick by
-    /// the operator since then keeps Follow's library step out.
+    /// the operator since then keeps Follow's library step out. Follow's own
+    /// library step moves it along, so it never counts as a pick.
     pub context_at_start: (Option<String>, Option<String>),
 }
 
@@ -85,6 +90,10 @@ pub struct AppContext {
     pub selected_entry_index: RwSignal<Option<u32>>,
     /// The AbleSet Follow open in flight, if any (#853).
     pub follow_pending: StoredValue<Option<FollowPending>>,
+    /// The last stage snapshot Follow acts on: every frame except a
+    /// songplayer push to an API layout (a frame with no song, #799), which
+    /// would otherwise hide the stage song from the catch-up paths.
+    pub follow_stage: StoredValue<Option<StageDisplaySnapshot>>,
     /// The song a Follow open just showed: its slide list lands on the stage
     /// slide, every other newly shown song opens at the top (#271, #853).
     pub follow_landing: StoredValue<Option<PresentationId>>,
@@ -145,6 +154,7 @@ impl AppContext {
             selected_playlist: RwSignal::new(None),
             selected_entry_index: RwSignal::new(None),
             follow_pending: StoredValue::new(None),
+            follow_stage: StoredValue::new(None),
             follow_landing: StoredValue::new(None),
             stage_snapshot: RwSignal::new(None),
             stage_layout_code: RwSignal::new(String::new()),

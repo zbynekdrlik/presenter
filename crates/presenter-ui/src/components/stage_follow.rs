@@ -56,7 +56,32 @@ fn may_navigate(follow_enabled: bool, mode: &str, forced: bool) -> bool {
 /// A songplayer push to an API layout (#799): a stage frame with no song,
 /// interleaved with the frames that carry the real stage song.
 fn is_songless_api_frame(snapshot: &StageDisplaySnapshot) -> bool {
-    snapshot.presentation_id.is_none() && is_api_stage_layout(&snapshot.layout.code)
+    songless_api_frame(snapshot.presentation_id.is_some(), &snapshot.layout.code)
+}
+
+fn songless_api_frame(has_song: bool, layout_code: &str) -> bool {
+    !has_song && is_api_stage_layout(layout_code)
+}
+
+/// Whether the stage has left the song a pending open is loading.
+fn stage_left_open(open: Option<&FollowPending>, stage_song: Option<&str>) -> bool {
+    open.is_some_and(|open| stage_song != Some(open.presentation_id.as_str()))
+}
+
+/// Whether an answer for request `request` of open `token` ends that open: a
+/// success of any of its requests opens the song; a failure ends it only when
+/// it is the latest request (an older one may fail while a newer one is still
+/// on its way).
+fn answer_ends_open(open: &FollowPending, token: u64, request: u32, succeeded: bool) -> bool {
+    open.token == token && (succeeded || open.request == request)
+}
+
+/// Remember `snapshot` as the stage Follow acts on (unless it is a songless
+/// API push). Also used for the snapshot loaded with the page.
+pub(crate) fn remember_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot) {
+    if !is_songless_api_frame(snapshot) {
+        ctx.follow_stage.set_value(Some(snapshot.clone()));
+    }
 }
 
 /// What a stage snapshot on `stage_song` asks of Follow.
@@ -105,12 +130,10 @@ pub(crate) fn on_stage_snapshot(ctx: &AppContext, snapshot: &StageDisplaySnapsho
     if is_songless_api_frame(snapshot) {
         return;
     }
+    remember_stage(ctx, snapshot);
     let stage_song = snapshot.presentation_id.map(|id| id.to_string());
     ctx.follow_pending.update_value(|open| {
-        let left = open
-            .as_ref()
-            .is_some_and(|open| stage_song.as_deref() != Some(open.presentation_id.as_str()));
-        if left {
+        if stage_left_open(open.as_ref(), stage_song.as_deref()) {
             *open = None;
         }
     });
@@ -145,19 +168,20 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
             ctx.selected_entry_index.set(entry_index);
         }
         SyncStep::AlreadyOpening | SyncStep::Retry => {
-            let mut retry_token = None;
+            let mut retry = None;
             ctx.follow_pending.update_value(|open| {
                 if let Some(open) = open {
                     open.forced |= forced;
                     open.entry_index = entry_index;
                     if step == SyncStep::Retry {
                         open.started_ms = now_ms;
-                        retry_token = Some(open.token);
+                        open.request += 1;
+                        retry = Some((open.token, open.request));
                     }
                 }
             });
-            if let Some(token) = retry_token {
-                fetch_stage_song(ctx, token, pres_id);
+            if let Some((token, request)) = retry {
+                fetch_stage_song(ctx, token, request, pres_id);
             }
         }
         SyncStep::Open => {
@@ -169,23 +193,24 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
                 forced,
                 entry_index,
                 started_ms: now_ms,
+                request: 0,
                 context_at_start: (
                     ctx.selected_library_id.get_untracked(),
                     ctx.selected_playlist_id.get_untracked(),
                 ),
             }));
-            fetch_stage_song(ctx, token, pres_id);
+            fetch_stage_song(ctx, token, 0, pres_id);
         }
     }
 }
 
-/// Fetch the stage song for the open `token` and show it if that open is
-/// still current; then its library context.
-fn fetch_stage_song(ctx: &AppContext, token: u64, pres_id: String) {
+/// Fetch the stage song (request `request` of the open `token`) and show it if
+/// that open is still current; then its library context.
+fn fetch_stage_song(ctx: &AppContext, token: u64, request: u32, pres_id: String) {
     let ctx = ctx.clone();
     leptos::task::spawn_local(async move {
         let fetched = crate::api::presentations::get_presentation(&pres_id).await;
-        let Some(open) = take_current_open(&ctx, token) else {
+        let Some(open) = take_current_open(&ctx, token, request, fetched.is_ok()) else {
             return;
         };
         let Ok(detail) = fetched else {
@@ -236,15 +261,28 @@ async fn show_song_library(ctx: &AppContext, open: &FollowPending, lib_id: Strin
     crate::state::session::remove("activePlaylistId");
     ctx.context_title.set(library.name);
     ctx.presentations.set(library.presentations);
+    // A Follow open already loading compares against this context now, so
+    // Follow's own switch is never taken for an operator pick.
+    ctx.follow_pending.update_value(|pending| {
+        if let Some(pending) = pending {
+            pending.context_at_start = (Some(lib_id.clone()), None);
+        }
+    });
 }
 
-/// The open `token` if it is still the one in flight and the operator has not
-/// picked another song since it started. Either way it is no longer pending.
-fn take_current_open(ctx: &AppContext, token: u64) -> Option<FollowPending> {
+/// The open `token` if this answer ends it (`answer_ends_open`) and the
+/// operator has not picked another song since it started. An ended open is no
+/// longer pending either way.
+fn take_current_open(
+    ctx: &AppContext,
+    token: u64,
+    request: u32,
+    succeeded: bool,
+) -> Option<FollowPending> {
     let open = ctx
         .follow_pending
         .with_value(|open| open.clone())
-        .filter(|open| open.token == token)?;
+        .filter(|open| answer_ends_open(open, token, request, succeeded))?;
     ctx.follow_pending.set_value(None);
     (ctx.selected_presentation_id.get_untracked() == open.selected_at_start).then_some(open)
 }
@@ -258,7 +296,7 @@ pub(crate) fn setup_follow_on_live(ctx: &AppContext) {
         let current = mode.get();
         let back_to_live = prev.as_deref() == Some("edit") && current == "live";
         if back_to_live && follow_navigation(ctx.ableset_status, ctx.mode) {
-            if let Some(snapshot) = ctx.stage_snapshot.get_untracked() {
+            if let Some(snapshot) = ctx.follow_stage.get_value() {
                 sync_to_stage(&ctx, &snapshot, false);
             }
         }
@@ -278,6 +316,7 @@ mod tests {
             forced: false,
             entry_index: None,
             started_ms,
+            request: 0,
             context_at_start: (None, None),
         }
     }
@@ -324,6 +363,34 @@ mod tests {
         assert_eq!(sync_step("S", Some("X"), Some(&open), 10.0), SyncStep::Open);
         assert_eq!(sync_step("S", None, Some(&open), 10.0), SyncStep::Open);
         assert_eq!(sync_step("S", Some("A"), None, 10.0), SyncStep::Open);
+    }
+
+    #[test]
+    fn a_songless_frame_is_a_songplayer_push_only_on_an_api_layout() {
+        assert!(songless_api_frame(false, "api"));
+        assert!(songless_api_frame(false, "api-ambient"));
+        assert!(!songless_api_frame(true, "api"));
+        assert!(!songless_api_frame(false, "worship"));
+    }
+
+    #[test]
+    fn a_pending_open_is_left_when_the_stage_is_on_another_song_or_none() {
+        let open = pending("S", Some("A"), 0.0);
+        assert!(!stage_left_open(Some(&open), Some("S")));
+        assert!(stage_left_open(Some(&open), Some("T")));
+        assert!(stage_left_open(Some(&open), None));
+        assert!(!stage_left_open(None, Some("T")));
+    }
+
+    #[test]
+    fn only_a_success_or_the_latest_request_failing_ends_an_open() {
+        let mut open = pending("S", Some("A"), 0.0);
+        open.request = 1;
+        assert!(answer_ends_open(&open, 1, 0, true));
+        assert!(answer_ends_open(&open, 1, 1, true));
+        assert!(answer_ends_open(&open, 1, 1, false));
+        assert!(!answer_ends_open(&open, 1, 0, false));
+        assert!(!answer_ends_open(&open, 2, 1, true));
     }
 
     #[test]

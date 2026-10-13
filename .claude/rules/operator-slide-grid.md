@@ -74,9 +74,9 @@ paths:
   the switch back to Live the operator syncs to the stage at once, so an arrow
   key never sends a slide of the song that was being edited; the Follow ON
   click also opens in Edit mode, but nothing opens once Follow is off. An open
-  is recorded in `AppContext::follow_pending` (token, the selection and the
-  library/playlist context it started from, forced, entry index, last request
-  time) while its song loads; the selection, `currentPresentationId`,
+  is recorded in `AppContext::follow_pending` (token, request number, the
+  selection and the library/playlist context it started from, forced, entry
+  index, last request time) while its song loads; the selection, `currentPresentationId`,
   `selected_entry_index` and the content are applied TOGETHER only when the
   song arrives, the token is current and the selection unchanged. NEVER move
   `selected_presentation_id` before the content: every round-2…4 race came
@@ -84,26 +84,37 @@ paths:
   so Follow never retried). A stale open is simply dropped: a newer open, the
   stage leaving that song (in ANY mode — `on_stage_snapshot`, so a Follow ON
   open in Edit mode cannot land after the stage moved on), the operator
-  picking a song, a failed fetch, Follow off / Edit by then. In Live mode the
+  picking a song (a click or a search result clears `follow_pending`, so even
+  a failed click that returns the selection cannot revive it), a failed fetch
+  of the LATEST request, Follow off / Edit by then. In Live mode the
   next stage change opens again (after an Edit drop the switch back to Live
   does); an open still waiting after `STALE_OPEN_MS` (5 s) is requested AGAIN
-  under the SAME token, so whichever answer arrives first opens the song (a
-  new token would discard a slow but live first answer). songplayer pushes to
-  an API layout (a stage frame with NO song, `is_api_stage_layout`) are not
-  stage changes for Follow — never treat a songless frame as "stage cleared".
+  under the SAME token with the next request number, so the first SUCCESSFUL
+  answer opens the song and only a failure of the latest request ends the
+  open (a new token would discard a slow but live first answer).
+  songplayer pushes to an API layout (a stage frame with NO song,
+  `is_api_stage_layout`) are not stage changes for Follow: `on_stage_snapshot`
+  skips them, and the catch-up paths (back to Live, the Follow ON click, the
+  landing scroll) read `AppContext::follow_stage` — the last stage frame that
+  is not such a push, seeded from the page's initial snapshot — never
+  `ctx.stage_snapshot`, which during songplayer playback holds the push.
   The decisions are the pure `sync_step` / `may_navigate` (host unit tests).
   The library context (library id, playlist clear, `activeLibraryId`,
   `activePlaylistId` removed, `context_title`, song list) is applied together
   after `get_library`, only if the song is still selected and the library /
   playlist are unchanged since the OPEN STARTED (a pick while the song loads
-  counts). Accepted: during that `/libraries/summary` round trip the trigger
+  counts); Follow's own library step moves a still-pending open's
+  `context_at_start` along, so it is never taken for an operator pick. Accepted: during that `/libraries/summary` round trip the trigger
   context still carries the old playlist id (clearing it earlier would flash
   the old list), and if `get_library` fails the old context stays.
-- **No late answer may replace a newer song.** A song-list click and the
-  session restore load through `state::song_load::show_when_loaded` (the #515
-  seq guard, the #556 F6 retry, `is_still_selected`; a failed click puts the
-  selection back on the shown song); the search result click checks
-  `is_still_selected`; every structural edit (insert / duplicate / delete /
+- **No late answer may replace a newer song.** A song-list click, a search
+  result and the session restore load through
+  `state::song_load::show_when_loaded` (the #515 seq guard, the #556 F6
+  retry, `is_still_selected`); a song that cannot be shown never stays
+  selected (`OnFailure::SelectShown` puts a click back on the shown song AND
+  its playlist occurrence, #496; `ClearSelection` empties the session
+  restore's selection but keeps its session key, so Follow can open it);
+  every structural edit (insert / duplicate / delete /
   paste via `slide_save::apply_structural_slides`, reorder and the reconcile
   refetch via `is_shown`) applies only while its song is still SHOWN.
   Otherwise the shown and selected songs disagree, or one song's slides land

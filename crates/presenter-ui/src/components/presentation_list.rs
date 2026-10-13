@@ -27,6 +27,9 @@ pub fn PresentationList() -> impl IntoView {
     let op = use_ctx!(OperatorState);
 
     let select_presentation = move |id: String, entry_index: Option<u32>| {
+        // #853: the operator's pick replaces any Follow open still loading.
+        ctx.follow_pending.set_value(None);
+        let previous_entry_index = ctx.selected_entry_index.get_untracked();
         ctx.selected_presentation_id.set(Some(id.clone()));
         // #496: remember which playlist OCCURRENCE was picked so triggers send
         // the right entry index for a repeated song (None for library picks).
@@ -57,7 +60,10 @@ pub fn PresentationList() -> impl IntoView {
             slide_edit_seq: op.slide_edit_seq,
             save_status: op.save_status,
             seq_at_select: op.slide_edit_seq.get_untracked(),
-            restore_on_failure: true,
+            on_failure: crate::state::song_load::OnFailure::SelectShown {
+                entry_index: ctx.selected_entry_index,
+                previous_entry_index,
+            },
         };
         leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     };

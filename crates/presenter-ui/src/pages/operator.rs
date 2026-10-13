@@ -407,10 +407,11 @@ fn load_initial_data(ctx: &AppContext) {
     });
 
     // Stage snapshot
-    let stage_snapshot = ctx.stage_snapshot;
+    let stage_ctx = ctx.clone();
     leptos::task::spawn_local(async move {
         if let Ok(snap) = crate::api::stage::get_snapshot().await {
-            stage_snapshot.set(Some(snap));
+            crate::components::stage_follow::remember_stage(&stage_ctx, &snap);
+            stage_ctx.stage_snapshot.set(Some(snap));
         }
     });
 
@@ -462,8 +463,9 @@ fn load_initial_data(ctx: &AppContext) {
 fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
     if let Some(pres_id) = ctx.selected_presentation_id.get_untracked() {
         // The session's song, through the same guarded load as a song-list
-        // click (#515 seq guard, #556 F6 retry, #853 still-selected); on a
-        // failed fetch the id stays for the next load.
+        // click (#515 seq guard, #556 F6 retry, #853 still-selected); if it
+        // cannot be shown the selection clears (so Follow can open it) and the
+        // session key stays for the next load.
         let load = crate::state::song_load::SongLoad {
             id: pres_id,
             selected_id: ctx.selected_presentation_id,
@@ -472,7 +474,7 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
             slide_edit_seq: op.slide_edit_seq,
             save_status: op.save_status,
             seq_at_select: op.slide_edit_seq.get_untracked(),
-            restore_on_failure: false,
+            on_failure: crate::state::song_load::OnFailure::ClearSelection,
         };
         leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     }

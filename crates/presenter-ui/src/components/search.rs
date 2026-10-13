@@ -114,18 +114,32 @@ pub fn SearchResults() -> impl IntoView {
         op.search_query.set(String::new());
         ctx.search_results.set(Vec::new());
 
-        if let Some(pid) = pres_id.clone() {
+        if let Some(pid) = pres_id {
+            // #853: the operator's pick replaces any Follow open still loading;
+            // the song loads like a song-list click (#515 seq guard, #556 F6
+            // retry, still-selected check, back to the shown song on failure).
+            ctx.follow_pending.set_value(None);
             ctx.selected_presentation_id.set(Some(pid.clone()));
             crate::state::session::set("currentPresentationId", &pid);
+            let load = crate::state::song_load::SongLoad {
+                id: pid,
+                selected_id: ctx.selected_presentation_id,
+                shown: ctx.selected_presentation,
+                slides_cache: None,
+                slide_edit_seq: op.slide_edit_seq,
+                save_status: op.save_status,
+                seq_at_select: op.slide_edit_seq.get_untracked(),
+                on_failure: crate::state::song_load::OnFailure::SelectShown {
+                    entry_index: ctx.selected_entry_index,
+                    previous_entry_index: ctx.selected_entry_index.get_untracked(),
+                },
+            };
+            leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
         }
 
         let presentations = ctx.presentations;
         let context_title = ctx.context_title;
         let libraries = ctx.libraries;
-        let selected_pres = ctx.selected_presentation;
-        let selected_id = ctx.selected_presentation_id;
-        let pres_id_clone = pres_id;
-
         leptos::task::spawn_local(async move {
             if let Ok(libs) = crate::api::libraries::list_libraries().await {
                 if let Some(lib) = libs.iter().find(|l| l.id.to_string() == lib_id) {
@@ -133,14 +147,6 @@ pub fn SearchResults() -> impl IntoView {
                     presentations.set(lib.presentations.clone());
                 }
                 libraries.set(libs);
-            }
-            if let Some(pid) = pres_id_clone {
-                if let Ok(detail) = crate::api::presentations::get_presentation(&pid).await {
-                    // #853: a song selected since (a click, a Follow open) wins.
-                    if crate::state::is_still_selected(selected_id, &pid) {
-                        selected_pres.set(Some(detail.presentation));
-                    }
-                }
             }
         });
     };

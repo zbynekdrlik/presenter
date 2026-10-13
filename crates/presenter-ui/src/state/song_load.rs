@@ -24,10 +24,23 @@ pub struct SongLoad {
     /// would bump the counter first and make a stale pre-save answer look
     /// fresh, blanking the edit.
     pub seq_at_select: u64,
-    /// Point the selection back at the shown song when the fetch fails (a
-    /// click), so selected and shown never disagree; the session restore
-    /// keeps its id for the next load instead.
-    pub restore_on_failure: bool,
+    /// What to do when the song cannot be shown (failed fetch, saves that
+    /// never settle, a second edit race) while it is still selected.
+    pub on_failure: OnFailure,
+}
+
+/// A song that could not be shown must not stay selected: an arrow key would
+/// send the shown song's slide, and Follow would think the stage song is open.
+pub enum OnFailure {
+    /// A click: select the shown song again, with the playlist occurrence it
+    /// had (#496).
+    SelectShown {
+        entry_index: RwSignal<Option<u32>>,
+        previous_entry_index: Option<u32>,
+    },
+    /// The session restore: nothing is shown yet, so clear the selection but
+    /// keep the session key for the next load.
+    ClearSelection,
 }
 
 /// Fetch the song and show it — only while it is still the selected song (a
@@ -43,9 +56,7 @@ pub async fn show_when_loaded(load: SongLoad) {
     let mut seq_at_fetch = load.seq_at_select;
     for attempt in 0..2 {
         let Ok(detail) = crate::api::presentations::get_presentation(&load.id).await else {
-            if load.restore_on_failure {
-                restore_shown_selection(&load);
-            }
+            give_up(&load);
             return;
         };
         if !is_still_selected(load.selected_id, &load.id) {
@@ -62,24 +73,33 @@ pub async fn show_when_loaded(load: SongLoad) {
         }
         // Still saving after the bounded wait: keep the always-safe drop.
         if attempt == 1 || !await_saves_quiescent(load.save_status, 3_000).await {
+            give_up(&load);
             return;
         }
         seq_at_fetch = load.slide_edit_seq.get_untracked();
     }
 }
 
-/// The song failed to load: if it is still selected, select the shown song
-/// again (or nothing).
-fn restore_shown_selection(load: &SongLoad) {
+/// The song could not be shown: if it is still selected, apply `on_failure`.
+fn give_up(load: &SongLoad) {
     if !is_still_selected(load.selected_id, &load.id) {
         return;
     }
-    let shown = load
-        .shown
-        .with_untracked(|p| p.as_ref().map(|p| p.id.to_string()));
-    match &shown {
-        Some(id) => session::set("currentPresentationId", id),
-        None => session::remove("currentPresentationId"),
+    match &load.on_failure {
+        OnFailure::SelectShown {
+            entry_index,
+            previous_entry_index,
+        } => {
+            let shown = load
+                .shown
+                .with_untracked(|p| p.as_ref().map(|p| p.id.to_string()));
+            match &shown {
+                Some(id) => session::set("currentPresentationId", id),
+                None => session::remove("currentPresentationId"),
+            }
+            load.selected_id.set(shown);
+            entry_index.set(*previous_entry_index);
+        }
+        OnFailure::ClearSelection => load.selected_id.set(None),
     }
-    load.selected_id.set(shown);
 }

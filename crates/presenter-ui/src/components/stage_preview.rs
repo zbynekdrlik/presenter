@@ -102,7 +102,7 @@ pub fn StagePreview() -> impl IntoView {
                     // explicit operator action; stage events alone never switch
                     // songs in Edit mode, #853).
                     if now_following {
-                        if let Some(snapshot) = ctx.stage_snapshot.get_untracked() {
+                        if let Some(snapshot) = ctx.follow_stage.get_value() {
                             crate::components::stage_follow::sync_to_stage(&ctx, &snapshot, true);
                         }
                     }
