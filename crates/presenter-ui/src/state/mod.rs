@@ -88,6 +88,10 @@ pub struct AppContext {
     /// repeated song's correct OCCURRENCE is sent to the server. `None` when the
     /// selection came from a library (no playlist position).
     pub selected_entry_index: RwSignal<Option<u32>>,
+    /// The playlist occurrence of the song actually SHOWN (#496, #853): what
+    /// a click that cannot be shown restores, even when another click is
+    /// still loading.
+    pub shown_entry_index: StoredValue<Option<u32>>,
     /// The AbleSet Follow open in flight, if any (#853).
     pub follow_pending: StoredValue<Option<FollowPending>>,
     /// The last stage snapshot Follow acts on: every frame except a
@@ -153,6 +157,7 @@ impl AppContext {
             selected_playlist_id: RwSignal::new(session::get("activePlaylistId")),
             selected_playlist: RwSignal::new(None),
             selected_entry_index: RwSignal::new(None),
+            shown_entry_index: StoredValue::new(None),
             follow_pending: StoredValue::new(None),
             follow_stage: StoredValue::new(None),
             follow_landing: StoredValue::new(None),

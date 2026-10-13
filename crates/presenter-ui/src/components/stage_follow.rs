@@ -168,8 +168,9 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
         return;
     }
     let entry_index = snapshot.active_entry_index;
+    // No song on stage: nothing to follow, and the occurrence the operator
+    // picked stays (#496).
     let Some(pres_id) = snapshot.presentation_id.map(|id| id.to_string()) else {
-        ctx.selected_entry_index.set(entry_index);
         return;
     };
     let selected = ctx.selected_presentation_id.get_untracked();
@@ -182,6 +183,7 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
             // An open of another song still loading is stale (stage A → S → A).
             ctx.follow_pending.set_value(None);
             ctx.selected_entry_index.set(entry_index);
+            ctx.shown_entry_index.set_value(entry_index);
         }
         SyncStep::AlreadyOpening | SyncStep::Retry => {
             let mut retry = None;
@@ -243,6 +245,7 @@ fn fetch_stage_song(ctx: &AppContext, token: u64, request: u32, pres_id: String)
         ctx.selected_presentation_id.set(Some(pres_id.clone()));
         crate::state::session::set("currentPresentationId", &pres_id);
         ctx.selected_entry_index.set(open.entry_index);
+        ctx.shown_entry_index.set_value(open.entry_index);
         ctx.slides_cache.update(|cache| {
             cache.insert(pres_id.clone(), detail.presentation.slides.clone());
         });

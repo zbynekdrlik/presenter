@@ -476,6 +476,8 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
             seq_at_select: op.slide_edit_seq.get_untracked(),
             on_failure: crate::state::song_load::OnFailure::ClearSelection,
             follow_pending: ctx.follow_pending,
+            entry_index: None,
+            shown_entry_index: ctx.shown_entry_index,
         };
         leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     }

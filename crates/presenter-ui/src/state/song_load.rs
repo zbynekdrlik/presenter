@@ -31,17 +31,19 @@ pub struct SongLoad {
     /// song was selected follows the selection when it moves on failure (the
     /// move is not an operator pick).
     pub follow_pending: StoredValue<Option<FollowPending>>,
+    /// The playlist occurrence this song is shown as (#496), recorded in
+    /// `shown_entry_index` once it is shown.
+    pub entry_index: Option<u32>,
+    pub shown_entry_index: StoredValue<Option<u32>>,
 }
 
 /// A song that could not be shown must not stay selected: an arrow key would
 /// send the shown song's slide, and Follow would think the stage song is open.
 pub enum OnFailure {
     /// A click: select the shown song again, with the playlist occurrence it
-    /// had (#496).
-    SelectShown {
-        entry_index: RwSignal<Option<u32>>,
-        previous_entry_index: Option<u32>,
-    },
+    /// is shown as (`shown_entry_index`, #496) — not the one of a click that
+    /// is still loading.
+    SelectShown { entry_index: RwSignal<Option<u32>> },
     /// The session restore: nothing is shown yet, so clear the selection but
     /// keep the session key for the next load.
     ClearSelection,
@@ -72,6 +74,7 @@ pub async fn show_when_loaded(load: SongLoad) {
                     cache.insert(load.id.clone(), detail.presentation.slides.clone());
                 });
             }
+            load.shown_entry_index.set_value(load.entry_index);
             load.shown.set(Some(detail.presentation));
             return;
         }
@@ -102,16 +105,12 @@ fn give_up(load: &SongLoad) {
             }
         }
     });
-    if let OnFailure::SelectShown {
-        entry_index,
-        previous_entry_index,
-    } = &load.on_failure
-    {
+    if let OnFailure::SelectShown { entry_index } = &load.on_failure {
         match &selection {
             Some(id) => session::set("currentPresentationId", id),
             None => session::remove("currentPresentationId"),
         }
-        entry_index.set(*previous_entry_index);
+        entry_index.set(load.shown_entry_index.get_value());
     }
     load.selected_id.set(selection);
 }

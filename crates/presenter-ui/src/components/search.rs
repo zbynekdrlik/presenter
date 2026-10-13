@@ -131,9 +131,10 @@ pub fn SearchResults() -> impl IntoView {
                 seq_at_select: op.slide_edit_seq.get_untracked(),
                 on_failure: crate::state::song_load::OnFailure::SelectShown {
                     entry_index: ctx.selected_entry_index,
-                    previous_entry_index: ctx.selected_entry_index.get_untracked(),
                 },
                 follow_pending: ctx.follow_pending,
+                entry_index: ctx.selected_entry_index.get_untracked(),
+                shown_entry_index: ctx.shown_entry_index,
             };
             leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
         }
