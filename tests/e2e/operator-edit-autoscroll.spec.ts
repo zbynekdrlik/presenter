@@ -752,3 +752,53 @@ test("Follow: after it moves from a playlist to the stage song's library, a relo
     await send("POST", "/integrations/ableset/follow", { enabled: false });
   }
 });
+
+test("Edit: the refetch after a raced slide duplicate does not replace a song opened meanwhile", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await openOperator(page);
+  await openTestLibrary(page);
+  await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 07" }).first().click();
+  const song7 = presIds[6];
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[song7][0]}"]`);
+
+  // Two duplicates whose answers cross: the first is held until the second has landed, so the
+  // first answer sees a newer edit and the slide list reconciles with one refetch of song 7.
+  let releaseFirstDuplicate!: () => void;
+  const firstDuplicateHeld = new Promise<void>((resolve) => (releaseFirstDuplicate = resolve));
+  let duplicates = 0;
+  await page.route(`**/presentations/${song7}/slides/*/duplicate`, async (route) => {
+    duplicates += 1;
+    if (duplicates === 1) await firstDuplicateHeld;
+    await route.continue();
+  });
+  const duplicate = page.locator(`.operator__slides [data-slide-id="${slideIds[song7][0]}"] [data-action="duplicate"]`).first();
+  const secondAnswered = page.waitForResponse(
+    (resp) => resp.url().includes(`/presentations/${song7}/slides/`) && resp.url().endsWith("/duplicate"),
+  );
+  await duplicate.click();
+  await expect.poll(() => duplicates).toBe(1);
+  await duplicate.click();
+  await secondAnswered;
+  await expect(page.locator(".operator__slides [data-slide-id]")).toHaveCount(17);
+
+  // The refetch is held; the operator opens song 8 meanwhile.
+  const releaseRefetch = await gateRoute(page, `**/presentations/${song7}`);
+  const refetchRequested = page.waitForRequest(`**/presentations/${song7}`);
+  const refetchAnswered = page.waitForResponse(`**/presentations/${song7}`);
+  releaseFirstDuplicate();
+  await refetchRequested;
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 08" }).first().click();
+  const song8First = page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[7]][0]}"]`);
+  await expect(song8First).toBeAttached();
+  releaseRefetch();
+  await refetchAnswered;
+  await settle(page);
+  await expect(song8First, "song 8 stays shown").toBeAttached();
+  await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[song7][0]}"]`)).not.toBeAttached();
+  await page.unroute(`**/presentations/${song7}`);
+  await page.unroute(`**/presentations/${song7}/slides/*/duplicate`);
+  expect(consoleMessages).toEqual([]);
+});
