@@ -18,7 +18,7 @@
 //! ([`TIMESTAMP_DEADBAND_MS`]) later than the pipeline clock.** It keeps the
 //! encoder's own stamps and pulls its timeline back by a correction that only
 //! grows when a frame would otherwise lead the clock by more than D, and then
-//! only by the part above D ([`TimestampGuard::apply`]). The maths is done in
+//! only by the part above D ([`TimestampGuard::decide`]). The maths is done in
 //! RUNNING TIME and converted back through the encoder's OUTPUT segment — never
 //! by copying a raw PTS: the output segment carries GstVideoEncoder's
 //! `time_adjustment` (vah264enc sets a 1000 h `min_pts`), the class of mistake
@@ -124,7 +124,10 @@ impl TimestampGuard {
     /// lead up to D is left alone; the correction only grows on `PulledBack`
     /// (by the part of the lead above D), so `Kept` frames keep the encoder's
     /// own spacing exactly.
-    pub(crate) fn apply(&mut self, enc_ns: i64, now_ns: i64, duration_ns: i64) -> GuardDecision {
+    ///
+    /// Pure: the guard's state changes only in [`Self::commit`], once the
+    /// caller knows the decision can be applied to its buffer.
+    pub(crate) fn decide(&self, enc_ns: i64, now_ns: i64, duration_ns: i64) -> GuardDecision {
         let limit = now_ns + TIMESTAMP_DEADBAND_NS;
         let candidate = enc_ns - self.correction_ns;
         let (mut out_ns, kind) = if candidate > limit {
@@ -143,9 +146,25 @@ impl TimestampGuard {
                 out_ns = last + 1;
             }
         }
-        self.correction_ns = enc_ns - out_ns;
-        self.last_out_ns = Some(out_ns);
         GuardDecision { out_ns, kind }
+    }
+
+    /// Record a decision the caller has applied to the frame the encoder
+    /// stamped `enc_ns`: the correction becomes `enc_ns − out` and `out` the
+    /// last output. Never called for a re-stamp that could not be carried out
+    /// (a failed segment conversion leaves the guard exactly as it was).
+    pub(crate) fn commit(&mut self, enc_ns: i64, decision: GuardDecision) {
+        self.correction_ns = enc_ns - decision.out_ns;
+        self.last_out_ns = Some(decision.out_ns);
+    }
+
+    /// [`Self::decide`] then [`Self::commit`]: the policy in one step, for the
+    /// integer unit tests.
+    #[cfg(test)]
+    pub(crate) fn apply(&mut self, enc_ns: i64, now_ns: i64, duration_ns: i64) -> GuardDecision {
+        let decision = self.decide(enc_ns, now_ns, duration_ns);
+        self.commit(enc_ns, decision);
+        decision
     }
 
     /// How far (ns) the encoder's own timeline is pulled back. Positive = the
@@ -206,6 +225,8 @@ struct GuardState {
 impl GuardState {
     /// Run the guard on one buffer's timestamps: PTS → running time through the
     /// output segment, decide, then running time → PTS through the SAME segment.
+    /// The decision is committed only once that conversion succeeded: an
+    /// `Unmeasured` buffer passes untouched AND leaves the guard unchanged.
     fn process(
         &mut self,
         pts: gst::ClockTime,
@@ -223,7 +244,7 @@ impl GuardState {
         let now_ns = clock_ns(now);
         let decision = self
             .guard
-            .apply(enc_ns, now_ns, duration.map_or(0, clock_ns));
+            .decide(enc_ns, now_ns, duration.map_or(0, clock_ns));
         let restamp = if decision.out_ns == enc_ns {
             None
         } else {
@@ -235,6 +256,7 @@ impl GuardState {
             };
             Some((new_pts, shifted_dts(dts, pts, new_pts)))
         };
+        self.guard.commit(enc_ns, decision);
         GuardStep::Decided {
             raw_lead_ns: enc_ns - now_ns,
             correction_ns: self.guard.correction_ns(),
