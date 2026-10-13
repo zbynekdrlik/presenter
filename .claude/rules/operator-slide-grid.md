@@ -121,18 +121,21 @@ paths:
   result and the session restore load through
   `state::song_load::show_when_loaded` (the #515 seq guard, the #556 F6
   retry, `is_still_selected`); a song that cannot be shown never stays
-  selected (`OnFailure::SelectShown` puts a click back on the shown song AND
-  its playlist occurrence — `AppContext::shown_entry_index`: when a song is
+  selected: the shown song (if any) becomes the selection again with the
+  occurrence it is shown as — `AppContext::shown_entry_index`: when a song is
   shown it records the occurrence selected at that moment (the click's, or a
   stage mirror that came during the load), and the stage mirror updates it
-  only while its song is shown — never the occurrence of a click still
-  loading, #496; `ClearSelection` empties the session
-  restore's selection but keeps its session key, so Follow can open it; a
-  load gives up only while no other load of the same song is in flight — a
-  double-click loads twice and either failing must not undo the other
-  (`IN_FLIGHT`) — and never for a re-click of the song already shown (its
-  clicked occurrence stays); a Follow open that started while the failing
-  song was selected is re-pointed at the new selection — the move is not an
+  only while its song is shown, never with the occurrence of a click still
+  loading (#496). With nothing shown, `OnFailure::SelectShown` (click,
+  search) clears selection and session key, `ClearSelection` (session
+  restore) clears the selection but keeps the session key, so Follow can
+  open the stage song. A load gives up only while no other load of the same
+  song is in flight (a double-click loads twice and either failing must not
+  undo the other; `IN_FLIGHT`, a load unanswered after `STALE_LOAD_MS` = 5 s
+  no longer counts), and a load of the song already shown (a re-click of
+  its other occurrence) gives up nothing — the clicked occurrence stays and
+  becomes the shown one. A Follow open that started while the failing song
+  was selected is re-pointed at the new selection (the move is not an
   operator pick);
   every structural edit (insert / duplicate / delete /
   paste via `slide_save::apply_structural_slides`, reorder and the reconcile
@@ -164,7 +167,7 @@ paths:
   reorder, the raced-duplicate reconcile refetch), failed manual / search /
   session loads (incl. the playlist occurrence after a failed click, with a
   click still loading, mirrored during a load, and after a songless
-  catch-up, #496), a double-click whose first or second load fails, a failed re-click of the shown song, Follow back to the shown stage song from a playlist that lacks it, an old Follow ON
+  catch-up, #496), a double-click whose first or second load fails, a re-click failing behind a hung load, a slow session restore failing last, a failed re-click of the shown song, a stage occurrence arriving while a clicked song fails, Follow back to the shown stage song from a playlist that lacks it, an old Follow ON
   answer for the song that ends up shown, Follow ON right after a reload on
   an API layout, and the manual-open-starts-at-the-top cases. Idioms: hold a request with
   `gateRoute` (+ `waitForRequest`) and release it only after the competing

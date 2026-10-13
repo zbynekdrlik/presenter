@@ -1,7 +1,7 @@
 //! Showing a song the operator opened (a song-list click, a search result,
 //! the session restore) once its content arrives (#515, #556 F6, #853).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use leptos::prelude::*;
@@ -10,30 +10,55 @@ use presenter_core::{Presentation, Slide};
 use super::operator::{await_saves_quiescent, SaveStatus};
 use super::{is_still_selected, session, FollowPending};
 
+/// A load still unanswered after this long (a hung request — fetch has no
+/// timeout) no longer holds back another load of the same song from giving up.
+const STALE_LOAD_MS: f64 = 5_000.0;
+
 thread_local! {
-    /// Loads in flight per song id: a double-click loads a song twice, and
-    /// one failing must not undo the other, whichever answers first.
-    static IN_FLIGHT: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+    /// Loads in flight per song id (`(load number, start time)`): a
+    /// double-click loads a song twice, and one failing must not undo the
+    /// other, whichever answers first.
+    static IN_FLIGHT: RefCell<HashMap<String, Vec<(u64, f64)>>> = RefCell::new(HashMap::new());
+    static NEXT_LOAD: Cell<u64> = const { Cell::new(0) };
 }
 
 /// One load of a song counted in `IN_FLIGHT` until it is dropped.
-struct InFlight(String);
+struct InFlight {
+    id: String,
+    number: u64,
+}
 
 impl InFlight {
     fn start(id: &str) -> Self {
-        IN_FLIGHT.with(|loads| *loads.borrow_mut().entry(id.to_string()).or_default() += 1);
-        Self(id.to_string())
-    }
-
-    /// Other loads of the same song still on their way.
-    fn others(&self) -> u32 {
+        let number = NEXT_LOAD.with(|next| {
+            next.set(next.get() + 1);
+            next.get()
+        });
+        let started = js_sys::Date::now();
         IN_FLIGHT.with(|loads| {
             loads
-                .borrow()
-                .get(&self.0)
-                .copied()
-                .unwrap_or(1)
-                .saturating_sub(1)
+                .borrow_mut()
+                .entry(id.to_string())
+                .or_default()
+                .push((number, started));
+        });
+        Self {
+            id: id.to_string(),
+            number,
+        }
+    }
+
+    /// Other loads of the same song still on their way (and not hung).
+    fn others(&self) -> usize {
+        let now = js_sys::Date::now();
+        IN_FLIGHT.with(|loads| {
+            loads.borrow().get(&self.id).map_or(0, |list| {
+                list.iter()
+                    .filter(|(number, started)| {
+                        *number != self.number && now - started < STALE_LOAD_MS
+                    })
+                    .count()
+            })
         })
     }
 }
@@ -42,10 +67,10 @@ impl Drop for InFlight {
     fn drop(&mut self) {
         IN_FLIGHT.with(|loads| {
             let mut loads = loads.borrow_mut();
-            if let Some(count) = loads.get_mut(&self.0) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    loads.remove(&self.0);
+            if let Some(list) = loads.get_mut(&self.id) {
+                list.retain(|(number, _)| *number != self.number);
+                if list.is_empty() {
+                    loads.remove(&self.id);
                 }
             }
         });
@@ -84,13 +109,14 @@ pub struct SongLoad {
 
 /// A song that could not be shown must not stay selected: an arrow key would
 /// send the shown song's slide, and Follow would think the stage song is open.
+/// Either way the shown song (if any) becomes the selection again, with the
+/// playlist occurrence it is shown as (`shown_entry_index`, #496).
 pub enum OnFailure {
-    /// A click: select the shown song again, with the playlist occurrence it
-    /// is shown as (`shown_entry_index`, #496) — not the one of a click that
-    /// is still loading.
+    /// A click or a search result: with nothing shown, the selection and the
+    /// session key clear.
     SelectShown,
-    /// The session restore: nothing is shown yet, so clear the selection but
-    /// keep the session key for the next load.
+    /// The session restore: with nothing shown yet, the selection clears but
+    /// the session key stays for the next load.
     ClearSelection,
 }
 
@@ -134,40 +160,46 @@ pub async fn show_when_loaded(load: SongLoad) {
     }
 }
 
-/// The song could not be shown: if it is still selected, not shown already
-/// (a re-click of the shown song: nothing to undo, its clicked occurrence
-/// stays) and no other load of it is on its way, apply `on_failure`.
+/// The song could not be shown: if it is still selected and no other load of
+/// it is on its way, the shown song becomes the selection again
+/// (`OnFailure`). A load of the song that is already shown (a re-click of its
+/// other occurrence) gives up nothing: the clicked occurrence stays and is
+/// recorded as the shown one.
 fn give_up(load: &SongLoad, flight: &InFlight) {
-    let already_shown = load
-        .shown
-        .with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == load.id));
-    if already_shown || flight.others() > 0 || !is_still_selected(load.selected_id, &load.id) {
+    if flight.others() > 0 || !is_still_selected(load.selected_id, &load.id) {
         return;
     }
-    let selection = match &load.on_failure {
-        OnFailure::SelectShown => load
-            .shown
-            .with_untracked(|p| p.as_ref().map(|p| p.id.to_string())),
-        OnFailure::ClearSelection => None,
-    };
+    let shown = load
+        .shown
+        .with_untracked(|p| p.as_ref().map(|p| p.id.to_string()));
+    if shown.as_deref() == Some(load.id.as_str()) {
+        load.shown_entry_index
+            .set_value(load.selected_entry_index.get_untracked());
+        return;
+    }
     // A Follow open that started while this song was selected follows the
     // selection (the move is no operator pick). If the selection becomes the
-    // open's own song, its answer only moves the selection and occurrence —
-    // `stage_follow` never replaces the content of a song already shown.
+    // open's own song, its answer moves the selection, the occurrence and the
+    // library context but never the content (`stage_follow`, #515).
     load.follow_pending.update_value(|pending| {
         if let Some(open) = pending {
             if open.selected_at_start.as_deref() == Some(load.id.as_str()) {
-                open.selected_at_start = selection.clone();
+                open.selected_at_start = shown.clone();
             }
         }
     });
-    if let OnFailure::SelectShown = load.on_failure {
-        match &selection {
-            Some(id) => session::set("currentPresentationId", id),
-            None => session::remove("currentPresentationId"),
+    match (&shown, &load.on_failure) {
+        (None, OnFailure::ClearSelection) => {}
+        (Some(id), _) => {
+            session::set("currentPresentationId", id);
+            load.selected_entry_index
+                .set(load.shown_entry_index.get_value());
         }
-        load.selected_entry_index
-            .set(load.shown_entry_index.get_value());
+        (None, OnFailure::SelectShown) => {
+            session::remove("currentPresentationId");
+            load.selected_entry_index
+                .set(load.shown_entry_index.get_value());
+        }
     }
-    load.selected_id.set(selection);
+    load.selected_id.set(shown);
 }

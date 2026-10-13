@@ -253,9 +253,10 @@ fn fetch_stage_song(ctx: &AppContext, token: u64, request: u32, pres_id: String)
         ctx.selected_entry_index.set(open.entry_index);
         ctx.shown_entry_index.set_value(open.entry_index);
         // Already shown (the open's song stayed on screen while a click or
-        // search of another song was loading): its answer may predate an
-        // edit made since (#515), so the content stays; only the selection,
-        // the occurrence and the library context follow the stage.
+        // search of another song was loading, or a failed load moved the
+        // selection back to it): its answer may predate an edit made since
+        // (#515), so the content stays; only the selection, the occurrence
+        // and the library context follow the stage.
         let already_shown = ctx
             .selected_presentation
             .with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == pres_id));
