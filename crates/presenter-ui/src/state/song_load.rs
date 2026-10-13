@@ -4,6 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use presenter_core::{Presentation, Slide};
 
@@ -48,19 +49,33 @@ impl InFlight {
         }
     }
 
-    /// Other loads of the same song still on their way (and not hung).
-    fn others(&self) -> usize {
+    /// How long until no OTHER load of the same song counts any more
+    /// (`None` when none counts now): each counts until it answers or for
+    /// `STALE_LOAD_MS` (a hung request).
+    fn others_count_for_ms(&self) -> Option<f64> {
         let now = js_sys::Date::now();
         IN_FLIGHT.with(|loads| {
-            loads.borrow().get(&self.id).map_or(0, |list| {
+            loads.borrow().get(&self.id).and_then(|list| {
                 list.iter()
-                    .filter(|(number, started)| {
-                        *number != self.number && now - started < STALE_LOAD_MS
-                    })
-                    .count()
+                    .filter(|(number, _)| *number != self.number)
+                    .map(|(_, started)| started + STALE_LOAD_MS - now)
+                    .filter(|left| *left > 0.0)
+                    .reduce(f64::max)
             })
         })
     }
+}
+
+/// Loads of `id` on their way that still count (younger than `STALE_LOAD_MS`).
+fn counting_loads(id: &str) -> usize {
+    let now = js_sys::Date::now();
+    IN_FLIGHT.with(|loads| {
+        loads.borrow().get(id).map_or(0, |list| {
+            list.iter()
+                .filter(|(_, started)| now - started < STALE_LOAD_MS)
+                .count()
+        })
+    })
 }
 
 impl Drop for InFlight {
@@ -78,6 +93,7 @@ impl Drop for InFlight {
 }
 
 /// One song being opened. The caller sets `selected_id` first.
+#[derive(Clone)]
 pub struct SongLoad {
     pub id: String,
     pub selected_id: RwSignal<Option<String>>,
@@ -111,6 +127,7 @@ pub struct SongLoad {
 /// send the shown song's slide, and Follow would think the stage song is open.
 /// Either way the shown song (if any) becomes the selection again, with the
 /// playlist occurrence it is shown as (`shown_entry_index`, #496).
+#[derive(Clone, Copy)]
 pub enum OnFailure {
     /// A click or a search result: with nothing shown, the selection and the
     /// session key clear.
@@ -166,7 +183,23 @@ pub async fn show_when_loaded(load: SongLoad) {
 /// other occurrence) gives up nothing: the clicked occurrence stays and is
 /// recorded as the shown one.
 fn give_up(load: &SongLoad, flight: &InFlight) {
-    if flight.others() > 0 || !is_still_selected(load.selected_id, &load.id) {
+    if let Some(wait_ms) = flight.others_count_for_ms() {
+        // Another load of this song is on its way: it shows the song or gives
+        // up itself — and if it hangs, check again once it no longer counts.
+        let load = load.clone();
+        leptos::task::spawn_local(async move {
+            TimeoutFuture::new(wait_ms.ceil() as u32 + 50).await;
+            if counting_loads(&load.id) == 0 {
+                give_up_now(&load);
+            }
+        });
+        return;
+    }
+    give_up_now(load);
+}
+
+fn give_up_now(load: &SongLoad) {
+    if !is_still_selected(load.selected_id, &load.id) {
         return;
     }
     let shown = load

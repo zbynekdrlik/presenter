@@ -464,7 +464,8 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
     if let Some(pres_id) = ctx.selected_presentation_id.get_untracked() {
         // The session's song, through the same guarded load as a song-list
         // click (#515 seq guard, #556 F6 retry, #853 still-selected); if it
-        // cannot be shown the selection clears (so Follow can open it) and the
+        // cannot be shown, a song shown meanwhile becomes the selection, else
+        // the selection clears (so Follow can open the stage song) and the
         // session key stays for the next load.
         let load = crate::state::song_load::SongLoad {
             id: pres_id,

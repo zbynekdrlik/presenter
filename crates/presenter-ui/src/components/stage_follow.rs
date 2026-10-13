@@ -180,8 +180,17 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
         .with_value(|open| sync_step(&pres_id, selected.as_deref(), open.as_ref(), now_ms));
     match step {
         SyncStep::OnSelectedSong => {
-            // An open of another song still loading is stale (stage A → S → A).
-            ctx.follow_pending.set_value(None);
+            // An open of another song still loading is stale (stage A → S → A);
+            // an open of this song (re-pointed by a failed click) is kept, so its
+            // answer still brings the library context.
+            ctx.follow_pending.update_value(|open| {
+                if open
+                    .as_ref()
+                    .is_some_and(|open| open.presentation_id != pres_id)
+                {
+                    *open = None;
+                }
+            });
             ctx.selected_entry_index.set(entry_index);
             // Only once the song is shown (a click may still be loading it;
             // `song_load` records the mirrored occurrence when it shows).

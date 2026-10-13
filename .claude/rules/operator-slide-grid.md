@@ -132,7 +132,8 @@ paths:
   open the stage song. A load gives up only while no other load of the same
   song is in flight (a double-click loads twice and either failing must not
   undo the other; `IN_FLIGHT`, a load unanswered after `STALE_LOAD_MS` = 5 s
-  no longer counts), and a load of the song already shown (a re-click of
+  no longer counts — a give-up skipped for a fresh sibling is checked again
+  once that sibling stops counting), and a load of the song already shown (a re-click of
   its other occurrence) gives up nothing — the clicked occurrence stays and
   becomes the shown one. A Follow open that started while the failing song
   was selected is re-pointed at the new selection (the move is not an
@@ -171,7 +172,7 @@ paths:
   answer for the song that ends up shown, Follow ON right after a reload on
   an API layout, and the manual-open-starts-at-the-top cases. Idioms: hold a request with
   `gateRoute` (+ `waitForRequest`) and release it only after the competing
-  event is CONFIRMED in the DOM — never a fixed sleep; before a "nothing
+  event is CONFIRMED in the DOM — never a fixed sleep (the one exception: a wait just past a time limit the code itself applies, `STALE_OPEN_MS` / `STALE_LOAD_MS`); before a "nothing
   changed" check wait for the late answer's BODY (`landed()` =
   `response.finished()`) and `settle`; a network failure is a MALFORMED 200
   (`not-json`), never a 5xx (Chrome logs every non-2xx and the specs assert a
