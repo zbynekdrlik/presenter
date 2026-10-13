@@ -92,12 +92,26 @@ impl TimestampGuard {
     /// correction only grows on `PulledBack`, so `Kept` frames keep the
     /// encoder's own spacing exactly.
     pub(crate) fn apply(&mut self, enc_ns: i64, now_ns: i64, duration_ns: i64) -> GuardDecision {
-        // #854 RED stub: no guard yet — the encoder's stamp passes unchanged.
-        let _ = (now_ns, duration_ns, self.last_out_ns);
-        GuardDecision {
-            out_ns: enc_ns,
-            kind: GuardKind::Kept,
+        let candidate = enc_ns - self.correction_ns;
+        let (mut out_ns, kind) = if candidate > now_ns {
+            (now_ns, GuardKind::PulledBack)
+        } else {
+            match self.last_out_ns {
+                Some(last) if candidate <= last => (
+                    (last + duration_ns.max(0)).min(now_ns),
+                    GuardKind::Reanchored,
+                ),
+                _ => (candidate, GuardKind::Kept),
+            }
+        };
+        if let Some(last) = self.last_out_ns {
+            if out_ns <= last {
+                out_ns = last + 1;
+            }
         }
+        self.correction_ns = enc_ns - out_ns;
+        self.last_out_ns = Some(out_ns);
+        GuardDecision { out_ns, kind }
     }
 
     /// How far (ns) the encoder's own timeline is pulled back. Positive = the
@@ -490,9 +504,8 @@ pub(crate) fn install(
         .map(|f| f.name().to_string())
         .unwrap_or_default();
     let timing = Arc::new(EncoderTiming::new(factory, label.to_string()));
-    // #854 RED stub: the probes are not installed yet.
-    let (guard_ok, meter_ok) = (false, false);
-    let _ = (install_guard_probe, install_lead_meter, appsink);
+    let guard_ok = install_guard_probe(&timing, encoder);
+    let meter_ok = install_lead_meter(&timing, appsink);
     if guard_ok && meter_ok {
         timing.installed.store(true, Ordering::Relaxed);
         tracing::info!(

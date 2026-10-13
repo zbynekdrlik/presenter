@@ -48,8 +48,17 @@ impl SecondBuckets {
     /// Record `value` in the bucket for second `sec`. A slot still holding a
     /// different (older) second is reset first.
     pub(crate) fn record(&mut self, sec: u64, value: i64) {
-        // #854 RED stub: nothing is recorded yet.
-        let _ = (sec, value);
+        let idx = (sec % BUCKETS as u64) as usize;
+        if let Some(bucket) = self.buckets[idx].as_mut().filter(|b| b.sec == sec) {
+            bucket.min = bucket.min.min(value);
+            bucket.max = bucket.max.max(value);
+            return;
+        }
+        self.buckets[idx] = Some(Bucket {
+            sec,
+            min: value,
+            max: value,
+        });
     }
 
     /// `(min, max)` over the seconds `now_sec - span_secs + 1 ..= now_sec`
