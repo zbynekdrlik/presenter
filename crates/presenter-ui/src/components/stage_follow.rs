@@ -11,10 +11,12 @@
 //! Follow never moves the selection ahead of the song's content. Anything that
 //! makes the open stale (a newer open, the stage leaving that song, the
 //! operator picking a song, a failure of its latest request, Follow off or
-//! Edit mode by then) just drops it — there is nothing to undo. In Live mode the next stage
-//! change opens the stage song again; after an Edit-mode drop the switch back
-//! to Live does. songplayer pushes to an API layout (#799: a stage frame with
-//! no song) are not stage changes for Follow.
+//! Edit mode by then) just drops it — there is nothing to undo. A stage frame
+//! on the selected song drops only an open of another song; an open of that
+//! song, re-pointed by a failed click, is kept and refreshed. In Live mode the
+//! next stage change opens the stage song again; after an Edit-mode drop the
+//! switch back to Live does. songplayer pushes to an API layout (#799: a stage
+//! frame with no song) are not stage changes for Follow.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -181,15 +183,15 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
     match step {
         SyncStep::OnSelectedSong => {
             // An open of another song still loading is stale (stage A → S → A);
-            // an open of this song (re-pointed by a failed click) is kept, so its
-            // answer still brings the library context.
-            ctx.follow_pending.update_value(|open| {
-                if open
-                    .as_ref()
-                    .is_some_and(|open| open.presentation_id != pres_id)
-                {
-                    *open = None;
+            // an open of this song (re-pointed by a failed click) is kept and
+            // refreshed like `AlreadyOpening`, so its answer still brings the
+            // library context and the stage's latest occurrence.
+            ctx.follow_pending.update_value(|pending| match pending {
+                Some(open) if open.presentation_id == pres_id => {
+                    open.forced |= forced;
+                    open.entry_index = entry_index;
                 }
+                _ => *pending = None,
             });
             ctx.selected_entry_index.set(entry_index);
             // Only once the song is shown (a click may still be loading it;

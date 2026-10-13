@@ -177,11 +177,10 @@ pub async fn show_when_loaded(load: SongLoad) {
     }
 }
 
-/// The song could not be shown: if it is still selected and no other load of
-/// it is on its way, the shown song becomes the selection again
-/// (`OnFailure`). A load of the song that is already shown (a re-click of its
-/// other occurrence) gives up nothing: the clicked occurrence stays and is
-/// recorded as the shown one.
+/// The song could not be shown. While another load of it still counts, that
+/// load decides (it shows the song or gives up itself); if it hangs, the
+/// give-up is checked again once it stops counting (`STALE_LOAD_MS`). Then
+/// `give_up_now`.
 fn give_up(load: &SongLoad, flight: &InFlight) {
     if let Some(wait_ms) = flight.others_count_for_ms() {
         // Another load of this song is on its way: it shows the song or gives
@@ -198,6 +197,10 @@ fn give_up(load: &SongLoad, flight: &InFlight) {
     give_up_now(load);
 }
 
+/// If the song is still selected, the shown song becomes the selection again
+/// (`OnFailure`). A load of the song that is already shown (a re-click of its
+/// other occurrence) gives up nothing: the clicked occurrence stays and is
+/// recorded as the shown one.
 fn give_up_now(load: &SongLoad) {
     if !is_still_selected(load.selected_id, &load.id) {
         return;

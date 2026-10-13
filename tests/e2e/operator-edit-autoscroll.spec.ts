@@ -2098,6 +2098,11 @@ test("Follow: a stage frame on the shown song keeps a pending open of it, so its
     const song5Failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
     await song5[0].fulfill({ status: 200, contentType: "application/json", body: "not-json" });
     await landed(song5Failed);
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__presenterOperatorState().currentPresentationId), {
+        message: "the failed click gave up (selection back on song 2)",
+      })
+      .toBe(presIds[1]);
     await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][2] });
     await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][2]}"]`)).toHaveClass(/is-active/);
     releaseSong2();

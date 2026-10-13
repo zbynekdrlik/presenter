@@ -88,7 +88,9 @@ paths:
   a failed click that returns the selection cannot revive it), a failed fetch
   of the LATEST request, Follow off / Edit by then. In Live mode the
   next stage change opens again (after an Edit drop the switch back to Live
-  does); an open still waiting after `STALE_OPEN_MS` (5 s) is requested AGAIN
+  does). A stage frame on the selected song drops only an open of ANOTHER
+  song; an open of that song (re-pointed by a failed click) is kept and
+  refreshed. An open still waiting after `STALE_OPEN_MS` (5 s) is requested AGAIN
   under the SAME token with the next request number, so the first SUCCESSFUL
   answer opens the song and only a failure of the latest request ends the
   open (a new token would discard a slow but live first answer).
@@ -168,7 +170,7 @@ paths:
   reorder, the raced-duplicate reconcile refetch), failed manual / search /
   session loads (incl. the playlist occurrence after a failed click, with a
   click still loading, mirrored during a load, and after a songless
-  catch-up, #496), a double-click whose first or second load fails, a re-click failing behind a hung load, a slow session restore failing last, a failed re-click of the shown song, a stage occurrence arriving while a clicked song fails, Follow back to the shown stage song from a playlist that lacks it, an old Follow ON
+  catch-up, #496), a double-click whose first or second load fails, a re-click failing behind a hung load, a slow session restore failing last, a failed re-click of the shown song (and its occurrence surviving a later failed click), a click failing within 5 s of a hung load, a Follow open of the shown song re-pointed by a failed click still landing (also when a stage frame on that song comes first), Follow back to the shown stage song from a playlist that lacks it, an old Follow ON
   answer for the song that ends up shown, Follow ON right after a reload on
   an API layout, and the manual-open-starts-at-the-top cases. Idioms: hold a request with
   `gateRoute` (+ `waitForRequest`) and release it only after the competing

@@ -45,7 +45,7 @@ pub struct FollowPending {
     pub presentation_id: String,
     /// The selected song when the open started; the operator picking another
     /// song meanwhile cancels it. A failed load that moves the selection
-    /// re-points it (`song_load::give_up`), since that move is no pick.
+    /// re-points it (`song_load::give_up_now`), since that move is no pick.
     pub selected_at_start: Option<String>,
     /// The Follow ON click: may open in Edit mode too (Follow must still be
     /// on when the song arrives).
