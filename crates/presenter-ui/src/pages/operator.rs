@@ -467,6 +467,7 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
         // cannot be shown the selection clears (so Follow can open it) and the
         // session key stays for the next load.
         let load = crate::state::song_load::SongLoad {
+            seq: crate::state::song_load::next_load_seq(),
             id: pres_id,
             selected_id: ctx.selected_presentation_id,
             shown: ctx.selected_presentation,

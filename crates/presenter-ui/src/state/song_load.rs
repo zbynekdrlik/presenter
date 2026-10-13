@@ -2,6 +2,7 @@
 //! the session restore) once its content arrives (#515, #556 F6, #853).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use leptos::prelude::*;
 use presenter_core::{Presentation, Slide};
@@ -9,8 +10,18 @@ use presenter_core::{Presentation, Slide};
 use super::operator::{await_saves_quiescent, SaveStatus};
 use super::{is_still_selected, session, FollowPending};
 
+static LATEST_LOAD: AtomicU64 = AtomicU64::new(0);
+
+/// A number for a new load (`SongLoad::seq`); the newest one is the latest.
+pub fn next_load_seq() -> u64 {
+    LATEST_LOAD.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 /// One song being opened. The caller sets `selected_id` first.
 pub struct SongLoad {
+    /// From `next_load_seq`: only the latest load may give up (a double-click
+    /// loads the song twice; the first failing must not undo the second).
+    pub seq: u64,
     pub id: String,
     pub selected_id: RwSignal<Option<String>>,
     pub shown: RwSignal<Option<Presentation>>,
@@ -92,7 +103,9 @@ pub async fn show_when_loaded(load: SongLoad) {
 
 /// The song could not be shown: if it is still selected, apply `on_failure`.
 fn give_up(load: &SongLoad) {
-    if !is_still_selected(load.selected_id, &load.id) {
+    if LATEST_LOAD.load(Ordering::Relaxed) != load.seq
+        || !is_still_selected(load.selected_id, &load.id)
+    {
         return;
     }
     let selection = match &load.on_failure {

@@ -126,7 +126,9 @@ paths:
   stage mirror that came during the load), and the stage mirror updates it
   only while its song is shown — never the occurrence of a click still
   loading, #496; `ClearSelection` empties the session
-  restore's selection but keeps its session key, so Follow can open it; a
+  restore's selection but keeps its session key, so Follow can open it;
+  only the LATEST load may give up — a double-click loads twice and the
+  first failing must not undo the second (`next_load_seq`); a
   Follow open that started while the failing song was selected is re-pointed
   at the new selection — the move is not an operator pick);
   every structural edit (insert / duplicate / delete /
@@ -157,8 +159,11 @@ paths:
   Follow open started while a clicked song fails), the reload after a Follow
   library switch, structural-edit answers after a song switch (duplicate,
   reorder, the raced-duplicate reconcile refetch), failed manual / search /
-  session loads (incl. the playlist occurrence, #496), and the
-  manual-open-starts-at-the-top cases. Idioms: hold a request with
+  session loads (incl. the playlist occurrence after a failed click, with a
+  click still loading, mirrored during a load, and after a songless
+  catch-up, #496), a double-click whose first load fails, an old Follow ON
+  answer for the song that ends up shown, Follow ON right after a reload on
+  an API layout, and the manual-open-starts-at-the-top cases. Idioms: hold a request with
   `gateRoute` (+ `waitForRequest`) and release it only after the competing
   event is CONFIRMED in the DOM — never a fixed sleep; before a "nothing
   changed" check wait for the late answer's BODY (`landed()` =
