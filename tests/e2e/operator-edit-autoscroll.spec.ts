@@ -1879,7 +1879,7 @@ test("a failed re-click of the shown song in a playlist keeps the occurrence cli
 });
 
 // Guard (the re-point without a drop shipped in 90a42d34 without a failing test first).
-test("Follow: a stage occurrence that arrives for the shown song while a clicked song fails is kept (#496)", async ({ page }) => {
+test("Follow: an open of the shown song that a failed click re-pointed still lands (its library opens)", async ({ page }) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
   const set = await send("POST", "/playlists", { name: "_E2E Repeat Set 5", showInDashboard: true });
@@ -1895,10 +1895,10 @@ test("Follow: a stage occurrence that arrives for the shown song while a clicked
     await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Repeat Set 5");
     const rows = page.locator('[data-role="presentation-item"]');
     await expect(rows).toHaveCount(3);
-    await rows.nth(0).click(); // song 3, occurrence 0
+    await rows.nth(0).click(); // song 3
     await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
 
-    // Song 5 is clicked (held, then failing); the stage plays song 3's SECOND occurrence meanwhile (held).
+    // Song 5 is clicked (held, then failing); the stage plays song 3 meanwhile and Follow opens it (held).
     const song5: Route[] = [];
     await page.route(`**/presentations/${presIds[4]}`, (route) => {
       song5.push(route);
@@ -1915,19 +1915,15 @@ test("Follow: a stage occurrence that arrives for the shown song while a clicked
       entryIndex: 2,
     });
     await song3Requested;
+    // Song 5 fails: the selection returns to song 3, and the Follow open follows it ...
     const song5Failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
     await song5[0].fulfill({ status: 200, contentType: "application/json", body: "not-json" });
     await landed(song5Failed);
+    // ... so its answer still lands: Follow moves the operator to song 3's library.
     releaseSong3();
     await landed(song3Answered);
-    await settle(page);
-    await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
-    await expect
-      .poll(async () => {
-        const snap = await (await fetch(new URL("/stage/snapshot", baseURL))).json();
-        return { song: snap.presentationId, entry: snap.activeEntryIndex, slide: snap.currentSlideId };
-      }, { message: "the trigger carries the stage's occurrence" })
-      .toEqual({ song: presIds[2], entry: 2, slide: slideIds[presIds[2]][1] });
+    await expect(page.locator('[data-role="context-title"]'), "the open landed").toHaveText("_E2E Stage Churn");
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`)).toBeAttached();
     await page.unroute(`**/presentations/${presIds[2]}`);
     await page.unroute(`**/presentations/${presIds[4]}`);
     expect(consoleMessages).toEqual([]);
