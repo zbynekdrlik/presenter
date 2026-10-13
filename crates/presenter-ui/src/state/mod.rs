@@ -33,6 +33,23 @@ pub fn save_baseline_to_storage(connected: usize, issues: usize) {
     session::set_persistent("stageMonitorBaselineIssues", &issues.to_string());
 }
 
+/// An AbleSet Follow open in flight (#853): the stage's song being fetched.
+/// The selection moves only when the song arrives, so this records the open
+/// until then (`components/stage_follow.rs`).
+#[derive(Clone, Debug)]
+pub struct FollowPending {
+    /// Unique per open: a newer open, or a cancel, replaces it.
+    pub token: u64,
+    pub presentation_id: String,
+    /// The selected song when the open started; the operator picking another
+    /// song meanwhile cancels it.
+    pub selected_at_start: Option<String>,
+    /// The Follow ON click: opens in any mode.
+    pub forced: bool,
+    /// The stage's playlist occurrence (#496), applied with the song.
+    pub entry_index: Option<u32>,
+}
+
 #[derive(Clone)]
 pub struct AppContext {
     pub view: RwSignal<String>,
@@ -50,6 +67,7 @@ pub struct AppContext {
     /// repeated song's correct OCCURRENCE is sent to the server. `None` when the
     /// selection came from a library (no playlist position).
     pub selected_entry_index: RwSignal<Option<u32>>,
+    pub follow_pending: StoredValue<Option<FollowPending>>,
     pub stage_snapshot: RwSignal<Option<StageDisplaySnapshot>>,
     pub stage_layout_code: RwSignal<String>,
     pub stage_layouts: RwSignal<Vec<StageDisplayLayout>>,
@@ -106,6 +124,7 @@ impl AppContext {
             selected_playlist_id: RwSignal::new(session::get("activePlaylistId")),
             selected_playlist: RwSignal::new(None),
             selected_entry_index: RwSignal::new(None),
+            follow_pending: StoredValue::new(None),
             stage_snapshot: RwSignal::new(None),
             stage_layout_code: RwSignal::new(String::new()),
             stage_layouts: RwSignal::new(Vec::new()),

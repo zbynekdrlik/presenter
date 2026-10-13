@@ -10,7 +10,9 @@ use crate::state::AppContext;
 use crate::utils::color::group_pill_style;
 
 use super::slide_columns::SlideColumnsControl;
-use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
+use super::slide_list_scroll::{
+    handle_wheel_event, scroll_slide_into_view, setup_scroll_on_song_shown,
+};
 use super::slide_list_utils::{
     field_has_warning, format_multiline, is_interactive_tag, resolve_group_display,
     slide_has_any_warning,
@@ -71,37 +73,8 @@ pub fn SlideList() -> impl IntoView {
         });
     }
 
-    // Scroll when a different presentation is SHOWN (its content arrived, not
-    // when the selection id moves): to the top so the new song starts at its
-    // first slide (#271 concern 3) — or, in Live mode, to the stage's current
-    // slide when that slide is in this song, so a Follow navigation lands on
-    // the slide on stage (#853).
-    {
-        let selected_presentation = ctx.selected_presentation;
-        let stage_snapshot = ctx.stage_snapshot;
-        let mode = ctx.mode;
-        Effect::new(move |prev_id: Option<Option<String>>| {
-            let current_id = selected_presentation.with(|p| p.as_ref().map(|p| p.id.to_string()));
-            if current_id != prev_id.flatten() && current_id.is_some() {
-                let stage_slide = if mode.get_untracked() == "live" {
-                    stage_snapshot.with_untracked(|snapshot| {
-                        snapshot
-                            .as_ref()
-                            .filter(|s| s.presentation_id.map(|id| id.to_string()) == current_id)
-                            .and_then(|s| s.current_slide_id.map(|id| id.to_string()))
-                    })
-                } else {
-                    None
-                };
-                gloo_timers::callback::Timeout::new(0, move || match stage_slide {
-                    Some(slide_id) => scroll_slide_into_view(&slide_id),
-                    None => scroll_slides_to_top(),
-                })
-                .forget();
-            }
-            current_id
-        });
-    }
+    // #271 / #853: scroll a newly shown song to its top, or to the stage slide.
+    setup_scroll_on_song_shown(&ctx);
 
     // #554: clear selection/clipboard on song switch + the window C/X/V/Escape
     // shortcut listener. F1: also disarm the paste-target chooser on a

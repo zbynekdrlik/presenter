@@ -6,11 +6,22 @@
 //! the switch back to Live the operator catches up with the stage at once, so an
 //! arrow key never sends a slide of the song that was being edited. An explicit
 //! Follow ON click (`stage_preview.rs`) syncs in any mode (`forced`).
+//!
+//! An open is recorded in `AppContext::follow_pending` while its song loads;
+//! the selection moves only when the song is shown, so the selected song and
+//! the shown song never disagree. Anything that makes the open stale (a newer
+//! open, the stage returning to the selected song, the operator picking a
+//! song, a failed fetch, Edit mode or Follow off by then) just drops it — there
+//! is nothing to undo, and the next stage change opens the stage song again.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use leptos::prelude::*;
 use presenter_core::{AbleSetStatusSnapshot, StageDisplaySnapshot};
 
-use crate::state::AppContext;
+use crate::state::{AppContext, FollowPending};
+
+static NEXT_OPEN_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 /// Whether a stage change may navigate the operator to the stage's song:
 /// AbleSet Follow is on and the operator is not editing. Until the Follow
@@ -27,76 +38,104 @@ pub(crate) fn follow_navigation(
     follow_enabled && mode.get_untracked() != "edit"
 }
 
-/// Follow the stage: mirror its playlist occurrence (#496) and open its song
-/// when it differs from the selected one. Stage events check
-/// `follow_navigation` first; `forced` (the Follow ON click) opens the song in
-/// any mode.
+/// Follow the stage: open its song when it differs from the selected one, or
+/// mirror its playlist occurrence (#496) when it is the selected song, so a
+/// later keyboard advance targets the repeated-song row the stage is on.
+/// Stage events check `follow_navigation` first; `forced` (the Follow ON
+/// click) opens the song in any mode.
 pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, forced: bool) {
-    // #496: mirror the active playlist occurrence so a later keyboard advance
-    // targets the same repeated-song row the stage is on (e.g. after an
-    // AbleSet-driven change).
-    ctx.selected_entry_index.set(snapshot.active_entry_index);
+    let entry_index = snapshot.active_entry_index;
     let Some(pres_id) = snapshot.presentation_id.map(|id| id.to_string()) else {
+        ctx.selected_entry_index.set(entry_index);
         return;
     };
-    if ctx.selected_presentation_id.get_untracked().as_deref() != Some(pres_id.as_str()) {
-        open_stage_song(ctx, pres_id, forced);
+    let selected = ctx.selected_presentation_id.get_untracked();
+    if selected.as_deref() == Some(pres_id.as_str()) {
+        // Back on the selected song: an open of another song still loading
+        // is stale (stage A → S → A).
+        ctx.follow_pending.set_value(None);
+        ctx.selected_entry_index.set(entry_index);
+        return;
     }
+    let already_opening = ctx.follow_pending.with_value(|open| {
+        open.as_ref().is_some_and(|open| {
+            open.presentation_id == pres_id && open.selected_at_start == selected
+        })
+    });
+    if already_opening {
+        ctx.follow_pending.update_value(|open| {
+            if let Some(open) = open {
+                open.forced |= forced;
+                open.entry_index = entry_index;
+            }
+        });
+        return;
+    }
+    open_stage_song(
+        ctx,
+        FollowPending {
+            token: NEXT_OPEN_TOKEN.fetch_add(1, Ordering::Relaxed),
+            presentation_id: pres_id,
+            selected_at_start: selected,
+            forced,
+            entry_index,
+        },
+    );
 }
 
 fn is_selected(ctx: &AppContext, pres_id: &str) -> bool {
     ctx.selected_presentation_id.get_untracked().as_deref() == Some(pres_id)
 }
 
-/// Open `pres_id`: the song first, then its library and song list. Each async
-/// step applies only while `pres_id` is still the selected song, so a song the
-/// operator picks meanwhile wins. If Follow may no longer navigate when the
-/// song arrives (Edit mode, Follow off), the selection goes back to the song
-/// actually shown, so the two never disagree and the next catch-up reopens the
-/// stage song.
-fn open_stage_song(ctx: &AppContext, pres_id: String, forced: bool) {
-    ctx.selected_presentation_id.set(Some(pres_id.clone()));
-    crate::state::session::set("currentPresentationId", &pres_id);
+/// Fetch the stage song and show it if the open is still current; then its
+/// library and song list, while that song is still selected.
+fn open_stage_song(ctx: &AppContext, open: FollowPending) {
+    let token = open.token;
+    let pres_id = open.presentation_id.clone();
+    ctx.follow_pending.set_value(Some(open));
     let ctx = ctx.clone();
     leptos::task::spawn_local(async move {
-        let Ok(detail) = crate::api::presentations::get_presentation(&pres_id).await else {
+        let fetched = crate::api::presentations::get_presentation(&pres_id).await;
+        let Some(open) = take_current_open(&ctx, token) else {
             return;
         };
-        if !is_selected(&ctx, &pres_id) {
+        let Ok(detail) = fetched else {
             return;
-        }
-        if !forced && !follow_navigation(ctx.ableset_status, ctx.mode) {
-            restore_shown_selection(&ctx);
+        };
+        if !open.forced && !follow_navigation(ctx.ableset_status, ctx.mode) {
             return;
         }
         let lib_id = detail.library_id.to_string();
+        ctx.selected_presentation_id.set(Some(pres_id.clone()));
+        crate::state::session::set("currentPresentationId", &pres_id);
+        ctx.selected_entry_index.set(open.entry_index);
         ctx.slides_cache.update(|cache| {
             cache.insert(pres_id.clone(), detail.presentation.slides.clone());
         });
         ctx.selected_presentation.set(Some(detail.presentation));
-        // Switch to the library containing this presentation.
-        ctx.selected_library_id.set(Some(lib_id.clone()));
-        ctx.selected_playlist_id.set(None);
-        ctx.selected_playlist.set(None);
-        crate::state::session::set("activeLibraryId", &lib_id);
-        if let Ok(pres_list) = crate::api::libraries::list_presentations(&lib_id).await {
+        // The library containing the song: its context and list together.
+        if let Ok(library) = crate::api::libraries::get_library(&lib_id).await {
             if is_selected(&ctx, &pres_id) {
-                ctx.presentations.set(pres_list);
+                ctx.selected_library_id.set(Some(lib_id.clone()));
+                ctx.selected_playlist_id.set(None);
+                ctx.selected_playlist.set(None);
+                crate::state::session::set("activeLibraryId", &lib_id);
+                ctx.context_title.set(library.name);
+                ctx.presentations.set(library.presentations);
             }
         }
     });
 }
 
-/// Point the selection back at the song the slide list shows.
-fn restore_shown_selection(ctx: &AppContext) {
-    let shown = ctx
-        .selected_presentation
-        .with_untracked(|p| p.as_ref().map(|p| p.id.to_string()));
-    match &shown {
-        Some(id) => crate::state::session::set("currentPresentationId", id),
-        None => crate::state::session::remove("currentPresentationId"),
-    }
-    ctx.selected_presentation_id.set(shown);
+/// The open `token` if it is still the one in flight and the operator has not
+/// picked another song since it started. Either way it is no longer pending.
+fn take_current_open(ctx: &AppContext, token: u64) -> Option<FollowPending> {
+    let open = ctx
+        .follow_pending
+        .with_value(|open| open.clone())
+        .filter(|open| open.token == token)?;
+    ctx.follow_pending.set_value(None);
+    (ctx.selected_presentation_id.get_untracked() == open.selected_at_start).then_some(open)
 }
 
 /// On the switch from Edit back to Live, catch up with the stage once (no
