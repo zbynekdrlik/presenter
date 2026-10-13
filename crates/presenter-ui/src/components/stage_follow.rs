@@ -10,8 +10,8 @@
 //! An open is recorded in `AppContext::follow_pending` while its song loads;
 //! Follow never moves the selection ahead of the song's content. Anything that
 //! makes the open stale (a newer open, the stage leaving that song, the
-//! operator picking a song, a failed fetch, Follow off or Edit mode by then)
-//! just drops it — there is nothing to undo. In Live mode the next stage
+//! operator picking a song, a failure of its latest request, Follow off or
+//! Edit mode by then) just drops it — there is nothing to undo. In Live mode the next stage
 //! change opens the stage song again; after an Edit-mode drop the switch back
 //! to Live does. songplayer pushes to an API layout (#799: a stage frame with
 //! no song) are not stage changes for Follow.
@@ -84,6 +84,21 @@ pub(crate) fn remember_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot) 
     }
 }
 
+/// Follow's stage until the first live frame, at page load: the camera-crew
+/// snapshot always carries the stage song (an API layout's own snapshot may
+/// be a songless songplayer push); a live frame that came first wins.
+pub(crate) fn seed_follow_stage(ctx: &AppContext) {
+    let ctx = ctx.clone();
+    leptos::task::spawn_local(async move {
+        let layout = crate::pages::stage_events::CAMERA_CREW_LAYOUT;
+        if let Ok(snapshot) = crate::api::stage::get_snapshot_for(layout).await {
+            if ctx.follow_stage.with_value(Option::is_none) {
+                remember_stage(&ctx, &snapshot);
+            }
+        }
+    });
+}
+
 /// What a stage snapshot on `stage_song` asks of Follow.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SyncStep {
@@ -92,7 +107,8 @@ enum SyncStep {
     /// An open of this song, started from this selection, is still loading.
     AlreadyOpening,
     /// That open has waited past `STALE_OPEN_MS`: request the song again
-    /// under the same open, so whichever answer arrives first opens it.
+    /// under the same open, so the first successful answer opens it (an older
+    /// request failing meanwhile does not end it).
     Retry,
     /// Open the stage song.
     Open,

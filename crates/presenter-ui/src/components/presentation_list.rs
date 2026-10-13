@@ -64,6 +64,7 @@ pub fn PresentationList() -> impl IntoView {
                 entry_index: ctx.selected_entry_index,
                 previous_entry_index,
             },
+            follow_pending: ctx.follow_pending,
         };
         leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     };

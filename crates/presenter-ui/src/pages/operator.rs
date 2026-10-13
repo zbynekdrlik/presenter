@@ -407,13 +407,13 @@ fn load_initial_data(ctx: &AppContext) {
     });
 
     // Stage snapshot
-    let stage_ctx = ctx.clone();
+    let stage_snapshot = ctx.stage_snapshot;
     leptos::task::spawn_local(async move {
         if let Ok(snap) = crate::api::stage::get_snapshot().await {
-            crate::components::stage_follow::remember_stage(&stage_ctx, &snap);
-            stage_ctx.stage_snapshot.set(Some(snap));
+            stage_snapshot.set(Some(snap));
         }
     });
+    crate::components::stage_follow::seed_follow_stage(ctx);
 
     // Timers
     let timers = ctx.timers;
@@ -475,6 +475,7 @@ fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
             save_status: op.save_status,
             seq_at_select: op.slide_edit_seq.get_untracked(),
             on_failure: crate::state::song_load::OnFailure::ClearSelection,
+            follow_pending: ctx.follow_pending,
         };
         leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     }

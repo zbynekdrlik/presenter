@@ -96,9 +96,14 @@ paths:
   `is_api_stage_layout`) are not stage changes for Follow: `on_stage_snapshot`
   skips them, and the catch-up paths (back to Live, the Follow ON click, the
   landing scroll) read `AppContext::follow_stage` — the last stage frame that
-  is not such a push, seeded from the page's initial snapshot — never
-  `ctx.stage_snapshot`, which during songplayer playback holds the push.
-  The decisions are the pure `sync_step` / `may_navigate` (host unit tests).
+  is not such a push, seeded at page load from the camera-crew snapshot
+  (which always carries the stage song) unless a live frame came first —
+  never `ctx.stage_snapshot`, which during songplayer playback holds the
+  push. On an API layout a presenter trigger publishes ONLY the camera-crew
+  frame.
+  The decisions are pure functions with host unit tests: `sync_step`,
+  `may_navigate`, `songless_api_frame`, `stage_left_open`,
+  `answer_ends_open`.
   The library context (library id, playlist clear, `activeLibraryId`,
   `activePlaylistId` removed, `context_title`, song list) is applied together
   after `get_library`, only if the song is still selected and the library /
@@ -113,7 +118,9 @@ paths:
   retry, `is_still_selected`); a song that cannot be shown never stays
   selected (`OnFailure::SelectShown` puts a click back on the shown song AND
   its playlist occurrence, #496; `ClearSelection` empties the session
-  restore's selection but keeps its session key, so Follow can open it);
+  restore's selection but keeps its session key, so Follow can open it; a
+  Follow open that started while the failing song was selected is re-pointed
+  at the new selection — the move is not an operator pick);
   every structural edit (insert / duplicate / delete /
   paste via `slide_save::apply_structural_slides`, reorder and the reconcile
   refetch via `is_shown`) applies only while its song is still SHOWN.
@@ -130,16 +137,20 @@ paths:
   closure (tachys already patched the rows in place, so this is CPU, not DOM:
   the "same row node" assertion passes on the old code too).
 - `operator-edit-autoscroll.spec.ts`: each case fails on the code it fixes
-  (a few marked guards cover fixes that shipped without one) — Edit-mode
-  scroll / focus / Follow-in-Edit, back to Live, the network-race cases (Edit
-  or a song click while the stage song or its library loads, a failed or
-  hung or slow re-requested stage song, the stage bouncing back, a late
-  manual / search / session-restore answer vs a Follow open, Follow ON→OFF, a
-  stale Follow ON open in Edit, a playlist picked while the song or its
-  library loads, a songplayer API-layout push during an open), the reload
-  after a Follow library switch, structural-edit answers after a song switch
-  (duplicate, the raced-duplicate reconcile refetch), a failed manual open,
-  and the manual-open-starts-at-the-top cases. Idioms: hold a request with
+  (cases marked `// Guard` cover fixes that shipped without one) — Edit-mode
+  scroll / focus / Follow-in-Edit, back to Live (also on an API layout after
+  a songplayer push), the network-race cases (Edit or a song click while the
+  stage song or its library loads, a failed / hung / slow re-requested stage
+  song, an old request failing after a re-request, the stage bouncing back,
+  a late manual / search / session-restore answer vs a Follow open, Follow
+  ON→OFF, a stale Follow ON open in Edit, a click cancelling a Follow ON
+  open, a playlist picked while the song or its library loads, Follow's own
+  library switch vs the next open, a songplayer push during an open, a
+  Follow open started while a clicked song fails), the reload after a Follow
+  library switch, structural-edit answers after a song switch (duplicate,
+  reorder, the raced-duplicate reconcile refetch), failed manual / search /
+  session loads (incl. the playlist occurrence, #496), and the
+  manual-open-starts-at-the-top cases. Idioms: hold a request with
   `gateRoute` (+ `waitForRequest`) and release it only after the competing
   event is CONFIRMED in the DOM — never a fixed sleep; before a "nothing
   changed" check wait for the late answer's BODY (`landed()` =

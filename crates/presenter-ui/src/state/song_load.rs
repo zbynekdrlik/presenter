@@ -1,5 +1,5 @@
-//! Showing a song the operator opened (a song-list click, the session
-//! restore) once its content arrives (#515, #556 F6, #853).
+//! Showing a song the operator opened (a song-list click, a search result,
+//! the session restore) once its content arrives (#515, #556 F6, #853).
 
 use std::collections::HashMap;
 
@@ -7,7 +7,7 @@ use leptos::prelude::*;
 use presenter_core::{Presentation, Slide};
 
 use super::operator::{await_saves_quiescent, SaveStatus};
-use super::{is_still_selected, session};
+use super::{is_still_selected, session, FollowPending};
 
 /// One song being opened. The caller sets `selected_id` first.
 pub struct SongLoad {
@@ -27,6 +27,10 @@ pub struct SongLoad {
     /// What to do when the song cannot be shown (failed fetch, saves that
     /// never settle, a second edit race) while it is still selected.
     pub on_failure: OnFailure,
+    /// `AppContext::follow_pending`: a Follow open that started while this
+    /// song was selected follows the selection when it moves on failure (the
+    /// move is not an operator pick).
+    pub follow_pending: StoredValue<Option<FollowPending>>,
 }
 
 /// A song that could not be shown must not stay selected: an arrow key would
@@ -85,21 +89,29 @@ fn give_up(load: &SongLoad) {
     if !is_still_selected(load.selected_id, &load.id) {
         return;
     }
-    match &load.on_failure {
-        OnFailure::SelectShown {
-            entry_index,
-            previous_entry_index,
-        } => {
-            let shown = load
-                .shown
-                .with_untracked(|p| p.as_ref().map(|p| p.id.to_string()));
-            match &shown {
-                Some(id) => session::set("currentPresentationId", id),
-                None => session::remove("currentPresentationId"),
+    let selection = match &load.on_failure {
+        OnFailure::SelectShown { .. } => load
+            .shown
+            .with_untracked(|p| p.as_ref().map(|p| p.id.to_string())),
+        OnFailure::ClearSelection => None,
+    };
+    load.follow_pending.update_value(|open| {
+        if let Some(open) = open {
+            if open.selected_at_start.as_deref() == Some(load.id.as_str()) {
+                open.selected_at_start = selection.clone();
             }
-            load.selected_id.set(shown);
-            entry_index.set(*previous_entry_index);
         }
-        OnFailure::ClearSelection => load.selected_id.set(None),
+    });
+    if let OnFailure::SelectShown {
+        entry_index,
+        previous_entry_index,
+    } = &load.on_failure
+    {
+        match &selection {
+            Some(id) => session::set("currentPresentationId", id),
+            None => session::remove("currentPresentationId"),
+        }
+        entry_index.set(*previous_entry_index);
     }
+    load.selected_id.set(selection);
 }
