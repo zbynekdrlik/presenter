@@ -326,6 +326,21 @@ fn setup_body_attributes(ctx: &AppContext) {
     }
 }
 
+/// Whether a stage change may navigate the operator to the stage's song:
+/// AbleSet Follow is on (assumed on until its status loads) and the operator is
+/// not editing. #853: in Edit mode a song change would replace the open song,
+/// scroll its slide list to the top and destroy the textarea being typed into.
+fn follow_navigation(
+    ableset_status: RwSignal<Option<presenter_core::AbleSetStatusSnapshot>>,
+    mode: RwSignal<String>,
+) -> bool {
+    let follow_enabled = ableset_status
+        .get_untracked()
+        .map(|s| s.follow_enabled)
+        .unwrap_or(true);
+    follow_enabled && mode.get_untracked() != "edit"
+}
+
 fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext) {
     let stage_snapshot = ctx.stage_snapshot;
     let timers = ctx.timers;
@@ -344,20 +359,15 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let selected_playlist = ctx.selected_playlist;
     let selected_entry_index = ctx.selected_entry_index;
     let presentations = ctx.presentations;
+    let mode = ctx.mode;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
             match event {
                 LiveEvent::Stage { snapshot } => {
-                    // Auto-sync operator selection from stage, gated by follow_enabled.
-                    // When follow is OFF, the stage preview still updates (snapshot is always set),
-                    // but the operator's selected presentation/slides don't auto-navigate.
-                    let follow_enabled = ableset_status
-                        .get_untracked()
-                        .map(|s| s.follow_enabled)
-                        .unwrap_or(true);
-
-                    if follow_enabled {
+                    // Auto-sync operator selection from stage (see `follow_navigation`).
+                    // The stage preview always updates (snapshot is always set).
+                    if follow_navigation(ableset_status, mode) {
                         // #496: mirror the active playlist occurrence so a later
                         // keyboard advance targets the same repeated-song row the
                         // stage is on (e.g. after an AbleSet-driven change).

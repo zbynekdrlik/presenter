@@ -7,6 +7,9 @@ paths:
   - "crates/presenter-ui/src/state/session.rs"
   - "crates/presenter-ui/styles/operator.css"
   - "tests/e2e/operator-slide-columns.spec.ts"
+  - "tests/e2e/operator-edit-autoscroll.spec.ts"
+  - "crates/presenter-ui/src/components/presentation_list.rs"
+  - "crates/presenter-ui/src/pages/operator.rs"
 ---
 
 # Operator slide grids — per-browser slides per row (#832)
@@ -44,11 +47,20 @@ paths:
   hidden grid's computed `gridTemplateColumns` is the specified `repeat(…)`
   text, not resolved tracks. The control renders in both the worship and the
   Bible toolbar — select it with `:visible`.
-- **Auto-scroll to the active stage slide is Live-mode only (#853).** The
-  `slide_list.rs` effect that calls `scroll_slide_into_view` on every stage
-  slide change reads `ctx.mode` UNTRACKED and does nothing in Edit mode: AbleSet
-  advances the stage every few seconds during a rehearsal, and editing the song
-  on stage used to drag the list away from the slide being typed into ("the page
-  refreshes and jumps to the top" on SNV). Pinned by
-  `operator-edit-autoscroll.spec.ts` (stage changes every 0.7 s while editing
-  the song on stage / another song, and while browsing a library or playlist).
+- **In Edit mode a stage change never moves the operator's place (#853).**
+  AbleSet advances the stage every few seconds during a rehearsal; on SNV an
+  operator editing slides on the FOH PC saw "the page refresh and jump to the
+  top". Three rules keep Edit mode still:
+  - the `slide_list.rs` effect that calls `scroll_slide_into_view` reads
+    `ctx.mode` UNTRACKED and scrolls only in Live mode (it still returns the
+    current id, so going back to Live never replays an old change);
+  - AbleSet Follow does not switch songs in Edit mode (`follow_navigation` in
+    `pages/operator.rs`) — the snapshot is still stored for the preview;
+  - per-card state that a stage event re-renders (the card `class` closure)
+    derives everything it shows, `is-focused` included, from signals — never
+    poke a class into the DOM, the next stage event rewrites `class`.
+  The song list reads the stage song through a `Memo` of `presentation_id`
+  (`presentation_list.rs`), so a stage SLIDE change does not rebuild its rows.
+  `operator-edit-autoscroll.spec.ts`: the "editing the song on stage" and the
+  "Follow on" cases fail on the old code (1605 → 806; the edited song closed);
+  the library / playlist / other-song cases guard against reloads and jumps.

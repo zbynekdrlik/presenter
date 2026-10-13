@@ -13,6 +13,17 @@ use super::presentation_list_drag::{
 #[component]
 pub fn PresentationList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
+    // #853: the song on stage, as its own memo — the list highlights it, but a
+    // stage SLIDE change (every few seconds while AbleSet drives a rehearsal)
+    // must not rebuild every row; only a song change does.
+    let stage_snapshot = ctx.stage_snapshot;
+    let stage_presentation_id = Memo::new(move |_| {
+        stage_snapshot.with(|snapshot| {
+            snapshot
+                .as_ref()
+                .and_then(|s| s.presentation_id.map(|id| id.to_string()))
+        })
+    });
     let op = use_ctx!(OperatorState);
 
     let select_presentation = move |id: String, entry_index: Option<u32>| {
@@ -197,8 +208,7 @@ pub fn PresentationList() -> impl IntoView {
                     let active_id = ctx.selected_presentation_id.get();
                     let mode = ctx.mode.get();
                     let is_edit = mode == "edit";
-                    let stage_pres_id = ctx.stage_snapshot.get()
-                        .and_then(|s| s.presentation_id.map(|id| id.to_string()));
+                    let stage_pres_id = stage_presentation_id.get();
                     let has_playlist = ctx.selected_playlist_id.get().is_some();
                     let selected_playlist = ctx.selected_playlist.get();
                     let pres_index = ctx.presentation_index.get();

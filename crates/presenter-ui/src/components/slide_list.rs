@@ -12,8 +12,8 @@ use crate::utils::color::group_pill_style;
 use super::slide_columns::SlideColumnsControl;
 use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
-    apply_focused_class, field_has_warning, format_multiline, is_interactive_tag,
-    resolve_group_display, slide_has_any_warning,
+    field_has_warning, format_multiline, is_interactive_tag, resolve_group_display,
+    slide_has_any_warning,
 };
 use super::slide_reorder::{handle_slide_drop, render_song_bubble};
 use super::slide_save::{
@@ -237,10 +237,6 @@ pub fn SlideList() -> impl IntoView {
                     // reactively in its class= closure, which only updates the class
                     // attribute without destroying textarea DOM elements.
                     let line_limit = op.line_limit.get();
-                    // Use get_untracked() so focused_slide_id changes do NOT trigger
-                    // full slide list re-render. The is-focused class is applied
-                    // via DOM manipulation in on:focus handlers instead.
-                    let focused_slide = op.focused_slide_id.get_untracked();
 
                     let Some(presentation) = pres else {
                         return view! { <p class="empty">"Select a presentation to load slides."</p> }.into_any();
@@ -327,7 +323,6 @@ pub fn SlideList() -> impl IntoView {
 
                         // is_active is now computed reactively in the class= closure
                         // using ctx.stage_snapshot.get() directly (see class closure below)
-                        let is_focused = focused_slide.as_deref() == Some(&slide_id);
                         let main_warning = field_has_warning(&main_text, line_limit);
                         let translation_warning = field_has_warning(&translation_text, line_limit);
                         // #515: the stage field is free-form speaker/reading
@@ -404,8 +399,12 @@ pub fn SlideList() -> impl IntoView {
                                     if active_id.as_deref() == Some(&slide_id_class) {
                                         c.push_str(" is-active");
                                     }
-                                    // is-focused is managed via DOM in apply_focused_class()
-                                    if is_focused { c.push_str(" is-focused"); }
+                                    // #853: is-focused is derived here too (not poked into
+                                    // the DOM), so a stage event rewriting this class can't
+                                    // drop it; only this attribute updates on a focus change.
+                                    if op.focused_slide_id.get().as_deref() == Some(&slide_id_class) {
+                                        c.push_str(" is-focused");
+                                    }
                                     // Add is-loading class during trigger operation
                                     if op.triggering_slide_id.get().as_deref() == Some(&slide_id_class) {
                                         c.push_str(" is-loading");
@@ -778,9 +777,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("main".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "main");
-                                                                // Apply is-focused class via DOM since focused_slide_id
-                                                                // uses get_untracked() to avoid re-renders
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -815,7 +811,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("translation".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "translation");
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -851,7 +846,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("stage".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "stage");
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -894,7 +888,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("group".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "group");
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />

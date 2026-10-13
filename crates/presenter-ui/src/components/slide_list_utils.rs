@@ -1,5 +1,4 @@
 use presenter_core::{resolve_sequence, Presentation};
-use wasm_bindgen::JsCast;
 
 /// Format text with `<br>` for line breaks and highlight lines exceeding limit.
 pub(super) fn format_multiline(text: &str, limit: u32) -> String {
@@ -186,24 +185,6 @@ mod group_display_tests {
         let display = resolve_group_display(&pres, &second_id);
         assert_eq!(display.badge_text, Some("Verse 1".to_string()));
         assert!(display.badge_inherited);
-    }
-}
-
-/// Apply is-focused class to a slide card via DOM manipulation.
-pub(super) fn apply_focused_class(slide_id: &str) {
-    let doc = crate::utils::window::document();
-    if let Ok(cards) = doc.query_selector_all(".is-focused") {
-        for i in 0..cards.length() {
-            if let Some(el) = cards.item(i) {
-                if let Ok(el) = el.dyn_into::<web_sys::Element>() {
-                    let _ = el.class_list().remove_1("is-focused");
-                }
-            }
-        }
-    }
-    let selector = format!("[data-slide-id=\"{}\"]", slide_id);
-    if let Ok(Some(el)) = doc.query_selector(&selector) {
-        let _ = el.class_list().add_1("is-focused");
     }
 }
 
