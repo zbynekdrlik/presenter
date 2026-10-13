@@ -12,7 +12,7 @@ use crate::components::presentation_list::PresentationList;
 use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
-use crate::components::stage_follow::{follow_navigation, setup_follow_on_live, sync_to_stage};
+use crate::components::stage_follow::{on_stage_snapshot, setup_follow_on_live};
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;
@@ -337,8 +337,6 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let stage_text_mode = ctx.stage_text_mode;
     let active_bible_broadcast = ctx.active_bible_broadcast;
     let bible_presentations_version = ctx.bible_presentations_version;
-    let ableset_status = ctx.ableset_status;
-    let mode = ctx.mode;
     let follow_ctx = ctx.clone();
 
     Effect::new(move || {
@@ -347,9 +345,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 LiveEvent::Stage { snapshot } => {
                     // AbleSet Follow: Live mode opens the stage's song (#853: never
                     // in Edit mode). The stage preview always updates.
-                    if follow_navigation(ableset_status, mode) {
-                        sync_to_stage(&follow_ctx, &snapshot, false);
-                    }
+                    on_stage_snapshot(&follow_ctx, &snapshot);
                     stage_snapshot.set(Some(snapshot));
                 }
                 LiveEvent::Timers { overview } => timers.set(Some(overview)),
@@ -465,55 +461,20 @@ fn load_initial_data(ctx: &AppContext) {
 
 fn load_session_presentation(ctx: &AppContext, op: &OperatorState) {
     if let Some(pres_id) = ctx.selected_presentation_id.get_untracked() {
-        let selected = ctx.selected_presentation;
-        // #515: same stale-refetch guard as `PresentationList::select_presentation`
-        // — this fetch fires once at page load; if a slide edit is saved
-        // before it resolves, drop the response instead of clobbering it.
-        let slide_edit_seq = op.slide_edit_seq;
-        let save_status = op.save_status;
-        // #515: the initial seq capture MUST stay SYNCHRONOUS (outside the
-        // spawn_local) — a `spawn_local` body runs as a microtask after the
-        // current handler, so a save fired in the same synchronous script
-        // would bump the counter first and make a stale pre-save response
-        // look "fresh" (see `PresentationList::select_presentation`).
-        let seq_at_load = op.slide_edit_seq.get_untracked();
-        let selected_id = ctx.selected_presentation_id;
-        leptos::task::spawn_local(async move {
-            // #556 F6: reorder/insert/duplicate/delete now ALSO bump
-            // `slide_edit_seq` (#552/#553), widening the window in which
-            // some edit lands while THIS session-restore fetch is in
-            // flight — a bare drop on mismatch, with no retry, could leave
-            // the session-restored presentation never loading at all.
-            // Retry the fetch ONCE with a freshly captured seq before
-            // giving up (same policy as `PresentationList::select_presentation`),
-            // and only AFTER in-flight saves committed — a retry issued
-            // immediately can be served from pre-save state and its tracked
-            // apply would blank the just-typed edit (the #515 race).
-            let mut seq_at_fetch = seq_at_load;
-            let mut remaining_attempts = 2;
-            loop {
-                remaining_attempts -= 1;
-                let Ok(detail) = crate::api::presentations::get_presentation(&pres_id).await else {
-                    return;
-                };
-                if slide_edit_seq.get_untracked() == seq_at_fetch {
-                    // #853: a song selected since (a click, a Follow open) wins.
-                    if crate::state::is_still_selected(selected_id, &pres_id) {
-                        selected.set(Some(detail.presentation));
-                    }
-                    return;
-                }
-                if remaining_attempts == 0 {
-                    return;
-                }
-                if !crate::state::operator::await_saves_quiescent(save_status, 3_000).await {
-                    // Still saving after the bounded wait — keep the old,
-                    // always-safe drop-the-response behavior.
-                    return;
-                }
-                seq_at_fetch = slide_edit_seq.get_untracked();
-            }
-        });
+        // The session's song, through the same guarded load as a song-list
+        // click (#515 seq guard, #556 F6 retry, #853 still-selected); on a
+        // failed fetch the id stays for the next load.
+        let load = crate::state::song_load::SongLoad {
+            id: pres_id,
+            selected_id: ctx.selected_presentation_id,
+            shown: ctx.selected_presentation,
+            slides_cache: None,
+            slide_edit_seq: op.slide_edit_seq,
+            save_status: op.save_status,
+            seq_at_select: op.slide_edit_seq.get_untracked(),
+            restore_on_failure: false,
+        };
+        leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     }
 
     if let Some(lib_id) = ctx.selected_library_id.get_untracked() {

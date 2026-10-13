@@ -14,6 +14,9 @@ paths:
   - "crates/presenter-ui/src/components/stage_preview.rs"
   - "crates/presenter-ui/src/components/search.rs"
   - "crates/presenter-ui/src/components/slide_save.rs"
+  - "crates/presenter-ui/src/components/slide_reorder.rs"
+  - "crates/presenter-ui/src/components/slide_selection.rs"
+  - "crates/presenter-ui/src/state/song_load.rs"
   - "crates/presenter-ui/src/state/mod.rs"
 ---
 
@@ -56,44 +59,55 @@ paths:
   AbleSet advances the stage every few seconds during a rehearsal; on SNV an
   operator editing slides on the FOH PC saw "the page refresh and jump to the
   top". Two rules keep Edit mode still:
-  - the `slide_list.rs` effect that calls `scroll_slide_into_view` reads
-    `ctx.mode` UNTRACKED and scrolls only in Live mode (it still returns the
-    current id, so going back to Live never replays an old change);
+  - the `slide_list.rs` effect that follows stage slide changes with
+    `scroll_slide_into_view` reads `ctx.mode` UNTRACKED and scrolls only in
+    Live mode (it still returns the current id, so going back to Live never
+    replays an old change); the only Edit-mode scroll to the stage slide is a
+    song the operator's own Follow ON click opened;
   - per-card state that a stage event re-renders (the card `class` closure)
     derives everything it shows, `is-focused` included, from signals — never
     poke a class into the DOM, the next stage event rewrites `class`.
-- **AbleSet Follow** (`components/stage_follow.rs`, used by the operator page
-  and the header's Follow button): stage events switch songs only in Live mode
-  (`follow_navigation`; Follow counts as OFF until its status loads); on the
-  switch back to Live the operator syncs to the stage at once, so an arrow key
-  never sends a slide of the song that was being edited; the Follow ON click
-  (`forced`) also opens in Edit mode, but nothing opens once Follow is off. An
-  open is recorded in `AppContext::follow_pending` (token, the selection it
-  started from, forced, entry index, start time) while its song loads; the
-  selection, `currentPresentationId`, `selected_entry_index` and the content
-  are applied TOGETHER only when the song arrives, the open is still current
-  and the selection has not changed. NEVER move `selected_presentation_id`
-  before the content: every round-2…4 race came from doing that (a failed
-  fetch left the id on a song that was never shown, so Follow never retried).
-  A stale open (newer open, stage back on the selected song or cleared,
-  operator picked a song, fetch failed, Follow off / Edit by then) is simply
-  dropped; the next stage change opens again (after an Edit drop the switch
-  back to Live does), and an open still waiting after `STALE_OPEN_MS` (5 s, a
-  hung request) is re-opened. The decision is the pure `sync_step` /
-  `may_navigate` (host unit tests). The library context (library id,
-  playlist clear, `activeLibraryId`, `activePlaylistId` removed,
-  `context_title`, song list) is applied together after `get_library`, only
-  if the song is still selected and the operator has not switched library or
-  playlist since the song was shown. Accepted: during that one
-  `/libraries/summary` round trip the trigger context still carries the old
-  playlist id (clearing it earlier would flash the old list).
-- **Every manual open checks the song is still selected before showing it**
-  (`state::is_still_selected` in `presentation_list.rs` select, `search.rs`
-  result click, the `pages/operator.rs` session restore; the `slide_save.rs`
-  reconcile refetch checks the song is still SHOWN): a late answer for a
-  song the operator or Follow has since replaced must not be shown, or the
-  shown and selected songs disagree and an arrow key sends the shown song's
-  slide.
+- **AbleSet Follow** (`components/stage_follow.rs`; the operator page feeds
+  every stage snapshot to `on_stage_snapshot`, the header's Follow ON click
+  calls `sync_to_stage(.., forced)`): stage events switch songs only in Live
+  mode (`follow_navigation`; Follow counts as OFF until its status loads); on
+  the switch back to Live the operator syncs to the stage at once, so an arrow
+  key never sends a slide of the song that was being edited; the Follow ON
+  click also opens in Edit mode, but nothing opens once Follow is off. An open
+  is recorded in `AppContext::follow_pending` (token, the selection and the
+  library/playlist context it started from, forced, entry index, last request
+  time) while its song loads; the selection, `currentPresentationId`,
+  `selected_entry_index` and the content are applied TOGETHER only when the
+  song arrives, the token is current and the selection unchanged. NEVER move
+  `selected_presentation_id` before the content: every round-2…4 race came
+  from doing that (a failed fetch left the id on a song that was never shown,
+  so Follow never retried). A stale open is simply dropped: a newer open, the
+  stage leaving that song (in ANY mode — `on_stage_snapshot`, so a Follow ON
+  open in Edit mode cannot land after the stage moved on), the operator
+  picking a song, a failed fetch, Follow off / Edit by then. In Live mode the
+  next stage change opens again (after an Edit drop the switch back to Live
+  does); an open still waiting after `STALE_OPEN_MS` (5 s) is requested AGAIN
+  under the SAME token, so whichever answer arrives first opens the song (a
+  new token would discard a slow but live first answer). songplayer pushes to
+  an API layout (a stage frame with NO song, `is_api_stage_layout`) are not
+  stage changes for Follow — never treat a songless frame as "stage cleared".
+  The decisions are the pure `sync_step` / `may_navigate` (host unit tests).
+  The library context (library id, playlist clear, `activeLibraryId`,
+  `activePlaylistId` removed, `context_title`, song list) is applied together
+  after `get_library`, only if the song is still selected and the library /
+  playlist are unchanged since the OPEN STARTED (a pick while the song loads
+  counts). Accepted: during that `/libraries/summary` round trip the trigger
+  context still carries the old playlist id (clearing it earlier would flash
+  the old list), and if `get_library` fails the old context stays.
+- **No late answer may replace a newer song.** A song-list click and the
+  session restore load through `state::song_load::show_when_loaded` (the #515
+  seq guard, the #556 F6 retry, `is_still_selected`; a failed click puts the
+  selection back on the shown song); the search result click checks
+  `is_still_selected`; every structural edit (insert / duplicate / delete /
+  paste via `slide_save::apply_structural_slides`, reorder and the reconcile
+  refetch via `is_shown`) applies only while its song is still SHOWN.
+  Otherwise the shown and selected songs disagree, or one song's slides land
+  in another, and an arrow key sends the wrong slide.
 - **Scroll on a newly shown song** (`slide_list_scroll::setup_scroll_on_song_shown`,
   keyed on the SHOWN song, not the selection id): a song a Follow open just
   showed (`AppContext::follow_landing`, set right before `selected_presentation`
@@ -104,18 +118,20 @@ paths:
   (`presentation_list.rs`), so a stage SLIDE change does not re-run its render
   closure (tachys already patched the rows in place, so this is CPU, not DOM:
   the "same row node" assertion passes on the old code too).
-- `operator-edit-autoscroll.spec.ts`: each case fails on the code it fixes —
-  the "editing the song on stage" case (1605 → 806), the "Follow on" case
-  (the edited song closed), "back to Live", the two network-delay tests (Edit
-  clicked while the stage song loads; a song clicked while the stage song's
-  library loads, started from the playlist), the failed-fetch retry, the
-  hung-request retry, the "selection stays on the shown song" + stage bounce
-  case, a late manual answer vs a Follow open, Follow ON→OFF before the song
-  arrives, a playlist opened while the library loads, the reload after a
-  Follow library switch, the reconcile refetch after a raced duplicate, and
-  the manual-open-starts-at-the-top cases (Follow off and on); the library / playlist / other-song cases guard against
-  reloads, jumps and row rebuilds. Gate a delayed request with `gateRoute` +
-  `waitForRequest`/`waitForResponse` and release it after the competing event
-  is CONFIRMED in the DOM — never a fixed sleep. A network-failure case
-  fulfils a MALFORMED 200 (`not-json`), never a 5xx: Chrome logs every non-2xx
-  and the specs assert a clean console.
+- `operator-edit-autoscroll.spec.ts`: each case fails on the code it fixes
+  (a few marked guards cover fixes that shipped without one) — Edit-mode
+  scroll / focus / Follow-in-Edit, back to Live, the network-race cases (Edit
+  or a song click while the stage song or its library loads, a failed or
+  hung or slow re-requested stage song, the stage bouncing back, a late
+  manual / search / session-restore answer vs a Follow open, Follow ON→OFF, a
+  stale Follow ON open in Edit, a playlist picked while the song or its
+  library loads, a songplayer API-layout push during an open), the reload
+  after a Follow library switch, structural-edit answers after a song switch
+  (duplicate, the raced-duplicate reconcile refetch), a failed manual open,
+  and the manual-open-starts-at-the-top cases. Idioms: hold a request with
+  `gateRoute` (+ `waitForRequest`) and release it only after the competing
+  event is CONFIRMED in the DOM — never a fixed sleep; before a "nothing
+  changed" check wait for the late answer's BODY (`landed()` =
+  `response.finished()`) and `settle`; a network failure is a MALFORMED 200
+  (`not-json`), never a 5xx (Chrome logs every non-2xx and the specs assert a
+  clean console).

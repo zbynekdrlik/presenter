@@ -18,9 +18,7 @@ use super::slide_list_utils::{
     slide_has_any_warning,
 };
 use super::slide_reorder::{handle_slide_drop, render_song_bubble};
-use super::slide_save::{
-    capture_selection, reconcile_after_seq_mismatch, save_all_fields_from_dom,
-};
+use super::slide_save::{apply_structural_slides, capture_selection, save_all_fields_from_dom};
 use super::slide_selection::{
     cut_memo, render_insertion_bar, render_select_checkbox, selected_memo,
     setup_clipboard_keyboard, setup_paste_chooser_clear_on_live, setup_selection_clear_on_switch,
@@ -120,22 +118,15 @@ pub fn SlideList() -> impl IntoView {
             let save_status = op.save_status;
             leptos::task::spawn_local(async move {
                 if let Ok(slides) = api::presentations::insert_slide(&pres_id, None).await {
-                    if slide_edit_seq.get_untracked() == my_seq {
-                        selected_presentation_signal.update(|p| {
-                            if let Some(pres) = p.as_mut() {
-                                pres.slides = slides;
-                            }
-                        });
-                    } else {
-                        reconcile_after_seq_mismatch(
-                            pres_id_for_reconcile,
-                            slides,
-                            selected_presentation_signal,
-                            slide_edit_seq,
-                            save_status,
-                        )
-                        .await;
-                    }
+                    apply_structural_slides(
+                        pres_id_for_reconcile,
+                        slides,
+                        selected_presentation_signal,
+                        slide_edit_seq,
+                        save_status,
+                        my_seq,
+                    )
+                    .await;
                 }
             });
         }
@@ -628,13 +619,7 @@ pub fn SlideList() -> impl IntoView {
                                                         let my_seq = slide_edit_seq_dup.get_untracked();
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::duplicate_slide(&pres_id, &sid).await {
-                                                                if slide_edit_seq_dup.get_untracked() == my_seq {
-                                                                    selected_pres.update(|p| {
-                                                                        if let Some(pres) = p.as_mut() { pres.slides = slides; }
-                                                                    });
-                                                                } else {
-                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup, save_status_dup).await;
-                                                                }
+                                                                apply_structural_slides(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup, save_status_dup, my_seq).await;
                                                             }
                                                         });
                                                     }
@@ -655,13 +640,7 @@ pub fn SlideList() -> impl IntoView {
                                                         let my_seq = slide_edit_seq_del.get_untracked();
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::delete_slide(&pres_id, &sid).await {
-                                                                if slide_edit_seq_del.get_untracked() == my_seq {
-                                                                    selected_pres.update(|p| {
-                                                                        if let Some(pres) = p.as_mut() { pres.slides = slides; }
-                                                                    });
-                                                                } else {
-                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del, save_status_del).await;
-                                                                }
+                                                                apply_structural_slides(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del, save_status_del, my_seq).await;
                                                             }
                                                         });
                                                     }

@@ -3,6 +3,7 @@ pub mod bible_range;
 pub mod operator;
 pub mod session;
 pub mod slide_columns;
+pub mod song_load;
 pub mod stage;
 pub mod tablet;
 
@@ -38,19 +39,25 @@ pub fn save_baseline_to_storage(connected: usize, issues: usize) {
 /// until then (`components/stage_follow.rs`).
 #[derive(Clone, Debug)]
 pub struct FollowPending {
-    /// Unique per open: a newer open, or a cancel, replaces it.
+    /// Unique per open: a newer open replaces it, a stale one clears it; only
+    /// an answer carrying the current token may be applied.
     pub token: u64,
     pub presentation_id: String,
     /// The selected song when the open started; the operator picking another
     /// song meanwhile cancels it.
     pub selected_at_start: Option<String>,
-    /// The Follow ON click: opens in any mode.
+    /// The Follow ON click: may open in Edit mode too (Follow must still be
+    /// on when the song arrives).
     pub forced: bool,
     /// The stage's playlist occurrence (#496), applied with the song.
     pub entry_index: Option<u32>,
-    /// `Date.now()` when the open started; an open still waiting long after
-    /// (a hung request) is retried by the next stage change.
+    /// `Date.now()` when the song was last requested; an open still waiting
+    /// long after (a hung or very slow request) is requested again by the
+    /// next stage change, under the same token.
     pub started_ms: f64,
+    /// The selected library and playlist when the open started: a pick by
+    /// the operator since then keeps Follow's library step out.
+    pub context_at_start: (Option<String>, Option<String>),
 }
 
 /// Whether `id` is still the selected song. A late fetch for a song the
@@ -76,6 +83,7 @@ pub struct AppContext {
     /// repeated song's correct OCCURRENCE is sent to the server. `None` when the
     /// selection came from a library (no playlist position).
     pub selected_entry_index: RwSignal<Option<u32>>,
+    /// The AbleSet Follow open in flight, if any (#853).
     pub follow_pending: StoredValue<Option<FollowPending>>,
     /// The song a Follow open just showed: its slide list lands on the stage
     /// slide, every other newly shown song opens at the top (#271, #853).

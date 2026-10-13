@@ -9,22 +9,24 @@
 //!
 //! An open is recorded in `AppContext::follow_pending` while its song loads;
 //! Follow never moves the selection ahead of the song's content. Anything that
-//! makes the open stale (a newer open, the stage returning to the selected song
-//! or clearing, the operator picking a song, a failed fetch, Follow off or Edit
-//! mode by then) just drops it — there is nothing to undo. A stage change opens
-//! the stage song again; after an Edit-mode drop the switch back to Live does.
+//! makes the open stale (a newer open, the stage leaving that song, the
+//! operator picking a song, a failed fetch, Follow off or Edit mode by then)
+//! just drops it — there is nothing to undo. In Live mode the next stage
+//! change opens the stage song again; after an Edit-mode drop the switch back
+//! to Live does. songplayer pushes to an API layout (#799: a stage frame with
+//! no song) are not stage changes for Follow.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use leptos::prelude::*;
-use presenter_core::{AbleSetStatusSnapshot, StageDisplaySnapshot};
+use presenter_core::{is_api_stage_layout, AbleSetStatusSnapshot, StageDisplaySnapshot};
 
 use crate::state::{is_still_selected, AppContext, FollowPending};
 
 static NEXT_OPEN_TOKEN: AtomicU64 = AtomicU64::new(1);
 
-/// An open still waiting this long for its song is retried by the next stage
-/// change: a hung request never settles (fetch has no timeout).
+/// An open still waiting this long for its song is requested again by the
+/// next stage change: a hung request never settles (fetch has no timeout).
 const STALE_OPEN_MS: f64 = 5_000.0;
 
 /// Whether a stage change may navigate the operator to the stage's song:
@@ -51,13 +53,22 @@ fn may_navigate(follow_enabled: bool, mode: &str, forced: bool) -> bool {
     follow_enabled && (forced || mode != "edit")
 }
 
+/// A songplayer push to an API layout (#799): a stage frame with no song,
+/// interleaved with the frames that carry the real stage song.
+fn is_songless_api_frame(snapshot: &StageDisplaySnapshot) -> bool {
+    snapshot.presentation_id.is_none() && is_api_stage_layout(&snapshot.layout.code)
+}
+
 /// What a stage snapshot on `stage_song` asks of Follow.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum SyncStep {
     /// The stage is on the selected song.
     OnSelectedSong,
     /// An open of this song, started from this selection, is still loading.
     AlreadyOpening,
+    /// That open has waited past `STALE_OPEN_MS`: request the song again
+    /// under the same open, so whichever answer arrives first opens it.
+    Retry,
     /// Open the stage song.
     Open,
 }
@@ -71,15 +82,40 @@ fn sync_step(
     if selected == Some(stage_song) {
         return SyncStep::OnSelectedSong;
     }
-    let opening = pending.is_some_and(|open| {
-        open.presentation_id == stage_song
-            && open.selected_at_start.as_deref() == selected
-            && now_ms - open.started_ms < STALE_OPEN_MS
+    match pending {
+        Some(open)
+            if open.presentation_id == stage_song
+                && open.selected_at_start.as_deref() == selected =>
+        {
+            if now_ms - open.started_ms < STALE_OPEN_MS {
+                SyncStep::AlreadyOpening
+            } else {
+                SyncStep::Retry
+            }
+        }
+        _ => SyncStep::Open,
+    }
+}
+
+/// A stage snapshot reached the operator page. A pending open whose song the
+/// stage has left is stale in any mode — in Edit mode no later stage event
+/// replaces a Follow ON open, so without this it could still replace the
+/// song being edited. In Live mode with Follow on, the stage song is opened.
+pub(crate) fn on_stage_snapshot(ctx: &AppContext, snapshot: &StageDisplaySnapshot) {
+    if is_songless_api_frame(snapshot) {
+        return;
+    }
+    let stage_song = snapshot.presentation_id.map(|id| id.to_string());
+    ctx.follow_pending.update_value(|open| {
+        let left = open
+            .as_ref()
+            .is_some_and(|open| stage_song.as_deref() != Some(open.presentation_id.as_str()));
+        if left {
+            *open = None;
+        }
     });
-    if opening {
-        SyncStep::AlreadyOpening
-    } else {
-        SyncStep::Open
+    if follow_navigation(ctx.ableset_status, ctx.mode) {
+        sync_to_stage(ctx, snapshot, false);
     }
 }
 
@@ -89,10 +125,11 @@ fn sync_step(
 /// Stage events check `follow_navigation` first; `forced` (the Follow ON
 /// click) opens the song in Edit mode too.
 pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, forced: bool) {
+    if is_songless_api_frame(snapshot) {
+        return;
+    }
     let entry_index = snapshot.active_entry_index;
     let Some(pres_id) = snapshot.presentation_id.map(|id| id.to_string()) else {
-        // Nothing on stage: an open still loading is stale.
-        ctx.follow_pending.set_value(None);
         ctx.selected_entry_index.set(entry_index);
         return;
     };
@@ -107,32 +144,44 @@ pub(crate) fn sync_to_stage(ctx: &AppContext, snapshot: &StageDisplaySnapshot, f
             ctx.follow_pending.set_value(None);
             ctx.selected_entry_index.set(entry_index);
         }
-        SyncStep::AlreadyOpening => ctx.follow_pending.update_value(|open| {
-            if let Some(open) = open {
-                open.forced |= forced;
-                open.entry_index = entry_index;
+        SyncStep::AlreadyOpening | SyncStep::Retry => {
+            let mut retry_token = None;
+            ctx.follow_pending.update_value(|open| {
+                if let Some(open) = open {
+                    open.forced |= forced;
+                    open.entry_index = entry_index;
+                    if step == SyncStep::Retry {
+                        open.started_ms = now_ms;
+                        retry_token = Some(open.token);
+                    }
+                }
+            });
+            if let Some(token) = retry_token {
+                fetch_stage_song(ctx, token, pres_id);
             }
-        }),
-        SyncStep::Open => open_stage_song(
-            ctx,
-            FollowPending {
-                token: NEXT_OPEN_TOKEN.fetch_add(1, Ordering::Relaxed),
-                presentation_id: pres_id,
+        }
+        SyncStep::Open => {
+            let token = NEXT_OPEN_TOKEN.fetch_add(1, Ordering::Relaxed);
+            ctx.follow_pending.set_value(Some(FollowPending {
+                token,
+                presentation_id: pres_id.clone(),
                 selected_at_start: selected,
                 forced,
                 entry_index,
                 started_ms: now_ms,
-            },
-        ),
+                context_at_start: (
+                    ctx.selected_library_id.get_untracked(),
+                    ctx.selected_playlist_id.get_untracked(),
+                ),
+            }));
+            fetch_stage_song(ctx, token, pres_id);
+        }
     }
 }
 
-/// Fetch the stage song and show it if the open is still current; then its
-/// library context.
-fn open_stage_song(ctx: &AppContext, open: FollowPending) {
-    let token = open.token;
-    let pres_id = open.presentation_id.clone();
-    ctx.follow_pending.set_value(Some(open));
+/// Fetch the stage song for the open `token` and show it if that open is
+/// still current; then its library context.
+fn fetch_stage_song(ctx: &AppContext, token: u64, pres_id: String) {
     let ctx = ctx.clone();
     leptos::task::spawn_local(async move {
         let fetched = crate::api::presentations::get_presentation(&pres_id).await;
@@ -158,18 +207,16 @@ fn open_stage_song(ctx: &AppContext, open: FollowPending) {
         });
         ctx.follow_landing.set_value(Some(detail.presentation.id));
         ctx.selected_presentation.set(Some(detail.presentation));
-        show_song_library(&ctx, &pres_id, lib_id).await;
+        show_song_library(&ctx, &open, lib_id).await;
     });
 }
 
 /// The library containing the song Follow just showed: its context and song
 /// list together, unless the operator has since picked another song, library
-/// or playlist.
-async fn show_song_library(ctx: &AppContext, pres_id: &str, lib_id: String) {
-    let context = (
-        ctx.selected_library_id.get_untracked(),
-        ctx.selected_playlist_id.get_untracked(),
-    );
+/// or playlist (since the open started — a pick while the song loaded counts).
+/// If the library cannot be read, the old context stays (accepted: the next
+/// Follow open or a click fixes it).
+async fn show_song_library(ctx: &AppContext, open: &FollowPending, lib_id: String) {
     let Ok(library) = crate::api::libraries::get_library(&lib_id).await else {
         return;
     };
@@ -177,7 +224,9 @@ async fn show_song_library(ctx: &AppContext, pres_id: &str, lib_id: String) {
         ctx.selected_library_id.get_untracked(),
         ctx.selected_playlist_id.get_untracked(),
     );
-    if !is_still_selected(ctx.selected_presentation_id, pres_id) || context_now != context {
+    if !is_still_selected(ctx.selected_presentation_id, &open.presentation_id)
+        || context_now != open.context_at_start
+    {
         return;
     }
     ctx.selected_library_id.set(Some(lib_id.clone()));
@@ -229,6 +278,7 @@ mod tests {
             forced: false,
             entry_index: None,
             started_ms,
+            context_at_start: (None, None),
         }
     }
 
@@ -259,11 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_open_is_opened_again() {
+    fn a_stale_open_is_requested_again_under_the_same_open() {
         let open = pending("S", Some("A"), 1_000.0);
         assert_eq!(
             sync_step("S", Some("A"), Some(&open), 6_000.0),
-            SyncStep::Open
+            SyncStep::Retry
         );
     }
 

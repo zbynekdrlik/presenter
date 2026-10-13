@@ -1,0 +1,85 @@
+//! Showing a song the operator opened (a song-list click, the session
+//! restore) once its content arrives (#515, #556 F6, #853).
+
+use std::collections::HashMap;
+
+use leptos::prelude::*;
+use presenter_core::{Presentation, Slide};
+
+use super::operator::{await_saves_quiescent, SaveStatus};
+use super::{is_still_selected, session};
+
+/// One song being opened. The caller sets `selected_id` first.
+pub struct SongLoad {
+    pub id: String,
+    pub selected_id: RwSignal<Option<String>>,
+    pub shown: RwSignal<Option<Presentation>>,
+    /// Filled with the song's slides when given (the click path).
+    pub slides_cache: Option<RwSignal<HashMap<String, Vec<Slide>>>>,
+    pub slide_edit_seq: RwSignal<u64>,
+    pub save_status: RwSignal<HashMap<String, (SaveStatus, u64)>>,
+    /// `slide_edit_seq` captured SYNCHRONOUSLY by the caller, before its
+    /// `spawn_local` (#515): a `spawn_local` body runs as a microtask after
+    /// the rest of the event handler, so a blur-save fired in the same script
+    /// would bump the counter first and make a stale pre-save answer look
+    /// fresh, blanking the edit.
+    pub seq_at_select: u64,
+    /// Point the selection back at the shown song when the fetch fails (a
+    /// click), so selected and shown never disagree; the session restore
+    /// keeps its id for the next load instead.
+    pub restore_on_failure: bool,
+}
+
+/// Fetch the song and show it — only while it is still the selected song (a
+/// later click or a Follow open wins, #853) and only if no slide edit landed
+/// since the fetch began (#515: the answer would carry pre-edit content).
+///
+/// #556 F6: reorder/insert/duplicate/delete also bump `slide_edit_seq`, so an
+/// edit landing during the fetch is likely; a bare drop would leave the song
+/// never loading. Retry ONCE with a fresh seq, but only after in-flight saves
+/// have committed (`await_saves_quiescent`): a retry issued at once can be
+/// served from pre-save state and blank the just-typed edit.
+pub async fn show_when_loaded(load: SongLoad) {
+    let mut seq_at_fetch = load.seq_at_select;
+    for attempt in 0..2 {
+        let Ok(detail) = crate::api::presentations::get_presentation(&load.id).await else {
+            if load.restore_on_failure {
+                restore_shown_selection(&load);
+            }
+            return;
+        };
+        if !is_still_selected(load.selected_id, &load.id) {
+            return;
+        }
+        if load.slide_edit_seq.get_untracked() == seq_at_fetch {
+            if let Some(cache) = load.slides_cache {
+                cache.update(|cache| {
+                    cache.insert(load.id.clone(), detail.presentation.slides.clone());
+                });
+            }
+            load.shown.set(Some(detail.presentation));
+            return;
+        }
+        // Still saving after the bounded wait: keep the always-safe drop.
+        if attempt == 1 || !await_saves_quiescent(load.save_status, 3_000).await {
+            return;
+        }
+        seq_at_fetch = load.slide_edit_seq.get_untracked();
+    }
+}
+
+/// The song failed to load: if it is still selected, select the shown song
+/// again (or nothing).
+fn restore_shown_selection(load: &SongLoad) {
+    if !is_still_selected(load.selected_id, &load.id) {
+        return;
+    }
+    let shown = load
+        .shown
+        .with_untracked(|p| p.as_ref().map(|p| p.id.to_string()));
+    match &shown {
+        Some(id) => session::set("currentPresentationId", id),
+        None => session::remove("currentPresentationId"),
+    }
+    load.selected_id.set(shown);
+}
