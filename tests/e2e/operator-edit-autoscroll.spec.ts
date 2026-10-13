@@ -892,7 +892,11 @@ test("Follow: a slow stage song still opens when a later stage change re-request
       page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
       "the first answer opens song 2",
     ).toBeAttached();
+    // Let the second request finish before removing the route (a handler still waiting when the
+    // route is removed fails with "Route is already handled").
+    const secondAnswered = page.waitForResponse(`**/presentations/${presIds[1]}`);
     gates[1]();
+    await landed(secondAnswered);
     await page.unroute(`**/presentations/${presIds[1]}`);
     expect(consoleMessages).toEqual([]);
   } finally {
@@ -1499,7 +1503,11 @@ test("a failed click keeps the occurrence of the song actually shown, not of a c
   await rows.nth(2).click();
   await landed(song6Failed);
   await expect(rows.nth(0), "back on the song still shown").toHaveClass(/is-active/);
+  const song5Answered = page.waitForResponse(`**/presentations/${presIds[4]}`);
   releaseSong5(); // too late: song 5 is no longer selected
+  await landed(song5Answered);
+  await settle(page);
+  await expect(rows.nth(0), "song 5's late answer changes nothing").toHaveClass(/is-active/);
 
   await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
   await expect
