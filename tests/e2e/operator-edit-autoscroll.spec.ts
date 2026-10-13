@@ -1641,11 +1641,15 @@ test("Edit: a Follow ON open of the song that ends up shown never replaces it wi
     await expect(follow, "Follow is off").toHaveAttribute("data-state", "off");
     await openTestLibrary(page);
     await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
-    const song3 = presIds[12]; // song 13: edited here, used by no other test
-    const firstSlide = slideIds[song3][0];
+    const song13 = presIds[12]; // edited here, used by no other test
+    const firstSlide = slideIds[song13][0];
     await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 13" }).first().click();
     await page.waitForSelector(`.operator__slides [data-slide-id="${firstSlide}"]`);
-    await send("POST", "/stage/state", { presentationId: song3, currentSlideId: firstSlide });
+    await send("POST", "/stage/state", { presentationId: song13, currentSlideId: firstSlide });
+    await expect(
+      page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 13" }).first(),
+      "the stage frame reached the page",
+    ).toHaveClass(/is-stage-active/);
 
     // The operator clicks song 5 (held, then failing) and turns Follow ON: Follow opens the stage
     // song 13 from "song 5 selected"; its answer is read from the server NOW and delivered later.
@@ -1656,7 +1660,7 @@ test("Edit: a Follow ON open of the song that ends up shown never replaces it wi
     let deliverOld!: () => void;
     const oldAnswerHeld = new Promise<void>((resolve) => (deliverOld = resolve));
     let oldAnswerRead = false;
-    await page.route(`**/presentations/${song3}`, async (route) => {
+    await page.route(`**/presentations/${song13}`, async (route) => {
       const response = await route.fetch();
       oldAnswerRead = true;
       await oldAnswerHeld;
@@ -1676,7 +1680,7 @@ test("Edit: a Follow ON open of the song that ends up shown never replaces it wi
     // The operator edits song 13's first slide; the save lands.
     const area = page.locator(`.operator__slides [data-slide-id="${firstSlide}"] textarea`).first();
     const saved = page.waitForResponse(
-      (r) => r.url().includes(`/presentations/${song3}/slides/`) && r.request().method() !== "GET",
+      (r) => r.url().includes(`/presentations/${song13}/slides/`) && r.request().method() !== "GET",
     );
     await area.click();
     await page.keyboard.press("Control+End");
@@ -1685,12 +1689,12 @@ test("Edit: a Follow ON open of the song that ends up shown never replaces it wi
     await landed(saved);
 
     // The old (pre-edit) answer of the Follow open arrives: it must not replace the edited song.
-    const oldDelivered = page.waitForResponse(`**/presentations/${song3}`);
+    const oldDelivered = page.waitForResponse(`**/presentations/${song13}`);
     deliverOld();
     await landed(oldDelivered);
     await settle(page);
     await expect(area, "the edit stays").toHaveValue(/ edited$/);
-    await page.unroute(`**/presentations/${song3}`);
+    await page.unroute(`**/presentations/${song13}`);
     await page.unroute(`**/presentations/${presIds[4]}`);
     expect(consoleMessages).toEqual([]);
   } finally {
@@ -1738,11 +1742,18 @@ test("a double-click whose first load fails still shows the song", async ({ page
   await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
   await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
 
-  // Song 5's first request fails at once; the second (the double-click's) is answered.
+  // Song 5's first request fails — but only once the second (the double-click's) has been sent,
+  // which is then answered.
   let requests = 0;
+  let secondSent!: () => void;
+  const secondSeen = new Promise<void>((resolve) => (secondSent = resolve));
   await page.route(`**/presentations/${presIds[4]}`, async (route) => {
     requests += 1;
-    if (requests === 1) return route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    if (requests === 1) {
+      await secondSeen;
+      return route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    }
+    secondSent();
     return route.continue();
   });
   await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().dblclick();
@@ -1753,5 +1764,116 @@ test("a double-click whose first load fails still shows the song", async ({ page
   ).toBeAttached();
   await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first()).toHaveClass(/is-active/);
   await page.unroute(`**/presentations/${presIds[4]}`);
+  expect(consoleMessages).toEqual([]);
+});
+
+test("a double-click whose second load fails fast while the first is slow still shows the song", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await openOperator(page);
+  await openTestLibrary(page);
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+  // Song 5's first request is held; the second (the double-click's) fails at once.
+  let releaseFirst!: () => void;
+  const firstHeld = new Promise<void>((resolve) => (releaseFirst = resolve));
+  let requests = 0;
+  await page.route(`**/presentations/${presIds[4]}`, async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await firstHeld;
+      return route.continue();
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+  });
+  const secondFailed = page.waitForResponse(
+    (resp) => resp.url().endsWith(`/presentations/${presIds[4]}`) && resp.status() === 200,
+  );
+  await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().dblclick();
+  await expect.poll(() => requests, { message: "both clicks load the song" }).toBe(2);
+  await landed(secondFailed);
+  await settle(page);
+  const firstAnswered = page.waitForResponse(`**/presentations/${presIds[4]}`);
+  releaseFirst();
+  await landed(firstAnswered);
+  await expect(
+    page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[4]][0]}"]`),
+    "the first load shows song 5",
+  ).toBeAttached();
+  await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first()).toHaveClass(/is-active/);
+  await page.unroute(`**/presentations/${presIds[4]}`);
+  expect(consoleMessages).toEqual([]);
+});
+
+test("Follow: opening the shown stage song from a playlist that lacks it still switches to its library", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const set = await send("POST", "/playlists", { name: "_E2E Without Song 2", showInDashboard: true });
+  await send("PUT", `/playlists/${set.id}/entries`, {
+    entries: [presIds[4], presIds[5]].map((id) => ({ type: "presentation", presentationId: id })),
+  });
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await followReady(page);
+    // Follow opens the stage song 2 from its library.
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`)).toBeAttached();
+    await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Stage Churn");
+    // The operator opens a playlist without song 2 (song 2 stays shown) and clicks song 5 there (held).
+    await page.locator(`[data-role="playlist-item"][data-playlist-id="${set.id}"]`).first().click();
+    await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Without Song 2");
+    const releaseSong5 = await gateRoute(page, `**/presentations/${presIds[4]}`);
+    const song5Requested = page.waitForRequest(`**/presentations/${presIds[4]}`);
+    const song5Answered = page.waitForResponse(`**/presentations/${presIds[4]}`);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().click();
+    await song5Requested;
+    // AbleSet moves on within song 2: Follow brings the operator back to it — and to its library.
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][1] });
+    await expect(page.locator('[data-role="context-title"]'), "Follow switches to song 2's library").toHaveText("_E2E Stage Churn");
+    await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`)).toBeAttached();
+    releaseSong5();
+    await landed(song5Answered);
+    await page.unroute(`**/presentations/${presIds[4]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("a failed re-click of the shown song in a playlist keeps the occurrence clicked (#496)", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const set = await send("POST", "/playlists", { name: "_E2E Repeat Set 4", showInDashboard: true });
+  await send("PUT", `/playlists/${set.id}/entries`, {
+    entries: [presIds[2], presIds[4], presIds[2]].map((id) => ({ type: "presentation", presentationId: id })),
+  });
+  await resetStage();
+  await openOperator(page);
+  await page.locator(`[data-role="playlist-item"][data-playlist-id="${set.id}"]`).first().click();
+  await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Repeat Set 4");
+  const rows = page.locator('[data-role="presentation-item"]');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click(); // song 3, occurrence 0
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+  // The second song 3 (occurrence 2) is clicked; reloading the (already shown) song fails.
+  await page.route(`**/presentations/${presIds[2]}`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+  );
+  const failed = page.waitForResponse(`**/presentations/${presIds[2]}`);
+  await rows.nth(2).click();
+  await landed(failed);
+  await settle(page);
+  await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
+  await expect
+    .poll(async () => {
+      const snap = await (await fetch(new URL("/stage/snapshot", baseURL))).json();
+      return { song: snap.presentationId, entry: snap.activeEntryIndex, slide: snap.currentSlideId };
+    }, { message: "the trigger carries the clicked occurrence" })
+    .toEqual({ song: presIds[2], entry: 2, slide: slideIds[presIds[2]][1] });
+  await page.unroute(`**/presentations/${presIds[2]}`);
   expect(consoleMessages).toEqual([]);
 });
