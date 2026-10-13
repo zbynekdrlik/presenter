@@ -16,23 +16,31 @@
 //! The guard (a pad probe on the shared encoder's `src` pad) enforces ONE rule:
 //! **no frame leaves the encoder stamped more than D = 50 ms
 //! ([`TIMESTAMP_DEADBAND_MS`]) later than the pipeline clock.** It keeps the
-//! encoder's own stamps and pulls its timeline back by a correction that only
-//! grows when a frame would otherwise lead the clock by more than D, and then
-//! only by the part above D ([`TimestampGuard::decide`]). The maths is done in
-//! RUNNING TIME and converted back through the encoder's OUTPUT segment — never
-//! by copying a raw PTS: the output segment carries GstVideoEncoder's
-//! `time_adjustment` (vah264enc sets a 1000 h `min_pts`), the class of mistake
-//! behind #768's constant −3600 s read.
+//! encoder's own spacing and pulls its timeline back by a correction that grows
+//! when a frame would otherwise lead the clock by more than D, and then only by
+//! the part above D ([`TimestampGuard::decide`]). The correction only grows
+//! while the encoder's timeline is continuous; a backward re-anchor can make it
+//! negative. The maths is done in RUNNING TIME and converted back through the
+//! encoder's OUTPUT segment — never by copying a raw PTS: the output segment
+//! carries GstVideoEncoder's `time_adjustment` (vah264enc sets a 1000 h
+//! `min_pts`), the class of mistake behind #768's constant −3600 s read. The
+//! rule holds for every guarded frame; a frame whose running time cannot be
+//! converted leaves unguarded with the encoder's stamp (`framesUnmeasured`),
+//! which a live single-segment pipeline never reaches.
 //!
 //! - x264enc (CI), NVENC (dev2), vah264enc ≥ 1.26: their stamps ARE the
 //!   receive time, always earlier than the clock → exact identity.
-//! - vah264enc 1.24 on SNV (prod, Intel N100): the counter is anchored at the
-//!   first frame's arrival, so frames that arrive earlier than it lead the
-//!   clock by the NDI arrival jitter (≤ ~40 ms minus the encode latency). That
-//!   stays under D, so the guard is an identity there as well: SNV keeps exactly
-//!   the pacing it had before the guard (clocksync still holds an early frame
-//!   for its lead, as it always did). Only a source that ALSO drifts fast could
-//!   push SNV's lead past D, and then the same cap as on PP applies.
+//! - vah264enc 1.24 on SNV (prod, Intel N100, source ≈ 0 ppm): the counter is
+//!   anchored on the FIRST frame, so a late first frame or a start-up burst
+//!   becomes a CONSTANT lead for the pipeline's lifetime. SNV 7.–13.10. (104
+//!   starts): the first frame arrived late by 23 ms p50, 38 ms p90 (two starts
+//!   46–48 ms); 3 starts had a 6–8 frame NDI burst worth 199–258 ms. Most SNV
+//!   pipelines lead by less than D: an exact identity, clocksync holds every
+//!   frame for that lead as it always did. A start-up lead above D is cut to D
+//!   once (an earlier-arriving frame can later shave off a few more ms), then
+//!   the cadence is unchanged: ~150–210 ms less latency after a burst, and a
+//!   burst happens before any TV joins. A positive drift on a long-lived
+//!   pipeline also crosses D (+5 ppm in ~45 min) and is capped as on PP.
 //! - vah264enc 1.24 on PP (+48…+106 ppm): an identity until the drift brings
 //!   the lead to D (~18 min of pipeline age at +48 ppm), then the lead is
 //!   capped at D: a clocksync hold of ≤ D (~1.5 frames), i.e. ≈ +D of latency,
@@ -71,13 +79,16 @@ const CORRECTION_LOG_STEP_MS: i64 = 100;
 /// encoder stamped at most this many ms LATER than the pipeline clock; only the
 /// part of a lead above D is pulled back.
 ///
-/// Why 50 ms: SNV's vah264enc 1.24 frame counter leads the clock by up to the
-/// NDI arrival jitter (≤ ~40 ms, minus the encode latency), so with D above
-/// that the guard never touches a frame on SNV, by construction. On PP it caps
-/// the drift lead at D: a clocksync hold of ≤ D (~1.5 frames), far below the
-/// 500 ms consumer queue that overflowed. The drift self-heal trigger (300 ms
-/// lead) and the `futureTimestamps` verdict (≤ −100 ms lateness) both stay
-/// above it, so neither can fire on a lead the guard allows.
+/// Why 50 ms: on SNV (vah264enc 1.24, ≈ 0 ppm) the frame counter anchors on
+/// the first frame, which arrives late by 23 ms p50, 38 ms p90 (7.–13.10.), so
+/// most SNV pipelines lead the clock by less than D and stay exactly as they
+/// were. A start-up lead above D (a first frame more than ~D late, an NDI
+/// burst of 199–258 ms) is cut to D once, with the cadence unchanged. On PP
+/// it caps the drift lead at D: a clocksync hold of ≤ D (~1.5 frames), far
+/// below the 500 ms consumer queue that overflowed. The drift self-heal
+/// trigger (300 ms lead) and the `futureTimestamps` verdict (≤ −100 ms
+/// lateness) both stay above it, so neither can fire on a lead the guard
+/// allows.
 pub(crate) const TIMESTAMP_DEADBAND_MS: i64 = 50;
 
 /// [`TIMESTAMP_DEADBAND_MS`] in nanoseconds (the guard's running-time unit).
@@ -105,8 +116,9 @@ pub(crate) struct GuardDecision {
     pub(crate) kind: GuardKind,
 }
 
-/// Pure guard state: the ratcheting correction and the last output running
-/// time. Everything is in running-time nanoseconds; no GStreamer types, so the
+/// Pure guard state: the correction (grows on a pulled-back frame, can go
+/// negative on a backward re-anchor) and the last output running time.
+/// Everything is in running-time nanoseconds; no GStreamer types, so the
 /// policy is unit-tested with plain integers.
 #[derive(Debug, Default)]
 pub(crate) struct TimestampGuard {
@@ -121,9 +133,10 @@ impl TimestampGuard {
     ///
     /// Invariants: `out ≤ now + D` (except a 1 ns monotonic nudge when two
     /// frames leave at the same clock reading) and `out` strictly increases. A
-    /// lead up to D is left alone; the correction only grows on `PulledBack`
-    /// (by the part of the lead above D), so `Kept` frames keep the encoder's
-    /// own spacing exactly.
+    /// lead up to D is left alone. The correction changes only on `PulledBack`
+    /// (it grows by the part of the lead above D) and on `Reanchored` (a
+    /// backward jump, which can make it negative), so `Kept` frames keep the
+    /// encoder's own spacing exactly.
     ///
     /// Pure: the guard's state changes only in [`Self::commit`], once the
     /// caller knows the decision can be applied to its buffer.
@@ -169,7 +182,7 @@ impl TimestampGuard {
 
     /// How far (ns) the encoder's own timeline is pulled back. Positive = the
     /// encoder ran more than D ahead of the clock (the old code would have held
-    /// it D longer than now); negative after a backward re-anchor.
+    /// every frame this much longer); negative after a backward re-anchor.
     pub(crate) fn correction_ns(&self) -> i64 {
         self.correction_ns
     }
@@ -202,8 +215,9 @@ fn shifted_dts(
 /// One buffer's outcome inside the guard probe.
 #[derive(Debug, PartialEq, Eq)]
 enum GuardStep {
-    /// No segment yet, the PTS is outside the segment, or no clock yet: the
-    /// buffer passes through untouched.
+    /// No segment yet, the PTS is outside the segment, no clock yet, or the
+    /// decided running time has no position in the segment: the buffer passes
+    /// through untouched.
     Unmeasured,
     /// The guard ran. `restamp` is `None` when the stamp is unchanged.
     Decided {
@@ -287,13 +301,16 @@ pub struct EncoderTimingSnapshot {
     pub frames_pulled_back: u64,
     /// Frames re-anchored after the encoder timeline went backwards/stalled.
     pub frames_reanchored: u64,
-    /// Frames the guard could not measure (no segment / clock yet).
+    /// Frames the guard could not measure (no segment / clock yet, or a
+    /// running time outside the segment); they leave with the encoder's stamp.
     pub frames_unmeasured: u64,
-    /// How far the encoder's own timeline is pulled back (ms). On a
-    /// fast-drifting vah264enc 1.24 source this is the lead the unguarded
-    /// pipeline would have built, minus D; 0 on PTS-preserving encoders and
-    /// while the lead stays within D (SNV); negative after a backward
-    /// re-anchor (a framerate rise).
+    /// How far the encoder's own timeline is pulled back (ms). 0 on
+    /// PTS-preserving encoders and while the lead stays within D (most SNV
+    /// pipelines). Constant after a start-up lead above D (a late first frame
+    /// or an NDI burst: that lead minus D). Growing with a positive drift, by
+    /// ≈ ppm × age once the lead passed D (PP: the lead the unguarded pipeline
+    /// would have built, minus D). Negative after a backward re-anchor (a
+    /// framerate rise).
     pub correction_ms: i64,
     /// Encoder stamp − clock for the last measured frame (ms), BEFORE the guard.
     pub raw_lead_last_ms: Option<i64>,
@@ -736,13 +753,16 @@ mod tests {
         // SNV (prod, Intel N100) runs vah264enc 1.24 too. Its counter is
         // anchored at the FIRST frame's arrival, so when that frame arrived
         // late, every frame that arrives earlier than it leads the clock by up
-        // to the arrival jitter (0–40 ms) minus the encode latency (3–8 ms).
-        // Source on the server clock (0 ppm), one hour at 30 fps. With D the
-        // guard must leave every frame exactly as the encoder stamped it: SNV
-        // stays bit-identical to the pipeline it had before the guard.
+        // to that delay minus the encode latency (3–8 ms). SNV 7.–13.10.: the
+        // first frame after a start is late by 23 ms p50, 38 ms p90. Source on
+        // the server clock (0 ppm), one hour at 30 fps. While the lead stays
+        // under D the guard must leave every frame exactly as the encoder
+        // stamped it: such a pipeline (most SNV pipelines) is bit-identical to
+        // the one it had before the guard.
         let mut g = TimestampGuard::default();
         let mut rng = XorShift(0x854_5A1);
-        // The worst case: the first frame arrived as late as the jitter gets.
+        // The first frame 40 ms late (above SNV's p90), every later frame
+        // 0–40 ms late.
         let first_arrival = 40 * MS;
         let mut max_lead = i64::MIN;
         for n in 0..108_000i64 {

@@ -189,8 +189,10 @@ fn connect_demux_pads(
 /// (Resolume's) timecode with windowed drift correction — accumulated
 /// sender-clock drift is then corrected via DISCONT, which the browser
 /// sees as "latency builds up, then the picture jumps". Receive-time
-/// has ZERO sender-clock coupling; arrival jitter (10-60ms measured)
-/// is absorbed by the browser's jitter buffer.
+/// has ZERO sender-clock coupling; arrival jitter (SNV 11.10.2026: worst
+/// frame gap per 5 s window 36.4 ms p50, 44.7 ms p99, 65 ms max) is absorbed
+/// by the browser's jitter buffer — when the encoder keeps the input PTS
+/// (vah264enc 1.24 replaces it with a frame counter, see `encoder_timing`).
 fn build_ndi_source(ndi_name: &str) -> Result<(gst::Element, gst::Element)> {
     let ndisrc = gst::ElementFactory::make("ndisrc")
         .name("ndisrc")

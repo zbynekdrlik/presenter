@@ -78,10 +78,12 @@ pub struct PipelineDropHealth {
     /// <= 0 on PTS-preserving encoders.
     pub timestamp_lead_ms_30s: Option<i64>,
     /// #854: how far the timestamp guard has pulled the encoder's own timeline
-    /// back (ms). On a fast-drifting vah264enc 1.24 source it is the lead the
-    /// unguarded pipeline would have built, minus D (50 ms); 0 while the lead
-    /// stays within D (SNV, PTS-preserving encoders); negative after a
-    /// backward re-anchor.
+    /// back (ms). 0 while the lead stays within D = 50 ms (PTS-preserving
+    /// encoders, most SNV pipelines). After a start-up lead above D (a late
+    /// first frame or an NDI burst on vah264enc 1.24) it is that lead minus D,
+    /// constant. With a positive drift it grows by ≈ ppm × age once the lead
+    /// passed D (PP: the lead the unguarded code would have built, minus D).
+    /// Negative after a backward re-anchor.
     pub encoder_timestamp_correction_ms: i64,
     /// #854: the timestamp guard + lead meter are installed.
     pub encoder_timestamp_guard: bool,

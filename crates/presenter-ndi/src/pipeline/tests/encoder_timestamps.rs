@@ -249,7 +249,7 @@ fn frame_counter_stamping_never_becomes_a_consumer_hold() {
         run.pushed_after_settle
     );
     // The guard lets a frame lead the clock by at most the deadband D (50 ms,
-    // #854 ROZHODNUTÉ: SNV's arrival jitter stays untouched), plus the 5 ms
+    // #854 ROZHODNUTÉ: most SNV pipelines stay untouched), plus the 5 ms
     // tolerance this bound always had (the lead only shrinks on the way from
     // the encoder to the producer appsink).
     let (_, lead_max) = run.lead_30s.expect("the lead meter saw frames");

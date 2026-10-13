@@ -21,17 +21,33 @@ skill's #854 chapter.
 
 ## Invariants — keep them
 
-- **No frame leaves the shared encoder stamped more than D = 50 ms later than the pipeline clock**
-  (`TIMESTAMP_DEADBAND_MS`; `out <= now + D`, `out` strictly increasing). Only the part of a lead
-  above D is pulled back. The correction only GROWS on a pulled-back frame, so kept frames keep
-  the encoder's own stamps exactly.
-- **The deadband is what keeps SNV untouched (owner: "nerozbabre snv sd1").** SNV's counter is
-  anchored at the first frame's arrival, so frames that arrive earlier lead the clock by the NDI
-  arrival jitter (<= ~40 ms minus the encode latency). That is below D, so on SNV the guard is an
-  identity and SNV keeps exactly the pacing it had before the guard. With D = 0 the guard pulled
-  those frames back and changed SNV's pacing (review, 2026-10-13). Do not lower D below SNV's
-  jitter; do not raise it toward the 100 ms drift clear level or the −100 ms `futureTimestamps`
-  threshold (both must stay above D, and tests pin that).
+- **No guarded frame leaves the shared encoder stamped more than D = 50 ms later than the
+  pipeline clock** (`TIMESTAMP_DEADBAND_MS`; `out <= now + D`, `out` strictly increasing). Only
+  the part of a lead above D is pulled back. The correction changes only on a pulled-back frame
+  (it grows) and on a backward re-anchor (it can go negative): it only grows while the encoder's
+  timeline is continuous. Kept frames keep the encoder's own SPACING exactly; once the correction
+  is non-zero their stamps are shifted by it. The invariants hold for guarded frames: a frame
+  whose running-time conversion fails leaves unguarded with its encoder stamp
+  (`framesUnmeasured`), which a live single-segment pipeline never reaches.
+- **SNV (vah264enc 1.24 too, source ≈ 0 ppm; owner: "nerozbabre snv sd1"): an identity for most
+  pipelines, not for all.** The counter is anchored on the FIRST frame, so a late first frame or
+  a start-up burst becomes a CONSTANT lead for the pipeline's lifetime. SNV ingest cadence
+  7.–13.10. (104 pipeline starts): the first frame arrives late by 23 ms p50, 38 ms p90, two
+  starts 46–48 ms; 3 starts had a 6–8 frame start-up burst of 199–258 ms; steady intervals stay
+  within ±0.24 frames; worst frame gap per 5 s window in the 11.10. service 36.4 ms p50, 44.7 ms
+  p99, 65 ms max.
+  - Start-up lead under D (most pipelines): exact identity; clocksync holds every frame for that
+    lead, as it always did.
+  - Start-up lead above D (a late first frame above D, an NDI burst): cut to D once (an
+    earlier-arriving frame can later shave off a few more ms), then the cadence is exactly
+    unchanged, with ~150–210 ms less latency after a burst. Bursts happen before any TV joins.
+  - A positive drift on a long-lived pipeline also crosses D (+5 ppm in ~45 min) and is capped
+    like PP.
+
+  With D = 0 (the first cut, never released to prod) the guard would have pulled back SNV's
+  ordinary early frames too and changed its pacing (review, 2026-10-13). Do not lower D below SNV's common start-up leads; do not raise
+  it toward the 100 ms drift clear level or the −100 ms `futureTimestamps` threshold (both must
+  stay above D, and tests pin that).
 - **PP's lead is capped at D**: an identity until the drift brings the lead to D (~18 min of
   pipeline age at +48 ppm), then a clocksync hold of <= D, i.e. ≈ +D of latency, never a queue
   overflow.
@@ -65,13 +81,21 @@ counter into a prod-shaped consumer (`configure_consumer` appsrc → `clocksync 
   producer appsink;
 - keep it asserting that the emulated raw lead really passed 500 ms (`rawLeadMaxMs`);
 - the negative control (`Guard::Absent`, same harness) must DROP frames — it proves the harness
-  turns a lead into drops, so the regression's "0 dropped" cannot silently go vacuous.
+  turns a lead into drops, so the regression's "0 dropped" cannot silently go vacuous. It first
+  asserts that >= 100 frames reached the consumer link (pushed + dropped), so a starved runner
+  fails as starved, not as "the harness no longer reproduces the hold".
 
 x264enc missing = hard failure, never a skip. The pure policy is `TimestampGuard::decide` (integer
-unit tests through `apply` = decide + commit). The SNV identity test (0 ppm, one-sided 0–40 ms
-jitter, late first frame) must stay exact: 0 pulled back, correction 0. Simulate numeric bounds in
-Python with an exact port of the guard and the test xorshift before asserting them — Tier-0 has no
-local `cargo test`.
+unit tests through `apply` = decide + commit). Two SNV tests (0 ppm) must stay exact:
+
+- the SNV identity test (first frame 40 ms late, later frames 0–40 ms late): 0 pulled back,
+  correction 0;
+- the start-up burst test (first frame + 8 burst frames 4 ms apart, then 10 min of the cadence):
+  only burst frames 2..=8 pulled back, correction = the 229.7 ms start-up lead − D, constant
+  after the burst, every later frame Kept exactly one encoder period after its predecessor.
+
+Simulate numeric bounds in Python with an exact port of the guard and the test xorshift before
+asserting them — Tier-0 has no local `cargo test`.
 
 ## Self-heal: never trigger rebuilds on `dropRatio30s`
 
@@ -94,9 +118,17 @@ churn (PP SD1 rejoined every ~45 s) and would loop site-wide blackouts — the #
 
 ## Verifying on prod (read-only)
 
-- SNV: `encoderTiming.framesPulledBack` 0 and `encoderTimestampCorrectionMs` 0 (the arrival-jitter
-  lead stays inside D), unless SNV's source also drifts fast; per-display presented fps from the
-  `ndi_client_stats` beacons at its baseline.
+Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (`/ndi/snapshot/<id>`)
+plus `encoderTimestampCorrectionMs` (`/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline
+age (age = time since the `timestamp guard installed` INFO line in the journal).
+
+- A correction that stays the same between the two reads is the start-up anchor (a late first
+  frame or an NDI burst above D): expected and harmless.
+- A correction that grows with age is drift: the lead stays capped at D and the correction shows
+  ≈ ppm × age − D (plus the pipeline's start-up lead, if it had one).
+- SNV passes when: the guard is installed (`encoderTimestampGuard`); `timestampLeadMs30s` <= 50;
+  `driftRebuilds` 0; consumers' `dropRatio30s ≈ 0`; per-display presented fps from the
+  `ndi_client_stats` beacons at baseline (LEAP-S1 ≈ 30, Android TVs ≈ 25.1 / 24.8 / 22.9).
 - PP after the lead reached D: `timestampLeadMs30s` <= 50, `encoderTimestampCorrectionMs ≈`
   ppm × pipeline age − 50 ms, consumers' `dropRatio30s ≈ 0`, `driftRebuilds` 0.
 
