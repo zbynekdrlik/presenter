@@ -4,7 +4,11 @@
 //! Issue #271: lookahead scroll, deterministic wheel scroll, scroll-to-top
 //! on song open.
 
+use leptos::prelude::*;
+use presenter_core::PresentationId;
 use wasm_bindgen::JsCast;
+
+use crate::state::AppContext;
 
 /// Columns of a `.operator__slides` grid when its layout cannot be read (the
 /// CSS default). The next-row anchor for an active slide at DOM index N is the
@@ -170,6 +174,44 @@ pub(super) fn handle_wheel_event(ev: web_sys::WheelEvent) {
     let step = step_for_wheel(&container);
     let capped = cap_wheel_delta(delta_y, step);
     container.set_scroll_top((container.scroll_top() as f64 + capped) as i32);
+}
+
+/// Scroll when a different song is SHOWN (its content arrived, not when the
+/// selection id moves): to the top, so a new song starts at its first slide
+/// (#271 concern 3) — or, for a song a Follow open just showed
+/// (`AppContext::follow_landing`), to the stage's current slide when it is in
+/// that song (`AppContext::follow_stage`, never a songless API push) (#853).
+/// Opening a song by hand, from search, a playlist or a reload always starts
+/// at the top, Follow on or off.
+pub(super) fn setup_scroll_on_song_shown(ctx: &AppContext) {
+    let selected_presentation = ctx.selected_presentation;
+    let follow_stage = ctx.follow_stage;
+    let follow_landing = ctx.follow_landing;
+    Effect::new(move |prev_id: Option<Option<PresentationId>>| {
+        let current_id = selected_presentation.with(|p| p.as_ref().map(|p| p.id));
+        // Consumed on every run, so a Follow open never marks a later one.
+        let follow_opened =
+            current_id.is_some() && follow_landing.with_value(|id| *id == current_id);
+        follow_landing.set_value(None);
+        if current_id.is_some() && current_id != prev_id.flatten() {
+            let stage_slide = if follow_opened {
+                follow_stage.with_value(|snapshot| {
+                    snapshot
+                        .as_ref()
+                        .filter(|s| s.presentation_id == current_id)
+                        .and_then(|s| s.current_slide_id.map(|id| id.to_string()))
+                })
+            } else {
+                None
+            };
+            gloo_timers::callback::Timeout::new(0, move || match stage_slide {
+                Some(slide_id) => scroll_slide_into_view(&slide_id),
+                None => scroll_slides_to_top(),
+            })
+            .forget();
+        }
+        current_id
+    });
 }
 
 #[cfg(test)]

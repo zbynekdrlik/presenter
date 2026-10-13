@@ -80,6 +80,8 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
   });
   // Wait for WebSocket connection to establish
   await page.waitForTimeout(1000);
+  // #853: Follow counts as off until its status has loaded — wait for the button to say so.
+  await expect(page.locator('[data-role="ableset-follow"]')).toHaveAttribute("data-state", "on");
 
   // Trigger the LAST slide (index 9) — should be off-screen
   const lastSlideId = testSlideIds[testSlideIds.length - 1];

@@ -10,15 +10,15 @@ use crate::state::AppContext;
 use crate::utils::color::group_pill_style;
 
 use super::slide_columns::SlideColumnsControl;
-use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
+use super::slide_list_scroll::{
+    handle_wheel_event, scroll_slide_into_view, setup_scroll_on_song_shown,
+};
 use super::slide_list_utils::{
-    apply_focused_class, field_has_warning, format_multiline, is_interactive_tag,
-    resolve_group_display, slide_has_any_warning,
+    field_has_warning, format_multiline, is_interactive_tag, resolve_group_display,
+    slide_has_any_warning,
 };
 use super::slide_reorder::{handle_slide_drop, render_song_bubble};
-use super::slide_save::{
-    capture_selection, reconcile_after_seq_mismatch, save_all_fields_from_dom,
-};
+use super::slide_save::{apply_structural_slides, capture_selection, save_all_fields_from_dom};
 use super::slide_selection::{
     cut_memo, render_insertion_bar, render_select_checkbox, selected_memo,
     setup_clipboard_keyboard, setup_paste_chooser_clear_on_live, setup_selection_clear_on_switch,
@@ -45,14 +45,20 @@ pub fn SlideList() -> impl IntoView {
     let slide_stage_markers =
         crate::components::slide_stage_layout_picker::use_slide_stage_markers(&ctx);
 
-    // Scroll active slide into view when stage's current slide changes.
+    // Scroll active slide into view when stage's current slide changes —
+    // in Live mode only. #853: in Edit mode the operator owns the scroll; AbleSet
+    // advancing the stage every few seconds must not drag the list away from the
+    // slide being edited. The mode is read untracked, so switching modes never
+    // scrolls by itself.
     {
         let stage_snapshot = ctx.stage_snapshot;
+        let mode = ctx.mode;
         Effect::new(move |prev_id: Option<Option<String>>| {
             let current_id = stage_snapshot
                 .get()
                 .and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-            if current_id != prev_id.flatten() {
+            let is_live = mode.get_untracked() == "live";
+            if is_live && current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
                     gloo_timers::callback::Timeout::new(0, move || {
@@ -65,19 +71,8 @@ pub fn SlideList() -> impl IntoView {
         });
     }
 
-    // Scroll to top when the operator opens a different presentation.
-    // Issue #271 concern 3: new song should load with the first slide
-    // visible, not at the previous song's scroll position.
-    {
-        let selected_presentation_id = ctx.selected_presentation_id;
-        Effect::new(move |prev_id: Option<Option<String>>| {
-            let current_id = selected_presentation_id.get();
-            if current_id != prev_id.flatten() && current_id.is_some() {
-                gloo_timers::callback::Timeout::new(0, scroll_slides_to_top).forget();
-            }
-            current_id
-        });
-    }
+    // #271 / #853: scroll a newly shown song to its top, or to the stage slide.
+    setup_scroll_on_song_shown(&ctx);
 
     // #554: clear selection/clipboard on song switch + the window C/X/V/Escape
     // shortcut listener. F1: also disarm the paste-target chooser on a
@@ -123,22 +118,15 @@ pub fn SlideList() -> impl IntoView {
             let save_status = op.save_status;
             leptos::task::spawn_local(async move {
                 if let Ok(slides) = api::presentations::insert_slide(&pres_id, None).await {
-                    if slide_edit_seq.get_untracked() == my_seq {
-                        selected_presentation_signal.update(|p| {
-                            if let Some(pres) = p.as_mut() {
-                                pres.slides = slides;
-                            }
-                        });
-                    } else {
-                        reconcile_after_seq_mismatch(
-                            pres_id_for_reconcile,
-                            slides,
-                            selected_presentation_signal,
-                            slide_edit_seq,
-                            save_status,
-                        )
-                        .await;
-                    }
+                    apply_structural_slides(
+                        pres_id_for_reconcile,
+                        slides,
+                        selected_presentation_signal,
+                        slide_edit_seq,
+                        save_status,
+                        my_seq,
+                    )
+                    .await;
                 }
             });
         }
@@ -231,10 +219,6 @@ pub fn SlideList() -> impl IntoView {
                     // reactively in its class= closure, which only updates the class
                     // attribute without destroying textarea DOM elements.
                     let line_limit = op.line_limit.get();
-                    // Use get_untracked() so focused_slide_id changes do NOT trigger
-                    // full slide list re-render. The is-focused class is applied
-                    // via DOM manipulation in on:focus handlers instead.
-                    let focused_slide = op.focused_slide_id.get_untracked();
 
                     let Some(presentation) = pres else {
                         return view! { <p class="empty">"Select a presentation to load slides."</p> }.into_any();
@@ -264,7 +248,8 @@ pub fn SlideList() -> impl IntoView {
                         .zip(resolved.into_iter())
                         .enumerate()
                         .map(|(i, (raw_slide, resolved_slide))| {
-                        let slide_id = resolved_slide.id.to_string();
+                        let card_slide_id = resolved_slide.id;
+                        let slide_id = card_slide_id.to_string();
                         let main_text = resolved_slide.main.value().to_string();
                         let translation_text = resolved_slide.translation.value().to_string();
                         let stage_text = resolved_slide.stage.value().to_string();
@@ -321,7 +306,6 @@ pub fn SlideList() -> impl IntoView {
 
                         // is_active is now computed reactively in the class= closure
                         // using ctx.stage_snapshot.get() directly (see class closure below)
-                        let is_focused = focused_slide.as_deref() == Some(&slide_id);
                         let main_warning = field_has_warning(&main_text, line_limit);
                         let translation_warning = field_has_warning(&translation_text, line_limit);
                         // #515: the stage field is free-form speaker/reading
@@ -393,13 +377,22 @@ pub fn SlideList() -> impl IntoView {
                                     let mut c = "operator__slide-card operator__slide-card--worship".to_string();
                                     // Read stage_snapshot reactively HERE (in class closure)
                                     // so it only updates this element's class, not the entire view.
-                                    let snap = ctx.stage_snapshot.get();
-                                    let active_id = snap.as_ref().and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-                                    if active_id.as_deref() == Some(&slide_id_class) {
+                                    // Compared inside `with`: no clone of the whole snapshot
+                                    // per card per stage change (#853).
+                                    let is_active = ctx.stage_snapshot.with(|snap| {
+                                        snap.as_ref()
+                                            .and_then(|s| s.current_slide_id)
+                                            == Some(card_slide_id)
+                                    });
+                                    if is_active {
                                         c.push_str(" is-active");
                                     }
-                                    // is-focused is managed via DOM in apply_focused_class()
-                                    if is_focused { c.push_str(" is-focused"); }
+                                    // #853: is-focused is derived here too (not poked into
+                                    // the DOM), so a stage event rewriting this class can't
+                                    // drop it; only this attribute updates on a focus change.
+                                    if op.focused_slide_id.get().as_deref() == Some(&slide_id_class) {
+                                        c.push_str(" is-focused");
+                                    }
                                     // Add is-loading class during trigger operation
                                     if op.triggering_slide_id.get().as_deref() == Some(&slide_id_class) {
                                         c.push_str(" is-loading");
@@ -626,13 +619,7 @@ pub fn SlideList() -> impl IntoView {
                                                         let my_seq = slide_edit_seq_dup.get_untracked();
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::duplicate_slide(&pres_id, &sid).await {
-                                                                if slide_edit_seq_dup.get_untracked() == my_seq {
-                                                                    selected_pres.update(|p| {
-                                                                        if let Some(pres) = p.as_mut() { pres.slides = slides; }
-                                                                    });
-                                                                } else {
-                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup, save_status_dup).await;
-                                                                }
+                                                                apply_structural_slides(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_dup, save_status_dup, my_seq).await;
                                                             }
                                                         });
                                                     }
@@ -653,13 +640,7 @@ pub fn SlideList() -> impl IntoView {
                                                         let my_seq = slide_edit_seq_del.get_untracked();
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::delete_slide(&pres_id, &sid).await {
-                                                                if slide_edit_seq_del.get_untracked() == my_seq {
-                                                                    selected_pres.update(|p| {
-                                                                        if let Some(pres) = p.as_mut() { pres.slides = slides; }
-                                                                    });
-                                                                } else {
-                                                                    reconcile_after_seq_mismatch(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del, save_status_del).await;
-                                                                }
+                                                                apply_structural_slides(pres_id_for_reconcile, slides, selected_pres, slide_edit_seq_del, save_status_del, my_seq).await;
                                                             }
                                                         });
                                                     }
@@ -772,9 +753,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("main".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "main");
-                                                                // Apply is-focused class via DOM since focused_slide_id
-                                                                // uses get_untracked() to avoid re-renders
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -809,7 +787,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("translation".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "translation");
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -845,7 +822,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("stage".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "stage");
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -888,7 +864,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("group".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "group");
-                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />

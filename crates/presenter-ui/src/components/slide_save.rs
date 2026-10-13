@@ -311,6 +311,40 @@ pub(super) fn restore_pending_focus(slide_id: &str, field: &str) {
     }
 }
 
+/// Whether `pres_id` is the song the slide list shows.
+pub(super) fn is_shown(selected_pres: RwSignal<Option<Presentation>>, pres_id: &str) -> bool {
+    selected_pres.with_untracked(|p| p.as_ref().is_some_and(|p| p.id.to_string() == pres_id))
+}
+
+/// Apply a structural edit's answer (insert / duplicate / delete / reorder /
+/// paste): only while its song is still the one shown (#558 V4, #853 — the
+/// operator or Follow may have opened another song while the request was in
+/// flight, and the answer would replace that song's slides), then under the
+/// `slide_edit_seq` guard (#552/#556): the slides directly when no other edit
+/// landed since `my_seq` was taken, else a reconcile.
+pub(super) async fn apply_structural_slides(
+    pres_id: String,
+    slides: Vec<Slide>,
+    selected_pres: RwSignal<Option<Presentation>>,
+    slide_edit_seq: RwSignal<u64>,
+    save_status: SaveStatusMap,
+    my_seq: u64,
+) {
+    if !is_shown(selected_pres, &pres_id) {
+        return;
+    }
+    if slide_edit_seq.get_untracked() == my_seq {
+        selected_pres.update(|p| {
+            if let Some(pres) = p.as_mut() {
+                pres.slides = slides;
+            }
+        });
+    } else {
+        reconcile_after_seq_mismatch(pres_id, slides, selected_pres, slide_edit_seq, save_status)
+            .await;
+    }
+}
+
 /// Reconcile an editing response (reorder / insert / duplicate / delete)
 /// against a possible `slide_edit_seq` mismatch (#556 F1/F3): some OTHER
 /// edit landed while this request was in flight. Never apply a response
@@ -377,7 +411,9 @@ pub(super) async fn reconcile_after_seq_mismatch(
     }
     let seq_at_refetch = slide_edit_seq.get_untracked();
     if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
-        if slide_edit_seq.get_untracked() == seq_at_refetch {
+        // #853: only while this song is still the one shown — the operator
+        // (or Follow) may have opened another song during the wait.
+        if is_shown(selected_pres, &pres_id) && slide_edit_seq.get_untracked() == seq_at_refetch {
             selected_pres.set(Some(detail.presentation));
         }
     }

@@ -13,7 +13,7 @@ use crate::api::ApiError;
 use crate::state::operator::{ClipboardMode, OperatorState, SlideClipboard};
 use crate::state::AppContext;
 
-use super::slide_save::reconcile_after_seq_mismatch;
+use super::slide_save::apply_structural_slides;
 use super::slide_selection_logic::{
     cut_splice_order, range_select_by_anchor_id, shortcut_action, ShortcutAction,
 };
@@ -309,30 +309,15 @@ async fn apply_slides_guarded(
     slides: Vec<presenter_core::Slide>,
     my_seq: u64,
 ) {
-    let same_presentation = ctx
-        .selected_presentation
-        .get_untracked()
-        .map(|pres| pres.id.to_string() == pres_id)
-        .unwrap_or(false);
-    if !same_presentation {
-        return;
-    }
-    if op.slide_edit_seq.get_untracked() == my_seq {
-        ctx.selected_presentation.update(|p| {
-            if let Some(pres) = p.as_mut() {
-                pres.slides = slides;
-            }
-        });
-    } else {
-        reconcile_after_seq_mismatch(
-            pres_id,
-            slides,
-            ctx.selected_presentation,
-            op.slide_edit_seq,
-            op.save_status,
-        )
-        .await;
-    }
+    apply_structural_slides(
+        pres_id,
+        slides,
+        ctx.selected_presentation,
+        op.slide_edit_seq,
+        op.save_status,
+        my_seq,
+    )
+    .await;
 }
 
 /// Is `pres_id` still the presentation currently open? An async paste

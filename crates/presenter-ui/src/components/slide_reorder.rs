@@ -15,7 +15,7 @@ use crate::state::AppContext;
 
 use super::slide_list_utils::reorder_slide_ids;
 use super::slide_save::{
-    finish_save_status_err, finish_save_status_ok, focused_slide_field_in_dom,
+    finish_save_status_err, finish_save_status_ok, focused_slide_field_in_dom, is_shown,
     reconcile_after_seq_mismatch, restore_pending_focus, save_all_fields_from_dom,
     start_save_status,
 };
@@ -118,6 +118,11 @@ pub(super) fn handle_slide_drop(
                             let token = start_save_status(&dragged_id, save_status);
                             leptos::task::spawn_local(async move {
                                 match api::presentations::reorder_slides(&pres_id, new_ids).await {
+                                    // #853: another song shown meanwhile — its
+                                    // fields and slides are not this answer's.
+                                    Ok(_) if !is_shown(selected_pres, &pres_id) => {
+                                        finish_save_status_ok(dragged_id, save_status, token).await;
+                                    }
                                     Ok(slides) => {
                                         // #556 F1: on a seq mismatch, never silently
                                         // discard the response while still showing

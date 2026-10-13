@@ -327,6 +327,11 @@ the smaller file or a new sibling:
 - **Prove a cover step ran by its opacity READ (a GET), then a timer-frame barrier.** A command
   sent right after a push runs BEFORE that push's first cover step (commands win the biased
   `select!`), so a barrier alone proves nothing; after the GET it waits for the step in flight.
+- **A test pins one conjunct of a predicate only where every other conjunct is true.** Trace
+  it before writing "pinned by" (#848 sixth review: the worker test cited for
+  `cover_refetch_pending`'s `is_none()` ran with `refetched_mapping == None`, so the equality
+  already made it false; the conjuncts are now pinned by
+  `a_cached_newer_mapping_ends_a_pending_cover_refetch`).
 - **Bound a fade's length by its step COUNT, not the clock.** A step is due `FADE_STEP` after
   the previous one ended, so a fade of length `d` sends at most `floor(d / FADE_STEP) + 1`
   PUTs (`a_hide_right_after_a_short_show_lasts_only_for_the_distance_left`). Load only lowers
@@ -381,6 +386,14 @@ the smaller file or a new sibling:
   and its `connected.value` never changes. A transient cover error ends in that line with
   `error_before_final_step=…`; a second failure is one WARN `a #bible-clear cover fade step
   failed and so did its final step`, never a host error.
+- **Re-read the cover's opacity param id before sampling.** Arena regenerates parameter ids
+  when it reloads a composition while the clip ids stay (SNV 2026-10-13: clip 1791557304764
+  kept its id, its opacity param went 1791557304838 → 1791836131729), so a param id from an
+  earlier session answers 404. Sample `GET /parameter/by-id/{id}` every ~250 ms from the
+  presenter box (same LAN as Arena). A cover that is not playing (`Disconnected`) still fades
+  its parameter, invisibly on the wall.
+- `POST /bible/trigger` `{translation, book, chapter, verseStart}` takes the translation's own
+  book name (`Ján` for `slk-roh`, from `GET /bible/books?translation=…`); `John` answers 404.
 - End with a clear, so the wall is left empty.
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small

@@ -13,9 +13,22 @@ use super::presentation_list_drag::{
 #[component]
 pub fn PresentationList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
+    // #853: the song on stage, as its own memo — the list highlights it, but a
+    // stage SLIDE change (every few seconds while AbleSet drives a rehearsal)
+    // must not rebuild every row; only a song change does.
+    let stage_snapshot = ctx.stage_snapshot;
+    let stage_presentation_id = Memo::new(move |_| {
+        stage_snapshot.with(|snapshot| {
+            snapshot
+                .as_ref()
+                .and_then(|s| s.presentation_id.map(|id| id.to_string()))
+        })
+    });
     let op = use_ctx!(OperatorState);
 
     let select_presentation = move |id: String, entry_index: Option<u32>| {
+        // #853: the operator's pick replaces any Follow open still loading.
+        ctx.follow_pending.set_value(None);
         ctx.selected_presentation_id.set(Some(id.clone()));
         // #496: remember which playlist OCCURRENCE was picked so triggers send
         // the right entry index for a repeated song (None for library picks).
@@ -36,64 +49,22 @@ pub fn PresentationList() -> impl IntoView {
         // all. The `get_presentation` fetch below (seq-guarded) is the only
         // source of truth needed here.
 
-        // Capture signals OUTSIDE async block - context may not be available inside spawn_local
-        let slides_cache_signal = ctx.slides_cache;
-        let selected_presentation_signal = ctx.selected_presentation;
-        let id_clone = id.clone();
-        // #515: capture the edit generation BEFORE issuing the fetch. If a
-        // slide-content save lands while this GET is still in flight (a
-        // very plausible race right after opening a song and immediately
-        // typing a stage/main/translation edit), the response below reflects
-        // pre-edit content — apply it ONLY if no save has landed since,
-        // otherwise it would clobber the newer edit with stale data.
-        let slide_edit_seq = op.slide_edit_seq;
-        let save_status = op.save_status;
-        // #515: the initial seq capture MUST stay SYNCHRONOUS (outside the
-        // spawn_local) — a `spawn_local` body runs as a microtask AFTER the
-        // rest of the current event handler, so a blur-save fired in the
-        // same synchronous script (re-select a song, type, blur) would bump
-        // the counter BEFORE an inside-the-task capture ran, making the
-        // stale pre-save response look "fresh" and blanking the edit.
-        let seq_at_select = op.slide_edit_seq.get_untracked();
-        leptos::task::spawn_local(async move {
-            // #556 F6: reorder/insert/duplicate/delete now ALSO bump
-            // `slide_edit_seq` (#552/#553), widening the window in which
-            // some edit lands while THIS song-select fetch is in flight far
-            // beyond the original content-save-only race above. A bare
-            // drop on mismatch, with no retry, could leave the
-            // newly-selected song never actually loading. Retry the fetch
-            // ONCE with a freshly captured seq before giving up — but only
-            // AFTER the in-flight saves have committed (see
-            // `await_saves_quiescent`): a retry issued immediately can be
-            // served from pre-save state and its tracked apply would blank
-            // the just-typed edit (the #515 race this guard exists for).
-            let mut seq_at_fetch = seq_at_select;
-            let mut remaining_attempts = 2;
-            loop {
-                remaining_attempts -= 1;
-                let Ok(detail) = crate::api::presentations::get_presentation(&id_clone).await
-                else {
-                    return;
-                };
-                if slide_edit_seq.get_untracked() == seq_at_fetch {
-                    // Cache slides
-                    slides_cache_signal.update(|cache| {
-                        cache.insert(id_clone.clone(), detail.presentation.slides.clone());
-                    });
-                    selected_presentation_signal.set(Some(detail.presentation));
-                    return;
-                }
-                if remaining_attempts == 0 {
-                    return;
-                }
-                if !crate::state::operator::await_saves_quiescent(save_status, 3_000).await {
-                    // Still saving after the bounded wait — keep the old,
-                    // always-safe drop-the-response behavior.
-                    return;
-                }
-                seq_at_fetch = slide_edit_seq.get_untracked();
-            }
-        });
+        // #515 / #556 F6 / #853: the seq is captured here, synchronously
+        // (see `SongLoad::seq_at_select`).
+        let load = crate::state::song_load::SongLoad {
+            id,
+            selected_id: ctx.selected_presentation_id,
+            shown: ctx.selected_presentation,
+            slides_cache: Some(ctx.slides_cache),
+            slide_edit_seq: op.slide_edit_seq,
+            save_status: op.save_status,
+            seq_at_select: op.slide_edit_seq.get_untracked(),
+            on_failure: crate::state::song_load::OnFailure::SelectShown,
+            follow_pending: ctx.follow_pending,
+            selected_entry_index: ctx.selected_entry_index,
+            shown_entry_index: ctx.shown_entry_index,
+        };
+        leptos::task::spawn_local(crate::state::song_load::show_when_loaded(load));
     };
 
     let on_create = {
@@ -197,8 +168,7 @@ pub fn PresentationList() -> impl IntoView {
                     let active_id = ctx.selected_presentation_id.get();
                     let mode = ctx.mode.get();
                     let is_edit = mode == "edit";
-                    let stage_pres_id = ctx.stage_snapshot.get()
-                        .and_then(|s| s.presentation_id.map(|id| id.to_string()));
+                    let stage_pres_id = stage_presentation_id.get();
                     let has_playlist = ctx.selected_playlist_id.get().is_some();
                     let selected_playlist = ctx.selected_playlist.get();
                     let pres_index = ctx.presentation_index.get();
