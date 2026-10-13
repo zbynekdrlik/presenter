@@ -40,7 +40,8 @@
 //!   once (an earlier-arriving frame can later shave off a few more ms), then
 //!   the cadence is unchanged: ~150–210 ms less latency after a burst, and a
 //!   burst happens before any TV joins. A positive drift on a long-lived
-//!   pipeline also crosses D (+5 ppm in ~45 min) and is capped as on PP.
+//!   pipeline also crosses D (at +5 ppm ~2.8 h from a zero lead, ~45 min
+//!   from a ~37 ms start-up lead) and is capped as on PP.
 //! - vah264enc 1.24 on PP (+48…+106 ppm): an identity until the drift brings
 //!   the lead to D (~18 min of pipeline age at +48 ppm), then the lead is
 //!   capped at D: a clocksync hold of ≤ D (~1.5 frames), i.e. ≈ +D of latency,
@@ -796,8 +797,9 @@ mod tests {
         // burst becomes a CONSTANT lead for the pipeline's lifetime. Here the
         // first frame plus 8 burst frames 4 ms apart (each gains 29.3 ms on
         // the clock), a 5 ms encode latency, then 10 min of the 33.333 ms
-        // cadence with every frame 0–8 ms later than the burst's last one
-        // (SNV's steady intervals stay within ±0.24 frames).
+        // cadence anchored on the burst's last frame, each frame 0–8 ms late
+        // against it (one-sided; SNV's steady intervals stay within ±0.24
+        // frames).
         const BURST: i64 = 8;
         const GAP: i64 = 4 * MS;
         const LATENCY: i64 = 5 * MS;
@@ -846,6 +848,14 @@ mod tests {
         // same cadence: that much less latency for the pipeline's lifetime.
         assert_eq!(correction_after_burst, max_raw_lead - D);
         assert_eq!(correction_after_burst, 179_666_664);
+        // A frame arriving 8 ms ahead of that cadence later shaves off its
+        // excess: pulled back to exactly D, the correction 8 ms larger.
+        let n = 18_000i64;
+        let now = BURST * GAP + (n - BURST) * FRAME_NS - 8 * MS + LATENCY;
+        let d = g.apply(n * FRAME_NS, now, FRAME_NS);
+        assert_eq!(d.kind, GuardKind::PulledBack);
+        assert_eq!(d.out_ns, now + D);
+        assert_eq!(g.correction_ns(), correction_after_burst + 8 * MS);
     }
 
     #[test]

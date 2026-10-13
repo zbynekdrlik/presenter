@@ -41,13 +41,13 @@ skill's #854 chapter.
   - Start-up lead above D (a late first frame above D, an NDI burst): cut to D once (an
     earlier-arriving frame can later shave off a few more ms), then the cadence is exactly
     unchanged, with ~150–210 ms less latency after a burst. Bursts happen before any TV joins.
-  - A positive drift on a long-lived pipeline also crosses D (+5 ppm in ~45 min) and is capped
-    like PP.
+  - A positive drift on a long-lived pipeline also crosses D (at +5 ppm ~2.8 h from a zero lead,
+    ~45 min from a ~37 ms start-up lead) and is capped like PP.
 
-  With D = 0 (the first cut, never released to prod) the guard would have pulled back SNV's
-  ordinary early frames too and changed its pacing (review, 2026-10-13). Do not lower D below SNV's common start-up leads; do not raise
-  it toward the 100 ms drift clear level or the −100 ms `futureTimestamps` threshold (both must
-  stay above D, and tests pin that).
+  With D = 0 (the first cut, never released to prod) the guard would have pulled back SNV's ordinary
+  early frames too and changed its pacing (review, 2026-10-13). Do not lower D below SNV's common
+  start-up leads; do not raise it toward the 100 ms drift clear level or the −100 ms
+  `futureTimestamps` threshold (both must stay above D, and tests pin that).
 - **PP's lead is capped at D**: an identity until the drift brings the lead to D (~18 min of
   pipeline age at +48 ppm), then a clocksync hold of <= D, i.e. ≈ +D of latency, never a queue
   overflow.
@@ -82,8 +82,8 @@ counter into a prod-shaped consumer (`configure_consumer` appsrc → `clocksync 
 - keep it asserting that the emulated raw lead really passed 500 ms (`rawLeadMaxMs`);
 - the negative control (`Guard::Absent`, same harness) must DROP frames — it proves the harness
   turns a lead into drops, so the regression's "0 dropped" cannot silently go vacuous. It first
-  asserts that >= 100 frames reached the consumer link (pushed + dropped), so a starved runner
-  fails as starved, not as "the harness no longer reproduces the hold".
+  asserts that >= 100 frames reached the consumer link (pushed + dropped), so a badly starved
+  runner fails as starved, not as "the harness no longer reproduces the hold".
 
 x264enc missing = hard failure, never a skip. The pure policy is `TimestampGuard::decide` (integer
 unit tests through `apply` = decide + commit). Two SNV tests (0 ppm) must stay exact:
@@ -122,8 +122,8 @@ Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (`/ndi/
 plus `encoderTimestampCorrectionMs` (`/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline
 age (age = time since the `timestamp guard installed` INFO line in the journal).
 
-- A correction that stays the same between the two reads is the start-up anchor (a late first
-  frame or an NDI burst above D): expected and harmless.
+- A correction that stays the same (within a few ms) between the two reads is the start-up
+  anchor (a late first frame or an NDI burst above D): expected and harmless.
 - A correction that grows with age is drift: the lead stays capped at D and the correction shows
   ≈ ppm × age − D (plus the pipeline's start-up lead, if it had one).
 - SNV passes when: the guard is installed (`encoderTimestampGuard`); `timestampLeadMs30s` <= 50;

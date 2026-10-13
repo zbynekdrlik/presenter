@@ -391,9 +391,10 @@ GStreamer **1.24.2 `vah264enc`** (SNV + PP, Ubuntu 24.04) stamps its output
   burst of 199–258 ms). Most SNV pipelines stay under D and are untouched. A start-up lead above
   D is cut to D once, then the cadence is unchanged: today clocksync holds every frame of such a
   pipeline by that lead, so it gets ~150–210 ms less latency after a burst (bursts happen before
-  any TV joins). A positive drift on a long-lived pipeline also crosses D (+5 ppm in ~45 min) and
-  is capped like PP. The D = 0 first cut (never released to prod; it reached the dev instance as
-  v0.4.317, where NVENC made it a no-op) would have pulled back SNV's ordinary early frames too
+  any TV joins). A positive drift on a long-lived pipeline also crosses D (at +5 ppm ~2.8 h from
+  a zero lead, ~45 min from a ~37 ms start-up lead) and is capped like PP. The D = 0 first cut
+  (never released to prod; it reached the dev instance as v0.4.317, where NVENC made it a no-op)
+  would have pulled back SNV's ordinary early frames too
   (mostly in the first ~20 s after a build) and stopped clocksync pacing them, which is why D
   exists (review, 2026-10-13). On PP the lead is capped at D: a clocksync hold of <= 50 ms, ≈ +50 ms
   latency once the lead reaches D (~18 min), never the queue overflow. Deliberately NOT "copy the
@@ -422,7 +423,8 @@ Expect: guard `true`, lead `<= 50`, `driftRebuilds` 0, consumers `dropRatio30s �
 `healthy`. Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (plus
 `encoderTimestampCorrectionMs` on `/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline
 age (age = time since the `timestamp guard installed` INFO line). A correction that stays the
-same between the reads is the start-up anchor (a late first frame or an NDI burst above D):
+same (within a few ms) between the reads is the start-up anchor (a late first frame or an NDI
+burst above D):
 expected and harmless. A correction that grows with age is drift: the lead stays capped at D and
 the correction shows ≈ ppm × age − D (plus the start-up lead, if the pipeline had one). On PP
 after >= 1 h with a fast source, `encoderTimestampCorrectionMs ≈ ppm × age − 50` (≈ 173 ms/h

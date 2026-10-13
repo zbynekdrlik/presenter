@@ -261,6 +261,7 @@ fn frame_counter_stamping_never_becomes_a_consumer_hold() {
     // The emulated PP condition really happened (the harness is not vacuous):
     // unguarded, these stamps would have been >= 500 ms in the future.
     assert!(snap.frames_pulled_back > 0, "guard never engaged: {snap:?}");
+    assert_eq!(snap.frames_unmeasured, 0, "{snap:?}");
     assert!(
         snap.raw_lead_max_ms.unwrap_or(0) >= 500,
         "emulated counter lead never passed 500 ms: {snap:?}"
@@ -272,8 +273,11 @@ fn frame_counter_stamping_never_becomes_a_consumer_hold() {
 /// settles. Proof that this harness really turns a lead into consumer drops,
 /// so the regression's "0 dropped" is not vacuous (the lead passes the 500 ms
 /// consumer queue ~1.5 s after the encoder starts, inside the measure window).
-/// A starved runner (too few frames for the lead to build up) fails on its own
-/// assertion first, never as "the harness no longer reproduces the hold".
+/// A badly starved runner (too few frames for the lead to build up) fails on
+/// its own assertion first instead of reading as "the harness no longer
+/// reproduces the hold" (the lead reaches the queue limit inside the window
+/// from ~34 fps; between that and the 100-frame floor the second message can
+/// still be the one that fires).
 #[test]
 fn frame_counter_stamping_without_the_guard_drops_frames() {
     let side = build_encoder_side(40, true, Guard::Absent);
@@ -283,9 +287,9 @@ fn frame_counter_stamping_without_the_guard_drops_frames() {
         run.pushed_after_settle, run.dropped_after_settle
     );
     // Frames that reached the consumer link after the settle (~140 at 40 fps).
-    // `pushed` alone is not it here: clocksync releases only ~30 of the 40 fps
-    // and after every overflow StreamProducer drops frames until a keyframe,
-    // so `pushed` legitimately falls well below that in this control.
+    // `pushed` alone is not it here: after every overflow StreamProducer
+    // drops frames until a keyframe, so `pushed` legitimately falls well below
+    // that in this control.
     // `dropped` also counts the old buffer each overflow pushes out, so the
     // sum can exceed the frames offered once something drops; with nothing
     // dropped (the case this check exists for) it is exact.
