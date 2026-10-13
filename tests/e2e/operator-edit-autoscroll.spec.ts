@@ -78,7 +78,8 @@ async function churnStage(pres: string, count: number, from = 0) {
 
 /**
  * Counts the `stage` frames the operator page's own live socket receives (not the preview iframe's),
- * one per stage change: the always-on camera-crew snapshot each change also sends is skipped.
+ * one per stage change: the always-on camera-crew snapshot each change also sends is skipped. On an
+ * API layout a presenter trigger sends ONLY the camera-crew frame (not counted); a songplayer push is.
  */
 function countStageFrames(page: Page): { count: number } {
   const seen = { count: 0 };
@@ -1464,6 +1465,98 @@ test("Follow: a stage song that starts loading while a clicked song fails still 
     ).toBeAttached();
     await page.unroute(`**/presentations/${presIds[4]}`);
     await page.unroute(`**/presentations/${presIds[1]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
+});
+
+test("a failed click keeps the occurrence of the song actually shown, not of a click still loading (#496)", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const set = await send("POST", "/playlists", { name: "_E2E Three Set", showInDashboard: true });
+  await send("PUT", `/playlists/${set.id}/entries`, {
+    entries: [presIds[2], presIds[4], presIds[5]].map((id) => ({ type: "presentation", presentationId: id })),
+  });
+  await resetStage();
+  await openOperator(page);
+  await page.locator(`[data-role="playlist-item"][data-playlist-id="${set.id}"]`).first().click();
+  await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Three Set");
+  const rows = page.locator('[data-role="presentation-item"]');
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click(); // song 3, occurrence 0
+  await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+  // Song 5 (occurrence 1) is clicked and held; song 6 (occurrence 2) is clicked and fails.
+  const releaseSong5 = await gateRoute(page, `**/presentations/${presIds[4]}`);
+  const song5Requested = page.waitForRequest(`**/presentations/${presIds[4]}`);
+  await rows.nth(1).click();
+  await song5Requested;
+  await page.route(`**/presentations/${presIds[5]}`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+  );
+  const song6Failed = page.waitForResponse(`**/presentations/${presIds[5]}`);
+  await rows.nth(2).click();
+  await landed(song6Failed);
+  await expect(rows.nth(0), "back on the song still shown").toHaveClass(/is-active/);
+  releaseSong5(); // too late: song 5 is no longer selected
+
+  await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
+  await expect
+    .poll(async () => {
+      const snap = await (await fetch(new URL("/stage/snapshot", baseURL))).json();
+      return { song: snap.presentationId, entry: snap.activeEntryIndex };
+    }, { message: "the stage marks song 3's own occurrence" })
+    .toEqual({ song: presIds[2], entry: 0 });
+  await page.unroute(`**/presentations/${presIds[4]}`);
+  await page.unroute(`**/presentations/${presIds[5]}`);
+  expect(consoleMessages).toEqual([]);
+});
+
+test("Follow: catching up with a stage that has no song keeps the occurrence the operator picked (#496)", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  const set = await send("POST", "/playlists", { name: "_E2E Repeat Set 2", showInDashboard: true });
+  await send("PUT", `/playlists/${set.id}/entries`, {
+    entries: [presIds[2], presIds[4], presIds[2]].map((id) => ({ type: "presentation", presentationId: id })),
+  });
+  // A song that goes on stage and is then deleted: clearing the stage then leaves no song at all.
+  const gone = await send("POST", `/libraries/${libId}/presentations`, {
+    name: "Churn Gone Song",
+    slides: [{ main: "Gone 1" }, { main: "Gone 2" }],
+  });
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await send("POST", "/stage/state", {
+      presentationId: gone.presentation.id,
+      currentSlideId: gone.presentation.slides[0].id,
+    });
+    await send("DELETE", `/presentations/${gone.presentation.id}`, {});
+    await send("POST", "/stage/clear", {});
+    const snap = await (await fetch(new URL("/stage/snapshot", baseURL))).json();
+    expect(snap.presentationId ?? null, "the stage has no song").toBeNull();
+
+    await openOperator(page);
+    await followReady(page);
+    await page.locator(`[data-role="playlist-item"][data-playlist-id="${set.id}"]`).first().click();
+    await expect(page.locator('[data-role="context-title"]')).toHaveText("_E2E Repeat Set 2");
+    const rows = page.locator('[data-role="presentation-item"]');
+    await expect(rows).toHaveCount(3);
+    // In Edit mode the operator picks the SECOND occurrence of song 3, then goes back to Live.
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').first().click();
+    await rows.nth(2).click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').first().click();
+    await settle(page);
+
+    await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
+    await expect
+      .poll(async () => {
+        const s2 = await (await fetch(new URL("/stage/snapshot", baseURL))).json();
+        return { song: s2.presentationId, entry: s2.activeEntryIndex };
+      }, { message: "the stage marks the occurrence the operator picked" })
+      .toEqual({ song: presIds[2], entry: 2 });
     expect(consoleMessages).toEqual([]);
   } finally {
     await send("POST", "/integrations/ableset/follow", { enabled: false });
