@@ -7,7 +7,8 @@
 //! consecutive ticks, the pipeline is rebuilt through the normal dead-state
 //! path. A frame-counter lead is carried by every frame (min ≈ max), so a
 //! single future-stamped buffer can never trigger it; with the guard working
-//! the lead stays <= 0 and this never fires — a firing is a regression signal.
+//! the lead stays <= the guard's 50 ms deadband (below even the 100 ms clear
+//! level) and this never fires — a firing is a regression signal.
 //!
 //! Loop-proofing (every rebuild blanks every TV on the site for ~10-20 s,
 //! #385):

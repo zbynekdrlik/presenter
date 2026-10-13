@@ -10,20 +10,36 @@
 //! `clocksync sync=true` on every input stream, so future-stamped buffers are
 //! HELD there; once the lead passes the consumer appsrc's 500 ms `max-time`
 //! every consumer queue overflows once per GOP and the TVs get broken GOPs.
-//! A source framerate change rescales the same counter into a forward jump.
+//! A source framerate DROP rescales the same counter into a forward jump; a
+//! framerate RISE rescales it backwards.
 //!
 //! The guard (a pad probe on the shared encoder's `src` pad) enforces ONE rule:
-//! **no frame leaves the encoder stamped later than the pipeline clock.** It
-//! keeps the encoder's own cadence and pulls its timeline back by a correction
-//! that only grows when a frame would otherwise be in the future
-//! ([`TimestampGuard::apply`]). The maths is done in RUNNING TIME and converted
-//! back through the encoder's OUTPUT segment — never by copying a raw PTS: the
-//! output segment carries GstVideoEncoder's `time_adjustment` (vah264enc sets a
-//! 1000 h `min_pts`), the class of mistake behind #768's constant −3600 s read.
+//! **no frame leaves the encoder stamped more than D = 50 ms
+//! ([`TIMESTAMP_DEADBAND_MS`]) later than the pipeline clock.** It keeps the
+//! encoder's own stamps and pulls its timeline back by a correction that only
+//! grows when a frame would otherwise lead the clock by more than D, and then
+//! only by the part above D ([`TimestampGuard::apply`]). The maths is done in
+//! RUNNING TIME and converted back through the encoder's OUTPUT segment — never
+//! by copying a raw PTS: the output segment carries GstVideoEncoder's
+//! `time_adjustment` (vah264enc sets a 1000 h `min_pts`), the class of mistake
+//! behind #768's constant −3600 s read.
 //!
 //! - x264enc (CI), NVENC (dev2), vah264enc ≥ 1.26: their stamps ARE the
 //!   receive time, always earlier than the clock → exact identity.
-//! - vah264enc 1.24 (SNV, PP): today's regular RTP cadence, minus the lead.
+//! - vah264enc 1.24 on SNV (prod, Intel N100): the counter is anchored at the
+//!   first frame's arrival, so frames that arrive earlier than it lead the
+//!   clock by the NDI arrival jitter (≤ ~40 ms minus the encode latency). That
+//!   stays under D, so the guard is an identity there as well: SNV keeps exactly
+//!   the pacing it had before the guard (clocksync still holds an early frame
+//!   for its lead, as it always did). Only a source that ALSO drifts fast could
+//!   push SNV's lead past D, and then the same cap as on PP applies.
+//! - vah264enc 1.24 on PP (+48…+106 ppm): an identity until the drift brings
+//!   the lead to D (~18 min of pipeline age at +48 ppm), then the lead is
+//!   capped at D: a clocksync hold of ≤ D (~1.5 frames), i.e. ≈ +D of latency,
+//!   never a queue overflow.
+//! - A backward jump (a framerate rise) re-anchors the output one frame after
+//!   the previous one; the correction then goes NEGATIVE (the encoder's stamps
+//!   sit behind the output), which `encoderTimestampCorrectionMs` shows as < 0.
 //!
 //! The lead meter (a probe on the producer appsink's `sink` pad, after
 //! h264parse, independent of the guard) records how far each shared buffer is
@@ -48,7 +64,7 @@ const NS_PER_MS: i64 = 1_000_000;
 
 /// The correction-growth INFO line fires each time the correction crosses
 /// another multiple of this (ms): ~2 lines/hour on PP's +48 ppm source, none
-/// where the encoder keeps the input PTS.
+/// where the encoder keeps the input PTS or the lead stays within D.
 const CORRECTION_LOG_STEP_MS: i64 = 100;
 
 /// The guard's deadband D (#854 ROZHODNUTÉ): a frame may leave the shared
@@ -73,11 +89,11 @@ pub(crate) enum GuardKind {
     /// The encoder's own stamp, shifted back by the current correction (0 on a
     /// PTS-preserving encoder) — the encoder's cadence is kept.
     Kept,
-    /// The stamp would have been later than the clock: clamped to the clock and
-    /// the correction grew by the excess.
+    /// The stamp would have led the clock by more than D: clamped to clock + D
+    /// and the correction grew by the excess.
     PulledBack,
     /// The encoder's timeline went backwards or stalled: re-anchored one frame
-    /// after the previous output (never later than the clock).
+    /// after the previous output (never more than D ahead of the clock).
     Reanchored,
 }
 
@@ -103,18 +119,20 @@ impl TimestampGuard {
     /// leaving the encoder when the clock reads `now_ns`. `duration_ns` (0 when
     /// unknown) spaces a re-anchored frame from its predecessor.
     ///
-    /// Invariants: `out ≤ now` (except a 1 ns monotonic nudge when two frames
-    /// leave at the same clock reading) and `out` strictly increases. The
-    /// correction only grows on `PulledBack`, so `Kept` frames keep the
-    /// encoder's own spacing exactly.
+    /// Invariants: `out ≤ now + D` (except a 1 ns monotonic nudge when two
+    /// frames leave at the same clock reading) and `out` strictly increases. A
+    /// lead up to D is left alone; the correction only grows on `PulledBack`
+    /// (by the part of the lead above D), so `Kept` frames keep the encoder's
+    /// own spacing exactly.
     pub(crate) fn apply(&mut self, enc_ns: i64, now_ns: i64, duration_ns: i64) -> GuardDecision {
+        let limit = now_ns + TIMESTAMP_DEADBAND_NS;
         let candidate = enc_ns - self.correction_ns;
-        let (mut out_ns, kind) = if candidate > now_ns {
-            (now_ns, GuardKind::PulledBack)
+        let (mut out_ns, kind) = if candidate > limit {
+            (limit, GuardKind::PulledBack)
         } else {
             match self.last_out_ns {
                 Some(last) if candidate <= last => (
-                    (last + duration_ns.max(0)).min(now_ns),
+                    (last + duration_ns.max(0)).min(limit),
                     GuardKind::Reanchored,
                 ),
                 _ => (candidate, GuardKind::Kept),
@@ -131,7 +149,8 @@ impl TimestampGuard {
     }
 
     /// How far (ns) the encoder's own timeline is pulled back. Positive = the
-    /// encoder runs ahead of the clock (what the old code would have held).
+    /// encoder ran more than D ahead of the clock (the old code would have held
+    /// it D longer than now); negative after a backward re-anchor.
     pub(crate) fn correction_ns(&self) -> i64 {
         self.correction_ns
     }
@@ -242,22 +261,25 @@ pub struct EncoderTimingSnapshot {
     pub encoder_factory: String,
     /// Encoder output buffers with a valid PTS seen by the guard.
     pub frames_seen: u64,
-    /// Frames clamped to the clock (their stamp was in the future).
+    /// Frames clamped to clock + D (their stamp led the clock by more than D).
     pub frames_pulled_back: u64,
     /// Frames re-anchored after the encoder timeline went backwards/stalled.
     pub frames_reanchored: u64,
     /// Frames the guard could not measure (no segment / clock yet).
     pub frames_unmeasured: u64,
     /// How far the encoder's own timeline is pulled back (ms). On a
-    /// fast-drifting vah264enc 1.24 source this IS the lead the unguarded
-    /// pipeline would have built; 0 on PTS-preserving encoders.
+    /// fast-drifting vah264enc 1.24 source this is the lead the unguarded
+    /// pipeline would have built, minus D; 0 on PTS-preserving encoders and
+    /// while the lead stays within D (SNV); negative after a backward
+    /// re-anchor (a framerate rise).
     pub correction_ms: i64,
     /// Encoder stamp − clock for the last measured frame (ms), BEFORE the guard.
     pub raw_lead_last_ms: Option<i64>,
     /// Maximum of the above since the pipeline was built.
     pub raw_lead_max_ms: Option<i64>,
     /// Trailing-30s lead at the producer appsink (after the guard). `null`
-    /// without frames in the window. Healthy: max ≤ 0.
+    /// without frames in the window. Healthy: max ≤ D (50); ≤ 0 on
+    /// PTS-preserving encoders.
     pub lead_ms_30s: Option<LeadWindow>,
 }
 
@@ -435,12 +457,17 @@ impl EncoderTiming {
                         .fetch_max(steps, Ordering::Relaxed)
                         < steps
                 {
+                    // A pulled-back frame leaves at clock + D, so its lead
+                    // was the correction + D.
                     tracing::info!(
                         encoder = %self.encoder_factory,
                         source = %self.label,
                         correction_ms = correction_ns / NS_PER_MS,
-                        "NDI encoder timeline would be +{} ms ahead of the clock — held back (#854)",
-                        correction_ns / NS_PER_MS
+                        deadband_ms = TIMESTAMP_DEADBAND_MS,
+                        "NDI encoder timeline would be +{} ms ahead of the clock — held back to \
+                         +{} ms (#854)",
+                        correction_ns / NS_PER_MS + TIMESTAMP_DEADBAND_MS,
+                        TIMESTAMP_DEADBAND_MS
                     );
                 }
             }
