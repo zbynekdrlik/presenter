@@ -37,15 +37,25 @@ use crate::pipeline::encoder_timing::{self, EncoderTiming};
 const COUNTER_FRAME_NS: u64 = 1_000_000_000 / 30;
 
 /// The encoder half: live source → x264enc → production profile caps →
-/// production h264parse + appsink, guarded by the production install, wrapped
-/// in a `StreamProducer` exactly like `NdiPipeline::build`.
+/// production h264parse + appsink, guarded by the production install (unless
+/// [`Guard::Absent`]), wrapped in a `StreamProducer` exactly like
+/// `NdiPipeline::build`.
 struct EncoderSide {
     pipeline: gst::Pipeline,
     producer: StreamProducer,
     timing: Arc<EncoderTiming>,
 }
 
-fn build_encoder_side(fps: i32, emulate_vah264enc_1_24: bool) -> EncoderSide {
+/// Whether the production timestamp guard + lead meter are installed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Guard {
+    Installed,
+    /// The negative control: no probes (a detached `EncoderTiming`, so the
+    /// lead meter reads nothing).
+    Absent,
+}
+
+fn build_encoder_side(fps: i32, emulate_vah264enc_1_24: bool, guard: Guard) -> EncoderSide {
     crate::init().expect("gstreamer init");
     let pipeline = gst::Pipeline::new();
     // Prod pins the encoder pipeline to the system monotonic clock.
@@ -100,7 +110,13 @@ fn build_encoder_side(fps: i32, emulate_vah264enc_1_24: bool) -> EncoderSide {
         // the guard sees the frame-counter stamps, as on prod.
         install_frame_counter_stamping(&encoder);
     }
-    let timing = encoder_timing::install(&encoder, sink_el, "encoder-timestamps-test");
+    let timing = match guard {
+        Guard::Installed => encoder_timing::install(&encoder, sink_el, "encoder-timestamps-test"),
+        Guard::Absent => Arc::new(EncoderTiming::new(
+            "x264enc".into(),
+            "encoder-timestamps-negative-control".into(),
+        )),
+    };
     let producer = StreamProducer::with(
         &appsink,
         gstreamer_utils::streamproducer::ProducerSettings { sync: false },
@@ -213,7 +229,7 @@ fn run_with_consumer(side: &EncoderSide, settle: Duration, measure: Duration) ->
 /// guard's deadband D (a ≤ 50 ms clocksync hold, never a queue overflow).
 #[test]
 fn frame_counter_stamping_never_becomes_a_consumer_hold() {
-    let side = build_encoder_side(40, true);
+    let side = build_encoder_side(40, true, Guard::Installed);
     let run = run_with_consumer(&side, Duration::from_secs(1), Duration::from_millis(3_500));
     let snap = side.timing.snapshot();
     eprintln!(
@@ -251,11 +267,32 @@ fn frame_counter_stamping_never_becomes_a_consumer_hold() {
     );
 }
 
+/// Negative control for the regression above: the SAME frame-counter
+/// emulation and consumer WITHOUT the guard must drop frames after the join
+/// settles. Proof that this harness really turns a lead into consumer drops,
+/// so the regression's "0 dropped" is not vacuous (the lead passes the 500 ms
+/// consumer queue ~1.5 s after the encoder starts, inside the measure window).
+#[test]
+fn frame_counter_stamping_without_the_guard_drops_frames() {
+    let side = build_encoder_side(40, true, Guard::Absent);
+    let run = run_with_consumer(&side, Duration::from_secs(1), Duration::from_millis(3_500));
+    eprintln!(
+        "[#854] negative control: pushed {} dropped {} after settle",
+        run.pushed_after_settle, run.dropped_after_settle
+    );
+    assert!(
+        run.dropped_after_settle > 0,
+        "the unguarded frame counter dropped nothing ({} pushed): the harness no \
+         longer reproduces the #854 hold, so the guarded regression proves nothing",
+        run.pushed_after_settle
+    );
+}
+
 /// On an encoder that keeps the input PTS (x264enc here; NVENC on dev2;
 /// vah264enc >= 1.26) the guard must change nothing at all.
 #[test]
 fn guard_is_an_identity_when_the_encoder_keeps_pts() {
-    let side = build_encoder_side(30, false);
+    let side = build_encoder_side(30, false, Guard::Installed);
     let run = run_with_consumer(
         &side,
         Duration::from_millis(500),
