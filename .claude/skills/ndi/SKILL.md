@@ -381,26 +381,25 @@ GStreamer **1.24.2 `vah264enc`** (SNV + PP, Ubuntu 24.04) stamps its output
   x264enc (`pipeline/tests/encoder_timestamps.rs`).
 
 **The fix (#854):**
-- **Guard** (invariant 9): `out = enc_rt − correction`, clamped to clock + D (D = 50 ms) if it
-  would lead the clock by more (the correction grows by the excess), converted through the
-  encoder's OUTPUT segment (1000 h `time_adjustment`). The decision is committed only after that
-  conversion succeeded. Identity on PTS-preserving encoders and whenever the lead stays under D.
-  On SNV (vah264enc 1.24, ≈ 0 ppm) the counter anchors on the first frame, so a late first frame
-  or a start-up burst is a CONSTANT lead for the pipeline's lifetime (7.–13.10., 104 starts:
-  first frame late by 23 ms p50, 38 ms p90, two starts 46–48 ms; 3 starts with a 6–8 frame
-  burst of 199–258 ms). Most SNV pipelines stay under D and are untouched. A start-up lead above
-  D is cut to D once, then the cadence is unchanged: today clocksync holds every frame of such a
-  pipeline by that lead, so it gets ~150–210 ms less latency after a burst (bursts happen before
-  any TV joins). A positive drift on a long-lived pipeline also crosses D (at +5 ppm ~2.8 h from
-  a zero lead, ~45 min from a ~37 ms start-up lead) and is capped like PP. The D = 0 first cut
-  (never released to prod; it reached the dev instance as v0.4.317, where NVENC made it a no-op)
-  would have pulled back SNV's ordinary early frames too
-  (mostly in the first ~20 s after a build) and stopped clocksync pacing them, which is why D
-  exists (review, 2026-10-13). On PP the lead is capped at D: a clocksync hold of <= 50 ms, ≈ +50 ms
-  latency once the lead reaches D (~18 min), never the queue overflow. Deliberately NOT "copy the
-  raw input PTS" (GStreamer 1.26 behaviour): that would hand every TV the NDI arrival jitter as
-  RTP timestamps (SNV 11.10. service: worst frame gap per 5 s window 36.4 ms p50, 44.7 ms p99,
-  65 ms max), a risk to the weak SNV TVs' baseline.
+- **Guard** (invariant 9): `out = enc_rt − correction`, clamped to clock + D (D = 50 ms) if it would
+  lead the clock by more (the correction grows by the excess), converted through the encoder's
+  OUTPUT segment (1000 h `time_adjustment`). The decision is committed only after that conversion
+  succeeded. Identity on PTS-preserving encoders and whenever the lead stays under D. On SNV
+  (vah264enc 1.24, ≈ 0 ppm) the counter anchors on the first frame, so a late first frame or a
+  start-up burst is a CONSTANT lead for the pipeline's lifetime (7.–13.10., 104 starts: first frame
+  late by 23 ms p50, 38 ms p90, two starts 46–48 ms; 3 starts with a 6–8 frame burst of 199–258 ms).
+  Most SNV pipelines stay under D and are untouched. A start-up lead above D is cut to D once, then
+  the cadence is unchanged: today clocksync holds every frame of such a pipeline by that lead, so it
+  gets ~150–210 ms less latency after a burst (bursts happen before any TV joins). A positive drift
+  on a long-lived pipeline also crosses D (at +5 ppm ~2.8 h from a zero lead, ~43 min from the SNV
+  identity test's ~37 ms start-up lead) and is capped like PP. The D = 0 first cut (never released
+  to prod; it reached the dev instance as v0.4.317, where NVENC made it a no-op) would have pulled
+  back SNV's ordinary early frames too (mostly in the first ~20 s after a build) and stopped
+  clocksync pacing them, which is why D exists (review, 2026-10-13). On PP the lead is capped at D:
+  a clocksync hold of <= 50 ms, ≈ +50 ms latency once the lead reaches D (~18 min), never the queue
+  overflow. Deliberately NOT "copy the raw input PTS" (GStreamer 1.26 behaviour): that would hand
+  every TV the NDI arrival jitter as RTP timestamps (SNV 11.10. service: worst frame gap per 5 s
+  window 36.4 ms p50, 44.7 ms p99, 65 ms max), a risk to the weak SNV TVs' baseline.
 - **`futureTimestamps` verdict** on a time-windowed lateness minimum (below).
 - **Guarded drift self-heal** (`manager/drift_guard.rs`): on the supervisor's 30 s tick, when the
   lead meter's 30 s MINIMUM lead is >= 300 ms for two consecutive windows OF THE SAME PIPELINE
@@ -421,21 +420,22 @@ journalctl -u presenter --since -1h | grep -E '#854|ndi_client_stats'
 ```
 Expect: guard `true`, lead `<= 50`, `driftRebuilds` 0, consumers `dropRatio30s ≈ 0`, verdict
 `healthy`. Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (plus
-`encoderTimestampCorrectionMs` on `/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline
-age (age = time since the `timestamp guard installed` INFO line). A correction that stays the
-same (within a few ms) between the reads is the start-up anchor (a late first frame or an NDI
-burst above D):
-expected and harmless. A correction that grows with age is drift: the lead stays capped at D and
-the correction shows ≈ ppm × age − D (plus the start-up lead, if the pipeline had one). On PP
-after >= 1 h with a fast source, `encoderTimestampCorrectionMs ≈ ppm × age − 50` (≈ 173 ms/h
-at +48 ppm once the lead passed D) — the direct proof the guard is absorbing the lead; INFO lines
-`encoder timeline would be +N ms ahead of the clock — held back to +50 ms (#854)` every ~100 ms of
-correction growth (on a burst pipeline one such line right after the build). On a slow-source day
-the correction stays 0 (the counter falls behind, which was always harmless) — re-check on a fast
-day. **SNV passes when:** the guard is installed, `timestampLeadMs30s <= 50`, `driftRebuilds` 0,
-consumers' `dropRatio30s ≈ 0`, and the per-display presented fps from the `ndi_client_stats`
-beacons is at its baseline (LEAP-S1 ≈ 30, Android TVs ≈ 25.1 / 24.8 / 22.9). A non-zero but
-constant correction there is a start-up lead, not a failure.
+`encoderTimestampCorrectionMs` on `/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline age
+(age = time since the `timestamp guard installed` INFO line). A correction that changes by less than
+~20 ms between the reads is the start-up anchor (a late first frame or an NDI burst above D; an
+earlier-arriving frame can still shave a few ms off it): expected and harmless. Drift keeps growing
+with age, by ≈ ppm × 3.6 ms per hour (≈ 18 ms/h at +5 ppm, ≈ 173 ms/h at +48 ppm): the lead stays
+capped at D and the correction shows ≈ ppm × age − D (plus the start-up lead, if the pipeline had
+one); when the difference is small, read once more hours later — an anchor stays put, drift keeps
+growing. On PP after >= 1 h with a fast source, `encoderTimestampCorrectionMs ≈ ppm × age − 50` (≈
+173 ms/h at +48 ppm once the lead passed D) — the direct proof the guard is absorbing the lead; INFO
+lines `encoder timeline would be +N ms ahead of the clock — held back to +50 ms (#854)` every ~100
+ms of correction growth (on a burst pipeline one such line right after the build). On a slow-source
+day the correction stays 0 (the counter falls behind, which was always harmless) — re-check on a
+fast day. **SNV passes when:** the guard is installed, `timestampLeadMs30s <= 50`, `driftRebuilds`
+0, consumers' `dropRatio30s ≈ 0`, and the per-display presented fps from the `ndi_client_stats`
+beacons is at its baseline (LEAP-S1 ≈ 30, Android TVs ≈ 25.1 / 24.8 / 22.9). A non-zero but constant
+correction there is a start-up lead, not a failure.
 
 **Receive-time drift note.** On vah264enc 1.24 the consumers' RTP timestamps are the frame counter
 (perfectly regular), shifted back by the guard's correction once the lead passed D (on SNV: only

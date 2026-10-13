@@ -273,11 +273,10 @@ fn frame_counter_stamping_never_becomes_a_consumer_hold() {
 /// settles. Proof that this harness really turns a lead into consumer drops,
 /// so the regression's "0 dropped" is not vacuous (the lead passes the 500 ms
 /// consumer queue ~1.5 s after the encoder starts, inside the measure window).
-/// A badly starved runner (too few frames for the lead to build up) fails on
-/// its own assertion first instead of reading as "the harness no longer
-/// reproduces the hold" (the lead reaches the queue limit inside the window
-/// from ~34 fps; between that and the 100-frame floor the second message can
-/// still be the one that fires).
+/// A starved runner (too few frames for the lead to build up) fails on its own
+/// assertion first, never as "the harness no longer reproduces the hold": the
+/// floor, 120 frames in 3.5 s (≈ 34 fps), is the rate from which the lead
+/// reaches the queue limit inside the window.
 #[test]
 fn frame_counter_stamping_without_the_guard_drops_frames() {
     let side = build_encoder_side(40, true, Guard::Absent);
@@ -295,7 +294,7 @@ fn frame_counter_stamping_without_the_guard_drops_frames() {
     // dropped (the case this check exists for) it is exact.
     let offered = run.pushed_after_settle + run.dropped_after_settle;
     assert!(
-        offered >= 100,
+        offered >= 120,
         "only {offered} frames reached the consumer link in 3.5 s at 40 fps ({} pushed, \
          {} dropped): the runner is starved, the counter lead never built up, so this \
          control cannot tell whether the harness still reproduces the #854 hold",

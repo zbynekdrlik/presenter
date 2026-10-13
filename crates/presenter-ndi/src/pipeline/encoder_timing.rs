@@ -40,8 +40,9 @@
 //!   once (an earlier-arriving frame can later shave off a few more ms), then
 //!   the cadence is unchanged: ~150–210 ms less latency after a burst, and a
 //!   burst happens before any TV joins. A positive drift on a long-lived
-//!   pipeline also crosses D (at +5 ppm ~2.8 h from a zero lead, ~45 min
-//!   from a ~37 ms start-up lead) and is capped as on PP.
+//!   pipeline also crosses D (at +5 ppm ~2.8 h from a zero lead, ~43 min
+//!   from the SNV identity test's ~37 ms start-up lead) and is capped as on
+//!   PP.
 //! - vah264enc 1.24 on PP (+48…+106 ppm): an identity until the drift brings
 //!   the lead to D (~18 min of pipeline age at +48 ppm), then the lead is
 //!   capped at D: a clocksync hold of ≤ D (~1.5 frames), i.e. ≈ +D of latency,
@@ -803,13 +804,14 @@ mod tests {
         const BURST: i64 = 8;
         const GAP: i64 = 4 * MS;
         const LATENCY: i64 = 5 * MS;
+        const FRAMES: i64 = 18_000;
         let mut g = TimestampGuard::default();
         let mut rng = XorShift(0x0008_54B5);
         let mut prev: Option<i64> = None;
         let mut pulled_back = Vec::new();
         let mut correction_after_burst = 0;
         let mut max_raw_lead = i64::MIN;
-        for n in 0..18_000i64 {
+        for n in 0..FRAMES {
             let arrival = if n <= BURST {
                 n * GAP
             } else {
@@ -850,7 +852,7 @@ mod tests {
         assert_eq!(correction_after_burst, 179_666_664);
         // A frame arriving 8 ms ahead of that cadence later shaves off its
         // excess: pulled back to exactly D, the correction 8 ms larger.
-        let n = 18_000i64;
+        let n = FRAMES;
         let now = BURST * GAP + (n - BURST) * FRAME_NS - 8 * MS + LATENCY;
         let d = g.apply(n * FRAME_NS, now, FRAME_NS);
         assert_eq!(d.kind, GuardKind::PulledBack);
