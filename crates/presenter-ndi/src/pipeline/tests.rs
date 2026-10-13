@@ -21,6 +21,9 @@ use super::build::consumer_h264_caps;
 use super::*;
 use crate::whep_session::{LivenessState, WhepConnectionState, WhepSession};
 
+/// #854: live-pipeline regression tests for the shared-encoder timestamp guard.
+mod encoder_timestamps;
+
 impl NdiPipeline {
     /// Test-only constructor: a minimal pipeline-shaped value in `Stopped`
     /// state without actually building any GStreamer elements. Lets the
@@ -49,6 +52,10 @@ impl NdiPipeline {
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer: StreamProducer::from(&appsink),
             keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
+            encoder_timing: Arc::new(super::encoder_timing::EncoderTiming::new(
+                String::new(),
+                String::new(),
+            )),
         }
     }
 
@@ -113,6 +120,10 @@ impl NdiPipeline {
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
             keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
+            encoder_timing: Arc::new(super::encoder_timing::EncoderTiming::new(
+                encoder_name.to_string(),
+                String::new(),
+            )),
         })
     }
 
@@ -860,6 +871,53 @@ fn encoder_output_is_pinned_to_constrained_baseline() {
         s.get::<&str>("profile").expect("profile field"),
         "constrained-baseline"
     );
+}
+
+/// #854 wiring: `NdiPipeline::build` installs the shared-encoder timestamp
+/// guard + lead meter on the encoder it selected. Fails hard (never skips)
+/// when no encoder is usable — x264enc is always installed on CI.
+#[test]
+fn ndi_pipeline_build_installs_the_timestamp_guard() {
+    super::super::init().expect("gst init");
+    let encoder = super::super::hw_h264_encoder()
+        .expect("an H264 encoder must be usable on this host (x264enc on CI)");
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into())
+        .expect("pipeline build");
+    let snap = p.encoder_timing.snapshot();
+    assert!(
+        snap.installed,
+        "guard + lead meter must be installed: {snap:?}"
+    );
+    assert_eq!(snap.encoder_factory, encoder);
+    assert_eq!(snap.frames_seen, 0, "nothing flows before PLAYING");
+}
+
+/// #854 self-heal request: only a STREAMING pipeline is flipped to
+/// `Errored(reason)` (which its supervisor then rebuilds); a pipeline that is
+/// stopped, starting or already errored is left alone.
+#[test]
+fn self_heal_rebuild_request_only_flips_a_streaming_pipeline() {
+    let mut p = NdiPipeline::stopped_for_test();
+    assert!(!p.request_self_heal_rebuild("lead 400 ms"));
+    assert_eq!(p.state(), PipelineState::Stopped);
+
+    p.set_state_for_test(PipelineState::Starting);
+    assert!(!p.request_self_heal_rebuild("lead 400 ms"));
+    assert_eq!(p.state(), PipelineState::Starting);
+
+    p.set_state_for_test(PipelineState::Streaming);
+    let watcher = p.state_watcher();
+    let reason = "self-heal: shared encoder timestamps lead the clock by 400 ms (#854)";
+    assert!(p.request_self_heal_rebuild(reason));
+    assert_eq!(p.state(), PipelineState::Errored(reason.to_string()));
+    assert!(
+        watcher.has_changed().expect("sender alive"),
+        "the supervisor's watcher must be notified"
+    );
+
+    // Already errored: a second request changes nothing.
+    assert!(!p.request_self_heal_rebuild("again"));
+    assert_eq!(p.state(), PipelineState::Errored(reason.to_string()));
 }
 
 /// webrtcsink parity: rtph264pay must aggregate in zero-latency mode

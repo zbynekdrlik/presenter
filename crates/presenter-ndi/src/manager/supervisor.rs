@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use crate::pipeline::NdiPipeline;
 
 use super::activation::{finalize_reservation, wait_for_streaming, Finalize, WaitOutcome};
+use super::drift_guard::{log_drift_action, DriftAction, DriftGuard, ObservedPipeline};
 use super::{check_active_entry, NdiManager, StateCheckOutcome};
 
 /// #388 periodic RTCP-liveness sweep cadence: how often each source's
@@ -94,7 +95,10 @@ impl SupervisorState {
     /// unrecoverable faults; short enough that a self-healing transient
     /// fault (intermittent NDI broadcaster, GPU contention from another
     /// process) recovers without operator intervention.
-    const COOL_OFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+    /// Also the minimum spacing between two #854 drift self-heal rebuilds
+    /// (`drift_guard.rs`).
+    pub(in crate::manager) const COOL_OFF_WINDOW: std::time::Duration =
+        std::time::Duration::from_secs(5 * 60);
 
     /// Rate-limit window: minimum 2 seconds between rebuild attempts.
     pub(in crate::manager) fn should_rebuild_now(
@@ -186,6 +190,9 @@ impl NdiManager {
                     }
                     _ = reap_tick.tick() => {
                         manager.periodic_reap(&source_id).await;
+                        // #854: the drift self-heal backstop rides the same
+                        // 30 s tick (no new thread, #768 D3).
+                        manager.drift_check(&source_id).await;
                         continue;
                     }
                 }
@@ -359,6 +366,75 @@ impl NdiManager {
                 "supervisor: periodic sweep reaped RTCP-stale WHEP sessions (#388)"
             );
         }
+    }
+
+    /// #854 drift self-heal backstop for ONE source, on the supervisor's 30 s
+    /// tick. Reads the shared encoder's trailing-30s lead — a PIPELINE-level
+    /// signal, never consumer drop ratios (join drops and reconnect churn
+    /// would loop rebuilds, the #263 lesson) — and feeds the source's
+    /// `DriftGuard` (memory in the manager). When a rebuild is due it marks the
+    /// pipeline Errored; the next loop turn then rebuilds through the normal
+    /// `handle_dead_state` → `rebuild_pipeline` path (#741 reservation, #745c
+    /// carried supervisor, 2 s rate limit). Only a CONFIRMED request (the
+    /// pipeline was still Streaming) is recorded in the guard: a refused one
+    /// spends no spacing, no budget and no `driftRebuilds`. The `active` lock
+    /// is held only to clone the pipeline Arc.
+    async fn drift_check(&self, source_id: &str) {
+        let pipeline = {
+            let active = self.active.lock().await;
+            match active.get(source_id) {
+                Some(src) => std::sync::Arc::clone(&src.pipeline),
+                None => return,
+            }
+        };
+        if pipeline.state() != crate::pipeline::PipelineState::Streaming {
+            return;
+        }
+        let timing = pipeline.encoder_timing();
+        let lead = timing.lead_window_ms(crate::pipeline::health_window::WINDOW);
+        let observed = ObservedPipeline {
+            generation: timing.generation(),
+            age: timing.age(),
+        };
+        let now = std::time::Instant::now();
+        let action = self.with_drift_guard(source_id, |guard| {
+            guard.on_tick(now, observed, lead.map(|(min, _)| min))
+        });
+        if let DriftAction::Rebuild { lead_min_ms } = action {
+            let reason = format!(
+                "self-heal: shared encoder timestamps lead the clock by {lead_min_ms} ms (#854)"
+            );
+            if !pipeline.request_self_heal_rebuild(&reason) {
+                tracing::debug!(
+                    source_id = %source_id,
+                    "NDI self-heal: the pipeline left Streaming before the rebuild request — \
+                     not rebuilt, not recorded (#854)"
+                );
+                return;
+            }
+            self.with_drift_guard(source_id, |guard| guard.record_rebuild(now));
+        }
+        let (fires_last_hour, total_fires) = self.with_drift_guard(source_id, |guard| {
+            (guard.fires_in_last_hour(), guard.total_fires())
+        });
+        log_drift_action(source_id, lead, action, fires_last_hour, total_fires);
+    }
+
+    /// Run `f` on `source_id`'s drift memory (created on first use). The std
+    /// mutex is held only for `f`, never across an `.await`.
+    fn with_drift_guard<R>(&self, source_id: &str, f: impl FnOnce(&mut DriftGuard) -> R) -> R {
+        let mut guards = self.drift_guards.lock().unwrap_or_else(|p| p.into_inner());
+        f(guards.entry(source_id.to_string()).or_default())
+    }
+
+    /// #854: drift self-heal rebuilds for `source_id` since process start
+    /// (`/healthz` `driftRebuilds`); 0 for a source that never drifted.
+    pub(in crate::manager) fn drift_rebuilds(&self, source_id: &str) -> u32 {
+        self.drift_guards
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(source_id)
+            .map_or(0, DriftGuard::total_fires)
     }
 
     /// Fetch the live `state_watcher` for an active source. Used by the

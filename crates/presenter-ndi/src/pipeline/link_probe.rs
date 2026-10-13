@@ -40,6 +40,14 @@
 //! ~+250 ms — the classifier had inherited a threshold calibrated on the
 //! pre-lane-6 wrong lateness (≈ −3600 s).
 //!
+//! #854 adds `FutureTimestamps`, checked right after "no drops in the window":
+//! window drops while the windowed lateness minimum is <= −100 ms mean the
+//! forwarded buffers were stamped in the future (the shared encoder's timeline
+//! led the clock), so webrtcbin held them and the queue overflowed — every such
+//! overflow forwards a DISCONT, which the older branches would misread as a
+//! keyframe wait. The lateness window is time-based (`time_window.rs`), not
+//! since-join, so a lead that forms long after the join is still seen.
+//!
 //! Everything else is measured from a src-pad BUFFER probe, which fires
 //! reliably regardless of callbacks: DISCONT / keyframe buffer counts, buffer
 //! lateness vs the consumer clock, and the appsrc's `current-level-time` at
@@ -60,6 +68,8 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 
+use super::time_window::SecondBuckets;
+
 /// appsrc `current-level-time` (ms) at/above which the queue is read as
 /// genuinely FULL — 90% of the 500 ms appsrc `max-time` bound. A window drop
 /// with the queue this deep AND buffers not in the future is a real
@@ -77,6 +87,17 @@ const QUEUE_FULL_MS: u64 = 450;
 /// join transients into `queueOverflow`).
 const LATENESS_NOT_FUTURE_MS: i64 = 0;
 
+/// Trailing-window lateness minimum (ms) at/below which a window with drops is
+/// explained by FUTURE-stamped buffers (#854): a sync element downstream
+/// (webrtcbin's `clocksync`) holds them, the 500 ms appsrc queue fills and
+/// overflows once per GOP. Calibrated on the segment-aware lateness: healthy
+/// links read +5…+40 ms, a join transient ≈ +250 ms, the PP incident −1532 ms
+/// — so −100 ms is three frames below any healthy value and far above the
+/// failure. The encoder guard lets a frame lead by up to its deadband
+/// (`encoder_timing::TIMESTAMP_DEADBAND_MS`, 50 ms), so a guarded PP link can
+/// read down to −50 ms: still above this threshold, by design.
+const FUTURE_TIMESTAMP_MS: i64 = -100;
+
 /// How a consumer link's drops are best explained (#768). Computed over the
 /// trailing 30s window (#768 lane 7), NOT since-join cumulative: an old
 /// join-drop episode that has aged out of the window reads `Healthy`, not a
@@ -88,6 +109,13 @@ pub enum LinkVerdict {
     /// keyframe, no recent DISCONT, queue near its `max-time` bound, buffers not
     /// in the future) — downstream is draining slower than realtime.
     QueueOverflow,
+    /// Drops in the window while forwarded buffers were stamped >= 100 ms in
+    /// the FUTURE (windowed lateness minimum <= −100 ms, #854): the shared
+    /// encoder's timestamps lead the clock, webrtcbin holds the buffers and the
+    /// consumer queue overflows. Checked before both `keyframeWait` branches —
+    /// every such overflow forwards a DISCONT, and a session joining a led
+    /// pipeline forwards its first IDR already in the future.
+    FutureTimestamps,
     /// Forwarding was keyframe-gated: drops in the window while still pre-first-
     /// IDR, OR a DISCONT was forwarded within the window (the producer re-armed
     /// `needs_keyframe` and resumed at an IDR) — the consumer is waiting for a
@@ -135,6 +163,10 @@ pub struct VerdictInputs {
     /// consumer clock (a real overflow drains too slowly); `< 0` = buffers in
     /// the future (a sync sink holds them — not an overflow).
     pub lateness_max_ms: i64,
+    /// Minimum forwarded-buffer lateness (ms) over the trailing 30 s window
+    /// (time-windowed, poll-independent; #854). `None` without buffers in the
+    /// window. <= −100 ms with window drops → `FutureTimestamps`.
+    pub lateness_window_min_ms: Option<i64>,
 }
 
 /// Classify a consumer link's drop signature over the trailing 30s window
@@ -159,6 +191,15 @@ pub fn classify(inputs: &VerdictInputs) -> LinkVerdict {
         // join drops (the whole recalibration: an aged-out join episode is not
         // a fault).
         return LinkVerdict::Healthy;
+    }
+    // #854: drops while buffers were stamped in the future — the cause is the
+    // shared encoder's timeline leading the clock, not the keyframe wait the
+    // resulting DISCONT (or a led join's first IDR) would otherwise suggest.
+    if inputs
+        .lateness_window_min_ms
+        .is_some_and(|min| min <= FUTURE_TIMESTAMP_MS)
+    {
+        return LinkVerdict::FutureTimestamps;
     }
     // Drops IN the window while still pre-first-IDR — unambiguously a keyframe
     // wait (there is no established stream to overflow yet).
@@ -293,6 +334,13 @@ pub struct LinkProbe {
     /// the snapshot read path so the verdict can tell a RECENT keyframe wait
     /// (discont within the window) from an old join-time one.
     discont_window: std::sync::Mutex<DiscontWindow>,
+    /// Per-second min/max of forwarded-buffer lateness (#854), recorded on the
+    /// buffer path so the `futureTimestamps` verdict reads a TIME window (the
+    /// since-join `latenessMs.max` is pinned >= +250 ms by every join
+    /// transient, so it can never see a lead that forms after the join).
+    lateness_window: std::sync::Mutex<SecondBuckets>,
+    /// Second zero of `lateness_window`.
+    origin: Instant,
 }
 
 impl Default for LinkProbe {
@@ -308,6 +356,8 @@ impl Default for LinkProbe {
             lateness_last_ms: AtomicI64::new(0),
             active_segment: std::sync::Mutex::new(None),
             discont_window: std::sync::Mutex::new(DiscontWindow::default()),
+            lateness_window: std::sync::Mutex::new(SecondBuckets::default()),
+            origin: Instant::now(),
         }
     }
 }
@@ -349,6 +399,20 @@ impl LinkProbe {
         self.lateness_max_ms
             .fetch_max(lateness_ms, Ordering::Relaxed);
         self.lateness_last_ms.store(lateness_ms, Ordering::Relaxed);
+        self.lateness_window
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .record(self.origin.elapsed().as_secs(), lateness_ms);
+    }
+
+    /// `(min, max)` lateness (ms) over the trailing 30 s ending at `now`;
+    /// `None` without buffers in that window (#854).
+    fn lateness_window_extrema(&self, now: Instant) -> Option<(i64, i64)> {
+        let now_sec = now.saturating_duration_since(self.origin).as_secs();
+        self.lateness_window
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .extrema(now_sec, super::health_window::WINDOW.as_secs())
     }
 
     /// Store the active TIME segment seen on the consumer appsrc src pad (#768
@@ -416,17 +480,22 @@ impl LinkProbe {
         let keyframe_buffers = self.keyframe_buffers.load(Ordering::Relaxed);
         let max_queue_level_ms = self.max_queue_level_ms.load(Ordering::Relaxed);
         let lateness_max = self.lateness_max_ms.load(Ordering::Relaxed);
+        let window = self.lateness_window_extrema(now);
         let lateness_ms = if total == 0 {
             LatenessSnapshot {
                 min: None,
                 max: None,
                 last: None,
+                window_min: None,
+                window_max: None,
             }
         } else {
             LatenessSnapshot {
                 min: Some(self.lateness_min_ms.load(Ordering::Relaxed)),
                 max: Some(lateness_max),
                 last: Some(self.lateness_last_ms.load(Ordering::Relaxed)),
+                window_min: window.map(|(min, _)| min),
+                window_max: window.map(|(_, max)| max),
             }
         };
         // Sample the discont window at this read instant (same cadence as the
@@ -451,6 +520,7 @@ impl LinkProbe {
             discont_in_window,
             max_queue_level_ms,
             lateness_max_ms: lateness_for_verdict,
+            lateness_window_min_ms: window.map(|(min, _)| min),
         });
         LinkProbeSnapshot {
             dropped_buffers,
@@ -482,6 +552,13 @@ pub struct LatenessSnapshot {
     pub max: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last: Option<i64>,
+    /// Minimum lateness over the trailing 30 s (#854) — a TIME window, unlike
+    /// the since-join `min`/`max`. <= −100 ms with drops = `futureTimestamps`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_min: Option<i64>,
+    /// Maximum lateness over the trailing 30 s (#854).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_max: Option<i64>,
 }
 
 /// Serialized per-consumer-link diagnostic for `GET /ndi/snapshot/{id}`
@@ -629,6 +706,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 0,
             lateness_max_ms: 0,
+            lateness_window_min_ms: None,
         }
     }
 
@@ -650,6 +728,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 256,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::Healthy);
     }
@@ -667,6 +746,7 @@ mod tests {
             discont_in_window: Some(true),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::KeyframeWait);
     }
@@ -682,6 +762,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::KeyframeWait);
     }
@@ -698,6 +779,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::QueueOverflow);
     }
@@ -714,6 +796,7 @@ mod tests {
             discont_in_window: Some(true),
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::KeyframeWait);
     }
@@ -730,6 +813,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: -50,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::Unknown);
     }
@@ -746,6 +830,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 200,
             lateness_max_ms: 300,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::Unknown);
     }
@@ -766,6 +851,7 @@ mod tests {
             discont_in_window: None,
             max_queue_level_ms: 499,
             lateness_max_ms: 300,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::Unknown);
     }
@@ -782,6 +868,7 @@ mod tests {
             discont_in_window: Some(false),
             max_queue_level_ms: 499,
             lateness_max_ms: 2152,
+            lateness_window_min_ms: None,
         };
         assert_eq!(classify(&inputs), LinkVerdict::Unknown);
     }
@@ -1023,5 +1110,146 @@ mod tests {
             probe.buffer_lateness_ms(Some(gst::ClockTime::from_mseconds(5)), None),
             0
         );
+    }
+
+    /// The PP SD1 incident shape (#854): drops in the window, a DISCONT in the
+    /// window (every overflow forwards one), queue full, and buffers stamped
+    /// up to 1.5 s in the future.
+    fn future_lead_inputs() -> VerdictInputs {
+        VerdictInputs {
+            window_dropped: Some(400),
+            cumulative_dropped: 5000,
+            keyframe_buffers: 5000,
+            discont_in_window: Some(true),
+            max_queue_level_ms: 1466,
+            lateness_max_ms: -16,
+            lateness_window_min_ms: Some(-1532),
+        }
+    }
+
+    #[test]
+    fn classify_future_timestamps_for_the_pp_incident() {
+        assert_eq!(
+            classify(&future_lead_inputs()),
+            LinkVerdict::FutureTimestamps
+        );
+    }
+
+    #[test]
+    fn classify_future_beats_the_discont_keyframe_wait_branch() {
+        let inputs = VerdictInputs {
+            lateness_window_min_ms: Some(-150),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&inputs), LinkVerdict::FutureTimestamps);
+    }
+
+    #[test]
+    fn classify_future_beats_the_pre_first_idr_branch() {
+        // A session that JOINED a led pipeline forwards its first IDR already
+        // in the future: still pre-first-IDR, but the cause is the lead.
+        let inputs = VerdictInputs {
+            keyframe_buffers: 1,
+            discont_in_window: Some(false),
+            lateness_window_min_ms: Some(-600),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&inputs), LinkVerdict::FutureTimestamps);
+    }
+
+    #[test]
+    fn classify_no_drops_is_healthy_even_with_a_lead() {
+        // A lead below 500 ms causes no drops; it is reported on the pipeline
+        // (`timestampLeadMs30s`), not as a link fault.
+        let inputs = VerdictInputs {
+            window_dropped: Some(0),
+            lateness_window_min_ms: Some(-1500),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&inputs), LinkVerdict::Healthy);
+    }
+
+    #[test]
+    fn classify_future_threshold_is_minus_100_ms() {
+        let at = VerdictInputs {
+            lateness_window_min_ms: Some(-100),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&at), LinkVerdict::FutureTimestamps);
+        // One ms short of the threshold falls through to the existing logic
+        // (here: the DISCONT in the window → keyframe wait).
+        let above = VerdictInputs {
+            lateness_window_min_ms: Some(-99),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&above), LinkVerdict::KeyframeWait);
+    }
+
+    #[test]
+    fn classify_a_lead_inside_the_guard_deadband_is_not_future() {
+        // #854 deadband: the shared-encoder guard lets a frame leave up to
+        // D = 50 ms ahead of the clock, so a consumer can read lateness down to
+        // −D (the trip to the appsrc only adds lateness). Even with drops in
+        // the window that must never read `futureTimestamps`: the existing
+        // logic decides (here: the DISCONT in the window → keyframe wait).
+        let d = crate::pipeline::encoder_timing::TIMESTAMP_DEADBAND_MS;
+        let inputs = VerdictInputs {
+            lateness_window_min_ms: Some(-d),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&inputs), LinkVerdict::KeyframeWait);
+    }
+
+    #[test]
+    fn classify_healthy_lateness_or_no_window_is_not_future() {
+        let healthy = VerdictInputs {
+            lateness_window_min_ms: Some(33),
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&healthy), LinkVerdict::KeyframeWait);
+        let no_window = VerdictInputs {
+            lateness_window_min_ms: None,
+            ..future_lead_inputs()
+        };
+        assert_eq!(classify(&no_window), LinkVerdict::KeyframeWait);
+    }
+
+    #[test]
+    fn to_snapshot_reads_the_windowed_lateness_into_the_verdict() {
+        let probe = LinkProbe::default();
+        probe.record_buffer(false, true, -1500, 499);
+        probe.record_buffer(true, false, -1400, 499);
+        let snap = probe.to_snapshot(400, Some(400), Instant::now());
+        assert_eq!(snap.lateness_ms.window_min, Some(-1500));
+        assert_eq!(snap.lateness_ms.window_max, Some(-1400));
+        assert_eq!(snap.verdict, LinkVerdict::FutureTimestamps);
+    }
+
+    #[test]
+    fn to_snapshot_aged_out_future_lateness_is_not_future() {
+        // A lead seen 40 s ago is outside the 30 s window: the verdict must not
+        // keep blaming it.
+        let probe = LinkProbe::default();
+        probe.record_buffer(false, true, -1500, 499);
+        probe.record_buffer(false, true, -1500, 499);
+        let later = Instant::now() + Duration::from_secs(40);
+        let _ = probe.to_snapshot(400, Some(400), later);
+        let snap = probe.to_snapshot(400, Some(400), later + Duration::from_secs(3));
+        assert_eq!(snap.lateness_ms.window_min, None);
+        assert_ne!(snap.verdict, LinkVerdict::FutureTimestamps);
+    }
+
+    #[test]
+    fn future_timestamps_serializes_and_window_keys_are_camelcase() {
+        assert_eq!(
+            serde_json::to_string(&LinkVerdict::FutureTimestamps).expect("serialize"),
+            "\"futureTimestamps\""
+        );
+        let probe = LinkProbe::default();
+        probe.record_buffer(false, true, 30, 0);
+        let json = serde_json::to_string(&probe.to_snapshot(0, Some(0), Instant::now()))
+            .expect("serialize");
+        assert!(json.contains("\"windowMin\":30"), "{json}");
+        assert!(json.contains("\"windowMax\":30"), "{json}");
     }
 }

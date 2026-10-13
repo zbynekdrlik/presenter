@@ -1083,6 +1083,15 @@ test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic
       dropRatio?: number;
       consumer_count?: number;
       consumerCount?: number;
+      // #854: the shared-encoder timestamp guard + lead meter.
+      encoderTiming?: {
+        installed?: boolean;
+        encoderFactory?: string;
+        framesSeen?: number;
+        framesPulledBack?: number;
+        correctionMs?: number;
+        leadMs30s?: { min: number; max: number } | null;
+      };
       sessions?: Array<{
         id?: string;
         dropRatio?: number;
@@ -1128,6 +1137,41 @@ test("boot-restore NDI pipeline delivers a healthy (low-drop) fan-out (synthetic
       ).toBeLessThan(0.2);
     }
 
+    // #854: the shared-encoder timestamp guard is wired on the REAL ndisrc
+    // pipeline and its output never leads the clock. dev2's NVENC keeps the
+    // input PTS, so framesPulledBack should stay 0 — printed, not asserted
+    // (the frame-counter case is covered by the Rust regression test).
+    console.log(
+      `[e2e-evidence] #854 encoderTiming: ${JSON.stringify(final!.encoderTiming)}`,
+    );
+    expect(
+      final!.encoderTiming?.installed,
+      "#854: the timestamp guard + lead meter must be installed on the restored pipeline",
+    ).toBe(true);
+    const healthResp = await request.get(new URL("/healthz", baseURL).toString());
+    expect(healthResp.ok(), "/healthz must answer").toBe(true);
+    const health = (await healthResp.json()) as {
+      ndi_pipelines?: Array<{
+        source_id: string;
+        timestampLeadMs30s?: number | null;
+        encoderTimestampGuard?: boolean;
+        encoderTimestampCorrectionMs?: number;
+        driftRebuilds?: number;
+      }>;
+    };
+    const entry = (health.ndi_pipelines ?? []).find((p) => p.source_id === src.id);
+    console.log(`[e2e-evidence] #854 /healthz entry: ${JSON.stringify(entry)}`);
+    expect(entry, "/healthz must list the restored pipeline").toBeTruthy();
+    expect(entry!.encoderTimestampGuard, "#854 guard flag on /healthz").toBe(true);
+    expect(entry!.driftRebuilds, "#854: no drift self-heal rebuild on a healthy pipeline").toBe(0);
+    const lead = entry!.timestampLeadMs30s;
+    expect(typeof lead, "#854: frames flowed in the last 30 s, so the lead is measured").toBe(
+      "number",
+    );
+    expect(
+      lead as number,
+      `#854: the shared encoder output must never be stamped ahead of the clock, got ${lead} ms`,
+    ).toBeLessThanOrEqual(5);
   } finally {
     // Release the held consumers even on an assertion failure (they live on
     // window across page.evaluate calls); releaseHeldConsumers no-ops if none

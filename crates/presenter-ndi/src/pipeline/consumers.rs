@@ -439,6 +439,7 @@ impl NdiPipeline {
             drop_ratio: super::health::drop_ratio(agg_pushed, agg_dropped),
             drop_ratio_30s: pipe_drop_ratio_30s,
             pushed_fps_30s: pipe_pushed_fps_30s,
+            encoder_timing: self.encoder_timing.snapshot(),
             sessions: session_snaps,
         }
     }
@@ -634,7 +635,7 @@ fn build_consumer_pipeline_blocking(
 /// StreamProducer's push_sample) are valid on this pipeline's timeline.
 /// set_start_time(NONE) stops the PLAYING transition from re-selecting a
 /// base-time. This mirrors webrtcsink's session-pipeline setup verbatim.
-fn adopt_encoder_timeline(
+pub(super) fn adopt_encoder_timeline(
     consumer_pipeline: &gst::Pipeline,
     enc_clock: Option<gst::Clock>,
     enc_base_time: Option<gst::ClockTime>,

@@ -109,15 +109,12 @@ impl NdiPipeline {
         let producer = StreamProducer::with(&appsink, settings);
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
-
-        // #509 (T0): read-only ingest-timing probe on the raw NDI frames
-        // (videoconvert's static sink pad, fed by the demux video pad). With
-        // ndisrc timestamp-mode=receive-time, buffer PTS = this server's clock
-        // at frame arrival, so the probe logs the camera→NDI→server delivery
-        // cadence — the signal that localizes the "lags/jumps after a while".
-        if let Some(sink) = videoconvert.static_pad("sink") {
-            super::ingest_timing::install_probe(&sink, ndi_name);
-        }
+        let encoder_timing = install_timing_probes(
+            &videoconvert,
+            &encoder,
+            appsink.upcast_ref::<gst::Element>(),
+            ndi_name,
+        );
 
         tracing::info!(
             encoder = encoder_name,
@@ -136,8 +133,30 @@ impl NdiPipeline {
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
             keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
+            encoder_timing,
         })
     }
+}
+
+/// Install the read-only and timing probes on a freshly built (still NULL)
+/// encoder pipeline, so each sees the sticky SEGMENT before the first buffer:
+///
+/// - #509 (T0): the ingest-timing probe on the raw NDI frames (videoconvert's
+///   static sink pad, fed by the demux video pad). With ndisrc
+///   timestamp-mode=receive-time, buffer PTS = this server's clock at frame
+///   arrival, so it logs the camera→NDI→server delivery cadence.
+/// - #854: the shared-encoder timestamp guard (encoder `src` pad) and the lead
+///   meter (producer appsink `sink` pad) — see `encoder_timing.rs`.
+fn install_timing_probes(
+    videoconvert: &gst::Element,
+    encoder: &gst::Element,
+    appsink: &gst::Element,
+    ndi_name: &str,
+) -> Arc<super::encoder_timing::EncoderTiming> {
+    if let Some(sink) = videoconvert.static_pad("sink") {
+        super::ingest_timing::install_probe(&sink, ndi_name);
+    }
+    super::encoder_timing::install(encoder, appsink, ndi_name)
 }
 
 /// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → fakesink.
@@ -170,8 +189,10 @@ fn connect_demux_pads(
 /// (Resolume's) timecode with windowed drift correction — accumulated
 /// sender-clock drift is then corrected via DISCONT, which the browser
 /// sees as "latency builds up, then the picture jumps". Receive-time
-/// has ZERO sender-clock coupling; arrival jitter (10-60ms measured)
-/// is absorbed by the browser's jitter buffer.
+/// has ZERO sender-clock coupling; arrival jitter (SNV 11.10.2026: worst
+/// frame gap per 5 s window 36.4 ms p50, 44.7 ms p99, 65 ms max) is absorbed
+/// by the browser's jitter buffer — when the encoder keeps the input PTS
+/// (vah264enc 1.24 replaces it with a frame counter, see `encoder_timing`).
 fn build_ndi_source(ndi_name: &str) -> Result<(gst::Element, gst::Element)> {
     let ndisrc = gst::ElementFactory::make("ndisrc")
         .name("ndisrc")
@@ -211,7 +232,7 @@ fn build_ndi_source(ndi_name: &str) -> Result<(gst::Element, gst::Element)> {
 /// can never back-pressure (and stall) the shared encoder. 5 frames
 /// (~170ms) — a bigger backlog would replay stale frames late after a
 /// transient stall (latency spike); drop(true) keeps the newest.
-fn build_parse_and_sink() -> Result<(gst::Element, gst_app::AppSink)> {
+pub(super) fn build_parse_and_sink() -> Result<(gst::Element, gst_app::AppSink)> {
     let h264parse = gst::ElementFactory::make("h264parse")
         .name("h264parse")
         .property("config-interval", -1i32)
@@ -375,7 +396,7 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
 /// flowing (live prod finding, 2026-06-11). Constrained-baseline is WebRTC's
 /// universally-decodable profile; the ~10-15% bitrate-efficiency loss is
 /// invisible, the compatibility is mandatory.
-fn build_profile_caps() -> Result<gst::Element> {
+pub(super) fn build_profile_caps() -> Result<gst::Element> {
     gst::ElementFactory::make("capsfilter")
         .name("profile_caps")
         .property(

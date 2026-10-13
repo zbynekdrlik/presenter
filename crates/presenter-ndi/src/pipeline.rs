@@ -57,6 +57,7 @@ use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 mod build;
 pub mod client_stats;
 mod consumers;
+pub mod encoder_timing;
 pub mod health;
 pub mod health_window;
 mod ingest_timing;
@@ -65,6 +66,7 @@ mod lifecycle;
 pub mod link_probe;
 mod negotiation;
 mod reaper;
+mod time_window;
 
 /// Pipeline lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,9 +105,9 @@ impl StreamProfile {
     /// old WASM watchdog state) resolves to [`Self::Default`] — an unknown
     /// profile string must never break a display's join.
     pub fn from_query(value: Option<&str>) -> Self {
-        // ALL clients get Default = 720p hardware H264. Proven 2026-06-15: the
-        // standalone com.tcl.browser HW-decodes H264 on every stage TV incl. the
-        // weak Hyundais (the old "HW H264 = black" was the system WebView only).
+        // ALL clients get Default = 720p hardware H264. The stage TVs run our own
+        // APK WebView (#472/#477), which HW-decodes H264 on every stage TV incl.
+        // the weak Hyundais (the old "HW H264 = black" was the system WebView only).
         let _ = value;
         Self::Default
     }
@@ -166,6 +168,9 @@ pub struct PipelineSnapshot {
     /// (#768 D3): the SUM of the consumers' windowed FPS. `null` until a window
     /// exists.
     pub pushed_fps_30s: Option<f64>,
+    /// #854: the shared encoder's timestamp guard + lead meter (guard
+    /// correction, pulled-back frames, raw lead, trailing-30s lead).
+    pub encoder_timing: encoder_timing::EncoderTimingSnapshot,
     pub sessions: Vec<SessionSnapshot>,
 }
 
@@ -216,8 +221,10 @@ pub struct SessionSnapshot {
     /// `need-data` event counts, DISCONT/keyframe buffer counts, max appsrc
     /// queue depth, buffer lateness (min/max/last ms) vs the consumer clock,
     /// and a `verdict` classifying the drop signature over the trailing 30s
-    /// window (#768 lane 7): `queueOverflow` / `keyframeWait` / `healthy` /
-    /// `unknown` (window too young, or an unrecognized drop signature). Keyed
+    /// window (#768 lane 7): `futureTimestamps` (#854: drops while buffers were
+    /// stamped >= 100 ms in the future) / `queueOverflow` / `keyframeWait` /
+    /// `healthy` / `unknown` (window too young, or an unrecognized drop
+    /// signature). Keyed
     /// off drops IN THE WINDOW, so an aged-out join transient reads `healthy`,
     /// never a permanent fault. Always present — the probe exists for every
     /// consumer from join; the counters make the NEXT prod occurrence
@@ -256,6 +263,10 @@ pub struct NdiPipeline {
     /// shared encoder with a keyframe per join (#768 D5). Interior-mutable so
     /// the decision is made behind `&self` in `add_consumer`.
     keyframe_throttle: keyframe_throttle::KeyframeThrottle,
+    /// #854: the shared encoder's timestamp guard + lead meter state (the two
+    /// pad probes hold clones). Read by `/healthz`, `/ndi/snapshot` and the
+    /// supervisor's drift self-heal check.
+    encoder_timing: Arc<encoder_timing::EncoderTiming>,
 }
 
 impl Drop for NdiPipeline {

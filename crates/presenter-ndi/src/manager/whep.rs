@@ -117,6 +117,8 @@ impl NdiManager {
         for (source_id, pipeline) in pipelines {
             let state = pipeline.state();
             let totals = pipeline.consumer_delivery_totals().await;
+            let timing = pipeline.encoder_timing();
+            let drift_rebuilds = self.drift_rebuilds(&source_id);
             out.push(crate::pipeline::health::PipelineDropHealth {
                 source_id,
                 state,
@@ -125,6 +127,14 @@ impl NdiManager {
                 // #768 D3: current-health trailing-30s aggregate for the watchdog.
                 drop_ratio_30s: totals.drop_ratio_30s,
                 pushed_fps_30s: totals.pushed_fps_30s,
+                // #854: shared-encoder timestamp health (cheap: atomics + the
+                // 32-bucket lead window).
+                timestamp_lead_ms_30s: timing
+                    .lead_window_ms(crate::pipeline::health_window::WINDOW)
+                    .map(|(_, max)| max),
+                encoder_timestamp_correction_ms: timing.correction_ms(),
+                encoder_timestamp_guard: timing.is_installed(),
+                drift_rebuilds,
             });
         }
         Some(out)

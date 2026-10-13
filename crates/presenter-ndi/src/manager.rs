@@ -27,6 +27,7 @@ use crate::ndi_sdk::NdiLib;
 use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 
 mod activation;
+mod drift_guard;
 mod lifecycle;
 mod supervisor;
 mod whep;
@@ -261,6 +262,11 @@ pub struct NdiManager {
     /// long `start_pipeline`/`rebuild_pipeline` window logs ~log2(N)+1 lines
     /// instead of one per status poll (the resolume #484 idiom).
     pub(in crate::manager) snapshot_contention_streak: AtomicU32,
+    /// #854: per-source drift self-heal memory (sustain count, rebuild times,
+    /// totals). Lives HERE, not in the supervisor task, so the 5 min spacing
+    /// and the 3/h budget survive a supervisor being replaced. A std mutex:
+    /// only ever held for a pure `on_tick`/read, never across an await.
+    pub(in crate::manager) drift_guards: std::sync::Mutex<HashMap<String, drift_guard::DriftGuard>>,
 }
 
 // Re-export the supervisor's pure-state types into the module root so the
