@@ -13,6 +13,10 @@
 //! crossfades it in from an invisible clip. Before a clip is connected,
 //! [`HostDriver::restore_before_connect`] puts a faded opacity back.
 //!
+//! #848 (owner, 2026-10-12): the clip TAGGED `#bible-clear` (the sermon title
+//! on SNV) is a cover: a clear fades it UP, a verse fades it DOWN. That fade
+//! is deferred and best-effort, NOT part of this push (`bible_clear_cover.rs`).
+//!
 //! [`TrackedOpacities`] remembers the opacity this process gave every clip it
 //! faded or connected:
 //!
@@ -25,8 +29,9 @@
 //!   `/composition` lists only the new deck, so a clear fades it from what was
 //!   remembered.
 //! - Each composition fetch shows what Resolume really has, and nothing writes
-//!   between a fetch and its sync, so the tracked level then takes the fetched
-//!   value. An opacity changed in Arena counts from the next fetch on.
+//!   a Bible clip between a fetch and its sync, so the tracked level then
+//!   takes the fetched value. An opacity changed in Arena counts from the
+//!   next fetch on.
 
 use super::clip_map::ClipMapping;
 use super::driver::{duration_ms, HostDriver, ACTION_TIMEOUT};
@@ -40,15 +45,15 @@ use std::time::Duration;
 use tokio::time::{sleep, Instant};
 use tracing::{debug, info, warn};
 
-/// Upper bound of a clear's fade. The host worker is serial, so a fade holds
+/// Upper bound of a fade. The host worker is serial, so a clear's fade holds
 /// every later push of this host for its whole length.
 pub(super) const MAX_CLEAR_FADE: Duration = Duration::from_secs(3);
 /// Time between two fade steps (20 opacity updates per second). Every step
-/// PUTs each Bible clip on a fresh connection (#808 keeps no pool), so the
-/// rate stays modest for Arena.
-const FADE_STEP: Duration = Duration::from_millis(50);
+/// PUTs each clip on a fresh connection (#808 keeps no pool), so the rate
+/// stays modest for Arena.
+pub(super) const FADE_STEP: Duration = Duration::from_millis(50);
 /// Opacities closer than this are the same value (Resolume may round).
-const SAME_OPACITY: f64 = 1e-6;
+pub(super) const SAME_OPACITY: f64 = 1e-6;
 
 /// The opacity this process last gave one clip.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,6 +63,22 @@ pub(super) struct TrackedOpacity {
     /// The last opacity Resolume accepted from us (or showed in a fetch);
     /// below `base` while faded.
     pub(super) level: f64,
+}
+
+impl TrackedOpacity {
+    /// This clip once Resolume shows it at `shown` (a fetch, or the cover
+    /// fade's read): a VISIBLE clip changed outside Presenter keeps that
+    /// opacity as its base, so a dim made in Arena survives; a faded one is
+    /// still restored to at least its old base, so 0 never becomes a base.
+    pub(super) fn observe(self, shown: f64) -> Self {
+        let visible = self.level >= self.base;
+        let base = if visible && shown > 0.0 {
+            shown
+        } else {
+            self.base.max(shown)
+        };
+        Self { base, level: shown }
+    }
 }
 
 /// A clip a verse connected, as a clear needs it once a deck switch has taken
@@ -94,17 +115,39 @@ impl TrackedOpacities {
         self.clips.get(&param_id).copied()
     }
 
+    /// Track `param_id` at `opacity`, replacing what was tracked.
+    pub(super) fn set(&mut self, param_id: i64, opacity: TrackedOpacity) {
+        self.clips.insert(param_id, opacity);
+    }
+
+    /// Track `param_id` at `opacity` unless it is tracked already. A fade
+    /// tracks its clips BEFORE its first PUT, so a fade that fails halfway is
+    /// still restored (or continued) from where it stopped.
+    pub(super) fn track_if_absent(&mut self, param_id: i64, opacity: TrackedOpacity) {
+        self.clips.entry(param_id).or_insert(opacity);
+    }
+
+    /// Resolume accepted `level` for a tracked clip.
+    pub(super) fn record_level(&mut self, param_id: i64, level: f64) {
+        if let Some(tracked) = self.clips.get_mut(&param_id) {
+            tracked.level = level;
+        }
+    }
+
     /// Apply a fresh composition fetch, once per fetch:
     ///
     /// - an untracked Bible lane clip shown at opacity 0 is adopted as faded
     ///   from full: a clear left it invisible, possibly one of a previous
     ///   process, and it goes back to full opacity before its next connect;
-    /// - a tracked clip takes the fetched value as its level (no write runs
-    ///   between a fetch and its sync, so a difference was made outside
-    ///   Presenter, e.g. in Arena, or by a step that failed halfway). A clip
-    ///   that was visible also takes it as its base, so an opacity lowered in
-    ///   Arena survives the next verse; a faded clip keeps restoring to at
-    ///   least its old base.
+    /// - a tracked clip takes the fetched value as its level (no Bible write
+    ///   runs between a fetch and its sync, so a difference was made outside
+    ///   Presenter, e.g. in Arena, or by a step that failed halfway), with the
+    ///   base rules of [`TrackedOpacity::observe`].
+    ///
+    /// The `#bible-clear` covers are left out (#848): their deferred fade can
+    /// write between a fetch and its sync, so a fetch may cache a value from
+    /// the middle of that fade. The cover fade reads each cover's opacity in
+    /// Arena before it plans instead (`bible_clear_cover.rs`).
     pub(super) fn sync_with_fetch(
         &mut self,
         mapping: &ClipMapping,
@@ -131,17 +174,7 @@ impl TrackedOpacities {
                     sync.adopted.push(opacity.param_id);
                 }
                 Some(tracked) if (tracked.level - shown).abs() > SAME_OPACITY => {
-                    // A visible clip changed in Arena keeps that opacity as
-                    // its base; a faded one is still restored to at least
-                    // its old base.
-                    let visible = tracked.level >= tracked.base;
-                    let base = if visible && shown > 0.0 {
-                        shown
-                    } else {
-                        tracked.base.max(shown)
-                    };
-                    let synced = TrackedOpacity { base, level: shown };
-                    self.clips.insert(opacity.param_id, synced);
+                    self.clips.insert(opacity.param_id, tracked.observe(shown));
                     sync.corrected.push(opacity.param_id);
                 }
                 _ => {}
@@ -151,13 +184,13 @@ impl TrackedOpacities {
     }
 
     /// Stop tracking a clip Resolume no longer knows.
-    fn forget(&mut self, param_id: i64) {
+    pub(super) fn forget(&mut self, param_id: i64) {
         self.clips.remove(&param_id);
         self.connected.remove(&param_id);
     }
 }
 
-/// One clip of a clear's fade.
+/// One clip of a fade.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct FadeTarget {
     pub(super) clip_id: i64,
@@ -166,15 +199,18 @@ pub(super) struct FadeTarget {
     pub(super) base: f64,
     /// The opacity the fade starts from.
     pub(super) from: f64,
+    /// The opacity the fade ends at: 0 for a Bible clip and a cover a verse
+    /// hides, the base for a `#bible-clear` cover a clear shows (#848).
+    pub(super) to: f64,
     pub(super) duration: Duration,
-    /// Listed by the current mapping. A clip outside it (a verse's clip from
-    /// before a deck switch) that answers 404 is dropped; a mapped one is a
-    /// stale mapping.
+    /// Listed by the current mapping. A clip outside it (a verse's clip or a
+    /// cover from before a deck switch) that answers 404 is dropped; a mapped
+    /// one is a stale mapping.
     pub(super) mapped: bool,
 }
 
 /// Every Bible lane clip of `mapping`, A and B sides.
-fn bible_lane_clips(mapping: &ClipMapping) -> impl Iterator<Item = &ClipTarget> {
+pub(super) fn bible_lane_clips(mapping: &ClipMapping) -> impl Iterator<Item = &ClipTarget> {
     [
         &mapping.bible_a,
         &mapping.bible_b,
@@ -192,8 +228,10 @@ fn bible_lane_clips(mapping: &ClipMapping) -> impl Iterator<Item = &ClipTarget> 
 /// The fade a clear runs: each still-visible Bible lane clip with an opacity
 /// parameter, from where it is now (the tracked level, else the mapped value),
 /// then each still-visible clip a verse connected that the mapping no longer
-/// lists. A clip tagged twice fades once. Pure, so the selection is
-/// unit-tested without a mock Resolume.
+/// lists, all down to 0. A clip tagged twice fades once. The `#bible-clear`
+/// covers are not part of it: their fade is deferred (#848,
+/// `bible_clear_cover.rs`). Pure, so the selection is unit-tested without a
+/// mock Resolume.
 pub(super) fn plan_clear_fade(
     mapping: &ClipMapping,
     tracked: &TrackedOpacities,
@@ -214,6 +252,7 @@ pub(super) fn plan_clear_fade(
                 param_id: opacity.param_id,
                 base,
                 from,
+                to: 0.0,
                 duration: target.fade,
                 mapped: true,
             })
@@ -230,6 +269,7 @@ pub(super) fn plan_clear_fade(
                 param_id,
                 base: opacity.base,
                 from: opacity.level,
+                to: 0.0,
                 duration: clip.fade,
                 mapped: false,
             })
@@ -242,12 +282,35 @@ pub(super) fn plan_clear_fade(
 
 /// The opacity of a fading clip `elapsed` into its fade: linear from `from`
 /// down to 0, reached exactly at `duration` (at once for a zero duration).
+#[cfg(test)]
 pub(super) fn fade_level(from: f64, elapsed: Duration, duration: Duration) -> f64 {
+    fade_toward(from, 0.0, elapsed, duration)
+}
+
+/// The opacity of a fading clip `elapsed` into its fade: linear from `from`
+/// to `to` (up or down), reached exactly at `duration` (at once for a zero
+/// duration). A level within [`SAME_OPACITY`] of `to` IS `to`: the fades stop
+/// once a clip is that close, so a step landing there must send `to` itself
+/// (#848 CI run 38288218234: a hide's step 1.4 µs before its end sent 9.3e-7
+/// and the cover was never set to 0).
+pub(super) fn fade_toward(from: f64, to: f64, elapsed: Duration, duration: Duration) -> f64 {
     if elapsed >= duration {
-        return 0.0;
+        return to;
     }
-    let remaining = 1.0 - elapsed.as_secs_f64() / duration.as_secs_f64();
-    (from * remaining).max(0.0)
+    let progress = elapsed.as_secs_f64() / duration.as_secs_f64();
+    let level = from + (to - from) * progress;
+    if (level - to).abs() <= SAME_OPACITY {
+        to
+    } else {
+        level
+    }
+}
+
+/// The longest fade of `fade` in milliseconds, for the logs.
+fn longest_ms(fade: &[FadeTarget]) -> f64 {
+    fade.iter()
+        .map(|target| duration_ms(target.duration))
+        .fold(0.0, f64::max)
 }
 
 impl HostDriver {
@@ -273,8 +336,10 @@ impl HostDriver {
         }
     }
 
-    /// Fade every visible Bible clip of this host to opacity 0, without
-    /// triggering a clip or writing text (see the module docs).
+    /// Fade every visible Bible clip of this host to opacity 0 without
+    /// triggering a clip or writing text (see the module docs). The
+    /// `#bible-clear` cover is shown afterwards, deferred
+    /// (`HostDriver::schedule_cover_fade`).
     pub(super) async fn handle_bible_clear(&mut self, mapping: &ClipMapping) -> anyhow::Result<()> {
         self.warn_unfadeable(mapping);
         let fade = plan_clear_fade(mapping, &self.opacities);
@@ -285,10 +350,7 @@ impl HostDriver {
             );
             return Ok(());
         }
-        let fade_ms = fade
-            .iter()
-            .map(|target| duration_ms(target.duration))
-            .fold(0.0, f64::max);
+        let fade_ms = longest_ms(&fade);
         let faded_clip_ids: Vec<i64> = fade.iter().map(|target| target.clip_id).collect();
         let unmapped_clip_ids: Vec<i64> = fade
             .iter()
@@ -312,9 +374,11 @@ impl HostDriver {
     }
 
     /// A Bible clip without a `video.opacity` parameter cannot be faded, so its
-    /// text stays on the wall after a clear.
+    /// text stays on the wall after a clear; a `#bible-clear` clip without one
+    /// is never shown or hidden.
     fn warn_unfadeable(&self, mapping: &ClipMapping) {
         let unfadeable: Vec<i64> = bible_lane_clips(mapping)
+            .chain(&mapping.bible_clear)
             .filter(|target| target.opacity.is_none())
             .map(|target| target.clip_id)
             .collect();
@@ -322,24 +386,23 @@ impl HostDriver {
             warn!(
                 host = %self.config.host,
                 ?unfadeable,
-                "resolume bible clear: these Bible clips have no video.opacity parameter and cannot be faded"
+                "resolume bible clear: these Bible / #bible-clear clips have no video.opacity parameter and cannot be faded"
             );
         }
     }
 
-    /// Step every target's opacity down to 0 over its duration. `steps` counts
-    /// the steps that landed, and stays right when a later step fails.
+    /// Step every target's opacity from where it is to its `to` over its
+    /// duration. `steps` counts the steps that landed, and stays right when a
+    /// later step fails.
     async fn run_fade(&mut self, fade: &[FadeTarget], steps: &mut usize) -> anyhow::Result<()> {
         // Tracked BEFORE the first PUT: a fade that fails halfway must still
         // be restored before these clips are connected again.
         for target in fade {
-            self.opacities
-                .clips
-                .entry(target.param_id)
-                .or_insert(TrackedOpacity {
-                    base: target.base,
-                    level: target.from,
-                });
+            let start = TrackedOpacity {
+                base: target.base,
+                level: target.from,
+            };
+            self.opacities.track_if_absent(target.param_id, start);
         }
         let longest = fade
             .iter()
@@ -355,10 +418,10 @@ impl HostDriver {
                 .filter(|target| {
                     self.opacities
                         .get(target.param_id)
-                        .is_some_and(|tracked| tracked.level > 0.0)
+                        .is_some_and(|tracked| (tracked.level - target.to).abs() > SAME_OPACITY)
                 })
                 .map(|target| {
-                    let level = fade_level(target.from, elapsed, target.duration);
+                    let level = fade_toward(target.from, target.to, elapsed, target.duration);
                     (target.param_id, level)
                 })
                 .collect();
@@ -369,11 +432,8 @@ impl HostDriver {
             // Record every PUT that landed, also in a failed step, so the
             // tracked levels match what Arena has.
             for (param_id, level) in levels {
-                if !puts.landed.contains(&param_id) {
-                    continue;
-                }
-                if let Some(tracked) = self.opacities.clips.get_mut(&param_id) {
-                    tracked.level = level;
+                if puts.landed.contains(&param_id) {
+                    self.opacities.record_level(param_id, level);
                 }
             }
             let stale = self.drop_missing(fade, &puts.missing);
@@ -382,7 +442,7 @@ impl HostDriver {
             }
             *steps += 1;
             stale?;
-            // Past the longest duration every level just sent was 0.
+            // Past the longest duration every level just sent was its `to`.
             if elapsed >= longest {
                 return Ok(());
             }
@@ -487,17 +547,17 @@ impl HostDriver {
 /// What one batch of opacity PUTs did. Every request of the batch is awaited,
 /// also after a failure (`batch.rs`).
 #[derive(Debug, Default)]
-struct OpacityPuts {
+pub(super) struct OpacityPuts {
     /// Accepted by Resolume.
-    landed: Vec<i64>,
+    pub(super) landed: Vec<i64>,
     /// Answered 404; the caller decides what a missing clip means.
-    missing: Vec<i64>,
+    pub(super) missing: Vec<i64>,
     /// The first other failure, in completion order.
-    error: Option<anyhow::Error>,
+    pub(super) error: Option<anyhow::Error>,
 }
 
 /// PUT each `(opacity param id, value)` concurrently and wait for all of them.
-async fn put_opacities(
+pub(super) async fn put_opacities(
     client: &Client,
     endpoint: &ResolvedEndpoint,
     levels: &[(i64, f64)],

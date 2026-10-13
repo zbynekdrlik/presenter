@@ -31,7 +31,7 @@ fn deck_two_opacity() -> impl Iterator<Item = i64> {
 
 /// Assert that every param in `params` was stepped down to 0 from near full
 /// opacity: a fade, not a cut and not skipped.
-fn assert_faded(requests: &[Request], params: impl IntoIterator<Item = i64>) {
+pub(super) fn assert_faded(requests: &[Request], params: impl IntoIterator<Item = i64>) {
     for param in params {
         let steps = opacities_put(requests, param);
         assert_eq!(

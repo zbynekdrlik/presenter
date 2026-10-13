@@ -864,9 +864,10 @@ async fn handle_bible_routes_to_clear_when_no_passage() {
         .await
         .expect("bible clear");
 
-    // #841: a clear only fades the Bible clips' opacity (`bible_clear_tests.rs`).
-    // These fixture clips carry no opacity parameter, so it sends nothing: no
-    // blanked text, and no clip trigger (`#bible-clear` is no longer a tag).
+    // #841/#848: a clear only fades opacities (`bible_clear_tests.rs`,
+    // `bible_clear_cover_tests.rs`). These fixture clips, `#bible-clear`
+    // included, carry no opacity parameter, so it sends nothing: no blanked
+    // text, and no clip trigger.
     let requests = server.received_requests().await.expect("requests");
     assert!(
         !requests

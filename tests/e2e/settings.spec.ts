@@ -663,12 +663,13 @@ test('resolume settings shows the static supported-clip-names reference panel (#
   ]) {
     await expect(legend).toContainText(token);
   }
-  // #841: a Bible clear fades the clips' opacity, so there is no #bible-clear
-  // clip any more and the legend says how a clear works instead.
-  await expect(legend).not.toContainText('#bible-clear');
-  await expect(legend.locator('[data-role="resolume-bible-clear-note"]')).toContainText(
-    'fades the opacity',
-  );
+  // #841/#848: a Bible clear triggers no clip. It fades the Bible clips out and
+  // the clip tagged #bible-clear (e.g. a sermon title) back to its own opacity,
+  // which is full only by default; the legend says so.
+  const clearNote = legend.locator('[data-role="resolume-bible-clear-note"]');
+  await expect(clearNote).toContainText('#bible-clear');
+  await expect(clearNote).toContainText('triggers no clip');
+  await expect(clearNote).toContainText('back to its opacity (full by default)');
 
   expect(consoleMessages).toEqual([]);
 });

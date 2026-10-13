@@ -37,6 +37,11 @@ pub struct ClipMapping {
     pub timer: Vec<ClipTarget>,
     pub song_name: Vec<ClipTarget>,
     pub band_name: Vec<ClipTarget>,
+    /// #848: clips tagged `#bible-clear` (the sermon title on SNV). A Bible
+    /// clear fades their opacity up, a verse fades it down; never triggered.
+    /// Optional (PP has none), so not in [`Self::destinations`]: never a
+    /// missing clip, never a destination kind.
+    pub bible_clear: Vec<ClipTarget>,
     missing_tokens: Vec<&'static str>,
 }
 
@@ -48,11 +53,11 @@ impl ClipMapping {
             .ok_or_else(|| anyhow!("composition has no layers"))?;
 
         let mut mapping = ClipMapping::default();
-        for layer in layers {
+        for (index, layer) in layers.iter().enumerate() {
             let fade = layer_fade(layer);
             if let Some(clips) = layer.get("clips").and_then(Value::as_array) {
                 for clip in clips {
-                    ingest_clip(&mut mapping, clip, fade);
+                    ingest_clip(&mut mapping, clip, fade, index + 1);
                 }
             }
         }
@@ -152,16 +157,17 @@ fn layer_fade(layer: &Value) -> Duration {
 }
 
 /// What a clip's tags share: its id, text and opacity parameters, its
-/// layer's fade, and whether it was connected.
+/// layer's fade, whether it was connected, and its layer (1-based).
 struct ClipFacts {
     clip_id: i64,
     text_param_id: Option<i64>,
     opacity: Option<ClipOpacity>,
     fade: Duration,
     connected: bool,
+    layer: usize,
 }
 
-fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
+fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration, layer: usize) {
     let clip_id = clip.get("id").and_then(Value::as_i64);
     let Some(clip_id) = clip_id else {
         return;
@@ -179,6 +185,7 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
         opacity: extract_opacity(clip),
         fade,
         connected: is_connected(clip),
+        layer,
     };
 
     for fragment in name_lower.split_whitespace() {
@@ -219,6 +226,7 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value, fade: Duration) {
                     ClipDestination::Timer(target) => mapping.timer.push(target),
                     ClipDestination::SongName(target) => mapping.song_name.push(target),
                     ClipDestination::BandName(target) => mapping.band_name.push(target),
+                    ClipDestination::BibleClear(target) => mapping.bible_clear.push(target),
                 }
             }
         }
@@ -235,6 +243,7 @@ enum ClipDestination {
     Timer(ClipTarget),
     SongName(ClipTarget),
     BandName(ClipTarget),
+    BibleClear(ClipTarget),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -248,6 +257,7 @@ enum ClipKind {
     Timer,
     SongName,
     BandName,
+    BibleClear,
 }
 
 fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination> {
@@ -271,7 +281,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
 
     let transforms_start;
     let lane = match kind {
-        ClipKind::Timer | ClipKind::SongName | ClipKind::BandName => {
+        ClipKind::Timer | ClipKind::SongName | ClipKind::BandName | ClipKind::BibleClear => {
             transforms_start = index;
             None
         }
@@ -301,6 +311,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
         opacity: facts.opacity,
         fade: facts.fade,
         connected: facts.connected,
+        layer: facts.layer,
     };
 
     let destination = match (kind, lane) {
@@ -315,6 +326,7 @@ fn parse_clip_destinations(name: &str, facts: &ClipFacts) -> Vec<ClipDestination
         (ClipKind::Timer, _) => ClipDestination::Timer(target),
         (ClipKind::SongName, _) => ClipDestination::SongName(target),
         (ClipKind::BandName, _) => ClipDestination::BandName(target),
+        (ClipKind::BibleClear, _) => ClipDestination::BibleClear(target),
         _ => return result,
     };
     result.push(destination);
@@ -341,10 +353,14 @@ fn parse_clip_kind(tokens: &[&str]) -> Option<(ClipKind, usize)> {
             } else if tokens.get(index) == Some(&"reference") {
                 index += 1;
                 ClipKind::BibleReference
+            } else if tokens.get(index) == Some(&"clear") {
+                index += 1;
+                ClipKind::BibleClear
             } else {
                 ClipKind::Bible
             }
         }
+        "#bibleclear" => ClipKind::BibleClear,
         "#timer" => ClipKind::Timer,
         "#song" if tokens.get(index) == Some(&"name") => {
             index += 1;

@@ -100,6 +100,10 @@ pub struct ClipTarget {
     /// The clip was connected (playing) when the composition was fetched.
     /// Seeds the A/B lanes after a start (`lane_seed.rs`).
     pub connected: bool,
+    /// #848: the clip's layer, 1-based as in `/composition/layers/{n}`.
+    /// Resolume plays one clip per layer, so a remembered `#bible-clear`
+    /// cover is kept per layer.
+    pub layer: usize,
 }
 
 /// #841: a clip's `video.opacity` parameter and the value it was mapped at.

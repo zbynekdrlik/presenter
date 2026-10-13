@@ -1,0 +1,367 @@
+//! #848: the clip tagged `#bible-clear` (the sermon title on SNV) is a COVER.
+//! A Bible clear fades its opacity UP to its base, a verse fades it DOWN to 0,
+//! and it is never triggered.
+//!
+//! Owner, 2026-10-12: "ked sa clearne v presentery vers alebo je clearnuty tak
+//! ma sa zapnut opacita bible clear a ked sa zapne vers tak sa ma stiahnut
+//! opacita bible clear aby bol vers vyditelny". The cover fades over its OWN
+//! layer's transition (SNV 2.3 s), so it is NOT part of the push (#848
+//! review): the push returns after the Bible fade and the connects, and the
+//! host worker steps the cover afterwards, between its other commands. This
+//! file pins the mapping, the planners and the push side;
+//! `bible_clear_cover_worker_tests.rs` drives the deferred fade through the
+//! real host worker.
+
+use super::bible_clear::{
+    fade_toward, plan_clear_fade, FadeTarget, TrackedOpacities, TrackedOpacity,
+};
+use super::bible_clear_cover::{cover_candidates, plan_cover_fade, CoverClip, CoverDirection};
+use super::bible_clear_deck_tests::assert_faded;
+use super::bible_clear_tests::{
+    bible_layers, clear_update, clip, connects, deck_layers, driver_for, layer, opacities_put,
+    start_resolume, values_put, verse_update, A_SIDE_OPACITY, BIBLE_A, B_SIDE_OPACITY, FADE,
+};
+use super::clip_map::ClipMapping;
+use super::types::ClipOpacity;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::time::Duration;
+
+/// The cover clip, its text parameter and its opacity parameter (text + 100).
+pub(super) const COVER: i64 = 500;
+pub(super) const COVER_TEXT: i64 = 50;
+pub(super) const COVER_OPACITY: i64 = 150;
+/// The cover layer's transition where the length matters: far longer than the
+/// Bible layers' [`BIBLE_FADE`], as on SNV (2.3 s against 0.5 s), so "the
+/// push returned before the cover faded" has a wide margin on a loaded runner.
+pub(super) const COVER_FADE: Duration = Duration::from_millis(1500);
+/// A shorter cover transition for tests about the fade's shape, not its length.
+pub(super) const SHORT_COVER_FADE: Duration = Duration::from_millis(450);
+/// The Bible layers' transition in the timing tests.
+pub(super) const BIBLE_FADE: Duration = Duration::from_millis(300);
+/// The `#timer` clip and its text parameter: the worker tests use timer frames
+/// as commands that must not wait for a cover fade.
+const TIMER: i64 = 600;
+pub(super) const TIMER_TEXT: i64 = 60;
+
+/// The SNV shape on deck `offset` (every id shifted by it, as a deck switch
+/// does): the Bible layers, the sermon title on a layer of its own at
+/// `cover_opacity`, and a `#timer` clip.
+pub(super) fn cover_layers_on(
+    offset: i64,
+    transition: Option<Duration>,
+    cover_transition: Option<Duration>,
+    cover_opacity: f64,
+) -> Vec<Value> {
+    let mut layers = deck_layers(offset, transition);
+    layers.push(cover_layer(offset, cover_transition, cover_opacity));
+    layers.push(timer_layer(offset));
+    layers
+}
+
+/// [`cover_layers_on`] the first deck.
+pub(super) fn cover_layers(
+    transition: Option<Duration>,
+    cover_transition: Option<Duration>,
+    cover_opacity: f64,
+) -> Vec<Value> {
+    cover_layers_on(0, transition, cover_transition, cover_opacity)
+}
+
+/// The layer of the sermon title, named like the SNV clip, at `opacity`.
+pub(super) fn cover_layer(offset: i64, transition: Option<Duration>, opacity: f64) -> Value {
+    layer(
+        vec![clip(
+            COVER + offset,
+            "NAZOV #bible-clear",
+            COVER_TEXT + offset,
+            opacity,
+        )],
+        transition,
+    )
+}
+
+pub(super) fn timer_layer(offset: i64) -> Value {
+    layer(
+        vec![clip(TIMER + offset, "#timer", TIMER_TEXT + offset, 1.0)],
+        None,
+    )
+}
+
+/// Assert that the cover opacities `steps` went only up, in at least three
+/// steps from near 0, and ended at `base`: a fade, not a cut.
+pub(super) fn assert_shown(steps: &[f64], base: f64) {
+    assert!(
+        steps.len() >= 3 && steps[0] < 0.5,
+        "the cover is faded in steps from near 0, not cut: {steps:?}"
+    );
+    assert!(
+        steps.windows(2).all(|pair| pair[1] > pair[0]),
+        "the cover only goes up: {steps:?}"
+    );
+    let last = steps.last().copied().unwrap_or_default();
+    assert!(
+        (last - base).abs() < 1e-9,
+        "the cover ends at {base}: {steps:?}"
+    );
+}
+
+/// Assert that the cover opacities `steps` went only down, in at least three
+/// steps, and ended at 0.
+pub(super) fn assert_hidden(steps: &[f64]) {
+    assert!(
+        steps.len() >= 3,
+        "the cover is faded out in steps, not cut: {steps:?}"
+    );
+    assert!(
+        steps.windows(2).all(|pair| pair[1] < pair[0]),
+        "the cover only goes down: {steps:?}"
+    );
+    assert_eq!(steps.last(), Some(&0.0), "the cover ends at 0: {steps:?}");
+}
+
+#[test]
+fn the_sermon_title_tagged_bible_clear_is_an_optional_cover() {
+    let mapping = ClipMapping::from_composition(
+        &json!({ "layers": cover_layers(Some(FADE), Some(COVER_FADE), 0.0) }),
+    )
+    .expect("mapping");
+    let covers: Vec<(i64, Option<ClipOpacity>, Duration)> = mapping
+        .bible_clear
+        .iter()
+        .map(|target| (target.clip_id, target.opacity, target.fade))
+        .collect();
+    assert_eq!(
+        covers,
+        vec![(
+            COVER,
+            Some(ClipOpacity {
+                param_id: COVER_OPACITY,
+                base: 0.0
+            }),
+            COVER_FADE
+        )],
+        "the tag after other words maps the clip with its opacity and layer fade"
+    );
+    assert!(mapping
+        .bible_a
+        .iter()
+        .all(|target| target.clip_id == BIBLE_A));
+
+    // PP has no cover: it is optional, so never reported as missing.
+    let without =
+        ClipMapping::from_composition(&json!({ "layers": bible_layers(None) })).expect("mapping");
+    assert!(without.bible_clear.is_empty());
+    for mapping in [&mapping, &without] {
+        assert!(!mapping.missing_tokens().iter().any(|k| k.contains("clear")));
+        assert!(!mapping
+            .destination_kinds()
+            .iter()
+            .any(|k| k.contains("clear")));
+    }
+}
+
+#[test]
+fn fade_toward_runs_linearly_up_or_down_to_its_target() {
+    let duration = Duration::from_millis(500);
+    let half = Duration::from_millis(250);
+    assert_eq!(fade_toward(0.2, 1.0, Duration::ZERO, duration), 0.2);
+    assert!((fade_toward(0.2, 1.0, half, duration) - 0.6).abs() < 1e-9);
+    assert!((fade_toward(0.8, 0.0, half, duration) - 0.4).abs() < 1e-9);
+    assert_eq!(fade_toward(0.2, 0.7, duration, duration), 0.7);
+    assert_eq!(fade_toward(0.2, 0.7, Duration::from_secs(9), duration), 0.7);
+    assert_eq!(fade_toward(0.0, 1.0, Duration::ZERO, Duration::ZERO), 1.0);
+}
+
+/// CI run 38288218234: a hide that replaced a show cut short lasts as long as
+/// the show had run, and its steps repeat the show's timing, so a step landed
+/// 1.4 µs before the end at 9.3e-7. Within `SAME_OPACITY` of 0, the fade
+/// counted the cover as arrived and never sent the 0. A level that close to
+/// the target IS the target.
+#[test]
+fn a_fade_level_within_same_opacity_of_its_target_is_the_target() {
+    let duration = Duration::from_nanos(102_382_405);
+    let almost = duration - Duration::from_nanos(1_400);
+    assert_eq!(
+        fade_toward(0.068_254_936_666_666_67, 0.0, almost, duration),
+        0.0
+    );
+    assert_eq!(
+        fade_toward(0.931_745_063_333_333_3, 1.0, almost, duration),
+        1.0
+    );
+    let half = fade_toward(0.068_254_936_666_666_67, 0.0, duration / 2, duration);
+    assert!(
+        (half - 0.034_127_468_333_333_33).abs() < 1e-9,
+        "halfway is still on the way: {half}"
+    );
+}
+
+/// #848 review, finding 1: the cover's 2.3 s fade ran inside the clear and
+/// held the serial host worker. The clear's own fade is only the Bible clips
+/// (#841); the cover is the deferred fade's job.
+#[test]
+fn the_clear_fade_leaves_the_covers_to_the_deferred_cover_fade() {
+    let mapping = ClipMapping::from_composition(
+        &json!({ "layers": cover_layers(Some(FADE), Some(COVER_FADE), 0.0) }),
+    )
+    .expect("mapping");
+    let mut tracked = TrackedOpacities::default();
+    tracked.sync_with_fetch(&mapping, None);
+
+    let plan = plan_clear_fade(&mapping, &tracked);
+    let mut params: Vec<i64> = plan.iter().map(|target| target.param_id).collect();
+    params.sort_unstable();
+    let mut bible: Vec<i64> = A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY).collect();
+    bible.sort_unstable();
+    assert_eq!(params, bible, "only the Bible clips, no cover: {plan:?}");
+    assert!(plan.iter().all(|target| target.to == 0.0), "{plan:?}");
+}
+
+/// The hide plan: each cover once, from its mapped opacity down to 0. A cover
+/// that is already invisible gets nothing, and a clip tagged as a cover AND a
+/// Bible lane clip is left to the lane (the verse just showed it). Planned by
+/// `cover_candidates` + `plan_cover_fade` themselves (#848 second review,
+/// finding 10: no test-only wrapper).
+#[test]
+fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
+    let mut layers = bible_layers(None);
+    layers.push(layer(
+        vec![
+            clip(COVER, "NAZOV #bible-clear", COVER_TEXT, 0.7),
+            clip(501, "#bible-clear", 51, 0.0),
+            clip(302, "#bible-a #bible-clear", 32, 1.0),
+        ],
+        Some(SHORT_COVER_FADE),
+    ));
+    let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
+
+    let covers = cover_candidates(&mapping, &HashMap::new());
+    let plan = plan_cover_fade(&covers, &TrackedOpacities::default(), CoverDirection::Hide);
+    assert_eq!(
+        plan,
+        vec![FadeTarget {
+            clip_id: COVER,
+            param_id: COVER_OPACITY,
+            base: 0.7,
+            from: 0.7,
+            to: 0.0,
+            duration: SHORT_COVER_FADE,
+            mapped: true,
+        }]
+    );
+}
+
+/// The planned duration of the one cover in `covers`.
+fn planned_duration(
+    covers: &[CoverClip],
+    tracked: &TrackedOpacities,
+    direction: CoverDirection,
+) -> Duration {
+    let plan = plan_cover_fade(covers, tracked, direction);
+    assert_eq!(plan.len(), 1, "one cover to fade: {plan:?}");
+    plan[0].duration
+}
+
+fn assert_duration(actual: Duration, expected: Duration) {
+    assert!(
+        (actual.as_secs_f64() - expected.as_secs_f64()).abs() < 1e-6,
+        "fades over {actual:?}, expected {expected:?}"
+    );
+}
+
+/// #848 second review, finding 1: a fade that replaced one cut short ran over
+/// the cover's WHOLE transition from where it was, so quick verses stretched
+/// the hide (the title stayed partly visible behind the verse ~2.3 s on SNV).
+/// A cover now fades over the share of its transition that the distance left
+/// is of its base: `fade × |to − from| / base`.
+#[test]
+fn a_cover_fades_over_the_share_of_its_transition_left_to_go() {
+    let mapping = ClipMapping::from_composition(
+        &json!({ "layers": cover_layers(None, Some(COVER_FADE), 0.0) }),
+    )
+    .expect("mapping");
+    let covers = cover_candidates(&mapping, &HashMap::new());
+    let mut tracked = TrackedOpacities::default();
+
+    // A show cut short at 0.2 of a 0.8 base: a quarter of the way up.
+    tracked.set(
+        COVER_OPACITY,
+        TrackedOpacity {
+            base: 0.8,
+            level: 0.2,
+        },
+    );
+    assert_duration(
+        planned_duration(&covers, &tracked, CoverDirection::Hide),
+        COVER_FADE.mul_f64(0.25),
+    );
+    assert_duration(
+        planned_duration(&covers, &tracked, CoverDirection::Show),
+        COVER_FADE.mul_f64(0.75),
+    );
+
+    // Shown at its base: the hide is the whole way down.
+    tracked.set(
+        COVER_OPACITY,
+        TrackedOpacity {
+            base: 0.8,
+            level: 0.8,
+        },
+    );
+    assert_duration(
+        planned_duration(&covers, &tracked, CoverDirection::Hide),
+        COVER_FADE,
+    );
+}
+
+/// #848 review, finding 1: the clear held the worker for the cover's whole
+/// transition, so the `#timer` countdown froze and the next verse waited. The
+/// push ends once the Bible clips are faded; it sends the cover nothing (the
+/// cover is shown afterwards by the worker). No wall-clock bound (#848 second
+/// review, finding 6).
+#[tokio::test]
+async fn a_clear_sends_the_cover_nothing_inside_its_push() {
+    let server = start_resolume(cover_layers(Some(BIBLE_FADE), Some(COVER_FADE), 0.0)).await;
+    let (mut driver, status) = driver_for(&server);
+
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_faded(&requests, A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY));
+    assert!(connects(&requests).is_empty(), "a clear triggers no clip");
+    assert!(values_put(&requests, COVER_TEXT).is_empty());
+    assert!(
+        opacities_put(&requests, COVER_OPACITY).is_empty(),
+        "the cover is faded after the push, not inside it"
+    );
+}
+
+/// The verse after a clear is on air without waiting for the cover either:
+/// the title is fully visible (#848 second review, finding 6: seeded at 0, a
+/// hide inside the push sent nothing and this test could not fail), yet the
+/// push sends it nothing; the worker hides it afterwards.
+#[tokio::test]
+async fn a_verse_sends_the_cover_nothing_inside_its_push() {
+    let server = start_resolume(cover_layers(None, Some(COVER_FADE), 1.0)).await;
+    let (mut driver, status) = driver_for(&server);
+    driver
+        .handle_bible(clear_update(), &status)
+        .await
+        .expect("bible clear");
+
+    driver
+        .handle_bible(verse_update(), &status)
+        .await
+        .expect("verse");
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(connects(&requests).len(), 4, "the verse is on air");
+    assert!(
+        opacities_put(&requests, COVER_OPACITY).is_empty(),
+        "the shown cover is hidden after the push, not inside it"
+    );
+}

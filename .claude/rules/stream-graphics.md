@@ -581,3 +581,13 @@ seconds, the files sat in `/opt/presenter-dev/stream-assets/playback/<folder>/` 
 background and a clean console. Use a throwaway output on DEV for this (`POST
 /stream/api/outputs`), never an operator's output on SNV/PP.
 
+A release check on SNV/PP stays read-only (v0.4.314):
+- Probe `GET /stream/api/playback?url=https%3A%2F%2Fexample.com%2Fx`. It answers 422 with
+  „neplatný odkaz na priečinok Google Drive" and nothing is queued.
+- An unknown `/stream/playback/<25 zeros>/<25 zeros>` must answer 404.
+- In the browser, open `/ui/stream?tab=scenes&output=stream`. The editor otherwise reopens the
+  output the profile last used, which may have no scene.
+- The `[data-role^="stream-add-element-"]` buttons exist only after a scene's „Upraviť prvky"
+  (`stream-scene-edit`, UI only). Read `stream-add-element-playback`, but never click an add
+  button there: it creates an element on the operator's scene.
+

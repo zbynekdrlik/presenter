@@ -7,6 +7,7 @@ paths:
   - "crates/presenter-server/src/resolume/keepalive_tests.rs"
   - "crates/presenter-server/src/resolume/handlers.rs"
   - "crates/presenter-server/src/resolume/bible_clear.rs"
+  - "crates/presenter-server/src/resolume/bible_clear_cover.rs"
   - "crates/presenter-server/src/resolume/port_drift.rs"
   - "crates/presenter-server/src/mock_integrations/resolume.rs"
   - "crates/presenter-ui/src/pages/settings/resolume.rs"
@@ -250,6 +251,16 @@ When you touch this area:
   `put_text_param_future` (handlers.rs) and `trigger_clips` (driver.rs) do.
   A plain `anyhow!` makes a composition change look like a host failure:
   Error, backoff, and no refetch.
+  - The one exception is the deferred #848 cover fade, which is not a push:
+    its 404 never becomes an error and leaves only that cover out of the
+    fade. A mapped cover id calls `invalidate_mapping(StaleId)` itself, at
+    most once per fetched mapping and once per id (every id that refetched is
+    kept until a config change, and so is one whose 404 came while that
+    refetch was still pending), never while stale refetches are paused or
+    once a newer mapping is cached (`cover_404_refetch`), and the next push
+    or tick refetches. Its later 404s WARN through the #563h limiter
+    (`cover-404:<id>`). An unmapped (remembered) cover's 404 is forgotten,
+    like a #841 connected clip's.
 - **Keep the push idempotent up to the point it succeeds.** The retry runs
   the whole push again. That is safe only because lane flips
   (`lane_state.flip`) and dedup payloads (`last_*_payload`) change only after
@@ -298,10 +309,14 @@ a status flip, a #484 backoff window that skips pushes, and possibly a lost line
 
 ## Worker loop
 
-`run_host_worker`'s `select!` is `biased`, in this order: commands, the
-follow-up deadline (a pending future when nothing is scheduled), then the
-tick. When a command and a tick are both ready, the command runs first. A push that arrives while a
-probe is in flight still waits for it, up to `LIVENESS_TIMEOUT` (5 s). The
+`run_host_worker`'s `select!` is `biased`, in this order: commands, the #848
+cover fade deadline (`cover_fade_deadline`, the next 50 ms step of a deferred
+`#bible-clear` fade, `bible_clear_cover.rs`), the follow-up deadline, then the
+tick. Both deadlines are pending futures when nothing is scheduled. When a
+command and anything else are both ready, the command runs first, so pushes
+interleave between cover steps; a cover step goes before a follow-up fetch
+because it takes milliseconds, not a composition read. A push that arrives
+while a probe is in flight still waits for it, up to `LIVENESS_TIMEOUT` (5 s). The
 interval uses `MissedTickBehavior::Delay`, so a long push burst does not leave
 a queue of missed ticks that probe back to back.
 
