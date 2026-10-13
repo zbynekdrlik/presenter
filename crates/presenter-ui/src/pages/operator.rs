@@ -3,6 +3,7 @@ use presenter_core::LiveEvent;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+use super::operator_follow::{follow_navigation, setup_follow_on_live, sync_to_stage};
 use crate::components::header::Header;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
@@ -132,6 +133,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
 
     // Dispatch WS events
     setup_ws_dispatch(last_event, &ctx);
+    setup_follow_on_live(&ctx);
 
     // Load initial data (libraries, playlists, etc.)
     load_initial_data(&ctx);
@@ -326,21 +328,6 @@ fn setup_body_attributes(ctx: &AppContext) {
     }
 }
 
-/// Whether a stage change may navigate the operator to the stage's song:
-/// AbleSet Follow is on (assumed on until its status loads) and the operator is
-/// not editing. #853: in Edit mode a song change would replace the open song,
-/// scroll its slide list to the top and destroy the textarea being typed into.
-fn follow_navigation(
-    ableset_status: RwSignal<Option<presenter_core::AbleSetStatusSnapshot>>,
-    mode: RwSignal<String>,
-) -> bool {
-    let follow_enabled = ableset_status
-        .get_untracked()
-        .map(|s| s.follow_enabled)
-        .unwrap_or(true);
-    follow_enabled && mode.get_untracked() != "edit"
-}
-
 fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext) {
     let stage_snapshot = ctx.stage_snapshot;
     let timers = ctx.timers;
@@ -348,64 +335,20 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let broadcast_live = ctx.broadcast_live;
     let stage_layout_code = ctx.stage_layout_code;
     let stage_text_mode = ctx.stage_text_mode;
-    let selected_presentation_id = ctx.selected_presentation_id;
-    let selected_presentation = ctx.selected_presentation;
-    let slides_cache = ctx.slides_cache;
     let active_bible_broadcast = ctx.active_bible_broadcast;
     let bible_presentations_version = ctx.bible_presentations_version;
     let ableset_status = ctx.ableset_status;
-    let selected_library_id = ctx.selected_library_id;
-    let selected_playlist_id = ctx.selected_playlist_id;
-    let selected_playlist = ctx.selected_playlist;
-    let selected_entry_index = ctx.selected_entry_index;
-    let presentations = ctx.presentations;
     let mode = ctx.mode;
+    let follow_ctx = ctx.clone();
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
             match event {
                 LiveEvent::Stage { snapshot } => {
-                    // Auto-sync operator selection from stage (see `follow_navigation`).
-                    // The stage preview always updates (snapshot is always set).
+                    // AbleSet Follow: Live mode opens the stage's song (#853: never
+                    // in Edit mode). The stage preview always updates.
                     if follow_navigation(ableset_status, mode) {
-                        // #496: mirror the active playlist occurrence so a later
-                        // keyboard advance targets the same repeated-song row the
-                        // stage is on (e.g. after an AbleSet-driven change).
-                        selected_entry_index.set(snapshot.active_entry_index);
-                        let new_pres_id = snapshot.presentation_id.map(|id| id.to_string());
-                        let current_pres_id = selected_presentation_id.get_untracked();
-                        if new_pres_id.is_some() && new_pres_id != current_pres_id {
-                            if let Some(ref pres_id) = new_pres_id {
-                                selected_presentation_id.set(Some(pres_id.clone()));
-                                crate::state::session::set("currentPresentationId", pres_id);
-                                let pid = pres_id.clone();
-                                leptos::task::spawn_local(async move {
-                                    if let Ok(detail) =
-                                        crate::api::presentations::get_presentation(&pid).await
-                                    {
-                                        // Switch to the library containing this presentation
-                                        let lib_id = detail.library_id.to_string();
-                                        selected_library_id.set(Some(lib_id.clone()));
-                                        selected_playlist_id.set(None);
-                                        selected_playlist.set(None);
-                                        crate::state::session::set("activeLibraryId", &lib_id);
-                                        // Load the library's presentations list
-                                        if let Ok(pres_list) =
-                                            crate::api::libraries::list_presentations(&lib_id).await
-                                        {
-                                            presentations.set(pres_list);
-                                        }
-                                        slides_cache.update(|cache| {
-                                            cache.insert(
-                                                pid.clone(),
-                                                detail.presentation.slides.clone(),
-                                            );
-                                        });
-                                        selected_presentation.set(Some(detail.presentation));
-                                    }
-                                });
-                            }
-                        }
+                        sync_to_stage(&follow_ctx, &snapshot);
                     }
                     stage_snapshot.set(Some(snapshot));
                 }

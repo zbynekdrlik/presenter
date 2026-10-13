@@ -10,6 +10,7 @@ paths:
   - "tests/e2e/operator-edit-autoscroll.spec.ts"
   - "crates/presenter-ui/src/components/presentation_list.rs"
   - "crates/presenter-ui/src/pages/operator.rs"
+  - "crates/presenter-ui/src/pages/operator_follow.rs"
 ---
 
 # Operator slide grids — per-browser slides per row (#832)
@@ -54,13 +55,22 @@ paths:
   - the `slide_list.rs` effect that calls `scroll_slide_into_view` reads
     `ctx.mode` UNTRACKED and scrolls only in Live mode (it still returns the
     current id, so going back to Live never replays an old change);
-  - AbleSet Follow does not switch songs in Edit mode (`follow_navigation` in
-    `pages/operator.rs`) — the snapshot is still stored for the preview;
+  - AbleSet Follow (`pages/operator_follow.rs`): stage events never switch
+    songs in Edit mode (the snapshot is still stored for the preview); on the
+    switch back to Live the operator syncs to the stage at once, so an arrow
+    key never sends a slide of the song that was being edited; an explicit
+    Follow ON click (`stage_preview.rs`) still syncs in any mode; Follow counts
+    as OFF until its status loads; the async song fetch applies only while that
+    song is still selected and Follow may still navigate;
   - per-card state that a stage event re-renders (the card `class` closure)
     derives everything it shows, `is-focused` included, from signals — never
     poke a class into the DOM, the next stage event rewrites `class`.
   The song list reads the stage song through a `Memo` of `presentation_id`
-  (`presentation_list.rs`), so a stage SLIDE change does not rebuild its rows.
-  `operator-edit-autoscroll.spec.ts`: the "editing the song on stage" and the
-  "Follow on" cases fail on the old code (1605 → 806; the edited song closed);
-  the library / playlist / other-song cases guard against reloads and jumps.
+  (`presentation_list.rs`), so a stage SLIDE change does not re-run its render
+  closure (tachys already patched the rows in place, so this is CPU, not DOM:
+  the "same row node" assertion passes on the old code too).
+  `operator-edit-autoscroll.spec.ts`: the "editing the song on stage" case
+  (1605 → 806, and the edited card losing `is-focused` once it is the stage
+  slide), the "Follow on" case (the edited song closed) and its "back to Live"
+  step fail on the code they fix; the library / playlist / other-song cases
+  guard against reloads, jumps and row rebuilds.

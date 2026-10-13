@@ -394,9 +394,14 @@ pub fn SlideList() -> impl IntoView {
                                     let mut c = "operator__slide-card operator__slide-card--worship".to_string();
                                     // Read stage_snapshot reactively HERE (in class closure)
                                     // so it only updates this element's class, not the entire view.
-                                    let snap = ctx.stage_snapshot.get();
-                                    let active_id = snap.as_ref().and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-                                    if active_id.as_deref() == Some(&slide_id_class) {
+                                    // Compared inside `with`: no clone of the whole snapshot
+                                    // per card per stage change (#853).
+                                    let is_active = ctx.stage_snapshot.with(|snap| {
+                                        snap.as_ref()
+                                            .and_then(|s| s.current_slide_id)
+                                            .is_some_and(|id| id.to_string() == slide_id_class)
+                                    });
+                                    if is_active {
                                         c.push_str(" is-active");
                                     }
                                     // #853: is-focused is derived here too (not poked into
