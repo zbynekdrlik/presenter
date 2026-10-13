@@ -1134,11 +1134,14 @@ test("Follow, API layout: back to Live opens the stage song even after a songpla
     await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
     await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
 
-    // In Edit mode AbleSet moves the stage to song 2, then songplayer pushes text (a frame with no song).
-    let before = frames.count;
+    // In Edit mode AbleSet moves the stage to song 2 (on an API layout only the camera-crew frame
+    // carries it — the song list highlights it), then songplayer pushes text (a frame with no song).
     await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
-    await expect.poll(() => frames.count - before, { message: "the stage change reached the page" }).toBeGreaterThanOrEqual(1);
-    before = frames.count;
+    await expect(
+      page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 02" }).first(),
+      "the stage change reached the page",
+    ).toHaveClass(/is-stage-active/);
+    const before = frames.count;
     const push = await fetch(new URL("/api/stage", baseURL), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1273,7 +1276,8 @@ test("a failed open in a playlist keeps the shown occurrence for the next trigge
   const failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
   await rows.nth(1).click();
   await landed(failed);
-  await settle(page);
+  // The selection (and with it the occurrence) is back on the shown entry.
+  await expect(rows.nth(2)).toHaveClass(/is-active/);
   // A slide of the shown song goes to the stage: it must carry song 3's occurrence, not song 5's.
   await page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[2]][1]}"]`).click();
   await expect
@@ -1422,4 +1426,46 @@ test("Edit: a slide reorder answered after another song was opened leaves that s
   await expect(page.locator(`.operator__slides [data-slide-id="${slideIds[song11][0]}"]`)).not.toBeAttached();
   await page.unroute(`**/presentations/${song11}/slides/reorder`);
   expect(consoleMessages).toEqual([]);
+});
+
+test("Follow: a stage song that starts loading while a clicked song fails still opens", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  attachConsoleErrorCollector(page, consoleMessages);
+  await resetStage();
+  await send("POST", "/integrations/ableset/follow", { enabled: true });
+  try {
+    await openOperator(page);
+    await followReady(page);
+    await openTestLibrary(page);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first().click();
+    await page.waitForSelector(`.operator__slides [data-slide-id="${slideIds[presIds[2]][0]}"]`);
+
+    // The operator clicks song 5 (held, then failing); the stage moves to song 2 meanwhile (held).
+    const song5: Route[] = [];
+    await page.route(`**/presentations/${presIds[4]}`, (route) => {
+      song5.push(route);
+    });
+    const releaseSong2 = await gateRoute(page, `**/presentations/${presIds[1]}`);
+    const song2Requested = page.waitForRequest(`**/presentations/${presIds[1]}`);
+    await page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 05" }).first().click();
+    await expect.poll(() => song5.length).toBe(1);
+    await send("POST", "/stage/state", { presentationId: presIds[1], currentSlideId: slideIds[presIds[1]][0] });
+    await song2Requested;
+    // Song 5 fails: the selection returns to song 3 ...
+    const song5Failed = page.waitForResponse(`**/presentations/${presIds[4]}`);
+    await song5[0].fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    await landed(song5Failed);
+    await expect(page.locator('[data-role="presentation-item"]', { hasText: "Churn Song 03" }).first()).toHaveClass(/is-active/);
+    // ... and the Follow open that started during that load must still land.
+    releaseSong2();
+    await expect(
+      page.locator(`.operator__slides [data-slide-id="${slideIds[presIds[1]][0]}"]`),
+      "song 2 opens",
+    ).toBeAttached();
+    await page.unroute(`**/presentations/${presIds[4]}`);
+    await page.unroute(`**/presentations/${presIds[1]}`);
+    expect(consoleMessages).toEqual([]);
+  } finally {
+    await send("POST", "/integrations/ableset/follow", { enabled: false });
+  }
 });
