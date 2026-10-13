@@ -1000,6 +1000,47 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_conversion_leaves_the_guard_state_unchanged() {
+        gst::init().expect("gst init");
+        // An output segment with a 10 s base: a running time below 10 s maps
+        // to a position before the segment start, i.e. no position at all.
+        let start = 3_600_000 + 5;
+        let mut seg = vah264enc_output_segment();
+        seg.set_base(gst::ClockTime::from_seconds(10));
+        let mut state = GuardState {
+            guard: TimestampGuard::default(),
+            segment: Some(seg),
+        };
+        // Running time 14 s while the clock reads 5 s: the guard would pull
+        // the frame back to 5 s + D, which cannot be converted back to a PTS.
+        let pts = gst::ClockTime::from_seconds(start + 4);
+        let step = state.process(pts, Some(pts), None, Some(gst::ClockTime::from_seconds(5)));
+        assert_eq!(step, GuardStep::Unmeasured);
+        // The buffer left untouched, so the guard must not remember having
+        // re-stamped it: no correction, no last output.
+        assert_eq!(state.guard.correction_ns(), 0, "correction committed");
+        assert_eq!(state.guard.last_out_ns, None, "last output committed");
+        // The next frame (running time 11 s, clock 12 s) is judged as if the
+        // failed one never happened: kept, untouched.
+        let next = gst::ClockTime::from_seconds(start + 1);
+        let step = state.process(
+            next,
+            Some(next),
+            None,
+            Some(gst::ClockTime::from_seconds(12)),
+        );
+        assert_eq!(
+            step,
+            GuardStep::Decided {
+                raw_lead_ns: -1_000 * MS,
+                correction_ns: 0,
+                kind: GuardKind::Kept,
+                restamp: None,
+            }
+        );
+    }
+
+    #[test]
     fn guard_probe_glue_restamps_buffers_and_counts() {
         // The probe callbacks without pads: SEGMENT event → buffers → stats.
         gst::init().expect("gst init");
