@@ -2,22 +2,17 @@
 
 use anyhow::{anyhow, Context, Result};
 use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation};
-use regex::Regex;
 use rusqlite::{types::ValueRef, Connection};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io::{Cursor, Read, Write};
 use std::str;
-use std::sync::LazyLock;
 use tempfile::NamedTempFile;
 use tracing::warn;
 use zip::read::ZipArchive;
 
+use crate::cleanup;
 use crate::{BibleImportSummary, BibleSourceFormat, BibleTranslationSpec};
-
-/// Regex to strip bracketed comments like `[ Var.: + vám.]` or `[ Adresa v Efeze chýba v najstarších rkp.]`
-static BRACKETED_COMMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("invalid bracketed comment regex"));
 
 pub(crate) fn build_ingestion_batch(
     bytes: &[u8],
@@ -321,13 +316,17 @@ fn parse_usfm_document(
                 .split_once(' ')
                 .ok_or_else(|| anyhow!("missing verse text after \\v marker"))?;
             let (start, end) = parse_verse_range(verse_range)?;
-            let clean_text = sanitize_text(text);
+            let clean_text = clean_usfm_text(text);
             current_builder = Some(PassageBuilder::new(start, end, clean_text));
             continue;
         }
 
         if let Some(builder) = current_builder.as_mut() {
-            let clean_text = sanitize_text(line);
+            // #851 D1: a heading line (`\s1`, `\d`, …) is never verse text.
+            if cleanup::is_usfm_heading_line(line) {
+                continue;
+            }
+            let clean_text = clean_usfm_text(line);
             if !clean_text.is_empty() {
                 builder.push_text(&clean_text);
             }
@@ -414,6 +413,13 @@ fn parse_verse_number(value: &str) -> Result<u16> {
         .context("failed to parse verse number into u16")
 }
 
+/// One USFM line as verse text (#851 D1): footnotes and cross-references out
+/// with their text, markers out, no leading `¶` (it sits behind `\wj` in the
+/// words of Jesus, so it goes AFTER the markers).
+fn clean_usfm_text(text: &str) -> String {
+    cleanup::strip_leading_pilcrow(sanitize_text(&cleanup::strip_usfm_notes(text)))
+}
+
 fn sanitize_text(input: &str) -> String {
     let mut result = String::new();
     let mut chars = input.chars().peekable();
@@ -465,8 +471,9 @@ fn sanitize_text(input: &str) -> String {
 }
 
 fn sanitize_mysword_text(input: &str) -> String {
-    // First strip all bracketed comments like [ Var.: + vám.] or [ Adresa v Efeze chýba...]
-    let without_variants = BRACKETED_COMMENT_RE.replace_all(input, "");
+    // #851 D1: only `<FI>[ … ]<Fi>` notes and `<TS>…<Ts>` headings go; a bare
+    // `[ … ]` is translation text and stays.
+    let without_variants = cleanup::strip_mysword_notes_and_headings(input);
 
     let mut output = String::with_capacity(without_variants.len());
     let mut i = 0;
@@ -495,7 +502,7 @@ fn sanitize_mysword_text(input: &str) -> String {
         }
     }
 
-    sanitize_markup_text(&output)
+    cleanup::drop_space_before_punctuation(&sanitize_markup_text(&output))
 }
 
 fn sanitize_markup_text(input: &str) -> String {

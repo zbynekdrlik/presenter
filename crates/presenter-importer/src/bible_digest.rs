@@ -7,7 +7,8 @@
 
 use sha2::{Digest, Sha256};
 
-pub const PARSER_VERSION: u32 = 1;
+/// 2 = #851 D1 (notes, headings, footnotes, `¶`, punctuation spacing).
+pub const PARSER_VERSION: u32 = 2;
 
 pub fn compute_source_digest(file_bytes: &[u8], parser_version: u32) -> String {
     let mut h = Sha256::new();
