@@ -170,6 +170,90 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
 """
         self.assertEqual(len(_violations(steps)), 1)
 
+    def test_staged_deploy_running_the_old_tools_before_the_swap_is_flagged(self) -> None:
+        # #851 D1: deploy.yml ran /opt/presenter/ingest_bibles while the new
+        # binary still waited in staging.new/ — the old parser skipped every
+        # translation as up-to-date.
+        steps = SAFE_SETUP + """
+      - name: Import ProPresenter
+        run: ssh deploy-target "/opt/presenter/import_propresenter --root /opt/presenter/libraries"
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db /opt/presenter/ingest_bibles
+          REMOTE_SCRIPT
+      - name: Swap staged binaries
+        run: ssh deploy-target "cd /opt/presenter && mv -f staging.new/presenter-server staging.new/ingest_bibles . && sudo systemctl start presenter"
+"""
+        found = _violations(steps)
+        self.assertEqual(
+            [(v.step, "PREVIOUS release" in v.message, "/healthz" in v.message) for v in found],
+            [
+                ("Import ProPresenter", True, False),
+                ("Import Bible translations", True, False),
+                ("Import Bible translations", False, True),
+            ],
+        )
+
+    def test_staged_copy_of_import_propresenter_before_the_swap_passes(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Import ProPresenter
+        run: ssh deploy-target "${{ env.DEPLOY_DIR }}/staging.new/import_propresenter --root x"
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+        self.assertEqual(_violations(steps), [])
+
+    def test_staged_ingest_before_the_swap_is_flagged_because_it_migrates(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Import Bible translations
+        run: ssh deploy-target "/opt/presenter/staging.new/ingest_bibles"
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+        found = _violations(steps)
+        self.assertEqual(len(found), 1)
+        self.assertIn("/healthz", found[0].message)
+
+    def test_ingest_right_after_the_swap_without_a_health_wait_is_flagged(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server . && sudo systemctl start presenter"
+      - name: Import Bible translations
+        run: ssh deploy-target "${{ env.DEPLOY_DIR }}/ingest_bibles"
+"""
+        self.assertEqual(len(_violations(steps)), 1)
+
+    def test_ingest_after_the_health_wait_passes(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Place binaries
+        run: |
+          cp _artifacts/ingest_bibles target/release/
+          chmod +x target/release/ingest_bibles
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server staging.new/ingest_bibles ."
+      - name: Verify deployment
+        run: ssh deploy-target "curl -sf http://localhost:80/healthz"
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
+          /opt/presenter/ingest_bibles
+          REMOTE_SCRIPT
+"""
+        self.assertEqual(_violations(steps), [])
+
+    def test_jobs_without_a_staged_swap_are_not_checked_for_tools(self) -> None:
+        # pipeline.yml / release.yml stop the service and copy the new binaries
+        # first, so /opt/.../ingest_bibles IS the new binary there.
+        steps = SAFE_SETUP + """
+      - name: Stop service
+        run: ssh deploy-target "sudo systemctl stop presenter"
+      - name: Import Bible translations
+        run: ssh deploy-target "/opt/presenter-dev/ingest_bibles"
+"""
+        self.assertEqual(_violations(steps), [])
+
     def test_repository_workflows_are_clean(self) -> None:
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         workflows = sorted(

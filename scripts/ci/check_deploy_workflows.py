@@ -21,6 +21,21 @@ Two invariants are enforced for every job whose step writes the
    ``steps.<setup-id>.outcome == 'success'`` — so a recovery step (#469) only
    touches a host the job actually set up.
 
+A third invariant covers STAGED deploys (a job whose step swaps the new
+binaries in with ``mv ... staging.new/...``, deploy.yml since 2026-07-18):
+until that swap step, ``<deploy dir>/ingest_bibles`` and
+``<deploy dir>/import_propresenter`` are still the PREVIOUS release's binaries.
+
+3. No step before the swap runs a tool from the deploy dir itself (only the
+   staged ``staging.new/`` copy) — the old tool imports with the old parser
+   (#851 D1: PARSER_VERSION 2 never reached SNV, the old binary saw its own
+   digest and skipped every translation).
+4. ``ingest_bibles`` runs after the swap AND after a step that waits for
+   ``/healthz``. It opens the database with the migrations of its own build:
+   before the swap, a deploy that then stops would leave a migrated database
+   the old service refuses to boot on; right after the restart it would race
+   the new service's own migration run.
+
 Usage: check_deploy_workflows.py [WORKFLOW.yml ...]
        (default: every .github/workflows/*.yml)
 Exit 0 when clean, 1 on any violation (each printed as a GitHub ::error::).
@@ -46,6 +61,15 @@ KEYSCAN_RE = re.compile(r"\bssh-keyscan\b")
 # loudly and is trivially gated; a false negative is the #795 incident.
 REMOTE_USE_RE = re.compile(r"\bdeploy-target\b")
 STATUS_FN_RE = re.compile(r"\b(always|failure|cancelled)\s*\(\s*\)")
+# A staged deploy swaps the new binaries in with `mv ... staging.new/<file>`.
+SWAP_RE = re.compile(r"\bmv\b[^\n]*\bstaging\.new/")
+# A deploy tool run by an absolute path straight under the deploy dir (NOT the
+# staged copy): `/opt/presenter/ingest_bibles`, `${{ env.DEPLOY_DIR }}/import_propresenter`.
+OLD_TOOL_RE = re.compile(
+    r"(?:/opt/[\w.-]+|\$\{\{\s*env\.DEPLOY_DIR\s*\}\})/(ingest_bibles|import_propresenter)\b"
+)
+ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+HEALTH_WAIT_RE = re.compile(r"/healthz\b")
 
 
 @dataclass(frozen=True)
@@ -126,6 +150,46 @@ def check_job(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
     return violations
 
 
+def _runs_ingest(script: str) -> bool:
+    """True when a command EXECUTES ingest_bibles — not when `cp` / `chmod` /
+    `mv` merely name the file. A command is a `&&` / `||` / `;` / `|` segment of
+    a line with the quotes dropped, `${{ … }}` expressions as one word, a leading
+    `ssh ... deploy-target` and any `VAR=value` prefixes stripped; its command
+    word must be the tool."""
+    for line in script.splitlines():
+        line = re.sub(r"\$\{\{.*?\}\}", "EXPR", line)
+        for segment in re.split(r"&&|\|\||;|\|", line.replace('"', " ").replace("'", " ")):
+            words = segment.split()
+            if words and words[0] == "ssh":
+                at = next((i for i, word in enumerate(words) if ALIAS in word), None)
+                words = words[at + 1 :] if at is not None else []
+            words = [word for word in words if not ENV_ASSIGN_RE.match(word)]
+            if words and (words[0] == "ingest_bibles" or words[0].endswith("/ingest_bibles")):
+                return True
+    return False
+
+
+def check_staged_tools(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
+    """Invariants 3 and 4: deploy tools in a staged deploy job (#851 D1)."""
+    steps = [step for step in spec.get("steps") or [] if isinstance(step, dict)]
+    scripts = [_script(step) for step in steps]
+    swap = next((i for i, script in enumerate(scripts) if SWAP_RE.search(script)), None)
+    if swap is None:
+        return []
+    violations: list[Violation] = []
+    healthy = False
+    for index, (step, script) in enumerate(zip(steps, scripts)):
+        name = _step_name(step, index)
+        if index < swap:
+            for match in OLD_TOOL_RE.finditer(script):
+                violations.append(Violation(workflow, job, name, f"runs `{match.group(0)}` before the swap step — that is the PREVIOUS release's binary; run `staging.new/{match.group(1)}` or move the step after the swap (#851 D1)"))
+        if _runs_ingest(script) and (index <= swap or not healthy):
+            violations.append(Violation(workflow, job, name, "runs ingest_bibles before the new service answered `/healthz` after the swap — it migrates the database (an aborted deploy leaves the old service unable to boot) and would race the new service's migration run; move it after the step that waits for `/healthz` (#851 D1)"))
+        if index > swap and HEALTH_WAIT_RE.search(script):
+            healthy = True
+    return violations
+
+
 def check_workflow(path: str, document: Any) -> list[Violation]:
     if not isinstance(document, dict):
         return []
@@ -134,6 +198,7 @@ def check_workflow(path: str, document: Any) -> list[Violation]:
     for job, spec in jobs.items():
         if isinstance(spec, dict):
             violations.extend(check_job(path, str(job), spec))
+            violations.extend(check_staged_tools(path, str(job), spec))
     return violations
 
 
@@ -149,7 +214,7 @@ def main(argv: list[str]) -> int:
     for violation in violations:
         print(violation.render())
     if violations:
-        print(f"{len(violations)} deploy-workflow SSH safety violation(s) (#795)", file=sys.stderr)
+        print(f"{len(violations)} deploy-workflow safety violation(s) (#795, #851 D1)", file=sys.stderr)
         return 1
     print(f"deploy-workflow SSH safety OK ({len(paths)} workflow file(s) checked)")
     return 0
