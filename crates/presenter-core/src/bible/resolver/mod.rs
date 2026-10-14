@@ -11,6 +11,7 @@ mod hint;
 pub mod names_table;
 mod rank;
 mod types;
+mod versification;
 
 pub use fold::{fold_book_text, FoldedBook};
 pub use hint::{
@@ -19,6 +20,7 @@ pub use hint::{
 pub use types::{
     BookCandidate, BookRef, MatchKind, ParsedQuery, Passage, RawSpec, Resolution, Segment, Tier,
 };
+pub use versification::{BookStructure, Step, Versification};
 
 #[cfg(test)]
 mod tests;
