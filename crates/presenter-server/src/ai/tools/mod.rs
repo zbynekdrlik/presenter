@@ -36,13 +36,19 @@ fn slide_to_json(s: &Slide) -> Value {
     })
 }
 
+/// One text field of an AI-authored slide payload. A missing field, or one over the
+/// 4000-char cap, becomes an empty text. The fallback is built with
+/// `from_stored_unchecked`: an empty string can never fail the cap, so there is no
+/// error left to `unwrap`.
+fn slide_text_field(s: &Value, key: &str) -> SlideText {
+    SlideText::new(s[key].as_str().unwrap_or(""))
+        .unwrap_or_else(|_| SlideText::from_stored_unchecked(""))
+}
+
 fn make_slide(i: usize, s: &Value) -> Slide {
-    let main_text = SlideText::new(s["main"].as_str().unwrap_or(""))
-        .unwrap_or_else(|_| SlideText::new("").unwrap());
-    let translation_text = SlideText::new(s["translation"].as_str().unwrap_or(""))
-        .unwrap_or_else(|_| SlideText::new("").unwrap());
-    let stage_text = SlideText::new(s["stage"].as_str().unwrap_or(""))
-        .unwrap_or_else(|_| SlideText::new("").unwrap());
+    let main_text = slide_text_field(s, "main");
+    let translation_text = slide_text_field(s, "translation");
+    let stage_text = slide_text_field(s, "stage");
     let group = s["group"]
         .as_str()
         .map(presenter_core::slide::SlideGroup::new);

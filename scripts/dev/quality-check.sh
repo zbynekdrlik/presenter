@@ -270,16 +270,27 @@ else
   warn "cargo-audit not installed; skipping (install: cargo install cargo-audit)"
 fi
 
-# 10) Production code hygiene (no unwrap/expect/panic)
-if command -v rg >/dev/null 2>&1 && rg -n "\\b(panic!)\\(|\\.unwrap\\(|\\.expect\\\(" \
-    -g 'crates/**/src/**/*.rs' \
-    -g '!**/tests/**' -g '!**/benches/**' -g '!**/examples/**' \
-    >/tmp/qc-nounwrap.txt 2>/dev/null; then
-  # Filter out false positives (doc comments / allow lines) – minimal heuristic
-  if [[ -s /tmp/qc-nounwrap.txt ]]; then
-    fail "Found unwrap/expect/panic in production code (see /tmp/qc-nounwrap.txt)"
-  fi
-fi
+# 10) Production code hygiene (no unwrap/expect/panic — CLAUDE.md Banned Patterns)
+# The checker lives in scripts/dev/no_panic_check.py: telling production code from
+# `#[cfg(test)]` code needs a lexer + the module tree, which a flat rg pattern cannot
+# do (the old rg pattern here did not even parse — rg exited 2, the `if` was false,
+# and this gate never fired). It reads QC_TARGETS from the environment (exported in
+# section 7) and exits 0 clean / 1 violations / 2 crash. Exemptions, the
+# `// allow-panic: <reason>` escape and the self-test (scripts/dev/
+# test_no_panic_check.py, run by the CI Quality job) are documented in its header.
+nopanic_rc=0
+nopanic_out=$(python3 "$ROOT_DIR/scripts/dev/no_panic_check.py" "$ROOT_DIR" 2>&1) || nopanic_rc=$?
+case "$nopanic_rc" in
+  0) ;;
+  1)
+    while IFS= read -r row; do
+      if [[ "$row" == *" in production code: "* ]]; then
+        fail "unwrap/expect/panic in production code: ${row}"
+      fi
+    done <<<"$nopanic_out"
+    ;;
+  *) fail "no_panic_check.py failed (exit ${nopanic_rc}): ${nopanic_out}" ;;
+esac
 
 # 11) Async anti-patterns in server (blocking in async paths)
 if command -v rg >/dev/null 2>&1 && rg -n "std::thread::sleep|block_on\\(" \
