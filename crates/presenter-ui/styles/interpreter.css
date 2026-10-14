@@ -1,0 +1,232 @@
+/* #852 interpreter display (/ui/interpreter), tablet layout (spec §8.2).
+   A grid with a transcript column (C5a) and a side column (tips, Bible,
+   numbers); while no transcript exists (data-transcript="absent") the side
+   column is the whole page. --interpreter-scale is the A−/A+ hook (C5a).
+   Bundled globally by trunk: every rule is scoped to body.interpreter or an
+   .interpreter* class. */
+body.interpreter {
+  margin: 0;
+  height: 100dvh;
+  overflow: hidden;
+  background: #0b1220;
+  color: #f8fafc;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+body.interpreter *,
+body.interpreter *::before,
+body.interpreter *::after {
+  box-sizing: border-box;
+}
+
+.interpreter__root {
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.interpreter__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+  grid-template-areas: "transcript side";
+  min-height: 0;
+}
+
+.interpreter__grid[data-transcript="absent"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "side";
+}
+
+.interpreter__side {
+  grid-area: side;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  gap: 12px;
+}
+
+.interpreter-tips {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.interpreter-tips__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.interpreter-tips__title {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.interpreter-tips__clear {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+.interpreter-tips__clear:disabled {
+  opacity: 0.4;
+}
+
+.interpreter-tips__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.interpreter-tip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #1e293b;
+  touch-action: pan-y;
+  transition: transform 120ms ease-out;
+  overflow-wrap: anywhere;
+}
+
+.interpreter-tip[data-new="true"] {
+  animation: interpreter-tip-new 2s ease-out;
+}
+
+@keyframes interpreter-tip-new {
+  from {
+    background: #1d4ed8;
+  }
+  to {
+    background: #1e293b;
+  }
+}
+
+.interpreter-tip__pair {
+  grid-column: 1;
+  font-size: calc(22px * var(--interpreter-scale, 1));
+  font-weight: 700;
+}
+
+.interpreter-tip__note {
+  grid-column: 1;
+  font-size: calc(20px * var(--interpreter-scale, 1));
+  color: #e2e8f0;
+}
+
+.interpreter-tip__meta {
+  grid-column: 1;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.interpreter-tip__dismiss {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: start;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 8px;
+  background: #334155;
+  color: #f8fafc;
+  font-size: 20px;
+}
+
+.interpreter-tips__empty {
+  margin: 16px 0 0;
+  font-size: 18px;
+  color: #94a3b8;
+}
+
+.interpreter-tips__error {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+
+.interpreter-undo {
+  position: fixed;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 16px;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 18px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.interpreter-undo__button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.interpreter__tv-pending {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  font-size: 28px;
+  text-align: center;
+}
+
+.interpreter__status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 14px;
+  color: #94a3b8;
+  border-top: 1px solid #1e293b;
+}
+
+.interpreter__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #64748b;
+  flex: none;
+}
+
+.interpreter__dot[data-ws="connected"] {
+  background: #22c55e;
+}
+
+.interpreter__dot[data-ws="reconnecting"] {
+  background: #ef4444;
+}
+
+.interpreter__version {
+  margin-left: auto;
+}
