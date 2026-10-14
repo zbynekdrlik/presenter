@@ -51,8 +51,11 @@ without libndi.
 `reconnect_active_video_source` (`state/integrations.rs`, driven by `background_tasks.rs`) decides
 via `ReconnectAction` from `pipeline_snapshots_checked("NDI reconnect ticker")`:
 
-- **Repair** — no pipeline, errored or stopped: full re-activation, logged "re-activated the source's
-  pipeline". A silent broadcaster (#448) lands here too, so the log never says "restored".
+- **Repair** — no pipeline, errored or stopped: full re-activation. A silent broadcaster (#448) lands
+  here every tick for hours (SNV between events). `reconnect_active_video_source` returns `Some`
+  ONLY when the repair left the source STREAMING (`NdiActivation::Streaming`); the ticker body
+  `AppState::ndi_reconnect_once` logs "re-activated the source's pipeline" only then, so the log
+  never says "restored" and a silent repair logs nothing there (its #448 line is gated, below).
 - **Heartbeat** — streaming: NO re-activation, only the state re-announcement
   `NdiSourceActivated` + `NdiConnectionStatus "connected"`. `Heartbeat { leftovers }` additionally
   reaps (WARN) any other pipeline still up.
@@ -94,6 +97,15 @@ any removed/orphaned pipeline OUTSIDE the lock).
   sibling reap). It has an exhaustive-match cost: adding it broke `Display` (lifecycle.rs)
   AND `ndi_status_for_start_error` (server integrations.rs) — grep `PipelineStartError::`
   before pushing any new variant.
+- `PipelineStartError::SourceSilent { ndi_name, attempt }` (#858): `attempt` is the source's
+  consecutive silent-start streak, kept in `NdiManager.silent_streaks`
+  (`manager/silent_streak.rs`; a std mutex held only for the count, never across an await).
+  `finalize_start` and `observe_in_flight` count it (`silent_error`); it ENDS on a promote
+  (`start_pipeline` AND a supervisor `rebuild_pipeline` — `note_streaming`, which also logs the one
+  INFO `NDI pipeline streaming` line), `stop_pipeline(id)` (even with no active entry — a silent
+  start leaves only the streak), `stop_all` (clear) and `stop_other_pipelines(keep)` (`retain_only`:
+  it runs after EVERY silent activation and MUST keep that source's streak). The server's
+  `FakeNdiControl` mirrors these rules in its `silent_attempts` map; `Display` ignores `attempt`.
 
 ## Testing the seam without libndi (Tier-0)
 

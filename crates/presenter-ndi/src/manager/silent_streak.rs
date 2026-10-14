@@ -1,12 +1,135 @@
 //! Per-source silent-start streak (#858).
 //!
-//! RED stage: the tests below pin the behavior; the implementation lands in the
-//! following commit.
+//! A silent broadcaster (SNV's Resolume is off for hours between events) makes
+//! every `start_pipeline` build + start a pipeline, wait ~8 s and time out as
+//! `PipelineStartError::SourceSilent`; the 30 s reconnect ticker then repeats it.
+//! Nothing counted the repeats, so nothing could rate-limit the log lines they
+//! produce (5 INFO lines per tick, 600/h, the whole journal).
+//!
+//! The manager counts the repeats HERE — the consecutive `SourceSilent` outcomes
+//! per source — and hands the count out as `SourceSilent { attempt }`. Every line
+//! about a silent attempt is gated on it with [`should_log_silent_attempt`] (the
+//! `should_log_contention` / resolume #484 idiom), and the ONE line that ends a
+//! streak, [`log_pipeline_streaming`], reports how long it was.
+//!
+//! A std mutex, held only for an increment / reset / retain and never across an
+//! `.await` (the `active` map's rule, `ndi-manager-locking.md`, #741).
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use super::PipelineStartError;
+
+/// Whether a silent start attempt (1-based) logs at INFO: the first attempt and
+/// then only the power-of-two milestones, so a long silence is ~log2(N)+1 lines
+/// (a 24 h night of 30 s ticks: 12) instead of one per tick. Every other attempt
+/// logs at DEBUG. `0` is not a power of two, so it never logs. Pure → unit-tested.
+pub fn should_log_silent_attempt(attempt: u32) -> bool {
+    attempt.is_power_of_two()
+}
+
+/// Consecutive silent start outcomes per source id.
+#[derive(Default)]
+pub(in crate::manager) struct SilentStreaks {
+    streaks: Mutex<HashMap<String, u32>>,
+}
+
+impl SilentStreaks {
+    /// Count one more silent attempt for `source_id` and return its 1-based number.
+    pub(in crate::manager) fn bump(&self, source_id: &str) -> u32 {
+        let mut streaks = self.streaks.lock().unwrap_or_else(|p| p.into_inner());
+        let streak = streaks.entry(source_id.to_string()).or_insert(0);
+        *streak = streak.saturating_add(1);
+        *streak
+    }
+
+    /// End `source_id`'s streak (it reached Streaming, or was stopped); returns
+    /// the length it had, `0` when there was none.
+    pub(in crate::manager) fn reset(&self, source_id: &str) -> u32 {
+        self.streaks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(source_id)
+            .unwrap_or(0)
+    }
+
+    /// Forget every source's streak (`stop_all`).
+    pub(in crate::manager) fn clear(&self) {
+        self.streaks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+    }
+
+    /// Forget every streak but `keep_id`'s (`stop_other_pipelines`, the #370 reap
+    /// that runs after EVERY silent activation and must keep that source's count).
+    pub(in crate::manager) fn retain_only(&self, keep_id: &str) {
+        self.streaks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|id, _| id == keep_id);
+    }
+
+    /// The current streak length of `source_id` (`0` = none).
+    #[cfg(test)]
+    fn get(&self, source_id: &str) -> u32 {
+        self.streaks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(source_id)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+/// The `start_pipeline` outcome for a silent broadcaster: counts the attempt and
+/// carries its number, so the caller's log line can be gated on it.
+pub(in crate::manager) fn silent_error(
+    streaks: &SilentStreaks,
+    source_id: &str,
+    ndi_name: String,
+) -> PipelineStartError {
+    PipelineStartError::SourceSilent {
+        ndi_name,
+        attempt: streaks.bump(source_id),
+    }
+}
+
+/// `installed` / `not-installed` for the streaming line's `timestamp_guard` field.
+fn timestamp_guard_label(installed: bool) -> &'static str {
+    if installed {
+        "installed"
+    } else {
+        "not-installed"
+    }
+}
+
+/// The ONE INFO line per real pipeline (#858): `source_id` was promoted to
+/// Streaming. It ends the silent streak and reports its length, and it is the
+/// anchor of the #854 "pipeline age" read (the build-time lines are DEBUG now).
+/// Returns the silent attempts the source had before this pipeline.
+pub(in crate::manager) fn log_pipeline_streaming(
+    streaks: &SilentStreaks,
+    source_id: &str,
+    ndi_name: &str,
+    encoder: &str,
+    guard_installed: bool,
+) -> u32 {
+    let silent_attempts_before = streaks.reset(source_id);
+    tracing::info!(
+        source_id = %source_id,
+        ndi_name = %ndi_name,
+        encoder = %encoder,
+        timestamp_guard = timestamp_guard_label(guard_installed),
+        silent_attempts_before,
+        "NDI pipeline streaming"
+    );
+    silent_attempts_before
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::PipelineStartError;
 
     /// The attempt number a `SourceSilent` carries. A total match (never `if let`)
     /// so a new variant is a compile error here, not a silently skipped arm.

@@ -13,6 +13,7 @@ use crate::ndi_sdk::NdiLib;
 use crate::pipeline::NdiPipeline;
 
 use super::activation::{finalize_reservation, wait_for_streaming, Finalize, WaitOutcome};
+use super::silent_streak::{log_pipeline_streaming, silent_error, SilentStreaks};
 use super::{check_active_entry, ActiveSource, NdiManager, StateCheckOutcome};
 
 /// Outcome classification for [`NdiManager::start_pipeline`] failures.
@@ -28,7 +29,11 @@ pub enum PipelineStartError {
     /// The pipeline built and started, but the NDI source did not begin
     /// streaming within the budget — the broadcaster is silent / not producing
     /// (e.g. Resolume output is off). An expected, non-error state.
-    SourceSilent { ndi_name: String },
+    ///
+    /// `attempt` (1-based) is the source's consecutive silent-start streak (#858,
+    /// `manager/silent_streak.rs`): it restarts at 1 after the source streams or
+    /// is stopped, and the caller gates its log line on it (INFO on 1,2,4,8,...).
+    SourceSilent { ndi_name: String, attempt: u32 },
     /// A genuine failure to build/start/run the pipeline (encoder build failure,
     /// GStreamer element error, etc.).
     Failed(anyhow::Error),
@@ -42,7 +47,7 @@ pub enum PipelineStartError {
 impl std::fmt::Display for PipelineStartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PipelineStartError::SourceSilent { ndi_name } => write!(
+            PipelineStartError::SourceSilent { ndi_name, .. } => write!(
                 f,
                 "NDI source '{ndi_name}' is not producing — broadcaster silent or off"
             ),
@@ -74,6 +79,7 @@ impl NdiManager {
             active: Mutex::new(HashMap::new()),
             snapshot_contention_streak: std::sync::atomic::AtomicU32::new(0),
             drift_guards: std::sync::Mutex::new(HashMap::new()),
+            silent_streaks: SilentStreaks::default(),
         })
     }
 
@@ -144,7 +150,7 @@ impl NdiManager {
                         ) {
                             let in_flight = std::sync::Arc::clone(&entry.pipeline);
                             drop(active);
-                            return Self::observe_in_flight(in_flight, ndi_name).await;
+                            return self.observe_in_flight(source_id, in_flight, ndi_name).await;
                         }
                     }
                     return Ok(());
@@ -226,6 +232,11 @@ impl NdiManager {
                             reserved.state_watcher(),
                         );
                         slot.supervisor = Some(supervisor);
+                        // The slot is ours and supervised — release `active` BEFORE
+                        // the log line (ndi-manager-locking.md: hold it only for the
+                        // map work).
+                        drop(active);
+                        self.note_streaming(&source_id, &ndi_name, &reserved);
                         Ok(())
                     }
                     _ => {
@@ -243,9 +254,29 @@ impl NdiManager {
             }
             // Stopped/TimedOut → broadcaster silent / not producing (#448): a
             // neutral "waiting for source" placeholder, not a red error.
-            Finalize::Removed(_) => Err(PipelineStartError::SourceSilent { ndi_name }),
+            Finalize::Removed(_) => Err(silent_error(&self.silent_streaks, &source_id, ndi_name)),
             Finalize::Superseded => Err(PipelineStartError::Superseded),
         }
+    }
+
+    /// A pipeline of `source_id` was just promoted to Streaming (`start_pipeline`
+    /// or a supervisor rebuild): end the source's silent streak and log the ONE
+    /// INFO line per real pipeline (#858). Called WITHOUT the `active` lock — it
+    /// only reads the pipeline's already-built timing state and logs.
+    pub(in crate::manager) fn note_streaming(
+        &self,
+        source_id: &str,
+        ndi_name: &str,
+        pipeline: &NdiPipeline,
+    ) {
+        let timing = pipeline.encoder_timing().snapshot();
+        log_pipeline_streaming(
+            &self.silent_streaks,
+            source_id,
+            ndi_name,
+            &timing.encoder_factory,
+            timing.installed,
+        );
     }
 
     /// Observer-join an in-flight `Starting` reservation created by a CONCURRENT
@@ -258,7 +289,13 @@ impl NdiManager {
     /// caller (`activate_video_source`) publishes nothing new, so a stale stage status
     /// can persist until the 30 s auto-reconnect ticker re-drives activation. Accepted
     /// — the owner (the rebuild's supervisor) owns that source's real recovery.
+    ///
+    /// A timeout here is a silent outcome of THIS `start_pipeline` call, so it is
+    /// counted into the source's silent-start streak like the owner's (#858) — a
+    /// rare overlap only advances the log gate a step sooner.
     async fn observe_in_flight(
+        &self,
+        source_id: &str,
         in_flight: std::sync::Arc<NdiPipeline>,
         ndi_name: &str,
     ) -> std::result::Result<(), PipelineStartError> {
@@ -270,14 +307,19 @@ impl NdiManager {
             }
             // The owner tore the reservation down (deactivate/reset) — publish nothing.
             WaitOutcome::Stopped => Err(PipelineStartError::Superseded),
-            WaitOutcome::TimedOut => Err(PipelineStartError::SourceSilent {
-                ndi_name: ndi_name.to_string(),
-            }),
+            WaitOutcome::TimedOut => Err(silent_error(
+                &self.silent_streaks,
+                source_id,
+                ndi_name.to_string(),
+            )),
         }
     }
 
     /// Stop one pipeline.
     pub async fn stop_pipeline(&self, source_id: &str) {
+        // A stopped source's silence is over (#858) — also when it never got a
+        // pipeline (a silent start leaves no active entry, only the streak).
+        self.silent_streaks.reset(source_id);
         let mut active = self.active.lock().await;
         if let Some(mut src) = active.remove(source_id) {
             if let Some(handle) = src.supervisor.take() {
@@ -297,12 +339,16 @@ impl NdiManager {
     /// switch. Reaping the orphaned siblings here keeps exactly ONE source
     /// pipeline running per the single-active-source invariant.
     pub async fn stop_other_pipelines(&self, keep_id: &str) {
+        // The siblings' silent streaks end with them (#858); `keep_id`'s own
+        // streak stays — this reap runs after every silent activation.
+        self.silent_streaks.retain_only(keep_id);
         let mut active = self.active.lock().await;
         super::retain_only_active(&mut active, keep_id).await;
     }
 
     /// Stop ALL pipelines.
     pub async fn stop_all(&self) {
+        self.silent_streaks.clear();
         let mut active = self.active.lock().await;
         for (_, src) in active.drain() {
             if let Some(handle) = src.supervisor {
@@ -333,6 +379,7 @@ mod tests {
         let ndi_name = "RESOLUME-SNV (cg-obs)";
         let msg = PipelineStartError::SourceSilent {
             ndi_name: ndi_name.into(),
+            attempt: 1,
         }
         .to_string();
         assert!(

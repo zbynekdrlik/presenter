@@ -96,6 +96,50 @@ fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
     }
 }
 
+/// How far an activation got on the NDI side (#858). The reconnect ticker needs it
+/// to log "re-activated" only for a repair that produced a STREAMING pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NdiActivation {
+    /// `start_pipeline` returned Ok: the source's pipeline is Streaming.
+    Streaming,
+    /// Nothing streams (yet): the broadcaster is silent (#448), the start was
+    /// superseded by a concurrent change (#741), or there is no NDI manager.
+    NotStreaming,
+}
+
+/// The silent-start streak attempt (1-based) a start error carries (#858):
+/// `SourceSilent`'s own, `0` for the variants that are not a silent outcome. A
+/// TOTAL match, so a widened `PipelineStartError` is a compile error here and
+/// never a silently dropped payload.
+fn silent_attempt(err: &PipelineStartError) -> u32 {
+    match err {
+        PipelineStartError::SourceSilent { attempt, .. } => *attempt,
+        PipelineStartError::Failed(_) | PipelineStartError::Superseded => 0,
+    }
+}
+
+/// The #448 line for an activated source whose broadcaster is silent. A silent
+/// source is re-activated every 30 s by the reconnect ticker (SNV: hours of
+/// silence between events), so the line is INFO only on attempts 1,2,4,8,... of
+/// the streak (`log-flood-backoff.md`, #858) and DEBUG in between.
+fn log_silent_activation(source: &VideoSource, attempt: u32) {
+    if presenter_ndi::manager::should_log_silent_attempt(attempt) {
+        tracing::info!(
+            source_id = %source.id,
+            ndi_name = %source.ndi_name,
+            attempt,
+            "NDI source activated but not yet producing — broadcaster silent (#448)"
+        );
+    } else {
+        tracing::debug!(
+            source_id = %source.id,
+            ndi_name = %source.ndi_name,
+            attempt,
+            "NDI source activated but not yet producing — broadcaster silent (#448)"
+        );
+    }
+}
+
 impl AppState {
     // Resolume methods
     pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
@@ -455,6 +499,7 @@ impl AppState {
         let _activation_guard = self.activation_lock.lock().await;
         self.activate_video_source_locked(id, audit_source, actor)
             .await
+            .map(|(source, _activation)| source)
     }
 
     /// The body of [`Self::activate_video_source`], assuming the caller ALREADY
@@ -469,7 +514,7 @@ impl AppState {
         id: VideoSourceId,
         audit_source: presenter_persistence::SettingsAuditSource,
         actor: &str,
-    ) -> anyhow::Result<VideoSource> {
+    ) -> anyhow::Result<(VideoSource, NdiActivation)> {
         let source = self
             .repository
             .activate_video_source(id, audit_source, actor)
@@ -494,7 +539,7 @@ impl AppState {
                         ndi_name = %source.ndi_name,
                         "NDI start superseded by a concurrent activation change (#741) — publishing nothing"
                     );
-                    return Ok(source);
+                    return Ok((source, NdiActivation::NotStreaming));
                 }
                 let classified = ndi_status_for_start_error(&e);
                 if classified.is_hard_error {
@@ -519,11 +564,7 @@ impl AppState {
                 // activation SUCCEEDS (the source is genuinely active, just
                 // waiting for signal); the stage shows a neutral `no-signal`
                 // placeholder, not a red error.
-                tracing::info!(
-                    source_id = %source.id,
-                    ndi_name = %source.ndi_name,
-                    "NDI source activated but not yet producing — broadcaster silent (#448)"
-                );
+                log_silent_activation(&source, silent_attempt(&e));
                 self.live_hub.publish(LiveEvent::NdiConnectionStatus {
                     status: classified.status,
                 });
@@ -531,7 +572,7 @@ impl AppState {
                 // switch to a not-yet-live source still tears down the previous
                 // source's encoder (the #370 single-active-source invariant).
                 manager.stop_other_pipelines(&source.id.to_string()).await;
-                return Ok(source);
+                return Ok((source, NdiActivation::NotStreaming));
             }
             // start_pipeline only returns Ok AFTER the webrtcsink video pad
             // has negotiated caps — at that point frames are flowing through
@@ -549,8 +590,9 @@ impl AppState {
             // now that the new source is confirmed Streaming, so the operator
             // never sees a gap and exactly ONE source pipeline remains.
             manager.stop_other_pipelines(&source.id.to_string()).await;
+            return Ok((source, NdiActivation::Streaming));
         }
-        Ok(source)
+        Ok((source, NdiActivation::NotStreaming))
     }
 
     pub async fn deactivate_video_sources(
@@ -577,8 +619,11 @@ impl AppState {
     /// The NDI 30 s auto-reconnect ticker's read-then-activate step
     /// (`background_tasks.rs`): (re)activate whatever source is currently
     /// `is_active` in the DB, restoring its pipeline after the sender comes back
-    /// online. Returns the reconnected source, or `None` when no source is active
-    /// or its pipeline needs no repair (see `ReconnectAction`).
+    /// online. Returns the reconnected source — ONLY when the repair produced a
+    /// streaming pipeline — or `None` when no source is active, its pipeline
+    /// needs no repair (see `ReconnectAction`), or the repair found the
+    /// broadcaster still silent (#858: a silent source is repaired every tick and
+    /// that is not a reconnect; its #448 line is the power-of-two-gated one).
     ///
     /// #747: acquire `activation_lock` BEFORE reading the active source and hold
     /// it across the activation, so an operator `deactivate_video_sources` /
@@ -630,7 +675,10 @@ impl AppState {
         }
         self.activate_video_source_locked(source.id, audit_source, actor)
             .await
-            .map(Some)
+            .map(|(source, activation)| match activation {
+                NdiActivation::Streaming => Some(source),
+                NdiActivation::NotStreaming => None,
+            })
     }
 
     /// What the reconnect ticker does for the active source's pipeline.
@@ -1470,6 +1518,7 @@ mod tests {
     fn silent_source_maps_to_neutral_no_signal_and_is_not_a_hard_error() {
         let err = PipelineStartError::SourceSilent {
             ndi_name: "RESOLUME-SNV (cg-obs)".to_string(),
+            attempt: 1,
         };
         let classified = ndi_status_for_start_error(&err);
         assert_eq!(
@@ -1681,6 +1730,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         const SILENT_LINE: &str = "broadcaster silent (#448)";
+        const RECONNECT_LINE: &str = "NDI auto-reconnect: re-activated the source's pipeline";
 
         /// One captured tracing event: its level, rendered `message` and `attempt`.
         #[derive(Clone, Debug)]
@@ -1832,6 +1882,62 @@ mod tests {
                 streaming.map(|s| s.id),
                 Some(a_id),
                 "a repair that produced a streaming pipeline is the reconnect"
+            );
+        }
+
+        // The ticker body (`ndi_reconnect_once`): a silent repair is covered by the
+        // gated #448 line and logs NO "re-activated"; the repair that finally
+        // produces a streaming pipeline logs it once, at INFO.
+        #[tokio::test]
+        async fn the_ticker_logs_re_activated_only_after_a_streaming_repair() {
+            let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::SilentSource).await;
+            // The operator's own activation is silent attempt 1 (not captured).
+            state
+                .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+                .expect("activate A (silent)");
+            let (_scope, _keeper, events) = capture_events();
+
+            for _ in 0..3 {
+                state.ndi_reconnect_once().await;
+            }
+
+            assert!(
+                lines_containing(&events, RECONNECT_LINE).is_empty(),
+                "a silent repair is not a reconnect; got {:?}",
+                lines_containing(&events, RECONNECT_LINE)
+            );
+            let silent = lines_containing(&events, SILENT_LINE);
+            let (info, debug) = (tracing::Level::INFO, tracing::Level::DEBUG);
+            assert_eq!(
+                silent
+                    .iter()
+                    .map(|line| (line.attempt, line.level))
+                    .collect::<Vec<_>>(),
+                vec![(Some(2), info), (Some(3), debug), (Some(4), info)],
+                "the ticker's silent repairs are attempts 2,3,4 of the streak"
+            );
+
+            fake.set_start_outcome(StartOutcome::Ok);
+            state.ndi_reconnect_once().await;
+
+            let reconnected = lines_containing(&events, RECONNECT_LINE);
+            assert_eq!(
+                reconnected
+                    .iter()
+                    .map(|line| line.level)
+                    .collect::<Vec<_>>(),
+                vec![info],
+                "the repair that produced a streaming pipeline logs once at INFO"
+            );
+            let starts = fake
+                .calls()
+                .iter()
+                .filter(|c| matches!(c, NdiCall::StartPipeline { source_id, .. } if *source_id == a_str))
+                .count();
+            assert_eq!(
+                starts, 5,
+                "operator start + 3 silent repairs + 1 live repair"
             );
         }
     }
