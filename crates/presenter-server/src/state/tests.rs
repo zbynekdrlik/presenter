@@ -822,6 +822,40 @@ async fn validate_startup_mode_starts_no_integrations_but_serves_healthz() {
     );
 }
 
+/// #852 C1a: the Normal boot starts the VBAN receiver from
+/// `spawn_background_tasks` (`from_config`'s last start). With no microphone
+/// saved it stays idle and binds nothing; the test fails if that start is
+/// ever dropped.
+#[tokio::test]
+async fn the_normal_boot_starts_the_vban_receiver_idle_without_mics() {
+    use presenter_core::listen::status::SocketState;
+
+    let state = AppState::in_memory().await.expect("in-memory state");
+    assert_eq!(state.listen_status().socket.state, SocketState::NotStarted);
+    state.spawn_background_tasks();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        let status = state.listen_status();
+        if status.socket.state == SocketState::Idle {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the receiver task never started: {status:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert_eq!(
+        status.socket.bind_addr,
+        Some(crate::listen::vban_bind_addr().to_string())
+    );
+    assert_eq!(
+        status.socket.local_addr, None,
+        "nothing bound without a mic"
+    );
+    assert!(status.mics.is_empty());
+}
+
 /// #852 C1a: the schema probe boot must not bind the VBAN port either — a
 /// stored `listen.mics` would otherwise make the probe take 6980 next to the
 /// live service. The receiver is started only from `spawn_background_tasks`.

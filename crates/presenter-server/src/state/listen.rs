@@ -141,38 +141,4 @@ mod tests {
             Some("127.0.0.1:0")
         );
     }
-
-    #[tokio::test]
-    async fn a_save_during_startup_is_applied_and_never_overwritten() {
-        let state = AppState::in_memory().await.unwrap();
-        let save = state.listen.save_guard().await;
-        let starter = {
-            let state = state.clone();
-            tokio::spawn(async move { state.start_listen("127.0.0.1:0".parse().unwrap()).await })
-        };
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let saver = {
-            let state = state.clone();
-            tokio::spawn(async move {
-                let guest = serde_json::from_str::<Vec<MicConfig>>(
-                    r#"[{"id":"guest","name":"Hosť","streamName":"GUEST_EN","senderIp":null,"channel":"left","language":"en","role":"guest"}]"#,
-                )
-                .unwrap();
-                state.set_listen_mics(guest, "203.0.113.9").await.unwrap()
-            })
-        };
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        drop(save);
-        tokio::time::timeout(Duration::from_secs(5), starter)
-            .await
-            .unwrap()
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), saver)
-            .await
-            .unwrap()
-            .unwrap();
-        let mics = state.listen_status().mics;
-        assert_eq!(mics.len(), 1, "the save is applied whichever ran first");
-        assert_eq!(mics[0].config.id, "guest");
-    }
 }

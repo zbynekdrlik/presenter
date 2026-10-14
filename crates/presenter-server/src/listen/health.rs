@@ -62,6 +62,18 @@ struct UnmatchedEntry {
     packets: u64,
 }
 
+/// What [`ListenHealth::note_unmatched`] saw: the input of the #484 gates of
+/// the unassigned-stream lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UnmatchedCount {
+    /// Packets of this stream NAME while it stayed in the bounded name map.
+    pub(crate) packets: u64,
+    /// The name entered the map with this packet (new, or back after an eviction).
+    pub(crate) fresh: bool,
+    /// Names that entered the map this socket session.
+    pub(crate) names: u64,
+}
+
 /// A map that keeps the [`RECENT_CAP`] most recently seen keys.
 #[derive(Debug)]
 struct Recent<K, V> {
@@ -77,9 +89,11 @@ impl<K, V> Default for Recent<K, V> {
 }
 
 impl<K: Eq + Hash + Clone, V: Default> Recent<K, V> {
-    /// The entry of `key`, seen `now` (a new key pushes out the oldest).
-    fn touch(&mut self, key: K, now: Instant) -> &mut V {
-        if !self.entries.contains_key(&key) && self.entries.len() >= RECENT_CAP {
+    /// The entry of `key`, seen `now` (a new key pushes out the oldest), and
+    /// whether the key entered the map just now.
+    fn touch(&mut self, key: K, now: Instant) -> (&mut V, bool) {
+        let fresh = !self.entries.contains_key(&key);
+        if fresh && self.entries.len() >= RECENT_CAP {
             let oldest = self
                 .entries
                 .iter()
@@ -94,7 +108,7 @@ impl<K: Eq + Hash + Clone, V: Default> Recent<K, V> {
             .entry(key)
             .or_insert_with(|| (V::default(), now));
         entry.1 = now;
-        &mut entry.0
+        (&mut entry.0, fresh)
     }
 }
 
@@ -105,6 +119,10 @@ pub(crate) struct ListenHealth {
     unmatched: Recent<(String, SocketAddr), UnmatchedEntry>,
     /// Packets per unassigned stream NAME: the #484 gate of its INFO line.
     unmatched_names: Recent<String, u64>,
+    /// Names that entered `unmatched_names` this session, again after an
+    /// eviction too: the gate of a new name's line, so a sender cycling more
+    /// names than the map keeps cannot log every packet.
+    new_names: u64,
 }
 
 impl ListenHealth {
@@ -129,6 +147,16 @@ impl ListenHealth {
         }
     }
 
+    /// The socket closed: the session's counters go, so a later bind (or a
+    /// failed rebind under a new stream name) never shows the last session's
+    /// numbers, and the unassigned-stream log gates start over.
+    pub(crate) fn end_session(&mut self) {
+        self.mics.clear();
+        self.unmatched = Recent::default();
+        self.unmatched_names = Recent::default();
+        self.new_names = 0;
+    }
+
     pub(crate) fn record_packet(&mut self, mic_id: &str, seen: PacketSeen) {
         let Some(mic) = self.mics.get_mut(mic_id) else {
             return;
@@ -140,20 +168,29 @@ impl ListenHealth {
         mic.frames_per_packet = Some(seen.frames);
     }
 
-    /// A stream no mic takes; the packets seen so far of that stream NAME.
+    /// A stream no mic takes: counted per (name, sender) for the status and
+    /// per name for the log gates.
     pub(crate) fn note_unmatched(
         &mut self,
         stream_name: &str,
         from: SocketAddr,
         format: VbanAudioFormat,
         now: Instant,
-    ) -> u64 {
-        let entry = self.unmatched.touch((stream_name.to_string(), from), now);
+    ) -> UnmatchedCount {
+        let (entry, _) = self.unmatched.touch((stream_name.to_string(), from), now);
         entry.packets += 1;
         entry.format = Some(format);
-        let packets = self.unmatched_names.touch(stream_name.to_string(), now);
-        *packets += 1;
-        *packets
+        let (count, fresh) = self.unmatched_names.touch(stream_name.to_string(), now);
+        *count += 1;
+        let packets = *count;
+        if fresh {
+            self.new_names += 1;
+        }
+        UnmatchedCount {
+            packets,
+            fresh,
+            names: self.new_names,
+        }
     }
 
     pub(crate) fn snapshot(&self, mics: &[MicConfig], now: Instant) -> ListenStatus {

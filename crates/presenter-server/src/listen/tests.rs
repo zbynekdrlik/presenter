@@ -3,8 +3,8 @@
 //! explicit instants (never a sleep); the socket path has its own real
 //! loopback UDP tests on `127.0.0.1:0` with bounded 5 s polls (`wait_for`).
 
-use super::health::{ListenHealth, PacketSeen, RECENT_CAP};
-use super::vban_rx::{receive, MicRouter, SocketEnd};
+use super::health::{ListenHealth, PacketSeen, UnmatchedCount, RECENT_CAP};
+use super::vban_rx::{receive, MicRouter, SocketEnd, Streak};
 use super::*;
 use crate::tracing_capture::{quoted, Capture};
 use presenter_core::audio::vban::{VbanAudioFormat, VbanSampleType};
@@ -147,14 +147,32 @@ async fn unmatched_streams_keep_the_16_most_recent_and_count_per_name() {
         let at = t0 + Duration::from_millis(k);
         assert_eq!(
             health.note_unmatched(&format!("S{k:02}"), addr(OTHER), MONO_48K, at),
-            1
+            UnmatchedCount {
+                packets: 1,
+                fresh: true,
+                names: k + 1
+            }
         );
     }
     let again = t0 + Duration::from_millis(17);
     assert_eq!(
         health.note_unmatched("S16", addr(OTHER), MONO_48K, again),
-        2,
+        UnmatchedCount {
+            packets: 2,
+            fresh: false,
+            names: 17
+        },
         "per NAME"
+    );
+    let evicted = t0 + Duration::from_millis(18);
+    assert_eq!(
+        health.note_unmatched("S00", addr(OTHER), MONO_48K, evicted),
+        UnmatchedCount {
+            packets: 1,
+            fresh: true,
+            names: 18
+        },
+        "an evicted name enters again"
     );
     let status = health.snapshot(&[], t0 + Duration::from_secs(1));
     let names: Vec<&str> = status
@@ -163,9 +181,80 @@ async fn unmatched_streams_keep_the_16_most_recent_and_count_per_name() {
         .map(|s| s.stream_name.as_str())
         .collect();
     assert_eq!(names.len(), RECENT_CAP);
-    assert!(!names.contains(&"S00"), "the oldest went");
-    assert_eq!(names.first(), Some(&"S01"), "sorted by name");
+    assert!(!names.contains(&"S01"), "the oldest went");
+    assert_eq!(names.first(), Some(&"S00"), "sorted by name");
     assert_eq!(status.unmatched[15].packets, 2);
+}
+
+#[tokio::test]
+async fn a_closed_socket_ends_the_session_counters() {
+    let t0 = Instant::now();
+    let mics = vec![mic("guest", "GUEST_EN", None)];
+    let mut health = ListenHealth::default();
+    health.set_mics(&[], &["guest"]);
+    health.record_packet("guest", seen(t0));
+    health.note_unmatched("Stream1", addr(OTHER), MONO_48K, t0);
+    health.end_session();
+    let status = health.snapshot(&mics, t0);
+    let guest = &status.mics[0];
+    assert_eq!(
+        (guest.state, guest.packets, guest.sender.as_deref()),
+        (MicState::Waiting, 0, None)
+    );
+    assert!(status.unmatched.is_empty());
+    assert_eq!(
+        health.note_unmatched("Stream1", addr(OTHER), MONO_48K, t0),
+        UnmatchedCount {
+            packets: 1,
+            fresh: true,
+            names: 1
+        },
+        "the log gates start over"
+    );
+}
+
+#[test]
+fn a_socket_failing_right_after_each_bind_backs_off_and_logs_on_power_of_two() {
+    let mut streak = Streak::default();
+    let mut bound_lines = Vec::new();
+    let mut delays = Vec::new();
+    for _ in 0..8 {
+        bound_lines.push(streak.log_bound());
+        streak.session_failed(false, Duration::from_millis(5));
+        delays.push(bind_retry_delay(streak.failures).as_secs());
+    }
+    assert_eq!(delays, vec![1, 2, 4, 8, 16, 32, 60, 60]);
+    assert_eq!(
+        bound_lines,
+        vec![true, true, false, true, false, false, false, true]
+    );
+}
+
+#[test]
+fn a_healthy_socket_restarts_the_backoff_and_a_freed_port_logs_its_bind() {
+    let mut early = Streak::default();
+    for _ in 0..3 {
+        early.session_failed(false, Duration::from_secs(1));
+    }
+    assert_eq!(early.failures, 3);
+    let mut received = early;
+    received.session_failed(true, Duration::from_millis(5));
+    assert_eq!((received.failures, received.log_bound()), (1, true));
+    let mut long = early;
+    long.session_failed(false, Duration::from_secs(30));
+    assert_eq!(long.failures, 1, "30 s bound is healthy");
+    let mut short = early;
+    short.session_failed(false, Duration::from_millis(29_999));
+    assert_eq!(short.failures, 4);
+    let mut taken = Streak::default();
+    for _ in 0..3 {
+        taken.bind_failed();
+    }
+    assert_eq!(
+        (taken.failures, taken.log_bound()),
+        (3, true),
+        "bind retries never hide the bind that finally works"
+    );
 }
 
 #[tokio::test]
@@ -410,6 +499,80 @@ async fn a_taken_port_is_retried_and_reported_until_it_is_free() {
         s.socket.state == SocketState::Bound
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_sender_rotating_20_names_over_udp_logs_log2_lines_and_one_summary() {
+    let capture = Capture::install();
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
+    service.start(addr("127.0.0.1:0"));
+    let bound = wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let vban: SocketAddr = bound.socket.local_addr.unwrap().parse().unwrap();
+    let tx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut rotating: Vec<VbanEncoder> = (0..20)
+        .map(|k| VbanEncoder::new(&format!("ROT{k:02}"), 48_000, 1, VbanSampleType::Int16))
+        .collect();
+    for _ in 0..5 {
+        for encoder in &mut rotating {
+            tx.send_to(&next_packet(encoder), vban).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // one socket, in order: once the guest's packet counts, the flood was handled
+    tx.send_to(&next_packet(&mut guest_encoder()), vban)
+        .await
+        .unwrap();
+    wait_for(&service, "the closing guest packet", |s| {
+        s.mics[0].packets == 1
+    })
+    .await;
+    let lines = capture.events_with_message("VBAN stream not assigned to any mic");
+    let names: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.field("names"))
+        .collect();
+    assert_eq!(
+        names,
+        vec!["1", "2", "4", "8", "16", "32", "64"],
+        "100 packets of 20 rotating names: one line per power of two, not 100"
+    );
+    let summaries = capture.events_with_message("rotate through more than the names kept");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].field("names"), Some("17"));
+}
+
+#[tokio::test]
+async fn a_failed_rebind_shows_none_of_the_last_sessions_counters() {
+    // a fixed port, so the rebind can be made to fail
+    let fixed = std::net::UdpSocket::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
+    service.start(fixed);
+    wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let tx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut guest = guest_encoder();
+    for _ in 0..3 {
+        tx.send_to(&next_packet(&mut guest), fixed).await.unwrap();
+    }
+    wait_for(&service, "3 packets", |s| s.mics[0].packets == 3).await;
+    service.apply(Vec::new());
+    wait_for(&service, "closed", |s| s.socket.state == SocketState::Idle).await;
+    let _holder = std::net::UdpSocket::bind(fixed).expect("the port was released");
+    service.apply(vec![mic("guest", "GUEST_2", None)]);
+    let status = wait_for(&service, "retrying", |s| {
+        s.socket.state == SocketState::Retrying
+    })
+    .await;
+    let guest = &status.mics[0];
+    assert_eq!(
+        (guest.state, guest.packets, guest.sender.as_deref()),
+        (MicState::Waiting, 0, None),
+        "never the last session's numbers under the new stream name"
+    );
 }
 
 #[tokio::test]

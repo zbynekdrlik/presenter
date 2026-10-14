@@ -19,23 +19,62 @@ use tokio::sync::watch;
 use tokio::time::{interval, sleep, Instant, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use super::health::PacketSeen;
+use super::health::{ListenHealth, PacketSeen, UnmatchedCount, RECENT_CAP};
 use super::{bind_retry_delay, should_log_event, ListenService, MIC_TARGET, NO_AUDIO_AFTER};
 
 /// Big enough for any datagram (a conformant VBAN packet is ≤ 1464 bytes).
 const RECV_BUFFER_LEN: usize = 65_536;
 /// The "lost audio" line is evaluated this often.
 const TICK: Duration = Duration::from_secs(1);
+/// A socket is healthy once it received a datagram or stayed bound this long;
+/// only then does a later failure start the retry pause at 1 s again.
+const HEALTHY_AFTER: Duration = Duration::from_secs(30);
+/// The new-name count at which the bounded name map evicts for the first time.
+const FIRST_EVICTION: u64 = RECENT_CAP as u64 + 1;
 
 pub(super) type ConfigRx = watch::Receiver<Arc<Vec<MicConfig>>>;
 
 /// Why a bound socket was closed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SocketEnd {
     /// The list was emptied (or the service is gone).
     NoMic,
-    /// `recv_from` failed: rebind after a pause.
-    Failed,
+    /// `recv_from` failed: rebind after a pause. `received`: a datagram
+    /// arrived before it failed.
+    Failed { received: bool, error: String },
+}
+
+/// The supervisor's failure streak (#484): failed attempts in a row drive the
+/// retry pause and its WARN gate; `early_ends`, the bound sessions that failed
+/// before they were healthy, gate the "bound" line. A socket that fails right
+/// after every bind therefore neither rebinds every second nor logs each time.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Streak {
+    pub(super) failures: u32,
+    early_ends: u32,
+}
+
+impl Streak {
+    pub(super) fn bind_failed(&mut self) {
+        self.failures = self.failures.saturating_add(1);
+    }
+
+    /// A bound session failed after `bound_for`; a healthy one resets the
+    /// streak first, so its failure retries after 1 s.
+    pub(super) fn session_failed(&mut self, received: bool, bound_for: Duration) {
+        if received || bound_for >= HEALTHY_AFTER {
+            *self = Self::default();
+        } else {
+            self.early_ends = self.early_ends.saturating_add(1);
+        }
+        self.failures = self.failures.saturating_add(1);
+    }
+
+    /// Log "VBAN socket bound": every bind of a healthy run (a port freed after
+    /// bind retries included), then on power-of-two counts of early ends.
+    pub(super) fn log_bound(&self) -> bool {
+        should_log_event(u64::from(self.early_ends) + 1)
+    }
 }
 
 /// The socket task: idle while the list is empty, bound while it is not,
@@ -43,10 +82,10 @@ pub(super) enum SocketEnd {
 /// later, or at once when the list changes.
 pub(super) async fn supervise(service: ListenService, bind: SocketAddr) {
     let mut config = service.config_receiver();
-    let mut failures: u32 = 0;
+    let mut streak = Streak::default();
     loop {
-        let idle = config.borrow_and_update().is_empty();
-        if idle {
+        if config.borrow_and_update().is_empty() {
+            streak = Streak::default();
             service.with_health(|health| health.set_socket(SocketState::Idle, None, None));
             if config.changed().await.is_err() {
                 return;
@@ -55,27 +94,23 @@ pub(super) async fn supervise(service: ListenService, bind: SocketAddr) {
         }
         let error = match UdpSocket::bind(bind).await {
             Ok(socket) => {
-                failures = 0;
-                let local = socket.local_addr().ok();
-                info!(target: MIC_TARGET, %bind, local = ?local, "VBAN socket bound");
-                service.with_health(|health| health.set_socket(SocketState::Bound, local, None));
-                let end = receive(&service, &socket, &mut config).await;
-                info!(target: MIC_TARGET, %bind, ?end, "VBAN socket closed");
-                if end == SocketEnd::NoMic {
-                    continue;
+                match bound_session(&service, &socket, &mut config, bind, &mut streak).await {
+                    None => continue,
+                    Some(error) => error,
                 }
-                "príjem zo socketu VBAN zlyhal".to_string()
             }
-            Err(err) => format!("port {} sa nedá otvoriť: {err}", bind.port()),
+            Err(err) => {
+                streak.bind_failed();
+                format!("port {} sa nedá otvoriť: {err}", bind.port())
+            }
         };
-        failures = failures.saturating_add(1);
-        let delay = bind_retry_delay(failures);
-        if should_log_event(u64::from(failures)) {
+        let delay = bind_retry_delay(streak.failures);
+        if should_log_event(u64::from(streak.failures)) {
             warn!(
                 target: MIC_TARGET,
                 %bind,
                 error = error.as_str(),
-                attempt = failures,
+                attempt = streak.failures,
                 retry_in_s = delay.as_secs(),
                 "the VBAN socket is not receiving — retrying"
             );
@@ -88,6 +123,36 @@ pub(super) async fn supervise(service: ListenService, bind: SocketAddr) {
                     return;
                 }
             }
+        }
+    }
+}
+
+/// One bound socket: receive until the list is emptied (`None`) or receiving
+/// fails (`Some`, the Slovak status error). The session's counters go with
+/// the socket.
+async fn bound_session(
+    service: &ListenService,
+    socket: &UdpSocket,
+    config: &mut ConfigRx,
+    bind: SocketAddr,
+    streak: &mut Streak,
+) -> Option<String> {
+    let local = socket.local_addr().ok();
+    if streak.log_bound() {
+        info!(target: MIC_TARGET, %bind, local = ?local, "VBAN socket bound");
+    }
+    service.with_health(|health| health.set_socket(SocketState::Bound, local, None));
+    let bound_at = Instant::now();
+    let end = receive(service, socket, config).await;
+    service.with_health(ListenHealth::end_session);
+    match end {
+        SocketEnd::NoMic => {
+            info!(target: MIC_TARGET, %bind, "VBAN socket closed — no microphone is configured");
+            None
+        }
+        SocketEnd::Failed { received, error } => {
+            streak.session_failed(received, bound_at.elapsed());
+            Some(format!("príjem zo socketu VBAN zlyhal: {error}"))
         }
     }
 }
@@ -107,14 +172,15 @@ pub(super) async fn receive(
     let mut buf = vec![0u8; RECV_BUFFER_LEN];
     let mut tick = interval(TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut received = false;
     loop {
         tokio::select! {
-            received = socket.recv_from(&mut buf) => match received {
-                Ok((len, from)) => router.handle_datagram(&buf[..len], from, Instant::now()),
-                Err(err) => {
-                    warn!(target: MIC_TARGET, %err, "receiving from the VBAN socket failed");
-                    return SocketEnd::Failed;
+            result = socket.recv_from(&mut buf) => match result {
+                Ok((len, from)) => {
+                    received = true;
+                    router.handle_datagram(&buf[..len], from, Instant::now());
                 }
+                Err(err) => return SocketEnd::Failed { received, error: err.to_string() },
             },
             changed = config.changed() => {
                 if changed.is_err() {
@@ -235,23 +301,49 @@ impl MicRouter {
         }
     }
 
-    /// Counted per (name, sender) for the status; logged on power-of-two
-    /// packets per stream NAME (a bounded map, review 1f).
+    /// Counted per (name, sender) for the status; logged through
+    /// [`unmatched_lines`] (bounded maps, review 1f).
     fn unmatched(&self, packet: &VbanPacket, from: SocketAddr, now: Instant) {
-        let packets = self.service.with_health(|health| {
+        let seen = self.service.with_health(|health| {
             health.note_unmatched(&packet.stream_name, from, packet.format, now)
         });
-        if should_log_event(packets) {
+        let (line, summary) = unmatched_lines(seen);
+        if line {
             info!(
                 target: MIC_TARGET,
                 stream = packet.stream_name.as_str(),
                 %from,
                 rate = packet.format.rate_hz,
                 channels = packet.format.channels,
-                packets,
+                packets = seen.packets,
+                names = seen.names,
                 "VBAN stream not assigned to any mic"
             );
         }
+        if summary {
+            info!(
+                target: MIC_TARGET,
+                %from,
+                names = seen.names,
+                kept = RECENT_CAP,
+                "unassigned VBAN stream names rotate through more than the names kept — \
+                 a new name is logged on power-of-two counts of new names only"
+            );
+        }
+    }
+}
+
+/// The #484 gates of the unassigned-stream lines, `(line, summary)`. A name's
+/// later packets log on its own power-of-two count; a name that enters the
+/// bounded map (new, or back after an eviction) logs on the power-of-two
+/// count of such names this session, so a sender cycling more names than the
+/// map keeps logs log2(N) lines for N packets, not N. The summary marks the
+/// first eviction, once per session.
+fn unmatched_lines(seen: UnmatchedCount) -> (bool, bool) {
+    if seen.fresh {
+        (should_log_event(seen.names), seen.names == FIRST_EVICTION)
+    } else {
+        (should_log_event(seen.packets), false)
     }
 }
 
