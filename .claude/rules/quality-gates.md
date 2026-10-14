@@ -200,15 +200,17 @@ Same family: a `///` Markdown blockquote (`> …`) must repeat `> ` on EVERY con
 third Tier-0 clippy cycle lost this weekend; re-read every `///` block and every `for … if let Some`
 before pushing.
 
-## `fn_length_check.py` does NOT see GENERIC functions — size them by hand (#768)
+## `fn_length_check.py` measures code only — generic fns included (#768, fixed 2026-10-14)
 
-The checker's `fn_start` regex is `fn\s+NAME\s*\(` — it requires `(` right after the name, so a
-generic signature `fn install<F: Fn() + 'static>(…)` (or any `fn foo<T>(…)`) NEVER matches and is
-invisible to BOTH the warn (>80) and hard-fail (>120) gates. `cargo fmt`/CI-clippy don't enforce
-length either, so a generic function can grow past 120 with every automated check green. When you
-grow a generic fn (e.g. `Watchdog::install` reached 113 lines here), measure it by hand
-(`awk 'NR>=<start>&&/pub.*fn <name></,/^    }$/'`) and split with the #687 helper-extraction pattern
-if it nears 120 — the local gate will not warn you.
+Until 2026-10-14 the checker counted `{` / `}` on RAW lines and its `fn_start` regex needed `(`
+right after the name. So a brace inside a string, raw string, char literal or comment moved the
+count (`"}"` ended a function early and hid a hard fail; `"{oops"` merged it into the next function
+for a false >120), and every generic fn (`fn install<F: Fn()>(…)`) was invisible to both gates.
+Now it blanks literals and comments with the no-panic gate's lexer (`no_panic_check.mask_source`)
+before counting, and `fn_start` accepts `<` or `(` after the name. `test_fn_length_check.py` pins it
+(CI Quality step "Test fn-length gate"). The switch surfaced four generic fns as warnings (80–120:
+`remap_markers`, `resolve_slide_positions`, `start_health_ticker`, `ndi_watchdog::install`) and no new
+hard fails. A file the lexer cannot read falls back to the raw text.
 
 ## `cargo fmt --all` at the workspace root does NOT format `crates/presenter-ui` (#768 lane 2)
 
