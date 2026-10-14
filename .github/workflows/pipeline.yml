@@ -460,6 +460,16 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s ops/cloudflare -p 'test_presenter_access.py' -v
 
+      # Self-test for the no-panic gate (quality-check.sh section 10 ->
+      # scripts/dev/no_panic_check.py). The gate's old rg pattern did not parse, so
+      # it never fired and CLAUDE.md's "no unwrap/expect/panic in production code"
+      # went unenforced. The test seeds production vs #[cfg(test)] code and pins
+      # that the checker flags the first and ignores the second.
+      - name: Test no-panic gate (section 10)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev -p 'test_no_panic_check.py' -v
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

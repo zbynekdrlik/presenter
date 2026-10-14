@@ -259,6 +259,7 @@ cargo fmt --all -- --check && (cd crates/presenter-ui && cargo fmt --check)
 QC_TARGETS="<newline-separated touched .rs files>" python3 scripts/dev/fn_length_check.py .
 bash scripts/dev/count_prod_lines.sh <file>
 bash scripts/dev/placeholder_check.sh . && bash scripts/dev/feature_router_check.sh .
+python3 scripts/dev/no_panic_check.py .   # section 10: QC_TARGETS scopes it like the fn-length gate
 ```
 
 E2E TypeScript (CI job "TypeScript Type Check") also runs locally without compiling Rust. A
@@ -309,4 +310,31 @@ from there with `crate::router::build_router(state.clone())` — the existing va
 futures.next().await` loop with `futures.collect()` / a helper that takes the stream by value
 leaves the `mut` unused, and `-D warnings` fails Clippy on `unused_mut` (#841 lost a cycle on five
 such bindings). Also drop the now-unused `StreamExt` import from that file.
+
+## No `unwrap()` / `expect()` / `panic!` in PRODUCTION code is a real CI gate (quality-check.sh section 10)
+
+CLAUDE.md "Banned Patterns" was unenforced for months: section 10's `rg` pattern did not parse
+(unclosed group), `rg` exited 2 and the `if` was false. It is now `scripts/dev/no_panic_check.py`
+(a lexer + module-tree walk — a flat regex would flag every inline `#[cfg(test)] mod tests`), with
+a seeded self-test `scripts/dev/test_no_panic_check.py` run by the CI Quality job. Run both locally
+(no compile needed): `python3 scripts/dev/no_panic_check.py .` and
+`python3 -m unittest discover -s scripts/dev -p 'test_no_panic_check.py'`.
+
+- **Exempt (documented in the script header):** `crates/presenter-ui` (WASM), `tests/` `benches/`
+  `examples/` dirs, `tests.rs`, `src/bin/**`, files declared by a parent's `#[cfg(test)] mod x;`
+  (also every `*_tests.rs` sibling and everything below that module's dir), `mock_integrations/`
+  and `feature = "test-helpers"` / `"mock-integrations"` items, `#[test]` fns, everything after a
+  top-level inline `#[cfg(test)] mod x { .. }`, and any other `#[cfg(test)]` item (fn / impl / use /
+  field / match arm). `#[cfg(not(test))]` and `#[cfg(any(test, feature = "x"))]` are production.
+- **Only `.unwrap()`, `.expect(` and `panic!(`** are matched; `unwrap_or*`, `unwrap_err`,
+  `expect_err`, comments and string literals never are.
+- **Fix, don't escape:** return the error (`?`, `map_err` into the handler's error type) or log +
+  degrade (the NDI finder thread: a refused spawn leaves the list never-scanned = the #546 "blind"
+  state). A truly infallible site may carry a trailing `// allow-panic: <non-empty reason>` on the
+  SAME line; reviewers should challenge every one. A `SlideText::new("").unwrap()`-style
+  "can't fail" fallback is the cue to use the infallible constructor
+  (`SlideText::from_stored_unchecked("")`) instead.
+- **Changing a fn that returns `Response` to `Result<Response, AppError>`** (as `ndi_whep.rs`
+  `into_response` did) means every caller's `Ok(f(..))` tail becomes `f(..)`; grep the callers —
+  Tier-0 has no local compiler to flag the mismatch.
 
