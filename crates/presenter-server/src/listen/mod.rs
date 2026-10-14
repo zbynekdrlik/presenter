@@ -6,6 +6,7 @@
 //! only, so validate mode never binds.
 
 pub(crate) mod health;
+mod resample;
 #[cfg(test)]
 mod tests;
 mod vban_rx;

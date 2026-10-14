@@ -46,6 +46,12 @@ sha2 = "0.10"
 # ttf-parser flagged by RUSTSEC-2026-0192). Pure Rust, reads TTF + OTF; the
 # default `std` feature enables `NameString`'s Display-based decoding.
 read-fonts = "0.44"
+# #852 C1a: VBAN mic → 16 kHz mono for the ASR (listen/resample.rs) — songplayer's
+# converter (rubato's synchronous `Fft`, `FixedSync::Both`; sp-server
+# playback/vban_rate.rs @ dd551b7d), pinned exactly like songplayer. Pure Rust,
+# MIT OR Apache-2.0 (and its deps realfft / rustfft / audioadapter*, MIT or
+# MIT OR Apache-2.0 — all on deny.toml's allow list).
+rubato = "=5.0.1"
 
 [features]
 default = []
