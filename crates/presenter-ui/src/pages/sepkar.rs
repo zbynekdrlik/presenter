@@ -11,8 +11,8 @@
 use crate::api::{self, interpreter_tips::TipsScope, ApiError};
 use crate::components::version_label::VersionLabel;
 use crate::state::interpreter::{
-    note_counter, optional_text, sepkar_error_text, sepkar_notice, tip_meta, tip_pair, FetchGuard,
-    SepkarRowState,
+    failure_status, note_counter, optional_text, row_states, sepkar_error_text, sepkar_notice,
+    tip_meta, tip_pair, FetchGuard, SepkarRowState,
 };
 use crate::state::session;
 use crate::ws::passive::{use_passive_websocket, LiveEventHandler, PassiveWsState};
@@ -45,6 +45,8 @@ struct SepkarForm {
     /// The first "Dnes" list arrived: before that the list is not "empty",
     /// it is not known yet.
     loaded: RwSignal<bool>,
+    /// The newest "Dnes" fetch failed (the rows shown, if any, may be stale).
+    list_failed: RwSignal<bool>,
     today_guard: StoredValue<FetchGuard>,
 }
 
@@ -83,25 +85,33 @@ impl SepkarForm {
             notice_ticket: StoredValue::new(0),
             today: RwSignal::new(TipsList::default()),
             loaded: RwSignal::new(false),
+            list_failed: RwSignal::new(false),
             today_guard: StoredValue::new(FetchGuard::default()),
         }
     }
 
-    /// Refetch today's tips; only the newest request may land.
+    /// Refetch today's tips; only the newest request may land, and only the
+    /// newest one may say it failed (an older failure was overtaken).
     fn reload_today(self) {
         let ticket = self
             .today_guard
             .try_update_value(FetchGuard::begin)
             .unwrap_or_default();
         leptos::task::spawn_local(async move {
-            match api::interpreter_tips::list(TipsScope::Today).await {
+            let answer = api::interpreter_tips::list(TipsScope::Today).await;
+            if !self.today_guard.with_value(|guard| guard.accepts(ticket)) {
+                return;
+            }
+            match answer {
                 Ok(list) => {
-                    if self.today_guard.with_value(|guard| guard.accepts(ticket)) {
-                        self.today.set(list);
-                        self.loaded.set(true);
-                    }
+                    self.today.set(list);
+                    self.loaded.set(true);
+                    self.list_failed.set(false);
                 }
-                Err(err) => leptos::logging::log!("sepkar: today's tips failed: {err}"),
+                Err(err) => {
+                    leptos::logging::log!("sepkar: today's tips failed: {err}");
+                    self.list_failed.set(true);
+                }
             }
         });
     }
@@ -164,11 +174,7 @@ impl SepkarForm {
     /// to the console only).
     fn fail(self, err: &ApiError) {
         leptos::logging::log!("sepkar: send failed: {err}");
-        let status = match err {
-            ApiError::Status(code, detail) => Some((*code, detail.as_str())),
-            _ => None,
-        };
-        self.error.set(Some(sepkar_error_text(status)));
+        self.error.set(Some(sepkar_error_text(failure_status(err))));
     }
 }
 
@@ -347,19 +353,21 @@ fn TodayList(form: SepkarForm) -> impl IntoView {
     let empty = move || form.loaded.get() && form.today.with(|list| list.tips.is_empty());
     let rows = move || {
         let list = form.today.get();
-        list.tips
-            .into_iter()
-            .map(|tip| {
-                let state = SepkarRowState::of(&tip, &list.active_ids);
-                (tip, state)
-            })
-            .collect::<Vec<_>>()
+        let states = row_states(&list.tips, &list.active_ids);
+        list.tips.into_iter().zip(states).collect::<Vec<_>>()
     };
     view! {
         <section class="sepkar__today" data-role="sepkar-today">
             <h2 class="sepkar__today-title">"Dnes"</h2>
+            <Show when=move || form.list_failed.get()>
+                <p class="sepkar__list-error" data-role="sepkar-today-error" role="alert">
+                    "Zoznam sa nepodarilo načítať."
+                </p>
+            </Show>
             <Show when=empty>
-                <p class="sepkar__empty">"Dnes ešte žiadne tipy."</p>
+                <p class="sepkar__empty" data-role="sepkar-today-empty">
+                    "Dnes ešte žiadne tipy."
+                </p>
             </Show>
             <ul class="sepkar__list">
                 <For

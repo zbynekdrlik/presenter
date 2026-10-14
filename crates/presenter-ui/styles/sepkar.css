@@ -5,6 +5,7 @@
    body too. tablet.css makes <html> overflow:hidden, so the BODY scrolls. */
 body.sepkar {
   margin: 0;
+  height: 100vh; /* older phones (no dvh) */
   height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
@@ -128,16 +129,22 @@ body.sepkar *::after {
 }
 
 .sepkar__error,
-.sepkar__notice {
+.sepkar__notice,
+.sepkar__list-error {
   margin: 0;
   padding: 10px 12px;
   border-radius: 8px;
   overflow-wrap: anywhere;
 }
 
-.sepkar__error {
+.sepkar__error,
+.sepkar__list-error {
   background: #7f1d1d;
   color: #fee2e2;
+}
+
+.sepkar__list-error {
+  margin-bottom: 10px;
 }
 
 .sepkar__notice {
@@ -176,7 +183,8 @@ body.sepkar *::after {
 /* A tip that is not on the screen any more reads dimmer, but still ≥ 4.5:1 on
    the row (an opacity on the whole row would sink the "skryté" label below it). */
 .sepkar__row[data-state="dismissed"] .sepkar__row-text,
-.sepkar__row[data-state="expired"] .sepkar__row-text {
+.sepkar__row[data-state="expired"] .sepkar__row-text,
+.sepkar__row[data-state="over-limit"] .sepkar__row-text {
   color: #94a3b8;
 }
 

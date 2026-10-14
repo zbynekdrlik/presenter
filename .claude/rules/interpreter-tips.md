@@ -90,21 +90,30 @@ paths:
   would retarget that click). A hide is optimistic: `pending_dismiss` keeps the tip out of every list
   until its POST answered, and a Späť pressed meanwhile waits for it (`restore_after`). The undo
   offer is a ticketed 5 s `Timeout` (`try_` signal calls inside timers).
-- **Errors:** the tablet shows `tip_error_text` (the server's message only for 404 / 409 / 422 / 429,
-  else a fixed Slovak line — never raw network or proxy text); the šepkár page shows
-  `sepkar_error_text` (the server's text verbatim for 422 / 429 only) and keeps the fields.
+- **Errors:** the tips client's writes use `api::post_json_refusal`: a non-2xx whose body IS the
+  server's JSON error body is `ApiError::Refused(code, message)`, any other body (a proxy / gateway
+  page) stays `ApiError::Status`. `state::interpreter::failure_status` maps that to the helpers'
+  input (the text is empty for a `Status`), so the tablet's `tip_error_text` (server text only for a
+  404 / 409 / 422 / 429 refusal) and the šepkár page's `sepkar_error_text` (verbatim for a 422 / 429
+  refusal only; the fields are kept) show a fixed Slovak line for a proxy page, never its text. The
+  other `*_detail` helpers and their `ApiError::Status` callers are unchanged.
 - **Šepkár page:** never blocks a send. The page's ROOT element is `.sepkar__root` — the `<body>` itself
   carries the class `sepkar` (like `interpreter`), so a bare `.sepkar` rule would also style the body.
   A success clears only the fields still holding what was sent (the šepkár may have typed on) and
   refocuses Slovo only when none was touched. Enter: name → Slovo → Preklad; Preklad / Poznámka send
-  (an IME-composition Enter never does). User text is a text node, never HTML.
+  (an IME-composition Enter never does). User text is a text node, never HTML. A failed "Dnes" fetch
+  shows „Zoznam sa nepodarilo načítať." (only the NEWEST fetch may set or clear it) and never the
+  "žiadne tipy" text; row states come from `row_states`: only the newest 20 ACTIVE tips are "na
+  obrazovke" (the interpreter's list is capped), further active ones read "mimo obrazovky (max. 20)".
 - **CSS** is bundled globally: scope to `body.sepkar` / `body.interpreter`. `tablet.css` sets
   `html { overflow: hidden }`, so `body.sepkar` is the scroll box. Dimmed rows keep ≥ 4.5:1 (dim the
   text colour, never an `opacity` on the row).
 - **E2E (`interpreter-tips.spec.ts`):** one server per file, `beforeEach` dismiss-all, a distinct
-  sender name per test, ≤ 30 accepted tips per minute across the file (20 today). The šepkár list
+  sender name per test, ≤ 30 accepted tips per minute across the file (21 today). The šepkár list
   shows ALL of today's tips, dismissed ones too, so every word a test looks for there is unique across
-  the file. 422 / 429 come from the REAL server (empty / over-long note, a 6th tip in a minute):
+  the file. Measure a delivery bound (T-S1, 1 s) with `expect.poll(…, { intervals: [25] })`, never
+  `toBeVisible`, whose own back-off (~0 / 100 / 350 / 850 ms) would blur it. A client fetch failure
+  without console noise = a malformed 200 (`route.fulfill({ status: 200, body: "not-json" })`). 422 / 429 come from the REAL server (empty / over-long note, a 6th tip in a minute):
   Chrome logs each as "Failed to load resource", so that test asserts exactly one 422 line and one 429
   line and an otherwise empty console. Device profiles + fit helpers (`PHONE_390`, `TABLET_1180`,
   `assertNoHorizontalOverflow`, `assertMinFontSize`, `assertMinTapTarget`, `touchDrag`) live in

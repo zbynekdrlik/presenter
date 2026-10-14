@@ -11,8 +11,8 @@
 
 use crate::api::{self, interpreter_tips::TipsScope, ApiError};
 use crate::state::interpreter::{
-    fresh_ids, swipe_decision, swipe_offset, tip_error_text, tip_meta, tip_pair, visible_tips,
-    FetchGuard, SwipeDecision,
+    failure_status, fresh_ids, swipe_decision, swipe_offset, tip_error_text, tip_meta, tip_pair,
+    visible_tips, FetchGuard, SwipeDecision,
 };
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
@@ -215,11 +215,7 @@ impl TipsModel {
     /// resync so the list shows what the server really has.
     fn fail(self, what: &str, err: &ApiError) {
         leptos::logging::log!("interpreter: {what}: {err}");
-        let status = match err {
-            ApiError::Status(code, detail) => Some((*code, detail.as_str())),
-            _ => None,
-        };
-        self.show_error(tip_error_text(what, status));
+        self.show_error(tip_error_text(what, failure_status(err)));
         self.resync();
     }
 

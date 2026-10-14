@@ -4,7 +4,7 @@
  * whole file. Every test starts from an empty interpreter list (dismiss-all)
  * and uses its own sender names: the in-memory rate limit (5 / min per IP +
  * name, 30 / min overall) spans the file; the interpreter tests send 10 tips
- * and the šepkár tests 10 more, so 20 in all — under the overall limit even
+ * and the šepkár tests 11 more, so 21 in all — under the overall limit even
  * when every test lands inside one minute. Only one name ever sends 5 (the
  * test that provokes the refusal of its 6th).
  *
@@ -383,12 +383,29 @@ test("a tip sent from the phone shows on the tablet within 1 s, newest on top (T
   const phone = sepkar.page;
   const tablet = interp.page;
 
-  await fillTip(phone, { name: "Peter", source: "atonement", target: "zmierenie" });
+  // Enter walks name → Slovo → Preklad (it never sends from those two).
+  const name = phone.locator('[data-role="sepkar-name"]');
+  const source = phone.locator('[data-role="sepkar-source"]');
+  const target = phone.locator('[data-role="sepkar-target"]');
+  await name.fill("Peter");
+  await name.press("Enter");
+  await expect(source).toBeFocused();
+  await source.fill("atonement");
+  await source.press("Enter");
+  await expect(target).toBeFocused();
+  await target.fill("zmierenie");
+  await expect(cards(tablet)).toHaveCount(0);
+
+  // The click → card bound is measured on a 25 ms poll, not on `toBeVisible`'s
+  // own back-off (~0 / 100 / 350 / 850 ms), which would blur it to ~350 ms.
   const clickedAt = Date.now();
   await phone.locator('[data-role="sepkar-send"]').click();
   const first = card(tablet, "atonement");
-  await expect(first).toBeVisible({ timeout: 1_000 });
+  await expect
+    .poll(() => first.count(), { intervals: [25], timeout: 1_000 })
+    .toBe(1);
   expect(Date.now() - clickedAt, "click → card on the interpreter").toBeLessThan(1_000);
+  await expect(first).toBeVisible();
   await expect(first.locator('[data-role="interpreter-tip-pair"]')).toHaveText(
     "atonement → zmierenie",
   );
@@ -413,9 +430,9 @@ test("a tip sent from the phone shows on the tablet within 1 s, newest on top (T
   await expect(cards(tablet).first()).toContainText("sanctification");
   await expect(cards(tablet).nth(1)).toContainText("atonement");
 
-  // The same pair again (other case, stray blanks) is not shown twice.
+  // The same pair again (other case, stray blanks) is not shown twice; Enter in Preklad sends.
   await fillTip(phone, { source: " Atonement ", target: "ZMIERENIE" });
-  await phone.locator('[data-role="sepkar-send"]').click();
+  await target.press("Enter");
   await expect(phone.locator('[data-role="sepkar-notice"]')).toHaveText("Tento tip už tlmočník má");
   await expect(cards(tablet)).toHaveCount(2);
   await expect(row(phone, "atonement")).toHaveCount(1);
@@ -557,4 +574,36 @@ test("the šepkár page fits a phone (T-S3) and puts the list beside the form on
   expect(laptop.errors).toEqual([]);
   await sepkar.context.close();
   await laptop.context.close();
+});
+
+test("a failed 'Dnes' fetch says so inline, never claims the list is empty, and the next good one clears it", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  // A MALFORMED 200 fails the client's fetch without Chrome logging a console
+  // line of its own (a mocked non-2xx always would, #598).
+  const todayList = /\/interpreter\/tips\?scope=today/;
+  await page.route(todayList, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+  );
+  await page.goto("/ui/sepkar");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await expect(page.locator('[data-role="sepkar-ws"]')).toHaveAttribute("data-ws", "connected", {
+    timeout: 15_000,
+  });
+  const failed = page.locator('[data-role="sepkar-today-error"]');
+  await expect(failed).toHaveText("Zoznam sa nepodarilo načítať.");
+  await expect(page.locator('[data-role="sepkar-today-empty"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="sepkar-row"]')).toHaveCount(0);
+
+  // The route goes away; the next tip's live event refetches the list for real.
+  await page.unroute(todayList);
+  await apiTip(page, { senderName: "Výpadok", note: "po zlyhanom zozname" });
+  await expect(row(page, "po zlyhanom zozname")).toBeVisible();
+  await expect(failed).toHaveCount(0);
+  expect(errors).toEqual([]);
+  await context.close();
 });
