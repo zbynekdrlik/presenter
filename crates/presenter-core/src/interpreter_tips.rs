@@ -114,12 +114,39 @@ pub enum TipValidationError {
     NoteTooLong,
 }
 
-/// Control characters become spaces, then the text is trimmed: a pasted tab,
-/// newline or escape sequence never reaches a card or the log.
+/// Invisible format characters `char::is_control` does not cover (Unicode
+/// `Cf` and the line / paragraph separators), as an explicit set because std
+/// has no general-category lookup: zero-width space / non-joiner / joiner and
+/// the LRM / RLM marks (U+200B-U+200F), the line and paragraph separators and
+/// the bidi embeddings and overrides (U+2028-U+202E), the word joiner and
+/// invisible operators (U+2060-U+2064), the bidi isolates and the deprecated
+/// format controls (U+2066-U+206F) and the byte order mark (U+FEFF). Left in,
+/// a name of one zero-width space would pass as "filled in" and a
+/// right-to-left override would flip a card.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Control and invisible format characters become spaces, then the text is
+/// trimmed: a pasted tab, newline, escape sequence, zero-width space or
+/// bidi override never reaches a card or the log.
 pub fn clean_text(raw: &str) -> String {
     let replaced: String = raw
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || is_invisible_format(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     replaced.trim().to_string()
 }
@@ -183,18 +210,22 @@ fn normalized(text: &str) -> String {
         .join(" ")
 }
 
-/// What a tip says, for the duplicate check: its pair if it has one, else
-/// its note — lower-cased, whitespace collapsed.
+/// What a tip says, for the duplicate check — lower-cased, whitespace
+/// collapsed. A pair keys on the pair AND its note (a pair alone has an empty
+/// note part), a note alone keys on the note. So a double tap or the same
+/// word from two šepkárs is caught, but a resend with a corrected or added
+/// note is a new tip and must reach the interpreter.
 pub fn duplicate_key(source: Option<&str>, target: Option<&str>, note: Option<&str>) -> String {
+    let note = normalized(note.unwrap_or_default());
     match (source, target) {
         (Some(source), Some(target)) => {
             format!(
-                "pair\u{1f}{}\u{1f}{}",
+                "pair\u{1f}{}\u{1f}{}\u{1f}{note}",
                 normalized(source),
                 normalized(target)
             )
         }
-        _ => format!("note\u{1f}{}", normalized(note.unwrap_or_default())),
+        _ => format!("note\u{1f}{note}"),
     }
 }
 
@@ -235,9 +266,10 @@ impl TipDto {
     }
 }
 
-/// The recent tip `candidate` repeats: same key, sent within
-/// [`TIP_DUPLICATE_WINDOW_SECS`], by anyone, and NOT dismissed (a tip the
-/// interpreter hid may be sent again).
+/// The recent tip `candidate` repeats: same [`duplicate_key`], sent LESS than
+/// [`TIP_DUPLICATE_WINDOW_SECS`] ago (exactly that old is no longer recent),
+/// by anyone, and NOT dismissed (a tip the interpreter hid may be sent
+/// again).
 pub fn find_recent_duplicate<'a>(
     tips: &'a [TipDto],
     candidate: &ValidTip,
@@ -352,6 +384,18 @@ mod tests {
                 TipValidationError::MissingSender,
             ),
             (
+                request("\u{200B}\u{202E}\u{FEFF}", None, None, Some("x")),
+                TipValidationError::MissingSender,
+            ),
+            (
+                request("Peter", None, None, Some("\u{200B}\u{2028}\u{2066}")),
+                TipValidationError::Empty,
+            ),
+            (
+                request("Peter", Some("\u{200D}"), Some("b"), None),
+                TipValidationError::HalfPair,
+            ),
+            (
                 request(&long(41), None, None, Some("x")),
                 TipValidationError::SenderTooLong,
             ),
@@ -420,6 +464,41 @@ mod tests {
     }
 
     #[test]
+    fn invisible_format_characters_never_survive_cleaning() {
+        // zero-width space / non-joiner / joiner, word joiner, byte order mark
+        assert_eq!(clean_text("\u{200B}"), "");
+        assert_eq!(clean_text("\u{FEFF}hi\u{2060}"), "hi");
+        assert_eq!(clean_text("a\u{200B}\u{200C}\u{200D}b"), "a   b");
+        // line / paragraph separators
+        assert_eq!(clean_text("x\u{2028}y\u{2029}z"), "x y z");
+        // bidi overrides, embeddings, isolates, marks: a card cannot be flipped
+        assert_eq!(clean_text("a\u{202E}b\u{202A}c\u{202C}d"), "a b c d");
+        assert_eq!(
+            clean_text("a\u{2066}b\u{2067}c\u{2068}d\u{2069}e"),
+            "a b c d e"
+        );
+        assert_eq!(clean_text("a\u{200E}b\u{200F}c"), "a b c");
+        // the neighbours of each range stay: a no-break space, a hyphen, text
+        assert_eq!(
+            clean_text("a\u{200A}b"),
+            "a\u{200A}b",
+            "hair space is visible spacing"
+        );
+        assert_eq!(
+            clean_text("a\u{202F}b"),
+            "a\u{202F}b",
+            "narrow no-break space"
+        );
+        assert_eq!(
+            clean_text("a\u{2065}b"),
+            "a\u{2065}b",
+            "unassigned code point"
+        );
+        assert_eq!(clean_text("zmierenie — milosť"), "zmierenie — milosť");
+        assert!(clean_user_agent("\u{200B}\u{202E}").is_none());
+    }
+
+    #[test]
     fn the_user_agent_is_cleaned_and_cut() {
         assert_eq!(clean_user_agent("   "), None);
         let cut = clean_user_agent(&"a".repeat(250)).unwrap();
@@ -465,13 +544,13 @@ mod tests {
             "Jana",
             Some(" Atonement "),
             Some("ZMIERENIE"),
-            None,
+            Some(" X"),
         ))
         .unwrap();
         assert_eq!(
             find_recent_duplicate(&tips, &pair, now).map(|t| t.id),
             Some(2),
-            "the same pair from another sender, whatever the note"
+            "the same pair and note from another sender, case and spacing aside"
         );
         let note = validate_tip(&request("Eva", None, None, Some("hovorí o milosti"))).unwrap();
         assert_eq!(
@@ -492,6 +571,106 @@ mod tests {
             find_recent_duplicate(&dismissed, &pair, now),
             None,
             "a tip the interpreter hid may be sent again"
+        );
+    }
+
+    #[test]
+    fn the_duplicate_window_closes_at_exactly_two_minutes() {
+        let tips = vec![tip(
+            2,
+            "2026-10-18T19:40:30Z",
+            Some("atonement"),
+            Some("zmierenie"),
+            None,
+        )];
+        let pair =
+            validate_tip(&request("Jana", Some("atonement"), Some("zmierenie"), None)).unwrap();
+        let just_inside = at("2026-10-18T19:42:29Z");
+        assert_eq!(
+            find_recent_duplicate(&tips, &pair, just_inside).map(|t| t.id),
+            Some(2),
+            "119 s old is still a duplicate"
+        );
+        let exactly = at("2026-10-18T19:42:30Z");
+        assert_eq!(
+            find_recent_duplicate(&tips, &pair, exactly),
+            None,
+            "exactly 120 s old has left the window (> not >=)"
+        );
+    }
+
+    #[test]
+    fn a_resend_with_a_new_note_is_not_a_duplicate() {
+        let now = at("2026-10-18T19:42:00Z");
+        let tips = vec![
+            tip(
+                5,
+                "2026-10-18T19:41:30Z",
+                Some("atonement"),
+                Some("zmierenie"),
+                Some("nie zmier"),
+            ),
+            tip(
+                4,
+                "2026-10-18T19:41:20Z",
+                Some("grace"),
+                Some("milosť"),
+                None,
+            ),
+        ];
+        let corrected = validate_tip(&request(
+            "Peter",
+            Some("atonement"),
+            Some("zmierenie"),
+            Some("nie zmierlivosť"),
+        ))
+        .unwrap();
+        assert_eq!(
+            find_recent_duplicate(&tips, &corrected, now),
+            None,
+            "the same pair with a corrected note reaches the interpreter"
+        );
+        let dropped_note = validate_tip(&request(
+            "Peter",
+            Some("atonement"),
+            Some("zmierenie"),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            find_recent_duplicate(&tips, &dropped_note, now),
+            None,
+            "the pair alone is not the pair with a note"
+        );
+        let added_note = validate_tip(&request(
+            "Peter",
+            Some("grace"),
+            Some("milosť"),
+            Some("nie láskavosť"),
+        ))
+        .unwrap();
+        assert_eq!(
+            find_recent_duplicate(&tips, &added_note, now),
+            None,
+            "a note added to an earlier bare pair is a new tip"
+        );
+        let bare = validate_tip(&request("Peter", Some("GRACE"), Some(" milosť "), None)).unwrap();
+        assert_eq!(
+            find_recent_duplicate(&tips, &bare, now).map(|t| t.id),
+            Some(4),
+            "a bare pair repeated is a double tap"
+        );
+        let double_tap = validate_tip(&request(
+            "Peter",
+            Some("atonement"),
+            Some("zmierenie"),
+            Some("Nie  ZMIER"),
+        ))
+        .unwrap();
+        assert_eq!(
+            find_recent_duplicate(&tips, &double_tap, now).map(|t| t.id),
+            Some(5),
+            "the same pair and note again is a double tap"
         );
     }
 

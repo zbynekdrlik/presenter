@@ -477,7 +477,7 @@ New table `interpreter_tips` (incremental migration `m20261014_000001_create_int
 | `created_at` | TIMESTAMP (UTC) NOT NULL | |
 | `dismissed_at` | TIMESTAMP NULL | set by the interpreter; cleared by undo |
 
-- At least one of (pair, note). All text is trimmed, control characters removed, rendered as plain text (no HTML,
+- At least one of (pair, note). All text is trimmed, control and invisible format characters (zero-width, bidi overrides) replaced by spaces, rendered as plain text (no HTML,
   no markdown — Leptos escapes).
 - Site-local: excluded from the SNV ↔ PP library sync.
 
@@ -492,7 +492,7 @@ at once ("Skryť všetky", with a confirm).
 | Method + path | Body / query | Answer |
 |---|---|---|
 | `GET /interpreter/tips` | `?scope=active` (default) or `?scope=today` | 200 `{ serviceDate, tips: [TipDto] }`, newest first; `today` includes dismissed tips with `dismissedAt` (for the šepkár page) |
-| `POST /interpreter/tips` | `{ senderName, sourceTerm?, targetTerm?, note? }` | 201 `TipDto`; 200 `TipDto` + `duplicate: true` when the same pair/note was sent in the last 2 min (any sender); 422 with a Slovak `error` per rule; 429 with `Retry-After` + "Pomaly — najviac 5 tipov za minútu" |
+| `POST /interpreter/tips` | `{ senderName, sourceTerm?, targetTerm?, note? }` | 201 `TipDto`; 200 `TipDto` + `duplicate: true` when the same pair (with its note) or the same note alone was sent in the last 2 min (any sender; a resend with a changed note is a new tip); 422 with a Slovak `error` per rule; 429 with `Retry-After` + "Pomaly — najviac 5 tipov za minútu" |
 | `POST /interpreter/tips/{id}/dismiss` | — | 200 `TipDto` (idempotent); 404 unknown id |
 | `POST /interpreter/tips/{id}/restore` | — | 200 (the interpreter's 5 s undo); 404 unknown; 409 when it is no longer today's |
 | `POST /interpreter/tips/dismiss-all` | — | 200 `{ dismissed: n }` |
@@ -563,7 +563,7 @@ Phone-first, the same on a laptop (wider form, list to the right).
 | Sender name | 1–40 chars | |
 | Rate per sender | 5 tips per 60 s per (sender IP, sender name) | church devices through the tunnel share one public IP [TICKET #850 F2], so the name is part of the key |
 | Rate overall | 30 tips per 60 s | keeps the interpreter's screen calm |
-| Duplicate window | 2 min, same normalised pair or note | double taps, two šepkárs sending the same word |
+| Duplicate window | 2 min, same normalised pair + note, or note alone (a changed note is a new tip) | double taps, two šepkárs sending the same word |
 
 Rate state lives in memory (token buckets, tokio clock, reset on restart).
 
@@ -668,7 +668,7 @@ header layout) can replay a recording into the dev server.
 - Repository: insert / active list (date + 4 h window) / today list / dismiss / restore / dismiss-all / 30-day
   retention, with an injected clock.
 - Router: 201 valid pair, valid note, both; 422 for empty, half pair, > 60 / > 200 / > 40 chars, control
-  characters only; 429 on the 6th tip within 60 s per (IP, name) with a paused tokio clock, and the overall 30/min;
+  or invisible characters only; 429 on the 6th tip within 60 s per (IP, name) with a paused tokio clock, and the overall 30/min;
   duplicate within 2 min → 200 `duplicate: true` and no new row; dismiss idempotent; restore 404 / 409; each write
   publishes `InterpreterTips` with the full active list; the date / 4 h boundary empties it.
 - Companion: the new `LiveEvent` variant leaves Companion variables unchanged.

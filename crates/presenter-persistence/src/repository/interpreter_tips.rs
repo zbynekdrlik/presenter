@@ -10,8 +10,8 @@ use crate::entities::interpreter_tip;
 use chrono::{DateTime, NaiveDate, Utc};
 use presenter_core::interpreter_tips::{service_date_string, TipDto};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, NotSet, QueryFilter, QueryOrder,
-    Set, TransactionTrait,
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, NotSet,
+    QueryFilter, QueryOrder, Set,
 };
 use tracing::instrument;
 
@@ -65,19 +65,20 @@ impl Repository {
     }
 
     /// Hide one tip. Idempotent: a hidden tip keeps its first `dismissed_at`.
+    /// The write is ONE conditional `UPDATE … WHERE dismissed_at IS NULL`, so
+    /// two racing dismissals cannot overwrite each other's time (the first
+    /// wins), and no transaction reads before it writes (a WAL read-then-write
+    /// upgrade can fail at once with "database is locked"). The row is read
+    /// AFTER the update: no row → `NotFound`, else whichever time won.
     #[instrument(skip_all)]
     pub async fn dismiss_interpreter_tip(
         &self,
         id: i64,
         at: DateTime<Utc>,
     ) -> anyhow::Result<TipDto> {
-        let model = self.interpreter_tip_by_id(id).await?;
-        if model.dismissed_at.is_some() {
-            return Ok(tip_from_model(model));
-        }
-        let mut active = model.into_active_model();
-        active.dismissed_at = Set(Some(at.into()));
-        Ok(tip_from_model(active.update(&self.db).await?))
+        let key = tip_key(id)?;
+        self.hide_shown_tips(vec![key], at).await?;
+        Ok(tip_from_model(self.interpreter_tip_by_key(key).await?))
     }
 
     /// Undo a dismiss (the interpreter's 5 s "Späť"). A tip of another
@@ -88,7 +89,7 @@ impl Repository {
         id: i64,
         today: NaiveDate,
     ) -> anyhow::Result<TipDto> {
-        let model = self.interpreter_tip_by_id(id).await?;
+        let model = self.interpreter_tip_by_key(tip_key(id)?).await?;
         if model.service_date != service_date_string(today) {
             return Err(
                 RepositoryError::Conflict("Tento tip už nie je z dnešnej bohoslužby.").into(),
@@ -102,35 +103,21 @@ impl Repository {
         Ok(tip_from_model(active.update(&self.db).await?))
     }
 
-    /// Hide the given tips in one transaction. Returns how many were still
-    /// shown; a missing or already hidden id is skipped.
+    /// Hide the given tips with one conditional `UPDATE` (no transaction, see
+    /// [`Self::dismiss_interpreter_tip`]). Returns how many were still shown;
+    /// a missing, out-of-range or already hidden id is skipped, and an already
+    /// hidden tip keeps its first time.
     #[instrument(skip_all)]
     pub async fn dismiss_interpreter_tips(
         &self,
         ids: &[i64],
         at: DateTime<Utc>,
     ) -> anyhow::Result<u64> {
-        let keys: Vec<i32> = ids
-            .iter()
-            .filter_map(|id| i32::try_from(*id).ok())
-            .collect();
+        let keys: Vec<i32> = ids.iter().filter_map(|id| tip_key(*id).ok()).collect();
         if keys.is_empty() {
             return Ok(0);
         }
-        let txn = self.db.begin().await?;
-        let models = interpreter_tip::Entity::find()
-            .filter(interpreter_tip::Column::Id.is_in(keys))
-            .filter(interpreter_tip::Column::DismissedAt.is_null())
-            .all(&txn)
-            .await?;
-        let count = models.len() as u64;
-        for model in models {
-            let mut active = model.into_active_model();
-            active.dismissed_at = Set(Some(at.into()));
-            active.update(&txn).await?;
-        }
-        txn.commit().await?;
-        Ok(count)
+        self.hide_shown_tips(keys, at).await
     }
 
     /// Delete every tip whose service date is before `cutoff` (retention).
@@ -143,15 +130,33 @@ impl Repository {
         Ok(result.rows_affected)
     }
 
-    async fn interpreter_tip_by_id(&self, id: i64) -> anyhow::Result<interpreter_tip::Model> {
-        // An out-of-i32 id can never be a row: refuse, never wrap into another
-        // row (stream-graphics.md i32/i64 rule).
-        let key = i32::try_from(id).map_err(|_| RepositoryError::NotFound(TIP_NOT_FOUND))?;
+    /// Stamp `dismissed_at` on every listed tip that is still shown, in one
+    /// statement; returns the number of rows it changed.
+    async fn hide_shown_tips(&self, keys: Vec<i32>, at: DateTime<Utc>) -> anyhow::Result<u64> {
+        let result = interpreter_tip::Entity::update_many()
+            .col_expr(
+                interpreter_tip::Column::DismissedAt,
+                Expr::value(at.to_rfc3339()),
+            )
+            .filter(interpreter_tip::Column::Id.is_in(keys))
+            .filter(interpreter_tip::Column::DismissedAt.is_null())
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected)
+    }
+
+    async fn interpreter_tip_by_key(&self, key: i32) -> anyhow::Result<interpreter_tip::Model> {
         interpreter_tip::Entity::find_by_id(key)
             .one(&self.db)
             .await?
             .ok_or(RepositoryError::NotFound(TIP_NOT_FOUND).into())
     }
+}
+
+/// An out-of-i32 id can never be a row: refuse, never wrap into another row
+/// (stream-graphics.md i32/i64 rule).
+fn tip_key(id: i64) -> Result<i32, RepositoryError> {
+    i32::try_from(id).map_err(|_| RepositoryError::NotFound(TIP_NOT_FOUND))
 }
 
 fn tip_from_model(model: interpreter_tip::Model) -> TipDto {
@@ -333,7 +338,62 @@ mod tests {
             .list_interpreter_tips_on(date(10, 18))
             .await
             .expect("list");
-        assert!(today.iter().all(|tip| tip.dismissed_at.is_some()));
+        let times: Vec<(i64, Option<DateTime<Utc>>)> =
+            today.iter().map(|tip| (tip.id, tip.dismissed_at)).collect();
+        assert_eq!(
+            times,
+            vec![
+                (b.id, Some(at("2026-10-18T17:03:00Z"))),
+                (a.id, Some(at("2026-10-18T17:02:00Z"))),
+            ],
+            "b takes the batch time, a keeps the first one"
+        );
+    }
+
+    #[tokio::test]
+    async fn dismiss_many_ignores_repeated_and_out_of_range_ids() {
+        let repo = repo().await;
+        let a = repo
+            .insert_interpreter_tip(new_tip(date(10, 18), "2026-10-18T17:00:00Z", "a"))
+            .await
+            .expect("insert");
+        let count = repo
+            .dismiss_interpreter_tips(
+                &[a.id, a.id, -1, i64::from(i32::MAX) + 1],
+                at("2026-10-18T17:03:00Z"),
+            )
+            .await
+            .expect("dismiss many");
+        assert_eq!(count, 1, "a repeated id counts once, bad ids are skipped");
+        let only_bad = repo
+            .dismiss_interpreter_tips(&[i64::from(i32::MAX) + 1], at("2026-10-18T17:04:00Z"))
+            .await
+            .expect("only out of range");
+        assert_eq!(only_bad, 0);
+    }
+
+    #[tokio::test]
+    async fn a_restored_tip_takes_the_new_time_when_dismissed_again() {
+        let repo = repo().await;
+        let tip = repo
+            .insert_interpreter_tip(new_tip(date(10, 18), "2026-10-18T17:00:00Z", "a"))
+            .await
+            .expect("insert");
+        repo.dismiss_interpreter_tip(tip.id, at("2026-10-18T17:05:00Z"))
+            .await
+            .expect("dismiss");
+        repo.restore_interpreter_tip(tip.id, date(10, 18))
+            .await
+            .expect("restore");
+        let again = repo
+            .dismiss_interpreter_tip(tip.id, at("2026-10-18T17:09:00Z"))
+            .await
+            .expect("dismiss again");
+        assert_eq!(
+            again.dismissed_at,
+            Some(at("2026-10-18T17:09:00Z")),
+            "the earlier time was cleared by the restore"
+        );
     }
 
     #[tokio::test]
