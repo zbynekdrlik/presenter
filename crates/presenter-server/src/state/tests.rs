@@ -1420,6 +1420,11 @@ async fn trigger_and_read_bible_slide_output() {
         .trigger_bible_slide_output(
             output.clone(),
             super::bible::BibleSlideReferenceMetadata::default(),
+            super::bible_show_log::BibleShowOrigin {
+                source: super::bible_show_log::BibleShowSource::Api,
+                device: None,
+                client_ip: "anonymous".to_string(),
+            },
         )
         .await;
 

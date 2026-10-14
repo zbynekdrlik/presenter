@@ -9,6 +9,7 @@ mod libraries;
 pub mod network_mode;
 mod playlists;
 mod presentations;
+mod request_log;
 mod search;
 mod slide_stage_layout;
 pub(crate) mod stage;
@@ -439,6 +440,8 @@ pub fn build_router(state: AppState) -> Router {
         // prefixes; "playback" is a reserved slug, so `/stream/{slug}` never
         // collides.
         .merge(stream_playback::routes())
+        // #850 O1: one DEBUG request span + response line per request.
+        .layer(request_log::request_trace_layer())
         .with_state(state)
 }
 
@@ -756,5 +759,7 @@ mod stream_tests;
 mod sync_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tracing_capture;
 #[cfg(test)]
 mod video_source_tests;

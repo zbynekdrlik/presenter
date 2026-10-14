@@ -408,10 +408,12 @@ jobs:
           # #539: the encoder-ready gate the unit calls from ExecStartPre.
           scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
           # #544: the registry must not survive the deploy (see deploy.yml).
+          # #850 O1: drop the leftover ableset-debug.conf / noresolume.conf drop-ins (see deploy.yml).
           ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && \
             sudo install -m 0755 /tmp/wait-for-h264-encoder.sh ${{ env.DEPLOY_DIR }}/wait-for-h264-encoder.sh && \
             sudo rm -f ${{ env.DEPLOY_DIR }}/gstreamer-registry.bin && \
             sudo mkdir -p /etc/systemd/system/presenter.service.d && \
+            sudo rm -f /etc/systemd/system/presenter.service.d/ableset-debug.conf /etc/systemd/system/presenter.service.d/noresolume.conf && \
             sudo systemctl daemon-reload"
           # A newline in the variable would inject arbitrary [Service] directives into the
           # drop-in — accept only a single-line http(s) URL.

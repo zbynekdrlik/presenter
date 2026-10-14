@@ -4,14 +4,16 @@
 //! pattern as `router/integrations/`.
 
 use anyhow::Context;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::Json;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::{Extension, Json};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use tracing::instrument;
 
 use super::super::AppError;
+use crate::state::bible_show_log::{BibleShowOrigin, BibleShowSource};
 use crate::state::AppState;
 use presenter_core::{
     BiblePreferences, BiblePreferencesDraft, BiblePresentationId, BibleReference, BibleSlideId,
@@ -138,6 +140,8 @@ pub(crate) struct BibleTriggerSlideResponse {
 #[instrument(skip_all)]
 pub(crate) async fn trigger_bible_slide(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(payload): Json<BibleTriggerSlideRequest>,
 ) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
     use crate::state::bible::BibleSlideReferenceMetadata;
@@ -158,8 +162,9 @@ pub(crate) async fn trigger_bible_slide(
         verse_start: payload.verse_start,
         verse_end: payload.verse_end,
     };
+    let origin = show_origin(BibleShowSource::Api, &headers, connect_info);
     state
-        .trigger_bible_slide_output(output.clone(), reference_metadata)
+        .trigger_bible_slide_output(output.clone(), reference_metadata, origin)
         .await;
     Ok(Json(BibleTriggerSlideResponse {
         success: true,
@@ -170,6 +175,8 @@ pub(crate) async fn trigger_bible_slide(
 #[instrument(skip_all)]
 pub(crate) async fn trigger_presentation_slide(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     axum::extract::Path((presentation_id, slide_id)): Path<(String, String)>,
 ) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
     use crate::state::bible::BibleSlideReferenceMetadata;
@@ -214,13 +221,29 @@ pub(crate) async fn trigger_presentation_slide(
         verse_end,
     };
 
+    let origin = show_origin(BibleShowSource::Prepared, &headers, connect_info);
     state
-        .trigger_bible_slide_output(output.clone(), reference_metadata)
+        .trigger_bible_slide_output(output.clone(), reference_metadata, origin)
         .await;
     Ok(Json(BibleTriggerSlideResponse {
         success: true,
         output,
     }))
+}
+
+/// Who asked for a show (#850 §8): the endpoint's source and the client IP by
+/// the live WS rule (X-Forwarded-For only from a loopback peer).
+fn show_origin(
+    source: BibleShowSource,
+    headers: &HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+) -> BibleShowOrigin {
+    let peer = connect_info.map(|Extension(ConnectInfo(addr))| addr);
+    BibleShowOrigin {
+        source,
+        device: None,
+        client_ip: super::super::integrations::extract_client_ip(headers, peer),
+    }
 }
 
 #[instrument(skip_all)]

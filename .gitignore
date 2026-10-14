@@ -49,3 +49,7 @@ mutants.out.old/
 
 # Python bytecode (scripts/ci self-tests)
 __pycache__/
+
+# #850 O1: the real Cloudflare Access config (account id, e-mails, IPs) never enters this public repo
+ops/cloudflare/*.json
+!ops/cloudflare/presenter-access.example.json

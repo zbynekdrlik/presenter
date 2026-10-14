@@ -64,7 +64,7 @@ Environment=PRESENTER_LIBRARY_ROOT=/opt/presenter/libraries
 # #472: the Presenter Stage APK the watchdog installs on any TV that needs our
 # own app (so the stage runs on every Android TV without a kiosk browser).
 Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter/presenter-stage.apk
-Environment=RUST_LOG=info,tower_http=debug
+Environment=RUST_LOG=info,tower_http=debug,sqlx=warn
 # #544: the service owns its GStreamer plugin registry, inside its (writable) deploy
 # dir. It used to land in $HOME/.cache, where it became a permanent lie: PP's cache
 # recorded "va has 0 features" back when the service could not open the GPU, and
