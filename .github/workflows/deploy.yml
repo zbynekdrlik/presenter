@@ -434,10 +434,14 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
           # #544: the service's GStreamer registry must not survive this deploy — a driver
           # or permission change would otherwise keep being judged by the old cache.
+          # #850 O1: drop two leftover drop-ins — ableset-debug.conf (closed #600) overrides
+          # the unit's RUST_LOG with tower_http=info, which hides the request log; noresolume.conf
+          # sets an env var no code reads. rm -f keeps this idempotent.
           ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && \
             sudo install -m 0755 /tmp/wait-for-h264-encoder.sh ${{ env.DEPLOY_DIR }}/wait-for-h264-encoder.sh && \
             sudo rm -f ${{ env.DEPLOY_DIR }}/gstreamer-registry.bin && \
             sudo mkdir -p /etc/systemd/system/presenter.service.d && \
+            sudo rm -f /etc/systemd/system/presenter.service.d/ableset-debug.conf /etc/systemd/system/presenter.service.d/noresolume.conf && \
             sudo systemctl daemon-reload"
           # A newline in the variable would inject arbitrary [Service] directives into the
           # drop-in — accept only a single-line http(s) URL.
