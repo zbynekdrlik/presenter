@@ -37,6 +37,14 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    the old service refuses to boot on; right after the restart it would race
    the new service's own migration run.
 
+5. A workflow that runs on every push to ``dev`` never deploys the Companion
+   module (no ``deploy_companion_module.sh``, no ``repin-presenter-connection``,
+   no ``systemctl stop|start|restart companion``). Companion runs only on the
+   production hosts, so a dev push restarted the operators' Companion on SNV
+   and PP about 50 min later, whenever that landed (2026-10-14, a PP event at
+   18:00), and put unreleased plugin code next to the released server. The
+   module ships with the release: deploy.yml (SNV) and release.yml (PP).
+
 Usage: check_deploy_workflows.py [WORKFLOW.yml ...]
        (default: every .github/workflows/*.yml)
 Exit 0 when clean, 1 on any violation (each printed as a GitHub ::error::).
@@ -65,6 +73,9 @@ STATUS_FN_RE = re.compile(r"\b(always|failure|cancelled)\s*\(\s*\)")
 # A staged deploy swaps the new binaries in with `mv ... staging.new/<file>`.
 SWAP_RE = re.compile(r"\bmv\b[^\n]*\bstaging\.new/")
 TOOLS = ("ingest_bibles", "import_propresenter")
+COMPANION_DEPLOY_RE = re.compile(
+    r"deploy_companion_module\.sh|repin-presenter-connection\.py|systemctl\s+(?:stop|start|restart)\s+companion\b"
+)
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # Words that run a LATER word as the command:
 # wrapper -> (options that take an argument, positional words before the command).
@@ -301,15 +312,39 @@ def check_staged_tools(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
     return violations
 
 
+def _runs_on_dev_push(document: dict[Any, Any]) -> bool:
+    # PyYAML reads the bare key `on` as the boolean True.
+    triggers = document.get("on", document.get(True))
+    if not isinstance(triggers, dict):
+        return False
+    push = triggers.get("push")
+    if not isinstance(push, dict):
+        return False
+    branches = push.get("branches") or []
+    return "dev" in (branches if isinstance(branches, list) else [branches])
+
+
+def check_companion_deploys(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
+    """Invariant 5: no Companion deploy in a workflow every dev push runs."""
+    violations: list[Violation] = []
+    for index, step in enumerate(spec.get("steps") or []):
+        if isinstance(step, dict) and COMPANION_DEPLOY_RE.search(_script(step)):
+            violations.append(Violation(workflow, job, _step_name(step, index), "deploys / restarts Companion from a workflow that runs on every push to dev — Companion runs only on the production hosts, so this restarts the operators' Companion whenever a dev push lands; ship the module with the release (deploy.yml / release.yml)"))
+    return violations
+
+
 def check_workflow(path: str, document: Any) -> list[Violation]:
     if not isinstance(document, dict):
         return []
     jobs = document.get("jobs") or {}
+    on_dev_push = _runs_on_dev_push(document)
     violations: list[Violation] = []
     for job, spec in jobs.items():
         if isinstance(spec, dict):
             violations.extend(check_job(path, str(job), spec))
             violations.extend(check_staged_tools(path, str(job), spec))
+            if on_dev_push:
+                violations.extend(check_companion_deploys(path, str(job), spec))
     return violations
 
 

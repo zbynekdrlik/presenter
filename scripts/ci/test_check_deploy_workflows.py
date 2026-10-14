@@ -382,6 +382,41 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
 """
         self.assertEqual(_violations(steps), [])
 
+    def test_a_dev_push_workflow_must_not_restart_companion(self) -> None:
+        # 2026-10-14: pipeline.yml (every dev push) stopped and restarted
+        # Companion on SNV and PP, ~50 min after the push - here a PP event.
+        step = """
+      - name: Deploy to companion-pp.lan
+        run: |
+          ssh companion-pp "sudo systemctl stop companion"
+          ssh companion-pp "sudo python3 /tmp/repin-presenter-connection.py --expect-connection"
+          python3 ops/companion/repin-presenter-connection.test.py
+          ssh companion-pp "sudo systemctl start companion"
+"""
+        for trigger, expected in (("push:\n    branches: [dev]", 1), ("push:\n    branches: [main]", 0), ("release:\n    types: [published]", 0)):
+            with self.subTest(trigger=trigger):
+                document = yaml.safe_load(f"on:\n  {trigger}\n" + _normalize(step))
+                found = cdw.check_workflow("wf.yml", document)
+                self.assertEqual(len(found), expected)
+                if expected:
+                    self.assertIn("every push to dev", found[0].message)
+
+    def test_the_shared_companion_script_counts_as_a_companion_deploy(self) -> None:
+        step = """
+      - name: Deploy Companion module
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target SNV
+"""
+        document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
+        self.assertEqual(len(cdw.check_workflow("wf.yml", document)), 1)
+
+    def test_running_the_repin_unit_tests_on_dev_is_not_a_deploy(self) -> None:
+        step = """
+      - name: Run companion deploy-tool tests (python)
+        run: python3 ops/companion/repin-presenter-connection.test.py
+"""
+        document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
+        self.assertEqual(cdw.check_workflow("wf.yml", document), [])
+
     def test_repository_workflows_are_clean(self) -> None:
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         workflows = sorted(
