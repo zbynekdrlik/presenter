@@ -1,6 +1,8 @@
 //! Resolver tests (#850 spec §10). Fixtures in `../testdata/`: the fold cases
 //! shared with the generator, the 100-case corpus and `/bible/books` snapshots.
 
+mod api;
+mod corpus;
 mod grammar;
 mod hint;
 mod rank;
@@ -53,4 +55,8 @@ fn seb() -> Versification {
 
 fn kjv() -> Versification {
     structure(include_str!("../testdata/structure-eng-kjv.json"))
+}
+
+fn sevp() -> Versification {
+    structure(include_str!("../testdata/structure-slk-sevp.json"))
 }

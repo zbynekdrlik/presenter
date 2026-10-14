@@ -1,0 +1,1286 @@
+{
+ "meta": {
+  "issue": "#850",
+  "generated": "2026-10-13",
+  "structure": "main translation slk-seb (prod/dev); single-chapter books OBA PHM 2JN 3JN JUD",
+  "fields": {
+   "expected": "book = canonical USFM code; chapter; verse_start/verse_end null = whole chapter",
+   "outcome": "resolved | ambiguous (default = expected.book, picker shows alternatives) | book_only | incomplete | no_book | out_of_range (+hint) | list | cross_chapter (not expressible in today's single-chapter contiguous model)",
+   "alternatives": "other books a picker should offer, best first",
+   "match": "fuzzy = only reachable via typo tolerance"
+  }
+ },
+ "cases": [
+  {
+   "id": 1,
+   "input": "zid 11:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "owner's exact input 2026-10-12; Žid = Roháček/SEP abbreviation, SEB stores 'Hebrejom'"
+  },
+  {
+   "id": 2,
+   "input": "žid 11,1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "diacritics + Slovak comma separator (SEB/SSV style 'Heb 11,1')"
+  },
+  {
+   "id": 3,
+   "input": "Zid 11 1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "phone: no punctuation, space as weak chapter-verse separator"
+  },
+  {
+   "id": 4,
+   "input": "Židom 11:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "ROH stored name"
+  },
+  {
+   "id": 5,
+   "input": "list zidom 11.1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "SEVP stored name 'List Židom', '.' as chapter-verse when no ':' or ','"
+  },
+  {
+   "id": 6,
+   "input": "hebr 11:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "Catholic SSV abbreviation 'Hebr' (biblia.sk ssv)"
+  },
+  {
+   "id": 7,
+   "input": "heb11:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "SEB abbreviation, no space"
+  },
+  {
+   "id": 8,
+   "input": "Hebrejom 11,1-3",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 3
+   },
+   "why": "SEB stored name + range"
+  },
+  {
+   "id": 9,
+   "input": "hebrjom 11:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "match": "fuzzy",
+   "why": "typo (missing e) -> Damerau-Levenshtein 1"
+  },
+  {
+   "id": 10,
+   "input": "hebrejon 11 1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "match": "fuzzy",
+   "why": "typo (n for m)"
+  },
+  {
+   "id": 11,
+   "input": "Žd 11,1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "source": "bprp:ces",
+   "why": "Czech ecumenical abbreviation"
+  },
+  {
+   "id": 12,
+   "input": "Hebrews 11:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "English (KJV stored name)"
+  },
+  {
+   "id": 13,
+   "input": "zid 11,1 až 3",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 3
+   },
+   "why": "'až' as range word"
+  },
+  {
+   "id": 14,
+   "input": "zid 11:1–3",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 3
+   },
+   "why": "en dash range (phone autocorrect)"
+  },
+  {
+   "id": 15,
+   "input": "zid 11",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "why": "whole chapter"
+  },
+  {
+   "id": 16,
+   "input": "zid 11:41",
+   "outcome": "out_of_range",
+   "expected": {
+    "book": "HEB",
+    "chapter": 11,
+    "verse_start": 41,
+    "verse_end": 41
+   },
+   "hint": "Kapitola má len 40 veršov",
+   "why": "Heb 11 has 40 verses in SEB; reuse bible_range hint"
+  },
+  {
+   "id": 17,
+   "input": "zid 14",
+   "outcome": "out_of_range",
+   "expected": {
+    "book": "HEB",
+    "chapter": 14,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "hint": "Kniha má len 13 kapitol",
+   "why": "Hebrews has 13 chapters"
+  },
+  {
+   "id": 18,
+   "input": "jan 3:16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "alternatives": [
+    "1JN",
+    "2JN",
+    "3JN"
+   ],
+   "why": "exact alias Ján beats 1/2/3 Ján (today's filter picks '1 Ján' first)"
+  },
+  {
+   "id": 19,
+   "input": "ján 3,16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "why": "diacritics + comma"
+  },
+  {
+   "id": 20,
+   "input": "jn 3 16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "why": "SEB/SSV abbreviation 'Jn'"
+  },
+  {
+   "id": 21,
+   "input": "j 3,16",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "alternatives": [
+    "JER",
+    "JOB",
+    "JAS",
+    "JOS"
+   ],
+   "why": "SEP abbreviation 'J' (Slovak evangelical, = slk-sevp text); 1-letter input ranks J* by frequency -> John first, but Jer/Job 3:16 also exist"
+  },
+  {
+   "id": 22,
+   "input": "Jána 3:16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "why": "genitive form ('podľa Jána')"
+  },
+  {
+   "id": 23,
+   "input": "evanjelium podla jana 3:16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "why": "full SEVP-style title, filler words dropped"
+  },
+  {
+   "id": 24,
+   "input": "1 jan 4:8",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1JN",
+    "chapter": 4,
+    "verse_start": 8,
+    "verse_end": 8
+   },
+   "why": "ordinal + 'jan' -> 1 Ján"
+  },
+  {
+   "id": 25,
+   "input": "1jn 4,8",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1JN",
+    "chapter": 4,
+    "verse_start": 8,
+    "verse_end": 8
+   },
+   "why": "SEB '1Jn'"
+  },
+  {
+   "id": 26,
+   "input": "prvy jan 4:8",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1JN",
+    "chapter": 4,
+    "verse_start": 8,
+    "verse_end": 8
+   },
+   "why": "spelled ordinal 'prvý'"
+  },
+  {
+   "id": 27,
+   "input": "I. Jánov 4,8",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1JN",
+    "chapter": 4,
+    "verse_start": 8,
+    "verse_end": 8
+   },
+   "why": "roman ordinal + ROH 'Jánov'"
+  },
+  {
+   "id": 28,
+   "input": "3jn 4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "3JN",
+    "chapter": 1,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "why": "single-chapter book: lone number = verse"
+  },
+  {
+   "id": 29,
+   "input": "jon 2",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JON",
+    "chapter": 2,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "JHN"
+   ],
+   "why": "Jonáš chapter 2; 'jon' is an exact Slovak alias of Jonah"
+  },
+  {
+   "id": 30,
+   "input": "ž 23",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PSA",
+    "chapter": 23,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "HEB",
+    "ZEC",
+    "REV",
+    "LAM",
+    "ZEP"
+   ],
+   "why": "official 'Ž' (SEB/SEP/SSV/ROH); today picks Efezanom"
+  },
+  {
+   "id": 31,
+   "input": "z 23",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PSA",
+    "chapter": 23,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "HEB",
+    "ZEC",
+    "REV",
+    "LAM",
+    "ZEP"
+   ],
+   "why": "no diacritic: Psalms by frequency (#1)"
+  },
+  {
+   "id": 32,
+   "input": "zalm 23",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PSA",
+    "chapter": 23,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "why": "canonical.rs 'Žalm'"
+  },
+  {
+   "id": 33,
+   "input": "Ž 119,105",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PSA",
+    "chapter": 119,
+    "verse_start": 105,
+    "verse_end": 105
+   },
+   "why": "only Psalms has >=119 chapters"
+  },
+  {
+   "id": 34,
+   "input": "ps 23:1-6",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PSA",
+    "chapter": 23,
+    "verse_start": 1,
+    "verse_end": 6
+   },
+   "why": "'Ps' Psalms; Roháček 'P.Š.' (Song) must not fold to 'ps'"
+  },
+  {
+   "id": 35,
+   "input": "z 151",
+   "outcome": "out_of_range",
+   "expected": {
+    "book": "PSA",
+    "chapter": 151,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "hint": "Kniha má len 150 kapitol",
+   "why": "no Ps 151 in installed translations"
+  },
+  {
+   "id": 36,
+   "input": "1kor13:4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "why": "no spaces at all"
+  },
+  {
+   "id": 37,
+   "input": "1 kor 13 4-7",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": 4,
+    "verse_end": 7
+   },
+   "why": "phone spaces"
+  },
+  {
+   "id": 38,
+   "input": "1. Korinťanom 13,4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "why": "ROH stored name"
+  },
+  {
+   "id": 39,
+   "input": "I. Kor 13,4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "why": "roman ordinal"
+  },
+  {
+   "id": 40,
+   "input": "1K 13,4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "alternatives": [
+    "1KI",
+    "1CH"
+   ],
+   "why": "SEP '1K' = 1 Kor (eng '1 K' = 1 Kings is a fold collision; Slovak wins)"
+  },
+  {
+   "id": 41,
+   "input": "kor 13",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "2CO"
+   ],
+   "why": "no ordinal: family Korinťanom, default ordinal 1, picker shows 2 Kor; 2CO has 13 chapters so both valid"
+  },
+  {
+   "id": 42,
+   "input": "2kor 5:17",
+   "outcome": "resolved",
+   "expected": {
+    "book": "2CO",
+    "chapter": 5,
+    "verse_start": 17,
+    "verse_end": 17
+   }
+  },
+  {
+   "id": 43,
+   "input": "sam 17",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "1SA",
+    "chapter": 17,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "2SA"
+   ],
+   "why": "no ordinal -> 1 Sam default"
+  },
+  {
+   "id": 44,
+   "input": "kr 18",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "1KI",
+    "chapter": 18,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "2KI",
+    "1CH",
+    "2CH"
+   ],
+   "why": "'Kr' = SSV/BPRP abbreviation of Kráľov (ordinal-stripped exact); Kroník is 'Krn'"
+  },
+  {
+   "id": 45,
+   "input": "tim 2:15",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "1TI",
+    "chapter": 2,
+    "verse_start": 15,
+    "verse_end": 15
+   },
+   "alternatives": [
+    "2TI"
+   ],
+   "why": "both have 2:15; default ordinal 1 (2 Tim 2:15 is famous — picker must show it)"
+  },
+  {
+   "id": 46,
+   "input": "pt 5:7",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1PE",
+    "chapter": 5,
+    "verse_start": 7,
+    "verse_end": 7
+   },
+   "why": "structure disambiguates: 2 Peter has only 3 chapters"
+  },
+  {
+   "id": 47,
+   "input": "2tim 3:16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "2TI",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   }
+  },
+  {
+   "id": 48,
+   "input": "1 sol 5,17",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1TH",
+    "chapter": 5,
+    "verse_start": 17,
+    "verse_end": 17
+   },
+   "why": "Catholic 'Solúnčanom' naming"
+  },
+  {
+   "id": 49,
+   "input": "1tes 5:16-18",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1TH",
+    "chapter": 5,
+    "verse_start": 16,
+    "verse_end": 18
+   }
+  },
+  {
+   "id": 50,
+   "input": "fil 4:13",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHP",
+    "chapter": 4,
+    "verse_start": 13,
+    "verse_end": 13
+   },
+   "why": "'Fil' (canonical.rs/ROH) = Filipanom; Philemon has 1 chapter so 4:13 cannot be PHM"
+  },
+  {
+   "id": 51,
+   "input": "flp 4,13",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHP",
+    "chapter": 4,
+    "verse_start": 13,
+    "verse_end": 13
+   },
+   "why": "SEB/SSV 'Flp'"
+  },
+  {
+   "id": 52,
+   "input": "filipanon 4 13",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHP",
+    "chapter": 4,
+    "verse_start": 13,
+    "verse_end": 13
+   },
+   "match": "fuzzy",
+   "why": "typo"
+  },
+  {
+   "id": 53,
+   "input": "fil 1:6",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHP",
+    "chapter": 1,
+    "verse_start": 6,
+    "verse_end": 6
+   },
+   "alternatives": [
+    "PHM"
+   ],
+   "why": "'Fil' is an exact alias of Filipanom (canonical.rs, ROH 'Fil.'); Filemonovi only a prefix match -> offered as alternative (Phlm 1:6 also exists)"
+  },
+  {
+   "id": 54,
+   "input": "flm 6",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHM",
+    "chapter": 1,
+    "verse_start": 6,
+    "verse_end": 6
+   },
+   "why": "single-chapter book: lone number = verse"
+  },
+  {
+   "id": 55,
+   "input": "filemonovi 1:6",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHM",
+    "chapter": 1,
+    "verse_start": 6,
+    "verse_end": 6
+   },
+   "why": "ROH stored name; SEB stores the misspelling 'Filimonovi'"
+  },
+  {
+   "id": 56,
+   "input": "mt 5,3-12",
+   "outcome": "resolved",
+   "expected": {
+    "book": "MAT",
+    "chapter": 5,
+    "verse_start": 3,
+    "verse_end": 12
+   },
+   "why": "SEB abbreviation + EU punctuation"
+  },
+  {
+   "id": 57,
+   "input": "mt 5:3.5.7",
+   "outcome": "list",
+   "expected": {
+    "book": "MAT",
+    "chapter": 5,
+    "verse_start": 3,
+    "verse_end": 7
+   },
+   "verses": [
+    3,
+    5,
+    7
+   ],
+   "model": "not expressible: BibleResolveRequest is one contiguous range",
+   "why": "'.' after ':' = verse list"
+  },
+  {
+   "id": 58,
+   "input": "mr 16:15",
+   "outcome": "resolved",
+   "expected": {
+    "book": "MRK",
+    "chapter": 16,
+    "verse_start": 15,
+    "verse_end": 15
+   },
+   "why": "'Mr' is in ai/style_guide.md:68 and BPRP English short forms only (tier 3), not in canonical.rs or any Slovak system — add it to the Slovak tier"
+  },
+  {
+   "id": 59,
+   "input": "lk 15",
+   "outcome": "resolved",
+   "expected": {
+    "book": "LUK",
+    "chapter": 15,
+    "verse_start": null,
+    "verse_end": null
+   }
+  },
+  {
+   "id": 60,
+   "input": "l 2,11",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "LUK",
+    "chapter": 2,
+    "verse_start": 11,
+    "verse_end": 11
+   },
+   "alternatives": [
+    "LEV",
+    "LAM"
+   ],
+   "why": "SEP 'L'; 1-letter input -> Luke by frequency, Lev/Lam 2:11 also exist"
+  },
+  {
+   "id": 61,
+   "input": "sk 2:38",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ACT",
+    "chapter": 2,
+    "verse_start": 38,
+    "verse_end": 38
+   }
+  },
+  {
+   "id": 62,
+   "input": "skutky 1,8",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ACT",
+    "chapter": 1,
+    "verse_start": 8,
+    "verse_end": 8
+   }
+  },
+  {
+   "id": 63,
+   "input": "gn 1,1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "GEN",
+    "chapter": 1,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "SEB 'Gn' (unresolved by canonical.rs today)"
+  },
+  {
+   "id": 64,
+   "input": "genezis 1:1-2:3",
+   "outcome": "cross_chapter",
+   "expected": {
+    "book": "GEN",
+    "chapter": 1,
+    "verse_start": 1,
+    "verse_end": 3
+   },
+   "end_chapter": 2,
+   "model": "not expressible: single chapter per request",
+   "why": "cross-chapter range"
+  },
+  {
+   "id": 65,
+   "input": "1 mojzisova 1:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "GEN",
+    "chapter": 1,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "ROH stored name, no diacritics"
+  },
+  {
+   "id": 66,
+   "input": "1M 1,1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "GEN",
+    "chapter": 1,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "SEP/ROH '1M'"
+  },
+  {
+   "id": 67,
+   "input": "iz 53",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ISA",
+    "chapter": 53,
+    "verse_start": null,
+    "verse_end": null
+   }
+  },
+  {
+   "id": 68,
+   "input": "jer 29:11",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JER",
+    "chapter": 29,
+    "verse_start": 11,
+    "verse_end": 11
+   }
+  },
+  {
+   "id": 69,
+   "input": "kaz 3:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ECC",
+    "chapter": 3,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "SSV/canonical 'Kaz'; SEB uses 'Koh'"
+  },
+  {
+   "id": 70,
+   "input": "koh 3,1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ECC",
+    "chapter": 3,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "why": "SEB 'Koh' (unresolved today)"
+  },
+  {
+   "id": 71,
+   "input": "sud 6",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JDG",
+    "chapter": 6,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "why": "'Sud' = Sudcovia (SEP/ROH)"
+  },
+  {
+   "id": 72,
+   "input": "pris 3,5-6",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PRO",
+    "chapter": 3,
+    "verse_start": 5,
+    "verse_end": 6
+   },
+   "why": "SEB 'Prís'"
+  },
+  {
+   "id": 73,
+   "input": "nar 3:22-23",
+   "outcome": "resolved",
+   "expected": {
+    "book": "LAM",
+    "chapter": 3,
+    "verse_start": 22,
+    "verse_end": 23
+   },
+   "why": "SEB 'Nár'"
+  },
+  {
+   "id": 74,
+   "input": "ez 37",
+   "outcome": "resolved",
+   "expected": {
+    "book": "EZK",
+    "chapter": 37,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "EZR"
+   ],
+   "why": "'Ez' = Ezechiel in all four Slovak systems; Ezra has only 10 chapters"
+  },
+  {
+   "id": 75,
+   "input": "ezd 7:10",
+   "outcome": "resolved",
+   "expected": {
+    "book": "EZR",
+    "chapter": 7,
+    "verse_start": 10,
+    "verse_end": 10
+   }
+  },
+  {
+   "id": 76,
+   "input": "abd 4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "OBA",
+    "chapter": 1,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "why": "single-chapter book"
+  },
+  {
+   "id": 77,
+   "input": "ab 2:4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "HAB",
+    "chapter": 2,
+    "verse_start": 4,
+    "verse_end": 4
+   },
+   "alternatives": [
+    "OBA"
+   ],
+   "why": "'Ab' = Abakuk in SEP+BPRP but Abdiáš in canonical.rs; Obadiah has 1 chapter so 2:4 is HAB"
+  },
+  {
+   "id": 78,
+   "input": "mal 4:5",
+   "outcome": "out_of_range",
+   "expected": {
+    "book": "MAL",
+    "chapter": 4,
+    "verse_start": 5,
+    "verse_end": 5
+   },
+   "hint": "Kniha má len 3 kapitoly",
+   "note": "KJV/ROH Mal 4:5 = SEB 3:23 (versification)",
+   "why": "SEB has 3 chapters, ROH/KJV 4"
+  },
+  {
+   "id": 79,
+   "input": "joel 3:1",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JOL",
+    "chapter": 3,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "note": "SEB/SEVP 4 chapters, ROH/KJV 3 — same verse is 2:28 in KJV"
+  },
+  {
+   "id": 80,
+   "input": "rim 8:28",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ROM",
+    "chapter": 8,
+    "verse_start": 28,
+    "verse_end": 28
+   }
+  },
+  {
+   "id": 81,
+   "input": "r 8,28",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ROM",
+    "chapter": 8,
+    "verse_start": 28,
+    "verse_end": 28
+   },
+   "why": "SEP 'R'"
+  },
+  {
+   "id": 82,
+   "input": "g 2,20",
+   "outcome": "ambiguous",
+   "expected": {
+    "book": "GEN",
+    "chapter": 2,
+    "verse_start": 20,
+    "verse_end": 20
+   },
+   "alternatives": [
+    "GAL"
+   ],
+   "why": "SEP 'G' = Galatským, but by frequency G* -> Genezis; both have 2:20 — picker must show Gal"
+  },
+  {
+   "id": 83,
+   "input": "gal 2:20",
+   "outcome": "resolved",
+   "expected": {
+    "book": "GAL",
+    "chapter": 2,
+    "verse_start": 20,
+    "verse_end": 20
+   }
+  },
+  {
+   "id": 84,
+   "input": "ef 2 8-9",
+   "outcome": "resolved",
+   "expected": {
+    "book": "EPH",
+    "chapter": 2,
+    "verse_start": 8,
+    "verse_end": 9
+   }
+  },
+  {
+   "id": 85,
+   "input": "jak 1:5",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JAS",
+    "chapter": 1,
+    "verse_start": 5,
+    "verse_end": 5
+   },
+   "why": "SSV/ROH 'Jak'"
+  },
+  {
+   "id": 86,
+   "input": "jk 1,5",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JAS",
+    "chapter": 1,
+    "verse_start": 5,
+    "verse_end": 5
+   },
+   "why": "SEB 'Jk' (unresolved today)"
+  },
+  {
+   "id": 87,
+   "input": "jud 24",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JUD",
+    "chapter": 1,
+    "verse_start": 24,
+    "verse_end": 24
+   },
+   "alternatives": [
+    "JDG"
+   ],
+   "why": "single-chapter: lone number = verse; 'Jud' = Júda (SEP), English 'Judges' only a prefix"
+  },
+  {
+   "id": 88,
+   "input": "jud 1",
+   "outcome": "book_only",
+   "expected": {
+    "book": "JUD",
+    "chapter": 1,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "note": "BPRP single_chapter_1_strategy=chapter: 'Jude 1' = whole book",
+   "why": "1 on a single-chapter book = the whole chapter"
+  },
+  {
+   "id": 89,
+   "input": "zj 21:4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "REV",
+    "chapter": 21,
+    "verse_start": 4,
+    "verse_end": 4
+   }
+  },
+  {
+   "id": 90,
+   "input": "zjv 3,20",
+   "outcome": "resolved",
+   "expected": {
+    "book": "REV",
+    "chapter": 3,
+    "verse_start": 20,
+    "verse_end": 20
+   },
+   "why": "SSV 'Zjv'"
+  },
+  {
+   "id": 91,
+   "input": "John 3:16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "why": "English"
+  },
+  {
+   "id": 92,
+   "input": "Phil 4:13",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHP",
+    "chapter": 4,
+    "verse_start": 13,
+    "verse_end": 13
+   },
+   "why": "English/OSIS 'Phil'"
+  },
+  {
+   "id": 93,
+   "input": "Rev 21:4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "REV",
+    "chapter": 21,
+    "verse_start": 4,
+    "verse_end": 4
+   }
+  },
+  {
+   "id": 94,
+   "input": "1 Cor 13:4",
+   "outcome": "resolved",
+   "expected": {
+    "book": "1CO",
+    "chapter": 13,
+    "verse_start": 4,
+    "verse_end": 4
+   }
+  },
+  {
+   "id": 95,
+   "input": "Ř 8,28",
+   "outcome": "resolved",
+   "expected": {
+    "book": "ROM",
+    "chapter": 8,
+    "verse_start": 28,
+    "verse_end": 28
+   },
+   "source": "bprp:ces",
+   "why": "Czech 'Ř' folds to 'r'"
+  },
+  {
+   "id": 96,
+   "input": "Fp 4,13",
+   "outcome": "resolved",
+   "expected": {
+    "book": "PHP",
+    "chapter": 4,
+    "verse_start": 13,
+    "verse_end": 13
+   },
+   "source": "bprp:ces",
+   "why": "Czech"
+  },
+  {
+   "id": 97,
+   "input": "Jan 3,16",
+   "outcome": "resolved",
+   "expected": {
+    "book": "JHN",
+    "chapter": 3,
+    "verse_start": 16,
+    "verse_end": 16
+   },
+   "why": "Czech 'Jan' = Slovak 'Ján' after folding"
+  },
+  {
+   "id": 98,
+   "input": "jan",
+   "outcome": "book_only",
+   "expected": {
+    "book": "JHN",
+    "chapter": null,
+    "verse_start": null,
+    "verse_end": null
+   },
+   "alternatives": [
+    "1JN",
+    "2JN",
+    "3JN"
+   ],
+   "why": "book only: select the book, wait for chapter (no auto-load)"
+  },
+  {
+   "id": 99,
+   "input": "1",
+   "outcome": "incomplete",
+   "expected": null,
+   "why": "bare ordinal: show numbered books, resolve nothing"
+  },
+  {
+   "id": 100,
+   "input": "11:1",
+   "outcome": "no_book",
+   "expected": {
+    "book": null,
+    "chapter": 11,
+    "verse_start": 1,
+    "verse_end": 1
+   },
+   "hint": "Napíš aj knihu",
+   "why": "numbers without a book"
+  }
+ ]
+}
