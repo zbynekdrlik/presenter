@@ -165,8 +165,10 @@ impl AppState {
     /// deactivate cannot land in a read→activate gap and get its source revived
     /// by this ticker.
     ///
-    /// #858: the repair line is logged only when the repair produced a STREAMING
-    /// pipeline (`Some`). A silent broadcaster (#448) is repaired every tick for
+    /// #858: the repair is reported (at DEBUG) only when it produced a STREAMING
+    /// pipeline (`Some`). The recovery is already marked by the manager's ONE INFO
+    /// `NDI pipeline streaming` line (with `silent_attempts_before`), so this line
+    /// adds nothing at INFO. A silent broadcaster (#448) is repaired every tick for
     /// hours; that is not a reconnect and its own "not yet producing" line is
     /// already power-of-two gated.
     pub(super) async fn ndi_reconnect_once(&self) {
@@ -178,7 +180,7 @@ impl AppState {
             .await
         {
             Ok(Some(source)) => {
-                tracing::info!(
+                tracing::debug!(
                     ndi_name = %source.ndi_name,
                     "NDI auto-reconnect: re-activated the source's pipeline"
                 );

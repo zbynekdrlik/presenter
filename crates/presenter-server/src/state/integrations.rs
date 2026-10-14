@@ -97,7 +97,7 @@ fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
 }
 
 /// How far an activation got on the NDI side (#858). The reconnect ticker needs it
-/// to log "re-activated" only for a repair that produced a STREAMING pipeline.
+/// to report "re-activated" only for a repair that produced a STREAMING pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NdiActivation {
     /// `start_pipeline` returned Ok: the source's pipeline is Streaming.
@@ -1886,8 +1886,10 @@ mod tests {
         }
 
         // The ticker body (`ndi_reconnect_once`): a silent repair is covered by the
-        // gated #448 line and logs NO "re-activated"; the repair that finally
-        // produces a streaming pipeline logs it once, at INFO.
+        // gated #448 line and reports NO "re-activated" (at ANY level — the capture
+        // takes DEBUG too); the repair that finally produces a streaming pipeline
+        // reports it once. That line is DEBUG: the recovery is the ONE INFO
+        // `NDI pipeline streaming` line the manager logs.
         #[tokio::test]
         async fn the_ticker_logs_re_activated_only_after_a_streaming_repair() {
             let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::SilentSource).await;
@@ -1927,8 +1929,8 @@ mod tests {
                     .iter()
                     .map(|line| line.level)
                     .collect::<Vec<_>>(),
-                vec![info],
-                "the repair that produced a streaming pipeline logs once at INFO"
+                vec![debug],
+                "the repair that produced a streaming pipeline reports once, at DEBUG"
             );
             let starts = fake
                 .calls()

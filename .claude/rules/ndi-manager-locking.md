@@ -54,8 +54,9 @@ via `ReconnectAction` from `pipeline_snapshots_checked("NDI reconnect ticker")`:
 - **Repair** — no pipeline, errored or stopped: full re-activation. A silent broadcaster (#448) lands
   here every tick for hours (SNV between events). `reconnect_active_video_source` returns `Some`
   ONLY when the repair left the source STREAMING (`NdiActivation::Streaming`); the ticker body
-  `AppState::ndi_reconnect_once` logs "re-activated the source's pipeline" only then, so the log
-  never says "restored" and a silent repair logs nothing there (its #448 line is gated, below).
+  `AppState::ndi_reconnect_once` reports "re-activated the source's pipeline" (DEBUG, #858 — the
+  recovery's one INFO line is the manager's `NDI pipeline streaming`) only then, so the log never
+  says "restored" and a silent repair reports nothing there (its #448 line is gated, below).
 - **Heartbeat** — streaming: NO re-activation, only the state re-announcement
   `NdiSourceActivated` + `NdiConnectionStatus "connected"`. `Heartbeat { leftovers }` additionally
   reaps (WARN) any other pipeline still up.
