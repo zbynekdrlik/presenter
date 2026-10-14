@@ -164,6 +164,57 @@ async function gotoStream(page: Page): Promise<void> {
   await page.waitForSelector('[data-role="stream-canvas"]', { timeout: 10_000 });
 }
 
+/**
+ * The three px lengths (x, y, blur) of a computed `text-shadow`. Chromium
+ * serialises it colour-first (`rgb(0, 0, 0) 2px 2px 12px`); the colour has no
+ * `px`, so every `px` token is one length. Throws on anything but three.
+ */
+function shadowLengths(textShadow: string): number[] {
+  const lengths = (textShadow.match(/-?[\d.]+px/g) ?? []).map(parseFloat);
+  if (lengths.length !== 3) {
+    throw new Error(`expected 3 px lengths in text-shadow, got "${textShadow}"`);
+  }
+  return lengths;
+}
+
+async function countdownShadowAndFont(
+  page: Page,
+): Promise<{ shadow: number[]; fontPx: number }> {
+  const { raw, fontPx } = await page
+    .locator('[data-role="stream-element-countdown"]')
+    .evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { raw: cs.textShadow, fontPx: parseFloat(cs.fontSize) };
+    });
+  return { shadow: shadowLengths(raw), fontPx };
+}
+
+/** Create a base scene with ONE shadowed countdown (2/2/12 px), activate it. */
+async function seedShadowScene(request: APIRequestContext): Promise<void> {
+  const sceneResp = await request.post(
+    `${baseURL}/stream/api/outputs/${SLUG}/scenes`,
+    { data: { name: "ShadowScale", kind: "base" } },
+  );
+  expect(sceneResp.ok(), `create scene -> ${sceneResp.status()}`).toBeTruthy();
+  const sceneId = (await sceneResp.json()).id as number;
+  await postJson(request, `/stream/api/scenes/${sceneId}/elements`, {
+    kind: "countdown",
+    timer_id: 1,
+    style: {
+      fontFamily: "Arial",
+      sizePct: 12,
+      color: "#ffffff",
+      weight: 700,
+      align: "center",
+      lineHeight: 1.2,
+      shadow: { xPx: 2, yPx: 2, blurPx: 12, color: "#000000" },
+    },
+    frame: { xPct: 10, yPct: 60, wPct: 80, hPct: 20 },
+  });
+  await startCountdown(request);
+  await activateBase(request, sceneId);
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 test.describe("Stream output page", () => {
@@ -271,6 +322,51 @@ test.describe("Stream output page", () => {
       .poll(() => defRequests, { timeout: 15_000 })
       .toBeGreaterThan(defsBefore);
     await expect(image).toHaveCount(1, { timeout: 10_000 });
+
+    // Zero console errors AND warnings — asserted last.
+    expect(consoleErrors).toEqual([]);
+  });
+
+  // #860: the stored shadow px are px at the 1080-px output canvas, rendered in
+  // `vh` so the shadow scales with the text (font-size is `vh` too). The editor
+  // preview iframe is box-sized (not a scaled 1920x1080 page), so an absolute-px
+  // shadow was 2-2.4x too big there compared with OBS at 1080p.
+  test("text shadow scales with the canvas height (px at 1080p)", async ({
+    page,
+    request,
+  }) => {
+    const consoleErrors: string[] = [];
+    attachConsoleErrorCollector(page, consoleErrors);
+
+    await seedShadowScene(request);
+
+    // At 1080p the rendered shadow is exactly the stored 2/2/12 px.
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await gotoStream(page);
+    const countdown = page.locator('[data-role="stream-element-countdown"]');
+    await expect(countdown).toHaveCount(1);
+    const full = await countdownShadowAndFont(page);
+    const stored = [2, 2, 12];
+    stored.forEach((px, i) => {
+      expect(Math.abs(full.shadow[i] - px), `1080p shadow[${i}]`).toBeLessThan(0.1);
+    });
+    expect(full.fontPx).toBeCloseTo(1080 * 0.12, 0);
+
+    // At half the height every shadow length is half, in step with the font.
+    await page.setViewportSize({ width: 960, height: 540 });
+    await expect
+      .poll(async () => (await countdownShadowAndFont(page)).fontPx, { timeout: 5_000 })
+      .toBeCloseTo(540 * 0.12, 0);
+    const half = await countdownShadowAndFont(page);
+    stored.forEach((px, i) => {
+      expect(Math.abs(half.shadow[i] - px / 2), `540p shadow[${i}]`).toBeLessThan(0.1);
+      expect(
+        Math.abs(half.shadow[i] - full.shadow[i] / 2),
+        `540p vs 1080p shadow[${i}]`,
+      ).toBeLessThan(0.1);
+    });
+    // The blur-to-text ratio is the same at both sizes (WYSIWYG with OBS).
+    expect(half.shadow[2] / half.fontPx).toBeCloseTo(full.shadow[2] / full.fontPx, 2);
 
     // Zero console errors AND warnings — asserted last.
     expect(consoleErrors).toEqual([]);

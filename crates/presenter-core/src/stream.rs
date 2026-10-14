@@ -227,7 +227,9 @@ pub struct Frame {
     pub h_pct: f32,
 }
 
-/// A CSS text/box shadow. `color` is `#rrggbb` or `#rrggbbaa`.
+/// A CSS text/box shadow. `color` is `#rrggbb` or `#rrggbbaa`. The three
+/// lengths are px AT THE 1080-PX OUTPUT CANVAS (#860): the output page renders
+/// them in `vh` (`px / 10.8`), so the shadow scales with the text on any canvas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shadow {
