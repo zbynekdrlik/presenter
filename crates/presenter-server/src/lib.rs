@@ -85,6 +85,7 @@ mod bible_remote;
 mod companion;
 pub mod config;
 mod drive;
+mod listen;
 mod live;
 #[cfg(feature = "mock-integrations")]
 pub mod mock_integrations;
