@@ -10,10 +10,12 @@
 //! Consumers import `presenter_core::bible::sermon::…` (no root re-export).
 
 mod dates;
+mod edits;
 mod label;
 mod tokens;
 
 pub use dates::{default_sermon_title, default_service_date};
+pub use edits::{normalize_edits, retain_unchanged_edits, EditError};
 pub use label::{item_label, translation_short_code, verse_suffix, VerseMark};
 pub use tokens::{token_texts, tokenize, Token};
 

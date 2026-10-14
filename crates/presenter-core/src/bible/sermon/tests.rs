@@ -115,3 +115,39 @@ fn json_shapes_match_the_stored_columns() {
     let verse = serde_json::to_string(&source(&[(1, "Viera")])).expect("serialize");
     assert_eq!(verse, r#"[{"verse":1,"text":"Viera"}]"#);
 }
+
+#[test]
+fn normalize_drops_untouched_verses_and_refuses_bad_indices() {
+    let heb = source(&[(1, HEB_11_1)]);
+    assert_eq!(
+        normalize_edits(&heb, &edits(&[(1, &[], &[])])).expect("valid"),
+        ItemEdits::default()
+    );
+    assert_eq!(
+        normalize_edits(&heb, &edits(&[(1, &[12], &[])])),
+        Err(EditError::IndexOutOfRange {
+            verse: 1,
+            index: 12
+        })
+    );
+    assert_eq!(
+        normalize_edits(&heb, &edits(&[(2, &[0], &[])])),
+        Err(EditError::UnknownVerse { verse: 2 })
+    );
+    assert_eq!(
+        EditError::UnknownVerse { verse: 2 }.to_string(),
+        "Verš 2 nie je v tejto položke"
+    );
+}
+
+#[test]
+fn refresh_keeps_only_the_edits_of_unchanged_verses() {
+    let old = source(&[(1, "a b"), (2, "c d"), (3, "e f")]);
+    let new = source(&[(1, "a b"), (2, "c x")]);
+    let kept = retain_unchanged_edits(
+        &old,
+        &new,
+        &edits(&[(1, &[0], &[]), (2, &[1], &[]), (3, &[0], &[])]),
+    );
+    assert_eq!(kept, edits(&[(1, &[0], &[])]));
+}
