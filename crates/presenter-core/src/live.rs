@@ -98,6 +98,15 @@ pub enum LiveEvent {
     StreamNameplatesChanged {
         output: String,
     },
+    /// #852 šepkár tips: the FULL active list for the interpreter page (newest
+    /// first, at most `TIP_LIVE_LIST_CAP`), published after every create /
+    /// dismiss / restore / dismiss-all and when midnight or the 4 h window
+    /// changed it. Full-list semantics: a client that keeps only the latest
+    /// event never loses a tip.
+    InterpreterTips {
+        service_date: String,
+        tips: Vec<crate::interpreter_tips::TipDto>,
+    },
 }
 
 /// Messages sent from a WebSocket client to the server.
@@ -279,5 +288,41 @@ mod tests {
             serde_json::to_value(&event).unwrap(),
             json!({ "type": "stream_nameplates_changed", "output": "stream" })
         );
+    }
+
+    #[test]
+    fn interpreter_tips_wire_shape_is_exact() {
+        use crate::interpreter_tips::TipDto;
+        let created_at = DateTime::parse_from_rfc3339("2026-10-18T17:42:05Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let event = LiveEvent::InterpreterTips {
+            service_date: "2026-10-18".to_string(),
+            tips: vec![TipDto {
+                id: 17,
+                service_date: "2026-10-18".to_string(),
+                source_term: Some("atonement".to_string()),
+                target_term: Some("zmierenie".to_string()),
+                note: None,
+                sender_name: "Peter".to_string(),
+                created_at,
+                dismissed_at: None,
+            }],
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire,
+            json!({
+                "type": "interpreter_tips",
+                "service_date": "2026-10-18",
+                "tips": [{
+                    "id": 17, "serviceDate": "2026-10-18", "sourceTerm": "atonement",
+                    "targetTerm": "zmierenie", "note": null, "senderName": "Peter",
+                    "createdAt": "2026-10-18T17:42:05Z", "dismissedAt": null
+                }]
+            })
+        );
+        let back: LiveEvent = serde_json::from_value(wire).unwrap();
+        assert!(matches!(back, LiveEvent::InterpreterTips { ref tips, .. } if tips.len() == 1));
     }
 }

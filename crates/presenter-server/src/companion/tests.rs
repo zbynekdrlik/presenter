@@ -1051,3 +1051,24 @@ fn nameplate_variables_render_list_song_and_active() {
     assert!(vars.contains_key("nameplate_song_name"));
     assert!(vars.contains_key("nameplate_song_role"));
 }
+
+#[test]
+fn interpreter_tips_event_leaves_companion_variables_unchanged() {
+    let mut state = CompanionVariableState::default();
+    let before: Vec<(String, String)> = state
+        .to_variables()
+        .into_iter()
+        .map(|v| (v.name, v.value))
+        .collect();
+    let changed = state.apply_live_event(LiveEvent::InterpreterTips {
+        service_date: "2026-10-18".to_string(),
+        tips: vec![],
+    });
+    assert!(!changed, "a šepkár tips event drives no Companion variable");
+    let after: Vec<(String, String)> = state
+        .to_variables()
+        .into_iter()
+        .map(|v| (v.name, v.value))
+        .collect();
+    assert_eq!(before, after);
+}
