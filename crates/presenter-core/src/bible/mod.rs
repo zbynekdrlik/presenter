@@ -2,6 +2,7 @@ mod canonical;
 mod presentation;
 mod reference;
 pub mod search;
+pub mod sermon;
 mod translation;
 
 pub use canonical::{
