@@ -122,7 +122,8 @@ churn (PP SD1 rejoined every ~45 s) and would loop site-wide blackouts — the #
 
 Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (`/ndi/snapshot/<id>`)
 plus `encoderTimestampCorrectionMs` (`/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline
-age (age = time since the `timestamp guard installed` INFO line in the journal).
+age (age = time since the LAST `timestamp guard installed` INFO line in the journal — a silent
+source is rebuilt every 30 s, #858 — or `encoderTiming.framesSeen` ÷ the source fps).
 
 - A correction that changes by less than ~20 ms between the two reads is the start-up anchor (a late
   first frame or an NDI burst above D; an earlier-arriving frame can still shave a few ms off it):

@@ -421,7 +421,8 @@ journalctl -u presenter --since -1h | grep -E '#854|ndi_client_stats'
 Expect: guard `true`, lead `<= 50`, `driftRebuilds` 0, consumers `dropRatio30s ≈ 0`, verdict
 `healthy`. Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (plus
 `encoderTimestampCorrectionMs` on `/healthz`) TWICE: at ~5 min and again at >= 1 h of pipeline age
-(age = time since the `timestamp guard installed` INFO line). A correction that changes by less than
+(age = time since the LAST `timestamp guard installed` INFO line — a silent source is rebuilt
+every 30 s, #858 — or `encoderTiming.framesSeen` ÷ the source fps). A correction that changes by less than
 ~20 ms between the reads is the start-up anchor (a late first frame or an NDI burst above D; an
 earlier-arriving frame can still shave a few ms off it): expected and harmless. Drift keeps growing
 with age, by ≈ ppm × 3.6 ms per hour (≈ 18 ms/h at +5 ppm, ≈ 173 ms/h at +48 ppm): the lead stays
