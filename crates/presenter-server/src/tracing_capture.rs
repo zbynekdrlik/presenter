@@ -1,13 +1,15 @@
-//! Test-only capture of tracing spans and events for the #850 O1 log tests
-//! (the request span, the response line, `presenter::bible::show`).
+//! Test-only capture of tracing spans and events — the ONE helper for every log
+//! test in this crate: the #850 O1 ones (the request span, the response line,
+//! `presenter::bible::show`) and the #858 silent-streak ones in
+//! `state/integrations.rs`. Declared once in `lib.rs` as `#[cfg(test)] mod`.
 //!
 //! [`Capture::install`] keeps a SECOND live dispatcher next to the capturing
 //! one. tracing-core caches each callsite's interest, and while only one
 //! dispatcher is registered a callsite first hit by a sibling test's thread
 //! (which has no subscriber) can be cached as "never" for everyone — it would
 //! silently drop this test's records. With two live dispatchers every callsite
-//! is also asked about this capture (the same reason as `GlobalCapture` in
-//! `ai/client.rs` and the #858 `capture_events`).
+//! is also asked about this capture (the same trap as `GlobalCapture` in
+//! `ai/client.rs`).
 //!
 //! Field values are stored as the fmt layer prints them: a `&str` value is
 //! quoted (`"api"`), a `%display` value is not (`GET`), so a test can pin which
@@ -25,30 +27,30 @@ use tracing::{Dispatch, Event, Level, Metadata, Subscriber};
 
 /// A captured record is a span or an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Span,
     Event,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Captured {
-    pub(super) kind: Kind,
-    pub(super) target: String,
-    pub(super) level: Level,
+pub(crate) struct Captured {
+    pub(crate) kind: Kind,
+    pub(crate) target: String,
+    pub(crate) level: Level,
     /// The span name (an event's own name is not interesting).
-    pub(super) name: String,
-    pub(super) fields: BTreeMap<String, String>,
+    pub(crate) name: String,
+    pub(crate) fields: BTreeMap<String, String>,
 }
 
 impl Captured {
     /// The field as the fmt layer prints it, `None` when the record has none.
-    pub(super) fn field(&self, name: &str) -> Option<&str> {
+    pub(crate) fn field(&self, name: &str) -> Option<&str> {
         self.fields.get(name).map(String::as_str)
     }
 }
 
 /// `text` the way a `&str` tracing field prints: in double quotes.
-pub(super) fn quoted(text: &str) -> String {
+pub(crate) fn quoted(text: &str) -> String {
     format!("{text:?}")
 }
 
@@ -119,14 +121,14 @@ impl Subscriber for Recorder {
 /// Captures every DEBUG-and-above span and event the installing thread emits
 /// (a `#[tokio::test]` runs on one thread) until it is dropped. Bind it for the
 /// whole test body: `let capture = Capture::install();`.
-pub(super) struct Capture {
+pub(crate) struct Capture {
     records: Arc<Mutex<Vec<Captured>>>,
     _scope: DefaultGuard,
     _keeper: Dispatch,
 }
 
 impl Capture {
-    pub(super) fn install() -> Self {
+    pub(crate) fn install() -> Self {
         let records = Arc::new(Mutex::new(Vec::new()));
         let capture = Dispatch::new(Recorder::new(Arc::clone(&records)));
         let keeper = Dispatch::new(Recorder::new(Arc::new(Mutex::new(Vec::new()))));
@@ -138,13 +140,31 @@ impl Capture {
     }
 
     /// Every captured event with this target, in emission order.
-    pub(super) fn events(&self, target: &str) -> Vec<Captured> {
+    pub(crate) fn events(&self, target: &str) -> Vec<Captured> {
         self.of(Kind::Event, target)
     }
 
     /// Every captured span with this target, in creation order.
-    pub(super) fn spans(&self, target: &str) -> Vec<Captured> {
+    pub(crate) fn spans(&self, target: &str) -> Vec<Captured> {
         self.of(Kind::Span, target)
+    }
+
+    /// Every captured event whose `message` contains `needle`, in emission
+    /// order, whatever its target — for lines logged from several modules (the
+    /// #858 silent-source lines come from the manager and the server).
+    pub(crate) fn events_with_message(&self, needle: &str) -> Vec<Captured> {
+        self.records
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|record| {
+                record.kind == Kind::Event
+                    && record
+                        .field("message")
+                        .is_some_and(|message| message.contains(needle))
+            })
+            .cloned()
+            .collect()
     }
 
     fn of(&self, kind: Kind, target: &str) -> Vec<Captured> {

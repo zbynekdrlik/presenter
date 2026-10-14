@@ -94,6 +94,8 @@ mod resolume;
 pub mod router;
 mod stage_connections;
 pub mod state;
+#[cfg(test)]
+mod tracing_capture;
 mod turn;
 mod ui;
 

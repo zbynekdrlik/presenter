@@ -15,7 +15,7 @@ use crate::router::libraries::CreateLibraryPresentationResponse;
 use crate::router::playlists::UpdatePlaylistRequest;
 use crate::router::presentations::PresentationDetailDto;
 use crate::router::stage::StageLayoutResponse;
-use crate::router::tracing_capture::{quoted, Capture};
+use crate::tracing_capture::{quoted, Capture};
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::TimersOverview;
 use presenter_core::{Playlist, PlaylistEntry, PlaylistEntryId};
