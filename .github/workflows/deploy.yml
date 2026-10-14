@@ -146,6 +146,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
           ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
           path: data/bibles-private
           persist-credentials: false

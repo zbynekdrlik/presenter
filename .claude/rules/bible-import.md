@@ -20,12 +20,19 @@ paths:
 - **CI:** every job that needs them adds, right AFTER its main checkout (a self-hosted main
   checkout `git clean`s the workspace), the step "Check out the private Bible modules (#859)":
   `actions/checkout@v4` with `repository: zbynekdrlik/presenter-bibles`,
-  `ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}` (a read-only deploy key),
+  `ref: <pinned 40-hex commit>`, `ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}` (a read-only deploy key),
   `path: data/bibles-private`, `persist-credentials: false`. Today: pipeline.yml `e2e`,
   `e2e-ndi`, `deploy-dev`; deploy.yml `deploy`; release.yml `deploy-pp`; ndi-latency.yml.
   `PRESENTER_BIBLE_SEB/ROHACEK/SEVP/MILOST` and the "Deploy Bible files" scp read
   `data/bibles-private/<file>`; the host paths `/opt/presenter*/bibles/<file>` are unchanged
   (import-data.yml reads only those).
+- **The checkout is PINNED, one pin for every workflow.** Every private checkout carries the
+  same `ref:` (a full commit SHA of presenter-bibles; its README lists the modules' sha256).
+  Without the pin any push to presenter-bibles would reach SNV on the next deploy, and
+  redeploying an old release would ship today's modules. **Updating a module = push it to
+  presenter-bibles, then bump the pinned SHA in EVERY workflow in ONE commit here** (reviewed
+  like code; the new bytes reach SNV/PP with that release). The checker fails on a missing,
+  short or branch `ref:` and on two different pins.
 - **Local dev:** `git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private`
   (gitignored). `tests/e2e/support.ts` `refreshDevData` and the ai_eval recipe point there.
 - **A missing module fails loudly, never silently:** an unset `PRESENTER_BIBLE_*` skips that
@@ -38,8 +45,13 @@ paths:
 - **`scripts/ci/check_public_bibles.py`** (+ its self-test, Quality job) fails when a tracked
   file under `data/bibles/` is off the allow-list (`PUBLIC_MODULES`), when anything under
   `data/bibles-private/` is tracked, when a release-asset job or an `upload-artifact` step
-  touches the private modules (public downloads), or when a job reads `data/bibles-private`
-  before (or without) the private checkout. A new public-domain module goes on the allow-list;
+  touches the private modules (public downloads), when a checkout is unpinned or the pins
+  differ, when `PRESENTER_BIBLE_SEB/ROHACEK/SEVP/MILOST` points at the old `data/bibles/<module>`,
+  or when a job needs the modules before (or without) the private checkout: it names
+  `data/bibles-private`, runs the Playwright suite (`playwright test`, `npm test`,
+  `npm run test:playwright*`, `tests/e2e`, `refresh-dev-data.sh` — `support.ts` reads the
+  private dir) or runs `ingest_bibles` with a repo-relative path. It scans
+  `.github/workflows/*.yml` and `*.yaml`. A new public-domain module goes on the allow-list;
   a new restricted one goes to the private repo plus a checkout in each consuming job.
 
 ## What a verse may carry (`presenter-bible/src/cleanup.rs`)

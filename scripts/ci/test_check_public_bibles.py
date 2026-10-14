@@ -21,11 +21,15 @@ import check_public_bibles as cpb  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 
+PIN = "7a0e338ede080a118a90bdd9bb4379fea47f63f2"
+OTHER_PIN = "0123456789abcdef0123456789abcdef01234567"
+
 PRIVATE_CHECKOUT = """
       - name: Check out the private Bible modules (#859)
         uses: actions/checkout@v4
         with:
           repository: zbynekdrlik/presenter-bibles
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
           ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
           path: data/bibles-private
           persist-credentials: false
@@ -195,6 +199,141 @@ class WorkflowTest(unittest.TestCase):
         run: cp data/bibles/kjv.usfm.zip release/bibles/
 """
         self.assertEqual(_violations(step + RELEASE_UPLOAD), [])
+
+
+class PinTest(unittest.TestCase):
+    """Invariant 5: every private checkout pins one 40-hex commit."""
+
+    def test_a_checkout_without_a_ref_is_flagged(self) -> None:
+        found = _violations(PRIVATE_CHECKOUT.replace(f"          ref: {PIN}\n", ""))
+        self.assertEqual(len(found), 1)
+        self.assertIn("pin the private modules", found[0].message)
+
+    def test_a_branch_or_short_ref_is_flagged(self) -> None:
+        for ref in ("main", "7a0e338", PIN.upper(), PIN + "0"):
+            with self.subTest(ref=ref):
+                self.assertEqual(len(_violations(PRIVATE_CHECKOUT.replace(PIN, ref))), 1)
+
+    def test_different_pins_across_workflows_are_flagged(self) -> None:
+        first = cpb.private_checkouts("a.yml", _job(PRIVATE_CHECKOUT))
+        second = cpb.private_checkouts("b.yml", _job(PRIVATE_CHECKOUT.replace(PIN, OTHER_PIN)))
+        self.assertEqual([c.ref for c in first + second], [PIN, OTHER_PIN])
+        found = cpb.pin_consistency_violations(first + second)
+        self.assertEqual(sorted(v.file for v in found), ["a.yml", "b.yml"])
+        self.assertIn("2 different pins", found[0].message)
+
+    def test_one_pin_everywhere_passes(self) -> None:
+        checkouts = cpb.private_checkouts("a.yml", _job(PRIVATE_CHECKOUT)) + cpb.private_checkouts("b.yml", _job(PRIVATE_CHECKOUT))
+        self.assertEqual(cpb.pin_consistency_violations(checkouts), [])
+
+    def test_the_repository_workflows_share_one_pin(self) -> None:
+        checkouts: list[cpb.Checkout] = []
+        for path in cpb.workflow_paths(REPO_ROOT):
+            with open(path, encoding="utf-8") as handle:
+                checkouts.extend(cpb.private_checkouts(path, yaml.safe_load(handle)))
+        self.assertTrue(checkouts, "no private checkout found in the workflows")
+        refs = {checkout.ref for checkout in checkouts}
+        self.assertEqual(len(refs), 1, refs)
+        self.assertRegex(refs.pop(), cpb.PIN_RE)
+
+
+class OldPublicPathTest(unittest.TestCase):
+    """Invariant 6: SEB/ROHACEK/SEVP/MILOST never point at data/bibles/<module>."""
+
+    def test_a_step_env_pointing_at_the_old_path_is_flagged(self) -> None:
+        found = _violations(PRIVATE_CHECKOUT + READS_PRIVATE.replace("data/bibles-private/seb", "data/bibles/seb"))
+        self.assertEqual(len(found), 1)
+        self.assertIn("PRESENTER_BIBLE_SEB points at the old public path", found[0].message)
+
+    def test_job_and_workflow_env_are_checked(self) -> None:
+        document = yaml.safe_load(
+            "env:\n  PRESENTER_BIBLE_ROHACEK: data/bibles/rohacek.bbl.mybible.zip\n"
+            "jobs:\n  lat:\n    runs-on: self-hosted\n    env:\n      PRESENTER_BIBLE_SEVP: ./data/bibles/sevp.obohu.mybible.zip\n"
+            "    steps:\n      - uses: actions/checkout@v4\n"
+        )
+        found = cpb.check_workflow("wf.yml", document)
+        self.assertEqual(len(found), 2)
+        self.assertIn("workflow env", found[0].message)
+        self.assertIn("[lat] env", found[1].message)
+
+    def test_a_run_script_assignment_is_checked(self) -> None:
+        step = """
+      - name: Ingest
+        run: |
+          export PRESENTER_BIBLE_MILOST="$PWD/data/bibles/milost.bbl.mybible.zip"
+          ./target/release/ingest_bibles
+"""
+        found = _violations(PRIVATE_CHECKOUT + step)
+        self.assertEqual(len(found), 1)
+        self.assertIn("PRESENTER_BIBLE_MILOST", found[0].message)
+
+    def test_kjv_and_the_private_path_pass(self) -> None:
+        self.assertEqual(_violations(PRIVATE_CHECKOUT + READS_PRIVATE), [])
+
+
+class NeedsPrivateTest(unittest.TestCase):
+    """Invariant 4 without an explicit data/bibles-private mention."""
+
+    def _step(self, command: str) -> str:
+        return f"""
+      - name: Run
+        run: {command}
+"""
+
+    def test_the_playwright_suite_needs_the_checkout(self) -> None:
+        for command in (
+            "npx playwright test --shard=1/3",
+            "npm run test:playwright",
+            "npm run test:playwright:headed",
+            "npm test",
+            "npx playwright test tests/e2e/wasm-bible.spec.ts",
+            "node tests/e2e/global-setup.js",
+            "./scripts/dev/refresh-dev-data.sh data/libraries",
+        ):
+            with self.subTest(command=command):
+                found = _violations(self._step(command))
+                self.assertEqual(len(found), 1)
+                self.assertIn("no earlier step checks out", found[0].message)
+                self.assertEqual(_violations(PRIVATE_CHECKOUT + self._step(command)), [])
+
+    def test_unrelated_npm_and_playwright_commands_pass(self) -> None:
+        for command in ("npm run test:companion", "npx playwright merge-reports --reporter html ./all-blob-reports", "npm run typecheck", "npx playwright install --with-deps chromium"):
+            with self.subTest(command=command):
+                self.assertEqual(_violations(self._step(command)), [])
+
+    def test_a_local_ingest_with_a_repo_path_needs_the_checkout(self) -> None:
+        step = self._step("PRESENTER_BIBLE_KJV=data/bibles/kjv.usfm.zip ./target/release/ingest_bibles")
+        found = _violations(step)
+        self.assertEqual(len(found), 1)
+        self.assertIn("ingest_bibles", found[0].message)
+
+    def test_a_remote_ingest_with_host_paths_passes(self) -> None:
+        step = """
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          export PRESENTER_BIBLE_SEB=/opt/presenter/bibles/seb.bbl.mybible.zip
+          /opt/presenter/ingest_bibles
+          REMOTE_SCRIPT
+"""
+        self.assertEqual(_violations(step), [])
+
+
+class WorkflowExtensionTest(unittest.TestCase):
+    """Workflows named *.yaml are checked like *.yml."""
+
+    def test_a_yaml_workflow_is_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "-C", root, "init", "-q"], check=True, capture_output=True)
+            workflows = os.path.join(root, ".github", "workflows")
+            os.makedirs(workflows)
+            with open(os.path.join(workflows, "copied.yaml"), "w", encoding="utf-8") as handle:
+                handle.write(yaml.safe_dump({"on": "push", "jobs": {"e2e": {"runs-on": "ubuntu-latest", "steps": [{"uses": "actions/checkout@v4"}, {"run": "npx playwright test"}]}}}))
+            with open(os.path.join(workflows, "fine.yml"), "w", encoding="utf-8") as handle:
+                handle.write("jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n")
+            self.assertEqual([os.path.basename(p) for p in cpb.workflow_paths(root)], ["copied.yaml", "fine.yml"])
+            found = cpb.check_repository(root)
+            self.assertEqual([v.file for v in found], [os.path.join(".github", "workflows", "copied.yaml")])
 
 
 class RepositoryTest(unittest.TestCase):
