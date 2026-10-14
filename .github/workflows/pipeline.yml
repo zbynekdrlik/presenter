@@ -492,6 +492,14 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s scripts/dev -p 'test_no_panic_check.py' -v
 
+      # Self-test for the fn-length gate (quality-check.sh section 7 ->
+      # scripts/dev/fn_length_check.py): braces in string / char literals and
+      # comments must not count, and generic fns must be measured.
+      - name: Test fn-length gate (section 7)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev -p 'test_fn_length_check.py' -v
+
       # #852 C1a: the VBAN box tools (scripts/dev/listen). The sender's golden
       # packet is the one the Rust decoder test pins (presenter-core
       # audio/vban/tests.rs).
