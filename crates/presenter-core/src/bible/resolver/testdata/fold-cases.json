@@ -210,6 +210,31 @@
    "input": "7 Kor",
    "ordinal": 0,
    "key": "7kor"
+  },
+  {
+   "input": "Z\u030cidom",
+   "ordinal": 0,
+   "key": "zidom"
+  },
+  {
+   "input": "Prvy\u0301 list Ja\u0301nov",
+   "ordinal": 1,
+   "key": "janov"
+  },
+  {
+   "input": "Evanjelium podl\u030ca Ja\u0301na",
+   "ordinal": 0,
+   "key": "jana"
+  },
+  {
+   "input": "Li\u034fst Jánov",
+   "ordinal": 0,
+   "key": "janov"
+  },
+  {
+   "input": "Prvý listina",
+   "ordinal": 1,
+   "key": "listina"
   }
  ]
 }

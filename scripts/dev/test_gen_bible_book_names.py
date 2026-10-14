@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -21,11 +22,28 @@ import gen_bible_book_names as gen  # noqa: E402
 FOLD_CASES = gen.REPO / "crates" / "presenter-core" / "src" / "bible" / "resolver" / "testdata" / "fold-cases.json"
 
 
-def table_rows() -> list[gen.Row]:
-    curated = gen.yaml.safe_load((gen.DATA / "curated.yaml").read_text(encoding="utf-8"))
+def load_curated() -> dict:
+    return gen.yaml.safe_load((gen.DATA / "curated.yaml").read_text(encoding="utf-8"))
+
+
+def build_with(curated: dict) -> tuple[list[gen.Row], list[tuple[str, int]]]:
     forms, codes = gen.collect_forms(gen.DATA, gen.CANONICAL.read_text(encoding="utf-8"))
-    rows, _ = gen.build_table(forms, codes, curated)
-    return rows
+    return gen.build_table(forms, codes, curated)
+
+
+def table_rows() -> list[gen.Row]:
+    return build_with(load_curated())[0]
+
+
+def nfd(text: str) -> str:
+    return unicodedata.normalize("NFD", text)
+
+
+def curated_with_nfd_forms() -> dict:
+    curated = load_curated()
+    for section in ("no_fold", "remove", "add"):
+        curated[section] = [dict(entry, form=nfd(entry["form"])) for entry in curated[section]]
+    return curated
 
 
 class CanonicalSourceTests(unittest.TestCase):
@@ -87,6 +105,23 @@ class TableTests(unittest.TestCase):
         keys = [(r.key, r.ordinal, r.index) for r in self.rows]
         self.assertEqual(keys, sorted(keys))
         self.assertEqual(len(keys), len(set(keys)))
+
+    def test_nfd_curated_forms_match_like_nfc(self):
+        # An NFD edit of curated.yaml must keep matching the NFC source forms.
+        curated = curated_with_nfd_forms()
+        curated["add"].append({"form": nfd(" Žalmíček "), "code": "PSA", "tier": 1})
+        rows, fold_rows = build_with(curated)
+        self.assertEqual(fold_rows, [("pš", 21)], "P.Š. / PŠ stay one no-fold key")
+        added = [(r.index, r.tier, r.display) for r in rows if r.key == "zalmicek"]
+        self.assertEqual(added, [(18, 1, "Žalmíček")], "an added form is stored stripped and NFC")
+        self.assertEqual([r for r in rows if r.key != "zalmicek"], self.rows)
+
+    def test_an_nfd_remove_entry_still_removes(self):
+        curated = curated_with_nfd_forms()
+        curated["remove"].append({"form": nfd("Žid"), "code": "HEB"})
+        rows, _ = build_with(curated)
+        self.assertIn("Žid", {r.display for r in self.rows if r.index == 57})
+        self.assertNotIn("Žid", {r.display for r in rows if r.index == 57})
 
     def test_short_defaults_reject_an_unreachable_code(self):
         curated = {"short_defaults": {"z": ["PSA", "GEN"]}}

@@ -71,11 +71,11 @@ class Row:
 
 
 ORDINALS = [
-    (re.compile(r"(prva|prvy|prvni|prve)(\s+(kniha|list|epistola))?\s*"), 1),
-    (re.compile(r"(druha|druhy|druhe)(\s+(kniha|list|epistola))?\s*"), 2),
-    (re.compile(r"(tretia|treti|treta)(\s+(kniha|list|epistola))?\s*"), 3),
-    (re.compile(r"(stvrta|ctvrta)(\s+kniha)?\s*"), 4),
-    (re.compile(r"(piata|pata)(\s+kniha)?\s*"), 5),
+    (re.compile(r"(prva|prvy|prvni|prve)\s*"), 1),
+    (re.compile(r"(druha|druhy|druhe)\s*"), 2),
+    (re.compile(r"(tretia|treti|treta)\s*"), 3),
+    (re.compile(r"(stvrta|ctvrta)\s*"), 4),
+    (re.compile(r"(piata|pata)\s*"), 5),
     (re.compile(r"iii(\.|\s)\s*"), 3),
     (re.compile(r"ii(\.|\s)\s*"), 2),
     (re.compile(r"iv(\.|\s)\s*"), 4),
@@ -92,8 +92,10 @@ FILLER = re.compile(
 
 
 def strip_marks(text: str) -> str:
+    """NFD, every Unicode mark (General_Category M*) dropped, lowercase — the
+    same set as ``is_combining_mark`` in fold.rs, not only nonzero combining classes."""
     decomposed = unicodedata.normalize("NFD", text)
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
+    return "".join(c for c in decomposed if not unicodedata.category(c).startswith("M")).lower()
 
 
 def fold(text: str) -> tuple[int, str]:
@@ -108,6 +110,11 @@ def fold(text: str) -> tuple[int, str]:
             break
     folded = FILLER.sub(" ", folded)
     return ordinal, re.sub(r"[^a-z0-9]", "", folded)
+
+
+def normal_form(text: object) -> str:
+    """A form as stored in the table: stripped and NFC, whatever the source wrote."""
+    return unicodedata.normalize("NFC", str(text).strip())
 
 
 def no_fold_key(text: str) -> str:
@@ -187,7 +194,7 @@ def collect_forms(data: Path, canonical_text: str) -> tuple[list[Form], list[str
     forms: list[Form] = []
 
     def add(code: str, text: str, source: str) -> None:
-        text = unicodedata.normalize("NFC", text.strip())
+        text = normal_form(text)
         if text:
             forms.append(Form(code, text, source))
 
@@ -235,9 +242,9 @@ def collect_forms(data: Path, canonical_text: str) -> tuple[list[Form], list[str
 def build_table(forms: list[Form], codes: list[str], curated: dict) -> tuple[list[Row], list[tuple[str, int]]]:
     index = {code: i for i, code in enumerate(codes)}
     for entry in curated.get("add", []):
-        forms = forms + [Form(entry["code"], entry["form"], f"curated:tier{entry['tier']}")]
-    removed = {(entry["form"], entry["code"]) for entry in curated.get("remove", [])}
-    no_fold = {entry["form"]: entry["code"] for entry in curated.get("no_fold", [])}
+        forms = forms + [Form(entry["code"], normal_form(entry["form"]), f"curated:tier{entry['tier']}")]
+    removed = {(normal_form(entry["form"]), entry["code"]) for entry in curated.get("remove", [])}
+    no_fold = {normal_form(entry["form"]): entry["code"] for entry in curated.get("no_fold", [])}
     best: dict[tuple[str, int, int], tuple[int, int, str]] = {}
     for order, form in enumerate(forms):
         if form.code not in index:

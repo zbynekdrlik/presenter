@@ -31,6 +31,20 @@ must agree on every form. Two guards: `resolver/testdata/fold-cases.json` runs t
 `every_generated_row_folds_back_to_its_key` re-folds each row's display form in Rust. Change both
 folds in the same commit and add the new case to `fold-cases.json`.
 
+- **Marks = every Unicode mark** (General_Category `M*`, Rust `is_combining_mark`), never Python's
+  `unicodedata.combining()` (nonzero class only: it keeps U+034F, so `Li`+U+034F+`st Jánov` folded differently).
+- **A spelled ordinal consumes only itself**; `kniha` / `list` / `epistola` after it go through the
+  filler words (`Prvý listina` → `listina`). Keep the two ordinal lists in step.
+- **NFD test inputs are written as `\uXXXX` escapes** in `fold-cases.json`, so they stay visibly
+  different from NFC. Every form, source or `curated.yaml`, is stripped and NFC'd (`normal_form`)
+  before it is matched, so an NFD `remove` / `no_fold` / `add` entry still applies.
+
+## Notices ship with the release
+
+`THIRD_PARTY_NOTICES.md` (repo root) and `data/bible-book-names/LICENSE-BPRP.md` are copied into
+the public release tarball by release.yml's "Create release archive" step, at the same relative
+paths. A new third-party source gets its notice there in the same PR.
+
 ## Data decisions (2026-10-13)
 
 `Ab` = Habakkuk (removed from canonical.rs AND listed under `curated.yaml: remove`); `P.Š.` / `PŠ`

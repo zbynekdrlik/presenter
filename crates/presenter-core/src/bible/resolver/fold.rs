@@ -104,26 +104,12 @@ fn split_ordinal(text: &str) -> (Option<u8>, &str) {
     }
 }
 
-/// `prvá`, `druhý list`, `tretia kniha` … (the optional book word is consumed).
+/// `prvá`, `druhý`, `tretia` … (a `kniha` / `list` after it is a filler word).
 fn ordinal_word(text: &str) -> Option<(u8, &str)> {
-    let (rest, ordinal) = ORDINAL_WORDS
-        .iter()
-        .find_map(|&(word, n)| text.strip_prefix(word).map(|rest| (rest, n)))?;
-    let book_words: &[&str] = if ordinal <= 3 {
-        &["kniha", "list", "epistola"]
-    } else {
-        &["kniha"]
-    };
-    let after_space = rest.trim_start();
-    let rest = if after_space.len() < rest.len() {
-        book_words
-            .iter()
-            .find_map(|word| after_space.strip_prefix(word))
-            .unwrap_or(rest)
-    } else {
-        rest
-    };
-    Some((ordinal, rest.trim_start()))
+    ORDINAL_WORDS.iter().find_map(|&(word, ordinal)| {
+        text.strip_prefix(word)
+            .map(|rest| (ordinal, rest.trim_start()))
+    })
 }
 
 /// `I.`, `II `, `iv.` … and `v.` (five needs the dot).
