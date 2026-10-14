@@ -52,3 +52,14 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   under the old service (an aborted deploy leaves it unable to boot) or race the new service's
   migration run. pipeline.yml / release.yml stop the service and copy the binaries first, so the
   rule does not apply there.
+- **No Companion deploy in a dev-push workflow** (invariant 5, #850). Companion runs only on the
+  production hosts; `scripts/deploy/deploy_companion_module.sh` runs from deploy.yml (SNV) and
+  release.yml (PP) as the "Deploy Companion module" step, through the job's `deploy-target`
+  alias. pipeline.yml (every dev push) never runs it, `repin-presenter-connection.py` or
+  `systemctl stop|start|restart companion` (running the repin unit-test file is fine).
+- **The SEB / Roháček / SEVP / Milosť modules come from the private repo (#859).** A job that
+  scps them or sets `PRESENTER_BIBLE_*` to them has the step "Check out the private Bible modules
+  (#859)" right after its main checkout (`path: data/bibles-private`,
+  `persist-credentials: false`) and reads `data/bibles-private/<file>`; release.yml
+  `build-release` (the public tarball) never checks it out. Enforced by
+  `scripts/ci/check_public_bibles.py`; details in `.claude/rules/bible-import.md`.

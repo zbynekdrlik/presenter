@@ -1,4 +1,5 @@
-//! Stream-graphics output-page components (#709, epic #718; lyrics + verse #710).
+//! Stream-graphics output-page components (#709, epic #718; lyrics + verse #710;
+//! their one-block crossfade #863).
 //!
 //! `SceneRender` maps a scene's elements (already ordered by `z_order` in the
 //! def) to per-kind components: IMAGE + COUNTDOWN (#709) and LYRICS + VERSE
@@ -20,6 +21,7 @@ pub mod nameplate_preview;
 mod playback_model;
 pub mod scene_render;
 pub mod style;
+mod text_block;
 pub mod transition;
 
 use leptos::prelude::*;

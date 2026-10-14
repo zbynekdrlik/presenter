@@ -4,9 +4,55 @@ paths:
   - "crates/presenter-importer/src/bible_digest.rs"
   - "crates/presenter-importer/src/bin/ingest_bibles.rs"
   - "crates/presenter-persistence/src/repository/bible/import.rs"
+  - "data/bibles/**"
+  - "scripts/ci/check_public_bibles.py"
+  - "scripts/ci/test_check_public_bibles.py"
 ---
 
 # Bible import (#851 D1)
+
+## Where the modules live (#859)
+
+- **Only public-domain modules are in this public repo:** `data/bibles/kjv.usfm.zip`. SEB,
+  Roháček, SEVP and Milosť are licence-restricted (SEB: "Nešíriť bez povolenia") and live in
+  the PRIVATE repo `zbynekdrlik/presenter-bibles`, at its root. Git history before #859 still
+  holds them (never rewritten, owner's call).
+- **CI:** every job that needs them adds, right AFTER its main checkout (a self-hosted main
+  checkout `git clean`s the workspace), the step "Check out the private Bible modules (#859)":
+  `actions/checkout@v4` with `repository: zbynekdrlik/presenter-bibles`,
+  `ref: <pinned 40-hex commit>`, `ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}` (a read-only deploy key),
+  `path: data/bibles-private`, `persist-credentials: false`. Today: pipeline.yml `e2e`,
+  `e2e-ndi`, `deploy-dev`; deploy.yml `deploy`; release.yml `deploy-pp`; ndi-latency.yml.
+  `PRESENTER_BIBLE_SEB/ROHACEK/SEVP/MILOST` and the "Deploy Bible files" scp read
+  `data/bibles-private/<file>`; the host paths `/opt/presenter*/bibles/<file>` are unchanged
+  (import-data.yml reads only those).
+- **The checkout is PINNED, one pin for every workflow.** Every private checkout carries the
+  same `ref:` (a full commit SHA of presenter-bibles; its README lists the modules' sha256).
+  Without the pin any push to presenter-bibles would reach SNV on the next deploy, and
+  redeploying an old release would ship today's modules. **Updating a module = push it to
+  presenter-bibles, then bump the pinned SHA in EVERY workflow in ONE commit here** (reviewed
+  like code; the new bytes reach SNV/PP with that release). The checker fails on a missing,
+  short or branch `ref:` and on two different pins.
+- **Local dev:** `git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private`
+  (gitignored). `tests/e2e/support.ts` `refreshDevData` and the ai_eval recipe point there.
+- **A missing module fails loudly, never silently:** an unset `PRESENTER_BIBLE_*` skips that
+  translation ("Skipping … (local file not configured)"), but a SET var pointing at a missing
+  file makes `ingest_bibles` exit non-zero. CI sets all five, so a failed private checkout
+  breaks E2E instead of dropping translations. Never add an "if the file exists" fallback.
+- **The public release tarball** (release.yml `build-release`) ships `data/bibles/*.zip`, which
+  is the allow-list only; that job never checks out the private repo. PP gets the four from
+  `deploy-pp`'s "Deploy Bible files".
+- **`scripts/ci/check_public_bibles.py`** (+ its self-test, Quality job) fails when a tracked
+  file under `data/bibles/` is off the allow-list (`PUBLIC_MODULES`), when anything under
+  `data/bibles-private/` is tracked, when a release-asset job or an `upload-artifact` step
+  touches the private modules (public downloads), when a checkout is unpinned or the pins
+  differ, when `PRESENTER_BIBLE_SEB/ROHACEK/SEVP/MILOST` points at the old `data/bibles/<module>`,
+  or when a job needs the modules before (or without) the private checkout: it names
+  `data/bibles-private`, runs the Playwright suite (`playwright test`, `npm test`,
+  `npm run test:playwright*`, `tests/e2e`, `refresh-dev-data.sh` — `support.ts` reads the
+  private dir) or runs `ingest_bibles` with a repo-relative path. It scans
+  `.github/workflows/*.yml` and `*.yaml`. A new public-domain module goes on the allow-list;
+  a new restricted one goes to the private repo plus a checkout in each consuming job.
 
 ## What a verse may carry (`presenter-bible/src/cleanup.rs`)
 
@@ -51,8 +97,8 @@ the constant.
 
 ## Tests
 
-- The SEB/ROH/MIL/SEVP archives are private after #859 (read through `PRESENTER_BIBLE_*` env
-  vars wherever they live): pin their markup shapes with synthetic archives
+- The SEB/ROH/MIL/SEVP archives are private since #859 (read through `PRESENTER_BIBLE_*` env
+  vars; see "Where the modules live"): pin their markup shapes with synthetic archives
   (`import_fixes_tests.rs` `mysword_archive`) — made-up sentences in the real markup, never
   committed module text beyond the spec's own quotes.
 - The KJV is public domain and stays in `data/bibles/`: `the_bundled_kjv_has_no_import_defects`

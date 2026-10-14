@@ -131,7 +131,11 @@ ProPresenter libraries are stored in git at `data/libraries/` and synced to depl
 | Dev          | `/opt/presenter-dev/libraries` |
 | PP (release) | `/opt/presenter/libraries`     |
 
-Bible files are similarly stored in `data/bibles/` and synced during deploy.
+Bible files are synced to `$DEPLOY_DIR/bibles/` during deploy. Only the public-domain KJV is
+stored in this repo (`data/bibles/kjv.usfm.zip`). SEB, Roháček, SEVP and Milosť are
+licence-restricted and live in the private repo `zbynekdrlik/presenter-bibles`; CI checks it out
+into the gitignored `data/bibles-private/` with the read-only deploy key `BIBLES_DEPLOY_KEY`
+(#859). Local dev: `git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private`.
 
 #### Stream-graphics assets (#708)
 

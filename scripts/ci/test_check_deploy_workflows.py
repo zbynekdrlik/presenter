@@ -273,6 +273,80 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
                 self.assertEqual([v.step for v in found], ["Import Bible translations"])
                 self.assertIn("/healthz", found[0].message)
 
+    def test_more_wrapper_and_ssh_forms_are_seen(self) -> None:
+        # Review round 2: an ssh to a host other than the alias dropped the
+        # whole command; combined sudo flags, su -c and flock were missed.
+        for command in (
+            "ssh -i ~/.ssh/id_deploy newlevel@192.0.2.10 /opt/presenter/import_propresenter",
+            "sudo -iu newlevel /opt/presenter/import_propresenter",
+            "su newlevel -c '/opt/presenter/import_propresenter'",
+            "flock /tmp/deploy.lock /opt/presenter/import_propresenter",
+            "flock -w 30 /tmp/deploy.lock /opt/presenter/import_propresenter",
+            "flock /tmp/deploy.lock -c '/opt/presenter/import_propresenter'",
+            "sudo -uroot /opt/presenter/import_propresenter",
+            "ssh -oStrictHostKeyChecking=no deploy-target /opt/presenter/import_propresenter",
+        ):
+            with self.subTest(command=command):
+                steps = SAFE_SETUP + f"""
+      - name: Import ProPresenter
+        run: {command}
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+                found = _violations(steps)
+                self.assertEqual([v.step for v in found], ["Import ProPresenter"])
+                self.assertIn("PREVIOUS release", found[0].message)
+
+    def test_the_health_wait_needs_healthz_inside_the_loop(self) -> None:
+        swap = SAFE_SETUP + """
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server . && sudo systemctl start presenter"
+"""
+        ingest = """
+      - name: Import Bible translations
+        run: ssh deploy-target "/opt/presenter/ingest_bibles"
+"""
+        not_a_wait = """
+      - name: Peek
+        run: |
+          echo "waiting for the service"
+          curl -sf http://localhost:80/healthz
+"""
+        self.assertEqual([v.step for v in _violations(swap + not_a_wait + ingest)], ["Import Bible translations"])
+        for wait in (
+            "for attempt in $(seq 1 30); do curl -sf http://localhost:80/healthz && break; sleep 2; done",
+            "until curl -sf http://localhost:80/healthz; do sleep 2; done",
+            'ssh deploy-target "until curl -sf http://localhost:80/healthz; do sleep 2; done"',
+            "ssh -o ConnectTimeout=5 deploy-target 'for i in 1 2 3; do curl -sf http://localhost:80/healthz && break; done'",
+        ):
+            with self.subTest(wait=wait):
+                steps = swap + f"""
+      - name: Verify deployment
+        run: |
+          {wait}
+""" + ingest
+                self.assertEqual(_violations(steps), [])
+
+    def test_a_tool_path_held_in_a_variable_is_resolved(self) -> None:
+        # Review round 4: deploy.yml already runs the staged server as
+        # `NEW_BIN=...` + `"$NEW_BIN"`; the same shape for a tool was invisible.
+        for assign, run in (
+            ("NEW_INGEST=/opt/presenter/staging.new/ingest_bibles", '"$NEW_INGEST"'),
+            ("export TOOL=${{ env.DEPLOY_DIR }}/import_propresenter", "${TOOL} --root x"),
+        ):
+            with self.subTest(assign=assign):
+                steps = SAFE_SETUP + f"""
+      - name: Import
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          {assign}
+          {run}
+          REMOTE_SCRIPT
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+                self.assertEqual([v.step for v in _violations(steps)], ["Import"])
+
     def test_relative_tool_runs_resolve_against_the_last_cd(self) -> None:
         old = SAFE_SETUP + """
       - name: Import ProPresenter
@@ -307,6 +381,81 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
         run: ssh deploy-target "/opt/presenter-dev/ingest_bibles"
 """
         self.assertEqual(_violations(steps), [])
+
+    def test_a_dev_push_workflow_must_not_restart_companion(self) -> None:
+        # 2026-10-14: pipeline.yml (every dev push) stopped and restarted
+        # Companion on SNV and PP, ~50 min after the push - here a PP event.
+        step = """
+      - name: Deploy to companion-pp.lan
+        run: |
+          ssh companion-pp "sudo systemctl stop companion"
+          ssh companion-pp "sudo python3 /tmp/repin-presenter-connection.py --expect-connection"
+          python3 ops/companion/repin-presenter-connection.test.py
+          ssh companion-pp "sudo systemctl start companion"
+"""
+        for trigger, expected in (("push:\n    branches: [dev]", 1), ("push:\n    branches: [main]", 0), ("release:\n    types: [published]", 0)):
+            with self.subTest(trigger=trigger):
+                document = yaml.safe_load(f"on:\n  {trigger}\n" + _normalize(step))
+                found = cdw.check_workflow("wf.yml", document)
+                self.assertEqual(len(found), expected)
+                if expected:
+                    self.assertIn("every push to dev", found[0].message)
+
+    def test_the_shared_companion_script_counts_as_a_companion_deploy(self) -> None:
+        step = """
+      - name: Deploy Companion module
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target SNV
+"""
+        document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
+        self.assertEqual(len(cdw.check_workflow("wf.yml", document)), 1)
+
+    def test_every_trigger_form_a_dev_push_reaches_is_checked(self) -> None:
+        step = """
+      - name: Restart
+        run: ssh deploy-target "sudo systemctl restart companion"
+"""
+        cases = (
+            ("on: push\n", 1),
+            ("on: [push, workflow_dispatch]\n", 1),
+            ("on:\n  push:\n", 1),
+            ("on:\n  push:\n    branches: ['**']\n", 1),
+            ("on:\n  push:\n    branches: ['d*']\n", 1),
+            ("on:\n  push:\n    branches-ignore: [main]\n", 1),
+            ("on:\n  push:\n    branches-ignore: [dev]\n", 0),
+            ("on:\n  push:\n    tags: ['v*']\n    branches: [main]\n", 0),
+            ("on:\n  push:\n    tags: ['v*']\n", 0),
+            ("on:\n  push:\n    tags: ['v*']\n    branches: [dev]\n", 1),
+            ("on:\n  workflow_run:\n    workflows: [Pipeline]\n    types: [completed]\n", 1),
+            ("on:\n  workflow_run:\n    workflows: [Pipeline]\n    branches: [main]\n", 0),
+            ("on:\n  schedule:\n    - cron: '0 0 * * 0'\n", 0),
+            ("on:\n  pull_request:\n", 0),
+        )
+        for trigger, expected in cases:
+            with self.subTest(trigger=trigger):
+                self.assertEqual(len(cdw.check_workflow("wf.yml", yaml.safe_load(trigger + _normalize(step)))), expected)
+
+    def test_more_companion_touches_are_seen_on_a_dev_push(self) -> None:
+        for command in (
+            'ssh deploy-target "sudo systemctl --no-block restart companion"',
+            "rsync -az ops/companion/presenter/ deploy-target:/opt/companion-module-dev/presenter/",
+            'ssh companion-pp.lan "uptime"',
+            'ssh companion-snv "sudo systemctl kill companion"',
+        ):
+            with self.subTest(command=command):
+                step = f"""
+      - name: Touch
+        run: {command}
+"""
+                document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
+                self.assertEqual(len(cdw.check_workflow("wf.yml", document)), 1)
+
+    def test_running_the_repin_unit_tests_on_dev_is_not_a_deploy(self) -> None:
+        step = """
+      - name: Run companion deploy-tool tests (python)
+        run: python3 ops/companion/repin-presenter-connection.test.py
+"""
+        document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
+        self.assertEqual(cdw.check_workflow("wf.yml", document), [])
 
     def test_repository_workflows_are_clean(self) -> None:
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

@@ -444,6 +444,20 @@ jobs:
           python3 -m unittest discover -s scripts/ci -p 'test_check_deploy_workflows.py' -v
           python3 scripts/ci/check_deploy_workflows.py
 
+      # #859: the SEB / Roháček / SEVP / Milosť modules may not be distributed
+      # publicly; they live in the private repo zbynekdrlik/presenter-bibles,
+      # checked out into the gitignored data/bibles-private/. The checker fails
+      # when anything but a public-domain module (kjv.usfm.zip) is tracked under
+      # data/bibles/, when data/bibles-private/ is tracked, when a release-asset
+      # job or an artifact upload touches the private modules, when a job needs
+      # them (reads the dir, runs Playwright / ingest_bibles) without checking the
+      # private repo out first, or when the checkouts are not all pinned to one SHA.
+      - name: Check public Bible modules (#859)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_check_public_bibles.py' -v
+          python3 scripts/ci/check_public_bibles.py
+
       # Regression test for #802: the E2E harness (startTestServer,
       # refresh-dev-data.sh, the synthetic NDI sender) must never silently
       # fall back to a local `cargo run` — Tier-0 compiles in CI only. A
@@ -459,6 +473,14 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s ops/cloudflare -p 'test_presenter_access.py' -v
+
+      # #850 A1a: the Bible resolver's book-name table is generated from
+      # data/bible-book-names/ — a stale committed table fails here.
+      - name: Check generated Bible book-name table (#850)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev -p 'test_gen_bible_book_names.py' -v
+          python3 scripts/dev/gen_bible_book_names.py --check
 
       # Self-test for the no-panic gate (quality-check.sh section 10 ->
       # scripts/dev/no_panic_check.py). The gate's old rg pattern did not parse, so
@@ -687,6 +709,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
+
       - name: Install GStreamer runtime libraries
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         timeout-minutes: 10
@@ -744,10 +776,10 @@ jobs:
           CI: true
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
           PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
-          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
-          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
-          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
-          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles-private/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles-private/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles-private/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles-private/milost.bbl.mybible.zip
 
       - name: Upload blob report
         uses: actions/upload-artifact@v4
@@ -799,6 +831,16 @@ jobs:
       NDI_RUNTIME_DIR_V6: /usr/lib/ndi
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -867,10 +909,10 @@ jobs:
           PRESENTER_SKIP_MOCK_INTEGRATIONS: "1"
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
           PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
-          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
-          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
-          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
-          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles-private/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles-private/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles-private/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles-private/milost.bbl.mybible.zip
 
       - name: Stop synthetic NDI sender
         if: always()
@@ -957,6 +999,16 @@ jobs:
       DEPLOY_USER: newlevel
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -1341,10 +1393,10 @@ jobs:
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
           scp -i ~/.ssh/id_deploy \
             data/bibles/kjv.usfm.zip \
-            data/bibles/seb.bbl.mybible.zip \
-            data/bibles/rohacek.bbl.mybible.zip \
-            data/bibles/sevp.obohu.mybible.zip \
-            data/bibles/milost.bbl.mybible.zip \
+            data/bibles-private/seb.bbl.mybible.zip \
+            data/bibles-private/rohacek.bbl.mybible.zip \
+            data/bibles-private/sevp.obohu.mybible.zip \
+            data/bibles-private/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
       - name: Sync ProPresenter libraries from git
@@ -1685,144 +1737,7 @@ jobs:
             sudo systemctl enable --now cloudflared
           "
 
-  # ============================================
-  # Deploy Companion Plugin to both hosts
-  # ============================================
-  deploy-companion:
-    name: Deploy Companion Plugin
-    runs-on: self-hosted
-    needs: deploy-dev
-    concurrency:
-      group: deploy-companion
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-
-      # SNV is the production host and gets powered off when equipment travels to
-      # events — same reachability-skip treatment PP has always had below.
-      - name: Check companion-snv reachability
-        id: snv_check
-        run: |
-          if ssh-keyscan -T 5 10.77.9.205 2>/dev/null | grep -q '^10.77.9.205'; then
-            echo "reachable=true" >> "$GITHUB_OUTPUT"
-            echo "companion-snv (10.77.9.205) is reachable"
-          else
-            echo "reachable=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::companion-snv (10.77.9.205) unreachable (powered off?) — skipping SNV companion deploy; it re-arms once prod is back."
-          fi
-
-      - name: Setup SSH for SNV (companion-snv.lan = production host)
-        if: steps.snv_check.outputs.reachable == 'true'
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_snv
-          chmod 600 ~/.ssh/id_snv
-          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null
-          cat >> ~/.ssh/config <<EOF
-          Host companion-snv
-              HostName 10.77.9.205
-              User newlevel
-              IdentityFile ~/.ssh/id_snv
-          EOF
-
-      - name: Check companion-pp reachability
-        id: pp_check
-        run: |
-          if ssh-keyscan -T 5 companion-pp.lan 2>/dev/null | grep -q '^companion-pp.lan'; then
-            echo "reachable=true" >> "$GITHUB_OUTPUT"
-            echo "companion-pp.lan is reachable"
-          else
-            echo "reachable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::companion-pp.lan unreachable — skipping PP deploy. SNV deploy continues."
-          fi
-
-      - name: Setup SSH for PP (companion-pp.lan)
-        if: steps.pp_check.outputs.reachable == 'true'
-        run: |
-          echo "${{ secrets.DEPLOY_SSH_KEY_PP }}" > ~/.ssh/id_pp
-          chmod 600 ~/.ssh/id_pp
-          ssh-keyscan companion-pp.lan >> ~/.ssh/known_hosts 2>/dev/null
-          cat >> ~/.ssh/config <<EOF
-          Host companion-pp
-              HostName companion-pp.lan
-              User newlevel
-              IdentityFile ~/.ssh/id_pp
-          EOF
-
-      # #733: Deploy the presenter module as a Companion DEV module
-      # (--extra-module-path /opt/companion-module-dev, which both hosts already launch
-      # with) so the connection can pin the STABLE version id "dev" instead of a concrete
-      # version. A concrete pin (SNV's old state) breaks with "missing version" on every
-      # version bump and needs a manual re-pin in the UI. The re-pin step below sets
-      # moduleVersionId="dev" idempotently, so the connection auto-switches with no manual
-      # step. Runs with Companion stopped so the module swap + config-DB write are clean.
-      - name: Deploy to companion-snv.lan
-        if: steps.snv_check.outputs.reachable == 'true'
-        run: |
-          MODULE_DIR="/opt/companion-module-dev/presenter"
-          OLD_STORE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
-          CONFIG_DIR="/home/companion/.config/companion-nodejs"
-          STAGE_DIR=$(ssh companion-snv "mktemp -d /tmp/companion-module-XXXXXX")
-          echo "Deploying Companion plugin to companion-snv.lan (staging: $STAGE_DIR)..."
-          scp -r ops/companion/presenter/* companion-snv:$STAGE_DIR/
-          REPIN_REMOTE=$(ssh companion-snv "mktemp /tmp/repin-presenter-XXXXXX.py")
-          scp ops/companion/repin-presenter-connection.py "companion-snv:$REPIN_REMOTE"
-          ssh companion-snv "cd $STAGE_DIR && npm install --omit=dev"
-          ssh companion-snv "sudo systemctl stop companion"
-          # Swap the module. Best-effort recovery: on failure Companion is restarted (never
-          # left stopped), though the module dir may be a partial state — the job fails loudly.
-          ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
-            || { echo "::error::module swap failed on SNV"; ssh companion-snv "sudo systemctl start companion" || true; exit 1; }
-          ssh companion-snv "sudo rm -rf $OLD_STORE_DIR" || true
-          REPIN_RC=0
-          ssh companion-snv "sudo python3 $REPIN_REMOTE --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD --expect-connection" || REPIN_RC=$?
-          ssh companion-snv "rm -f $REPIN_REMOTE" || true
-          ssh companion-snv "sudo systemctl start companion"
-          sleep 5
-          ssh companion-snv "systemctl is-active companion" || { echo "::error::Companion failed to restart on SNV"; exit 1; }
-          if [ "$REPIN_RC" -ne 0 ]; then echo "::error::presenter connection re-pin failed on SNV (rc=$REPIN_RC)"; exit 1; fi
-          echo "Companion plugin deployed to companion-snv.lan (dev module + connection pinned to 'dev')"
-
-      - name: Deploy to companion-pp.lan
-        if: steps.pp_check.outputs.reachable == 'true'
-        run: |
-          # companion-pp runs the CompanionPi build; modules go in
-          # --extra-module-path /opt/companion-module-dev, service is systemd unit
-          # "companion", run as user "companion". PP is already on the dev-module + "dev"
-          # pin; the re-pin below is an idempotent no-op there (keeps both hosts uniform).
-          MODULE_DIR="/opt/companion-module-dev/presenter"
-          OLD_STORE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
-          CONFIG_DIR="/home/companion/.config/companion-nodejs"
-          STAGE_DIR=$(ssh companion-pp "mktemp -d /tmp/companion-module-XXXXXX")
-          echo "Deploying Companion plugin to companion-pp.lan (staging: $STAGE_DIR)..."
-          scp -r ops/companion/presenter/* companion-pp:$STAGE_DIR/
-          REPIN_REMOTE=$(ssh companion-pp "mktemp /tmp/repin-presenter-XXXXXX.py")
-          scp ops/companion/repin-presenter-connection.py "companion-pp:$REPIN_REMOTE"
-          ssh companion-pp "cd $STAGE_DIR && npm install --omit=dev"
-          ssh companion-pp "sudo systemctl stop companion"
-          # Swap the module. Best-effort recovery: on failure Companion is restarted (never
-          # left stopped), though the module dir may be a partial state — the job fails loudly.
-          ssh companion-pp "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
-            || { echo "::error::module swap failed on PP"; ssh companion-pp "sudo systemctl start companion" || true; exit 1; }
-          ssh companion-pp "sudo rm -rf $OLD_STORE_DIR" || true
-          REPIN_RC=0
-          ssh companion-pp "sudo python3 $REPIN_REMOTE --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD --expect-connection" || REPIN_RC=$?
-          ssh companion-pp "rm -f $REPIN_REMOTE" || true
-          ssh companion-pp "sudo systemctl start companion"
-          sleep 5
-          ssh companion-pp "systemctl is-active companion" || { echo "::error::Companion failed to restart on PP"; exit 1; }
-          if [ "$REPIN_RC" -ne 0 ]; then echo "::error::presenter connection re-pin failed on PP (rc=$REPIN_RC)"; exit 1; fi
-          echo "Companion plugin deployed to companion-pp.lan (dev module + connection pinned to 'dev')"
-
-      - name: Show deployment info
-        run: |
-          VERSION=$(node -e "console.log(require('./ops/companion/presenter/package.json').version)")
-          echo "=== Companion Plugin Deployment Complete ==="
-          echo "Version: $VERSION"
-          DEPLOYED=""
-          SKIPPED=""
-          if [ "${{ steps.snv_check.outputs.reachable }}" = "true" ]; then DEPLOYED="companion-snv.lan"; else SKIPPED="companion-snv.lan"; fi
-          if [ "${{ steps.pp_check.outputs.reachable }}" = "true" ]; then DEPLOYED="${DEPLOYED:+$DEPLOYED, }companion-pp.lan"; else SKIPPED="${SKIPPED:+$SKIPPED, }companion-pp.lan"; fi
-          echo "Deployed to: ${DEPLOYED:-none}"
-          [ -n "$SKIPPED" ] && echo "Skipped (unreachable at job start): $SKIPPED"
-          true
+  # The Companion module is NOT deployed from here (#850): Companion runs only on the
+  # production hosts, so a dev push restarted the operators' Companion on SNV and PP.
+  # deploy.yml (SNV) and release.yml (PP) ship it with the release through
+  # scripts/deploy/deploy_companion_module.sh; check_deploy_workflows.py invariant 5.

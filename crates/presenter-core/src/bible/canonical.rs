@@ -607,7 +607,6 @@ const SLOVAK_ABBREVIATIONS: &[(&str, &str)] = &[
     ("Zj", "REV"),
     ("Oz", "HOS"),
     ("Am", "AMO"),
-    ("Ab", "OBA"),
     ("Jon", "JON"),
     ("Mich", "MIC"),
     ("Nah", "NAM"),

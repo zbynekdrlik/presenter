@@ -12,7 +12,7 @@ hardware constraints, and the serving-stack recommendation live in the research 
 | Piece | Status |
 |---|---|
 | Corpus schema + starter fixtures (this README's "Corpus" section) | ✅ Done |
-| `crates/presenter-server/src/bin/ai_eval/` (the driver + Layer-1 scorer, feature `ai-eval`) | ✅ Built — #680, first live smoke-run done 2026-08-13 (see #662's smoke-run comment). `drive` runs the real `run_agent` against a `--candidate-url`, `score-l1` replays every `create_bible_presentation` call through the real `parse_bible_items`/`compose_bible_items_into_slides`/`validate_bible_slide` chain. Layer-1 scorer has a full unit-test suite (`cargo test --bin ai_eval --features ai-eval`, Tier-0 so not runnable on this box — verified via CI once pushed). Needs the `--candidate-url` endpoint reachable over the network; bible-authoring/adversarial cases ALSO need the 5 `PRESENTER_BIBLE_*` env vars pointing at LOCAL `data/bibles/*.zip` archives (no network involved in that part — #662 defect 2), and `drive` now exits non-zero and names every case that could not even be seeded, rather than silently degrading into a "model failed" result. |
+| `crates/presenter-server/src/bin/ai_eval/` (the driver + Layer-1 scorer, feature `ai-eval`) | ✅ Built — #680, first live smoke-run done 2026-08-13 (see #662's smoke-run comment). `drive` runs the real `run_agent` against a `--candidate-url`, `score-l1` replays every `create_bible_presentation` call through the real `parse_bible_items`/`compose_bible_items_into_slides`/`validate_bible_slide` chain. Layer-1 scorer has a full unit-test suite (`cargo test --bin ai_eval --features ai-eval`, Tier-0 so not runnable on this box — verified via CI once pushed). Needs the `--candidate-url` endpoint reachable over the network; bible-authoring/adversarial cases ALSO need the 5 `PRESENTER_BIBLE_*` env vars pointing at LOCAL archives (`data/bibles/kjv.usfm.zip` + the four licence-restricted modules in the private clone `data/bibles-private/`, #859) (no network involved in that part — #662 defect 2), and `drive` now exits non-zero and names every case that could not even be seeded, rather than silently degrading into a "model failed" result. |
 | `run.sh` stage wiring (drive → score-l1 → judge → gate) | `drive`/`score-l1` now shell out to `cargo run --bin ai_eval --features ai-eval -- ...` for real (#680). `judge`/`gate` still fail loudly with a "not yet implemented" error — report §8 steps 10-11, separate tickets. |
 | `judge/promptfooconfig.yaml` + rubrics + trace provider | Structurally complete, **never run end-to-end** (no traces exist yet — needs step 9 first) |
 | Golden `claude-opus-4-6` trace capture | ❌ Not run — report §8 step 9, needs a fresh CLIProxyAPI login + a live network run of `drive` |
@@ -104,19 +104,22 @@ song titles:
 | Slice | Starter count | Target (report §6.3) | Built from |
 |---|---|---|---|
 | `worship-crud` | 7 | ~70 | Real library/song names from `data/libraries/` (e.g. `SOYER`, `WONDER.pro`, `9. ráno.pro`) — the bulk still needs the corpus generator (report §8 step 6) that runs `.pro` files through `presenter-importer` for real Slovak slide text at scale |
-| `bible-authoring` | 11 | ~100 | Real verses read directly out of `data/bibles/*.mybible`/`.usfm` (SQLite/USFM sources) covering every hard case named in the report: verbatim quote, paraphrase-vs-DB, overlapping/adjacent ranges, bold spanning a verse boundary, title interleaved mid-sermon, multi-translation, plus the two title conventions (`##title##` at the very start vs. `Názov:`) |
+| `bible-authoring` | 11 | ~100 | Real verses read directly out of the Bible modules (`data/bibles/` KJV USFM, `data/bibles-private/` mybible/SQLite) covering every hard case named in the report: verbatim quote, paraphrase-vs-DB, overlapping/adjacent ranges, bold spanning a verse boundary, title interleaved mid-sermon, multi-translation, plus the two title conventions (`##title##` at the very start vs. `Názov:`) |
 | `adversarial` | 12 | ~30 | One case per server validation rule enumerated below, hand-written |
 
 See `corpus/SCHEMA.md` for the full case JSON schema and how each field maps to a Layer-1 check.
 
 ### Reading the raw Bible sources yourself
 
-`data/bibles/*.zip` are NOT plain text — `rohacek`/`seb`/`milost` are zipped `mybible` SQLite
-databases, `sevp` is a zipped raw SQLite3 file, and `kjv` is a zipped USFM tree. To pull a real
-verse for a new fixture:
+Only the public-domain `kjv` (a zipped USFM tree) is in this repo, at `data/bibles/kjv.usfm.zip`.
+`rohacek`/`seb`/`milost`/`sevp` are licence-restricted and live in the private repo
+`zbynekdrlik/presenter-bibles` (#859): `git clone git@github.com:zbynekdrlik/presenter-bibles
+data/bibles-private` (gitignored). None of them is plain text — `rohacek`/`seb`/`milost` are
+zipped `mybible` SQLite databases, `sevp` is a zipped raw SQLite3 file. To pull a real verse for
+a new fixture:
 
 ```bash
-unzip -o -q data/bibles/rohacek.bbl.mybible.zip -d /tmp/roh   # -> roh.bbl.mybible (SQLite)
+unzip -o -q data/bibles-private/rohacek.bbl.mybible.zip -d /tmp/roh   # -> roh.bbl.mybible (SQLite)
 sqlite3 /tmp/roh/roh.bbl.mybible "SELECT * FROM Bible WHERE Book=43 AND Chapter=3 AND Verse=16;"
 ```
 
@@ -172,7 +175,7 @@ exercise them) once the driver exists.
 ## How to add a case
 
 See `corpus/SCHEMA.md` §"Adding a new case" for the full checklist. In short: pick the slice and
-next sequence number, ground it in REAL data (a real verse from `data/bibles/`, a real
+next sequence number, ground it in REAL data (a real verse from `data/bibles/` or `data/bibles-private/`, a real
 library/song name from `data/libraries/`), fill in `expected.notes` with the hard-case category or
 rule it targets, and — once the driver + a fresh login exist — capture a golden trace for it (do
 not let a case sit uncaptured, or the per-PR Layer-1 lane has nothing to regress-check it

@@ -114,6 +114,12 @@ jobs:
           fi
           echo "Prod artifact verified: no test-only symbols"
 
+      # #859: the tarball is a PUBLIC release asset, so it carries only the
+      # public-domain modules: data/bibles/ holds exactly the allow-list of
+      # scripts/ci/check_public_bibles.py (today kjv.usfm.zip). SEB / Roháček /
+      # SEVP / Milosť are licence-restricted: this job never checks out the
+      # private repo (the checker fails if it does), and PP gets them from
+      # deploy-pp's "Deploy Bible files".
       - name: Create release archive
         run: |
           mkdir -p release/bibles release/libraries
@@ -123,6 +129,12 @@ jobs:
           cp target/release/presenter-stage.apk release/
           cp data/bibles/*.zip release/bibles/
           cp -r data/libraries/* release/libraries/
+          # #850 A1a: the binaries embed the book-name table generated from MIT /
+          # CC BY sources, so the notices and the MIT text ship with them (same
+          # relative path the notices name).
+          cp THIRD_PARTY_NOTICES.md release/
+          mkdir -p release/data/bible-book-names
+          cp data/bible-book-names/LICENSE-BPRP.md release/data/bible-book-names/
           tar -czvf presenter-${{ github.event.release.tag_name }}-linux-x64.tar.gz -C release .
 
       - name: Upload release artifact to GitHub Release
@@ -153,6 +165,16 @@ jobs:
       DEPLOY_USER: newlevel
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
 
       - name: Download release binaries
         uses: actions/download-artifact@v4
@@ -359,10 +381,10 @@ jobs:
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
           scp -i ~/.ssh/id_deploy \
             data/bibles/kjv.usfm.zip \
-            data/bibles/seb.bbl.mybible.zip \
-            data/bibles/rohacek.bbl.mybible.zip \
-            data/bibles/sevp.obohu.mybible.zip \
-            data/bibles/milost.bbl.mybible.zip \
+            data/bibles-private/seb.bbl.mybible.zip \
+            data/bibles-private/rohacek.bbl.mybible.zip \
+            data/bibles-private/sevp.obohu.mybible.zip \
+            data/bibles-private/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
       - name: Sync ProPresenter libraries from git
@@ -669,6 +691,12 @@ jobs:
             sudo cloudflared service install ${TUNNEL_TOKEN}
             sudo systemctl enable --now cloudflared
           "
+
+      # #850: the Companion module ships WITH the release (it used to be deployed by every
+      # dev push, restarting the operators' Companion). Runs after the server is up and
+      # before the RUST_LOG check; Companion is always started again (the script fails loudly).
+      - name: Deploy Companion module
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target PP
 
       # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
       # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement

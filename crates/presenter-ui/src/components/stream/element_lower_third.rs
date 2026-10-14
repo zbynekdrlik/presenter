@@ -11,7 +11,7 @@
 //! `@keyframes`; only `transform`/`opacity`/`clip-path` animate (compositor-only,
 //! 60 fps in OBS CEF). Layers are keyed on the plate's monotonic `seq` (from the
 //! server) with a JS removal buffer, exactly like the scene crossfade
-//! (`pages/stream_output.rs`) + `CrossfadeText` — so a re-show of the same plate
+//! (`pages/stream_output.rs`) + `transition::Crossfade` — so a re-show of the same plate
 //! while the previous copy is still leaving never key-collides.
 
 use gloo_timers::callback::Timeout;

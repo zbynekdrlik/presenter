@@ -55,3 +55,11 @@ fn canonical_lookup_matches_slovak_abbreviations() {
         );
     }
 }
+
+#[test]
+fn ab_is_no_longer_obadiah() {
+    // #850: "Ab" is Habakkuk in SEP and BPRP; Obadiah is "Abd" / "Ob.".
+    assert_eq!(canonical_book_by_name("Ab"), None);
+    let obadiah = canonical_book_by_name("Abdiáš").expect("Obadiah by its Slovak name");
+    assert_eq!(obadiah.code, "OBA");
+}

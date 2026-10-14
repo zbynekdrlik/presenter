@@ -1,6 +1,8 @@
 //! #825: bound a typed chapter / verse by the selected book's counts and say
 //! why when it was over — the decision behind the Bible page's range hint.
 
+use presenter_core::bible::resolver::counted;
+
 use super::bible::clamp_selection;
 
 /// A typed chapter or verse bounded to the selected book, plus the note to
@@ -135,16 +137,6 @@ pub fn next_end_cleared_hint(
     } else {
         current.cloned()
     }
-}
-
-/// `n` with the Slovak noun form it takes: 1 → `one`, 2–4 → `few`, else `many`.
-fn counted(n: u16, one: &str, few: &str, many: &str) -> String {
-    let noun = match n {
-        1 => one,
-        2..=4 => few,
-        _ => many,
-    };
-    format!("{n} {noun}")
 }
 
 #[cfg(test)]
