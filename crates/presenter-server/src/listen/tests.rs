@@ -4,10 +4,12 @@
 //! loopback UDP tests on `127.0.0.1:0` with bounded 5 s polls (`wait_for`).
 
 use super::health::{ListenHealth, PacketSeen, UnmatchedCount, RECENT_CAP};
+use super::mic_chain::QUEUE_CAPACITY;
 use super::vban_rx::{receive, MicRouter, SocketEnd, Streak};
 use super::*;
 use crate::tracing_capture::{quoted, Capture};
-use presenter_core::audio::vban::{VbanAudioFormat, VbanSampleType};
+use presenter_core::audio::sequence::SequenceVerdict;
+use presenter_core::audio::vban::{VbanAudioFormat, VbanReject, VbanSampleType};
 use presenter_core::audio::vban_encode::{tone, VbanEncoder};
 use presenter_core::listen::mics::{MicChannel, MicLanguage, MicRole};
 use presenter_core::listen::status::{MicState, MicStatus, SocketState};
@@ -94,7 +96,7 @@ async fn the_mic_state_follows_the_last_packet() {
     let mut health = ListenHealth::default();
     health.set_mics(&[], &["guest"]);
     assert_eq!(health.snapshot(&mics, t0).mics[0].state, MicState::Waiting);
-    health.record_packet("guest", seen(t0));
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
     let mic = &health.snapshot(&mics, t0 + Duration::from_millis(500)).mics[0];
     assert_eq!(
         (mic.state, mic.packets, mic.last_packet_age_ms),
@@ -118,8 +120,8 @@ async fn a_saved_list_keeps_kept_counters_and_starts_fresh_ones() {
     let t0 = Instant::now();
     let mut health = ListenHealth::default();
     health.set_mics(&[], &["guest", "interp"]);
-    health.record_packet("guest", seen(t0));
-    health.record_packet("interp", seen(t0));
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
+    health.record_packet("interp", seen(t0), SequenceVerdict::InOrder, false);
     health.set_mics(&["guest"], &["spare"]);
     let mics = vec![
         mic("guest", "GUEST_EN", None),
@@ -195,8 +197,9 @@ async fn a_closed_socket_ends_the_session_counters() {
     let mics = vec![mic("guest", "GUEST_EN", None)];
     let mut health = ListenHealth::default();
     health.set_mics(&[], &["guest"]);
-    health.record_packet("guest", seen(t0));
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
     health.note_unmatched("Stream1", addr(OTHER), MONO_48K, t0);
+    health.note_reject(addr(OTHER).ip(), VbanReject::NotVban, t0);
     health.end_session();
     let status = health.snapshot(&mics, t0);
     let guest = &status.mics[0];
@@ -205,6 +208,12 @@ async fn a_closed_socket_ends_the_session_counters() {
         (MicState::Waiting, 0, None)
     );
     assert!(status.unmatched.is_empty());
+    assert!(status.rejected.is_empty());
+    assert_eq!(
+        health.note_reject(addr(OTHER).ip(), VbanReject::NotVban, t0),
+        1,
+        "the reject gate starts over"
+    );
     assert_eq!(
         health.note_unmatched("Stream1", addr(OTHER), MONO_48K, t0),
         UnmatchedCount {
@@ -655,4 +664,443 @@ async fn real_udp_packets_reach_the_mic_through_the_socket() {
         (MicState::Receiving, Some(MONO_48K), Some(256))
     );
     assert_eq!(mic.sender, Some(tx.local_addr().unwrap().to_string()));
+}
+
+// ---- the counter rule's and the chain's counters (C1a-3) -------------------
+
+#[tokio::test]
+async fn the_verdicts_land_in_their_counters_and_the_tally_feeds_the_gate() {
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    health.set_mics(&[], &["guest"]);
+    let gap = SequenceVerdict::Gap {
+        missing: 3,
+        silence_frames: 768,
+    };
+    let tallies: Vec<(u64, u64)> = [
+        (SequenceVerdict::InOrder, false),
+        (gap, false),
+        (gap, true),
+        (SequenceVerdict::Late, false),
+        (SequenceVerdict::Resync, false),
+    ]
+    .into_iter()
+    .map(|(verdict, dropped)| {
+        let tally = health.record_packet("guest", seen(t0), verdict, dropped);
+        (tally.events, tally.dropped_blocks)
+    })
+    .collect();
+    assert_eq!(tallies, vec![(0, 0), (1, 0), (2, 1), (1, 0), (1, 0)]);
+    assert_eq!(health.record_other_sender("guest"), 1);
+    assert_eq!(health.record_other_sender("nobody"), 0);
+    let mic = &health.snapshot(&[mic("guest", "GUEST_EN", None)], t0).mics[0];
+    assert_eq!(
+        (
+            mic.packets,
+            mic.lost_packets,
+            mic.late_packets,
+            mic.resyncs,
+            mic.dropped_blocks,
+            mic.other_sender_packets
+        ),
+        (5, 6, 1, 1, 1, 1)
+    );
+}
+
+#[tokio::test]
+async fn packets_per_second_is_measured_between_ticks() {
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    health.set_mics(&[], &["guest"]);
+    health.on_tick(t0);
+    for k in 0..375u64 {
+        let at = t0 + Duration::from_millis(k * 2);
+        health.record_packet("guest", seen(at), SequenceVerdict::InOrder, false);
+    }
+    health.on_tick(t0 + Duration::from_secs(2));
+    let mics = vec![mic("guest", "GUEST_EN", None)];
+    let mic = &health.snapshot(&mics, t0 + Duration::from_secs(2)).mics[0];
+    assert_eq!(mic.packets_per_sec, 187.5, "375 packets in 2 s");
+    let silent = &health.snapshot(&mics, t0 + Duration::from_secs(4)).mics[0];
+    assert_eq!(silent.packets_per_sec, 0.0, "no audio: no rate shown");
+}
+
+#[tokio::test]
+async fn rejected_senders_are_counted_by_kind_and_keep_the_16_most_recent() {
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    let ip = addr(OTHER).ip();
+    assert_eq!(health.note_reject(ip, VbanReject::NotVban, t0), 1);
+    assert_eq!(
+        health.note_reject(ip, VbanReject::NonAudio(0x40), t0),
+        1,
+        "a non-audio packet reads its own count"
+    );
+    assert_eq!(
+        health.note_reject(ip, VbanReject::Corrupt, t0),
+        2,
+        "the WARN-gate total leaves non-audio out"
+    );
+    let rejected = &health.snapshot(&[], t0).rejected[0];
+    assert_eq!(rejected.sender, "198.51.100.7");
+    assert_eq!(
+        (
+            rejected.not_vban,
+            rejected.non_audio,
+            rejected.unsupported_codec,
+            rejected.unsupported_type,
+            rejected.corrupt
+        ),
+        (1, 1, 0, 0, 1)
+    );
+    for k in 0..20u8 {
+        let other: IpAddr = format!("203.0.113.{k}").parse().unwrap();
+        let at = t0 + Duration::from_millis(u64::from(k) + 1);
+        health.note_reject(other, VbanReject::NotVban, at);
+    }
+    assert_eq!(health.snapshot(&[], t0).rejected.len(), RECENT_CAP);
+}
+
+#[tokio::test]
+async fn a_chain_of_an_older_update_cannot_write_and_a_kept_mics_chain_can() {
+    let t0 = Instant::now();
+    let mics = vec![mic("guest", "GUEST_EN", None)];
+    let mut health = ListenHealth::default();
+    let old = health.set_mics(&[], &["guest"]);
+    let new = health.set_mics(&[], &["guest"]);
+    assert_ne!(old, new);
+    health.record_chain("guest", old, 5, Some(-20.0), None);
+    health.record_chain("guest", new, 1, Some(-30.0), None);
+    assert_eq!(
+        health.snapshot(&mics, t0).mics[0].frames_out,
+        1,
+        "the older chain is ignored"
+    );
+    health.set_mics(&["guest"], &[]); // a rename: the mic is kept
+    health.record_chain("guest", new, 1, None, None);
+    assert_eq!(
+        health.snapshot(&mics, t0).mics[0].frames_out,
+        2,
+        "the kept chain keeps counting"
+    );
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
+    let refused = "nepodporovaná vzorkovacia frekvencia 11025 Hz";
+    health.record_chain("guest", new, 0, None, Some(refused));
+    let mic = &health.snapshot(&mics, t0 + Duration::from_millis(100)).mics[0];
+    assert_eq!(
+        (mic.state, mic.error.as_deref()),
+        (MicState::Error, Some(refused))
+    );
+    let silent = &health.snapshot(&mics, t0 + Duration::from_secs(3)).mics[0];
+    assert_eq!(
+        (silent.state, silent.level_dbfs, silent.voiced),
+        (MicState::NoAudio, None, false)
+    );
+}
+
+#[tokio::test]
+async fn a_mics_formats_are_counted_for_its_chain_and_go_with_the_session() {
+    let mut health = ListenHealth::default();
+    let generation = health.set_mics(&[], &["guest"]);
+    assert_eq!(health.record_format("guest", generation), 1);
+    assert_eq!(health.record_format("guest", generation), 2);
+    assert_eq!(
+        health.record_format("guest", generation + 1),
+        0,
+        "another update's chain"
+    );
+    assert_eq!(health.record_format("nobody", generation), 0);
+    health.end_session();
+    let next = health.set_mics(&[], &["guest"]);
+    assert_eq!(
+        health.record_format("guest", next),
+        1,
+        "the gate starts over with the session"
+    );
+}
+
+// ---- the hand-over (C1a-3): via handle_datagram, explicit instants ---------
+// On the current-thread test runtime a mic's chain task cannot run before the
+// test awaits, so `queued` shows exactly what the receive path handed over.
+
+#[tokio::test]
+async fn a_counter_gap_inserts_silence_and_counts_the_lost_packets() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    for _ in 0..2 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    guest.skip(2);
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!(
+        (mic.packets, mic.lost_packets, mic.late_packets, mic.resyncs),
+        (3, 2, 0, 0)
+    );
+    assert_eq!(router.queued("guest"), vec![(0, 256), (0, 256), (512, 256)]);
+}
+
+#[tokio::test]
+async fn a_late_or_duplicate_packet_is_dropped_and_counted() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    let packets: Vec<Vec<u8>> = (0..3).map(|_| next_packet(&mut guest)).collect();
+    for packet in packets.iter().chain([&packets[1], &packets[2]]) {
+        router.handle_datagram(packet, addr(GUEST), t0);
+    }
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!((mic.packets, mic.late_packets, mic.lost_packets), (5, 2, 0));
+    assert_eq!(
+        router.queued("guest").len(),
+        3,
+        "late packets never reach the chain"
+    );
+}
+
+#[tokio::test]
+async fn a_jump_of_more_than_a_second_resyncs_and_counting_goes_on() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    guest.skip(187); // exactly one second of 256-frame packets
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    guest.skip(188); // one packet more than a second: a sender restart
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!((mic.lost_packets, mic.resyncs, mic.packets), (187, 1, 4));
+    let silences: Vec<usize> = router
+        .queued("guest")
+        .iter()
+        .map(|(silence, _)| *silence)
+        .collect();
+    assert_eq!(
+        silences,
+        vec![0, 187 * 256, 0, 0],
+        "a resync inserts nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_counter_wraps_at_u32_max_without_a_gap() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder().starting_at(u32::MAX - 1);
+    for _ in 0..4 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!(
+        (mic.packets, mic.lost_packets, mic.late_packets, mic.resyncs),
+        (4, 0, 0, 0)
+    );
+}
+
+#[tokio::test]
+async fn a_full_queue_drops_the_oldest_block_and_counts_it() {
+    // The chain task cannot run before this test awaits (current-thread
+    // runtime), so the queue fills exactly as on a box whose chain fell
+    // behind — and the receive path never waits.
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    for _ in 0..QUEUE_CAPACITY + 5 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    assert_eq!(status_of(&service, "guest", t0).dropped_blocks, 5);
+    assert_eq!(router.queued("guest").len(), QUEUE_CAPACITY);
+}
+
+#[tokio::test]
+async fn a_second_sender_of_the_stream_is_ignored_until_the_first_is_silent_for_3_s() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let (mut first, mut second) = (guest_encoder(), guest_encoder().starting_at(5_000));
+    router.handle_datagram(&next_packet(&mut first), addr(GUEST), t0);
+    let t1 = t0 + Duration::from_millis(1_000);
+    router.handle_datagram(&next_packet(&mut second), addr(OTHER), t1);
+    let mic = status_of(&service, "guest", t1);
+    assert_eq!((mic.packets, mic.other_sender_packets), (1, 1));
+    assert_eq!(mic.sender.as_deref(), Some(GUEST));
+    let t3 = t0 + Duration::from_millis(3_000);
+    router.handle_datagram(&next_packet(&mut second), addr(OTHER), t3);
+    let mic = status_of(&service, "guest", t3);
+    assert_eq!(
+        (mic.packets, mic.other_sender_packets, mic.resyncs),
+        (2, 1, 0),
+        "the new sender starts its own count: no resync"
+    );
+    assert_eq!(mic.sender.as_deref(), Some(OTHER));
+}
+
+#[tokio::test]
+async fn lost_packet_warnings_follow_the_power_of_two_gate() {
+    let capture = Capture::install();
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    for _ in 0..5 {
+        guest.skip(1);
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    assert_eq!(status_of(&service, "guest", t0).lost_packets, 5);
+    let warnings = capture.events_with_message("mic lost VBAN packets");
+    let events: Vec<&str> = warnings.iter().filter_map(|w| w.field("events")).collect();
+    assert_eq!(events, vec!["1", "2", "4"]);
+}
+
+#[tokio::test]
+async fn a_rename_keeps_the_chain_and_a_new_channel_restarts_it() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    for _ in 0..3 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    let mut renamed = mic("guest", "GUEST_EN", None);
+    renamed.name = "Hosť z Londýna".into();
+    router.update(&[renamed]);
+    assert_eq!(
+        router.queued("guest").len(),
+        3,
+        "the same chain (and its queue) goes on"
+    );
+    assert_eq!(status_of(&service, "guest", t0).packets, 3);
+    let mut right = mic("guest", "GUEST_EN", None);
+    right.channel = MicChannel::Right;
+    router.update(&[right]);
+    assert!(
+        router.queued("guest").is_empty(),
+        "another channel: a new chain"
+    );
+    assert_eq!(status_of(&service, "guest", t0).packets, 0);
+}
+
+#[tokio::test]
+async fn rejects_are_counted_per_sender_and_kind() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let good = next_packet(&mut guest_encoder());
+    let with = |index: usize, value: u8| {
+        let mut bytes = good.clone();
+        bytes[index] = value;
+        bytes
+    };
+    router.handle_datagram(b"hello", addr(GUEST), t0);
+    router.handle_datagram(&with(4, 0x40 | 3), addr(GUEST), t0); // VBAN-TEXT
+    router.handle_datagram(&with(7, 0x10 | 1), addr(GUEST), t0); // VBCA codec
+    router.handle_datagram(&with(7, 0x05), addr(GUEST), t0); // FLOAT64
+    router.handle_datagram(&good[..good.len() - 2], addr(GUEST), t0); // one sample short
+    router.handle_datagram(b"x", addr(OTHER), t0);
+    let status = service.with_health(|health| health.snapshot(&[], t0));
+    assert_eq!(status.rejected.len(), 2);
+    let guest = status
+        .rejected
+        .iter()
+        .find(|r| r.sender == "192.0.2.10")
+        .unwrap();
+    assert_eq!(
+        (
+            guest.not_vban,
+            guest.non_audio,
+            guest.unsupported_codec,
+            guest.unsupported_type,
+            guest.corrupt
+        ),
+        (1, 1, 1, 1, 1)
+    );
+    assert_eq!(status_of(&service, "guest", t0).packets, 0);
+}
+
+#[tokio::test]
+async fn non_audio_vban_is_counted_but_logged_at_debug_only() {
+    let capture = Capture::install();
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut text = next_packet(&mut guest_encoder());
+    text[4] = 0x40 | 3;
+    for _ in 0..4 {
+        router.handle_datagram(&text, addr(GUEST), t0);
+    }
+    let warnings: Vec<_> = capture
+        .events(MIC_TARGET)
+        .into_iter()
+        .filter(|event| event.level == tracing::Level::WARN)
+        .collect();
+    assert!(
+        warnings.is_empty(),
+        "VB-Matrix's VBAN-TEXT is normal traffic: {warnings:?}"
+    );
+    let ignored = capture.events_with_message("ignored a non-audio VBAN packet");
+    assert_eq!(ignored.len(), 4);
+    assert_eq!(ignored[3].field("non_audio"), Some("4"));
+    let status = service.with_health(|health| health.snapshot(&[], t0));
+    assert_eq!(status.rejected[0].non_audio, 4);
+}
+
+#[tokio::test]
+async fn non_audio_packets_take_no_slot_of_the_reject_warn_gate() {
+    // A VB-Matrix host sends VBAN-TEXT / SERVICE all the time; its rare
+    // garbage datagrams still WARN on their own 1st, 2nd, 4th … count.
+    let capture = Capture::install();
+    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut text = next_packet(&mut guest_encoder());
+    text[4] = 0x40 | 3;
+    for _ in 0..3 {
+        for _ in 0..5 {
+            router.handle_datagram(&text, addr(GUEST), t0);
+        }
+        router.handle_datagram(b"garbage", addr(GUEST), t0);
+    }
+    router.handle_datagram(b"x", addr(OTHER), t0);
+    let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
+    let totals: Vec<(&str, &str)> = warned
+        .iter()
+        .filter_map(|line| Some((line.field("from")?, line.field("total")?)))
+        .collect();
+    assert_eq!(
+        totals,
+        vec![(GUEST, "1"), (GUEST, "2"), (OTHER, "1")],
+        "18 rejects of the guest host, 15 of them VBAN-TEXT: its garbage counts 1, 2, 3"
+    );
+}
+
+#[tokio::test]
+async fn real_udp_packets_come_out_as_16_khz_frames_at_the_tone_level() {
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
+    service.start(addr("127.0.0.1:0"));
+    let bound = wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let vban: SocketAddr = bound.socket.local_addr.unwrap().parse().unwrap();
+    let tx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut guest = guest_encoder();
+    // 75 packets = 19 200 frames = 20 chunks of 20 ms = 6 400 samples = 4
+    // frames; the 4th completes only with the 75th packet (the Python mirror
+    // of rubato's Fft: the last frame −9.03 dBFS)
+    let block = tone(48_000, 1_000.0, 0.5, 0, 75 * 256, 1);
+    for (k, chunk) in block.chunks(256).enumerate() {
+        tx.send_to(&guest.packet(chunk).unwrap(), vban)
+            .await
+            .unwrap();
+        if k % 4 == 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    let status = wait_for(&service, "4 frames counted", |s| s.mics[0].frames_out == 4).await;
+    let mic = &status.mics[0];
+    assert_eq!(
+        (mic.packets, mic.lost_packets, mic.state),
+        (75, 0, MicState::Receiving)
+    );
+    let level = mic.level_dbfs.unwrap();
+    assert!(
+        (-9.6..=-8.5).contains(&level),
+        "1 kHz at half scale ≈ −9.03 dBFS: {level}"
+    );
+    assert!(mic.voiced);
 }

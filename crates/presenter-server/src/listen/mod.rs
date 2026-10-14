@@ -3,9 +3,13 @@
 //! `health`. [`ListenService`] (in `AppState`) holds the current `listen.mics`
 //! (a `watch`), the health (a std mutex, never held across an `.await`), the
 //! start-once flag and the save lock. Started from `spawn_background_tasks`
-//! only, so validate mode never binds.
+//! only, so validate mode never binds. Each mic has a chain (counter rule →
+//! 16 kHz → level, `mic_chain`); no frame channel yet: it arrives with its
+//! first consumer (C1b recorder / C3 ASR).
 
 pub(crate) mod health;
+mod mic_chain;
+mod resample;
 #[cfg(test)]
 mod tests;
 mod vban_rx;

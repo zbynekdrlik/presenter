@@ -35,7 +35,8 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "sync", "time", "process"] }
+# 1.44: `task::coop::consume_budget` (#852 C1a-3, presenter-server listen/mic_chain.rs).
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "time", "process"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
