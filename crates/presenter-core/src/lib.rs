@@ -15,6 +15,7 @@ pub mod ableset;
 pub mod android_stage_display;
 pub mod bible;
 pub mod id;
+pub mod interpreter_tips;
 pub mod library;
 pub mod live;
 pub mod osc;
