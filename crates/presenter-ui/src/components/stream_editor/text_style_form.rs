@@ -392,7 +392,7 @@ pub fn TextStyleForm(
             <Show when=has_shadow>
                 <div class="stream-editor__shadow-fields">
                     <label class="stream-editor__field">
-                        <span>"Tieň X"</span>
+                        <span>"Tieň X (px pri 1080p)"</span>
                         <input
                             type="number" step="1"
                             data-role="stream-ts-shadow-x"
@@ -407,7 +407,7 @@ pub fn TextStyleForm(
                         />
                     </label>
                     <label class="stream-editor__field">
-                        <span>"Tieň Y"</span>
+                        <span>"Tieň Y (px pri 1080p)"</span>
                         <input
                             type="number" step="1"
                             data-role="stream-ts-shadow-y"
@@ -422,7 +422,7 @@ pub fn TextStyleForm(
                         />
                     </label>
                     <label class="stream-editor__field">
-                        <span>"Rozmazanie"</span>
+                        <span>"Rozmazanie (px pri 1080p)"</span>
                         <input
                             type="number" min="0" step="1"
                             data-role="stream-ts-shadow-blur"

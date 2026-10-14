@@ -59,7 +59,10 @@ impl NdiPipeline {
         // receive-time PTS still stamps from this clock at frame arrival.
         let sysclock = gst::SystemClock::obtain();
         pipeline.use_clock(Some(&sysclock));
-        tracing::info!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
+        // DEBUG, not INFO (#858): a silent source rebuilds this pipeline every 30 s;
+        // the manager logs ONE INFO line per pipeline that actually reaches
+        // Streaming (`NDI pipeline streaming`).
+        tracing::debug!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
 
         let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
@@ -116,7 +119,7 @@ impl NdiPipeline {
             ndi_name,
         );
 
-        tracing::info!(
+        tracing::debug!(
             encoder = encoder_name,
             %ndi_name,
             "pipeline built (720p H264 shared encoder, per-consumer-pipeline fanout)"

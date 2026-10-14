@@ -10,6 +10,19 @@
 
 use presenter_core::{Frame, TextAlign, TextBox, TextStyle};
 
+/// Canvas pixels per `vh` at the 1080-px output (the OBS source is 1920×1080,
+/// so 1 `vh` = 10.8 px).
+const CANVAS_PX_PER_VH: f32 = 10.8;
+
+/// A stored shadow length (px AT THE 1080-PX CANVAS, #860) as a CSS `vh` length,
+/// four decimals (`2.0` ⇒ `0.1852vh`). Font sizes are `vh`, so a shadow in `vh`
+/// scales with the text on any canvas height: unchanged at 1080p (OBS), and the
+/// box-sized editor preview iframe shows the same shadow-to-text ratio. A
+/// shadow in absolute px was 2-2.4× too big there relative to the text.
+fn px_at_1080_to_vh(px: f32) -> String {
+    format!("{:.4}vh", px / CANVAS_PX_PER_VH)
+}
+
 /// CSS font stack for a whitelisted family. The three OFL families (Inter,
 /// Bebas Neue, Oswald) gracefully fall back until their `@font-face` woff2
 /// assets are bundled (see the #709 hand-back) — no `@font-face` pointing at a
@@ -53,7 +66,7 @@ pub(super) fn frame_css(frame: &Frame, z: i32) -> String {
 
 /// Typography CSS from a [`TextStyle`]: font family, size (`size_pct` ⇒ `vh`),
 /// color, weight, text-align, line-height, and the optional letter spacing,
-/// capitals (#831), italic (#830) and text-shadow.
+/// capitals (#831), italic (#830) and text-shadow (px at 1080p ⇒ `vh`, #860).
 pub(super) fn text_style_css(style: &TextStyle) -> String {
     let mut css = format!(
         "font-family:{};font-size:{}vh;color:{};font-weight:{};text-align:{};line-height:{};",
@@ -76,10 +89,16 @@ pub(super) fn text_style_css(style: &TextStyle) -> String {
     if style.italic == Some(true) {
         css.push_str("font-style:italic;");
     }
+    // #860: the stored px are px at the 1080-px canvas, emitted in `vh` so the
+    // shadow scales with the (`vh`) font size. Never add another absolute-px
+    // render value here.
     if let Some(shadow) = &style.shadow {
         css.push_str(&format!(
-            "text-shadow:{}px {}px {}px {};",
-            shadow.x_px, shadow.y_px, shadow.blur_px, shadow.color
+            "text-shadow:{} {} {} {};",
+            px_at_1080_to_vh(shadow.x_px),
+            px_at_1080_to_vh(shadow.y_px),
+            px_at_1080_to_vh(shadow.blur_px),
+            shadow.color
         ));
     }
     css
@@ -172,6 +191,55 @@ mod tests {
         let css = text_style_css(&wire_style(serde_json::json!({ "italic": true })));
         assert!(css.contains("font-style:italic;"), "{css}");
         assert!(css.contains("font-weight:900;"), "{css}");
+    }
+
+    /// #860: the stored shadow px are px at the 1080-px output canvas, emitted in
+    /// `vh` (value / 10.8) so the shadow scales with the text (`size_pct` is `vh`)
+    /// in the box-sized editor preview exactly as it does in OBS at 1080p.
+    #[test]
+    fn shadow_scales_with_the_canvas_height() {
+        let css = text_style_css(&wire_style(serde_json::json!({
+            "shadow": { "xPx": 2.0, "yPx": 2.0, "blurPx": 12.0, "color": "#000000" }
+        })));
+        assert!(
+            css.contains("text-shadow:0.1852vh 0.1852vh 1.1111vh #000000;"),
+            "{css}"
+        );
+        assert!(
+            !css.contains("px "),
+            "no absolute px render value left: {css}"
+        );
+    }
+
+    #[test]
+    fn px_at_1080_converts_to_vh() {
+        for (px, vh) in [
+            (0.0, "0.0000vh"),
+            (2.0, "0.1852vh"),
+            (4.0, "0.3704vh"),
+            (10.8, "1.0000vh"),
+            (12.0, "1.1111vh"),
+            (40.0, "3.7037vh"),
+            (-2.0, "-0.1852vh"),
+        ] {
+            assert_eq!(px_at_1080_to_vh(px), vh, "{px} px at 1080p");
+        }
+    }
+
+    #[test]
+    fn shadow_keeps_its_colour_and_negative_offsets() {
+        let css = text_style_css(&wire_style(serde_json::json!({
+            "shadow": { "xPx": -2.0, "yPx": 0.0, "blurPx": 4.0, "color": "#00000080" }
+        })));
+        assert!(
+            css.contains("text-shadow:-0.1852vh 0.0000vh 0.3704vh #00000080;"),
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn no_shadow_renders_no_text_shadow() {
+        assert!(!text_style_css(&style(None)).contains("text-shadow"));
     }
 
     #[test]

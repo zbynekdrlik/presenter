@@ -434,10 +434,14 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
           # #544: the service's GStreamer registry must not survive this deploy — a driver
           # or permission change would otherwise keep being judged by the old cache.
+          # #850 O1: drop two leftover drop-ins — ableset-debug.conf (closed #600) overrides
+          # the unit's RUST_LOG with tower_http=info, which hides the request log; noresolume.conf
+          # sets an env var no code reads. rm -f keeps this idempotent.
           ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && \
             sudo install -m 0755 /tmp/wait-for-h264-encoder.sh ${{ env.DEPLOY_DIR }}/wait-for-h264-encoder.sh && \
             sudo rm -f ${{ env.DEPLOY_DIR }}/gstreamer-registry.bin && \
             sudo mkdir -p /etc/systemd/system/presenter.service.d && \
+            sudo rm -f /etc/systemd/system/presenter.service.d/ableset-debug.conf /etc/systemd/system/presenter.service.d/noresolume.conf && \
             sudo systemctl daemon-reload"
           # A newline in the variable would inject arbitrary [Service] directives into the
           # drop-in — accept only a single-line http(s) URL.
@@ -738,3 +742,27 @@ jobs:
             sudo cloudflared service install ${TUNNEL_TOKEN}
             sudo systemctl enable --now cloudflared
           "
+
+      # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
+      # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement
+      # through. The RUNNING process must carry the committed unit's RUST_LOG. It is the job's
+      # LAST step on purpose: a mismatch must never skip the smoke test, the AI check, the NDI
+      # self-heal or cloudflared (the #675 ordering lesson).
+      - name: Verify effective RUST_LOG (#850 O1)
+        run: |
+          set -euo pipefail
+          lines=$(grep -c '^Environment=RUST_LOG=' scripts/deploy/presenter.service || true)
+          if [ "$lines" != "1" ]; then
+            echo "::error::scripts/deploy/presenter.service must set RUST_LOG exactly once (found $lines)"
+            exit 1
+          fi
+          expected=$(sed -n 's/^Environment=RUST_LOG=//p' scripts/deploy/presenter.service)
+          # The process environment, not the unit's Environment property: systemd quotes entries
+          # with special characters there, and an EnvironmentFile override never shows in it.
+          # The service runs as root, so reading its environ needs sudo (verified on SNV + PP).
+          effective=$(ssh deploy-target 'pid=$(systemctl show -p MainPID --value ${{ env.SERVICE_NAME }}); sudo -n cat /proc/$pid/environ | tr "\0" "\n"' | sed -n 's/^RUST_LOG=//p')
+          if [ "$effective" != "$expected" ]; then
+            echo "::error::running RUST_LOG is '$effective', the unit sets '$expected' — a drop-in or EnvironmentFile overrides it"
+            exit 1
+          fi
+          echo "Running RUST_LOG matches the unit: $expected"

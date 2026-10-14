@@ -9,6 +9,7 @@
 //! The implementation is split across responsibility-focused submodules
 //! (see #357 — split the over-cap god-file):
 //! - [`lifecycle`] — construction, discovery, start/stop, active-map queries
+//! - [`silent_streak`] — per-source silent-start streak + its INFO-log gate (#858)
 //! - [`supervisor`] — per-source rebuild supervisor + backoff/cool-off state
 //! - [`whep`] — WHEP HTTP bridge + pipeline snapshots
 //!
@@ -29,10 +30,12 @@ use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 mod activation;
 mod drift_guard;
 mod lifecycle;
+mod silent_streak;
 mod supervisor;
 mod whep;
 
 pub use lifecycle::PipelineStartError;
+pub use silent_streak::should_log_silent_attempt;
 
 /// Status callback retained for backwards compatibility with the old MJPEG
 /// status-reporting path. The WebRTC manager currently invokes it on
@@ -267,6 +270,12 @@ pub struct NdiManager {
     /// and the 3/h budget survive a supervisor being replaced. A std mutex:
     /// only ever held for a pure `on_tick`/read, never across an await.
     pub(in crate::manager) drift_guards: std::sync::Mutex<HashMap<String, drift_guard::DriftGuard>>,
+    /// #858: per-source silent-start streak — the consecutive
+    /// `PipelineStartError::SourceSilent` outcomes, carried in that error's
+    /// `attempt` field so every log line about a silent broadcaster can be
+    /// power-of-two gated. Ended when the source reaches Streaming or is
+    /// stopped. A std mutex held only for the count, never across an await.
+    pub(in crate::manager) silent_streaks: silent_streak::SilentStreaks,
 }
 
 // Re-export the supervisor's pure-state types into the module root so the

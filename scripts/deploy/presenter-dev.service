@@ -33,7 +33,7 @@ Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.8.134:8080/stage
 # #472: the Presenter Stage APK the watchdog installs on TVs that need our own
 # app. Dev deploys to /opt/presenter-dev (the default path is /opt/presenter).
 Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter-dev/presenter-stage.apk
-Environment=RUST_LOG=info,tower_http=debug
+Environment=RUST_LOG=info,tower_http=debug,sqlx=warn
 # #843: the dev box (the CI runner host) has far less free disk than prod, and
 # dev runs on a copy of the prod DB, so it mirrors the same Drive folders. Keep
 # its playback mirror small (prod/PP use the 20 GiB default).

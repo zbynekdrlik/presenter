@@ -1,0 +1,10 @@
+{
+  "account_id": "<cloudflare-account-id>",
+  "allowed_emails": ["person@example.com"],
+  "sites": [
+    {"host": "presenter-site-a.example.com", "bypass_ips": ["192.0.2.10/32"]},
+    {"host": "presenter-site-b.example.com", "bypass_ips": ["198.51.100.20/32"]}
+  ],
+  "session_duration": "720h",
+  "healthz_session_duration": "24h"
+}

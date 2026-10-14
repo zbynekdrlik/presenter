@@ -28,6 +28,7 @@ pub mod gesture;
 pub mod number_field;
 pub mod output_manage;
 pub mod output_paths;
+mod output_switch;
 pub mod percent_input;
 pub mod playback_fields;
 pub mod playback_status;
@@ -250,70 +251,6 @@ impl StreamEditorCtx {
     /// The currently-selected output slug (untracked — for use in handlers).
     pub fn slug(self) -> String {
         self.output_slug.get_untracked()
-    }
-
-    /// Re-fetch the output list for the header switcher (mount + after a config
-    /// change that might add/rename an output). #827: when the slug being edited
-    /// is not in the list (deleted / a stale bookmark), switch to the first
-    /// listed output, so the select and the editor agree.
-    ///
-    /// #842: the list is reloaded on every config change, so only the newest
-    /// request may install its response (an older one could lack an output
-    /// created since and trigger that fallback), and an unchanged list is not
-    /// set again (that would rebuild an open `<select>`).
-    pub fn reload_outputs(self) {
-        let request = output_paths::next_outputs_request();
-        leptos::task::spawn_local(async move {
-            let result =
-                crate::api::get_json::<Vec<StreamOutputSummary>>("/stream/api/outputs").await;
-            if !output_paths::is_latest_outputs_request(request) {
-                leptos::logging::log!("stream editor: dropping an outdated output list");
-                return;
-            }
-            match result {
-                Ok(list) => {
-                    let current = self.output_slug.get_untracked();
-                    let fallback = output_paths::fallback_output(&current, &list);
-                    if !self
-                        .outputs
-                        .with_untracked(|shown| output_paths::same_entries(shown, &list))
-                    {
-                        self.outputs.set(list);
-                    }
-                    if let Some(slug) = fallback {
-                        leptos::logging::log!(
-                            "stream editor: output {current:?} does not exist; switching to {slug:?}"
-                        );
-                        self.switch_output(slug);
-                    }
-                }
-                Err(e) => self.show_toast(&format!("Načítanie výstupov zlyhalo: {e}"), "error"),
-            }
-        });
-    }
-
-    /// Switch the editor to another output (#785): persist the choice
-    /// (localStorage + `?output=`), reset the per-output editing state, and
-    /// refetch the def + nameplates for the new output. A no-op if unchanged.
-    /// Unsaved element edits ask first (#787 reopen); returns whether it switched.
-    pub fn switch_output(self, slug: String) -> bool {
-        if slug == self.output_slug.get_untracked() || !self.confirm_discard_draft() {
-            return false;
-        }
-        self.output_slug.set(slug.clone());
-        output_paths::persist_output_slug(&slug);
-        output_paths::mirror_output_to_url(&slug);
-        // Drop the previous output's element/scene selection + draft, and its
-        // def (#787): until the new def lands the scene list shows „Načítavam…"
-        // and nothing can act on the previous output's scenes.
-        self.close_panel();
-        self.def.set(None);
-        self.active.set(empty_show_state());
-        // Refetch everything scoped to the new output.
-        self.refresh();
-        self.reload_nameplates();
-        self.reload_active_nameplate();
-        true
     }
 
     /// Exclusive base activation; `None` clears the base (transparent). The

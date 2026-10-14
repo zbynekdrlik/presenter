@@ -15,6 +15,7 @@ use crate::router::libraries::CreateLibraryPresentationResponse;
 use crate::router::playlists::UpdatePlaylistRequest;
 use crate::router::presentations::PresentationDetailDto;
 use crate::router::stage::StageLayoutResponse;
+use crate::tracing_capture::{quoted, Capture};
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::TimersOverview;
 use presenter_core::{Playlist, PlaylistEntry, PlaylistEntryId};
@@ -3374,4 +3375,54 @@ async fn restore_presentation_endpoint_returns_409_when_library_is_tombstoned() 
         .await
         .unwrap();
     assert_eq!(restore_response.status(), StatusCode::CONFLICT);
+}
+
+// #850 O1: the trigger handlers extract the headers and the optional ConnectInfo
+// for the `presenter::bible::show` line. A router served without connect-info
+// (this test, `tower::ServiceExt::oneshot`) must still accept a show, and the show
+// must leave exactly one INFO line with the endpoint, the client IP (the tunnel's
+// X-Forwarded-For, no loopback peer here) and the reference that went to the wall.
+#[tokio::test]
+async fn trigger_slide_logs_one_show_line_with_source_ip_and_reference() {
+    let capture = Capture::install();
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/bible/trigger-slide")
+                .header("content-type", "application/json")
+                .header("x-forwarded-for", "203.0.113.9")
+                .body(Body::from(
+                    json!({
+                        "mainText": "Viera je podstatou toho, v čo dúfame",
+                        "mainReference": "Hebrejom 11:1 (SEB)"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let active = state.active_bible_slide_output().await.unwrap();
+    assert_eq!(active.main_reference, "Hebrejom 11:1 (SEB)");
+
+    let lines = capture.events("presenter::bible::show");
+    assert_eq!(lines.len(), 1, "exactly one show line per show: {lines:?}");
+    let line = &lines[0];
+    assert_eq!(line.level, tracing::Level::INFO);
+    assert_eq!(line.field("message"), Some("bible show"));
+    assert_eq!(line.field("source"), Some(quoted("api").as_str()));
+    assert_eq!(line.field("device"), Some(quoted("-").as_str()));
+    assert_eq!(
+        line.field("client_ip"),
+        Some(quoted("203.0.113.9").as_str())
+    );
+    assert_eq!(
+        line.field("reference"),
+        Some(quoted("Hebrejom 11:1 (SEB)").as_str())
+    );
+    assert_eq!(line.field("secondary"), Some(quoted("-").as_str()));
 }

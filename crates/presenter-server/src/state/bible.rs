@@ -1,5 +1,6 @@
 //! Bible search, broadcast, and ingestion methods for [`AppState`].
 
+use super::bible_show_log::{log_bible_show, BibleShowOrigin};
 use super::AppState;
 use crate::bible_remote::RemoteBibleError;
 use crate::live::LiveEvent;
@@ -630,7 +631,9 @@ impl AppState {
         &self,
         output: BibleSlideOutput,
         reference_metadata: BibleSlideReferenceMetadata,
+        origin: BibleShowOrigin,
     ) {
+        log_bible_show(&origin, &output);
         // Store as the new active output
         {
             let mut guard = self.bible.slide_output.write().await;

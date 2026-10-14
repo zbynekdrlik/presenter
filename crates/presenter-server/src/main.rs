@@ -135,7 +135,7 @@ async fn serve_with_peer_addr(listener: TcpListener, app: axum::Router) -> anyho
 
 fn setup_tracing() {
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "info,tower_http=debug");
+        std::env::set_var("RUST_LOG", "info,tower_http=debug,sqlx=warn");
     }
 
     tracing_subscriber::registry()
