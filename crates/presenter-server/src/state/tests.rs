@@ -822,6 +822,49 @@ async fn validate_startup_mode_starts_no_integrations_but_serves_healthz() {
     );
 }
 
+/// #852 C1a: the schema probe boot must not bind the VBAN port either — a
+/// stored `listen.mics` would otherwise make the probe take 6980 next to the
+/// live service. The receiver is started only from `spawn_background_tasks`.
+#[tokio::test]
+async fn validate_startup_mode_never_starts_the_vban_receiver() {
+    use presenter_core::listen::mics::LISTEN_MICS_KEY;
+    use presenter_core::listen::status::SocketState;
+
+    let tmp = tempfile::NamedTempFile::new().expect("temp file");
+    let url = format!("sqlite://{}?mode=rwc", tmp.path().display());
+    {
+        let repo = presenter_persistence::Repository::connect(
+            &presenter_persistence::DatabaseSettings::new(&url),
+        )
+        .await
+        .expect("seed connection");
+        repo.set_app_setting(
+            LISTEN_MICS_KEY,
+            r#"[{"id":"guest","name":"Hosť","streamName":"GUEST_EN","senderIp":null,"channel":"left","language":"en","role":"guest"}]"#,
+        )
+        .await
+        .expect("seed listen.mics");
+    }
+    let mut config = config_for_db(url);
+    config.startup_mode = crate::state::StartupMode::Validate;
+    let state = AppState::from_config(config)
+        .await
+        .expect("from_config (validate)");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let status = state.listen_status();
+    assert_eq!(
+        status.socket.state,
+        SocketState::NotStarted,
+        "validate mode never starts the receiver"
+    );
+    assert!(status.mics.is_empty(), "nothing was loaded for it");
+    assert_eq!(
+        state.listen_mics().await.expect("stored list").len(),
+        1,
+        "the stored list is untouched"
+    );
+}
+
 /// Regression for issue #384: the selected stage layout MUST survive a server
 /// restart. Before the fix `set_stage_layout_code` only wrote the in-memory
 /// `RwLock`, so every `presenter.service` restart silently reset the layout to

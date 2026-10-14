@@ -7,6 +7,7 @@ mod features;
 mod integrations;
 mod interpreter_tips;
 mod libraries;
+mod listen;
 pub mod network_mode;
 mod playlists;
 mod presentations;
@@ -426,6 +427,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // #852: šepkár tips for the interpreter (/interpreter/tips*).
         .merge(interpreter_tips::router())
+        // #852 C1a: listening microphones + the VBAN receiver status.
+        .merge(listen::router())
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
         .merge(stream::router())
         // #779: lower-third nameplate list + show-state (/stream/api/*). Static

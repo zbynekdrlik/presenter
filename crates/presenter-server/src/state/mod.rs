@@ -43,6 +43,7 @@ mod companion;
 mod companion_manager;
 mod integrations;
 pub(crate) mod interpreter_tips;
+mod listen;
 mod ndi_control;
 #[cfg(test)]
 pub(crate) use ndi_control::{FakeNdiControl, NdiManagerHandle, WhepOutcome};
@@ -215,6 +216,8 @@ pub struct AppState {
     playback: crate::playback::PlaybackSync,
     /// #852: šepkár tips — clock, rate limiter, last published list.
     interpreter_tips: interpreter_tips::InterpreterTipsState,
+    /// #852 C1a: the VBAN microphones (`listen.mics`) + `/listen/status`.
+    listen: crate::listen::ListenService,
     /// #771: how this process booted. In [`StartupMode::Validate`] the
     /// constructor + `from_config` skip every integration/background task and
     /// `/healthz` skips the live AI probe. Defaults to `Normal` for every
@@ -391,6 +394,7 @@ impl AppState {
             stream_font_rederive_lock: Arc::new(tokio::sync::Mutex::new(())),
             playback: crate::playback::PlaybackSync::new(),
             interpreter_tips: interpreter_tips::InterpreterTipsState::new(),
+            listen: crate::listen::ListenService::new(),
             startup_mode,
         };
         // #771: heartbeat broadcasting is a background task — skip it in the

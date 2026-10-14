@@ -166,17 +166,19 @@ pub(super) fn is_quiet_request(method: &Method, path: &str) -> bool {
 /// The list / status GETs a page re-fetches on a timer: the tablet's 10 s
 /// presentation list (`pages/tablet.rs`) and the Settings tab's 5 s pollers (the
 /// Resolume and Android lists in `list_card.rs`, AbleSet + OSC status in
-/// `ableton.rs`, NDI source status in `video_sources.rs`). Only the GET is
+/// `ableton.rs`, NDI source status in `video_sources.rs`) and the listening
+/// microphones' status (`/listen/status`, #852 C1a). Only the GET is
 /// quiet: the same paths take a person's POST / PUT / DELETE (create, edit,
 /// remove), and those stay logged.
 pub(super) fn is_quiet_get_path(path: &str) -> bool {
-    const POLLED_GETS: [&str; 6] = [
+    const POLLED_GETS: [&str; 7] = [
         "/bible/presentations",
         "/integrations/resolume/hosts",
         "/integrations/android-stage/displays",
         "/integrations/ableset/status",
         "/integrations/osc/status",
         "/integrations/video-sources/status",
+        "/listen/status",
     ];
     POLLED_GETS.contains(&path)
 }
@@ -356,6 +358,7 @@ mod tests {
             "/integrations/ableset/status",
             "/integrations/osc/status",
             "/integrations/video-sources/status",
+            "/listen/status",
         ] {
             assert!(is_quiet_request(&Method::GET, path), "GET {path} is polled");
             assert!(!is_quiet_path(path), "{path} is quiet by GET only");
@@ -379,6 +382,7 @@ mod tests {
             "/integrations/ableset/settings",
             "/integrations/osc/status/extra",
             "/settings/features",
+            "/listen/mics",
         ] {
             assert!(
                 !is_quiet_request(&Method::GET, path),
