@@ -444,6 +444,20 @@ jobs:
           python3 -m unittest discover -s scripts/ci -p 'test_check_deploy_workflows.py' -v
           python3 scripts/ci/check_deploy_workflows.py
 
+      # #859: the SEB / Roháček / SEVP / Milosť modules may not be distributed
+      # publicly; they live in the private repo zbynekdrlik/presenter-bibles,
+      # checked out into the gitignored data/bibles-private/. The checker fails
+      # when anything but a public-domain module (kjv.usfm.zip) is tracked under
+      # data/bibles/, when data/bibles-private/ is tracked, when a release-asset
+      # job or an artifact upload touches the private modules, when a job needs
+      # them (reads the dir, runs Playwright / ingest_bibles) without checking the
+      # private repo out first, or when the checkouts are not all pinned to one SHA.
+      - name: Check public Bible modules (#859)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_check_public_bibles.py' -v
+          python3 scripts/ci/check_public_bibles.py
+
       # Regression test for #802: the E2E harness (startTestServer,
       # refresh-dev-data.sh, the synthetic NDI sender) must never silently
       # fall back to a local `cargo run` — Tier-0 compiles in CI only. A
@@ -687,6 +701,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
+
       - name: Install GStreamer runtime libraries
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         timeout-minutes: 10
@@ -744,10 +768,10 @@ jobs:
           CI: true
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
           PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
-          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
-          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
-          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
-          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles-private/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles-private/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles-private/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles-private/milost.bbl.mybible.zip
 
       - name: Upload blob report
         uses: actions/upload-artifact@v4
@@ -799,6 +823,16 @@ jobs:
       NDI_RUNTIME_DIR_V6: /usr/lib/ndi
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -867,10 +901,10 @@ jobs:
           PRESENTER_SKIP_MOCK_INTEGRATIONS: "1"
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
           PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
-          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
-          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
-          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
-          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles-private/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles-private/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles-private/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles-private/milost.bbl.mybible.zip
 
       - name: Stop synthetic NDI sender
         if: always()
@@ -957,6 +991,16 @@ jobs:
       DEPLOY_USER: newlevel
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -1341,10 +1385,10 @@ jobs:
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
           scp -i ~/.ssh/id_deploy \
             data/bibles/kjv.usfm.zip \
-            data/bibles/seb.bbl.mybible.zip \
-            data/bibles/rohacek.bbl.mybible.zip \
-            data/bibles/sevp.obohu.mybible.zip \
-            data/bibles/milost.bbl.mybible.zip \
+            data/bibles-private/seb.bbl.mybible.zip \
+            data/bibles-private/rohacek.bbl.mybible.zip \
+            data/bibles-private/sevp.obohu.mybible.zip \
+            data/bibles-private/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
       - name: Sync ProPresenter libraries from git

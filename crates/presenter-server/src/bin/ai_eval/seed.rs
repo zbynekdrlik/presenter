@@ -28,16 +28,21 @@ pub async fn build_state_for_case(case: &Case) -> anyhow::Result<AppState> {
         // (presenter-bible's king_james_spec/slovak_*_spec), read straight
         // off disk via std::fs::read. The likely failure is one of the 5
         // `PRESENTER_BIBLE_KJV/SEB/ROHACEK/SEVP/MILOST` env vars being unset
-        // or pointing at a missing `data/bibles/*.zip` archive — the
-        // underlying error already names which one and why.
+        // or pointing at a missing archive — the underlying error already
+        // names which one and why. KJV is `data/bibles/kjv.usfm.zip`; the
+        // other four are licence-restricted and live in the private repo
+        // zbynekdrlik/presenter-bibles, cloned into `data/bibles-private/`
+        // (#859).
         state
             .refresh_default_bible_translations()
             .await
             .with_context(|| {
                 format!(
-                    "case {}: ingesting bible translations from local data/bibles/*.zip \
-                     archives — check the PRESENTER_BIBLE_KJV/SEB/ROHACEK/SEVP/MILOST env \
-                     vars are all set (see the error below for which one)",
+                    "case {}: ingesting bible translations from local archives \
+                     (data/bibles/kjv.usfm.zip + the private modules in data/bibles-private/, \
+                     cloned from zbynekdrlik/presenter-bibles) — check the \
+                     PRESENTER_BIBLE_KJV/SEB/ROHACEK/SEVP/MILOST env vars are all set (see \
+                     the error below for which one)",
                     case.id
                 )
             })?;

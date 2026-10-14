@@ -149,7 +149,8 @@ shape both the fixture author and the driver author agree to.
 ## Adding a new case
 
 1. Pick the slice directory and the next `NN`.
-2. Write the fixture against REAL data: a real verse from `data/bibles/` (see the README for how
+2. Write the fixture against REAL data: a real verse from `data/bibles/` (KJV) or the private
+   clone `data/bibles-private/` (SEB / Roháček / SEVP / Milosť, #859) (see the README for how
    to read the mybible/USFM sources), or a real library/song name from `data/libraries/` for
    worship-crud. Never invent verse text — the whole point of `verbatimVerses` is catching
    corruption against a REAL canonical string.

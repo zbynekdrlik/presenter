@@ -44,6 +44,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
+
       # Build fresh (this lane is standalone — there is no `build` job to
       # download artifacts from). The latency server MUST be a RELEASE build:
       # an unoptimized debug binary would inflate latency and false-fail. The
@@ -93,10 +103,10 @@ jobs:
           PRESENTER_SKIP_MOCK_INTEGRATIONS: "1"
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
           PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
-          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
-          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
-          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
-          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles-private/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles-private/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles-private/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles-private/milost.bbl.mybible.zip
 
       - name: Stop synthetic NDI sender
         if: always()
