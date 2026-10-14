@@ -327,6 +327,26 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
 """ + ingest
                 self.assertEqual(_violations(steps), [])
 
+    def test_a_tool_path_held_in_a_variable_is_resolved(self) -> None:
+        # Review round 4: deploy.yml already runs the staged server as
+        # `NEW_BIN=...` + `"$NEW_BIN"`; the same shape for a tool was invisible.
+        for assign, run in (
+            ("NEW_INGEST=/opt/presenter/staging.new/ingest_bibles", '"$NEW_INGEST"'),
+            ("export TOOL=${{ env.DEPLOY_DIR }}/import_propresenter", "${TOOL} --root x"),
+        ):
+            with self.subTest(assign=assign):
+                steps = SAFE_SETUP + f"""
+      - name: Import
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          {assign}
+          {run}
+          REMOTE_SCRIPT
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+                self.assertEqual([v.step for v in _violations(steps)], ["Import"])
+
     def test_relative_tool_runs_resolve_against_the_last_cd(self) -> None:
         old = SAFE_SETUP + """
       - name: Import ProPresenter

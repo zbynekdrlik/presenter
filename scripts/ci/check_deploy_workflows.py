@@ -241,20 +241,34 @@ def _tool_runs(script: str) -> list[tuple[str, bool]]:
     """Every deploy tool the script EXECUTES, as (tool, staged) — not the ones
     `cp` / `chmod` / `mv` merely name. A command is a `&&` / `||` / `;` / `|`
     segment of a line with the quotes dropped and `${{ … }}` expressions as one
-    word. A relative `./tool` resolves against the last `cd` of the script, and
+    word. `$VAR` / `${VAR}` resolve from the script's plain `VAR=value`
+    assignments, a relative `./tool` against the last `cd` of the script, and
     `staged` = the path goes through `staging.new/`."""
     runs: list[tuple[str, bool]] = []
     cwd = ""
+    variables: dict[str, str] = {}
     for line in script.splitlines():
         line = re.sub(r"\$\{\{.*?\}\}", "EXPR", line).replace('"', " ").replace("'", " ")
         for segment in re.split(r"&&|\|\||;|\|", line):
-            words = _command_words(segment.split())
+            raw = segment.split()
+            if raw and raw[0] in ("export", "local", "readonly", "declare"):
+                raw = raw[1:]
+            if raw and all(ENV_ASSIGN_RE.match(word) for word in raw):
+                for word in raw:  # `NEW_INGEST=/opt/.../ingest_bibles` → resolve "$NEW_INGEST" later
+                    name, value = word.split("=", 1)
+                    variables[name] = value
+                continue
+            words = _command_words(raw)
             if not words:
                 continue
             if words[0] == "cd":
                 cwd = words[1] if len(words) > 1 else ""
                 continue
-            command = words[0]
+            command = re.sub(
+                r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?",
+                lambda match: variables.get(match.group(1), match.group(0)),
+                words[0],
+            )
             tool = command.rsplit("/", 1)[-1]
             if tool not in TOOLS:
                 continue
