@@ -12,8 +12,10 @@ set -euo pipefail
 #              (crates/presenter-server/src/bin/ai_eval/, report §8 step 8 — #680). Needs the
 #              candidate model endpoint (--candidate-url) reachable over the network. For
 #              bible-authoring/adversarial cases it ALSO needs the PRESENTER_BIBLE_KJV/SEB/
-#              ROHACEK/SEVP/MILOST env vars pointing at the local data/bibles/*.zip archives —
-#              this ingestion reads local files, never the network (#662 defect 2). A case that
+#              ROHACEK/SEVP/MILOST env vars pointing at the local archives: KJV at
+#              data/bibles/kjv.usfm.zip, the four licence-restricted modules in the gitignored
+#              data/bibles-private/ (a clone of the private repo zbynekdrlik/presenter-bibles,
+#              #859) — this ingestion reads local files, never the network (#662 defect 2). A case that
 #              cannot even be seeded (e.g. one of those env vars unset) makes `drive` exit
 #              non-zero and print which case + why — see `.claude/rules/ai-eval-harness.md`.
 #   score-l1 — deterministic structural scoring of the traces just driven (real tool structs,
