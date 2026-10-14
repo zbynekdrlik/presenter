@@ -5,6 +5,7 @@
 //! `canonical_book_by_name` and never goes through this resolver.
 
 mod fold;
+mod grammar;
 mod hint;
 #[rustfmt::skip]
 pub mod names_table;
