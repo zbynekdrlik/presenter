@@ -3,6 +3,7 @@
 //! Pure, no I/O — the server's `listen` module owns the socket and the
 //! resampler.
 
+pub mod level;
 pub mod vban;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod vban_encode;
