@@ -444,6 +444,19 @@ jobs:
           python3 -m unittest discover -s scripts/ci -p 'test_check_deploy_workflows.py' -v
           python3 scripts/ci/check_deploy_workflows.py
 
+      # #859: the SEB / Roháček / SEVP / Milosť modules may not be distributed
+      # publicly; they live in the private repo zbynekdrlik/presenter-bibles,
+      # checked out into the gitignored data/bibles-private/. The checker fails
+      # when anything but a public-domain module (kjv.usfm.zip) is tracked under
+      # data/bibles/, when data/bibles-private/ is tracked, when a release-asset
+      # job or an artifact upload touches the private modules, or when a job reads
+      # them without checking the private repo out first.
+      - name: Check public Bible modules (#859)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_check_public_bibles.py' -v
+          python3 scripts/ci/check_public_bibles.py
+
       # Regression test for #802: the E2E harness (startTestServer,
       # refresh-dev-data.sh, the synthetic NDI sender) must never silently
       # fall back to a local `cargo run` — Tier-0 compiles in CI only. A
