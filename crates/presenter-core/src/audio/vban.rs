@@ -22,8 +22,10 @@
 //! | 24..28 | `nuFrame`, u32 LE, +1 per packet |
 //!
 //! The decode scale is songplayer's symmetric encoder scale (INT16 ±32767,
-//! INT24 ±8388607, INT32 ±`i32::MAX`), clamped to ±1.0, so a packet of the
-//! ported encoder round-trips bit-exactly in the integer domain.
+//! INT24 ±8388607, INT32 ±`i32::MAX`), clamped to ±1.0, so an INT16 or INT24
+//! packet of the ported encoder round-trips bit-exactly in the integer domain.
+//! INT32 is carried in an f32 (24-bit mantissa) and keeps only its top 24
+//! bits: 2147483000 decodes to 2147483008 / 2^31 and re-encodes as 2147483007.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

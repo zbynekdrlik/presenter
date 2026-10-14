@@ -91,7 +91,9 @@ pub enum MicsValidationError {
 }
 
 /// Validate and normalize a whole list: names trimmed, the sender IP in its
-/// canonical form, a blank IP = any sender.
+/// canonical form (an IPv4-mapped IPv6 address as plain IPv4, the form the
+/// receiver compares the canonicalised peer address with), a blank IP = any
+/// sender.
 pub fn validate_mics(mics: Vec<MicConfig>) -> Result<Vec<MicConfig>, MicsValidationError> {
     if mics.len() > LISTEN_MAX_MICS {
         return Err(MicsValidationError::TooMany);
@@ -132,7 +134,7 @@ fn normalize_mic(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
     {
         None => None,
         Some(raw) => match raw.parse::<IpAddr>() {
-            Ok(ip) => Some(ip.to_string()),
+            Ok(ip) => Some(ip.to_canonical().to_string()),
             Err(_) => return Err(MicsValidationError::BadSenderIp(mic.id)),
         },
     };
@@ -303,6 +305,27 @@ mod tests {
         assert!(
             validate_mics(vec![mic(&"a".repeat(20), "ABCDEFGHIJKLMNOP", None)]).is_ok(),
             "a 20-char id and a 16-char stream name"
+        );
+    }
+
+    #[test]
+    fn an_ipv4_mapped_sender_is_saved_as_ipv4_and_is_the_same_sender() {
+        let mics =
+            validate_mics(vec![mic("guest", "GUEST_EN", Some("::ffff:192.0.2.10"))]).unwrap();
+        assert_eq!(mics[0].sender_ip.as_deref(), Some("192.0.2.10"));
+        assert_eq!(
+            mics[0].sender_ip_addr(),
+            Some("192.0.2.10".parse().unwrap())
+        );
+        assert_eq!(
+            validate_mics(vec![
+                mic("guest", "GUEST_EN", Some("::ffff:192.0.2.10")),
+                mic("interp", "GUEST_EN", Some("192.0.2.10")),
+            ]),
+            Err(MicsValidationError::Ambiguous(
+                "guest".into(),
+                "interp".into()
+            ))
         );
     }
 

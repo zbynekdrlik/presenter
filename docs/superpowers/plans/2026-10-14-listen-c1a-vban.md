@@ -114,7 +114,7 @@ Starts from `origin/dev`. Version: dev is unreleased; no bump unless main caught
 **Interfaces:**
 - Consumes: serde, thiserror (core deps).
 - Produces (`presenter_core::audio::vban::…`, no root re-export): consts `VBAN_MAGIC: [u8; 4]`, `VBAN_HEADER_LEN = 28`, `VBAN_STREAM_NAME_LEN = 16`, `VBAN_DATA_MAX = 1436`, `VBAN_DEFAULT_PORT: u16 = 6980`, `INT16_FULL_SCALE: i16 = 32_767`, `INT24_FULL_SCALE: i32 = 8_388_607`, `VBAN_SAMPLE_RATES: [u32; 21]`; `enum VbanSampleType { Int16, Int24, Int32, Float32 }` (serde lowercase; `from_data_type(u8) -> Option<Self>`, `data_type() -> u8`, `bytes() -> usize`, `as_str() -> &'static str`); `struct VbanAudioFormat { rate_hz: u32, channels: u16, sample_type: VbanSampleType }` (Copy, Hash, serde camelCase); `struct VbanPacket { stream_name: String, counter: u32, format: VbanAudioFormat, frames: u16, samples: Vec<f32> }`; `enum VbanReject { NotVban, NonAudio(u8), UnsupportedCodec(u8), UnsupportedType(u8), Corrupt }` (Copy, `Error`); `fn decode_packet(&[u8]) -> Result<VbanPacket, VbanReject>`; `fn stream_name_of(&[u8]) -> String`; `fn f32_to_int16(f32) -> i16`; `fn clean_f32(f32) -> f32`.
-- Produces (`presenter_core::audio::vban_encode::…`, only under `cfg(any(test, feature = "test-helpers"))`): `stream_name_bytes`, `f32_to_int24`, `int24_le`, `f32_to_int32`, `sr_index_of`, `header(rate_hz, frames, channels, sample_type, name, counter) -> Option<[u8; 28]>`, `write_sample`, `struct VbanEncoder` (`new(name, rate_hz, channels, sample_type)`, `starting_at(self, u32) -> Self`, `next_counter`, `skip(u32)`, `packet(&[f32]) -> Option<Vec<u8>>`, `packets(&[f32], frames_per_packet) -> Vec<Vec<u8>>`), `tone(rate_hz, hz, amplitude, start_frame, frames, channels) -> Vec<f32>`, `ramp(samples) -> Vec<f32>`.
+- Produces (`presenter_core::audio::vban_encode::…`, only under `cfg(any(test, feature = "test-helpers"))`): `stream_name_bytes`, `f32_to_int24`, `int24_le`, `f32_to_int32`, `sr_index_of`, `header(rate_hz, frames, channels, sample_type, name, counter) -> Option<[u8; 28]>`, `write_sample`, `struct VbanEncoder` (`new(name, rate_hz, channels, sample_type)`, `starting_at(self, u32) -> Self`, `next_counter`, `skip(u32)`, `packet(&[f32]) -> Option<Vec<u8>>`, `packets(&[f32], frames_per_packet) -> Vec<Vec<u8>>`), `ramp(samples) -> Vec<f32>`. (C1a-1 review 1: `tone(rate_hz, hz, amplitude, start_frame, frames, channels) -> Vec<f32>` (Step 5 below) is NOT in lane 1; lane 2 adds it to `vban_encode.rs` with its first caller, Task 6.)
 
 - [ ] **Step 1: The feature and the module skeleton.** In `crates/presenter-core/Cargo.toml`, after the `[dependencies]` table:
 
@@ -2079,6 +2079,7 @@ fn age_ms(at: Instant, now: Instant) -> u64 {
 
 **Files:**
 - Create: `crates/presenter-server/src/listen/vban_rx.rs`
+- Modify: `crates/presenter-core/src/audio/vban_encode.rs` (add `tone`, the code of Task 1 Step 5: lane 1 left it out until this first caller, C1a-1 review 1)
 - Test: `crates/presenter-server/src/listen/tests.rs` (append; `use` lines added at its top)
 
 **Interfaces:**
@@ -2458,7 +2459,10 @@ impl MicRouter {
                 return;
             }
         };
-        let index = self.mics.iter().position(|mic| mic.matches(&packet.stream_name, from.ip()));
+        // C1a-1 review 1: `validate_mics` stores the sender IP canonical
+        // (`::ffff:192.0.2.10` → `192.0.2.10`), so the peer is canonicalised too.
+        let sender = from.ip().to_canonical();
+        let index = self.mics.iter().position(|mic| mic.matches(&packet.stream_name, sender));
         match index {
             Some(index) => self.mics[index].accept(&self.service, &packet, from, now),
             None => self.unmatched(&packet, from, now),

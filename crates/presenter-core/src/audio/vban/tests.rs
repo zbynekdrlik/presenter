@@ -278,6 +278,12 @@ fn mono_and_stereo_int16_and_int32_round_trip() {
     }
     assert_eq!(f32_to_int32(1.0), i32::MAX);
     assert_eq!(f32_to_int32(-1.0), -i32::MAX);
+    // INT32 keeps its top 24 bits only (the f32 mantissa), as the module doc says:
+    let mut bytes = header(48_000, 1, 1, Int32, "x", 0).unwrap().to_vec();
+    bytes.extend_from_slice(&2_147_483_000i32.to_le_bytes());
+    let p = decode_packet(&bytes).unwrap();
+    assert_eq!(f64::from(p.samples[0]) * 2_147_483_648.0, 2_147_483_008.0);
+    assert_eq!(f32_to_int32(p.samples[0]), 2_147_483_007);
 }
 
 #[test]
@@ -340,20 +346,29 @@ fn the_checks_run_in_the_spec_order() {
         decode_packet(&bytes),
         Err(VbanReject::UnsupportedCodec(0x10))
     );
-    bytes[7] = 0x09;
+    bytes.pop(); // the size is right again
+    bytes[4] = 3; // a valid SR index
+    bytes[7] = 0x09; // the reserved bit alone (INT16)
     assert_eq!(
         decode_packet(&bytes),
         Err(VbanReject::Corrupt),
         "reserved bit"
     );
-    bytes[7] = 0x01;
+    bytes[7] = 0x0D; // the reserved bit AND FLOAT64
     assert_eq!(
         decode_packet(&bytes),
         Err(VbanReject::Corrupt),
-        "SR index 31"
+        "the reserved bit before the sample type"
+    );
+    bytes[4] = 31;
+    bytes[7] = 0x05; // SR index 31 AND FLOAT64
+    assert_eq!(
+        decode_packet(&bytes),
+        Err(VbanReject::Corrupt),
+        "the SR index before the sample type"
     );
     bytes[4] = 3;
-    bytes[7] = 0x05;
+    bytes.push(0); // FLOAT64 AND one byte too many
     assert_eq!(decode_packet(&bytes), Err(VbanReject::UnsupportedType(5)));
     bytes[7] = 0x01;
     assert_eq!(decode_packet(&bytes), Err(VbanReject::Corrupt), "size last");
