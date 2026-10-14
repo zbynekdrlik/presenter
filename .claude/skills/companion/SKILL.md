@@ -3,7 +3,7 @@ name: presenter-companion
 description: >
   Bitfocus Companion plugin setup and gotchas for the presenter project — /etc/hosts override,
   setVariableValues batching, and version sync. Use when working on the Companion plugin or
-  CI Deploy Companion Plugin job.
+  the "Deploy Companion module" step of deploy.yml / release.yml.
 triggers:
   - Companion
   - companion plugin
@@ -16,8 +16,17 @@ triggers:
 
 ## companion-pp.lan Access (Tailscale)
 
-The "Companion PP" box is NOT on the LAN anymore — it joins via Tailscale. CI's
-`Deploy Companion Plugin` job runs on the self-hosted runner and SSHs to `companion-pp.lan`.
+The "Companion PP" box is NOT on the LAN anymore — it joins via Tailscale. release.yml's
+`Deploy Companion module` step runs on the self-hosted runner and SSHs to `companion-pp.lan`.
+
+**The module ships with the RELEASE, never with a dev push (#850).** Companion runs only on the
+production hosts. `scripts/deploy/deploy_companion_module.sh <alias> <label>` runs as the
+"Deploy Companion module" step of deploy.yml (SNV, merge to main) and release.yml (PP, GitHub
+Release), after the server is up. pipeline.yml used to deploy it on every dev push, which
+restarted the operators' Companion on both hosts ~50 min after any push (2026-10-14: a PP event at
+18:00) and ran unreleased plugin code next to the released server. `check_deploy_workflows.py`
+invariant 5 blocks a Companion deploy / `systemctl … companion` in any dev-push workflow. To try a
+plugin change before a release, use the `node --test` suites and `lib/test-support.js`.
 
 **Fix applied 2026-04-14:** `/etc/hosts` on dev machine maps the name:
 
@@ -26,7 +35,7 @@ The "Companion PP" box is NOT on the LAN anymore — it joins via Tailscale. CI'
 ```
 
 `/etc/hosts` takes priority over DNS (nsswitch), so `ssh-keyscan` and `ssh` both resolve
-the Tailscale IP. If `Deploy Companion Plugin` starts failing on `ssh-keyscan companion-pp.lan`:
+the Tailscale IP. If release.yml's SSH setup starts failing on `ssh-keyscan companion-pp.lan`:
 1. Verify Tailscale IP: `tailscale status | grep companion-pp` or ask the user.
 2. Update the `/etc/hosts` entry.
 3. If the box is fully offline → machine-availability issue, not config.

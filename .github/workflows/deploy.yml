@@ -738,6 +738,12 @@ jobs:
             sudo systemctl enable --now cloudflared
           "
 
+      # #850: the Companion module ships WITH the release (it used to be deployed by every
+      # dev push, restarting the operators' Companion). Runs after the server is up and
+      # before the Bible import; Companion is always started again (the script fails loudly).
+      - name: Deploy Companion module
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target SNV
+
       # #851 D1: AFTER the swap and the /healthz wait, never before. Until the
       # swap /opt/presenter/ingest_bibles is the PREVIOUS release's binary
       # (old parser: it skips every translation as up-to-date), and the

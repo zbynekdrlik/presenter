@@ -670,6 +670,12 @@ jobs:
             sudo systemctl enable --now cloudflared
           "
 
+      # #850: the Companion module ships WITH the release (it used to be deployed by every
+      # dev push, restarting the operators' Companion). Runs after the server is up and
+      # before the RUST_LOG check; Companion is always started again (the script fails loudly).
+      - name: Deploy Companion module
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target PP
+
       # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
       # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement
       # through. The RUNNING process must carry the committed unit's RUST_LOG. It is the job's

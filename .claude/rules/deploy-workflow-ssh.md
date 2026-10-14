@@ -52,3 +52,8 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   under the old service (an aborted deploy leaves it unable to boot) or race the new service's
   migration run. pipeline.yml / release.yml stop the service and copy the binaries first, so the
   rule does not apply there.
+- **No Companion deploy in a dev-push workflow** (invariant 5, #850). Companion runs only on the
+  production hosts; `scripts/deploy/deploy_companion_module.sh` runs from deploy.yml (SNV) and
+  release.yml (PP) as the "Deploy Companion module" step, through the job's `deploy-target`
+  alias. pipeline.yml (every dev push) never runs it, `repin-presenter-connection.py` or
+  `systemctl stop|start|restart companion` (running the repin unit-test file is fine).
