@@ -53,3 +53,8 @@ __pycache__/
 # #850 O1: the real Cloudflare Access config (account id, e-mails, IPs) never enters this public repo
 ops/cloudflare/*.json
 !ops/cloudflare/presenter-access.example.json
+
+# #859: checkout of the PRIVATE repo zbynekdrlik/presenter-bibles (SEB / Roháček /
+# SEVP / Milosť, licence-restricted). Local dev:
+#   git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private
+data/bibles-private/

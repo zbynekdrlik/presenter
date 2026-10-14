@@ -281,15 +281,29 @@ export async function refreshDevData(
   dbUrl: string,
   root = DEFAULT_LIBRARY_ROOT,
 ) {
+  // KJV is public domain and lives in the repo; SEB / Roháček / SEVP / Milosť
+  // are licence-restricted and come from the private repo
+  // zbynekdrlik/presenter-bibles, checked out into the gitignored
+  // data/bibles-private/ (CI: the "Check out the private Bible modules" step;
+  // local: `git clone git@github.com:zbynekdrlik/presenter-bibles
+  // data/bibles-private`). A missing module fails the import loudly (#859).
   const bibleDir = path.join(REPO_ROOT, "data", "bibles");
+  const privateBibleDir = path.join(REPO_ROOT, "data", "bibles-private");
   await runShell(
     `PRESENTER_DB_URL=${dbUrl} ./scripts/dev/refresh-dev-data.sh "${root}"`,
     {
       PRESENTER_DB_URL: dbUrl,
       PRESENTER_BIBLE_KJV: path.join(bibleDir, "kjv.usfm.zip"),
-      PRESENTER_BIBLE_SEB: path.join(bibleDir, "seb.bbl.mybible.zip"),
-      PRESENTER_BIBLE_ROHACEK: path.join(bibleDir, "rohacek.bbl.mybible.zip"),
-      PRESENTER_BIBLE_SEVP: path.join(bibleDir, "sevp.obohu.mybible.zip"),
+      PRESENTER_BIBLE_SEB: path.join(privateBibleDir, "seb.bbl.mybible.zip"),
+      PRESENTER_BIBLE_ROHACEK: path.join(
+        privateBibleDir,
+        "rohacek.bbl.mybible.zip",
+      ),
+      PRESENTER_BIBLE_SEVP: path.join(privateBibleDir, "sevp.obohu.mybible.zip"),
+      PRESENTER_BIBLE_MILOST: path.join(
+        privateBibleDir,
+        "milost.bbl.mybible.zip",
+      ),
     },
   );
 }

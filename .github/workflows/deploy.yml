@@ -142,6 +142,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -385,10 +393,10 @@ jobs:
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
           scp -i ~/.ssh/id_deploy \
             data/bibles/kjv.usfm.zip \
-            data/bibles/seb.bbl.mybible.zip \
-            data/bibles/rohacek.bbl.mybible.zip \
-            data/bibles/sevp.obohu.mybible.zip \
-            data/bibles/milost.bbl.mybible.zip \
+            data/bibles-private/seb.bbl.mybible.zip \
+            data/bibles-private/rohacek.bbl.mybible.zip \
+            data/bibles-private/sevp.obohu.mybible.zip \
+            data/bibles-private/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
       - name: Sync ProPresenter libraries from git
