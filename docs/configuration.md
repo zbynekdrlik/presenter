@@ -98,9 +98,11 @@ Needs internet only to sync.
 Presenter receives the guest and interpreter microphones as VBAN audio on ONE UDP socket, bound only
 while at least one microphone is configured (`listen.mics`, `GET|PUT /listen/mics`). The list ships
 EMPTY: no port is bound until the microphones are saved (PP stays empty; SNV gets its two microphones
-on the routing day). `GET /listen/status` shows the socket, every microphone's packets, format,
-sender and state (`waiting`, `receiving`, `no_audio` 3 s after the last packet) and the streams seen
-but not assigned. Senders: VB-Matrix or Voicemeeter on the FOH PC, 48 kHz, 16-bit, stream names
+on the routing day). `GET /listen/status` shows the socket, every microphone's packets, packets per
+second, lost / late packets, resyncs, dropped blocks, packets of a second sender, 16 kHz frames,
+level, format, sender and state (`waiting`, `receiving`, `no_audio` 3 s after the last packet, `error`
+for a refused sample rate), the streams seen but not assigned and the senders whose datagrams were
+refused. Senders: VB-Matrix or Voicemeeter on the FOH PC, 48 kHz, 16-bit, stream names
 `GUEST_EN` / `INTERP_SK` (spec §5.7). `scripts/dev/listen/vban_send.py` sends a test tone.
 
 | Variable                     | Default        | Purpose |
