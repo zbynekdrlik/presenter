@@ -4,10 +4,13 @@
 //! loopback UDP tests on `127.0.0.1:0` with bounded 5 s polls (`wait_for`).
 
 use super::health::{ListenHealth, PacketSeen, RECENT_CAP};
+use super::vban_rx::{receive, MicRouter, SocketEnd};
 use super::*;
+use crate::tracing_capture::{quoted, Capture};
 use presenter_core::audio::vban::{VbanAudioFormat, VbanSampleType};
+use presenter_core::audio::vban_encode::{tone, VbanEncoder};
 use presenter_core::listen::mics::{MicChannel, MicLanguage, MicRole};
-use presenter_core::listen::status::{MicState, SocketState};
+use presenter_core::listen::status::{MicState, MicStatus, SocketState};
 
 const GUEST: &str = "192.0.2.10:6980";
 const OTHER: &str = "198.51.100.7:6980";
@@ -176,4 +179,259 @@ async fn a_service_that_was_never_started_reports_not_started() {
         (1, MicState::Waiting)
     );
     assert_eq!(service.mics().len(), 1);
+}
+
+// ---- the receiver (MicRouter): explicit senders and instants ----------------
+
+fn guest_encoder() -> VbanEncoder {
+    VbanEncoder::new("GUEST_EN", 48_000, 1, VbanSampleType::Int16)
+}
+
+/// One 256-frame packet of a 1 kHz tone (48 kHz: 187 packets per second).
+fn next_packet(encoder: &mut VbanEncoder) -> Vec<u8> {
+    encoder
+        .packet(&tone(48_000, 1_000.0, 0.5, 0, 256, 1))
+        .unwrap()
+}
+
+fn router_for(configs: Vec<MicConfig>) -> (ListenService, MicRouter) {
+    let service = ListenService::new();
+    service.apply(configs.clone());
+    let router = MicRouter::new(&service, &configs);
+    (service, router)
+}
+
+fn status_of(service: &ListenService, id: &str, now: Instant) -> MicStatus {
+    let mics = service.mics();
+    let status = service.with_health(|health| health.snapshot(&mics, now));
+    status
+        .mics
+        .into_iter()
+        .find(|mic| mic.config.id == id)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn packets_are_routed_by_stream_name_and_sender_ip() {
+    let (service, mut router) = router_for(vec![
+        mic("guest", "GUEST_EN", Some("192.0.2.10")),
+        mic("interp", "INTERP_SK", None),
+    ]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    let mut interp = VbanEncoder::new("INTERP_SK", 48_000, 1, VbanSampleType::Int16);
+    let mut stray = VbanEncoder::new("Stream1", 48_000, 2, VbanSampleType::Int24);
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    router.handle_datagram(&next_packet(&mut guest), addr(OTHER), t0); // right name, wrong sender
+    router.handle_datagram(&next_packet(&mut interp), addr(OTHER), t0);
+    let stray_packet = stray.packet(&tone(48_000, 440.0, 0.25, 0, 64, 2)).unwrap();
+    router.handle_datagram(&stray_packet, addr(OTHER), t0);
+    assert_eq!(status_of(&service, "guest", t0).packets, 1);
+    assert_eq!(status_of(&service, "interp", t0).packets, 1);
+    let status = service.with_health(|health| health.snapshot(&[], t0));
+    let seen: Vec<(&str, &str)> = status
+        .unmatched
+        .iter()
+        .map(|s| (s.stream_name.as_str(), s.sender.as_str()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![("GUEST_EN", OTHER), ("Stream1", OTHER)],
+        "seen, not used"
+    );
+    assert_eq!(
+        status.unmatched[1].format,
+        VbanAudioFormat {
+            rate_hz: 48_000,
+            channels: 2,
+            sample_type: VbanSampleType::Int24
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_ipv4_mapped_peer_matches_the_canonical_sender_ip() {
+    // A dual-stack socket reports an IPv4 sender as `::ffff:192.0.2.10`; the
+    // saved list holds `192.0.2.10` (C1a-1 review 1).
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", Some("192.0.2.10"))]);
+    let t0 = Instant::now();
+    let mapped = addr("[::ffff:192.0.2.10]:6980");
+    router.handle_datagram(&next_packet(&mut guest_encoder()), mapped, t0);
+    let guest = status_of(&service, "guest", t0);
+    assert_eq!(guest.packets, 1);
+    assert_eq!(guest.sender.as_deref(), Some("[::ffff:192.0.2.10]:6980"));
+}
+
+#[tokio::test]
+async fn a_datagram_that_is_not_vban_audio_reaches_no_mic() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    router.handle_datagram(b"hello", addr(GUEST), t0);
+    let mut text = next_packet(&mut guest_encoder());
+    text[4] = 0x40; // sub-protocol TEXT (VB-Matrix / VBAN-TEXT traffic on 6980)
+    router.handle_datagram(&text, addr(GUEST), t0);
+    assert_eq!(status_of(&service, "guest", t0).packets, 0);
+    let status = service.with_health(|health| health.snapshot(&[], t0));
+    assert!(status.unmatched.is_empty(), "{:?}", status.unmatched);
+}
+
+#[tokio::test]
+async fn an_unassigned_stream_is_logged_on_power_of_two_packets_per_name() {
+    let capture = Capture::install();
+    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut stray = VbanEncoder::new("Stream1", 48_000, 1, VbanSampleType::Int16);
+    for _ in 0..5 {
+        router.handle_datagram(&next_packet(&mut stray), addr(OTHER), t0);
+    }
+    // the same name from another sender counts on the same per-name gate
+    router.handle_datagram(&next_packet(&mut stray), addr(GUEST), t0);
+    let lines = capture.events_with_message("VBAN stream not assigned to any mic");
+    let packets: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.field("packets"))
+        .collect();
+    assert_eq!(packets, vec!["1", "2", "4"]);
+    assert_eq!(lines[0].field("stream"), Some(quoted("Stream1").as_str()));
+}
+
+#[tokio::test]
+async fn a_stopped_sender_shows_no_audio_after_3_s_and_logs_it_once() {
+    let capture = Capture::install();
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    router.handle_datagram(&next_packet(&mut guest_encoder()), addr(GUEST), t0);
+    let just_before = t0 + Duration::from_millis(2_999);
+    assert_eq!(
+        status_of(&service, "guest", just_before).state,
+        MicState::Receiving
+    );
+    let at_3_s = t0 + Duration::from_millis(3_000);
+    assert_eq!(
+        status_of(&service, "guest", at_3_s).state,
+        MicState::NoAudio
+    );
+    for ms in [2_999, 3_100, 4_100] {
+        router.on_tick(t0 + Duration::from_millis(ms));
+    }
+    let events = capture.events(MIC_TARGET);
+    let messages: Vec<&str> = events
+        .iter()
+        .filter_map(|event| event.field("message"))
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            "mic receives VBAN",
+            "mic lost audio — no VBAN packet for 3 s"
+        ]
+    );
+    assert_eq!(events[0].field("mic"), Some(quoted("guest").as_str()));
+    assert_eq!(events[0].field("stream"), Some(quoted("GUEST_EN").as_str()));
+    assert_eq!(events[0].field("rate"), Some("48000"));
+}
+
+#[tokio::test]
+async fn a_rename_keeps_the_mic_and_a_new_stream_name_starts_it_fresh() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    router.handle_datagram(&next_packet(&mut guest_encoder()), addr(GUEST), t0);
+    let mut renamed = mic("guest", "GUEST_EN", None);
+    renamed.name = "Hosť z Londýna".into();
+    renamed.language = MicLanguage::Off;
+    service.apply(vec![renamed.clone()]);
+    router.update(&[renamed]);
+    assert_eq!(
+        status_of(&service, "guest", t0).packets,
+        1,
+        "a rename / language change resets nothing"
+    );
+    let moved = mic("guest", "GUEST_2", None);
+    service.apply(vec![moved.clone()]);
+    router.update(&[moved]);
+    assert_eq!(
+        status_of(&service, "guest", t0).packets,
+        0,
+        "another stream name: a fresh mic"
+    );
+}
+
+// ---- the socket (real loopback UDP) ----------------------------------------
+
+#[tokio::test]
+async fn receive_ends_at_once_when_the_list_was_emptied_before_it_started() {
+    // supervise saw a mic, then the list was emptied before the bind finished
+    let service = ListenService::new();
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut config = service.config_receiver();
+    let end = tokio::time::timeout(
+        Duration::from_secs(5),
+        receive(&service, &socket, &mut config),
+    )
+    .await
+    .expect("receive returns at once");
+    assert_eq!(end, SocketEnd::NoMic);
+}
+
+#[tokio::test]
+async fn no_mic_binds_no_socket_and_a_saved_mic_binds_one() {
+    let service = ListenService::new();
+    assert!(service.start(addr("127.0.0.1:0")));
+    assert!(!service.start(addr("127.0.0.1:0")), "started once");
+    let idle = wait_for(&service, "idle", |s| s.socket.state == SocketState::Idle).await;
+    assert_eq!(
+        (idle.socket.local_addr, idle.socket.bind_addr.as_deref()),
+        (None, Some("127.0.0.1:0"))
+    );
+    service.apply(vec![mic("guest", "GUEST_EN", None)]);
+    let bound = wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let local: SocketAddr = bound.socket.local_addr.unwrap().parse().unwrap();
+    assert!(local.ip().is_loopback() && local.port() != 0);
+    service.apply(Vec::new());
+    wait_for(&service, "closed", |s| s.socket.state == SocketState::Idle).await;
+    std::net::UdpSocket::bind(local).expect("the port is free again: the socket was closed");
+}
+
+#[tokio::test]
+async fn a_taken_port_is_retried_and_reported_until_it_is_free() {
+    let holder = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let taken = holder.local_addr().unwrap();
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", None)]);
+    service.start(taken);
+    let retrying = wait_for(&service, "retrying", |s| {
+        s.socket.state == SocketState::Retrying
+    })
+    .await;
+    let error = retrying.socket.error.unwrap_or_default();
+    assert!(error.contains(&taken.port().to_string()), "{error}");
+    drop(holder);
+    wait_for(&service, "bound after a retry", |s| {
+        s.socket.state == SocketState::Bound
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn real_udp_packets_reach_the_mic_through_the_socket() {
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
+    service.start(addr("127.0.0.1:0"));
+    let bound = wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let vban: SocketAddr = bound.socket.local_addr.unwrap().parse().unwrap();
+    let tx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut guest = guest_encoder();
+    for k in 0..12 {
+        tx.send_to(&next_packet(&mut guest), vban).await.unwrap();
+        if k % 4 == 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await; // Voicemeeter-like bursts of 4
+        }
+    }
+    let status = wait_for(&service, "12 packets", |s| s.mics[0].packets == 12).await;
+    let mic = &status.mics[0];
+    assert_eq!(
+        (mic.state, mic.format, mic.frames_per_packet),
+        (MicState::Receiving, Some(MONO_48K), Some(256))
+    );
+    assert_eq!(mic.sender, Some(tx.local_addr().unwrap().to_string()));
 }

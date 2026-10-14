@@ -167,6 +167,24 @@ impl VbanEncoder {
     }
 }
 
+/// `frames` interleaved frames of a sine from `start_frame` on, the same value
+/// in every channel.
+pub fn tone(
+    rate_hz: u32,
+    hz: f64,
+    amplitude: f64,
+    start_frame: usize,
+    frames: usize,
+    channels: usize,
+) -> Vec<f32> {
+    (start_frame..start_frame + frames)
+        .flat_map(|n| {
+            let phase = std::f64::consts::TAU * hz * n as f64 / f64::from(rate_hz);
+            std::iter::repeat_n((amplitude * phase.sin()) as f32, channels)
+        })
+        .collect()
+}
+
 /// songplayer's `ramp_block`, any length: distinct-ish values over `[-1, 1)`.
 pub fn ramp(samples: usize) -> Vec<f32> {
     (0..samples)
