@@ -5,6 +5,7 @@ mod api_stage;
 mod bible;
 mod features;
 mod integrations;
+mod interpreter_tips;
 mod libraries;
 pub mod network_mode;
 mod playlists;
@@ -420,6 +421,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/clear", post(ai::clear_conversation))
         .route("/ai/status", get(ai::check_status))
         .route("/api/network-mode", get(network_mode::get_network_mode))
+        // #852: šepkár tips for the interpreter (/interpreter/tips*).
+        .merge(interpreter_tips::router())
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
         .merge(stream::router())
         // #779: lower-third nameplate list + show-state (/stream/api/*). Static
