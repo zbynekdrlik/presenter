@@ -38,3 +38,10 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   afterwards — it is not gitignored).
 - Adding a new deploy workflow/job with a `deploy-target` alias: it is picked up
   automatically (every `.github/workflows/*.yml` is scanned).
+- **Replace a host's known_hosts entry only AFTER a successful `ssh-keyscan`.** The shared
+  runner's `~/.ssh/known_hosts` is also what local sessions on dev2 use. Removing the entry
+  (`ssh-keygen -R`) BEFORE a scan that then fails (the host is offline) leaves the host out of
+  the file, so every later `ssh` to it fails "Host key verification failed" (PP internet
+  outage 2026-10-14). Scan into a `mktemp` file, and only when it is non-empty run
+  `ssh-keygen -R` + append. Recovery by hand: compare the fingerprint of a fresh scan with
+  `ssh-keygen -F <host> -f ~/.ssh/known_hosts.old` before re-adding it.
