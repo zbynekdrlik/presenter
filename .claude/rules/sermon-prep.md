@@ -32,11 +32,17 @@ paths:
   after `. ! ?`; a gap inside a verse reads ` … `; a wholly struck verse splits the label
   (`5-7, 9`); every token struck → no verses and the suffix names the whole source range (the
   editor still labels the card); emphasis = Unicode upper case ("vieru" → "VIERU").
-- **One `translation_short_code`** (core `label.rs`) formats "(SEB)" for the live composer and
-  the sermon labels. `resolume/handlers.rs` keeps its own older copy (out of scope).
+- **`translation_short_code`** (core `label.rs`) is the shared "(SEB)" formatter; new code calls
+  it, never a copy. Three older copies remain today: the live composer's private
+  `translation_short_code` in `state/slides/compose.rs` (P2a switches the composer to the core
+  function), an inline `short_code` in `ai/tools/bible.rs`, and `resolume/handlers.rs`'s own.
+- **End cuts:** a trailing `, ; : – —` goes even when glued to the word, but a hyphen only as a
+  standalone spaced ` - ` token (ROH and SEVP write the dash that way); a hyphen inside or at the
+  end of a word ("Bar-Jona", "nad- a podzemné") always stays. A sentence end followed only by
+  closing quotes or brackets (`.)`, `.”`, `!“`, `?»`, `.’`, `.]`) gets no trailing ellipsis.
 - `MAX_ITEM_VERSES` = 60. `default_service_date(today)` = the next Sunday (today on a Sunday),
-  `default_sermon_title(date)` = "Kázeň D. M. YYYY" — computed from the SERVER's date
-  (`state::sermons::local_today`), never the phone's.
+  `default_sermon_title(date)` = "Kázeň D. M. YYYY" — computed from the SERVER's date (the
+  `state::sermons::local_today` helper arrives in P3), never the phone's.
 - Tests are plain `#[test]` fns with inline `assert_eq!` (the quality job's assertion check reads
   `#[test]` bodies; a helper-only body fails it). Check new expected strings in a throwaway
   Python mirror first (Tier-0, no local `cargo test`), then port.

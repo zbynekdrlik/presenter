@@ -317,3 +317,95 @@ fn emphasis_is_unicode_upper_case_and_struck_beats_emphasized() {
     .expect("valid edits");
     assert_eq!(normalized, edits(&[(1, &[0, 2], &[4])]));
 }
+
+/// ROH and SEVP write the dash as a spaced hyphen (a made-up sentence in the
+/// same shape; the module text is private).
+const SPACED_HYPHEN: &str = "Prišli sme domov - dvere boli otvorené";
+
+#[test]
+fn an_end_cut_drops_a_spaced_hyphen_but_never_a_hyphen_inside_a_word() {
+    let run_end = render_item(
+        &source(&[(1, SPACED_HYPHEN)]),
+        &edits(&[(1, &[4, 5, 6], &[])]),
+    );
+    assert_eq!(texts(&run_end), [(1, "Prišli sme domov")]);
+    assert_eq!(run_end.suffix, "1a");
+    let inner = render_item(
+        &source(&[(1, SPACED_HYPHEN), (2, "Vošli sme dnu.")]),
+        &edits(&[(1, &[4, 5, 6], &[])]),
+    );
+    assert_eq!(
+        texts(&inner),
+        [(1, "Prišli sme domov …"), (2, "Vošli sme dnu.")]
+    );
+    assert_eq!(inner.suffix, "1-2");
+    let suspended = render_item(
+        &source(&[(1, "Stavby nad- a podzemné")]),
+        &edits(&[(1, &[2, 3], &[])]),
+    );
+    assert_eq!(texts(&suspended), [(1, "Stavby nad-")]);
+    let joined = render_item(
+        &source(&[(1, "Videli Bar-Jonu pri mori")]),
+        &edits(&[(1, &[2, 3], &[])]),
+    );
+    assert_eq!(texts(&joined), [(1, "Videli Bar-Jonu")]);
+}
+
+#[test]
+fn an_end_cut_that_keeps_only_a_dash_keeps_the_dash() {
+    let item = render_item(&source(&[(1, "— a b")]), &edits(&[(1, &[1, 2], &[])]));
+    assert_eq!(texts(&item), [(1, "—")]);
+    assert_eq!(item.suffix, "1a");
+}
+
+#[test]
+fn a_sentence_end_before_a_closing_quote_or_bracket_gets_no_ellipsis() {
+    let item = render_item(
+        &source(&[
+            (1, "Povedal: (Toto je koniec.) A potom odišiel"),
+            (2, "Zvolal: „Poď sem!“ a čakal"),
+            (3, "Spýtal sa: «Kto si?» a mlčal"),
+            (4, "Odpísal: ‚Áno, prídem.’ a odišiel"),
+            (5, "Spomenul (iné slovo) a ďalej"),
+            (6, "Koniec."),
+        ]),
+        &edits(&[
+            (1, &[4, 5, 6], &[]),
+            (2, &[3, 4], &[]),
+            (3, &[4, 5], &[]),
+            (4, &[3, 4], &[]),
+            (5, &[3, 4], &[]),
+        ]),
+    );
+    assert_eq!(
+        texts(&item),
+        [
+            (1, "Povedal: (Toto je koniec.)"),
+            (2, "Zvolal: „Poď sem!“"),
+            (3, "Spýtal sa: «Kto si?»"),
+            (4, "Odpísal: ‚Áno, prídem.’"),
+            (5, "Spomenul (iné slovo) …"),
+            (6, "Koniec."),
+        ]
+    );
+    assert_eq!(item.suffix, "1-6");
+    let more = render_item(
+        &source(&[
+            (1, "Riekol: “Choď.” a išiel"),
+            (2, "Dodal: 'Hneď.' a stál"),
+            (3, "Zapísal [toto.] a viac"),
+            (4, "Amen."),
+        ]),
+        &edits(&[(1, &[2, 3], &[]), (2, &[2, 3], &[]), (3, &[2, 3], &[])]),
+    );
+    assert_eq!(
+        texts(&more),
+        [
+            (1, "Riekol: “Choď.”"),
+            (2, "Dodal: 'Hneď.'"),
+            (3, "Zapísal [toto.]"),
+            (4, "Amen."),
+        ]
+    );
+    assert_eq!(more.suffix, "1-4");
+}

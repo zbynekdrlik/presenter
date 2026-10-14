@@ -1,6 +1,8 @@
-//! Reference labels of sermon items (#851 spec §7.3). The live composer and the
-//! sermon generator name a translation through [`translation_short_code`], so
-//! "(SEB)" is formatted in one place.
+//! Reference labels of sermon items (#851 spec §7.3). [`translation_short_code`]
+//! is the shared "(SEB)" formatter; new code calls it, never a copy. Three older
+//! copies remain today: the live composer's private one in
+//! `state/slides/compose.rs` (P2a switches the composer to this function), an
+//! inline one in `ai/tools/bible.rs`, and `resolume/handlers.rs`'s own.
 
 /// "eng-kjv" → "KJV", "slk-seb" → "SEB": the part after the last dash, upper
 /// case.

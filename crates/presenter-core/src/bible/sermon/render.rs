@@ -1,10 +1,12 @@
 //! The text and the label of a sermon item after its edits (#851 spec §7.3):
 //!
 //! - an end cut on the last verse of a run is `16a`, its trailing `, ; : – —`
-//!   goes; a start cut on the first verse of a run is `16b`, original case;
+//!   or standalone spaced ` - ` goes; a start cut on the first verse of a run
+//!   is `16b`, original case;
 //! - a cut the label cannot express (an inner verse, the inner edge of a run's
 //!   first or last verse, one verse cut at both ends) gets a leading `… `
-//!   and/or a trailing ` …`, never a trailing ellipsis after `. ! ?`;
+//!   and/or a trailing ` …`, never a trailing ellipsis after `. ! ?` (also
+//!   when only closing quotes or brackets follow it: `.)`, `!“`, `?»`);
 //! - a gap with kept words on both sides reads ` … `;
 //! - a wholly struck verse is omitted and splits the label (`5-7, 9`);
 //! - an emphasized token is upper case ("vieru" → "VIERU").
@@ -48,6 +50,10 @@ impl RenderedItem {
 }
 
 const END_CUT_TRIM: &[char] = &[',', ';', ':', '–', '—'];
+
+/// Closing quotes and brackets that may follow a sentence end (`.)`, `.”`,
+/// `!“`, `?»`, `.'`, `.’`, `.]`); Slovak quotes close with `“`, `‘` or `«`.
+const CLOSING_MARKS: &[char] = &[')', ']', '"', '\'', '”', '“', '’', '‘', '»', '«'];
 
 /// One verse with its kept tokens, before its place in a run is known.
 struct KeptVerse {
@@ -157,18 +163,26 @@ fn finish_text(verse: &KeptVerse, mark: &VerseMark) -> String {
     if verse.start_cut && !mark.start_cut {
         text = format!("… {text}");
     }
-    if verse.end_cut && !mark.end_cut && !text.ends_with(['.', '!', '?']) {
+    if verse.end_cut && !mark.end_cut && !ends_a_sentence(&text) {
         text = format!("{text} …");
     }
     text
 }
 
-/// The body without its trailing `, ; : – —` (and the spaces they leave);
-/// unchanged when nothing else would remain.
+/// `. ! ?` at the end, also when only closing quotes or brackets follow it
+/// ("koniec.)", "sem!“", "si?»").
+fn ends_a_sentence(text: &str) -> bool {
+    text.trim_end_matches(CLOSING_MARKS)
+        .ends_with(['.', '!', '?'])
+}
+
+/// The body without its trailing `, ; : – —` or standalone spaced `-` (and the
+/// spaces they leave); unchanged when nothing else would remain. A hyphen
+/// attached to a word ("Bar-Jona", "nad-") stays.
 fn trim_end_cut(body: &str) -> String {
     let mut text = body;
     loop {
-        let trimmed = text.trim_end_matches(END_CUT_TRIM).trim_end();
+        let trimmed = trim_end_once(text);
         if trimmed.len() == text.len() {
             break;
         }
@@ -179,4 +193,11 @@ fn trim_end_cut(body: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+/// One trimming step: the trailing `, ; : – —` and spaces, then a trailing
+/// standalone `-` token (ROH and SEVP write the dash as a spaced hyphen).
+fn trim_end_once(text: &str) -> &str {
+    let trimmed = text.trim_end_matches(END_CUT_TRIM).trim_end();
+    trimmed.strip_suffix(" -").map_or(trimmed, str::trim_end)
 }
