@@ -5,10 +5,18 @@
 //! `canonical_book_by_name` and never goes through this resolver.
 
 mod fold;
+mod hint;
 #[rustfmt::skip]
 pub mod names_table;
+mod types;
 
 pub use fold::{fold_book_text, FoldedBook};
+pub use hint::{
+    chapters_hint, counted, segment_label, verses_hint, MISSING_BOOK_HINT, NO_BOOK_HINT,
+};
+pub use types::{
+    BookCandidate, BookRef, MatchKind, ParsedQuery, Passage, RawSpec, Resolution, Segment, Tier,
+};
 
 #[cfg(test)]
 mod tests;
