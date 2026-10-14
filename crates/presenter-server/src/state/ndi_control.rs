@@ -337,6 +337,12 @@ impl FakeNdiControl {
         Arc::new(fake)
     }
 
+    /// #858: change what `start_pipeline` returns mid-test (a source that was
+    /// silent starts broadcasting).
+    pub(crate) fn set_start_outcome(&self, outcome: StartOutcome) {
+        *self.start_outcome.lock().expect("start_outcome lock") = outcome;
+    }
+
     /// A fake whose `whep_signaller_call` returns the chosen outcome (#630).
     pub(crate) fn with_whep_outcome(outcome: WhepOutcome) -> Arc<Self> {
         let fake = Self::default();

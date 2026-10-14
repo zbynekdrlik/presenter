@@ -29,6 +29,7 @@ use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 mod activation;
 mod drift_guard;
 mod lifecycle;
+mod silent_streak;
 mod supervisor;
 mod whep;
 
