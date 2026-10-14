@@ -9,6 +9,7 @@ mod grammar;
 mod hint;
 #[rustfmt::skip]
 pub mod names_table;
+mod rank;
 mod types;
 
 pub use fold::{fold_book_text, FoldedBook};

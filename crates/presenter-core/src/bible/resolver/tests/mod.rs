@@ -2,4 +2,5 @@
 
 mod grammar;
 mod hint;
+mod rank;
 mod table;
