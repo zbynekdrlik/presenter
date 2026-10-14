@@ -4,8 +4,11 @@
 //! (songplayer `vban-out.md` "The queue never blocks"). One task per mic
 //! ([`run_chain`]) picks the channel, converts to 16 kHz mono
 //! (`resample::Resampler16k`), cuts 100 ms frames and records how many and the
-//! last one's level. The frames themselves reach no consumer yet: the channel
-//! arrives with C1b's recorder / C3's ASR.
+//! last one's level; it spends a unit of its coop budget per block, so a full
+//! queue never pins a worker. A format change rebuilds the converter; its log
+//! line goes through the #484 gate on the mic's format count (health). The
+//! frames themselves reach no consumer yet: the channel arrives with C1b's
+//! recorder / C3's ASR.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -17,7 +20,7 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 
 use super::resample::Resampler16k;
-use super::{ListenService, MIC_TARGET};
+use super::{should_log_event, ListenService, MIC_TARGET};
 
 /// ≈ 340 ms of 256-frame packets at 48 kHz — far above the ≥ 6 × 256
 /// samples a Voicemeeter receiver keeps (songplayer `vban-out.md`).
@@ -195,21 +198,31 @@ pub(crate) async fn run_chain(
         let before = chain.format();
         let frames = chain.push(&block);
         if before != chain.format() {
-            log_format(&mic_id, before, block.format, chain.error());
+            let formats = service.with_health(|health| health.record_format(&mic_id, generation));
+            if should_log_event(formats) {
+                log_format(&mic_id, before, block.format, chain.error(), formats);
+            }
         }
         let level = frames.last().map(Vec::as_slice).map(rms_dbfs);
         let produced = frames.len() as u64;
         service.with_health(|health| {
             health.record_chain(&mic_id, generation, produced, level, chain.error());
         });
+        // `pop` touches no tokio resource: while blocks are queued (a sender
+        // flooding counter jumps queues a second of silence per packet) the
+        // task must still give its worker back once its coop budget is spent.
+        tokio::task::coop::consume_budget().await;
     }
 }
 
+/// The converter line of a format the chain switched to; `formats` (the
+/// mic's formats this session, its first one included) passed the #484 gate.
 fn log_format(
     mic_id: &str,
     before: Option<VbanAudioFormat>,
     after: VbanAudioFormat,
     error: Option<&str>,
+    formats: u64,
 ) {
     if let Some(error) = error {
         warn!(
@@ -217,6 +230,7 @@ fn log_format(
             mic = mic_id,
             rate = after.rate_hz,
             error,
+            formats,
             "mic converter refused the VBAN format — this mic gives no audio"
         );
     } else if let Some(before) = before {
@@ -225,6 +239,7 @@ fn log_format(
             mic = mic_id,
             from = ?before,
             to = ?after,
+            formats,
             "mic VBAN format changed — converter reset"
         );
     }
@@ -234,6 +249,7 @@ fn log_format(
 mod tests {
     use super::*;
     use crate::listen::health::PacketSeen;
+    use crate::tracing_capture::Capture;
     use presenter_core::audio::sequence::SequenceVerdict;
     use presenter_core::audio::vban::VbanSampleType;
     use presenter_core::audio::vban_encode::tone;
@@ -245,6 +261,11 @@ mod tests {
         rate_hz: 48_000,
         channels: 1,
         sample_type: VbanSampleType::Int16,
+    };
+    /// Passed through without a converter: a cheap block of exactly one frame.
+    const MONO_16K: VbanAudioFormat = VbanAudioFormat {
+        rate_hz: 16_000,
+        ..MONO_48K
     };
     const STEREO_48K: VbanAudioFormat = VbanAudioFormat {
         rate_hz: 48_000,
@@ -408,7 +429,98 @@ mod tests {
         service.with_health(|health| {
             health.record_packet("guest", seen, SequenceVerdict::InOrder, false);
         });
-        let guest = MicConfig {
+        let mic = &service
+            .with_health(|health| health.snapshot(&[guest()], now))
+            .mics[0];
+        assert_eq!(mic.frames_out, 2, "200 ms in, 2 frames");
+        let level = mic.level_dbfs.unwrap();
+        assert!((level + 9.03).abs() <= 0.3, "{level}");
+        assert!(mic.voiced);
+    }
+
+    #[tokio::test]
+    async fn the_chain_task_gives_its_worker_back_while_blocks_are_queued() {
+        // `pop` never waits while blocks are queued: without a yield point the
+        // task would convert all of them before any other task on this
+        // current-thread runtime got to run.
+        const BLOCKS: u64 = 300;
+        let service = ListenService::new();
+        let generation = service.with_health(|health| health.set_mics(&[], &["guest"]));
+        let queue = Arc::new(BlockQueue::new(512));
+        for _ in 0..BLOCKS {
+            queue.push(block(MONO_16K, 0, vec![0.0; 1_600]));
+        }
+        let chain = tokio::spawn(run_chain(
+            service.clone(),
+            "guest".to_string(),
+            MicChannel::Left,
+            generation,
+            Arc::clone(&queue),
+        ));
+        let probe = {
+            let service = service.clone();
+            tokio::spawn(async move { frames_out(&service) })
+        };
+        let meanwhile = tokio::time::timeout(Duration::from_secs(5), probe)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            meanwhile < BLOCKS,
+            "another task ran only after all {meanwhile} blocks"
+        );
+        queue.close();
+        tokio::time::timeout(Duration::from_secs(5), chain)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            frames_out(&service),
+            BLOCKS,
+            "every block was still converted"
+        );
+    }
+
+    #[tokio::test]
+    async fn alternating_formats_log_the_converter_line_on_power_of_two_counts() {
+        let capture = Capture::install();
+        let service = ListenService::new();
+        let generation = service.with_health(|health| health.set_mics(&[], &["guest"]));
+        let queue = Arc::new(BlockQueue::new(QUEUE_CAPACITY));
+        let at_44k = VbanAudioFormat {
+            rate_hz: 44_100,
+            ..MONO_48K
+        };
+        for k in 0..QUEUE_CAPACITY {
+            let format = if k % 2 == 0 { MONO_48K } else { at_44k };
+            queue.push(block(format, 0, Vec::new()));
+        }
+        queue.close();
+        let chain = tokio::spawn(run_chain(
+            service.clone(),
+            "guest".to_string(),
+            MicChannel::Left,
+            generation,
+            Arc::clone(&queue),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), chain)
+            .await
+            .unwrap()
+            .unwrap();
+        let lines = capture.events_with_message("mic VBAN format changed");
+        let formats: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| line.field("formats"))
+            .collect();
+        assert_eq!(
+            formats,
+            vec!["2", "4", "8", "16", "32", "64"],
+            "64 formats (63 changes): 6 lines, not 63"
+        );
+    }
+
+    fn guest() -> MicConfig {
+        MicConfig {
             id: "guest".into(),
             name: "Hosť".into(),
             stream_name: "GUEST_EN".into(),
@@ -416,13 +528,11 @@ mod tests {
             channel: MicChannel::Left,
             language: MicLanguage::En,
             role: MicRole::Guest,
-        };
-        let mic = &service
-            .with_health(|health| health.snapshot(&[guest], now))
-            .mics[0];
-        assert_eq!(mic.frames_out, 2, "200 ms in, 2 frames");
-        let level = mic.level_dbfs.unwrap();
-        assert!((level + 9.03).abs() <= 0.3, "{level}");
-        assert!(mic.voiced);
+        }
+    }
+
+    fn frames_out(service: &ListenService) -> u64 {
+        let status = service.with_health(|health| health.snapshot(&[guest()], Instant::now()));
+        status.mics[0].frames_out
     }
 }

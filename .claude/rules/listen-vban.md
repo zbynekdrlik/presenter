@@ -39,7 +39,9 @@ paths:
   mic locks to its first sender (`ip:port`); another sender of the same name counts
   `otherSenderPackets` and is ignored until the locked one is silent ≥ 3 s, then takes over with a
   fresh counter (no gap, no resync). Non-audio VBAN (VB-Matrix's VBAN-TEXT / SERVICE) is counted in
-  `rejected`, DEBUG only; every other reject WARNs on the sender's power-of-two totals.
+  `rejected`, DEBUG only, and left out of the WARN gate: every other reject WARNs on the power-of-two
+  totals of that sender's non-audio-free rejects (`RejectCounts::count`), so a VB-Matrix host's
+  constant VBAN-TEXT never swallows the slots of its rare corrupt / unsupported datagrams.
 - **A save** (`MicRouter::update`): a mic whose stream name, sender and channel stay keeps its state,
   counters and chain (a rename or a language change resets nothing); another mic starts fresh with a
   new chain and the update's generation; an unlisted mic's input is dropped → its queue closes → its
@@ -57,10 +59,18 @@ paths:
   counted (`framesOut`) with the last one's level (`levelDbfs`); **no frame channel until its first
   consumer** (C1b recorder / C3 ASR) adds it.
 - **rubato's lock footprint:** 13 packages, byte-identical to songplayer's lock — incl.
-  `audio-codec-algorithms` (a dependency of `audioadapter-sample`, 0BSD OR Apache-2.0). rubato and
-  audioadapter* declare `rust-version = 1.87`: CI builds on stable, `clippy.toml`'s msrv lints only our
-  code. Resolve a dependency change with `cargo metadata` (non-compiling) and diff `Cargo.lock`: only
-  `+` lines, no existing package's version moves.
+  `audio-codec-algorithms` (a dependency of `audioadapter-sample`, 0BSD OR Apache-2.0). Resolve a
+  dependency change with `cargo metadata` (non-compiling) and diff `Cargo.lock`: only `+` lines, no
+  existing package's version moves.
+- **Toolchain floor = Rust 1.87** (since #852 C1a-3): rubato, audioadapter* and
+  audio-codec-algorithms declare `rust-version = 1.87`, so the workspace no longer builds on 1.85/1.86.
+  CI builds on stable. `clippy.toml`'s `msrv = "1.85.0"` stays ONLY for lint selection — do NOT bump
+  it: 1.87 would fire `manual_is_multiple_of` across the whole repo. Our own code still avoids std APIs
+  newer than 1.85 (`incompatible_msrv`).
+- **The chain task yields:** `BlockQueue::pop` touches no tokio resource, so `run_chain` calls
+  `tokio::task::coop::consume_budget().await` once per block (the workspace tokio floor is 1.44 for
+  `task::coop`; `tokio::task::consume_budget` is the deprecated path). A format change logs through
+  the #484 gate on the mic's format count (`ListenHealth::record_format`, cleared with the session).
 - **Health / status:** one `std::sync::Mutex<ListenHealth>`, never across an `.await`; ages at read time
   (no-audio exactly 3 s after the last packet); the WARN gates read the health counters
   (`PacketTally`, `record_other_sender`, `note_reject`) — no second set of counters. Every session

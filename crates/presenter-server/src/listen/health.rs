@@ -86,6 +86,9 @@ struct MicCounters {
     frames_out: u64,
     level_dbfs: Option<f32>,
     error: Option<String>,
+    /// Formats the chain switched to (its first one included): the #484 gate
+    /// of the converter lines.
+    formats: u64,
 }
 
 #[derive(Debug, Default)]
@@ -104,20 +107,24 @@ struct RejectCounts {
 }
 
 impl RejectCounts {
-    /// Count one reject; the sender's total.
+    /// Count one reject; the count its log line reads: a non-audio packet's
+    /// own count (DEBUG only), else the sender's total of every OTHER kind —
+    /// the WARN gate, so a VB-Matrix host's frequent VBAN-TEXT / SERVICE
+    /// packets never take the power-of-two slots of its rare corrupt or
+    /// unsupported datagrams.
     fn count(&mut self, reject: VbanReject) -> u64 {
-        match reject {
-            VbanReject::NotVban => self.not_vban += 1,
-            VbanReject::NonAudio(_) => self.non_audio += 1,
-            VbanReject::UnsupportedCodec(_) => self.unsupported_codec += 1,
-            VbanReject::UnsupportedType(_) => self.unsupported_type += 1,
-            VbanReject::Corrupt => self.corrupt += 1,
-        }
-        self.not_vban
-            + self.non_audio
-            + self.unsupported_codec
-            + self.unsupported_type
-            + self.corrupt
+        let slot = match reject {
+            VbanReject::NonAudio(_) => {
+                self.non_audio += 1;
+                return self.non_audio;
+            }
+            VbanReject::NotVban => &mut self.not_vban,
+            VbanReject::UnsupportedCodec(_) => &mut self.unsupported_codec,
+            VbanReject::UnsupportedType(_) => &mut self.unsupported_type,
+            VbanReject::Corrupt => &mut self.corrupt,
+        };
+        *slot += 1;
+        self.not_vban + self.unsupported_codec + self.unsupported_type + self.corrupt
     }
 }
 
@@ -322,7 +329,20 @@ impl ListenHealth {
         mic.error = error.map(str::to_string);
     }
 
-    /// A refused datagram of `from`; that sender's reject total.
+    /// A format the mic's chain switched to; the mic's formats this session
+    /// (0 unless `generation` is the mic's current one).
+    pub(crate) fn record_format(&mut self, mic_id: &str, generation: u64) -> u64 {
+        self.mics
+            .get_mut(mic_id)
+            .filter(|mic| mic.generation == generation)
+            .map_or(0, |mic| {
+                mic.formats += 1;
+                mic.formats
+            })
+    }
+
+    /// A refused datagram of `from`; the count its log line reads (non-audio:
+    /// its own count; else the sender's WARN-gate total, non-audio left out).
     pub(crate) fn note_reject(&mut self, from: IpAddr, reject: VbanReject, now: Instant) -> u64 {
         self.rejected.touch(from, now).0.count(reject)
     }

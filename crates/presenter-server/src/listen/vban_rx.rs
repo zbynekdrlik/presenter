@@ -329,21 +329,23 @@ impl MicRouter {
     }
 
     /// A refused datagram: counted per sender (canonical IP, as routing reads
-    /// it) and kind, WARN on the sender's power-of-two totals.
+    /// it) and kind, WARN on the power-of-two totals of the sender's rejects
+    /// other than non-audio.
     fn reject(&self, from: SocketAddr, reject: VbanReject, now: Instant) {
         let sender = from.ip().to_canonical();
-        let total = self
+        let count = self
             .service
             .with_health(|health| health.note_reject(sender, reject, now));
         if matches!(reject, VbanReject::NonAudio(_)) {
-            // VB-Matrix also speaks VBAN-TEXT / SERVICE: counted, never a WARN.
-            debug!(target: MIC_TARGET, %from, %reject, total, "ignored a non-audio VBAN packet");
-        } else if should_log_event(total) {
+            // VB-Matrix also speaks VBAN-TEXT / SERVICE: counted, never a WARN,
+            // and kept out of the WARN gate's total.
+            debug!(target: MIC_TARGET, %from, %reject, non_audio = count, "ignored a non-audio VBAN packet");
+        } else if should_log_event(count) {
             warn!(
                 target: MIC_TARGET,
                 %from,
                 %reject,
-                total,
+                total = count,
                 "dropped a datagram that is not usable VBAN audio"
             );
         }

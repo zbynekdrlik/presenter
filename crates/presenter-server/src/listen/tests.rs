@@ -731,8 +731,16 @@ async fn rejected_senders_are_counted_by_kind_and_keep_the_16_most_recent() {
     let mut health = ListenHealth::default();
     let ip = addr(OTHER).ip();
     assert_eq!(health.note_reject(ip, VbanReject::NotVban, t0), 1);
-    assert_eq!(health.note_reject(ip, VbanReject::NonAudio(0x40), t0), 2);
-    assert_eq!(health.note_reject(ip, VbanReject::Corrupt, t0), 3);
+    assert_eq!(
+        health.note_reject(ip, VbanReject::NonAudio(0x40), t0),
+        1,
+        "a non-audio packet reads its own count"
+    );
+    assert_eq!(
+        health.note_reject(ip, VbanReject::Corrupt, t0),
+        2,
+        "the WARN-gate total leaves non-audio out"
+    );
     let rejected = &health.snapshot(&[], t0).rejected[0];
     assert_eq!(rejected.sender, "198.51.100.7");
     assert_eq!(
@@ -787,6 +795,27 @@ async fn a_chain_of_an_older_update_cannot_write_and_a_kept_mics_chain_can() {
     assert_eq!(
         (silent.state, silent.level_dbfs, silent.voiced),
         (MicState::NoAudio, None, false)
+    );
+}
+
+#[tokio::test]
+async fn a_mics_formats_are_counted_for_its_chain_and_go_with_the_session() {
+    let mut health = ListenHealth::default();
+    let generation = health.set_mics(&[], &["guest"]);
+    assert_eq!(health.record_format("guest", generation), 1);
+    assert_eq!(health.record_format("guest", generation), 2);
+    assert_eq!(
+        health.record_format("guest", generation + 1),
+        0,
+        "another update's chain"
+    );
+    assert_eq!(health.record_format("nobody", generation), 0);
+    health.end_session();
+    let next = health.set_mics(&[], &["guest"]);
+    assert_eq!(
+        health.record_format("guest", next),
+        1,
+        "the gate starts over with the session"
     );
 }
 
@@ -990,7 +1019,7 @@ async fn rejects_are_counted_per_sender_and_kind() {
 #[tokio::test]
 async fn non_audio_vban_is_counted_but_logged_at_debug_only() {
     let capture = Capture::install();
-    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
     let t0 = Instant::now();
     let mut text = next_packet(&mut guest_encoder());
     text[4] = 0x40 | 3;
@@ -1006,16 +1035,39 @@ async fn non_audio_vban_is_counted_but_logged_at_debug_only() {
         warnings.is_empty(),
         "VB-Matrix's VBAN-TEXT is normal traffic: {warnings:?}"
     );
-    router.handle_datagram(b"garbage", addr(GUEST), t0);
+    let ignored = capture.events_with_message("ignored a non-audio VBAN packet");
+    assert_eq!(ignored.len(), 4);
+    assert_eq!(ignored[3].field("non_audio"), Some("4"));
+    let status = service.with_health(|health| health.snapshot(&[], t0));
+    assert_eq!(status.rejected[0].non_audio, 4);
+}
+
+#[tokio::test]
+async fn non_audio_packets_take_no_slot_of_the_reject_warn_gate() {
+    // A VB-Matrix host sends VBAN-TEXT / SERVICE all the time; its rare
+    // garbage datagrams still WARN on their own 1st, 2nd, 4th … count.
+    let capture = Capture::install();
+    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut text = next_packet(&mut guest_encoder());
+    text[4] = 0x40 | 3;
+    for _ in 0..3 {
+        for _ in 0..5 {
+            router.handle_datagram(&text, addr(GUEST), t0);
+        }
+        router.handle_datagram(b"garbage", addr(GUEST), t0);
+    }
+    router.handle_datagram(b"x", addr(OTHER), t0);
     let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
+    let totals: Vec<(&str, &str)> = warned
+        .iter()
+        .filter_map(|line| Some((line.field("from")?, line.field("total")?)))
+        .collect();
     assert_eq!(
-        warned.len(),
-        0,
-        "the sender's 5th reject is not a power of two"
+        totals,
+        vec![(GUEST, "1"), (GUEST, "2"), (OTHER, "1")],
+        "18 rejects of the guest host, 15 of them VBAN-TEXT: its garbage counts 1, 2, 3"
     );
-    router.handle_datagram(b"garbage", addr(OTHER), t0);
-    let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
-    assert_eq!(warned.len(), 1, "another sender's 1st reject warns");
 }
 
 #[tokio::test]
