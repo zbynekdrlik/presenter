@@ -59,6 +59,9 @@ html[data-stream-editor="true"] {
   align-items: center;
   gap: 0.5rem 1rem;
   white-space: nowrap;
+  /* #855: a long output name in the select must shrink the nav, not widen the page. */
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* #829: Scény | Menovky | Písma tab bar under the header (it carries the
@@ -123,6 +126,9 @@ html[data-stream-editor="true"] {
   gap: 0.4rem;
   font-size: 0.85rem;
   color: #b8c0d0;
+  /* #855: outputs may carry long names; the select shrinks instead of overflowing. */
+  max-width: 100%;
+  min-width: 0;
 }
 
 .stream-editor__output-select select {
@@ -131,6 +137,8 @@ html[data-stream-editor="true"] {
   border: 1px solid #333c4f;
   border-radius: 6px;
   padding: 0.25rem 0.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .stream-editor__main {
@@ -308,7 +316,7 @@ html[data-stream-editor="true"] {
   font-size: 0.8rem;
 }
 
-.stream-editor__btn:hover {
+.stream-editor__btn:hover:not(:disabled) {
   background: #303646;
 }
 
@@ -328,7 +336,7 @@ html[data-stream-editor="true"] {
   color: #ff9aa6;
 }
 
-.stream-editor__btn--danger:hover {
+.stream-editor__btn--danger:hover:not(:disabled) {
   background: #3a2027;
 }
 
@@ -997,14 +1005,11 @@ html[data-stream-editor="true"] {
 }
 
 /* #855: a disabled bar button (the seeded `stream` output is not deletable)
- * must read as unavailable, and keep its tooltip reachable by hover. */
+ * must read as unavailable; it keeps its tooltip (title) on hover. The base
+ * `.stream-editor__btn:hover` rules skip disabled buttons. */
 .stream-editor__outputs .stream-editor__btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.stream-editor__outputs .stream-editor__btn:disabled:hover {
-  background: #262b38;
 }
 
 /* #855: the inline delete confirmation in the output bar — the output's name,
@@ -1027,6 +1032,8 @@ html[data-stream-editor="true"] {
   flex-direction: column;
   gap: 0.2rem;
   min-width: 0;
+  /* A 100-character name without spaces must wrap too, not push the page wide. */
+  overflow-wrap: anywhere;
 }
 
 .stream-editor__output-confirm-body code {

@@ -102,6 +102,24 @@ async function openEditor(page: Page, output?: string): Promise<void> {
   }
 }
 
+/**
+ * `openEditor` on `slug`, and wait until the editor's own mount requests for
+ * it (def, plate list, active plate) were answered. A test that changes the
+ * output behind the editor's back must not race those reads: a late one would
+ * 404 with a URL of its own, or a "Načítanie zlyhalo" toast would replace the
+ * toast under test.
+ */
+async function openEditorSettled(page: Page, slug: string): Promise<void> {
+  const answered = ["def", "nameplates", "nameplates/active"].map((tail) =>
+    page.waitForResponse(
+      (res) =>
+        res.url() === `${baseURL}/stream/api/outputs/${slug}/${tail}` &&
+        res.request().method() === "GET",
+    ),
+  );
+  await Promise.all([...answered, openEditor(page, slug)]);
+}
+
 test("#842 a new output is created from its name, selected, and its OBS URL shown", async ({
   page,
 }) => {
@@ -350,8 +368,6 @@ test("#855 the seeded stream output cannot be deleted, and the button follows th
     "title",
     "Predvolený výstup pre Companion – nedá sa zmazať",
   );
-  // A click that gets through anyway opens nothing.
-  await deleteButton(page).click({ force: true });
   await expect(deleteConfirm(page)).toHaveCount(0);
 
   await outputSelect(page).selectOption(slug);
@@ -391,7 +407,7 @@ test("#855 a delete of an output another operator already removed is an error to
   page.on("pageerror", (err) => errors.push(`[pageerror] ${err.message}`));
   await createOutput(page, slug, `Súbeh ${n}`);
 
-  await openEditor(page, slug);
+  await openEditorSettled(page, slug);
   const first = (await barSlugs(page)).find((candidate) => candidate !== slug);
   expect(first, "another output exists").toBeTruthy();
   const removed = await page.request.delete(deleteUrl);
@@ -419,23 +435,103 @@ test("#855 a delete of an output another operator already removed is an error to
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });
 
-test("#855 the delete confirmation fits a phone without horizontal scroll", async ({ page }) => {
+test("#855 a long output name and the delete confirmation fit a phone without horizontal scroll", async ({
+  page,
+}) => {
   const errors: string[] = [];
   attachEditorConsoleCollector(page, errors);
   const n = Date.now() % 100_000;
   const slug = `phone-855-${n}`;
-  await createOutput(page, slug, `Veľmi dlhý názov výstupu určeného na zmazanie ${n}`);
+  // ~90 characters WITHOUT a space: it is an <option> of the header select AND
+  // the confirmation's question, and neither may widen the page.
+  await createOutput(page, slug, `${"Dlhý".repeat(22)}${n}`);
   await page.setViewportSize({ width: 360, height: 740 });
 
+  const overflowPx = () =>
+    page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+
   await openEditor(page, slug);
+  expect(await overflowPx(), "overflow with the long name in the header select").toBeLessThanOrEqual(
+    0,
+  );
   await deleteButton(page).click();
   await expect(deleteConfirm(page)).toBeVisible();
   await expect(deleteYes(page)).toBeVisible();
   await expect(deleteCancel(page)).toBeVisible();
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  );
-  expect(overflow, "horizontal overflow in px").toBeLessThanOrEqual(0);
+  expect(await overflowPx(), "overflow with the confirmation open").toBeLessThanOrEqual(0);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+const DISCARD_Q = "Zahodiť neuložené zmeny prvku?";
+
+test("#855 deleting an output asks about unsaved element edits first: declining keeps everything, accepting deletes without a second question", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  // `window.confirm` is the editor's dirty-draft question; an un-handled one
+  // is auto-dismissed, so every question is recorded and answered here.
+  const questions: string[] = [];
+  let accept = false;
+  page.on("dialog", (dialog) => {
+    questions.push(dialog.message());
+    void (accept ? dialog.accept() : dialog.dismiss());
+  });
+  const n = Date.now() % 100_000;
+  const slug = `dirty-855-${n}`;
+  const name = `Rozpracovaný ${n}`;
+  await createOutput(page, slug, name);
+  const scene = await page.request.post(`${baseURL}/stream/api/outputs/${slug}/scenes`, {
+    data: { name: `Scéna ${n}`, kind: "base" },
+  });
+  expect(scene.ok(), `create scene -> ${scene.status()}`).toBeTruthy();
+  const sceneId = (await scene.json()).id as number;
+
+  await openEditor(page, slug);
+  await expect(sceneCard(page, sceneId)).toBeVisible({ timeout: 15_000 });
+  const first = (await barSlugs(page)).find((candidate) => candidate !== slug);
+  expect(first, "another output exists").toBeTruthy();
+
+  // A new colour element, selected, with an UNSAVED frame edit (the default
+  // frame is x=10, w=80, so 15 is inside the allowed range and differs).
+  await sceneCard(page, sceneId).locator('[data-role="stream-scene-edit"]').click();
+  await page.waitForSelector('[data-role="stream-element-panel"]', { timeout: 15_000 });
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect(
+    page.locator('[data-role="stream-overlay-element"][data-selected="true"]'),
+  ).toHaveCount(1, { timeout: 15_000 });
+  const frameX = page.locator('[data-role="stream-frame-x"]');
+  const saveProps = page.locator('[data-role="stream-prop-save"]');
+  await frameX.fill("15");
+  await expect(saveProps).toHaveAttribute("data-dirty", "true");
+
+  // Declined: asked once, and the output, the confirmation and the edit stay.
+  await deleteButton(page).click();
+  await expect(deleteConfirm(page)).toBeVisible();
+  await deleteYes(page).click();
+  await expect.poll(() => questions.length).toBe(1);
+  expect(questions[0]).toBe(DISCARD_Q);
+  await expect(deleteConfirm(page)).toBeVisible();
+  expect(await defStatus(page, slug)).toBe(200);
+  await expect(outputSelect(page)).toHaveValue(slug);
+  await expect(frameX).toHaveValue("15");
+  await expect(saveProps).toHaveAttribute("data-dirty", "true");
+
+  // Accepted: the output is deleted and the editor moves on. One question per
+  // click, so none was asked again after the DELETE.
+  accept = true;
+  await deleteYes(page).click();
+  await expect(outputSelect(page).locator(`option[value="${slug}"]`)).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect(outputSelect(page)).toHaveValue(first as string);
+  await expect(page.locator('[data-role="stream-element-panel"]')).toHaveCount(0);
+  await expect(toast(page)).toHaveText(`Výstup ${name} bol zmazaný.`);
+  expect(await defStatus(page, slug), "the output is deleted").toBe(404);
+  expect(questions, "the question was asked once per click").toEqual([DISCARD_Q, DISCARD_Q]);
 
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

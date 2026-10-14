@@ -73,7 +73,7 @@ struct RenameOutputBody<'a> {
 #[derive(Clone, Copy)]
 struct OutputForm {
     mode: RwSignal<Option<ManageMode>>,
-    /// The output a rename was opened for.
+    /// The output a rename or a delete was opened for.
     slug: RwSignal<String>,
     name: RwSignal<String>,
     error: RwSignal<Option<String>>,
@@ -200,7 +200,9 @@ fn obs_url(origin: &str, slug: &str) -> String {
     format!("{origin}/stream/{slug}")
 }
 
-/// The inline message for a refused create / rename.
+/// The message for a refused create / rename (shown inline) or delete (shown as
+/// a toast): the 409 and 422 texts are about names and addresses, so a delete
+/// gets the generic status line instead.
 fn refusal_message(mode: ManageMode, err: &ApiError) -> String {
     let action = mode.action();
     match err {
@@ -316,9 +318,17 @@ fn submit_rename(ctx: StreamEditorCtx, form: OutputForm) {
     });
 }
 
+/// Why the selected output cannot be deleted, read untracked (for handlers).
+fn delete_blocked_now(ctx: StreamEditorCtx) -> Option<&'static str> {
+    let slug = ctx.slug();
+    ctx.outputs
+        .with_untracked(|outputs| delete_blocked(&slug, outputs))
+}
+
 /// DELETE the output the confirmation was opened for. Success moves the editor
-/// on ([`finish_delete`]); a refusal is a toast and the output stays, except a
-/// 404 (another operator was first), which also reloads the list.
+/// on ([`drop_output`]); any other refusal is a toast and the output stays. A
+/// 404 means another operator was first: the output is gone all the same, so
+/// it is dropped from the bar the same way (no second question).
 fn submit_delete(ctx: StreamEditorCtx, form: OutputForm) {
     if form.busy.get_untracked() {
         return;
@@ -338,38 +348,45 @@ fn submit_delete(ctx: StreamEditorCtx, form: OutputForm) {
     if !ctx.confirm_discard_draft() {
         return;
     }
+    // The question is answered, so release the selection BEFORE awaiting (the
+    // #787 rule): otherwise the draft stays editable during the request and
+    // edits typed meanwhile would be dropped by the switch without a word.
+    ctx.close_panel();
     form.busy.set(true);
     leptos::task::spawn_local(async move {
         let result = crate::api::delete_detail(&output_path(&slug)).await;
         form.busy.set(false);
         form.close();
         match result {
-            Ok(()) => finish_delete(ctx, &slug, &name),
+            Ok(()) => {
+                ctx.show_toast(&format!("Výstup {name} bol zmazaný."), "success");
+                drop_output(ctx, &slug);
+            }
             Err(err) => {
                 let message = refusal_message(ManageMode::Delete, &err);
                 leptos::logging::log!("stream editor: deleting output {slug:?} refused: {message}");
                 ctx.show_toast(&message, "error");
                 if matches!(err, ApiError::Status(404, _)) {
-                    ctx.reload_outputs();
+                    drop_output(ctx, &slug);
                 }
             }
         }
     });
 }
 
-/// The server deleted output `slug`: drop it from the list and, when the editor
-/// is still on it, move to the first remaining output through the usual switch
-/// (URL, storage, def, nameplates). The edits were asked about before the
-/// request, so the switch itself asks nothing. An editor the operator moved
-/// elsewhere meanwhile stays where it is.
-fn finish_delete(ctx: StreamEditorCtx, slug: &str, name: &str) {
-    leptos::logging::log!("stream editor: deleted output {slug:?}");
+/// Output `slug` no longer exists on the server (this delete, or another
+/// operator's first): drop it from the list and, when the editor is still on
+/// it, move to the first remaining output through `enter_output` (URL, storage,
+/// def, nameplates). Nothing is asked: the edits were asked about before the
+/// request, and a vanished output cannot take them anyway. An editor the
+/// operator moved elsewhere meanwhile stays where it is.
+fn drop_output(ctx: StreamEditorCtx, slug: &str) {
+    leptos::logging::log!("stream editor: output {slug:?} is gone");
     let next = ctx
         .outputs
         .with_untracked(|outputs| next_output_after_delete(slug, outputs));
     ctx.outputs
         .update(|outputs| outputs.retain(|output| output.slug != slug));
-    ctx.show_toast(&format!("Výstup {name} bol zmazaný."), "success");
     if ctx.output_slug.get_untracked() == slug {
         if let Some(next) = next {
             ctx.enter_output(next);
@@ -470,7 +487,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
         form.open(ManageMode::Rename, slug, name);
     };
     let open_delete = move |_| {
-        if delete_block().is_some() {
+        if delete_blocked_now(ctx).is_some() {
             return;
         }
         let slug = ctx.slug();

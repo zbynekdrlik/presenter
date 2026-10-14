@@ -459,8 +459,9 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB
   (0.9 % of 5.6 MB, measured dev vs prod 2026-10-12). Accepted; a hand-written fold table would
   save that if the bundle size ever matters.
-- `components/stream_editor/mod.rs` is at ~794 production lines (800 = warning). Move something
-  into a sibling module (the #742 split pattern) BEFORE the next addition there.
+- `components/stream_editor/mod.rs` is at ~724 production lines (800 = warning; #855 moved the
+  output list / switch methods to `output_switch.rs`). Move something into a sibling module (the
+  #742 split pattern) BEFORE it nears 800 again.
 - **Live check on SNV/PP: never press „Vytvoriť" with a fresh name.** The duplicate refusal
   only fires for a name or slug that already exists, so a "test" name creates a real output, and
   deleting prod data needs the owner (2026-10-12: a check created „Stream 2" / `stream-2` on SNV).
@@ -483,17 +484,25 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   its `title` carries the reason (a disabled button shows no tooltip on a phone: accepted). The
   server DELETE stays unrestricted for scripted cleanup. This is the one legitimate use of
   `DEFAULT_OUTPUT_SLUG` besides the default value; every output-scoped call still reads `ctx.slug()`.
-- Success (`finish_delete`): drop the output from `ctx.outputs`, toast, move to the FIRST remaining
-  output of the list (`next_output_after_delete`) through `StreamEditorCtx::enter_output` (the
-  switch body split out of `switch_output` in #855: persist, `?output=`, `close_panel`, def reset,
-  refetch), then `reload_outputs` confirms. An editor that was moved elsewhere meanwhile stays put.
+- Success (`drop_output`): drop the output from `ctx.outputs`, move to the FIRST remaining output
+  of the list (`next_output_after_delete`) through `StreamEditorCtx::enter_output` (the switch body
+  split out of `switch_output` in #855: persist, `?output=`, `close_panel`, def reset, refetch),
+  then `reload_outputs` confirms. An editor that was moved elsewhere meanwhile stays put.
 - **The dirty-draft question comes BEFORE the request** (`confirm_discard_draft` in
-  `submit_delete`): the draft dies with the output, and declining must keep the output. After the
-  DELETE `enter_output` asks nothing, so the operator is never asked twice. A NEW path that
-  switches because the current output vanished must use `enter_output`, not `switch_output`.
+  `submit_delete`): the draft dies with the output, and declining must keep the output. Once it is
+  answered, `submit_delete` calls `ctx.close_panel()` BEFORE awaiting (the #787 rule), so no draft
+  stays editable during the request and nothing typed meanwhile is dropped silently. After the
+  DELETE `enter_output` asks nothing, so the operator is never asked twice. Cost: a refused
+  (non-404) DELETE has already closed the panel.
+- **A path that leaves an output because it NO LONGER EXISTS uses `enter_output`, never
+  `switch_output`:** a declined question would leave the editor on a deleted output. That covers
+  the delete itself, a 404 on it (`drop_output`, no second question), and the `reload_outputs`
+  fallback (#827). `switch_output` stays the guarded path for operator choices.
+- `reload_outputs`, `switch_output` and `enter_output` live in `output_switch.rs` (split out of
+  `mod.rs` in #855, #742 pattern: `enter_output` is `pub(super)`). `mod.rs` is ~724 production lines.
 - A refusal is a toast and the output stays (`refusal_message(ManageMode::Delete, …)`; the
-  create/rename-only 409 / 422 texts are guarded out). A 404 (another operator was first) also
-  reloads the list, so the vanished output leaves the bar and the fallback switches.
+  create/rename-only 409 / 422 texts are guarded out). A 404 (another operator was first) is the
+  same toast, but the output IS gone, so it is dropped from the bar like a success.
 - The server's `delete_output` broadcasts NOTHING, so a second editor on the deleted output only
   finds out at its next list reload / failed request.
 - E2E (`stream-editor-outputs.spec.ts`): a real-UI delete (confirmation text, Zrušiť, Escape,
@@ -501,8 +510,15 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   remaining output, survives a reload), `stream` disabled with the tooltip and the button follows
   the select, a REAL 404 (the output deleted via `page.request` first) = error toast + re-sync
   with exactly that one console line collected apart by its URL (never a mocked non-2xx in a
-  zero-console spec), 360 px no overflow with the confirmation open. `GET /stream/{slug}` is the
-  WASM shell and answers 200 for any slug, so only the def endpoint proves a delete.
+  zero-console spec; `openEditorSettled` waits for the editor's own def / plate-list mount reads
+  first, so none of them races the behind-the-back delete), the dirty-draft order (decline keeps
+  output + edit, accept = exactly one question per click), 360 px no overflow with a ~90-character
+  unspaced name in the header select and the confirmation open. `GET /stream/{slug}` is the WASM
+  shell and answers 200 for any slug, so only the def endpoint proves a delete.
+- CSS: a long output name must shrink the header select (`max-width:100%; min-width:0` on
+  `__header-nav`, `__output-select` and its `select`; measured 74 px overflow at 360 px without),
+  and the confirmation body wraps anywhere. The base `.stream-editor__btn:hover` rules skip
+  `:disabled`, so a disabled / busy button never lights up.
 - **Live check on SNV/PP: never press „Zmazať" on a real output** — deleting prod data needs the
   owner. Check the disabled `stream` button + tooltip, open the confirmation on a throwaway
   output the owner named, then Zrušiť.
