@@ -926,9 +926,12 @@ mod tests {
     #[tokio::test]
     async fn two_creates_of_the_same_tip_at_once_store_one_row() {
         let (state, _clock) = state_at("2026-10-18T19:00:00+02:00").await;
+        // The drafts outlive the join: `tokio::join!` holds both futures past the statement
+        // that would otherwise drop a temporary `&note(..)` (E0716).
+        let (peter, jana) = (note("Peter", "same word"), note("Jana", "Same  word"));
         let (first, second) = tokio::join!(
-            state.create_interpreter_tip(&note("Peter", "same word"), origin()),
-            state.create_interpreter_tip(&note("Jana", "Same  word"), origin()),
+            state.create_interpreter_tip(&peter, origin()),
+            state.create_interpreter_tip(&jana, origin()),
         );
         let (first, second) = (first.expect("first"), second.expect("second"));
         assert_ne!(
