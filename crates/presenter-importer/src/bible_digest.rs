@@ -7,7 +7,8 @@
 
 use sha2::{Digest, Sha256};
 
-pub const PARSER_VERSION: u32 = 1;
+/// 2 = #851 D1 (notes, headings, footnotes, `¶`, punctuation spacing).
+pub const PARSER_VERSION: u32 = 2;
 
 pub fn compute_source_digest(file_bytes: &[u8], parser_version: u32) -> String {
     let mut h = Sha256::new();
@@ -62,6 +63,17 @@ mod tests {
         assert_eq!(
             compute_source_digest(b"hello world", 1),
             "08f06e2c00ab9ba6aed0980a436856b02feec3435bae117aeb8bdb2b35b444ba",
+        );
+    }
+
+    #[test]
+    fn the_d1_import_fixes_change_every_stored_digest() {
+        // #851 D1 changed the parsed text of every translation: a digest stored
+        // under parser version 1 must not match, so the next deploy re-imports
+        // all five translations instead of printing "Skipping … (up-to-date)".
+        assert_ne!(
+            compute_source_digest(b"archive", PARSER_VERSION),
+            compute_source_digest(b"archive", 1),
         );
     }
 }
