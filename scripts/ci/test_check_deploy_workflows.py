@@ -409,6 +409,44 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
         document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
         self.assertEqual(len(cdw.check_workflow("wf.yml", document)), 1)
 
+    def test_every_trigger_form_a_dev_push_reaches_is_checked(self) -> None:
+        step = """
+      - name: Restart
+        run: ssh deploy-target "sudo systemctl restart companion"
+"""
+        cases = (
+            ("on: push\n", 1),
+            ("on: [push, workflow_dispatch]\n", 1),
+            ("on:\n  push:\n", 1),
+            ("on:\n  push:\n    branches: ['**']\n", 1),
+            ("on:\n  push:\n    branches: ['d*']\n", 1),
+            ("on:\n  push:\n    branches-ignore: [main]\n", 1),
+            ("on:\n  push:\n    branches-ignore: [dev]\n", 0),
+            ("on:\n  push:\n    tags: ['v*']\n    branches: [main]\n", 0),
+            ("on:\n  workflow_run:\n    workflows: [Pipeline]\n    types: [completed]\n", 1),
+            ("on:\n  workflow_run:\n    workflows: [Pipeline]\n    branches: [main]\n", 0),
+            ("on:\n  schedule:\n    - cron: '0 0 * * 0'\n", 0),
+            ("on:\n  pull_request:\n", 0),
+        )
+        for trigger, expected in cases:
+            with self.subTest(trigger=trigger):
+                self.assertEqual(len(cdw.check_workflow("wf.yml", yaml.safe_load(trigger + _normalize(step)))), expected)
+
+    def test_more_companion_touches_are_seen_on_a_dev_push(self) -> None:
+        for command in (
+            'ssh deploy-target "sudo systemctl --no-block restart companion"',
+            "rsync -az ops/companion/presenter/ deploy-target:/opt/companion-module-dev/presenter/",
+            'ssh companion-pp.lan "uptime"',
+            'ssh companion-snv "sudo systemctl kill companion"',
+        ):
+            with self.subTest(command=command):
+                step = f"""
+      - name: Touch
+        run: {command}
+"""
+                document = yaml.safe_load("on:\n  push:\n    branches: [dev]\n" + _normalize(step))
+                self.assertEqual(len(cdw.check_workflow("wf.yml", document)), 1)
+
     def test_running_the_repin_unit_tests_on_dev_is_not_a_deploy(self) -> None:
         step = """
       - name: Run companion deploy-tool tests (python)

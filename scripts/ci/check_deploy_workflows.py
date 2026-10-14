@@ -37,9 +37,11 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    the old service refuses to boot on; right after the restart it would race
    the new service's own migration run.
 
-5. A workflow that runs on every push to ``dev`` never deploys the Companion
-   module (no ``deploy_companion_module.sh``, no ``repin-presenter-connection``,
-   no ``systemctl stop|start|restart companion``). Companion runs only on the
+5. A workflow a push to ``dev`` starts (``push`` / ``workflow_run`` whose
+   branch filter reaches dev) never deploys the Companion module or reaches a
+   production Companion host (no ``deploy_companion_module.sh``,
+   ``repin-presenter-connection.py``, ``/opt/companion-module-dev``,
+   ``companion-pp`` / ``companion-snv``, ``systemctl … companion``). Companion runs only on the
    production hosts, so a dev push restarted the operators' Companion on SNV
    and PP about 50 min later, whenever that landed (2026-10-14, a PP event at
    18:00), and put unreleased plugin code next to the released server. The
@@ -52,6 +54,7 @@ Exit 0 when clean, 1 on any violation (each printed as a GitHub ::error::).
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import re
 import sys
@@ -74,7 +77,9 @@ STATUS_FN_RE = re.compile(r"\b(always|failure|cancelled)\s*\(\s*\)")
 SWAP_RE = re.compile(r"\bmv\b[^\n]*\bstaging\.new/")
 TOOLS = ("ingest_bibles", "import_propresenter")
 COMPANION_DEPLOY_RE = re.compile(
-    r"deploy_companion_module\.sh|repin-presenter-connection\.py|systemctl\s+(?:stop|start|restart)\s+companion\b"
+    r"deploy_companion_module\.sh|repin-presenter-connection\.py|/opt/companion-module-dev"
+    r"|\bcompanion-pp\b|\bcompanion-snv\b"
+    r"|systemctl\s+(?:-\S+\s+)*(?:stop|start|restart|reload|kill)\s+(?:-\S+\s+)*companion\b"
 )
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # Words that run a LATER word as the command:
@@ -312,16 +317,40 @@ def check_staged_tools(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
     return violations
 
 
+def _branch_filter_reaches_dev(spec: Any) -> bool:
+    """Would a push / pull_request / workflow_run filter fire for `dev`?
+    No filter = every branch. `branches` globs are matched with fnmatch
+    (`**`, `d*`); `branches-ignore` fires unless a pattern matches dev."""
+    if not isinstance(spec, dict):
+        return True
+    branches = spec.get("branches")
+    if branches is not None:
+        patterns = branches if isinstance(branches, list) else [branches]
+        return any(fnmatch.fnmatchcase("dev", str(pattern).replace("**", "*")) for pattern in patterns)
+    ignored = spec.get("branches-ignore")
+    if ignored is not None:
+        patterns = ignored if isinstance(ignored, list) else [ignored]
+        return not any(fnmatch.fnmatchcase("dev", str(pattern).replace("**", "*")) for pattern in patterns)
+    return True
+
+
 def _runs_on_dev_push(document: dict[Any, Any]) -> bool:
+    """Does a push to dev start this workflow — directly (`on: push`, a list
+    holding push, a push filter that matches dev) or through `workflow_run`
+    (chained after another workflow: conservatively yes, unless its own branch
+    filter excludes dev)?"""
     # PyYAML reads the bare key `on` as the boolean True.
     triggers = document.get("on", document.get(True))
+    if isinstance(triggers, str):
+        triggers = {triggers: None}
+    elif isinstance(triggers, list):
+        triggers = {str(name): None for name in triggers}
     if not isinstance(triggers, dict):
         return False
-    push = triggers.get("push")
-    if not isinstance(push, dict):
-        return False
-    branches = push.get("branches") or []
-    return "dev" in (branches if isinstance(branches, list) else [branches])
+    return any(
+        name in triggers and _branch_filter_reaches_dev(triggers[name])
+        for name in ("push", "workflow_run")
+    )
 
 
 def check_companion_deploys(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
@@ -329,7 +358,7 @@ def check_companion_deploys(workflow: str, job: str, spec: dict[str, Any]) -> li
     violations: list[Violation] = []
     for index, step in enumerate(spec.get("steps") or []):
         if isinstance(step, dict) and COMPANION_DEPLOY_RE.search(_script(step)):
-            violations.append(Violation(workflow, job, _step_name(step, index), "deploys / restarts Companion from a workflow that runs on every push to dev — Companion runs only on the production hosts, so this restarts the operators' Companion whenever a dev push lands; ship the module with the release (deploy.yml / release.yml)"))
+            violations.append(Violation(workflow, job, _step_name(step, index), "deploys / restarts Companion or reaches a production Companion host from a workflow that runs on every push to dev — Companion runs only on the production hosts, so this restarts the operators' Companion whenever a dev push lands; ship the module with the release (deploy.yml / release.yml)"))
     return violations
 
 

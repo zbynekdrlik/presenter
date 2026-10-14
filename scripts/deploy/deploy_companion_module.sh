@@ -18,8 +18,8 @@ set -euo pipefail
 # /opt/companion-module-dev, which both hosts launch with), so the connection pins the
 # STABLE version id "dev" instead of a concrete version. A concrete pin breaks with
 # "missing version" on every version bump. The re-pin is idempotent. Companion is
-# stopped for the module swap + config-DB write and is ALWAYS started again; the step
-# fails loudly on any error.
+# stopped for the module swap + config-DB write and is ALWAYS started again (an EXIT
+# trap from the stop on); the step fails loudly on any error.
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <ssh-alias> <label>" >&2
@@ -38,16 +38,28 @@ scp -r "$ROOT"/ops/companion/presenter/* "$HOST:$STAGE_DIR/"
 REPIN_REMOTE=$(ssh "$HOST" "mktemp /tmp/repin-presenter-XXXXXX.py")
 scp "$ROOT/ops/companion/repin-presenter-connection.py" "$HOST:$REPIN_REMOTE"
 ssh "$HOST" "cd $STAGE_DIR && npm install --omit=dev"
+
+# From the stop on, ANY exit (a failed ssh, a swap error) starts Companion again: the
+# operators' buttons are never left dead. The module dir may then be a partial state -
+# the step still fails loudly.
+STOP_ISSUED=0
+start_companion_on_exit() {
+  if [ "$STOP_ISSUED" -eq 1 ]; then
+    echo "::error::Companion deploy on $LABEL stopped early - starting Companion again"
+    ssh "$HOST" "sudo systemctl start companion" || true
+  fi
+}
+trap start_companion_on_exit EXIT
+STOP_ISSUED=1
 ssh "$HOST" "sudo systemctl stop companion"
-# Swap the module. Best-effort recovery: on failure Companion is started again (never
-# left stopped), though the module dir may be a partial state - the step fails loudly.
 ssh "$HOST" "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname "$MODULE_DIR") && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR" \
-  || { echo "::error::Companion module swap failed on $LABEL"; ssh "$HOST" "sudo systemctl start companion" || true; exit 1; }
+  || { echo "::error::Companion module swap failed on $LABEL"; exit 1; }
 ssh "$HOST" "sudo rm -rf $OLD_STORE_DIR" || true
 REPIN_RC=0
 ssh "$HOST" "sudo python3 $REPIN_REMOTE --config-dir $CONFIG_DIR --build-file /opt/companion/BUILD --expect-connection" || REPIN_RC=$?
 ssh "$HOST" "rm -f $REPIN_REMOTE" || true
 ssh "$HOST" "sudo systemctl start companion"
+STOP_ISSUED=0
 sleep 5
 ssh "$HOST" "systemctl is-active companion" || { echo "::error::Companion failed to restart on $LABEL"; exit 1; }
 if [ "$REPIN_RC" -ne 0 ]; then
