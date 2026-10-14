@@ -454,6 +454,12 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s scripts/ci -p 'test_no_local_cargo_fallback.py' -v
 
+      # #850 O1: the Cloudflare Access reconcile planner (pure functions, no network).
+      - name: Test Cloudflare Access reconcile script (#850)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s ops/cloudflare -p 'test_presenter_access.py' -v
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
