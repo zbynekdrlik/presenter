@@ -127,6 +127,9 @@ impl AppState {
         // on stream config changes and on refresh).
         self.spawn_playback_sync_task();
 
+        // #852: šepkár tips — midnight / 4 h boundary event + 30-day retention.
+        self.spawn_interpreter_tips_task();
+
         // NDI auto-reconnect: if a source is marked active in DB but no stream
         // is running, retry activation every 30 seconds. Handles the case where
         // the NDI source comes online after server startup.
