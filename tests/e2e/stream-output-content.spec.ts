@@ -314,6 +314,14 @@ test.describe("Stream output content (lyrics + verse)", () => {
     await expect(
       verseEl(page, vMain).locator('[data-role="stream-verse-text"]'),
     ).toHaveCount(0);
+    // #863: a leaving layer drops its line roles as its fade-out starts, so the
+    // role checks above pass before the DOM is empty — the layers themselves must go.
+    for (const v of [vBoth, vMain]) {
+      await expect(verseEl(page, v).locator('[data-role="stream-crossfade-layer"]')).toHaveCount(
+        0,
+        { timeout: 5_000 },
+      );
+    }
 
     // ── 4000-char SlideText clipped to its Frame (overflow hidden, no grow) ──
     const bigText = "A".repeat(4000);
@@ -333,6 +341,12 @@ test.describe("Stream output content (lyrics + verse)", () => {
     await clearStage(request);
     await expect(bothMain).toHaveCount(0, { timeout: 5_000 });
     await expect(bothTrans).toHaveCount(0);
+    for (const l of [lBoth, lMain]) {
+      await expect(lyricsEl(page, l).locator('[data-role="stream-crossfade-layer"]')).toHaveCount(
+        0,
+        { timeout: 5_000 },
+      );
+    }
 
     // Zero console errors AND warnings — asserted last.
     expect(consoleErrors).toEqual([]);
