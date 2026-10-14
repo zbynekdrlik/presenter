@@ -13,10 +13,12 @@
 
 pub mod ableset;
 pub mod android_stage_display;
+pub mod audio;
 pub mod bible;
 pub mod id;
 pub mod interpreter_tips;
 pub mod library;
+pub mod listen;
 pub mod live;
 pub mod osc;
 pub mod playlist;
