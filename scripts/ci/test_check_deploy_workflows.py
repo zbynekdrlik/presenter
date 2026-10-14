@@ -282,6 +282,9 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
             "su newlevel -c '/opt/presenter/import_propresenter'",
             "flock /tmp/deploy.lock /opt/presenter/import_propresenter",
             "flock -w 30 /tmp/deploy.lock /opt/presenter/import_propresenter",
+            "flock /tmp/deploy.lock -c '/opt/presenter/import_propresenter'",
+            "sudo -uroot /opt/presenter/import_propresenter",
+            "ssh -oStrictHostKeyChecking=no deploy-target /opt/presenter/import_propresenter",
         ):
             with self.subTest(command=command):
                 steps = SAFE_SETUP + f"""
@@ -313,6 +316,8 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
         for wait in (
             "for attempt in $(seq 1 30); do curl -sf http://localhost:80/healthz && break; sleep 2; done",
             "until curl -sf http://localhost:80/healthz; do sleep 2; done",
+            'ssh deploy-target "until curl -sf http://localhost:80/healthz; do sleep 2; done"',
+            "ssh -o ConnectTimeout=5 deploy-target 'for i in 1 2 3; do curl -sf http://localhost:80/healthz && break; done'",
         ):
             with self.subTest(wait=wait):
                 steps = swap + f"""

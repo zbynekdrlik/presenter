@@ -164,13 +164,24 @@ def check_job(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
     return violations
 
 
+def _option_takes_next(word: str, takes_arg: set[str]) -> bool:
+    """Does option `word` consume the NEXT word? A long or two-letter option:
+    when it is in `takes_arg`. A combined short flag (`-iu`, `-uroot`): scan its
+    letters — the first one that takes an argument either is the last letter
+    (`-iu user`: the next word is the value) or has its value attached
+    (`-uroot`, `-oStrictHostKeyChecking=no`: nothing more to consume)."""
+    if word.startswith("--") or len(word) <= 2:
+        return word.split("=", 1)[0] in takes_arg and "=" not in word
+    for index, letter in enumerate(word[1:], start=1):
+        if "-" + letter in takes_arg:
+            return index == len(word) - 1
+    return False
+
+
 def _skip_options(words: list[str], takes_arg: set[str]) -> list[str]:
-    """Drop leading options; an option in `takes_arg` (also as the last letter
-    of a combined short flag, `-iu user`) consumes the next word too."""
+    """Drop leading options (and the values of those that take one)."""
     while words and words[0].startswith("-") and words[0] != "-":
-        word = words[0]
-        combined = not word.startswith("--") and len(word) > 2 and "-" + word[-1] in takes_arg
-        words = words[2:] if word in takes_arg or combined else words[1:]
+        words = words[2:] if _option_takes_next(words[0], takes_arg) else words[1:]
     return words
 
 
@@ -193,6 +204,8 @@ def _command_words(words: list[str]) -> list[str]:
         elif head in WRAPPERS:
             takes_arg, positional = WRAPPERS[head]
             words = _skip_options(words[1:], takes_arg)[positional:]
+            if words and words[0] in ("-c", "--command"):  # flock <lock> -c '<cmd>'
+                words = words[1:]
         else:
             break
     return words
@@ -201,11 +214,18 @@ def _command_words(words: list[str]) -> list[str]:
 def _waits_for_health(script: str) -> bool:
     """True when a `/healthz` request sits INSIDE a for / while / until loop —
     the retry wait for the new service, not a single probe. A loop word only
-    counts in command position (so `echo waiting for x` opens nothing)."""
+    counts in command position (so `echo waiting for x` opens nothing); the
+    word after `ssh [options] host` is in command position."""
     tokens = re.findall(r"&&|\|\||[;|]|[^\s;|&]+", script.replace("\n", " ; ").replace('"', " ").replace("'", " "))
     loops = 0
     command_position = True
-    for token in tokens:
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if command_position and token == "ssh":
+            rest = _skip_options(tokens[index + 1 :], SSH_ARG_OPTIONS)
+            index = len(tokens) - len(rest) + 1  # past the host word
+            continue
         if command_position and token in LOOP_WORDS:
             loops += 1
         elif command_position and token == "done":
@@ -213,6 +233,7 @@ def _waits_for_health(script: str) -> bool:
         if "/healthz" in token and loops > 0:
             return True
         command_position = token in COMMAND_SEPARATORS or token in KEYWORDS
+        index += 1
     return False
 
 
