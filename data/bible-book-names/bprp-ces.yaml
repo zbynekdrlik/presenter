@@ -1,0 +1,1400 @@
+# Source: https://github.com/openbibleinfo/Bible-Passage-Reference-Parser-Languages/blob/5735787d970a87483eac580e5c1d1b5192c3ed48/book_names/all/ces.yaml (MIT, see LICENSE-BPRP.md)
+- osis: Gen
+  texts:
+    - První kniha Mojžíšova
+    - První Mojžíšova
+    - První. kniha Mojžíšova
+    - První. Mojžíšova
+    - 1 kniha Mojžíšova
+    - 1 Mojžíšova
+    - 1. kniha Mojžíšova
+    - 1. Mojžíšova
+    - I kniha Mojžíšova
+    - I Mojžíšova
+    - I. kniha Mojžíšova
+    - I. Mojžíšova
+- osis: Exod
+  texts:
+    - Druhá kniha Mojžíšova
+    - Druhá Mojžíšova
+    - Druhá. kniha Mojžíšova
+    - Druhá. Mojžíšova
+    - Druhý kniha Mojžíšova
+    - Druhý Mojžíšova
+    - Druhý. kniha Mojžíšova
+    - Druhý. Mojžíšova
+    - 2 kniha Mojžíšova
+    - 2 Mojžíšova
+    - 2. kniha Mojžíšova
+    - 2. Mojžíšova
+    - II kniha Mojžíšova
+    - II Mojžíšova
+    - II. kniha Mojžíšova
+    - II. Mojžíšova
+- osis: Lev
+  texts:
+    - Třetí kniha Mojžíšova
+    - Třetí Mojžíšova
+    - Třetí. kniha Mojžíšova
+    - Třetí. Mojžíšova
+    - 3 kniha Mojžíšova
+    - 3 Mojžíšova
+    - 3. kniha Mojžíšova
+    - 3. Mojžíšova
+    - III kniha Mojžíšova
+    - III Mojžíšova
+    - III. kniha Mojžíšova
+    - III. Mojžíšova
+- osis: Num
+  texts:
+    - Čtvrtá kniha Mojžíšova
+    - Čtvrtá Mojžíšova
+    - Čtvrtá. kniha Mojžíšova
+    - Čtvrtá. Mojžíšova
+    - 4 kniha Mojžíšova
+    - 4 Mojžíšova
+    - 4. kniha Mojžíšova
+    - 4. Mojžíšova
+    - IV kniha Mojžíšova
+    - IV Mojžíšova
+    - IV. kniha Mojžíšova
+    - IV. Mojžíšova
+- osis: Deut
+  texts:
+    - Pátá kniha Mojžíšova
+    - Pátá Mojžíšova
+    - Pátá. kniha Mojžíšova
+    - Pátá. Mojžíšova
+    - 5 kniha Mojžíšova
+    - 5 Mojžíšova
+    - 5. kniha Mojžíšova
+    - 5. Mojžíšova
+    - V kniha Mojžíšova
+    - V Mojžíšova
+    - V. kniha Mojžíšova
+    - V. Mojžíšova
+- osis: Gen
+  texts:
+    - Genesis
+    - Gen
+    - Gn
+- osis: Exod
+  texts:
+    - Exodus
+    - Exod
+    - Ex
+- osis: Bel
+  texts:
+    - Bél a drak
+    - Bel
+    - Bél
+- osis: Lev
+  texts:
+    - Leviticusi
+    - Leviticus
+    - Levitikus
+    - Lev
+    - Lv
+- osis: Num
+  texts:
+    - Numeri
+    - Num
+    - Nm
+    - Nu
+- osis: Sir
+  texts:
+    - Kniha Sírachovcova
+    - Ecclesiasticus
+    - Sírachovec
+    - Sir
+    - Sír
+- osis: Wis
+  texts:
+    - Moudrost Šalomounova
+    - Kniha Moudrosti
+    - Kniha moudrostí
+    - Moudrost
+    - Mdr
+    - Wis
+- osis: Lam
+  texts:
+    - Pláč Jeremiášův
+    - Pláč Jeremjášův
+    - Kniha nářků
+    - Pláč
+    - Lam
+    - Pl
+- osis: EpJer
+  texts:
+    - List Jeremjášův
+    - EpJer
+- osis: Rev
+  texts:
+    - Zjeveni svatého Jana
+    - Zjevení Janovo
+    - Kniha Zjevení
+    - Apokalypsa
+    - Zjevení
+    - Rev
+    - Zj
+- osis: PrMan
+  texts:
+    - Modlitbu Manasse
+    - PrMan
+- osis: Deut
+  texts:
+    - Deuteronomium
+    - Deut
+    - Dt
+- osis: Josh
+  texts:
+    - Jozue
+    - Josh
+    - Joz
+    - Jz
+- osis: Judg
+  texts:
+    - Soudců
+    - Judg
+    - Sdc
+    - Sd
+- osis: Ruth
+  texts:
+    - Ruth
+    - Rút
+    - Rt
+- osis: 1Esd
+  texts:
+    - 1 Ezdráš
+    - 1Esd
+- osis: 2Esd
+  texts:
+    - 2 Ezdráš
+    - 2Esd
+- osis: 1Esd
+  texts:
+    - První Ezdráš
+    - První. Ezdráš
+    - 1 Ezdráš
+    - 1. Ezdráš
+    - I Ezdráš
+    - I. Ezdráš
+- osis: 2Esd
+  texts:
+    - Druhá Ezdráš
+    - Druhá. Ezdráš
+    - Druhý Ezdráš
+    - Druhý. Ezdráš
+    - 2 Ezdráš
+    - 2. Ezdráš
+    - II Ezdráš
+    - II. Ezdráš
+- osis: Ezra
+  texts:
+    - Ezdráš
+- osis: Isa
+  texts:
+    - Izaiáš
+    - Izajáš
+    - Isa
+    - Is
+    - Iz
+- osis: 1Sam
+  texts:
+    - První kniha Samuelova
+    - První Samuelova
+    - První Samuel
+    - První Sam
+    - První S
+    - První. kniha Samuelova
+    - První. Samuelova
+    - První. Samuel
+    - První. Sam
+    - První. S
+    - 1 kniha Samuelova
+    - 1 Samuelova
+    - 1 Samuel
+    - 1 Sam
+    - 1 S
+    - 1. kniha Samuelova
+    - 1. Samuelova
+    - 1. Samuel
+    - 1. Sam
+    - 1. S
+    - I kniha Samuelova
+    - I Samuelova
+    - I Samuel
+    - I Sam
+    - I S
+    - I. kniha Samuelova
+    - I. Samuelova
+    - I. Samuel
+    - I. Sam
+    - I. S
+- osis: 2Sam
+  texts:
+    - Druhá kniha Samuelova
+    - Druhá Samuelova
+    - Druhá Samuel
+    - Druhá Sam
+    - Druhá S
+    - Druhá. kniha Samuelova
+    - Druhá. Samuelova
+    - Druhá. Samuel
+    - Druhá. Sam
+    - Druhá. S
+    - Druhý kniha Samuelova
+    - Druhý Samuelova
+    - Druhý Samuel
+    - Druhý Sam
+    - Druhý S
+    - Druhý. kniha Samuelova
+    - Druhý. Samuelova
+    - Druhý. Samuel
+    - Druhý. Sam
+    - Druhý. S
+    - 2 kniha Samuelova
+    - 2 Samuelova
+    - 2 Samuel
+    - 2 Sam
+    - 2 S
+    - 2. kniha Samuelova
+    - 2. Samuelova
+    - 2. Samuel
+    - 2. Sam
+    - 2. S
+    - II kniha Samuelova
+    - II Samuelova
+    - II Samuel
+    - II Sam
+    - II S
+    - II. kniha Samuelova
+    - II. Samuelova
+    - II. Samuel
+    - II. Sam
+    - II. S
+- osis: 2Sam
+  texts:
+    - 2 Samuel
+    - 2 Sam
+    - 2Sam
+    - 2 S
+- osis: 1Sam
+  texts:
+    - 1 Samuel
+    - 1 Sam
+    - 1Sam
+    - 1 S
+- osis: 1Kgs
+  texts:
+    - První kniha královská
+    - První Královská
+    - První Král
+    - První Kr
+    - První. kniha královská
+    - První. Královská
+    - První. Král
+    - První. Kr
+    - 1 kniha královská
+    - 1 Královská
+    - 1 Král
+    - 1 Kr
+    - 1. kniha královská
+    - 1. Královská
+    - 1. Král
+    - 1. Kr
+    - I kniha královská
+    - I Královská
+    - I Král
+    - I Kr
+    - I. kniha královská
+    - I. Královská
+    - I. Král
+    - I. Kr
+- osis: 2Kgs
+  texts:
+    - Druhá kniha královská
+    - Druhá Královská
+    - Druhá Král
+    - Druhá Kr
+    - Druhá. kniha královská
+    - Druhá. Královská
+    - Druhá. Král
+    - Druhá. Kr
+    - Druhý kniha královská
+    - Druhý Královská
+    - Druhý Král
+    - Druhý Kr
+    - Druhý. kniha královská
+    - Druhý. Královská
+    - Druhý. Král
+    - Druhý. Kr
+    - 2 kniha královská
+    - 2 Královská
+    - 2 Král
+    - 2 Kr
+    - 2. kniha královská
+    - 2. Královská
+    - 2. Král
+    - 2. Kr
+    - II kniha královská
+    - II Královská
+    - II Král
+    - II Kr
+    - II. kniha královská
+    - II. Královská
+    - II. Král
+    - II. Kr
+- osis: 2Kgs
+  texts:
+    - 2 Královská
+    - 2 Král
+    - 2Kgs
+    - 2 Kr
+- osis: 1Kgs
+  texts:
+    - 1 Královská
+    - 1 Král
+    - 1Kgs
+    - 1 Kr
+- osis: 1Chr
+  texts:
+    - První Paralipomenon
+    - První kniha kronik
+    - První Letopisu
+    - První Letopisů
+    - První Kronik
+    - První Kron
+    - První Pa
+    - První. Paralipomenon
+    - První. kniha kronik
+    - První. Letopisu
+    - První. Letopisů
+    - První. Kronik
+    - První. Kron
+    - První. Pa
+    - 1 Paralipomenon
+    - 1 kniha kronik
+    - 1 Letopisu
+    - 1 Letopisů
+    - 1 Kronik
+    - 1 Kron
+    - 1 Pa
+    - 1. Paralipomenon
+    - 1. kniha kronik
+    - 1. Letopisu
+    - 1. Letopisů
+    - 1. Kronik
+    - 1. Kron
+    - 1. Pa
+    - I Paralipomenon
+    - I kniha kronik
+    - I Letopisu
+    - I Letopisů
+    - I Kronik
+    - I Kron
+    - I Pa
+    - I. Paralipomenon
+    - I. kniha kronik
+    - I. Letopisu
+    - I. Letopisů
+    - I. Kronik
+    - I. Kron
+    - I. Pa
+- osis: 2Chr
+  texts:
+    - Druhá Paralipomenon
+    - Druhá kniha kronik
+    - Druhá Letopisu
+    - Druhá Letopisů
+    - Druhá Kronik
+    - Druhá Kron
+    - Druhá Pa
+    - Druhá. Paralipomenon
+    - Druhá. kniha kronik
+    - Druhá. Letopisu
+    - Druhá. Letopisů
+    - Druhá. Kronik
+    - Druhá. Kron
+    - Druhá. Pa
+    - Druhý Paralipomenon
+    - Druhý kniha kronik
+    - Druhý Letopisu
+    - Druhý Letopisů
+    - Druhý Kronik
+    - Druhý Kron
+    - Druhý Pa
+    - Druhý. Paralipomenon
+    - Druhý. kniha kronik
+    - Druhý. Letopisu
+    - Druhý. Letopisů
+    - Druhý. Kronik
+    - Druhý. Kron
+    - Druhý. Pa
+    - 2 Paralipomenon
+    - 2 kniha kronik
+    - 2 Letopisu
+    - 2 Letopisů
+    - 2 Kronik
+    - 2 Kron
+    - 2 Pa
+    - 2. Paralipomenon
+    - 2. kniha kronik
+    - 2. Letopisu
+    - 2. Letopisů
+    - 2. Kronik
+    - 2. Kron
+    - 2. Pa
+    - II Paralipomenon
+    - II kniha kronik
+    - II Letopisu
+    - II Letopisů
+    - II Kronik
+    - II Kron
+    - II Pa
+    - II. Paralipomenon
+    - II. kniha kronik
+    - II. Letopisu
+    - II. Letopisů
+    - II. Kronik
+    - II. Kron
+    - II. Pa
+- osis: 2Chr
+  texts:
+    - 2 Letopisů
+    - 2Chr
+    - 2 Pa
+- osis: 1Chr
+  texts:
+    - 1 Letopisů
+    - 1Chr
+    - 1 Pa
+- osis: Ezra
+  texts:
+    - Ezra
+    - Ezd
+- osis: Neh
+  texts:
+    - Nehemiáš
+    - Nehemjáš
+    - Neh
+- osis: GkEsth
+  texts:
+    - Ester (řecké dodatky)
+    - Ester (řecké části)
+    - GkEsth
+- osis: Esth
+  texts:
+    - Ester
+    - Esth
+    - Est
+- osis: Job
+  texts:
+    - Job
+    - Jób
+    - Jb
+- osis: Ps
+  texts:
+    - Kniha žalmů
+    - Žalmy
+    - Žalm
+    - Ps
+    - Žl
+    - Ž
+- osis: PrAzar
+  texts:
+    - Azarjášova modlitba
+    - PrAzar
+- osis: Prov
+  texts:
+    - Přísloví Šalomounova
+    - Přísloví
+    - Prov
+    - Přís
+    - Př
+- osis: Eccl
+  texts:
+    - Kazatel
+    - Kohelet
+    - Eccl
+    - Kaz
+- osis: SgThree
+  texts:
+    - Píseň mládenců v hořící peci
+    - Tři muži v rozpálené peci
+    - SgThree
+- osis: Song
+  texts:
+    - Píseň Šalamounova
+    - Píseň písní
+    - Píseň
+    - Song
+    - Pís
+- osis: Jer
+  texts:
+    - Jeremiáš
+    - Jeremjáš
+    - Jer
+    - Jr
+- osis: Ezek
+  texts:
+    - Ezechiel
+    - Ezek
+    - Ez
+- osis: Dan
+  texts:
+    - Daniel
+    - Dan
+    - Da
+- osis: Hos
+  texts:
+    - Ozeáš
+    - Hos
+    - Oz
+- osis: Joel
+  texts:
+    - Joel
+    - Jóel
+    - Jl
+    - Jo
+- osis: Amos
+  texts:
+    - Amos
+    - Ámos
+    - Am
+- osis: Obad
+  texts:
+    - Abdijáš
+    - Obadjáš
+    - Abdiáš
+    - Obadjá
+    - Obad
+    - Abd
+- osis: Jonah
+  texts:
+    - Jonah
+    - Jonáš
+    - Jon
+- osis: Mic
+  texts:
+    - Michaáš
+    - Micheáš
+    - Mich
+    - Mic
+    - Mi
+- osis: Nah
+  texts:
+    - Nahum
+    - Nah
+    - Na
+- osis: Hab
+  texts:
+    - Abakuk
+    - Abk
+    - Hab
+- osis: Zeph
+  texts:
+    - Sofoniáš
+    - Sofonjáš
+    - Zeph
+    - Sof
+    - Sf
+- osis: Hag
+  texts:
+    - Aggeus
+    - Ageus
+    - Hag
+    - Ag
+- osis: Zech
+  texts:
+    - Zachariáš
+    - Zacharjáš
+    - Zach
+    - Zech
+    - Za
+- osis: Mal
+  texts:
+    - Malachiáš
+    - Mal
+- osis: Matt
+  texts:
+    - Evangelium podle Matouše
+    - Matoušovo evangelium
+    - Matouš
+    - Matt
+    - Mat
+    - Mt
+- osis: Mark
+  texts:
+    - Evangelium podle Marka
+    - Markovo evangelium
+    - Marek
+    - Mark
+    - Mk
+- osis: Luke
+  texts:
+    - Evangelium podle Lukáše
+    - Lukášovo evangelium
+    - Lukáš
+    - Luke
+    - Lk
+    - L
+- osis: 1John
+  texts:
+    - První list Janův
+    - První Janova
+    - První Janův
+    - První. list Janův
+    - První. Janova
+    - První. Janův
+    - 1 list Janův
+    - 1 Janova
+    - 1 Janův
+    - 1. list Janův
+    - 1. Janova
+    - 1. Janův
+    - I list Janův
+    - I Janova
+    - I Janův
+    - I. list Janův
+    - I. Janova
+    - I. Janův
+- osis: 2John
+  texts:
+    - Druhá list Janův
+    - Druhá Janova
+    - Druhá Janův
+    - Druhá. list Janův
+    - Druhá. Janova
+    - Druhá. Janův
+    - Druhý list Janův
+    - Druhý Janova
+    - Druhý Janův
+    - Druhý. list Janův
+    - Druhý. Janova
+    - Druhý. Janův
+    - 2 list Janův
+    - 2 Janova
+    - 2 Janův
+    - 2. list Janův
+    - 2. Janova
+    - 2. Janův
+    - II list Janův
+    - II Janova
+    - II Janův
+    - II. list Janův
+    - II. Janova
+    - II. Janův
+- osis: 3John
+  texts:
+    - Třetí list Janův
+    - Třetí Janova
+    - Třetí Janův
+    - Třetí. list Janův
+    - Třetí. Janova
+    - Třetí. Janův
+    - 3 list Janův
+    - 3 Janova
+    - 3 Janův
+    - 3. list Janův
+    - 3. Janova
+    - 3. Janův
+    - III list Janův
+    - III Janova
+    - III Janův
+    - III. list Janův
+    - III. Janova
+    - III. Janův
+- osis: 1John
+  texts:
+    - 1John
+    - 1 Jan
+    - 1 J
+- osis: 2John
+  texts:
+    - 2John
+    - 2 Jan
+    - 2 J
+- osis: 3John
+  texts:
+    - 3John
+    - 3 Jan
+    - 3 J
+- osis: 1John
+  texts:
+    - První Jan
+    - První J
+    - První. Jan
+    - První. J
+    - 1 Jan
+    - 1 J
+    - 1. Jan
+    - 1. J
+    - I Jan
+    - I J
+    - I. Jan
+    - I. J
+- osis: 2John
+  texts:
+    - Druhá Jan
+    - Druhá J
+    - Druhá. Jan
+    - Druhá. J
+    - Druhý Jan
+    - Druhý J
+    - Druhý. Jan
+    - Druhý. J
+    - 2 Jan
+    - 2 J
+    - 2. Jan
+    - 2. J
+    - II Jan
+    - II J
+    - II. Jan
+    - II. J
+- osis: 3John
+  texts:
+    - Třetí Jan
+    - Třetí J
+    - Třetí. Jan
+    - Třetí. J
+    - 3 Jan
+    - 3 J
+    - 3. Jan
+    - 3. J
+    - III Jan
+    - III J
+    - III. Jan
+    - III. J
+- osis: John
+  texts:
+    - Jan
+    - J
+- osis: John
+  texts:
+    - Evangelium podle Jana
+    - Janovo evangelium
+    - John
+- osis: Acts
+  texts:
+    - Skutky apoštolské
+    - Skutky apoštolü
+    - Skutky apoštolů
+    - Skutky
+    - Acts
+    - Sk
+- osis: Rom
+  texts:
+    - List Římanům
+    - Římanům
+    - Rom
+    - Řím
+    - Ř
+- osis: 1Cor
+  texts:
+    - První list Korintským
+    - První list Korinským
+    - První Korintským
+    - První K
+    - První. list Korintským
+    - První. list Korinským
+    - První. Korintským
+    - První. K
+    - 1 list Korintským
+    - 1 list Korinským
+    - 1 Korintským
+    - 1 K
+    - 1. list Korintským
+    - 1. list Korinským
+    - 1. Korintským
+    - 1. K
+    - I list Korintským
+    - I list Korinským
+    - I Korintským
+    - I K
+    - I. list Korintským
+    - I. list Korinským
+    - I. Korintským
+    - I. K
+- osis: 2Cor
+  texts:
+    - Druhá list Korintským
+    - Druhá list Korinským
+    - Druhá Korintským
+    - Druhá K
+    - Druhá. list Korintským
+    - Druhá. list Korinským
+    - Druhá. Korintským
+    - Druhá. K
+    - Druhý list Korintským
+    - Druhý list Korinským
+    - Druhý Korintským
+    - Druhý K
+    - Druhý. list Korintským
+    - Druhý. list Korinským
+    - Druhý. Korintským
+    - Druhý. K
+    - 2 list Korintským
+    - 2 list Korinským
+    - 2 Korintským
+    - 2 K
+    - 2. list Korintským
+    - 2. list Korinským
+    - 2. Korintským
+    - 2. K
+    - II list Korintským
+    - II list Korinským
+    - II Korintským
+    - II K
+    - II. list Korintským
+    - II. list Korinským
+    - II. Korintským
+    - II. K
+- osis: 2Cor
+  texts:
+    - 2 Korintským
+    - 2 Kor
+    - 2Cor
+    - 2Kor
+    - 2 K
+- osis: 1Cor
+  texts:
+    - První Kor
+    - První. Kor
+    - 1 Kor
+    - 1. Kor
+    - I Kor
+    - I. Kor
+- osis: 1Cor
+  texts:
+    - 1 Korintským
+    - 1 Kor
+    - 1Cor
+    - 1 K
+- osis: Gal
+  texts:
+    - List Galatským
+    - Galatským
+    - Gal
+    - Ga
+- osis: Eph
+  texts:
+    - List Efezanům
+    - List Efezským
+    - List Efézským
+    - Efezským
+    - Efeským
+    - Eph
+    - Ef
+- osis: Phil
+  texts:
+    - List Filipským
+    - Filipenským
+    - Filipským
+    - Phil
+    - Flp
+    - Fp
+- osis: Col
+  texts:
+    - List Kolosanům
+    - List Koloským
+    - Kolossenským
+    - Kolosenským
+    - Kolosanům
+    - Koloským
+    - Col
+    - Kol
+    - Ko
+- osis: 1Thess
+  texts:
+    - První list Tesalonickým
+    - První Tessalonicenským
+    - První list Soluňským
+    - První Tesalonickým
+    - První Soluňským
+    - První Sol
+    - První Te
+    - První. list Tesalonickým
+    - První. Tessalonicenským
+    - První. list Soluňským
+    - První. Tesalonickým
+    - První. Soluňským
+    - První. Sol
+    - První. Te
+    - 1 list Tesalonickým
+    - 1 Tessalonicenským
+    - 1 list Soluňským
+    - 1 Tesalonickým
+    - 1 Soluňským
+    - 1 Sol
+    - 1 Te
+    - 1. list Tesalonickým
+    - 1. Tessalonicenským
+    - 1. list Soluňským
+    - 1. Tesalonickým
+    - 1. Soluňským
+    - 1. Sol
+    - 1. Te
+    - I list Tesalonickým
+    - I Tessalonicenským
+    - I list Soluňským
+    - I Tesalonickým
+    - I Soluňským
+    - I Sol
+    - I Te
+    - I. list Tesalonickým
+    - I. Tessalonicenským
+    - I. list Soluňským
+    - I. Tesalonickým
+    - I. Soluňským
+    - I. Sol
+    - I. Te
+- osis: 2Thess
+  texts:
+    - Druhá list Tesalonickým
+    - Druhá Tessalonicenským
+    - Druhá list Soluňským
+    - Druhá Tesalonickým
+    - Druhá Soluňským
+    - Druhá Sol
+    - Druhá Te
+    - Druhá. list Tesalonickým
+    - Druhá. Tessalonicenským
+    - Druhá. list Soluňským
+    - Druhá. Tesalonickým
+    - Druhá. Soluňským
+    - Druhá. Sol
+    - Druhá. Te
+    - Druhý list Tesalonickým
+    - Druhý Tessalonicenským
+    - Druhý list Soluňským
+    - Druhý Tesalonickým
+    - Druhý Soluňským
+    - Druhý Sol
+    - Druhý Te
+    - Druhý. list Tesalonickým
+    - Druhý. Tessalonicenským
+    - Druhý. list Soluňským
+    - Druhý. Tesalonickým
+    - Druhý. Soluňským
+    - Druhý. Sol
+    - Druhý. Te
+    - 2 list Tesalonickým
+    - 2 Tessalonicenským
+    - 2 list Soluňským
+    - 2 Tesalonickým
+    - 2 Soluňským
+    - 2 Sol
+    - 2 Te
+    - 2. list Tesalonickým
+    - 2. Tessalonicenským
+    - 2. list Soluňským
+    - 2. Tesalonickým
+    - 2. Soluňským
+    - 2. Sol
+    - 2. Te
+    - II list Tesalonickým
+    - II Tessalonicenským
+    - II list Soluňským
+    - II Tesalonickým
+    - II Soluňským
+    - II Sol
+    - II Te
+    - II. list Tesalonickým
+    - II. Tessalonicenským
+    - II. list Soluňským
+    - II. Tesalonickým
+    - II. Soluňským
+    - II. Sol
+    - II. Te
+- osis: 2Thess
+  texts:
+    - 2 Tesalonickým
+    - 2Thess
+    - 2 Te
+- osis: 1Thess
+  texts:
+    - 1 Tesalonickým
+    - 1Thess
+    - 1 Te
+- osis: 1Tim
+  texts:
+    - První list Timotejovi
+    - První list Timoteovi
+    - První Timotejovi
+    - První Timoteovi
+    - První Timoteus
+    - První Tim
+    - První Tm
+    - První. list Timotejovi
+    - První. list Timoteovi
+    - První. Timotejovi
+    - První. Timoteovi
+    - První. Timoteus
+    - První. Tim
+    - První. Tm
+    - 1 list Timotejovi
+    - 1 list Timoteovi
+    - 1 Timotejovi
+    - 1 Timoteovi
+    - 1 Timoteus
+    - 1 Tim
+    - 1 Tm
+    - 1. list Timotejovi
+    - 1. list Timoteovi
+    - 1. Timotejovi
+    - 1. Timoteovi
+    - 1. Timoteus
+    - 1. Tim
+    - 1. Tm
+    - I list Timotejovi
+    - I list Timoteovi
+    - I Timotejovi
+    - I Timoteovi
+    - I Timoteus
+    - I Tim
+    - I Tm
+    - I. list Timotejovi
+    - I. list Timoteovi
+    - I. Timotejovi
+    - I. Timoteovi
+    - I. Timoteus
+    - I. Tim
+    - I. Tm
+- osis: 2Tim
+  texts:
+    - Druhá list Timotejovi
+    - Druhá list Timoteovi
+    - Druhá Timotejovi
+    - Druhá Timoteovi
+    - Druhá Timoteus
+    - Druhá Tim
+    - Druhá Tm
+    - Druhá. list Timotejovi
+    - Druhá. list Timoteovi
+    - Druhá. Timotejovi
+    - Druhá. Timoteovi
+    - Druhá. Timoteus
+    - Druhá. Tim
+    - Druhá. Tm
+    - Druhý list Timotejovi
+    - Druhý list Timoteovi
+    - Druhý Timotejovi
+    - Druhý Timoteovi
+    - Druhý Timoteus
+    - Druhý Tim
+    - Druhý Tm
+    - Druhý. list Timotejovi
+    - Druhý. list Timoteovi
+    - Druhý. Timotejovi
+    - Druhý. Timoteovi
+    - Druhý. Timoteus
+    - Druhý. Tim
+    - Druhý. Tm
+    - 2 list Timotejovi
+    - 2 list Timoteovi
+    - 2 Timotejovi
+    - 2 Timoteovi
+    - 2 Timoteus
+    - 2 Tim
+    - 2 Tm
+    - 2. list Timotejovi
+    - 2. list Timoteovi
+    - 2. Timotejovi
+    - 2. Timoteovi
+    - 2. Timoteus
+    - 2. Tim
+    - 2. Tm
+    - II list Timotejovi
+    - II list Timoteovi
+    - II Timotejovi
+    - II Timoteovi
+    - II Timoteus
+    - II Tim
+    - II Tm
+    - II. list Timotejovi
+    - II. list Timoteovi
+    - II. Timotejovi
+    - II. Timoteovi
+    - II. Timoteus
+    - II. Tim
+    - II. Tm
+- osis: 2Tim
+  texts:
+    - Druhá list Timetejovi
+    - Druhá. list Timetejovi
+    - Druhý list Timetejovi
+    - Druhý. list Timetejovi
+    - 2 list Timetejovi
+    - 2. list Timetejovi
+    - II list Timetejovi
+    - II. list Timetejovi
+- osis: 2Tim
+  texts:
+    - 2 Timoteus
+    - 2 Tim
+    - 2Tim
+    - 2 Tm
+- osis: 1Tim
+  texts:
+    - První list Timeteovi
+    - První. list Timeteovi
+    - 1 list Timeteovi
+    - 1. list Timeteovi
+    - I list Timeteovi
+    - I. list Timeteovi
+- osis: 1Tim
+  texts:
+    - 1 Timoteus
+    - 1 Tim
+    - 1Tim
+    - 1 Tm
+- osis: Titus
+  texts:
+    - List Titovi
+    - Titovi
+    - Titus
+    - Tit
+    - Tt
+- osis: Phlm
+  texts:
+    - List Filemonovi
+    - Filemonovi
+    - Filemon
+    - Phlm
+    - Flm
+    - Fm
+- osis: Heb
+  texts:
+    - List Hebrejům
+    - List Židům
+    - Hebrejům
+    - Židům
+    - Heb
+    - Žid
+    - Žd
+- osis: Jas
+  texts:
+    - List Jakubův
+    - Jakubův
+    - Jakub
+    - Jak
+    - Jas
+    - Jk
+- osis: 1Pet
+  texts:
+    - První list Petrův
+    - První Petrova
+    - První Petrův
+    - První Petr
+    - První Pt
+    - První P
+    - První. list Petrův
+    - První. Petrova
+    - První. Petrův
+    - První. Petr
+    - První. Pt
+    - První. P
+    - 1 list Petrův
+    - 1 Petrova
+    - 1 Petrův
+    - 1 Petr
+    - 1 Pt
+    - 1 P
+    - 1. list Petrův
+    - 1. Petrova
+    - 1. Petrův
+    - 1. Petr
+    - 1. Pt
+    - 1. P
+    - I list Petrův
+    - I Petrova
+    - I Petrův
+    - I Petr
+    - I Pt
+    - I P
+    - I. list Petrův
+    - I. Petrova
+    - I. Petrův
+    - I. Petr
+    - I. Pt
+    - I. P
+- osis: 2Pet
+  texts:
+    - Druhá list Petrův
+    - Druhá Petrova
+    - Druhá Petrův
+    - Druhá Petr
+    - Druhá Pt
+    - Druhá P
+    - Druhá. list Petrův
+    - Druhá. Petrova
+    - Druhá. Petrův
+    - Druhá. Petr
+    - Druhá. Pt
+    - Druhá. P
+    - Druhý list Petrův
+    - Druhý Petrova
+    - Druhý Petrův
+    - Druhý Petr
+    - Druhý Pt
+    - Druhý P
+    - Druhý. list Petrův
+    - Druhý. Petrova
+    - Druhý. Petrův
+    - Druhý. Petr
+    - Druhý. Pt
+    - Druhý. P
+    - 2 list Petrův
+    - 2 Petrova
+    - 2 Petrův
+    - 2 Petr
+    - 2 Pt
+    - 2 P
+    - 2. list Petrův
+    - 2. Petrova
+    - 2. Petrův
+    - 2. Petr
+    - 2. Pt
+    - 2. P
+    - II list Petrův
+    - II Petrova
+    - II Petrův
+    - II Petr
+    - II Pt
+    - II P
+    - II. list Petrův
+    - II. Petrova
+    - II. Petrův
+    - II. Petr
+    - II. Pt
+    - II. P
+- osis: 2Pet
+  texts:
+    - 2 Petr
+    - 2Pet
+    - 2 Pt
+    - 2 P
+- osis: 1Pet
+  texts:
+    - 1 Petr
+    - 1Pet
+    - 1 Pt
+    - 1 P
+- osis: Jude
+  texts:
+    - List Judův
+    - Judova
+    - Judův
+    - Juda
+    - Jude
+    - Jd
+    - Ju
+- osis: Tob
+  texts:
+    - Tóbijáš
+    - Tobiáš
+    - Tóbit
+    - Tob
+- osis: Jdt
+  texts:
+    - Júdit
+    - Jdt
+    - Júd
+- osis: Bar
+  texts:
+    - Kniha Báruchova
+    - Kniha Bárukova
+    - Báruch
+    - Báruk
+    - Bar
+    - Bár
+- osis: Sus
+  texts:
+    - Zuzana
+    - Sus
+    - Zuz
+- osis: 1Macc
+  texts:
+    - První Makabejská
+    - První Mak
+    - První. Makabejská
+    - První. Mak
+    - 1 Makabejská
+    - 1 Mak
+    - 1. Makabejská
+    - 1. Mak
+    - I Makabejská
+    - I Mak
+    - I. Makabejská
+    - I. Mak
+- osis: 2Macc
+  texts:
+    - Druhá Makabejská
+    - Druhá Mak
+    - Druhá. Makabejská
+    - Druhá. Mak
+    - Druhý Makabejská
+    - Druhý Mak
+    - Druhý. Makabejská
+    - Druhý. Mak
+    - 2 Makabejská
+    - 2 Mak
+    - 2. Makabejská
+    - 2. Mak
+    - II Makabejská
+    - II Mak
+    - II. Makabejská
+    - II. Mak
+- osis: 3Macc
+  texts:
+    - Třetí Makabejská
+    - Třetí Mak
+    - Třetí. Makabejská
+    - Třetí. Mak
+    - 3 Makabejská
+    - 3 Mak
+    - 3. Makabejská
+    - 3. Mak
+    - III Makabejská
+    - III Mak
+    - III. Makabejská
+    - III. Mak
+- osis: 4Macc
+  texts:
+    - Čtvrtá Makabejská
+    - Čtvrtá Mak
+    - Čtvrtá. Makabejská
+    - Čtvrtá. Mak
+    - 4 Makabejská
+    - 4 Mak
+    - 4. Makabejská
+    - 4. Mak
+    - IV Makabejská
+    - IV Mak
+    - IV. Makabejská
+    - IV. Mak
+- osis: 2Macc
+  texts:
+    - 2 Makabejská
+    - 2Macc
+    - 2 Mak
+- osis: 3Macc
+  texts:
+    - 3 Makabejská
+    - 3Macc
+    - 3 Mak
+- osis: 4Macc
+  texts:
+    - 4 Makabejská
+    - 4Macc
+    - 4 Mak
+- osis: 1Macc
+  texts:
+    - 1 Makabejská
+    - 1Macc
+    - 1 Mak
+- osis: AddEsth
+  texts:
+    - Přídavky k Ester
+    - AddEsth

@@ -1,0 +1,617 @@
+# Source: https://github.com/openbibleinfo/Bible-Passage-Reference-Parser-Languages/blob/5735787d970a87483eac580e5c1d1b5192c3ed48/book_names/preferred/eng.yaml (MIT, see LICENSE-BPRP.md)
+default:
+  Gen:
+    long: Genesis
+    short: Gen
+    shorter: Ge
+  Exod:
+    long: Exodus
+    short: Exod
+    shorter: Ex
+  Lev:
+    long: Leviticus
+    short: Lev
+    shorter: Lv
+  Num:
+    long: Numbers
+    short: Num
+    shorter: Nu
+  Deut:
+    long: Deuteronomy
+    short: Deut
+    shorter: Dt
+  Josh:
+    long: Joshua
+    short: Josh
+    shorter: Josh
+  Judg:
+    long: Judges
+    short: Judg
+    shorter: Jg
+  Ruth:
+    long: Ruth
+    short: Ruth
+    shorter: Rt
+  1Sam:
+    long: 1 Samuel
+    short: 1 Sam
+    shorter: 1 Sa
+  2Sam:
+    long: 2 Samuel
+    short: 2 Sam
+    shorter: 2 Sa
+  1Kgs:
+    long: 1 Kings
+    short: 1 Kgs
+    shorter: 1 Kg
+  2Kgs:
+    long: 2 Kings
+    short: 2 Kgs
+    shorter: 2 Kg
+  1Chr:
+    long: 1 Chronicles
+    short: 1 Chr
+    shorter: 1 Ch
+  2Chr:
+    long: 2 Chronicles
+    short: 2 Chr
+    shorter: 2 Ch
+  Ezra:
+    long: Ezra
+    short: Ezra
+    shorter: Ezr
+  Neh:
+    long: Nehemiah
+    short: Neh
+    shorter: Neh
+  Esth:
+    long: Esther
+    short: Esth
+    shorter: Est
+  Job:
+    long: Job
+    short: Job
+    shorter: Job
+  Ps:
+    long: Psalms
+    long_single: Psalm
+    short: Ps
+    shorter: Ps
+  Prov:
+    long: Proverbs
+    short: Prov
+    shorter: Pr
+  Eccl:
+    long: Ecclesiastes
+    short: Eccl
+    shorter: Ec
+  Song:
+    long: Song of Songs
+    short: Song
+    shorter: Sg
+  Isa:
+    long: Isaiah
+    short: Isa
+    shorter: Is
+  Jer:
+    long: Jeremiah
+    short: Jer
+    shorter: Je
+  Lam:
+    long: Lamentations
+    short: Lam
+    shorter: La
+  Ezek:
+    long: Ezekiel
+    short: Ezek
+    shorter: Ezk
+  Dan:
+    long: Daniel
+    short: Dan
+    shorter: Dn
+  Hos:
+    long: Hosea
+    short: Hos
+    shorter: Ho
+  Joel:
+    long: Joel
+    short: Joel
+    shorter: Jl
+  Amos:
+    long: Amos
+    short: Amos
+    shorter: Am
+  Obad:
+    long: Obadiah
+    short: Obad
+    shorter: Ob
+  Jonah:
+    long: Jonah
+    short: Jonah
+    shorter: Jon
+  Mic:
+    long: Micah
+    short: Mic
+    shorter: Mic
+  Nah:
+    long: Nahum
+    short: Nah
+    shorter: Na
+  Hab:
+    long: Habakkuk
+    short: Hab
+    shorter: Hab
+  Zeph:
+    long: Zephaniah
+    short: Zeph
+    shorter: Zph
+  Hag:
+    long: Haggai
+    short: Hag
+    shorter: Hag
+  Zech:
+    long: Zechariah
+    short: Zech
+    shorter: Zch
+  Mal:
+    long: Malachi
+    short: Mal
+    shorter: Mal
+  Matt:
+    long: Matthew
+    short: Matt
+    shorter: Mt
+  Mark:
+    long: Mark
+    short: Mark
+    shorter: Mk
+  Luke:
+    long: Luke
+    short: Luke
+    shorter: Lk
+  John:
+    long: John
+    short: John
+    shorter: Jn
+  Acts:
+    long: Acts
+    short: Acts
+    shorter: Ac
+  Rom:
+    long: Romans
+    short: Rom
+    shorter: Ro
+  1Cor:
+    long: 1 Corinthians
+    short: 1 Cor
+    shorter: 1 Co
+  2Cor:
+    long: 2 Corinthians
+    short: 2 Cor
+    shorter: 2 Co
+  Gal:
+    long: Galatians
+    short: Gal
+    shorter: Gal
+  Eph:
+    long: Ephesians
+    short: Eph
+    shorter: Eph
+  Phil:
+    long: Philippians
+    short: Phil
+    shorter: Phil
+  Col:
+    long: Colossians
+    short: Col
+    shorter: Col
+  1Thess:
+    long: 1 Thessalonians
+    short: 1 Thess
+    shorter: 1 Th
+  2Thess:
+    long: 2 Thessalonians
+    short: 2 Thess
+    shorter: 2 Th
+  1Tim:
+    long: 1 Timothy
+    short: 1 Tim
+    shorter: 1 Ti
+  2Tim:
+    long: 2 Timothy
+    short: 2 Tim
+    shorter: 2 Ti
+  Titus:
+    long: Titus
+    short: Titus
+    shorter: Titus
+  Phlm:
+    long: Philemon
+    short: Phlm
+    shorter: Phm
+  Heb:
+    long: Hebrews
+    short: Heb
+    shorter: Heb
+  Jas:
+    long: James
+    short: Jas
+    shorter: Jas
+  1Pet:
+    long: 1 Peter
+    short: 1 Pet
+    shorter: 1 Pt
+  2Pet:
+    long: 2 Peter
+    short: 2 Pet
+    shorter: 2 Pt
+  1John:
+    long: 1 John
+    short: 1 John
+    shorter: 1 Jn
+  2John:
+    long: 2 John
+    short: 2 John
+    shorter: 2 Jn
+  3John:
+    long: 3 John
+    short: 3 John
+    shorter: 3 Jn
+  Jude:
+    long: Jude
+    short: Jude
+    shorter: Jude
+  Rev:
+    long: Revelation
+    short: Rev
+    shorter: Rv
+  Tob:
+    long: Tobit
+    short: Tob
+    shorter: Tob
+  Jdt:
+    long: Judith
+    short: Jdt
+    shorter: Jdt
+  GkEsth:
+    long: Greek Esther
+    short: Gk Esth
+    shorter: Gk Est
+  Wis:
+    long: Wisdom
+    short: Wis
+    shorter: Wis
+  Sir:
+    long: Sirach
+    short: Sir
+    shorter: Sir
+  Bar:
+    long: Baruch
+    short: Bar
+    shorter: Bar
+  PrAzar:
+    long: Prayer of Azariah
+    short: Pr Azar
+    shorter: Pr Azar
+  Sus:
+    long: Susannah
+    short: Sus
+    shorter: Sus
+  Bel:
+    long: Bel and the Dragon
+    short: Bel
+    shorter: Bel
+  SgThree:
+    long: Song of the Three Young Men
+    short: SgThree
+    shorter: SgThree
+  EpJer:
+    long: Epistle of Jeremiah
+    short: Ep Jer
+    shorter: Ep Jer
+  1Macc:
+    long: 1 Maccabees
+    short: 1 Macc
+    shorter: 1 Mc
+  2Macc:
+    long: 2 Maccabees
+    short: 2 Macc
+    shorter: 2 Mc
+  3Macc:
+    long: 3 Maccabees
+    short: 3 Macc
+    shorter: 3 Mc
+  4Macc:
+    long: 4 Maccabees
+    short: 4 Macc
+    shorter: 4 Mc
+  1Esd:
+    long: 1 Esdras
+    short: 1 Esd
+    shorter: 1 Esd
+  2Esd:
+    long: 2 Esdras
+    short: 2 Esd
+    shorter: 2 Esd
+  PrMan:
+    long: Prayer of Manasseh
+    short: Pr Man
+    shorter: Pr Man
+translations:
+  niv:
+    Lev:
+      shorter: Lev
+    Josh:
+      shorter: Jos
+    Judg:
+      shorter: Jdg
+    Ruth:
+      shorter: Ru
+    1Sam:
+      shorter: 1Sa
+    2Sam:
+      shorter: 2Sa
+    1Kgs:
+      shorter: 1Ki
+    2Kgs:
+      shorter: 2Ki
+    1Chr:
+      shorter: 1Ch
+    2Chr:
+      shorter: 2Ch
+    Neh:
+      shorter: Ne
+    Ps:
+      short_plural: Pss
+    Eccl:
+      shorter: Ecc
+    Song:
+      shorter: SS
+    Isa:
+      shorter: Isa
+    Jer:
+      shorter: Jer
+    Ezek:
+      shorter: Eze
+    Dan:
+      shorter: Da
+    Hos:
+      shorter: Hos
+    Joel:
+      shorter: Joel
+    Jonah:
+      shorter: Jnh
+    Zeph:
+      shorter: Zep
+    Zech:
+      shorter: Zec
+    1Cor:
+      shorter: 1Co
+    2Cor:
+      shorter: 2Co
+    Phil:
+      shorter: Php
+    1Thess:
+      shorter: 1Th
+    2Thess:
+      shorter: 2Th
+    1Tim:
+      shorter: 1Ti
+    2Tim:
+      shorter: 2Ti
+    1Pet:
+      shorter: 1Pe
+    2Pet:
+      shorter: 2Pe
+    1John:
+      shorter: 1Jn
+    2John:
+      shorter: 2Jn
+    3John:
+      shorter: 3Jn
+    Rev:
+      shorter: Rev
+    Tob:
+      short: Tobit
+      shorter: Tb
+    Jdt:
+      short: Judith
+      shorter: Jth
+    GkEsth:
+      short: Gr Esth
+      shorter: Gr Est
+    Wis:
+      long: Wisdom of Solomon
+      short: Wisd Sol
+      shorter: WS
+    SgThree:
+      long: Song of the Three Holy Children
+      short: S of III Ch
+      shorter: STHC
+    PrAzar:
+      shorter: PrAz
+    Sus:
+      long: Susanna
+    1Macc:
+      shorter: 1Mc
+    2Macc:
+      shorter: 2Mc
+    3Macc:
+      shorter: 3Mc
+    4Macc:
+      shorter: 4Mc
+    PrMan:
+      shorter: PrM
+    1Esd:
+      shorter: 1Es
+    2Esd:
+      shorter: 2Es
+  nlt:
+    Ps:
+      short_plural: Pss
+    1Thess:
+      short: 1 Thes
+    2Thess:
+      short: 2 Thes
+    1John:
+      short: 1 Jn
+    2John:
+      short: 2 Jn
+    3John:
+      short: 3 Jn
+    Tob:
+      short: Tb
+    GkEsth:
+      short: Gr Esth
+    Wis:
+      long: Wisdom of Solomon
+      short: Wisd Sol
+    SgThree:
+      long: Song of the Three Jews
+    PrAzar:
+      short: Pr Azar
+    Sus:
+      long: Susanna
+  esv:
+    Gen:
+      short: Gen.
+    Exod:
+      short: Ex.
+    Lev:
+      short: Lev.
+    Num:
+      short: Num.
+    Deut:
+      short: Deut.
+    Josh:
+      short: Josh.
+    Judg:
+      short: Judg.
+    1Sam:
+      short: 1 Sam.
+    2Sam:
+      short: 2 Sam.
+    1Kgs:
+      short: 1 Kings
+    2Kgs:
+      short: 2 Kings
+    1Chr:
+      short: 1 Chron.
+    2Chr:
+      short: 2 Chron.
+    Neh:
+      short: Neh.
+    Esth:
+      short: Est.
+    Ps:
+      short: Ps.
+      short_plural: Pss.
+    Prov:
+      short: Prov.
+    Eccl:
+      short: Eccles.
+    Song:
+      long: Song of Solomon
+    Isa:
+      short: Isa.
+    Jer:
+      short: Jer.
+    Lam:
+      short: Lam.
+    Ezek:
+      short: Ezek.
+    Dan:
+      short: Dan.
+    Hos:
+      short: Hos.
+    Obad:
+      short: Obad.
+    Mic:
+      short: Mic.
+    Nah:
+      short: Nah.
+    Hab:
+      short: Hab.
+    Zeph:
+      short: Zeph.
+    Hag:
+      short: Hag.
+    Zech:
+      short: Zech.
+    Mal:
+      short: Mal.
+    Matt:
+      short: Matt.
+    Rom:
+      short: Rom.
+    1Cor:
+      short: 1 Cor.
+    2Cor:
+      short: 2 Cor.
+    Gal:
+      short: Gal.
+    Eph:
+      short: Eph.
+    Phil:
+      short: Phil.
+    Col:
+      short: Col.
+    1Thess:
+      short: 1 Thess.
+    2Thess:
+      short: 2 Thess.
+    1Tim:
+      short: 1 Tim.
+    2Tim:
+      short: 2 Tim.
+    Phlm:
+      short: Philem.
+    Heb:
+      short: Heb.
+    Jas:
+      short: James
+    1Pet:
+      short: 1 Pet.
+    2Pet:
+      short: 2 Pet.
+    Rev:
+      short: Rev.
+    Tob:
+      short: Tob.
+    Jdt:
+      short: Jdt.
+    GkEsth:
+      short: Gr. Est.
+    Wis:
+      long: Wisdom of Solomon
+      short: Wisd. Sol.
+    Sir:
+      short: Sir.
+    Bar:
+      short: Bar.
+    EpJer:
+      short: Ep. Jer.
+    SgThree:
+      long: Song of the Three Jews
+      short: Song of the Three Jews
+    PrAzar:
+      short: Pr. Azar.
+    Sus:
+      long: Susanna
+      short: Sus.
+    Bel:
+      short: Bel and Dragon
+    1Macc:
+      short: 1 Macc.
+    2Macc:
+      short: 2 Macc.
+    3Macc:
+      short: 3 Macc.
+    4Macc:
+      short: 4 Macc.
+    PrMan:
+      short: Pr. Man.
+    1Esd:
+      short: 1 Esd.
+    2Esd:
+      short: 2 Esd.

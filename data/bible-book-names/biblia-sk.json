@@ -1,0 +1,1425 @@
+{
+"seb": [
+[
+"gn",
+"Gn",
+"Genezis — Prvá Mojžišova kniha"
+],
+[
+"ex",
+"Ex",
+"Exodus — Druhá Mojžišova kniha"
+],
+[
+"lv",
+"Lv",
+"Levitikus — Tretia Mojžišova kniha"
+],
+[
+"nm",
+"Nm",
+"Numeri — Štvrtá Mojžišova kniha"
+],
+[
+"dt",
+"Dt",
+"Deuteronómium — Piata Mojžišova kniha"
+],
+[
+"joz",
+"Joz",
+"Jozua"
+],
+[
+"sdc",
+"Sdc",
+"Kniha sudcov"
+],
+[
+"rut",
+"Rút",
+"Rút"
+],
+[
+"1sam",
+"1Sam",
+"Prvá Samuelova kniha"
+],
+[
+"2sam",
+"2Sam",
+"Druhá Samuelova kniha"
+],
+[
+"1krl",
+"1Krľ",
+"Prvá kniha kráľov"
+],
+[
+"2krl",
+"2Krľ",
+"Druhá kniha kráľov"
+],
+[
+"1krn",
+"1Krn",
+"Prvá kniha kroník"
+],
+[
+"2krn",
+"2Krn",
+"Druhá kniha kroník"
+],
+[
+"ezd",
+"Ezd",
+"Ezdráš"
+],
+[
+"neh",
+"Neh",
+"Nehemiáš"
+],
+[
+"est",
+"Est",
+"Ester"
+],
+[
+"job",
+"Jób",
+"Jób"
+],
+[
+"z",
+"Ž",
+"Žalmy"
+],
+[
+"pris",
+"Prís",
+"Príslovia"
+],
+[
+"koh",
+"Koh",
+"Kohelet — Kazateľ"
+],
+[
+"vlp",
+"Vľp",
+"Veľpieseň"
+],
+[
+"iz",
+"Iz",
+"Izaiáš"
+],
+[
+"jer",
+"Jer",
+"Jeremiáš"
+],
+[
+"nar",
+"Nár",
+"Náreky"
+],
+[
+"ez",
+"Ez",
+"Ezechiel"
+],
+[
+"dan",
+"Dan",
+"Daniel"
+],
+[
+"oz",
+"Oz",
+"Ozeáš"
+],
+[
+"joel",
+"Joel",
+"Joel"
+],
+[
+"am",
+"Am",
+"Amos"
+],
+[
+"abd",
+"Abd",
+"Abdiáš"
+],
+[
+"jon",
+"Jon",
+"Jonáš"
+],
+[
+"mich",
+"Mich",
+"Micheáš"
+],
+[
+"nah",
+"Nah",
+"Nahum"
+],
+[
+"hab",
+"Hab",
+"Habakuk"
+],
+[
+"sof",
+"Sof",
+"Sofoniáš"
+],
+[
+"ag",
+"Ag",
+"Aggeus"
+],
+[
+"zach",
+"Zach",
+"Zachariáš"
+],
+[
+"mal",
+"Mal",
+"Malachiáš"
+],
+[
+"tob",
+"Tob",
+"Tobiáš"
+],
+[
+"jdt",
+"Jdt",
+"Judita"
+],
+[
+"estgr",
+"EstG",
+"Ester (grécka verzia)"
+],
+[
+"mud",
+"Múd",
+"Kniha múdrosti"
+],
+[
+"sir",
+"Sir",
+"Kniha Sirachovca"
+],
+[
+"bar",
+"Bar",
+"Baruch"
+],
+[
+"lje",
+"JerL",
+"Jeremiášov list"
+],
+[
+"s3y",
+"S3M",
+"Traja mládenci v rozpálenej peci"
+],
+[
+"sus",
+"Zuz",
+"Zuzana"
+],
+[
+"bel",
+"Bél",
+"Bél a drak"
+],
+[
+"1mak",
+"1Mak",
+"Prvá kniha Makabejcov"
+],
+[
+"2mak",
+"2Mak",
+"Druhá kniha Makabejcov"
+],
+[
+"mt",
+"Mt",
+"Evanjelium podľa Matúša"
+],
+[
+"mk",
+"Mk",
+"Evanjelium podľa Marka"
+],
+[
+"lk",
+"Lk",
+"Evanjelium podľa Lukáša"
+],
+[
+"jn",
+"Jn",
+"Evanjelium podľa Jána"
+],
+[
+"sk",
+"Sk",
+"Skutky apoštolov"
+],
+[
+"rim",
+"Rim",
+"List Rimanom"
+],
+[
+"1kor",
+"1Kor",
+"Prvý list Korinťanom"
+],
+[
+"2kor",
+"2Kor",
+"Druhý list Korinťanom"
+],
+[
+"ga",
+"Ga",
+"List Galaťanom"
+],
+[
+"ef",
+"Ef",
+"List Efezanom"
+],
+[
+"flp",
+"Flp",
+"List Filipanom"
+],
+[
+"kol",
+"Kol",
+"List Kolosanom"
+],
+[
+"1tes",
+"1Tes",
+"Prvý list Tesaloničanom"
+],
+[
+"2tes",
+"2Tes",
+"Druhý list Tesaloničanom"
+],
+[
+"1tim",
+"1Tim",
+"Prvý list Timotejovi"
+],
+[
+"2tim",
+"2Tim",
+"Druhý list Timotejovi"
+],
+[
+"tit",
+"Tít",
+"List Títovi"
+],
+[
+"flm",
+"Flm",
+"List Filemonovi"
+],
+[
+"heb",
+"Heb",
+"List Hebrejom"
+],
+[
+"jk",
+"Jk",
+"Jakubov list"
+],
+[
+"1pt",
+"1Pt",
+"Prvý Petrov list"
+],
+[
+"2pt",
+"2Pt",
+"Druhý Petrov list"
+],
+[
+"1jn",
+"1Jn",
+"Prvý Jánov list"
+],
+[
+"2jn",
+"2Jn",
+"Druhý Jánov list"
+],
+[
+"3jn",
+"3Jn",
+"Tretí Jánov list"
+],
+[
+"jud",
+"Júd",
+"Júdov list"
+],
+[
+"zj",
+"Zj",
+"Zjavenie Jána"
+]
+],
+"sep": [
+[
+"gn",
+"1M",
+"Prvá kniha Mojžišova - Genesis"
+],
+[
+"ex",
+"2M",
+"Druhá kniha Mojžišova - Exodus"
+],
+[
+"lv",
+"3M",
+"Tretia kniha Mojžišova - Leviticus"
+],
+[
+"nm",
+"4M",
+"Štvrtá kniha Mojžišova - Numeri"
+],
+[
+"dt",
+"5M",
+"Piata kniha Mojžišova - Deuteronomium"
+],
+[
+"joz",
+"Joz",
+"Kniha Józuova"
+],
+[
+"sdc",
+"Sud",
+"Sudcovia"
+],
+[
+"rut",
+"Rut",
+"Rút"
+],
+[
+"1sam",
+"1S",
+"Prvá kniha Samuelova"
+],
+[
+"2sam",
+"2S",
+"Druhá kniha Samuelova"
+],
+[
+"1krl",
+"1Kr",
+"Prvá kniha kráľov"
+],
+[
+"2krl",
+"2Kr",
+"Druhá kniha kráľov"
+],
+[
+"1krn",
+"1Kron",
+"Prvá kniha kronická"
+],
+[
+"2krn",
+"2Kron",
+"Druhá kniha kronická"
+],
+[
+"ezd",
+"Ezd",
+"Ezdráš"
+],
+[
+"neh",
+"Neh",
+"Nehemiáš"
+],
+[
+"est",
+"Est",
+"Ester"
+],
+[
+"job",
+"Job",
+"Kniha Jóbova"
+],
+[
+"z",
+"Ž",
+"Žalmy"
+],
+[
+"pris",
+"Pr",
+"Príslovia"
+],
+[
+"koh",
+"Kaz",
+"Kazateľ"
+],
+[
+"vlp",
+"Veľp",
+"Veľpieseň"
+],
+[
+"iz",
+"Iz",
+"Izaiáš"
+],
+[
+"jer",
+"Jer",
+"Jeremiáš"
+],
+[
+"nar",
+"Žalosp",
+"Žalospevy"
+],
+[
+"ez",
+"Ez",
+"Ezechiel"
+],
+[
+"dan",
+"Dan",
+"Daniel"
+],
+[
+"oz",
+"Oz",
+"Ozeáš"
+],
+[
+"joel",
+"Joel",
+"Joel"
+],
+[
+"am",
+"Am",
+"Ámos"
+],
+[
+"abd",
+"Abd",
+"Abdiáš"
+],
+[
+"jon",
+"Jon",
+"Jonáš"
+],
+[
+"mich",
+"Mich",
+"Micheáš"
+],
+[
+"nah",
+"Nah",
+"Nahum"
+],
+[
+"hab",
+"Ab",
+"Abakuk"
+],
+[
+"sof",
+"Sof",
+"Sofoniáš"
+],
+[
+"ag",
+"Ag",
+"Aggeus"
+],
+[
+"zach",
+"Zach",
+"Zachariáš"
+],
+[
+"mal",
+"Mal",
+"Malachiáš"
+],
+[
+"mt",
+"Mt",
+"Evanjelium podľa Matúša"
+],
+[
+"mk",
+"Mk",
+"Evanjelium podľa Marka"
+],
+[
+"lk",
+"L",
+"Evanjelium podľa Lukáša"
+],
+[
+"jn",
+"J",
+"Evanjelium podľa Jána"
+],
+[
+"sk",
+"Sk",
+"Skutky apoštolov"
+],
+[
+"rim",
+"R",
+"List apoštola Pavla Rímskym"
+],
+[
+"1kor",
+"1K",
+"Prvý list apoštola Pavla Korintským"
+],
+[
+"2kor",
+"2K",
+"Druhý list apoštola Pavla Korintským"
+],
+[
+"ga",
+"G",
+"List apoštola Pavla Galatským"
+],
+[
+"ef",
+"Ef",
+"List apoštola Pavla Efezským"
+],
+[
+"flp",
+"F",
+"List apoštola Pavla Filipským"
+],
+[
+"kol",
+"Kol",
+"List apoštola Pavla Kolosenským"
+],
+[
+"1tes",
+"1Tes",
+"Prvý list apoštola Pavla Tesalonickým"
+],
+[
+"2tes",
+"2Tes",
+"Druhý list apoštola Pavla Tesalonickým"
+],
+[
+"1tim",
+"1Tim",
+"Prvý list apoštola Pavla Timoteovi"
+],
+[
+"2tim",
+"2Tim",
+"Druhý list apoštola Pavla Timoteovi"
+],
+[
+"tit",
+"Tit",
+"List apoštola Pavla Títovi"
+],
+[
+"flm",
+"Filem",
+"List apoštola Pavla Filemonovi"
+],
+[
+"heb",
+"Žid",
+"List Židom"
+],
+[
+"jk",
+"Jk",
+"List Jakuba"
+],
+[
+"1pt",
+"1Pt",
+"Prvý list apoštola Petra"
+],
+[
+"2pt",
+"2Pt",
+"Druhý list apoštola Petra"
+],
+[
+"1jn",
+"1J",
+"Prvý list Jánov"
+],
+[
+"2jn",
+"2J",
+"Druhý list Jánov"
+],
+[
+"3jn",
+"3J",
+"Tretí list Jánov"
+],
+[
+"jud",
+"Jud",
+"List Júdov"
+],
+[
+"zj",
+"Zjav",
+"Zjavenie Jána"
+]
+],
+"ssv": [
+[
+"gn",
+"Gn",
+"Kniha Genezis (Prvá kniha Mojžišova)"
+],
+[
+"ex",
+"Ex",
+"Kniha Exodus (Druhá kniha Mojžišova)"
+],
+[
+"lv",
+"Lv",
+"Kniha Levitikus (Tretia kniha Mojžišova)"
+],
+[
+"nm",
+"Nm",
+"Kniha Numeri (Štvrtá kniha Mojžišova)"
+],
+[
+"dt",
+"Dt",
+"Kniha Deuteronómium (Piata kniha Mojžišova)"
+],
+[
+"joz",
+"Joz",
+"Kniha Jozue"
+],
+[
+"sdc",
+"Sdc",
+"Kniha sudcov"
+],
+[
+"rut",
+"Rút",
+"Kniha Rút"
+],
+[
+"1sam",
+"1 Sam",
+"Prvá kniha Samuelova"
+],
+[
+"2sam",
+"2 Sam",
+"Druhá kniha Samuelova"
+],
+[
+"1krl",
+"1 Kr",
+"Prvá kniha kráľov"
+],
+[
+"2krl",
+"2 Kr",
+"Druhá kniha kráľov"
+],
+[
+"1krn",
+"1 Krn",
+"Prvá kniha kroník"
+],
+[
+"2krn",
+"2 Krn",
+"Druhá kniha kroník"
+],
+[
+"ezd",
+"Ezd",
+"Kniha Ezdrášova"
+],
+[
+"neh",
+"Neh",
+"Kniha Nehemiášova"
+],
+[
+"tob",
+"Tob",
+"Kniha Tobiáš"
+],
+[
+"jdt",
+"Jdt",
+"Kniha Judita"
+],
+[
+"est",
+"Est",
+"Kniha Ester"
+],
+[
+"job",
+"Jób",
+"Kniha Jób"
+],
+[
+"z",
+"Ž",
+"Kniha žalmov"
+],
+[
+"pris",
+"Prís",
+"Kniha prísloví"
+],
+[
+"koh",
+"Kaz",
+"Kniha Kazateľ"
+],
+[
+"vlp",
+"Pies",
+"Pieseň piesní"
+],
+[
+"mud",
+"Múd",
+"Kniha múdrosti"
+],
+[
+"sir",
+"Sir",
+"Kniha Sirachovcova"
+],
+[
+"iz",
+"Iz",
+"Kniha proroka Izaiáša"
+],
+[
+"jer",
+"Jer",
+"Kniha proroka Jeremiáša"
+],
+[
+"nar",
+"Nár",
+"Náreky"
+],
+[
+"bar",
+"Bar",
+"Kniha proroka Barucha"
+],
+[
+"ez",
+"Ez",
+"Kniha proroka Ezechiela"
+],
+[
+"dan",
+"Dan",
+"Kniha proroka Daniela"
+],
+[
+"oz",
+"Oz",
+"Kniha proroka Ozeáša"
+],
+[
+"joel",
+"Joel",
+"Kniha proroka Joela"
+],
+[
+"am",
+"Am",
+"Kniha proroka Amosa"
+],
+[
+"abd",
+"Abd",
+"Kniha proroka Abdiáša"
+],
+[
+"jon",
+"Jon",
+"Kniha proroka Jonáša"
+],
+[
+"mich",
+"Mich",
+"Kniha proroka Micheáša"
+],
+[
+"nah",
+"Nah",
+"Kniha proroka Nahuma"
+],
+[
+"hab",
+"Hab",
+"Kniha proroka Habakuka"
+],
+[
+"sof",
+"Sof",
+"Kniha proroka Sofoniáša"
+],
+[
+"ag",
+"Ag",
+"Kniha proroka Aggea"
+],
+[
+"zach",
+"Zach",
+"Kniha proroka Zachariáša"
+],
+[
+"mal",
+"Mal",
+"Kniha proroka Malachiáša"
+],
+[
+"1mak",
+"1 Mach",
+"Prvá kniha Machabejcov"
+],
+[
+"2mak",
+"2 Mach",
+"Druhá kniha Machabejcov"
+],
+[
+"mt",
+"Mt",
+"Evanjelium podľa Matúša"
+],
+[
+"mk",
+"Mk",
+"Evanjelium podľa Marka"
+],
+[
+"lk",
+"Lk",
+"Evanjelium podľa Lukáša"
+],
+[
+"jn",
+"Jn",
+"Evanjelium podľa Jána"
+],
+[
+"sk",
+"Sk",
+"Skutky apoštolov"
+],
+[
+"rim",
+"Rim",
+"List Rimanom"
+],
+[
+"1kor",
+"1 Kor",
+"Prvý list Korinťanom"
+],
+[
+"2kor",
+"2 Kor",
+"Druhý list Korinťanom"
+],
+[
+"ga",
+"Gal",
+"List Galaťanom"
+],
+[
+"ef",
+"Ef",
+"List Efezanom"
+],
+[
+"flp",
+"Flp",
+"List Filipanom"
+],
+[
+"kol",
+"Kol",
+"List Kolosanom"
+],
+[
+"1tes",
+"1 Sol",
+"Prvý list Solúnčanom"
+],
+[
+"2tes",
+"2 Sol",
+"Druhý list Solúnčanom"
+],
+[
+"1tim",
+"1 Tim",
+"Prvý list Timotejovi"
+],
+[
+"2tim",
+"2 Tim",
+"Druhý list Timotejovi"
+],
+[
+"tit",
+"Tít",
+"List Títovi"
+],
+[
+"flm",
+"Flm",
+"List Filemonovi"
+],
+[
+"heb",
+"Hebr",
+"List Hebrejom"
+],
+[
+"jk",
+"Jak",
+"Jakubov list"
+],
+[
+"1pt",
+"1 Pt",
+"Prvý Petrov list"
+],
+[
+"2pt",
+"2 Pt",
+"Druhý Petrov list"
+],
+[
+"1jn",
+"1 Jn",
+"Prvý Jánov list"
+],
+[
+"2jn",
+"2 Jn",
+"Druhý Jánov list"
+],
+[
+"3jn",
+"3 Jn",
+"Tretí Jánov list"
+],
+[
+"jud",
+"Júd",
+"Júdov list"
+],
+[
+"zj",
+"Zjv",
+"Zjavenie apoštola Jána (Apokalypsa)"
+]
+],
+"roh": [
+[
+"gn",
+"1M.",
+"Prvá kniha Mojžišova"
+],
+[
+"ex",
+"2M.",
+"Druhá kniha Mojžišova"
+],
+[
+"lv",
+"3M.",
+"Tretia kniha Mojžišova"
+],
+[
+"nm",
+"4M.",
+"Štvrtá kniha Mojžišova"
+],
+[
+"dt",
+"5M.",
+"Piata kniha Mojžišova"
+],
+[
+"joz",
+"Joz.",
+"Kniha Jozuova"
+],
+[
+"sdc",
+"Sud.",
+"Kniha Sudcov"
+],
+[
+"rut",
+"Rut.",
+"Kniha Rutina"
+],
+[
+"1sam",
+"1Sam.",
+"Prvá kniha Samuelova"
+],
+[
+"2sam",
+"2Sam.",
+"Druhá kniha Samuelova"
+],
+[
+"1krl",
+"1Kráľ.",
+"Prvá kniha Kráľov"
+],
+[
+"2krl",
+"2Kráľ.",
+"Druhá kniha Kráľov"
+],
+[
+"1krn",
+"1Par.",
+"Prvá kniha Paralipomenon"
+],
+[
+"2krn",
+"2Par.",
+"Druhá kniha Paralipomenon"
+],
+[
+"ezd",
+"Ezd.",
+"Kniha Ezdrášova"
+],
+[
+"neh",
+"Neh.",
+"Kniha Nehemiášova"
+],
+[
+"est",
+"Est.",
+"Kniha Esterina"
+],
+[
+"job",
+"Job.",
+"Kniha Jobova"
+],
+[
+"z",
+"Ž.",
+"Kniha Žalmov"
+],
+[
+"pris",
+"Pr.",
+"Kniha Príslovia"
+],
+[
+"koh",
+"Kaz.",
+"Kniha Kazateľova"
+],
+[
+"vlp",
+"P.Š.",
+"Pieseň Šalamúnova"
+],
+[
+"iz",
+"Iz.",
+"Prorok Izaiáš"
+],
+[
+"jer",
+"Jer.",
+"Prorok Jeremiáš"
+],
+[
+"nar",
+"P.J.",
+"Plač Jeremiášov"
+],
+[
+"ez",
+"Ez.",
+"Prorok Ezechiel"
+],
+[
+"dan",
+"Dan.",
+"Prorok Daniel"
+],
+[
+"oz",
+"Hoz.",
+"Prorok Hozeáš"
+],
+[
+"joel",
+"Joel.",
+"Prorok Joel"
+],
+[
+"am",
+"Am.",
+"Prorok Ámos"
+],
+[
+"abd",
+"Ob.",
+"Prorok Obadiáš"
+],
+[
+"jon",
+"Jon.",
+"Prorok Jonáš"
+],
+[
+"mich",
+"Mich.",
+"Prorok Micheáš"
+],
+[
+"nah",
+"Náh.",
+"Prorok Náhum"
+],
+[
+"hab",
+"Hab.",
+"Prorok Habakuk"
+],
+[
+"sof",
+"Sof.",
+"Prorok Sofoniáš"
+],
+[
+"ag",
+"Hag.",
+"Prorok Haggeus"
+],
+[
+"zach",
+"Zach.",
+"Prorok Zachariáš"
+],
+[
+"mal",
+"Mal.",
+"Prorok Malachiáš"
+],
+[
+"mt",
+"Mat.",
+"Evanjelium podľa svätého Matúša"
+],
+[
+"mk",
+"Mar.",
+"Evanjelium podľa svätého Marka"
+],
+[
+"lk",
+"Luk.",
+"Evanjelium podľa svätého Lukáša"
+],
+[
+"jn",
+"Ján.",
+"Evanjelium podľa svätého Jána"
+],
+[
+"sk",
+"Sk.",
+"Skutky svätých apoštolov"
+],
+[
+"rim",
+"Rim.",
+"Epištola čiže list svätého Pavla Rimanom"
+],
+[
+"1kor",
+"1Kor.",
+"Prvá epištola svätého Pavla Korinťanom"
+],
+[
+"2kor",
+"2Kor.",
+"Druhá epištola svätého Pavla Korinťanom"
+],
+[
+"ga",
+"Gal.",
+"Epištola svätého Pavla Galaťanom"
+],
+[
+"ef",
+"Ef.",
+"Epištola svätého Pavla Efežanom"
+],
+[
+"flp",
+"Fil.",
+"Epištola svätého Pavla Filipänom"
+],
+[
+"kol",
+"Kol.",
+"Epištola svätého Pavla Kološanom"
+],
+[
+"1tes",
+"1Tes.",
+"Prvá epištola svätého Pavla Tesaloničanom"
+],
+[
+"2tes",
+"2Tes.",
+"Druhá epištola svätého Pavla Tesaloničanom"
+],
+[
+"1tim",
+"1Tim.",
+"Prvá epištola svätého Pavla Timoteovi"
+],
+[
+"2tim",
+"2Tim.",
+"Druhá epištola svätého Pavla Timoteovi"
+],
+[
+"tit",
+"Tit.",
+"Epištola svätého Pavla Títovi"
+],
+[
+"flm",
+"Filem.",
+"Epištola svätého Pavla Filémonovi"
+],
+[
+"heb",
+"Žid.",
+"Epištola svätého Pavla Židom"
+],
+[
+"jk",
+"Jak.",
+"Epištola svätého Jakoba"
+],
+[
+"1pt",
+"1Pet.",
+"Prvá epištola svätého Petra"
+],
+[
+"2pt",
+"2Pet.",
+"Druhá epištola svätého Petra"
+],
+[
+"1jn",
+"1Ján.",
+"Prvá epištola svätého Jána"
+],
+[
+"2jn",
+"2Ján.",
+"Druhá epištola svätého Jána"
+],
+[
+"3jn",
+"3Ján.",
+"Tretia epištola svätého Jána"
+],
+[
+"jud",
+"Júda.",
+"Epištola svätého Júdu"
+],
+[
+"zj",
+"Zj.",
+"Zjavenie svätého Jána"
+]
+]
+}

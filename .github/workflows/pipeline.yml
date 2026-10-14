@@ -474,6 +474,14 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s ops/cloudflare -p 'test_presenter_access.py' -v
 
+      # #850 A1a: the Bible resolver's book-name table is generated from
+      # data/bible-book-names/ — a stale committed table fails here.
+      - name: Check generated Bible book-name table (#850)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev -p 'test_gen_bible_book_names.py' -v
+          python3 scripts/dev/gen_bible_book_names.py --check
+
       # Self-test for the no-panic gate (quality-check.sh section 10 ->
       # scripts/dev/no_panic_check.py). The gate's old rg pattern did not parse, so
       # it never fired and CLAUDE.md's "no unwrap/expect/panic in production code"

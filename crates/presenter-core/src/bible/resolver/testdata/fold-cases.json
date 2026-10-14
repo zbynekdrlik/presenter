@@ -1,0 +1,240 @@
+{
+ "note": "#850: book-text fold cases shared by the Rust fold tests and test_gen_bible_book_names.py — both folds must agree",
+ "cases": [
+  {
+   "input": "Židom",
+   "ordinal": 0,
+   "key": "zidom"
+  },
+  {
+   "input": "Žd",
+   "ordinal": 0,
+   "key": "zd"
+  },
+  {
+   "input": "Ř",
+   "ordinal": 0,
+   "key": "r"
+  },
+  {
+   "input": "Jób",
+   "ordinal": 0,
+   "key": "job"
+  },
+  {
+   "input": "1 Korinťanom",
+   "ordinal": 1,
+   "key": "korintanom"
+  },
+  {
+   "input": "1. Korinťanom",
+   "ordinal": 1,
+   "key": "korintanom"
+  },
+  {
+   "input": "1kor",
+   "ordinal": 1,
+   "key": "kor"
+  },
+  {
+   "input": "I Kor",
+   "ordinal": 1,
+   "key": "kor"
+  },
+  {
+   "input": "I. Jánov",
+   "ordinal": 1,
+   "key": "janov"
+  },
+  {
+   "input": "II. Kor",
+   "ordinal": 2,
+   "key": "kor"
+  },
+  {
+   "input": "III. Jánov",
+   "ordinal": 3,
+   "key": "janov"
+  },
+  {
+   "input": "IV. Mojžišova",
+   "ordinal": 4,
+   "key": "mojzisova"
+  },
+  {
+   "input": "V. Mojžišova",
+   "ordinal": 5,
+   "key": "mojzisova"
+  },
+  {
+   "input": "prvý Ján",
+   "ordinal": 1,
+   "key": "jan"
+  },
+  {
+   "input": "Prvá kniha Mojžišova",
+   "ordinal": 1,
+   "key": "mojzisova"
+  },
+  {
+   "input": "Prvýlist Jánov",
+   "ordinal": 1,
+   "key": "janov"
+  },
+  {
+   "input": "Druhýlist Jánov",
+   "ordinal": 2,
+   "key": "janov"
+  },
+  {
+   "input": "Tretílist Jánov",
+   "ordinal": 3,
+   "key": "janov"
+  },
+  {
+   "input": "první Korintským",
+   "ordinal": 1,
+   "key": "korintskym"
+  },
+  {
+   "input": "Štvrtá kniha Mojžišova",
+   "ordinal": 4,
+   "key": "mojzisova"
+  },
+  {
+   "input": "Piata Mojžišova",
+   "ordinal": 5,
+   "key": "mojzisova"
+  },
+  {
+   "input": "1 k. Mojžišova",
+   "ordinal": 1,
+   "key": "mojzisova"
+  },
+  {
+   "input": "1 k Mojžišova",
+   "ordinal": 1,
+   "key": "mojzisova"
+  },
+  {
+   "input": "K. stvorenia",
+   "ordinal": 0,
+   "key": "stvorenia"
+  },
+  {
+   "input": "Evanjelium podľa Jána",
+   "ordinal": 0,
+   "key": "jana"
+  },
+  {
+   "input": "List apoštola Pavla Rimanom",
+   "ordinal": 0,
+   "key": "rimanom"
+  },
+  {
+   "input": "Kniha proroka Abdiáša",
+   "ordinal": 0,
+   "key": "abdiasa"
+  },
+  {
+   "input": "Book of Revelation",
+   "ordinal": 0,
+   "key": "revelation"
+  },
+  {
+   "input": "Saint John",
+   "ordinal": 0,
+   "key": "john"
+  },
+  {
+   "input": "Iz",
+   "ordinal": 0,
+   "key": "iz"
+  },
+  {
+   "input": "I",
+   "ordinal": 0,
+   "key": "i"
+  },
+  {
+   "input": "I.",
+   "ordinal": 1,
+   "key": ""
+  },
+  {
+   "input": "prvý",
+   "ordinal": 1,
+   "key": ""
+  },
+  {
+   "input": "1",
+   "ordinal": 1,
+   "key": ""
+  },
+  {
+   "input": "P.Š.",
+   "ordinal": 0,
+   "key": "ps"
+  },
+  {
+   "input": "Rim.",
+   "ordinal": 0,
+   "key": "rim"
+  },
+  {
+   "input": "1K",
+   "ordinal": 1,
+   "key": "k"
+  },
+  {
+   "input": "1‑Kor",
+   "ordinal": 1,
+   "key": "kor"
+  },
+  {
+   "input": "  1 Ján  ",
+   "ordinal": 1,
+   "key": "jan"
+  },
+  {
+   "input": "Pieseň Šalamúnova",
+   "ordinal": 0,
+   "key": "piesensalamunova"
+  },
+  {
+   "input": "Skutky apoštolov",
+   "ordinal": 0,
+   "key": "skutky"
+  },
+  {
+   "input": "7 Kor",
+   "ordinal": 0,
+   "key": "7kor"
+  },
+  {
+   "input": "Z\u030cidom",
+   "ordinal": 0,
+   "key": "zidom"
+  },
+  {
+   "input": "Prvy\u0301 list Ja\u0301nov",
+   "ordinal": 1,
+   "key": "janov"
+  },
+  {
+   "input": "Evanjelium podl\u030ca Ja\u0301na",
+   "ordinal": 0,
+   "key": "jana"
+  },
+  {
+   "input": "Li\u034fst Jánov",
+   "ordinal": 0,
+   "key": "janov"
+  },
+  {
+   "input": "Prvý listina",
+   "ordinal": 1,
+   "key": "listina"
+  }
+ ]
+}

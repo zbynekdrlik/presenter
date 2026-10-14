@@ -129,6 +129,12 @@ jobs:
           cp target/release/presenter-stage.apk release/
           cp data/bibles/*.zip release/bibles/
           cp -r data/libraries/* release/libraries/
+          # #850 A1a: the binaries embed the book-name table generated from MIT /
+          # CC BY sources, so the notices and the MIT text ship with them (same
+          # relative path the notices name).
+          cp THIRD_PARTY_NOTICES.md release/
+          mkdir -p release/data/bible-book-names
+          cp data/bible-book-names/LICENSE-BPRP.md release/data/bible-book-names/
           tar -czvf presenter-${{ github.event.release.tag_name }}-linux-x64.tar.gz -C release .
 
       - name: Upload release artifact to GitHub Release
