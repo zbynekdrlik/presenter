@@ -66,22 +66,24 @@ STATUS_FN_RE = re.compile(r"\b(always|failure|cancelled)\s*\(\s*\)")
 SWAP_RE = re.compile(r"\bmv\b[^\n]*\bstaging\.new/")
 TOOLS = ("ingest_bibles", "import_propresenter")
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# Words that run the NEXT word as the command: (wrapper, options that take an argument).
+# Words that run a LATER word as the command:
+# wrapper -> (options that take an argument, positional words before the command).
 WRAPPERS = {
-    "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"},
-    "timeout": {"-s", "--signal", "-k", "--kill-after"},
-    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
-    "nice": {"-n", "--adjustment"},
-    "exec": {"-a"},
-    "time": {"-f", "--format", "-o", "--output"},
-    "nohup": set(),
-    "command": set(),
+    "sudo": ({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}, 0),
+    "timeout": ({"-s", "--signal", "-k", "--kill-after"}, 1),
+    "flock": ({"-w", "--timeout", "-E", "--conflict-exit-code"}, 1),
+    "env": ({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}, 0),
+    "nice": ({"-n", "--adjustment"}, 0),
+    "exec": ({"-a"}, 0),
+    "time": ({"-f", "--format", "-o", "--output"}, 0),
+    "nohup": (set(), 0),
+    "command": (set(), 0),
 }
+SSH_ARG_OPTIONS = {"-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w", "-B"}
 # Shell keywords that may precede a command on the same line.
 KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "("}
-# The step that waits for the new service: a /healthz request inside a retry loop.
-HEALTH_WAIT_RE = re.compile(r"/healthz\b")
-LOOP_RE = re.compile(r"\b(for|until|while)\b")
+LOOP_WORDS = {"for", "while", "until"}
+COMMAND_SEPARATORS = {";", "&&", "||", "|", "do", "then", "else"}
 
 
 @dataclass(frozen=True)
@@ -162,31 +164,56 @@ def check_job(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
     return violations
 
 
+def _skip_options(words: list[str], takes_arg: set[str]) -> list[str]:
+    """Drop leading options; an option in `takes_arg` (also as the last letter
+    of a combined short flag, `-iu user`) consumes the next word too."""
+    while words and words[0].startswith("-") and words[0] != "-":
+        word = words[0]
+        combined = not word.startswith("--") and len(word) > 2 and "-" + word[-1] in takes_arg
+        words = words[2:] if word in takes_arg or combined else words[1:]
+    return words
+
+
 def _command_words(words: list[str]) -> list[str]:
-    """Strip a leading `ssh ... deploy-target`, shell keywords, `VAR=value`
+    """Strip a leading `ssh [options] host`, shell keywords, `VAR=value`
     prefixes and wrapper commands (`sudo -u x`, `timeout 600`, `env A=1`,
-    `bash -c`, ...) so the first word left is the command that really runs."""
-    if words and words[0] == "ssh":
-        at = next((i for i, word in enumerate(words) if ALIAS in word), None)
-        words = words[at + 1 :] if at is not None else []
+    `flock /lock`, `su user -c`, `bash -c`, ...) so the first word left is the
+    command that really runs."""
     while words:
         head = words[0]
-        if head in KEYWORDS or ENV_ASSIGN_RE.match(head):
+        if head == "ssh":
+            words = _skip_options(words[1:], SSH_ARG_OPTIONS)[1:]  # options, then the host
+        elif head in KEYWORDS or ENV_ASSIGN_RE.match(head):
             words = words[1:]
+        elif head in ("su", "runuser"):
+            at = next((i for i, word in enumerate(words) if word in ("-c", "--command")), None)
+            words = words[at + 1 :] if at is not None else []
         elif head in ("bash", "sh") and len(words) > 1 and words[1].startswith("-"):
-            words = words[1:]
-            while words and words[0].startswith("-"):
-                words = words[1:]
+            words = _skip_options(words[1:], set())
         elif head in WRAPPERS:
-            takes_arg = WRAPPERS[head]
-            words = words[1:]
-            while words and words[0].startswith("-"):
-                words = words[2:] if words[0] in takes_arg else words[1:]
-            if head == "timeout" and words:
-                words = words[1:]  # the duration
+            takes_arg, positional = WRAPPERS[head]
+            words = _skip_options(words[1:], takes_arg)[positional:]
         else:
             break
     return words
+
+
+def _waits_for_health(script: str) -> bool:
+    """True when a `/healthz` request sits INSIDE a for / while / until loop —
+    the retry wait for the new service, not a single probe. A loop word only
+    counts in command position (so `echo waiting for x` opens nothing)."""
+    tokens = re.findall(r"&&|\|\||[;|]|[^\s;|&]+", script.replace("\n", " ; ").replace('"', " ").replace("'", " "))
+    loops = 0
+    command_position = True
+    for token in tokens:
+        if command_position and token in LOOP_WORDS:
+            loops += 1
+        elif command_position and token == "done":
+            loops = max(loops - 1, 0)
+        if "/healthz" in token and loops > 0:
+            return True
+        command_position = token in COMMAND_SEPARATORS or token in KEYWORDS
+    return False
 
 
 def _tool_runs(script: str) -> list[tuple[str, bool]]:
@@ -234,7 +261,7 @@ def check_staged_tools(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
                     violations.append(Violation(workflow, job, name, f"runs `{tool}` from the deploy dir before the swap step — that is the PREVIOUS release's binary; run `staging.new/{tool}` or move the step after the swap (#851 D1)"))
         if any(tool == "ingest_bibles" for tool, _ in runs) and (index <= swap or not healthy):
             violations.append(Violation(workflow, job, name, "runs ingest_bibles before the new service answered `/healthz` after the swap — it migrates the database (an aborted deploy leaves the old service unable to boot) and would race the new service's migration run; move it after the step that waits for `/healthz` (#851 D1)"))
-        if index > swap and HEALTH_WAIT_RE.search(script) and LOOP_RE.search(script):
+        if index > swap and _waits_for_health(script):
             healthy = True
     return violations
 

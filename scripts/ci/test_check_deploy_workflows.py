@@ -273,6 +273,55 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
                 self.assertEqual([v.step for v in found], ["Import Bible translations"])
                 self.assertIn("/healthz", found[0].message)
 
+    def test_more_wrapper_and_ssh_forms_are_seen(self) -> None:
+        # Review round 2: an ssh to a host other than the alias dropped the
+        # whole command; combined sudo flags, su -c and flock were missed.
+        for command in (
+            "ssh -i ~/.ssh/id_deploy newlevel@192.0.2.10 /opt/presenter/import_propresenter",
+            "sudo -iu newlevel /opt/presenter/import_propresenter",
+            "su newlevel -c '/opt/presenter/import_propresenter'",
+            "flock /tmp/deploy.lock /opt/presenter/import_propresenter",
+            "flock -w 30 /tmp/deploy.lock /opt/presenter/import_propresenter",
+        ):
+            with self.subTest(command=command):
+                steps = SAFE_SETUP + f"""
+      - name: Import ProPresenter
+        run: {command}
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+                found = _violations(steps)
+                self.assertEqual([v.step for v in found], ["Import ProPresenter"])
+                self.assertIn("PREVIOUS release", found[0].message)
+
+    def test_the_health_wait_needs_healthz_inside_the_loop(self) -> None:
+        swap = SAFE_SETUP + """
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server . && sudo systemctl start presenter"
+"""
+        ingest = """
+      - name: Import Bible translations
+        run: ssh deploy-target "/opt/presenter/ingest_bibles"
+"""
+        not_a_wait = """
+      - name: Peek
+        run: |
+          echo "waiting for the service"
+          curl -sf http://localhost:80/healthz
+"""
+        self.assertEqual([v.step for v in _violations(swap + not_a_wait + ingest)], ["Import Bible translations"])
+        for wait in (
+            "for attempt in $(seq 1 30); do curl -sf http://localhost:80/healthz && break; sleep 2; done",
+            "until curl -sf http://localhost:80/healthz; do sleep 2; done",
+        ):
+            with self.subTest(wait=wait):
+                steps = swap + f"""
+      - name: Verify deployment
+        run: |
+          {wait}
+""" + ingest
+                self.assertEqual(_violations(steps), [])
+
     def test_relative_tool_runs_resolve_against_the_last_cd(self) -> None:
         old = SAFE_SETUP + """
       - name: Import ProPresenter
