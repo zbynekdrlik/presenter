@@ -2,7 +2,7 @@ use crate::ndi_sdk::{NDIlib_find_create_t, NdiLib};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// A discovered NDI source on the network.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -89,24 +89,45 @@ impl Drop for FinderShutdown {
 ///
 /// Returns a `SourceList` for reading discovered sources and a `FinderShutdown`
 /// handle that stops the thread when dropped.
+///
+/// If the OS refuses the thread (thread limit, out of memory) the finder degrades exactly
+/// like one whose `NDIlib_find_create_v2` returned null: the list never completes a scan,
+/// so [`SourceList::snapshot`] stays `None` — we are BLIND and say so (#546) — while the
+/// rest of the manager keeps working. A panic here would take the whole server down.
 pub fn spawn_persistent_finder(sdk: Arc<NdiLib>) -> (SourceList, FinderShutdown) {
     let source_list = SourceList::new();
     let thread_list = source_list.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = Arc::clone(&stop);
 
-    let handle = std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("ndi-finder".into())
         .spawn(move || {
             run_finder_loop(sdk, thread_list, stop_clone);
-        })
-        .expect("failed to spawn NDI finder thread");
+        });
 
     let shutdown = FinderShutdown {
         stop,
-        handle: Some(handle),
+        handle: finder_thread_or_degrade(spawned),
     };
     (source_list, shutdown)
+}
+
+/// Turn the finder thread's spawn result into the handle `FinderShutdown` keeps: `None`
+/// (logged at ERROR, discovery disabled) when the thread could not be spawned.
+fn finder_thread_or_degrade(
+    spawned: std::io::Result<std::thread::JoinHandle<()>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    match spawned {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            error!(
+                error = %err,
+                "failed to spawn the NDI finder thread — source discovery disabled"
+            );
+            None
+        }
+    }
 }
 
 fn run_finder_loop(sdk: Arc<NdiLib>, sources: SourceList, stop: Arc<AtomicBool>) {
@@ -229,6 +250,33 @@ mod tests {
             Some(Vec::new()),
             "the finder looked and found nothing — that is an empty network",
         );
+    }
+
+    /// A finder thread the OS refuses to spawn must NOT panic the server (it used to,
+    /// via `.expect`): the spawn error degrades to "no thread to join", and the list it
+    /// leaves behind has never scanned — blindness (#546), not an empty network.
+    #[test]
+    fn a_refused_finder_thread_degrades_to_no_handle_instead_of_panicking() {
+        let refused = Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "Resource temporarily unavailable",
+        ));
+        assert!(finder_thread_or_degrade(refused).is_none());
+
+        let list = SourceList::new();
+        let shutdown = FinderShutdown {
+            stop: Arc::new(AtomicBool::new(false)),
+            handle: None,
+        };
+        assert_eq!(list.snapshot(), None, "the finder never looked");
+        drop(shutdown); // dropping a handle-less shutdown must not panic or hang
+    }
+
+    #[test]
+    fn a_spawned_finder_thread_keeps_its_handle_so_drop_can_join_it() {
+        let spawned = std::thread::Builder::new().spawn(|| {});
+        let handle = finder_thread_or_degrade(spawned).expect("a spawned thread keeps its handle");
+        handle.join().expect("the trivial thread joins cleanly");
     }
 
     #[test]

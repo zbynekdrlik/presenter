@@ -677,3 +677,26 @@ async fn load_bible_verses_handler_is_registered() {
         }
     }
 }
+
+/// `make_slide` used to build its empty fallback with `SlideText::new("").unwrap()` —
+/// an `unwrap` in production code. The fallback is infallible now; the behaviour is
+/// unchanged: a missing field and an over-the-cap field both become an empty text, a
+/// normal one is kept.
+#[test]
+fn make_slide_keeps_normal_text_and_blanks_missing_or_oversized_fields() {
+    let oversized = "x".repeat(4001);
+    let payload = json!({
+        "main": "Amazing grace",
+        "translation": oversized,
+        "group": "Verse 1",
+    });
+    let slide = super::make_slide(3, &payload);
+    assert_eq!(slide.content.main.value(), "Amazing grace");
+    assert_eq!(
+        slide.content.translation.value(),
+        "",
+        "an over-the-cap field is blanked, not rejected"
+    );
+    assert_eq!(slide.content.stage.value(), "", "a missing field is empty");
+    assert_eq!(slide.order, 3);
+}

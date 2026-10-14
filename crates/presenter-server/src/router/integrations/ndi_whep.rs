@@ -24,14 +24,22 @@ pub(crate) struct WhepPostQuery {
     profile: Option<String>,
 }
 
-fn into_response(reply: WhepReply) -> Response {
-    let mut builder = Response::builder().status(reply.status);
+/// Map the pipeline's WHEP reply 1:1 onto an HTTP response. The reply's status and
+/// headers come from the pipeline layer, so an invalid one (a status outside 100..=999,
+/// a header name or value HTTP cannot carry) is a server-side fault: it becomes a 500
+/// for this one request, logged, never a panic that takes the whole service down.
+fn into_response(reply: WhepReply) -> Result<Response, AppError> {
+    let status = reply.status;
+    let mut builder = Response::builder().status(status);
     for (name, value) in &reply.headers {
         builder = builder.header(name, value);
     }
     builder
         .body(axum::body::Body::from(reply.body.unwrap_or_default()))
-        .expect("valid response")
+        .map_err(|err| {
+            tracing::error!(status, error = %err, "WHEP reply is not a valid HTTP response");
+            AppError::internal(format!("invalid WHEP reply: {err}"))
+        })
 }
 
 /// Map a `whep_signaller_call` error to the right HTTP status via the TYPED
@@ -138,7 +146,7 @@ pub(crate) async fn post_whep_endpoint(
         Ok(reply) => reply,
         Err(err) => map_post_whep_error(err)?,
     };
-    Ok(into_response(reply))
+    into_response(reply)
 }
 
 #[instrument(skip_all, fields(source_id = %source_id, session_id = %session_id))]
@@ -164,7 +172,7 @@ pub(crate) async fn post_whep_session(
         )
         .await
         .map_err(map_signaller_error)?;
-    Ok(into_response(reply))
+    into_response(reply)
 }
 
 #[instrument(skip_all, fields(source_id = %source_id, session_id = %session_id))]
@@ -196,7 +204,7 @@ pub(crate) async fn patch_whep_session(
         )
         .await
         .map_err(map_signaller_error)?;
-    Ok(into_response(reply))
+    into_response(reply)
 }
 
 #[instrument(skip_all, fields(source_id = %source_id, session_id = %session_id))]
@@ -220,7 +228,7 @@ pub(crate) async fn delete_whep_session(
         // missing, mirroring #431's extraction of `map_post_whep_error`).
         Err(err) => map_delete_whep_error(err)?,
     };
-    Ok(into_response(reply))
+    into_response(reply)
 }
 
 /// Test-only: simulate an `ndisrc` "Internal data stream error" by
@@ -255,10 +263,11 @@ pub(crate) async fn kill_pipeline_for_test(
     {
         return Err(AppError::not_found("NDI source not active"));
     }
-    Ok(Response::builder()
-        .status(204)
-        .body(axum::body::Body::empty())
-        .expect("valid response"))
+    into_response(WhepReply {
+        status: 204,
+        headers: Vec::new(),
+        body: None,
+    })
 }
 
 #[cfg(test)]
@@ -499,7 +508,7 @@ mod tests {
             headers: vec![("location".to_string(), "/whep/abc".to_string())],
             body: Some(b"v=0\r\ns=-\r\n".to_vec()),
         };
-        let resp = into_response(reply);
+        let resp = into_response(reply).expect("a valid reply maps to a response");
         assert_eq!(resp.status(), StatusCode::CREATED);
         let location = resp.headers().get("location").and_then(|v| v.to_str().ok());
         assert_eq!(location, Some("/whep/abc"));
@@ -649,6 +658,37 @@ mod tests {
         }
     }
 
+    /// A reply the pipeline layer built with a status HTTP cannot carry used to PANIC
+    /// the handler (`.expect("valid response")` on the builder); it is a 500 for that
+    /// one request now.
+    #[test]
+    fn into_response_maps_an_invalid_status_to_500_instead_of_panicking() {
+        let reply = WhepReply {
+            status: 0,
+            headers: Vec::new(),
+            body: None,
+        };
+        let err = into_response(reply).expect_err("status 0 is not a valid HTTP status");
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn into_response_maps_an_invalid_header_to_500_instead_of_panicking() {
+        let reply = WhepReply {
+            status: 201,
+            headers: vec![("not a header name".to_string(), "x".to_string())],
+            body: None,
+        };
+        let err = into_response(reply).expect_err("a header name with spaces is invalid");
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
     #[test]
     fn into_response_defaults_to_empty_body_when_none() {
         let reply = WhepReply {
@@ -656,7 +696,7 @@ mod tests {
             headers: Vec::new(),
             body: None,
         };
-        let resp = into_response(reply);
+        let resp = into_response(reply).expect("a valid reply maps to a response");
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
