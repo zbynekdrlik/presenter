@@ -2,6 +2,7 @@
 //! host-tested with `cargo test --lib` in `crates/presenter-ui`. No clock and
 //! no DOM here: `js_sys::Date::now()` panics on the host.
 
+use crate::api::ApiError;
 use chrono::TimeZone;
 use presenter_core::interpreter_tips::{TipDto, TIP_LIVE_LIST_CAP, TIP_NOTE_MAX_CHARS};
 use std::collections::HashSet;
@@ -91,9 +92,16 @@ pub enum SepkarRowState {
     Dismissed,
     /// Not hidden, but older than the 4 h window (an earlier service).
     Expired,
+    /// Still active, but beyond the newest [`TIP_LIVE_LIST_CAP`] active tips:
+    /// the interpreter's list stops there, so it is not on the screen (it
+    /// comes back when newer tips are hidden or age out).
+    OverLimit,
 }
 
 impl SepkarRowState {
+    /// One tip on its own: hidden, active or not. Whether an active tip still
+    /// FITS on the interpreter's screen depends on the tips above it — see
+    /// [`row_states`], which the page uses.
     pub fn of(tip: &TipDto, active_ids: &[i64]) -> Self {
         if tip.dismissed_at.is_some() {
             Self::Dismissed
@@ -110,6 +118,7 @@ impl SepkarRowState {
             Self::OnScreen => "on-screen",
             Self::Dismissed => "dismissed",
             Self::Expired => "expired",
+            Self::OverLimit => "over-limit",
         }
     }
 
@@ -118,7 +127,39 @@ impl SepkarRowState {
             Self::OnScreen => "na obrazovke",
             Self::Dismissed => "skryté",
             Self::Expired => "staršie",
+            Self::OverLimit => "mimo obrazovky (max. 20)",
         }
+    }
+}
+
+/// The state of every row of the "Dnes" list (newest first, like the server
+/// sends it). The interpreter shows only the newest [`TIP_LIVE_LIST_CAP`]
+/// active tips, so an active tip past that many is [`SepkarRowState::OverLimit`],
+/// not "na obrazovke". Hidden and older-than-4-h tips take no place.
+pub fn row_states(tips: &[TipDto], active_ids: &[i64]) -> Vec<SepkarRowState> {
+    let mut on_screen = 0_usize;
+    tips.iter()
+        .map(|tip| match SepkarRowState::of(tip, active_ids) {
+            SepkarRowState::OnScreen if on_screen >= TIP_LIVE_LIST_CAP => SepkarRowState::OverLimit,
+            SepkarRowState::OnScreen => {
+                on_screen += 1;
+                SepkarRowState::OnScreen
+            }
+            other => other,
+        })
+        .collect()
+}
+
+/// The HTTP outcome of a failed tips call for the error-text helpers below:
+/// `Some((status, text))` when the server answered, with `text` set ONLY when
+/// it is the server's own JSON `message` ([`ApiError::Refused`]) — a proxy or
+/// gateway page ([`ApiError::Status`]) gets an empty text, so it is never
+/// shown to the user. `None` when no HTTP answer came at all.
+pub fn failure_status(err: &ApiError) -> Option<(u16, &str)> {
+    match err {
+        ApiError::Refused(code, message) => Some((*code, message.as_str())),
+        ApiError::Status(code, _) => Some((*code, "")),
+        _ => None,
     }
 }
 
@@ -135,7 +176,9 @@ pub fn visible_tips(mut tips: Vec<TipDto>, pending_dismiss: &HashSet<i64>) -> Ve
 /// The Slovak error line of a failed tips write (`what` = "Tip sa nepodarilo
 /// skryť"). The server's own message is shown only for its refusals (404 / 409
 /// / 422 / 429, Slovak by construction); anything else is a fixed Slovak line,
-/// never raw network or proxy text. `status` is `None` when no HTTP answer
+/// never raw network or proxy text. `status` comes from [`failure_status`]
+/// (its text is empty unless the server's JSON `message` carried it, so a
+/// proxy page on a 429 gets the fixed line too); `None` when no HTTP answer
 /// came at all.
 pub fn tip_error_text(what: &str, status: Option<(u16, &str)>) -> String {
     match status {
@@ -144,6 +187,49 @@ pub fn tip_error_text(what: &str, status: Option<(u16, &str)>) -> String {
         }
         Some((code, _)) => format!("{what} — server odpovedal chybou {code}."),
         None => format!("{what} — server je nedostupný."),
+    }
+}
+
+/// The Slovak error line of a refused or failed tip SEND (the šepkár page).
+/// The server's own message is shown verbatim only for its two refusals —
+/// 422 (the rule that was broken) and 429 (how long to wait), Slovak by
+/// construction; anything else is a fixed Slovak line, never raw network or
+/// proxy text. `status` comes from [`failure_status`] (its text is empty unless
+/// the server's JSON `message` carried it, so a proxy page on a 429 gets the
+/// fixed line too); `None` when no usable HTTP answer came at all. Every line
+/// says the tip stayed in the fields, because it did.
+pub fn sepkar_error_text(status: Option<(u16, &str)>) -> String {
+    match status {
+        Some((422 | 429, detail)) if !detail.trim().is_empty() => detail.to_string(),
+        Some((code, _)) => {
+            format!("Server odpovedal chybou {code} — tip zostal v poliach, skús znova.")
+        }
+        None => "Server je nedostupný — tip zostal v poliach, skús znova.".to_string(),
+    }
+}
+
+/// The line after an accepted send: "Odoslané 19:42" in `zone` (the pages pass
+/// `chrono::Local`), or, when the server answered with the earlier identical
+/// tip, that the interpreter already has it.
+pub fn sepkar_notice<Tz: TimeZone>(duplicate: bool, tip: &TipDto, zone: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    if duplicate {
+        return "Tento tip už tlmočník má".to_string();
+    }
+    let time = tip.created_at.with_timezone(zone).format("%H:%M");
+    format!("Odoslané {time}")
+}
+
+/// A form field as the optional request member: `None` when it is blank (the
+/// server trims and validates; this only keeps blank fields out of the
+/// request), otherwise the text exactly as typed.
+pub fn optional_text(value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -274,6 +360,145 @@ mod tests {
         assert_eq!(SepkarRowState::of(&hidden, &[1]), SepkarRowState::Dismissed);
         assert_eq!(SepkarRowState::Dismissed.label(), "skryté");
         assert_eq!(SepkarRowState::OnScreen.as_str(), "on-screen");
+        assert_eq!(SepkarRowState::OverLimit.as_str(), "over-limit");
+        assert!(
+            SepkarRowState::OverLimit
+                .label()
+                .contains(&TIP_LIVE_LIST_CAP.to_string()),
+            "the label names the interpreter's limit"
+        );
+    }
+
+    #[test]
+    fn only_the_newest_twenty_active_tips_are_on_the_screen() {
+        // 25 active tips, newest first (ids 25..=1): the interpreter's list is
+        // capped, so the oldest five are NOT on its screen.
+        let tips: Vec<TipDto> = (1..=25).rev().map(|id| tip(id, None, Some("n"))).collect();
+        let active: Vec<i64> = tips.iter().map(|tip| tip.id).collect();
+        let states = row_states(&tips, &active);
+        assert_eq!(states.len(), 25);
+        assert!(states[..TIP_LIVE_LIST_CAP]
+            .iter()
+            .all(|state| *state == SepkarRowState::OnScreen));
+        assert!(states[TIP_LIVE_LIST_CAP..]
+            .iter()
+            .all(|state| *state == SepkarRowState::OverLimit));
+    }
+
+    #[test]
+    fn a_hidden_or_older_tip_takes_no_place_on_the_screen() {
+        let mut tips: Vec<TipDto> = (1..=23).rev().map(|id| tip(id, None, Some("n"))).collect();
+        // Hidden (index 3) and older than the window (index 5, not in the
+        // active ids) sit among the newest, so two more active tips fit.
+        tips[3].dismissed_at = Some(tips[3].created_at);
+        let active: Vec<i64> = tips
+            .iter()
+            .enumerate()
+            .filter(|(index, tip)| *index != 3 && *index != 5 && tip.dismissed_at.is_none())
+            .map(|(_, tip)| tip.id)
+            .collect();
+        let states = row_states(&tips, &active);
+        assert_eq!(states[3], SepkarRowState::Dismissed);
+        assert_eq!(states[5], SepkarRowState::Expired);
+        let on_screen = states
+            .iter()
+            .filter(|state| **state == SepkarRowState::OnScreen)
+            .count();
+        assert_eq!(on_screen, TIP_LIVE_LIST_CAP);
+        assert_eq!(
+            states[21],
+            SepkarRowState::OnScreen,
+            "the 20th active tip is the 22nd row"
+        );
+        assert_eq!(states[22], SepkarRowState::OverLimit);
+        assert!(row_states(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn only_a_json_refusal_keeps_its_text_a_proxy_page_gets_the_fixed_line() {
+        let refused = ApiError::Refused(
+            429,
+            "Pomaly — najviac 5 tipov za minútu. Skús znova o 12 s.".to_string(),
+        );
+        let proxy = ApiError::Status(429, "<html>429 Too Many Requests</html>".to_string());
+        assert_eq!(failure_status(&refused).map(|(code, _)| code), Some(429));
+        assert_eq!(
+            sepkar_error_text(failure_status(&refused)),
+            "Pomaly — najviac 5 tipov za minútu. Skús znova o 12 s."
+        );
+        assert_eq!(
+            sepkar_error_text(failure_status(&proxy)),
+            "Server odpovedal chybou 429 — tip zostal v poliach, skús znova.",
+            "the proxy page's text is never shown"
+        );
+        // The tablet's lines follow the same rule.
+        let conflict = ApiError::Refused(409, "Tento tip už nie je z dnešnej bohoslužby.".into());
+        let gateway = ApiError::Status(409, "<html>Conflict</html>".to_string());
+        assert_eq!(
+            tip_error_text("Tip sa nepodarilo vrátiť", failure_status(&conflict)),
+            "Tip sa nepodarilo vrátiť: Tento tip už nie je z dnešnej bohoslužby."
+        );
+        assert_eq!(
+            tip_error_text("Tip sa nepodarilo vrátiť", failure_status(&gateway)),
+            "Tip sa nepodarilo vrátiť — server odpovedal chybou 409."
+        );
+        // No HTTP answer at all: the "server je nedostupný" lines.
+        let none = ApiError::NotFound("x".to_string());
+        assert_eq!(failure_status(&none), None);
+        assert_eq!(
+            sepkar_error_text(failure_status(&none)),
+            "Server je nedostupný — tip zostal v poliach, skús znova."
+        );
+    }
+
+    #[test]
+    fn a_send_error_keeps_the_servers_two_refusals_and_is_otherwise_a_fixed_slovak_line() {
+        assert_eq!(
+            sepkar_error_text(Some((422, "Poznámka môže mať najviac 200 znakov."))),
+            "Poznámka môže mať najviac 200 znakov."
+        );
+        assert_eq!(
+            sepkar_error_text(Some((
+                429,
+                "Pomaly — najviac 5 tipov za minútu. Skús znova o 12 s."
+            ))),
+            "Pomaly — najviac 5 tipov za minútu. Skús znova o 12 s."
+        );
+        assert_eq!(
+            sepkar_error_text(Some((502, "<html>Bad Gateway</html>"))),
+            "Server odpovedal chybou 502 — tip zostal v poliach, skús znova."
+        );
+        assert_eq!(
+            sepkar_error_text(Some((422, "  "))),
+            "Server odpovedal chybou 422 — tip zostal v poliach, skús znova.",
+            "an empty refusal body is no message to show"
+        );
+        assert_eq!(
+            sepkar_error_text(None),
+            "Server je nedostupný — tip zostal v poliach, skús znova."
+        );
+    }
+
+    #[test]
+    fn the_notice_after_a_send_says_the_time_or_that_the_tip_was_already_there() {
+        let sent = tip(1, Some(("atonement", "zmierenie")), None);
+        let bratislava = FixedOffset::east_opt(2 * 3600).unwrap();
+        assert_eq!(sepkar_notice(false, &sent, &bratislava), "Odoslané 19:42");
+        assert_eq!(
+            sepkar_notice(true, &sent, &bratislava),
+            "Tento tip už tlmočník má"
+        );
+    }
+
+    #[test]
+    fn a_blank_field_is_no_request_member_and_typed_text_is_kept_as_typed() {
+        assert_eq!(optional_text(""), None);
+        assert_eq!(optional_text("  \t "), None);
+        assert_eq!(
+            optional_text(" Atonement "),
+            Some(" Atonement ".to_string())
+        );
+        assert_eq!(optional_text("<b>x</b>"), Some("<b>x</b>".to_string()));
     }
 
     #[test]

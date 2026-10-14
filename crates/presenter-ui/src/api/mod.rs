@@ -170,25 +170,79 @@ struct ErrorDetail {
 /// real refusal reason (e.g. a props-validation 422 or a referenced-asset 409)
 /// rather than "Unprocessable Entity".
 async fn status_with_detail(response: Response) -> ApiError {
-    let code = response.status();
-    let fallback = response.status_text();
-    match response.text().await {
-        Ok(text) => {
-            let detail = serde_json::from_str::<ErrorDetail>(&text)
-                .ok()
-                .map(|d| d.message)
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| {
-                    if text.trim().is_empty() {
-                        fallback
-                    } else {
-                        text
-                    }
-                });
-            ApiError::Status(code, detail)
-        }
-        Err(_) => ApiError::Status(code, fallback),
+    let parts = error_parts(response).await;
+    ApiError::Status(parts.code, parts.message.unwrap_or(parts.fallback))
+}
+
+/// Like [`status_with_detail`], but a body that IS the server's JSON error
+/// body becomes [`ApiError::Refused`]: the text is then the server's own
+/// (Slovak) message and may be shown as it is. Any other body (a proxy or
+/// gateway page, an empty one) stays an [`ApiError::Status`] whose text is
+/// not fit for the user.
+async fn status_with_refusal(response: Response) -> ApiError {
+    let parts = error_parts(response).await;
+    match parts.message {
+        Some(message) => ApiError::Refused(parts.code, message),
+        None => ApiError::Status(parts.code, parts.fallback),
     }
+}
+
+/// What a non-2xx response said.
+struct ErrorParts {
+    code: u16,
+    /// The server's own `message`; `None` when the body is not its JSON error
+    /// body (or its message is empty).
+    message: Option<String>,
+    /// The raw body, or the status text when the body is empty or unreadable.
+    fallback: String,
+}
+
+async fn error_parts(response: Response) -> ErrorParts {
+    let code = response.status();
+    let status_text = response.status_text();
+    match response.text().await {
+        Ok(text) => ErrorParts {
+            code,
+            message: error_message_of(&text),
+            fallback: if text.trim().is_empty() {
+                status_text
+            } else {
+                text
+            },
+        },
+        Err(_) => ErrorParts {
+            code,
+            message: None,
+            fallback: status_text,
+        },
+    }
+}
+
+/// The `message` of the server's JSON error body, `None` for anything else
+/// (an HTML gateway page, an empty body, JSON without a message).
+fn error_message_of(body: &str) -> Option<String> {
+    serde_json::from_str::<ErrorDetail>(body)
+        .ok()
+        .map(|detail| detail.message)
+        .filter(|message| !message.is_empty())
+}
+
+/// `post_json`, but a non-2xx whose body is the server's JSON error body is an
+/// [`ApiError::Refused`] carrying that message (see [`status_with_refusal`]).
+pub async fn post_json_refusal<B: serde::Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
+    let response = Request::post(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_refusal(response).await);
+    }
+    response.json().await.map_err(ApiError::Deserialize)
 }
 
 /// `post_json`, but a non-2xx carries the server error-body message (see
@@ -252,6 +306,9 @@ pub struct HealthzResponse {
 pub enum ApiError {
     Network(gloo_net::Error),
     Status(u16, String),
+    /// A non-2xx whose body was the server's own JSON error body: the text is
+    /// the server's message (only [`post_json_refusal`] produces it).
+    Refused(u16, String),
     Serialize(gloo_net::Error),
     Deserialize(gloo_net::Error),
     NotFound(String),
@@ -261,10 +318,34 @@ impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Network(err) => write!(f, "Network error: {err}"),
-            Self::Status(code, text) => write!(f, "HTTP {code}: {text}"),
+            Self::Status(code, text) | Self::Refused(code, text) => {
+                write!(f, "HTTP {code}: {text}")
+            }
             Self::Serialize(err) => write!(f, "Serialization error: {err}"),
             Self::Deserialize(err) => write!(f, "Deserialization error: {err}"),
             Self::NotFound(msg) => write!(f, "Not found: {msg}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_servers_json_error_body_gives_a_message() {
+        assert_eq!(
+            error_message_of(r#"{"message":"Poznámka môže mať najviac 200 znakov."}"#),
+            Some("Poznámka môže mať najviac 200 znakov.".to_string())
+        );
+        assert_eq!(
+            error_message_of("<html><body>429 Too Many Requests</body></html>"),
+            None,
+            "a proxy page is not the server's message"
+        );
+        assert_eq!(error_message_of(""), None);
+        assert_eq!(error_message_of(r#"{"message":""}"#), None);
+        assert_eq!(error_message_of(r#"{"error":"nope"}"#), None);
+        assert_eq!(error_message_of(r#""just a string""#), None);
     }
 }
