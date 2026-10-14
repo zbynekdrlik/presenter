@@ -294,6 +294,19 @@ mod tests {
     }
 
     #[test]
+    fn the_upper_edges_are_allowed() {
+        // each refusal in `each_rule_has_its_own_refusal` is one past these:
+        let four: Vec<MicConfig> = (0..4)
+            .map(|k| mic(&format!("m{k}"), &format!("S{k}"), None))
+            .collect();
+        assert_eq!(validate_mics(four).map(|mics| mics.len()), Ok(4), "4 mics");
+        assert!(
+            validate_mics(vec![mic(&"a".repeat(20), "ABCDEFGHIJKLMNOP", None)]).is_ok(),
+            "a 20-char id and a 16-char stream name"
+        );
+    }
+
+    #[test]
     fn the_messages_are_slovak_and_name_the_mic() {
         assert_eq!(
             MicsValidationError::TooMany.to_string(),
