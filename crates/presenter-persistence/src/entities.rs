@@ -689,6 +689,10 @@ pub mod slide_stage_layout {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// #852 šepkár tips — its own file (`entities/interpreter_tip.rs`) because this
+/// file sits near the 1000-line gate.
+pub mod interpreter_tip;
+
 // ---------------------------------------------------------------------------
 // #703 stream-graphics (epic #718): the four tables created by
 // `m20260820_000001_create_stream_tables.rs`. Schema-only foundation — the
