@@ -319,10 +319,15 @@ def check_staged_tools(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
 
 def _branch_filter_reaches_dev(spec: Any) -> bool:
     """Would a push / pull_request / workflow_run filter fire for `dev`?
-    No filter = every branch. `branches` globs are matched with fnmatch
-    (`**`, `d*`); `branches-ignore` fires unless a pattern matches dev."""
+    No filter = every branch; a tag-only filter = no branch. `branches` globs
+    are matched with fnmatch (`**`, `d*`); `branches-ignore` fires unless a
+    pattern matches dev."""
     if not isinstance(spec, dict):
         return True
+    has_tags = spec.get("tags") is not None or spec.get("tags-ignore") is not None
+    has_branches = spec.get("branches") is not None or spec.get("branches-ignore") is not None
+    if has_tags and not has_branches:
+        return False  # a tag-only push never fires for a branch push
     branches = spec.get("branches")
     if branches is not None:
         patterns = branches if isinstance(branches, list) else [branches]

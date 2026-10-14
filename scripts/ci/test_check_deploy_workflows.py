@@ -423,6 +423,8 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
             ("on:\n  push:\n    branches-ignore: [main]\n", 1),
             ("on:\n  push:\n    branches-ignore: [dev]\n", 0),
             ("on:\n  push:\n    tags: ['v*']\n    branches: [main]\n", 0),
+            ("on:\n  push:\n    tags: ['v*']\n", 0),
+            ("on:\n  push:\n    tags: ['v*']\n    branches: [dev]\n", 1),
             ("on:\n  workflow_run:\n    workflows: [Pipeline]\n    types: [completed]\n", 1),
             ("on:\n  workflow_run:\n    workflows: [Pipeline]\n    branches: [main]\n", 0),
             ("on:\n  schedule:\n    - cron: '0 0 * * 0'\n", 0),
