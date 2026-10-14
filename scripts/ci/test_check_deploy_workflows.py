@@ -233,7 +233,10 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
       - name: Swap staged binaries
         run: ssh deploy-target "mv -f staging.new/presenter-server staging.new/ingest_bibles ."
       - name: Verify deployment
-        run: ssh deploy-target "curl -sf http://localhost:80/healthz"
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          for attempt in $(seq 1 30); do curl -sf http://localhost:80/healthz && break; sleep 2; done
+          REMOTE_SCRIPT
       - name: Import Bible translations
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -242,6 +245,57 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
           REMOTE_SCRIPT
 """
         self.assertEqual(_violations(steps), [])
+
+    def test_wrapped_ingest_runs_are_seen(self) -> None:
+        # Review of a5f2e2a8: only the first word was checked, so a wrapped run
+        # before the swap passed both invariants.
+        for command in (
+            "timeout 600 /opt/presenter/staging.new/ingest_bibles",
+            "sudo -u newlevel /opt/presenter/staging.new/ingest_bibles",
+            "env A=1 /opt/presenter/staging.new/ingest_bibles",
+            "if /opt/presenter/staging.new/ingest_bibles; then echo ok; fi",
+            "exec /opt/presenter/staging.new/ingest_bibles",
+            "time /opt/presenter/staging.new/ingest_bibles",
+            "bash -c '/opt/presenter/staging.new/ingest_bibles'",
+            "nice -n 10 /opt/presenter/staging.new/ingest_bibles",
+        ):
+            with self.subTest(command=command):
+                steps = SAFE_SETUP + f"""
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          {command}
+          REMOTE_SCRIPT
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+                found = _violations(steps)
+                self.assertEqual([v.step for v in found], ["Import Bible translations"])
+                self.assertIn("/healthz", found[0].message)
+
+    def test_relative_tool_runs_resolve_against_the_last_cd(self) -> None:
+        old = SAFE_SETUP + """
+      - name: Import ProPresenter
+        run: ssh deploy-target "cd /opt/presenter && ./import_propresenter --root x"
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server ."
+"""
+        found = _violations(old)
+        self.assertEqual(len(found), 1)
+        self.assertIn("PREVIOUS release", found[0].message)
+        staged = old.replace("cd /opt/presenter &&", "cd ${{ env.DEPLOY_DIR }}/staging.new &&")
+        self.assertEqual(_violations(staged), [])
+
+    def test_a_single_healthz_request_is_not_the_health_wait(self) -> None:
+        steps = SAFE_SETUP + """
+      - name: Swap staged binaries
+        run: ssh deploy-target "mv -f staging.new/presenter-server . && sudo systemctl start presenter"
+      - name: Peek
+        run: ssh deploy-target "curl -s http://localhost:80/healthz || true"
+      - name: Import Bible translations
+        run: ssh deploy-target "/opt/presenter/ingest_bibles"
+"""
+        self.assertEqual([v.step for v in _violations(steps)], ["Import Bible translations"])
 
     def test_jobs_without_a_staged_swap_are_not_checked_for_tools(self) -> None:
         # pipeline.yml / release.yml stop the service and copy the new binaries

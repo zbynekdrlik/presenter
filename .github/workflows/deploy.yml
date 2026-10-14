@@ -565,28 +565,6 @@ jobs:
           echo "Data check passed: libraries endpoint returned data"
           REMOTE_SCRIPT
 
-      # #851 D1: AFTER the swap and the /healthz wait, never before. Until the
-      # swap /opt/presenter/ingest_bibles is the PREVIOUS release's binary
-      # (old parser: it skips every translation as up-to-date), and the
-      # staged one would migrate the DB the old service is still running on.
-      # Here the new service has migrated, so ingest's own migration run is a
-      # no-op. Each translation is replaced in ONE transaction (WAL): the
-      # running service keeps reading the old text until the commit (~1.5 s
-      # per translation on a re-import; an unchanged digest skips it).
-      - name: Import Bible translations
-        run: |
-          ssh deploy-target << 'REMOTE_SCRIPT'
-          set -e
-          echo "Importing Bible translations..."
-          export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
-          export PRESENTER_BIBLE_KJV=/opt/presenter/bibles/kjv.usfm.zip
-          export PRESENTER_BIBLE_SEB=/opt/presenter/bibles/seb.bbl.mybible.zip
-          export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
-          export PRESENTER_BIBLE_SEVP=/opt/presenter/bibles/sevp.obohu.mybible.zip
-          export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
-          /opt/presenter/ingest_bibles
-          REMOTE_SCRIPT
-
       - name: Post-deploy smoke test
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -759,6 +737,31 @@ jobs:
             sudo cloudflared service install ${TUNNEL_TOKEN}
             sudo systemctl enable --now cloudflared
           "
+
+      # #851 D1: AFTER the swap and the /healthz wait, never before. Until the
+      # swap /opt/presenter/ingest_bibles is the PREVIOUS release's binary
+      # (old parser: it skips every translation as up-to-date), and the
+      # staged one would migrate the DB the old service is still running on.
+      # Here the new service has migrated, so ingest's own migration run is a
+      # no-op. Each translation is replaced in ONE transaction (WAL): the
+      # running service keeps reading the old text until the commit, and its
+      # writes wait at most one translation (~1.9 s on SNV's N100, 8.2 s for
+      # all five; an unchanged digest skips the translation). Placed after the
+      # smoke test, the AI check, the NDI self-heal and cloudflared so an
+      # import failure never skips them; the RUST_LOG check stays last.
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          echo "Importing Bible translations..."
+          export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
+          export PRESENTER_BIBLE_KJV=/opt/presenter/bibles/kjv.usfm.zip
+          export PRESENTER_BIBLE_SEB=/opt/presenter/bibles/seb.bbl.mybible.zip
+          export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_SEVP=/opt/presenter/bibles/sevp.obohu.mybible.zip
+          export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
+          /opt/presenter/ingest_bibles
+          REMOTE_SCRIPT
 
       # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
       # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement
