@@ -1,22 +1,28 @@
 //! What `GET /listen/status` reports (#852 C1a, spec §5.4, §14): the socket,
-//! the per-mic counters and the streams seen but not used. Ages are computed
-//! at read time: "no audio" (C-S1) appears exactly 3 s after the last packet.
+//! the per-mic counters (the counter rule's and the chain's included), the
+//! streams seen but not used and the senders whose datagrams were refused.
+//! Ages are computed at read time: "no audio" (C-S1) appears exactly 3 s
+//! after the last packet. The #484 log gates read these counters (the counts
+//! the `record_*` / `note_*` calls return) — there is no second set.
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
-use presenter_core::audio::vban::VbanAudioFormat;
+use presenter_core::audio::level::is_voiced;
+use presenter_core::audio::sequence::SequenceVerdict;
+use presenter_core::audio::vban::{VbanAudioFormat, VbanReject};
 use presenter_core::listen::mics::MicConfig;
 use presenter_core::listen::status::{
-    ListenStatus, MicState, MicStatus, SocketState, SocketStatus, UnmatchedStream,
+    ListenStatus, MicState, MicStatus, RejectedSender, SocketState, SocketStatus, UnmatchedStream,
 };
 use tokio::time::Instant;
 
 use super::NO_AUDIO_AFTER;
 
-/// Streams seen but not used (and their names) are kept at most this many
-/// (the oldest goes): a spoofed flood cannot grow the status.
+/// Streams seen but not used (and their names) and the refused senders are
+/// kept at most this many each (the oldest goes): a spoofed flood cannot grow
+/// the status.
 pub(crate) const RECENT_CAP: usize = 16;
 
 #[derive(Debug)]
@@ -47,6 +53,16 @@ pub(crate) struct PacketSeen {
     pub(crate) at: Instant,
 }
 
+/// The counts after one packet — the #484 log gate reads them, so `MicInput`
+/// keeps no second set of event counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PacketTally {
+    /// The count of this packet's verdict kind (gaps, late packets, resyncs); 0 in order.
+    pub(crate) events: u64,
+    /// `droppedBlocks` when this packet's block pushed out the oldest, else 0.
+    pub(crate) dropped_blocks: u64,
+}
+
 #[derive(Debug, Default)]
 struct MicCounters {
     sender: Option<SocketAddr>,
@@ -54,12 +70,55 @@ struct MicCounters {
     frames_per_packet: Option<u16>,
     packets: u64,
     last_packet: Option<Instant>,
+    packets_per_sec: f32,
+    packets_at_tick: u64,
+    tick_at: Option<Instant>,
+    /// The mic list update that started these counters: a closed chain of an
+    /// older update can no longer write them; a kept mic keeps its value.
+    generation: u64,
+    lost_packets: u64,
+    late_packets: u64,
+    resyncs: u64,
+    /// Gaps (events, not packets): the #484 gate of the "lost packets" WARN.
+    gap_events: u64,
+    dropped_blocks: u64,
+    other_sender_packets: u64,
+    frames_out: u64,
+    level_dbfs: Option<f32>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Default)]
 struct UnmatchedEntry {
     format: Option<VbanAudioFormat>,
     packets: u64,
+}
+
+#[derive(Debug, Default)]
+struct RejectCounts {
+    not_vban: u64,
+    non_audio: u64,
+    unsupported_codec: u64,
+    unsupported_type: u64,
+    corrupt: u64,
+}
+
+impl RejectCounts {
+    /// Count one reject; the sender's total.
+    fn count(&mut self, reject: VbanReject) -> u64 {
+        match reject {
+            VbanReject::NotVban => self.not_vban += 1,
+            VbanReject::NonAudio(_) => self.non_audio += 1,
+            VbanReject::UnsupportedCodec(_) => self.unsupported_codec += 1,
+            VbanReject::UnsupportedType(_) => self.unsupported_type += 1,
+            VbanReject::Corrupt => self.corrupt += 1,
+        }
+        self.not_vban
+            + self.non_audio
+            + self.unsupported_codec
+            + self.unsupported_type
+            + self.corrupt
+    }
 }
 
 /// What [`ListenHealth::note_unmatched`] saw: the input of the #484 gates of
@@ -117,6 +176,9 @@ impl<K: Eq + Hash + Clone, V: Default> Recent<K, V> {
 #[derive(Debug, Default)]
 pub(crate) struct ListenHealth {
     pub(crate) socket: SocketHealth,
+    /// The last mic list update. Never reset: a chain still draining from an
+    /// earlier socket session can never match a later mic.
+    generation: u64,
     mics: HashMap<String, MicCounters>,
     unmatched: Recent<(String, SocketAddr), UnmatchedEntry>,
     /// Packets per unassigned stream NAME: the #484 gate of its INFO line.
@@ -127,6 +189,8 @@ pub(crate) struct ListenHealth {
     new_names: u64,
     /// Unassigned datagrams this session: the second gate of a repeat line.
     unmatched_total: u64,
+    /// Refused datagrams per sender IP; each total is that sender's WARN gate.
+    rejected: Recent<IpAddr, RejectCounts>,
 }
 
 impl ListenHealth {
@@ -141,36 +205,126 @@ impl ListenHealth {
         self.socket.error = error;
     }
 
-    /// A saved mic list: `kept` mics keep their counters (same stream and
-    /// sender — a rename or a language change resets nothing), `fresh` ones
-    /// start from zero, mics no longer listed go.
-    pub(crate) fn set_mics(&mut self, kept: &[&str], fresh: &[&str]) {
+    /// A saved mic list: `kept` mics keep their counters and generation (same
+    /// stream, sender and channel — a rename or a language change resets
+    /// nothing), `fresh` ones start from zero with this update's generation,
+    /// mics no longer listed go. Returns the generation.
+    pub(crate) fn set_mics(&mut self, kept: &[&str], fresh: &[&str]) -> u64 {
+        self.generation += 1;
         self.mics.retain(|id, _| kept.contains(&id.as_str()));
         for id in fresh {
-            self.mics.insert((*id).to_string(), MicCounters::default());
+            let counters = MicCounters {
+                generation: self.generation,
+                ..MicCounters::default()
+            };
+            self.mics.insert((*id).to_string(), counters);
         }
+        self.generation
     }
 
     /// The socket closed: the session's counters go, so a later bind (or a
     /// failed rebind under a new stream name) never shows the last session's
-    /// numbers, and the unassigned-stream log gates start over.
+    /// numbers, and the unassigned-stream and reject log gates start over.
     pub(crate) fn end_session(&mut self) {
         self.mics.clear();
         self.unmatched = Recent::default();
         self.unmatched_names = Recent::default();
         self.new_names = 0;
         self.unmatched_total = 0;
+        self.rejected = Recent::default();
     }
 
-    pub(crate) fn record_packet(&mut self, mic_id: &str, seen: PacketSeen) {
+    /// Packets per second over the time since the last tick.
+    pub(crate) fn on_tick(&mut self, now: Instant) {
+        for mic in self.mics.values_mut() {
+            if let Some(at) = mic.tick_at {
+                let seconds = now.saturating_duration_since(at).as_secs_f32();
+                if seconds > 0.0 {
+                    let packets = mic.packets.saturating_sub(mic.packets_at_tick) as f32;
+                    mic.packets_per_sec = (packets / seconds * 10.0).round() / 10.0;
+                }
+            }
+            mic.packets_at_tick = mic.packets;
+            mic.tick_at = Some(now);
+        }
+    }
+
+    /// One packet a mic took with the counter rule's verdict on it; the counts
+    /// the #484 gates read.
+    pub(crate) fn record_packet(
+        &mut self,
+        mic_id: &str,
+        seen: PacketSeen,
+        verdict: SequenceVerdict,
+        dropped_block: bool,
+    ) -> PacketTally {
         let Some(mic) = self.mics.get_mut(mic_id) else {
-            return;
+            return PacketTally::default();
         };
         mic.packets += 1;
         mic.last_packet = Some(seen.at);
         mic.sender = Some(seen.from);
         mic.format = Some(seen.format);
         mic.frames_per_packet = Some(seen.frames);
+        let events = match verdict {
+            SequenceVerdict::Gap { missing, .. } => {
+                mic.lost_packets += u64::from(missing);
+                mic.gap_events += 1;
+                mic.gap_events
+            }
+            SequenceVerdict::Late => {
+                mic.late_packets += 1;
+                mic.late_packets
+            }
+            SequenceVerdict::Resync => {
+                mic.resyncs += 1;
+                mic.resyncs
+            }
+            SequenceVerdict::InOrder => 0,
+        };
+        if dropped_block {
+            mic.dropped_blocks += 1;
+        }
+        PacketTally {
+            events,
+            dropped_blocks: if dropped_block { mic.dropped_blocks } else { 0 },
+        }
+    }
+
+    /// A packet of a second sender of the mic's stream; that count.
+    pub(crate) fn record_other_sender(&mut self, mic_id: &str) -> u64 {
+        self.mics.get_mut(mic_id).map_or(0, |mic| {
+            mic.other_sender_packets += 1;
+            mic.other_sender_packets
+        })
+    }
+
+    /// A chain's output; ignored unless `generation` is the mic's current one.
+    pub(crate) fn record_chain(
+        &mut self,
+        mic_id: &str,
+        generation: u64,
+        frames: u64,
+        level_dbfs: Option<f32>,
+        error: Option<&str>,
+    ) {
+        let Some(mic) = self
+            .mics
+            .get_mut(mic_id)
+            .filter(|mic| mic.generation == generation)
+        else {
+            return;
+        };
+        mic.frames_out += frames;
+        if level_dbfs.is_some() {
+            mic.level_dbfs = level_dbfs;
+        }
+        mic.error = error.map(str::to_string);
+    }
+
+    /// A refused datagram of `from`; that sender's reject total.
+    pub(crate) fn note_reject(&mut self, from: IpAddr, reject: VbanReject, now: Instant) -> u64 {
+        self.rejected.touch(from, now).0.count(reject)
     }
 
     /// A stream no mic takes: counted per (name, sender) for the status and
@@ -201,6 +355,24 @@ impl ListenHealth {
     }
 
     pub(crate) fn snapshot(&self, mics: &[MicConfig], now: Instant) -> ListenStatus {
+        ListenStatus {
+            socket: SocketStatus {
+                state: self.socket.state,
+                bind_addr: self.socket.bind_addr.map(|addr| addr.to_string()),
+                local_addr: self.socket.local_addr.map(|addr| addr.to_string()),
+                error: self.socket.error.clone(),
+            },
+            mics: mics
+                .iter()
+                .map(|config| mic_status(config, self.mics.get(&config.id), now))
+                .collect(),
+            unmatched: self.unmatched_streams(now),
+            rejected: self.rejected_senders(now),
+        }
+    }
+
+    /// The streams seen but not used, sorted by name, then sender.
+    fn unmatched_streams(&self, now: Instant) -> Vec<UnmatchedStream> {
         let mut unmatched: Vec<UnmatchedStream> = self
             .unmatched
             .entries
@@ -220,27 +392,37 @@ impl ListenHealth {
                 .cmp(&b.stream_name)
                 .then_with(|| a.sender.cmp(&b.sender))
         });
-        ListenStatus {
-            socket: SocketStatus {
-                state: self.socket.state,
-                bind_addr: self.socket.bind_addr.map(|addr| addr.to_string()),
-                local_addr: self.socket.local_addr.map(|addr| addr.to_string()),
-                error: self.socket.error.clone(),
-            },
-            mics: mics
-                .iter()
-                .map(|config| mic_status(config, self.mics.get(&config.id), now))
-                .collect(),
-            unmatched,
-        }
+        unmatched
+    }
+
+    /// The refused senders, sorted by IP text.
+    fn rejected_senders(&self, now: Instant) -> Vec<RejectedSender> {
+        let mut rejected: Vec<RejectedSender> = self
+            .rejected
+            .entries
+            .iter()
+            .map(|(ip, (counts, seen))| RejectedSender {
+                sender: ip.to_string(),
+                not_vban: counts.not_vban,
+                non_audio: counts.non_audio,
+                unsupported_codec: counts.unsupported_codec,
+                unsupported_type: counts.unsupported_type,
+                corrupt: counts.corrupt,
+                last_packet_age_ms: age_ms(*seen, now),
+            })
+            .collect();
+        rejected.sort_by(|a, b| a.sender.cmp(&b.sender));
+        rejected
     }
 }
 
-/// Waiting (no packet yet) → receiving → no audio 3 s after the last packet.
+/// Waiting (no packet yet) → receiving → no audio 3 s after the last packet;
+/// error while packets arrive in a format the converter refused.
 fn mic_state(counters: &MicCounters, now: Instant) -> MicState {
     match counters.last_packet {
         None => MicState::Waiting,
         Some(at) if now.saturating_duration_since(at) >= NO_AUDIO_AFTER => MicState::NoAudio,
+        Some(_) if counters.error.is_some() => MicState::Error,
         Some(_) => MicState::Receiving,
     }
 }
@@ -248,14 +430,28 @@ fn mic_state(counters: &MicCounters, now: Instant) -> MicState {
 fn mic_status(config: &MicConfig, counters: Option<&MicCounters>, now: Instant) -> MicStatus {
     let empty = MicCounters::default();
     let c = counters.unwrap_or(&empty);
+    let state = mic_state(c, now);
+    let receiving = state == MicState::Receiving;
+    // packets arrive in the error state too (in a format the converter refused)
+    let arriving = receiving || state == MicState::Error;
     MicStatus {
         config: config.clone(),
-        state: mic_state(c, now),
+        state,
         sender: c.sender.map(|addr| addr.to_string()),
         format: c.format,
         frames_per_packet: c.frames_per_packet,
         packets: c.packets,
+        packets_per_sec: if arriving { c.packets_per_sec } else { 0.0 },
         last_packet_age_ms: c.last_packet.map(|at| age_ms(at, now)),
+        lost_packets: c.lost_packets,
+        late_packets: c.late_packets,
+        resyncs: c.resyncs,
+        dropped_blocks: c.dropped_blocks,
+        other_sender_packets: c.other_sender_packets,
+        frames_out: c.frames_out,
+        level_dbfs: if receiving { c.level_dbfs } else { None },
+        voiced: receiving && c.level_dbfs.is_some_and(is_voiced),
+        error: c.error.clone(),
     }
 }
 

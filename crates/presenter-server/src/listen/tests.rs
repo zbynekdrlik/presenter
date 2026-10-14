@@ -7,7 +7,8 @@ use super::health::{ListenHealth, PacketSeen, UnmatchedCount, RECENT_CAP};
 use super::vban_rx::{receive, MicRouter, SocketEnd, Streak};
 use super::*;
 use crate::tracing_capture::{quoted, Capture};
-use presenter_core::audio::vban::{VbanAudioFormat, VbanSampleType};
+use presenter_core::audio::sequence::SequenceVerdict;
+use presenter_core::audio::vban::{VbanAudioFormat, VbanReject, VbanSampleType};
 use presenter_core::audio::vban_encode::{tone, VbanEncoder};
 use presenter_core::listen::mics::{MicChannel, MicLanguage, MicRole};
 use presenter_core::listen::status::{MicState, MicStatus, SocketState};
@@ -94,7 +95,7 @@ async fn the_mic_state_follows_the_last_packet() {
     let mut health = ListenHealth::default();
     health.set_mics(&[], &["guest"]);
     assert_eq!(health.snapshot(&mics, t0).mics[0].state, MicState::Waiting);
-    health.record_packet("guest", seen(t0));
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
     let mic = &health.snapshot(&mics, t0 + Duration::from_millis(500)).mics[0];
     assert_eq!(
         (mic.state, mic.packets, mic.last_packet_age_ms),
@@ -118,8 +119,8 @@ async fn a_saved_list_keeps_kept_counters_and_starts_fresh_ones() {
     let t0 = Instant::now();
     let mut health = ListenHealth::default();
     health.set_mics(&[], &["guest", "interp"]);
-    health.record_packet("guest", seen(t0));
-    health.record_packet("interp", seen(t0));
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
+    health.record_packet("interp", seen(t0), SequenceVerdict::InOrder, false);
     health.set_mics(&["guest"], &["spare"]);
     let mics = vec![
         mic("guest", "GUEST_EN", None),
@@ -195,8 +196,9 @@ async fn a_closed_socket_ends_the_session_counters() {
     let mics = vec![mic("guest", "GUEST_EN", None)];
     let mut health = ListenHealth::default();
     health.set_mics(&[], &["guest"]);
-    health.record_packet("guest", seen(t0));
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
     health.note_unmatched("Stream1", addr(OTHER), MONO_48K, t0);
+    health.note_reject(addr(OTHER).ip(), VbanReject::NotVban, t0);
     health.end_session();
     let status = health.snapshot(&mics, t0);
     let guest = &status.mics[0];
@@ -205,6 +207,12 @@ async fn a_closed_socket_ends_the_session_counters() {
         (MicState::Waiting, 0, None)
     );
     assert!(status.unmatched.is_empty());
+    assert!(status.rejected.is_empty());
+    assert_eq!(
+        health.note_reject(addr(OTHER).ip(), VbanReject::NotVban, t0),
+        1,
+        "the reject gate starts over"
+    );
     assert_eq!(
         health.note_unmatched("Stream1", addr(OTHER), MONO_48K, t0),
         UnmatchedCount {
@@ -655,4 +663,128 @@ async fn real_udp_packets_reach_the_mic_through_the_socket() {
         (MicState::Receiving, Some(MONO_48K), Some(256))
     );
     assert_eq!(mic.sender, Some(tx.local_addr().unwrap().to_string()));
+}
+
+// ---- the counter rule's and the chain's counters (C1a-3) -------------------
+
+#[tokio::test]
+async fn the_verdicts_land_in_their_counters_and_the_tally_feeds_the_gate() {
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    health.set_mics(&[], &["guest"]);
+    let gap = SequenceVerdict::Gap {
+        missing: 3,
+        silence_frames: 768,
+    };
+    let tallies: Vec<(u64, u64)> = [
+        (SequenceVerdict::InOrder, false),
+        (gap, false),
+        (gap, true),
+        (SequenceVerdict::Late, false),
+        (SequenceVerdict::Resync, false),
+    ]
+    .into_iter()
+    .map(|(verdict, dropped)| {
+        let tally = health.record_packet("guest", seen(t0), verdict, dropped);
+        (tally.events, tally.dropped_blocks)
+    })
+    .collect();
+    assert_eq!(tallies, vec![(0, 0), (1, 0), (2, 1), (1, 0), (1, 0)]);
+    assert_eq!(health.record_other_sender("guest"), 1);
+    assert_eq!(health.record_other_sender("nobody"), 0);
+    let mic = &health.snapshot(&[mic("guest", "GUEST_EN", None)], t0).mics[0];
+    assert_eq!(
+        (
+            mic.packets,
+            mic.lost_packets,
+            mic.late_packets,
+            mic.resyncs,
+            mic.dropped_blocks,
+            mic.other_sender_packets
+        ),
+        (5, 6, 1, 1, 1, 1)
+    );
+}
+
+#[tokio::test]
+async fn packets_per_second_is_measured_between_ticks() {
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    health.set_mics(&[], &["guest"]);
+    health.on_tick(t0);
+    for k in 0..375u64 {
+        let at = t0 + Duration::from_millis(k * 2);
+        health.record_packet("guest", seen(at), SequenceVerdict::InOrder, false);
+    }
+    health.on_tick(t0 + Duration::from_secs(2));
+    let mics = vec![mic("guest", "GUEST_EN", None)];
+    let mic = &health.snapshot(&mics, t0 + Duration::from_secs(2)).mics[0];
+    assert_eq!(mic.packets_per_sec, 187.5, "375 packets in 2 s");
+    let silent = &health.snapshot(&mics, t0 + Duration::from_secs(4)).mics[0];
+    assert_eq!(silent.packets_per_sec, 0.0, "no audio: no rate shown");
+}
+
+#[tokio::test]
+async fn rejected_senders_are_counted_by_kind_and_keep_the_16_most_recent() {
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    let ip = addr(OTHER).ip();
+    assert_eq!(health.note_reject(ip, VbanReject::NotVban, t0), 1);
+    assert_eq!(health.note_reject(ip, VbanReject::NonAudio(0x40), t0), 2);
+    assert_eq!(health.note_reject(ip, VbanReject::Corrupt, t0), 3);
+    let rejected = &health.snapshot(&[], t0).rejected[0];
+    assert_eq!(rejected.sender, "198.51.100.7");
+    assert_eq!(
+        (
+            rejected.not_vban,
+            rejected.non_audio,
+            rejected.unsupported_codec,
+            rejected.unsupported_type,
+            rejected.corrupt
+        ),
+        (1, 1, 0, 0, 1)
+    );
+    for k in 0..20u8 {
+        let other: IpAddr = format!("203.0.113.{k}").parse().unwrap();
+        let at = t0 + Duration::from_millis(u64::from(k) + 1);
+        health.note_reject(other, VbanReject::NotVban, at);
+    }
+    assert_eq!(health.snapshot(&[], t0).rejected.len(), RECENT_CAP);
+}
+
+#[tokio::test]
+async fn a_chain_of_an_older_update_cannot_write_and_a_kept_mics_chain_can() {
+    let t0 = Instant::now();
+    let mics = vec![mic("guest", "GUEST_EN", None)];
+    let mut health = ListenHealth::default();
+    let old = health.set_mics(&[], &["guest"]);
+    let new = health.set_mics(&[], &["guest"]);
+    assert_ne!(old, new);
+    health.record_chain("guest", old, 5, Some(-20.0), None);
+    health.record_chain("guest", new, 1, Some(-30.0), None);
+    assert_eq!(
+        health.snapshot(&mics, t0).mics[0].frames_out,
+        1,
+        "the older chain is ignored"
+    );
+    health.set_mics(&["guest"], &[]); // a rename: the mic is kept
+    health.record_chain("guest", new, 1, None, None);
+    assert_eq!(
+        health.snapshot(&mics, t0).mics[0].frames_out,
+        2,
+        "the kept chain keeps counting"
+    );
+    health.record_packet("guest", seen(t0), SequenceVerdict::InOrder, false);
+    let refused = "nepodporovaná vzorkovacia frekvencia 11025 Hz";
+    health.record_chain("guest", new, 0, None, Some(refused));
+    let mic = &health.snapshot(&mics, t0 + Duration::from_millis(100)).mics[0];
+    assert_eq!(
+        (mic.state, mic.error.as_deref()),
+        (MicState::Error, Some(refused))
+    );
+    let silent = &health.snapshot(&mics, t0 + Duration::from_secs(3)).mics[0];
+    assert_eq!(
+        (silent.state, silent.level_dbfs, silent.voiced),
+        (MicState::NoAudio, None, false)
+    );
 }
