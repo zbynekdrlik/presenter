@@ -51,3 +51,30 @@ paths. A new third-party source gets its notice there in the same PR.
 = Song of Songs, matched before folding (`no_fold`); `Mr` = Mark at tier 1 (`add`); SEB's stored
 misspelling `Filimonovi` stays a key. BPRP entries that list several books (eng `Jo` = John,
 Jonah, Job …) are skipped by the generator.
+
+## Resolution rules the corpus pins (A1b)
+
+- `parse` is pure text (no structure); `resolve` binds to the MAIN translation's `Versification`
+  and drops candidates whose chapter/verse does not exist — the best disambiguator (`pt 5:7` →
+  1 Pt, `ab 2:4` → Hab, `jud 2:5` → Sudcov). EVERY segment is checked (`mt 5:3.99.7`,
+  `gn 50:1-51:2`), not only the last verse as the prototype did.
+- Order: (tier, kind, penalty), then the family's citation rank, then the code. Keys of at most
+  two letters are reordered by the curated `SHORT_DEFAULTS`, which is why `Ambiguous` uses `<=`:
+  an alternative whose (tier, kind) is as good as OR BETTER than the default makes it a guess
+  (`jd 1`).
+- Corpus `alternatives` = what a picker offers. The corpus test requires the FITTING ones to open
+  `Resolution::alternatives` in corpus order and the non-fitting ones (2 Ján has no chapter 3) to
+  be parse candidates that never fit; `Resolution::alternatives` holds fitting books only.
+- `parse` ranks WITHOUT stored names; `resolve` re-ranks with the main translation's stored
+  names (a new translation's own names work without regenerating the table). So a corpus
+  `alternatives` code must already be a table candidate, and `match: fuzzy` is checked on the
+  table-only `parse` candidates.
+- Typing in progress is normal input: trailing `:` `,` `-` `až` are ignored, words after the
+  numbers go to `leftover`, at most 64 chapter/verse tokens are parsed.
+- Single-chapter books (OBA PHM 2JN 3JN JUD): a lone `n > 1` and `n-m` are verses, `1` is the book.
+- `counted()` lives here (`hint.rs`); presenter-ui's `state/bible_range.rs` imports it, so the
+  Bible page hint and the resolver hints share one wording.
+- Rust tests run in CI only (Tier-0). When a rule or the corpus changes, check it first in a
+  throwaway Python twin of the Rust code that imports `gen_bible_book_names.py` for the table and
+  the fold (the A1b lane's twin scored 100/100 and matched every unit-test value), then port to
+  Rust. The structure fixtures are `GET /bible/books` snapshots of dev (= prod = PP).
