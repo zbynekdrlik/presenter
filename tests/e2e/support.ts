@@ -694,12 +694,17 @@ export async function assertMinTapTarget(locator: Locator, minPx: number): Promi
   }
 }
 
-/** A one-finger drag through CDP touch events (Playwright's touchscreen only taps). */
+/**
+ * A one-finger drag through CDP touch events (Playwright's touchscreen only
+ * taps). `whileHeld` runs after the last move and BEFORE the finger lifts, so
+ * a test can assert what the page shows mid-drag.
+ */
 export async function touchDrag(
   page: Page,
   from: { x: number; y: number },
   to: { x: number; y: number },
   steps = 8,
+  whileHeld?: () => Promise<void>,
 ): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Input.dispatchTouchEvent", {
@@ -717,6 +722,10 @@ export async function touchDrag(
       ],
     });
   }
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await cdp.detach();
+  try {
+    if (whileHeld) await whileHeld();
+  } finally {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.detach();
+  }
 }

@@ -104,6 +104,14 @@ body.interpreter *::after {
   touch-action: pan-y;
   transition: transform 120ms ease-out;
   overflow-wrap: anywhere;
+  /* A mouse swipe must not select the card's text. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The card follows the finger / mouse without lag; the snap back animates. */
+.interpreter-tip[data-dragging="true"] {
+  transition: none;
 }
 
 .interpreter-tip[data-new="true"] {

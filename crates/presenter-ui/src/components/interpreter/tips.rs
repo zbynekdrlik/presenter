@@ -2,10 +2,17 @@
 //! note smaller, "Peter · 19:42"), a 2 s highlight for a new card, ✕ or a
 //! left swipe hides a card with a 5 s "Skryté — Späť" offer, "Skryť všetky"
 //! after a confirm. Tips are immutable, so a keyed `<For>` by id is enough.
+//!
+//! A hide is optimistic: the card leaves at once and the dismiss POST runs in
+//! the background. While it is in flight the tip stays out of every incoming
+//! list (`pending_dismiss`), and a "Späť" pressed in that window is sent only
+//! after the POST resolved (`restore_after`), because a restore that overtook
+//! it would be a no-op and the dismiss would then win.
 
 use crate::api::{self, interpreter_tips::TipsScope, ApiError};
 use crate::state::interpreter::{
-    fresh_ids, swipe_decision, swipe_offset, tip_meta, tip_pair, FetchGuard, SwipeDecision,
+    fresh_ids, swipe_decision, swipe_offset, tip_error_text, tip_meta, tip_pair, visible_tips,
+    FetchGuard, SwipeDecision,
 };
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
@@ -15,6 +22,8 @@ use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
 const UNDO_MS: u32 = 5_000;
+/// A refusal stays on screen this long unless the next action clears it.
+const ERROR_MS: u32 = 8_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct UndoOffer {
@@ -35,6 +44,12 @@ pub struct TipsModel {
     undo_offer: RwSignal<Option<UndoOffer>>,
     undo_ticket: StoredValue<u64>,
     error: RwSignal<Option<String>>,
+    error_ticket: StoredValue<u64>,
+    /// Ids whose dismiss POST has not answered yet: hidden from every list.
+    pending_dismiss: StoredValue<HashSet<i64>>,
+    /// Ids whose "Späť" was pressed while the dismiss was still in flight:
+    /// the restore goes out once that POST resolved.
+    restore_after: StoredValue<HashSet<i64>>,
 }
 
 impl TipsModel {
@@ -48,19 +63,27 @@ impl TipsModel {
             undo_offer: RwSignal::new(None),
             undo_ticket: StoredValue::new(0),
             error: RwSignal::new(None),
+            error_ticket: StoredValue::new(0),
+            pending_dismiss: StoredValue::new(HashSet::new()),
+            restore_after: StoredValue::new(HashSet::new()),
         }
     }
 
-    /// Install a full active list (live event, resync or own write).
+    /// Install a full active list (live event, resync or own write), minus
+    /// the tips being dismissed and capped like the live event. The error
+    /// line is NOT touched here: a refusal must outlive the resync it
+    /// triggers (it clears on the next action or after `ERROR_MS`).
     fn install(self, list: Vec<TipDto>) {
         let first = !self.ready.get_untracked();
+        let list = self
+            .pending_dismiss
+            .with_value(|pending| visible_tips(list, pending));
         let fresh = self
             .known
             .with_value(|known| fresh_ids(known, &list, first));
         self.known
             .update_value(|known| known.extend(list.iter().map(|tip| tip.id)));
         self.fresh.set_value(fresh);
-        self.error.set(None);
         self.tips.set(list);
         self.ready.set(true);
     }
@@ -96,7 +119,11 @@ impl TipsModel {
 
     /// ✕ / swipe: hide at once, tell the server, offer "Späť" for 5 s.
     fn dismiss(self, id: i64) {
+        self.clear_error();
         self.guard.update_value(FetchGuard::note_newer);
+        self.pending_dismiss.update_value(|pending| {
+            pending.insert(id);
+        });
         self.tips.update(|tips| tips.retain(|tip| tip.id != id));
         let ticket = self.undo_ticket.get_value().wrapping_add(1);
         self.undo_ticket.set_value(ticket);
@@ -109,21 +136,62 @@ impl TipsModel {
         })
         .forget();
         leptos::task::spawn_local(async move {
-            if let Err(err) = api::interpreter_tips::dismiss(id).await {
-                self.fail("Tip sa nepodarilo skryť", err);
-            }
+            let answer = api::interpreter_tips::dismiss(id).await;
+            self.dismiss_answered(id, answer.map(|_| ()));
         });
+    }
+
+    /// The dismiss POST of `id` answered: the tip is no longer shielded from
+    /// lists, and a "Späť" pressed meanwhile goes out now, strictly after it.
+    fn dismiss_answered(self, id: i64, answer: Result<(), ApiError>) {
+        self.pending_dismiss.update_value(|pending| {
+            pending.remove(&id);
+        });
+        let restore_wanted = self
+            .restore_after
+            .try_update_value(|wanted| wanted.remove(&id))
+            .unwrap_or(false);
+        match answer {
+            Ok(()) if restore_wanted => self.send_restore(id),
+            Ok(()) => {}
+            Err(err) => {
+                self.drop_undo_offer_of(id);
+                self.fail("Tip sa nepodarilo skryť", &err);
+            }
+        }
+    }
+
+    /// The offer for a tip whose hide failed would restore nothing: close it.
+    fn drop_undo_offer_of(self, id: i64) {
+        let offered = self.undo_offer.try_get_untracked().flatten();
+        if offered.is_some_and(|offer| offer.id == id) {
+            let _ = self.undo_offer.try_set(None);
+        }
     }
 
     fn undo_dismiss(self) {
         let Some(offer) = self.undo_offer.get_untracked() else {
             return;
         };
+        self.clear_error();
         self.undo_offer.set(None);
+        let in_flight = self
+            .pending_dismiss
+            .with_value(|pending| pending.contains(&offer.id));
+        if in_flight {
+            self.restore_after.update_value(|wanted| {
+                wanted.insert(offer.id);
+            });
+            return;
+        }
+        self.send_restore(offer.id);
+    }
+
+    fn send_restore(self, id: i64) {
         leptos::task::spawn_local(async move {
-            match api::interpreter_tips::restore(offer.id).await {
+            match api::interpreter_tips::restore(id).await {
                 Ok(_) => self.resync(),
-                Err(err) => self.fail("Tip sa nepodarilo vrátiť", err),
+                Err(err) => self.fail("Tip sa nepodarilo vrátiť", &err),
             }
         });
     }
@@ -135,20 +203,41 @@ impl TipsModel {
         if !confirmed {
             return;
         }
+        self.clear_error();
         leptos::task::spawn_local(async move {
             if let Err(err) = api::interpreter_tips::dismiss_all().await {
-                self.fail("Tipy sa nepodarilo skryť", err);
+                self.fail("Tipy sa nepodarilo skryť", &err);
             }
         });
     }
 
-    fn fail(self, what: &str, err: ApiError) {
-        let message = match err {
-            ApiError::Status(_, detail) => format!("{what}: {detail}"),
-            other => format!("{what} — server je nedostupný ({other})."),
+    /// Show a Slovak refusal (the raw error goes to the console only), then
+    /// resync so the list shows what the server really has.
+    fn fail(self, what: &str, err: &ApiError) {
+        leptos::logging::log!("interpreter: {what}: {err}");
+        let status = match err {
+            ApiError::Status(code, detail) => Some((*code, detail.as_str())),
+            _ => None,
         };
-        self.error.set(Some(message));
+        self.show_error(tip_error_text(what, status));
         self.resync();
+    }
+
+    /// The line stays for `ERROR_MS`; a newer line owns the timer (ticket).
+    fn show_error(self, message: String) {
+        let ticket = self.error_ticket.get_value().wrapping_add(1);
+        self.error_ticket.set_value(ticket);
+        self.error.set(Some(message));
+        Timeout::new(ERROR_MS, move || {
+            if self.error_ticket.try_get_value() == Some(ticket) {
+                let _ = self.error.try_set(None);
+            }
+        })
+        .forget();
+    }
+
+    fn clear_error(self) {
+        self.error.set(None);
     }
 }
 
@@ -197,34 +286,57 @@ pub fn TipsArea(model: TipsModel) -> impl IntoView {
                     children=move |tip| view! { <TipCard tip=tip model=model /> }
                 />
             </ul>
-            <Show when=move || model.undo_offer.with(Option::is_some)>
-                <div class="interpreter-undo" data-role="interpreter-undo" role="status">
-                    <span>"Skryté"</span>
-                    <button
-                        type="button"
-                        class="interpreter-undo__button"
-                        data-role="interpreter-undo-button"
-                        on:click=move |_| model.undo_dismiss()
-                    >
-                        "Späť"
-                    </button>
-                </div>
-            </Show>
+            // The live region is always mounted and only its content comes and
+            // goes: a region inserted together with its text is often not
+            // announced by screen readers.
+            <div class="interpreter-undo-region" role="status">
+                <Show when=move || model.undo_offer.with(Option::is_some)>
+                    <div class="interpreter-undo" data-role="interpreter-undo">
+                        <span>"Skryté"</span>
+                        <button
+                            type="button"
+                            class="interpreter-undo__button"
+                            data-role="interpreter-undo-button"
+                            on:click=move |_| model.undo_dismiss()
+                        >
+                            "Späť"
+                        </button>
+                    </div>
+                </Show>
+            </div>
         </section>
     }
+}
+
+/// The element a pointer event started on, as a DOM element.
+fn event_element(ev: &PointerEvent) -> Option<web_sys::Element> {
+    ev.target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
 }
 
 /// True when the pointer went down on the card's ✕ — that is a tap on the
 /// button, never the start of a swipe.
 fn starts_on_dismiss_button(ev: &PointerEvent) -> bool {
-    ev.target()
-        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+    event_element(ev)
         .and_then(|el| {
             el.closest("[data-role=\"interpreter-tip-dismiss\"]")
                 .ok()
                 .flatten()
         })
         .is_some()
+}
+
+/// Capture the pointer on the card, so a mouse drag that leaves the card (or
+/// the window) still reaches `pointermove` / `pointerup` of this card. Never
+/// called for a press on ✕: capture would retarget that button's click.
+fn capture_pointer_on_card(ev: &PointerEvent) {
+    let card = event_element(ev)
+        .and_then(|el| el.closest("[data-role=\"interpreter-tip\"]").ok().flatten());
+    if let Some(card) = card {
+        // An unknown pointer id is the only error: the swipe then ends on
+        // `pointerleave` instead (a snap back, never a stuck drag).
+        let _ = card.set_pointer_capture(ev.pointer_id());
+    }
 }
 
 #[component]
@@ -235,13 +347,16 @@ fn TipCard(tip: TipDto, model: TipsModel) -> impl IntoView {
     let meta = tip_meta(&tip, &chrono::Local);
     let is_new = model.is_fresh(id);
     // Swipe: where the pointer went down, and how far the card follows it.
-    // No pointer capture: it would retarget the ✕ button's click.
     let start = StoredValue::new(None::<(f64, f64)>);
     let offset = RwSignal::new(0.0_f64);
+    let dragging = RwSignal::new(false);
     let on_down = move |ev: PointerEvent| {
-        if !starts_on_dismiss_button(&ev) {
-            start.set_value(Some((f64::from(ev.client_x()), f64::from(ev.client_y()))));
+        if starts_on_dismiss_button(&ev) {
+            return;
         }
+        capture_pointer_on_card(&ev);
+        start.set_value(Some((f64::from(ev.client_x()), f64::from(ev.client_y()))));
+        dragging.set(true);
     };
     // `try_get_value`: a pointer event can still reach a card that was just
     // removed (its owner is disposed); that must be a no-op, never a panic.
@@ -255,6 +370,7 @@ fn TipCard(tip: TipDto, model: TipsModel) -> impl IntoView {
             return;
         };
         start.set_value(None);
+        dragging.set(false);
         let dx = f64::from(ev.client_x()) - x;
         let dy = f64::from(ev.client_y()) - y;
         match swipe_decision(dx, dy) {
@@ -264,6 +380,7 @@ fn TipCard(tip: TipDto, model: TipsModel) -> impl IntoView {
     };
     let on_cancel = move |_: PointerEvent| {
         start.set_value(None);
+        dragging.set(false);
         offset.set(0.0);
     };
     let style = move || format!("transform: translateX({}px)", offset.get());
@@ -273,6 +390,7 @@ fn TipCard(tip: TipDto, model: TipsModel) -> impl IntoView {
             data-role="interpreter-tip"
             data-tip-id=id.to_string()
             data-new=is_new.to_string()
+            data-dragging=move || dragging.get().to_string()
             style=style
             on:pointerdown=on_down
             on:pointermove=on_move

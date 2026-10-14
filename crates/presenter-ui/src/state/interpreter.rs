@@ -3,7 +3,7 @@
 //! no DOM here: `js_sys::Date::now()` panics on the host.
 
 use chrono::TimeZone;
-use presenter_core::interpreter_tips::{TipDto, TIP_NOTE_MAX_CHARS};
+use presenter_core::interpreter_tips::{TipDto, TIP_LIVE_LIST_CAP, TIP_NOTE_MAX_CHARS};
 use std::collections::HashSet;
 
 /// `?layout=` of `/ui/interpreter` (spec §8.1). Explicit, so a TV never
@@ -119,6 +119,31 @@ impl SepkarRowState {
             Self::Dismissed => "skryté",
             Self::Expired => "staršie",
         }
+    }
+}
+
+/// The list the tips area shows: tips whose dismiss POST is still in flight
+/// stay hidden (a list that was published before the dismiss landed must not
+/// bring them back for a moment), and at most [`TIP_LIVE_LIST_CAP`] remain,
+/// newest first, exactly like the live event (the resync `GET` is not capped).
+pub fn visible_tips(mut tips: Vec<TipDto>, pending_dismiss: &HashSet<i64>) -> Vec<TipDto> {
+    tips.retain(|tip| !pending_dismiss.contains(&tip.id));
+    tips.truncate(TIP_LIVE_LIST_CAP);
+    tips
+}
+
+/// The Slovak error line of a failed tips write (`what` = "Tip sa nepodarilo
+/// skryť"). The server's own message is shown only for its refusals (404 / 409
+/// / 422 / 429, Slovak by construction); anything else is a fixed Slovak line,
+/// never raw network or proxy text. `status` is `None` when no HTTP answer
+/// came at all.
+pub fn tip_error_text(what: &str, status: Option<(u16, &str)>) -> String {
+    match status {
+        Some((404 | 409 | 422 | 429, detail)) if !detail.trim().is_empty() => {
+            format!("{what}: {detail}")
+        }
+        Some((code, _)) => format!("{what} — server odpovedal chybou {code}."),
+        None => format!("{what} — server je nedostupný."),
     }
 }
 
@@ -261,6 +286,52 @@ mod tests {
         assert_eq!(
             note_counter(&"ž".repeat(201)),
             ("201 / 200".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn a_pending_dismiss_stays_hidden_and_the_list_is_capped_like_the_live_event() {
+        let list: Vec<TipDto> = (1..=25).map(|id| tip(id, None, Some("n"))).collect();
+        let pending: HashSet<i64> = [2].into_iter().collect();
+        let shown = visible_tips(list, &pending);
+        assert_eq!(shown.len(), TIP_LIVE_LIST_CAP);
+        assert!(
+            shown.iter().all(|tip| tip.id != 2),
+            "the pending one is hidden"
+        );
+        assert_eq!(shown[0].id, 1, "the server's order (newest first) is kept");
+        assert_eq!(shown[1].id, 3);
+        let few = visible_tips(vec![tip(7, None, Some("n"))], &HashSet::new());
+        assert_eq!(few.len(), 1);
+    }
+
+    #[test]
+    fn error_text_is_slovak_and_only_the_servers_refusals_keep_their_message() {
+        assert_eq!(
+            tip_error_text(
+                "Tip sa nepodarilo vrátiť",
+                Some((409, "Tento tip už nie je z dnešnej bohoslužby."))
+            ),
+            "Tip sa nepodarilo vrátiť: Tento tip už nie je z dnešnej bohoslužby."
+        );
+        assert_eq!(
+            tip_error_text("Tip sa nepodarilo skryť", Some((404, "Tip neexistuje."))),
+            "Tip sa nepodarilo skryť: Tip neexistuje."
+        );
+        assert_eq!(
+            tip_error_text(
+                "Tip sa nepodarilo skryť",
+                Some((502, "<html>Bad Gateway</html>"))
+            ),
+            "Tip sa nepodarilo skryť — server odpovedal chybou 502."
+        );
+        assert_eq!(
+            tip_error_text("Tip sa nepodarilo skryť", Some((404, "  "))),
+            "Tip sa nepodarilo skryť — server odpovedal chybou 404."
+        );
+        assert_eq!(
+            tip_error_text("Tip sa nepodarilo skryť", None),
+            "Tip sa nepodarilo skryť — server je nedostupný."
         );
     }
 
