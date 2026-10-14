@@ -17,6 +17,12 @@ validator.workspace = true
 unicode-normalization.workspace = true
 once_cell.workspace = true
 
+[features]
+# #852 C1a: the songplayer VBAN encoder, ported test-only (`audio::vban_encode`) —
+# the packet generator for this crate's tests and, through presenter-server's
+# dev-dependency, for the real-UDP receiver tests. Never in a production binary.
+test-helpers = []
+
 [dev-dependencies]
 insta.workspace = true
 rstest = "0.19"

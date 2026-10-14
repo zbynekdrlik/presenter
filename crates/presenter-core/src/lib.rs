@@ -13,6 +13,7 @@
 
 pub mod ableset;
 pub mod android_stage_display;
+pub mod audio;
 pub mod bible;
 pub mod id;
 pub mod interpreter_tips;
