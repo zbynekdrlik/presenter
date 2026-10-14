@@ -7,6 +7,7 @@ pub mod bible_slides;
 pub mod camera;
 pub mod interpreter;
 pub mod operator;
+pub mod sepkar;
 pub mod settings;
 pub mod stage;
 pub mod stage_events;

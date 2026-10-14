@@ -1,0 +1,201 @@
+/* #852 šepkár page (/ui/sepkar): phone first, form + list side by side from
+   900 px. Bundled globally by trunk: every rule is scoped to body.sepkar /
+   .sepkar__*. The body carries the class `sepkar` (like `interpreter`), so the
+   page's root element is `.sepkar__root` — a bare `.sepkar` rule would hit the
+   body too. tablet.css makes <html> overflow:hidden, so the BODY scrolls. */
+body.sepkar {
+  margin: 0;
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+body.sepkar *,
+body.sepkar *::before,
+body.sepkar *::after {
+  box-sizing: border-box;
+}
+
+.sepkar__root {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  /* minmax(0, …): a long unspaced word may never widen the column. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+@media (min-width: 900px) {
+  .sepkar__root {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.sepkar__header,
+.sepkar__version {
+  grid-column: 1 / -1;
+}
+
+.sepkar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sepkar__title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.sepkar__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #64748b;
+  flex: none;
+}
+
+.sepkar__dot[data-ws="connected"] {
+  background: #22c55e;
+}
+
+.sepkar__dot[data-ws="reconnecting"] {
+  background: #ef4444;
+}
+
+.sepkar__form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sepkar__field {
+  display: grid;
+  gap: 4px;
+}
+
+.sepkar__label {
+  font-size: 15px;
+  color: #cbd5e1;
+}
+
+/* 16 px: iOS Safari zooms the page into any smaller input on focus. */
+.sepkar__input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+.sepkar__input:focus {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+.sepkar__counter {
+  justify-self: end;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.sepkar__counter[data-over="true"] {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.sepkar__send {
+  min-height: 48px;
+  font-size: 18px;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  background: #2563eb;
+  color: #fff;
+}
+
+.sepkar__send:disabled {
+  opacity: 0.6;
+}
+
+.sepkar__error,
+.sepkar__notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.sepkar__error {
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+
+.sepkar__notice {
+  background: #14532d;
+  color: #dcfce7;
+}
+
+.sepkar__today {
+  min-width: 0;
+}
+
+.sepkar__today-title {
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  font-size: 16px;
+  color: #cbd5e1;
+  border-bottom: 1px solid #334155;
+}
+
+.sepkar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sepkar__row {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #1e293b;
+  overflow-wrap: anywhere;
+}
+
+/* A tip that is not on the screen any more reads dimmer, but still ≥ 4.5:1 on
+   the row (an opacity on the whole row would sink the "skryté" label below it). */
+.sepkar__row[data-state="dismissed"] .sepkar__row-text,
+.sepkar__row[data-state="expired"] .sepkar__row-text {
+  color: #94a3b8;
+}
+
+.sepkar__row-text {
+  font-size: 17px;
+}
+
+.sepkar__row-meta {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.sepkar__empty {
+  margin: 0;
+  color: #94a3b8;
+}
+
+.sepkar__version {
+  font-size: 13px;
+  color: #94a3b8;
+}
