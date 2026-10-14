@@ -301,6 +301,7 @@ crates/
 | `PRESENTER_DRIVE_URL`         | `https://drive.google.com` | Google Drive folder-listing base URL for the stream playback mirror (#843; tests/E2E point it at a mock, the E2E default is a dead loopback). |
 | `PRESENTER_DRIVE_DOWNLOAD_URL` | `https://drive.usercontent.google.com` | Google Drive download base URL for the playback mirror (#843; same test treatment). |
 | `PRESENTER_PLAYBACK_MAX_GB`   | `20`                    | Byte budget of the whole playback mirror in GiB (#843); a download that would pass it is refused with a Slovak status error. |
+| `PRESENTER_LISTEN_VBAN_ADDR`  | `0.0.0.0:6980`          | Bind address of the VBAN receive socket for the listening microphones (#852 C1a); bound only while `listen.mics` is non-empty (it ships empty). The E2E harness uses `127.0.0.1:0`. |
 | `RUST_LOG`                    | `info,tower_http=debug,sqlx=warn` | Tracing filter                                                       |
 
 ---

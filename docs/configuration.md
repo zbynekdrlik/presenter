@@ -93,6 +93,20 @@ Needs internet only to sync.
 | `PRESENTER_DRIVE_DOWNLOAD_URL` | `https://drive.usercontent.google.com` | File-download base URL (same test treatment). |
 | `PRESENTER_PLAYBACK_MAX_GB`    | `20`                                   | Byte budget of the whole playback mirror, in whole GiB. A download that would pass it is refused and the editor shows „úložisko prehrávania je plné". |
 
+### Sermon listening — VBAN microphones (#852)
+
+Presenter receives the guest and interpreter microphones as VBAN audio on ONE UDP socket, bound only
+while at least one microphone is configured (`listen.mics`, `GET|PUT /listen/mics`). The list ships
+EMPTY: no port is bound until the microphones are saved (PP stays empty; SNV gets its two microphones
+on the routing day). `GET /listen/status` shows the socket, every microphone's packets, format,
+sender and state (`waiting`, `receiving`, `no_audio` 3 s after the last packet) and the streams seen
+but not assigned. Senders: VB-Matrix or Voicemeeter on the FOH PC, 48 kHz, 16-bit, stream names
+`GUEST_EN` / `INTERP_SK` (spec §5.7). `scripts/dev/listen/vban_send.py` sends a test tone.
+
+| Variable                     | Default        | Purpose |
+| ---------------------------- | -------------- | ------- |
+| `PRESENTER_LISTEN_VBAN_ADDR` | `0.0.0.0:6980` | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
+
 ### Companion Integration
 
 | Variable                      | Default | Description                      |

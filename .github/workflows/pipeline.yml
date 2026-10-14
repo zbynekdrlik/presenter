@@ -492,6 +492,14 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s scripts/dev -p 'test_no_panic_check.py' -v
 
+      # #852 C1a: the VBAN box tools (scripts/dev/listen). The sender's golden
+      # packet is the one the Rust decoder test pins (presenter-core
+      # audio/vban/tests.rs).
+      - name: Test VBAN box tools (#852)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev/listen -p 'test_vban_*.py' -v
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
