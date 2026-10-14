@@ -150,7 +150,8 @@ async fn unmatched_streams_keep_the_16_most_recent_and_count_per_name() {
             UnmatchedCount {
                 packets: 1,
                 fresh: true,
-                names: k + 1
+                names: k + 1,
+                total: k + 1
             }
         );
     }
@@ -160,7 +161,8 @@ async fn unmatched_streams_keep_the_16_most_recent_and_count_per_name() {
         UnmatchedCount {
             packets: 2,
             fresh: false,
-            names: 17
+            names: 17,
+            total: 18
         },
         "per NAME"
     );
@@ -170,7 +172,8 @@ async fn unmatched_streams_keep_the_16_most_recent_and_count_per_name() {
         UnmatchedCount {
             packets: 1,
             fresh: true,
-            names: 18
+            names: 18,
+            total: 19
         },
         "an evicted name enters again"
     );
@@ -207,7 +210,8 @@ async fn a_closed_socket_ends_the_session_counters() {
         UnmatchedCount {
             packets: 1,
             fresh: true,
-            names: 1
+            names: 1,
+            total: 1
         },
         "the log gates start over"
     );
@@ -540,6 +544,60 @@ async fn a_sender_rotating_20_names_over_udp_logs_log2_lines_and_one_summary() {
     let summaries = capture.events_with_message("rotate through more than the names kept");
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].field("names"), Some("17"));
+}
+
+/// Sends `rounds` rounds of 20 rotating names through a real socket, each
+/// name `burst` packets in a row (VB senders burst 2–4); returns the
+/// unassigned-stream INFO lines logged and the packets sent.
+async fn rotating_bursts(burst: usize, rounds: usize) -> (usize, u64) {
+    let capture = Capture::install();
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
+    service.start(addr("127.0.0.1:0"));
+    let bound = wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let vban: SocketAddr = bound.socket.local_addr.unwrap().parse().unwrap();
+    let tx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut rotating: Vec<VbanEncoder> = (0..20)
+        .map(|k| VbanEncoder::new(&format!("ROT{k:02}"), 48_000, 1, VbanSampleType::Int16))
+        .collect();
+    let mut sent = 0u64;
+    for _ in 0..rounds {
+        for encoder in &mut rotating {
+            for _ in 0..burst {
+                tx.send_to(&next_packet(encoder), vban).await.unwrap();
+                sent += 1;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // one socket, in order: once the guest's packet counts, the flood was handled
+    tx.send_to(&next_packet(&mut guest_encoder()), vban)
+        .await
+        .unwrap();
+    wait_for(&service, "the closing guest packet", |s| {
+        s.mics[0].packets == 1
+    })
+    .await;
+    let lines = capture
+        .events_with_message("VBAN stream not assigned to any mic")
+        .len()
+        + capture
+            .events_with_message("rotate through more than the names kept")
+            .len();
+    (lines, sent)
+}
+
+#[tokio::test]
+async fn rotating_names_in_bursts_of_2_and_4_log_logarithmically() {
+    for (burst, rounds) in [(2, 10), (4, 6)] {
+        let (lines, sent) = rotating_bursts(burst, rounds).await;
+        // each gate passes at most log2(N) + 1 times, plus the one summary
+        let bound = 2 * (u64::from(sent.ilog2()) + 1) + 1;
+        assert!(
+            (1..=bound).contains(&u64::try_from(lines).unwrap()),
+            "bursts of {burst}: {lines} lines for {sent} packets (bound {bound})"
+        );
+    }
 }
 
 #[tokio::test]

@@ -72,6 +72,8 @@ pub(crate) struct UnmatchedCount {
     pub(crate) fresh: bool,
     /// Names that entered the map this socket session.
     pub(crate) names: u64,
+    /// Unassigned datagrams this socket session, every name and sender.
+    pub(crate) total: u64,
 }
 
 /// A map that keeps the [`RECENT_CAP`] most recently seen keys.
@@ -123,6 +125,8 @@ pub(crate) struct ListenHealth {
     /// eviction too: the gate of a new name's line, so a sender cycling more
     /// names than the map keeps cannot log every packet.
     new_names: u64,
+    /// Unassigned datagrams this session: the second gate of a repeat line.
+    unmatched_total: u64,
 }
 
 impl ListenHealth {
@@ -155,6 +159,7 @@ impl ListenHealth {
         self.unmatched = Recent::default();
         self.unmatched_names = Recent::default();
         self.new_names = 0;
+        self.unmatched_total = 0;
     }
 
     pub(crate) fn record_packet(&mut self, mic_id: &str, seen: PacketSeen) {
@@ -186,10 +191,12 @@ impl ListenHealth {
         if fresh {
             self.new_names += 1;
         }
+        self.unmatched_total += 1;
         UnmatchedCount {
             packets,
             fresh,
             names: self.new_names,
+            total: self.unmatched_total,
         }
     }
 

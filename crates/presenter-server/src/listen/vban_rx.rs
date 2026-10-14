@@ -333,17 +333,23 @@ impl MicRouter {
     }
 }
 
-/// The #484 gates of the unassigned-stream lines, `(line, summary)`. A name's
-/// later packets log on its own power-of-two count; a name that enters the
-/// bounded map (new, or back after an eviction) logs on the power-of-two
-/// count of such names this session, so a sender cycling more names than the
-/// map keeps logs log2(N) lines for N packets, not N. The summary marks the
-/// first eviction, once per session.
+/// The #484 gates of the unassigned-stream lines, `(line, summary)`. A name
+/// that enters the bounded map (new, or back after an eviction) logs on the
+/// power-of-two count of such names this session; a name's later packets log
+/// when its own count AND the session's unassigned count are both on the
+/// power-of-two gate. Each gate passes at most log2(N) + 1 times in N packets,
+/// so a sender cycling more names than the map keeps, in bursts or not, logs
+/// at most 2 (log2(N) + 1) lines plus the summary, which marks the first
+/// eviction once per session. A single stream logs as before (both counts
+/// are the same).
 fn unmatched_lines(seen: UnmatchedCount) -> (bool, bool) {
     if seen.fresh {
         (should_log_event(seen.names), seen.names == FIRST_EVICTION)
     } else {
-        (should_log_event(seen.packets), false)
+        (
+            should_log_event(seen.packets) && should_log_event(seen.total),
+            false,
+        )
     }
 }
 
