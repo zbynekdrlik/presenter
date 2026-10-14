@@ -204,6 +204,7 @@ jobs:
             echo "ssh-keyscan attempt $attempt/5 failed, retrying in 3s..."
             sleep 3
           done
+          rm -f "$SCANNED"
           if [ "$KEYSCAN_OK" -ne 1 ] || [ ! -s ~/.ssh/known_hosts ]; then
             echo "::error::ssh-keyscan failed after 5 attempts — known_hosts is empty. Cannot verify host."
             exit 1

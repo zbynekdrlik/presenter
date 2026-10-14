@@ -39,8 +39,13 @@ paths:
 `presenter-importer/src/bible_digest.rs`: digest = SHA-256(file bytes ‖ version). A parser
 change that alters passage text WITHOUT a bump never reaches a deployed database — the stored
 digest still matches and `ingest_bibles` prints "Skipping … (up-to-date)". D1 = 2, D2b = 3.
-A bump re-imports all five translations on the next deploy (the server is stopped; saved
-presentations and sermons survive — no FK to passages or translations, spec §5.7). Pin a bump
+A bump re-imports all five translations on the next deploy (saved presentations and sermons
+survive — no FK to passages or translations, spec §5.7). Dev and PP import with the service
+stopped and the new binaries copied in; SNV's staged deploy imports AFTER the swap and the
+`/healthz` wait, with the new service running (one transaction per translation, ~1.5 s each on
+dev2). Never before the swap: `/opt/presenter/ingest_bibles` is then the previous release's
+binary, which skips everything as up-to-date (D1 nearly shipped that way; pinned by invariants
+3–4 of `scripts/ci/check_deploy_workflows.py`). Pin a bump
 with a digest test (`the_d1_import_fixes_change_every_stored_digest`), never `assert_eq!` on
 the constant.
 
