@@ -584,7 +584,7 @@ CREATE INDEX idx_bible_sermon_items_order ON bible_sermon_items(presentation_id,
 
 ### 7.2 Editing model (units P1 + E2)
 
-Pure module `crates/presenter-core/src/bible/sermon/{mod,tokens,edits,render,label}.rs`, used by the server
+Pure module `crates/presenter-core/src/bible/sermon/{mod,tokens,edits,render,label,dates}.rs`, used by the server
 for slides and by the WASM editor for instant display, so the two never disagree.
 
 - **Tokens:** `tokenize(text) -> Vec<Token { start, end }>` = maximal runs of non-whitespace. "nevidíme," is one
