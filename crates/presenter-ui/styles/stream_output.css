@@ -138,9 +138,11 @@ body.stream {
     line-height: 1;
 }
 
-/* Lyrics + verse elements (#710): the Frame is a vertically-centered flex
- * column (set inline in each element's container style) whose stacked text
- * lines each carry their own TextStyle inline. The line rules below only govern
+/* Lyrics + verse elements (#710): the lyrics Frame is a vertically-centered
+ * flex column (set inline in its container style); the verse Frame holds one
+ * crossfade block whose layers are such columns (#863, `.stream-verse__block`
+ * below). The stacked text lines each carry their own TextStyle inline. The
+ * line rules below only govern
  * WRAPPING — a long/multi-line SlideText wraps within the Frame and anything
  * past the box is clipped by `.stream-element { overflow:hidden }` (the
  * 4000-char acceptance criterion: text never spills outside its Frame). */
@@ -189,6 +191,22 @@ body.stream {
 }
 .stream-crossfade__layer--leaving {
     opacity: 0;
+}
+
+/* VERSE BLOCK (#863): the verse lines crossfade as ONE block. The wrapper fills
+ * the element's Frame and its single row is exactly the Frame height, so every
+ * layer (old + new) is the same box; each layer centres its own stack of lines
+ * vertically. Removing the outgoing layer therefore never moves the incoming
+ * one: before #863 each line crossfaded alone and the reference jumped when
+ * the taller old text left. Overflowing text is clipped by the element. */
+.stream-verse__block {
+    height: 100%;
+    grid-template-rows: minmax(0, 1fr);
+}
+.stream-verse__block > .stream-crossfade__layer {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
 }
 
 /* PLAYBACK (#843): a Drive folder's photos/videos in a loop. Each item is a

@@ -252,7 +252,8 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   closure.** `<Show>` children are `move` closures that must OWN their captures. A single `line_style(...)`
   String reused across two `<Show>` children (e.g. the same `reference_style` for BOTH the main and
   secondary reference lines) is a double-move compile error — build ONE owned String per `<Show>`
-  child (`main_reference_css` + `secondary_reference_css`). Inside each child, `style=css.clone()`
+  child (the verse block (#863) destructures a cloned `LineStyles` array: one String per line).
+  Inside each child, `style=css.clone()`
   (the child is `Fn`, may run on every mount, so clone). The reactive text closures (`main_text` etc.)
   ARE reusable in both the `<Show when=>` guard and the `{text}` child because they capture only the
   `Copy` `ctx.stage`/`ctx.bible` signal, so the closure is itself `Copy` (read the needed field via
@@ -297,13 +298,34 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   `mark_leaving` re-pointing the outgoing base to the incoming scene's duration was a DEAD WRITE — the
   scene faded over its creation duration while its removal timeout used the new one → a pop when
   per-scene overrides differ. Tier-0 hides this (no local build); catch it by reading + review.
-- **Content fade = a reusable `components/stream/transition.rs::CrossfadeText`, used by LYRICS and
-  VERSE only.** (The countdown left it in #776: its digits swap in place in one text node.)
+- **Content fade = ONE layer machinery, `components/stream/transition.rs::Crossfade` (#716,
+  generalised in #863), used by LYRICS and VERSE only.** (The countdown left it in #776: its digits
+  swap in place in one text node.)
   - Props:
-    - `text: Memo<String>`: the Memo dedups, so an unchanged re-derived line never animates;
+    - `content: Memo<String>`, a content KEY: the Memo dedups, so unchanged re-derived content never
+      animates;
     - a `ContentTransition`;
     - the wrapper's role / class / style;
-    - a `fill` flag.
+    - a `fill` flag;
+    - `render: LayerRender` (`Arc<dyn Fn(Signal<String>) -> AnyView + Send + Sync>`): draws ONE
+      layer. It gets the layer's key as a `Signal` read by seq, because `Cut` updates a layer in
+      place (the keyed-`<For>` trap above). `Send + Sync` because the layers render inside a `<Show>`;
+      the `<For>` children closure is built once outside the `view!` and `.clone()`d into it.
+  - `CrossfadeText` (`text: Memo<String>` + the same wrapper props) is a thin wrapper whose layer is
+    the bare text. Lyrics use it: their main and translation lines still fade on their own.
+  - **The VERSE fades as ONE block (#863).** Its key is the four shown lines as a JSON array
+    (`element_verse.rs::block_key`; empty when nothing is shown, the hidden secondary pair is left
+    empty so it never fades the block). Each layer renders the whole stack (`verse_layer`, one line
+    div per non-empty line). The wrapper `.stream-verse__block` fills the Frame (`height:100%`,
+    `grid-template-rows: minmax(0,1fr)`), so every layer is the same box, and each layer is its own
+    vertically centred flex column. Before #863 the four lines were independent `CrossfadeText`s in a
+    centred flex column: an unchanged reference never faded, and it JUMPED (151 px measured on dev)
+    when the taller outgoing text layer was removed and its grid cell shrank. Any two-line element
+    that should move together needs this block pattern, never two `CrossfadeText`s.
+  - Mid-fade a verse has TWO `stream-verse-text` / `stream-verse-reference` nodes (one per layer).
+    A Playwright `toHaveText` on a 2-match locator fails AT ONCE with a strict-mode violation (not
+    retried, it is thrown inside the evaluate), so assert a verse line after `toHaveCount(1)` or on a
+    freshly shown verse. The wrapper role is `stream-verse-block`.
   - Layers stack in ONE CSS grid cell: `.stream-crossfade { display:grid }`, every layer
     `grid-area:1/1`, and `--fill` (`grid-template-columns: minmax(0,1fr)`) lets lyrics/verse text
     wrap.
@@ -311,6 +333,11 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
     layers). `FadeThrough` is described below.
   - The wrapper renders ONLY when a layer exists, so empty or cleared content is DOM-ABSENT. That
     preserves the #710 `toHaveCount(0)` count-0-on-clear/toggle contract.
+  - E2E for "nothing visible moves" (`stream-verse-block-fade.spec.ts`): an init-script rAF recorder
+    gives every reference node a stable id (WeakMap on node identity) and records its top and its
+    EFFECTIVE opacity (its own times every ancestor's; the layer fades, not the line). Assert no
+    node is seen at opacity >= 0.99 at two tops > 2 px apart, and that the reference is sampled
+    mid-fade.
 - **Scene reconcile = a `RwSignal<Vec<SceneLayer>>` + one Effect on `def`+`show_state`.** A
   `config_revision` bump ⇒ rebuild fresh (config edits are not the smooth path); same revision ⇒
   crossfade the base + reconcile overlays individually. Read `layers` only via `with_untracked`/`update`

@@ -16,9 +16,9 @@
 //! toggle; `duration = scene.transition_ms ?? kind-level ?? default` (#752
 //! kind-level via `StreamOutputDef::resolve_transition_ms`). The
 //! scene layers are tracked in a keyed list (`SceneLayer`) with scheduled removal
-//! after each fade (no node leaks). Per-element content changes (lyric line /
-//! verse) crossfade, fade through empty (#834) or cut via
-//! `transition::CrossfadeText`; the countdown swaps its digits in place (#776).
+//! after each fade (no node leaks). Per-element content changes (a lyric line,
+//! or the whole verse block, #863) crossfade, fade through empty (#834) or cut
+//! via `transition::Crossfade`; the countdown swaps its digits in place (#776).
 
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
