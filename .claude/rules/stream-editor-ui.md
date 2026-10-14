@@ -295,8 +295,10 @@ a `switch_output` clobber. Rules:
   guarded methods decide synchronously inside the click handler, and the E2E "declined, nothing
   changed" checks rely on that.
 - `close_panel()` is the RAW reset, with no question. Call it only after the caller has already
-  decided: `switch_output` after its guard, and `delete_scene` after the delete was confirmed.
-  Never wire it to a button.
+  decided: `enter_output` (the body of `switch_output` after its guard, and of every path that
+  leaves an output that no longer exists), `submit_delete` (the output-bar delete, once its confirm
+  and draft question are answered, before it awaits the DELETE), `request_close_panel` after its
+  guard, and `delete_scene` after the delete was confirmed. Never wire it to a button.
 - A declined output switch leaves `output_slug` unchanged, so no option's `prop:selected` re-fires
   and the `<select>` would keep showing the rejected option. `on_output_change` (in
   `output_paths.rs`) sets it back to `ctx.slug()` by hand.
@@ -330,7 +332,8 @@ rendered, the browser picked the FIRST one, while the editor edited another outp
 `prop:selected = (slug == ctx.output_slug)` on every option. Each option is created already in the
 right state and follows every later switch, whatever order the list and the def arrive in. A slug
 missing from the list (a deleted output, a stale bookmark) switches to the first listed output
-through `switch_output`. `output_paths::fallback_output` (pure, host-tested) decides that.
+through `enter_output` (no question: the output no longer exists, #855). `output_paths::fallback_output`
+(pure, host-tested) decides that.
 E2E: gate the page's `**/stream/api/outputs` with `page.route` so the def lands first. The glob
 matches only that exact path, not `/outputs/{slug}/…`.
 

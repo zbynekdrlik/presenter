@@ -508,6 +508,26 @@ jobs:
           echo "Data check passed: libraries endpoint returned data"
           REMOTE_SCRIPT
 
+      # #850 O1: a systemd drop-in that sets RUST_LOG REPLACES the unit's value (the old SNV
+      # ableset-debug.conf did: tower_http=info hid the whole request log). The running service's
+      # environment must carry the committed unit's RUST_LOG, entry for entry. The expected value
+      # is read from the repo unit, so the filter has no second copy here.
+      - name: Verify effective RUST_LOG (#850 O1)
+        run: |
+          set -euo pipefail
+          expected=$(sed -n 's/^Environment=RUST_LOG=//p' scripts/deploy/presenter.service)
+          test -n "$expected"
+          effective=$(ssh deploy-target "systemctl show ${{ env.SERVICE_NAME }} -p Environment --value")
+          # Entry-for-entry match: the entries are space-separated, so pad both ends.
+          case " $effective " in
+            *" RUST_LOG=$expected "*) echo "Effective RUST_LOG matches the unit: $expected" ;;
+            *)
+              echo "::error::effective RUST_LOG is not the unit's RUST_LOG=$expected — a systemd drop-in overrides it"
+              echo "Environment: $effective"
+              exit 1
+              ;;
+          esac
+
       - name: Post-deploy smoke test
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'

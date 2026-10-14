@@ -1727,109 +1727,20 @@ mod tests {
     // the ticker reports a reconnect only when the repair left the source streaming.
     mod silent_streak_logs {
         use super::*;
-        use std::sync::{Arc, Mutex};
+        use crate::tracing_capture::{Capture, Captured};
 
         const SILENT_LINE: &str = "broadcaster silent (#448)";
         const RECONNECT_LINE: &str = "NDI auto-reconnect: re-activated the source's pipeline";
 
-        /// One captured tracing event: its level, rendered `message` and `attempt`.
-        #[derive(Clone, Debug)]
-        struct Captured {
-            level: tracing::Level,
-            message: String,
-            attempt: Option<u64>,
-        }
-
-        #[derive(Default)]
-        struct EventVisitor {
-            message: String,
-            attempt: Option<u64>,
-        }
-
-        impl tracing::field::Visit for EventVisitor {
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    self.message = format!("{value:?}");
-                }
-            }
-
-            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-                if field.name() == "attempt" {
-                    self.attempt = Some(value);
-                }
-            }
-        }
-
-        /// Records every DEBUG-and-above event the installing thread emits.
-        struct EventCapture {
-            events: Arc<Mutex<Vec<Captured>>>,
-        }
-
-        impl tracing::Subscriber for EventCapture {
-            fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-                *metadata.level() <= tracing::Level::DEBUG
-            }
-            fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-                tracing::span::Id::from_u64(1)
-            }
-            fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-            fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {
-            }
-            fn event(&self, event: &tracing::Event<'_>) {
-                let mut visitor = EventVisitor::default();
-                event.record(&mut visitor);
-                self.events
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .push(Captured {
-                        level: *event.metadata().level(),
-                        message: visitor.message,
-                        attempt: visitor.attempt,
-                    });
-            }
-            fn enter(&self, _span: &tracing::span::Id) {}
-            fn exit(&self, _span: &tracing::span::Id) {}
-        }
-
-        /// Install a capturing subscriber for THIS thread (a `#[tokio::test]` runs
-        /// on one), returning the guard, a keeper and the sink; bind all three
-        /// (`_scope`, `_keeper`) for the test's whole body.
-        ///
-        /// The keeper is a second live dispatcher. tracing-core caches each
-        /// callsite's interest, and while only ONE dispatcher is registered a
-        /// callsite first hit by a sibling test's thread (no subscriber there) is
-        /// cached as "never" for everyone — it would silently drop this test's
-        /// events. With two live dispatchers, every callsite is also asked about
-        /// this capture (see the `GlobalCapture` note in `ai/client.rs`).
-        fn capture_events() -> (
-            tracing::dispatcher::DefaultGuard,
-            tracing::Dispatch,
-            Arc<Mutex<Vec<Captured>>>,
-        ) {
-            let events = Arc::new(Mutex::new(Vec::new()));
-            let capture = tracing::Dispatch::new(EventCapture {
-                events: Arc::clone(&events),
-            });
-            let keeper = tracing::Dispatch::new(EventCapture {
-                events: Arc::new(Mutex::new(Vec::new())),
-            });
-            (tracing::dispatcher::set_default(&capture), keeper, events)
-        }
-
-        fn lines_containing(events: &Arc<Mutex<Vec<Captured>>>, needle: &str) -> Vec<Captured> {
-            events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .iter()
-                .filter(|captured| captured.message.contains(needle))
-                .cloned()
-                .collect()
+        /// The `attempt` field of a captured silent-source line.
+        fn attempt(line: &Captured) -> Option<u64> {
+            line.field("attempt").and_then(|value| value.parse().ok())
         }
 
         #[tokio::test]
         async fn a_silent_streak_logs_the_448_line_at_info_only_on_power_of_two_attempts() {
             let (state, source_id, _id, _fake) = state_with_fake(StartOutcome::SilentSource).await;
-            let (_scope, _keeper, events) = capture_events();
+            let capture = Capture::install();
 
             for _ in 0..8 {
                 state
@@ -1838,7 +1749,7 @@ mod tests {
                     .expect("a silent-source activation still succeeds (#448)");
             }
 
-            let lines = lines_containing(&events, SILENT_LINE);
+            let lines = capture.events_with_message(SILENT_LINE);
             let levels: Vec<tracing::Level> = lines.iter().map(|line| line.level).collect();
             let (info, debug) = (tracing::Level::INFO, tracing::Level::DEBUG);
             assert_eq!(
@@ -1846,7 +1757,7 @@ mod tests {
                 vec![info, info, debug, info, debug, debug, debug, info],
                 "one line per silent attempt, INFO only on attempts 1,2,4,8; got {lines:?}"
             );
-            let attempts: Vec<Option<u64>> = lines.iter().map(|line| line.attempt).collect();
+            let attempts: Vec<Option<u64>> = lines.iter().map(attempt).collect();
             assert_eq!(
                 attempts,
                 (1..=8u64).map(Some).collect::<Vec<_>>(),
@@ -1898,23 +1809,23 @@ mod tests {
                 .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
                 .await
                 .expect("activate A (silent)");
-            let (_scope, _keeper, events) = capture_events();
+            let capture = Capture::install();
 
             for _ in 0..3 {
                 state.ndi_reconnect_once().await;
             }
 
             assert!(
-                lines_containing(&events, RECONNECT_LINE).is_empty(),
+                capture.events_with_message(RECONNECT_LINE).is_empty(),
                 "a silent repair is not a reconnect; got {:?}",
-                lines_containing(&events, RECONNECT_LINE)
+                capture.events_with_message(RECONNECT_LINE)
             );
-            let silent = lines_containing(&events, SILENT_LINE);
+            let silent = capture.events_with_message(SILENT_LINE);
             let (info, debug) = (tracing::Level::INFO, tracing::Level::DEBUG);
             assert_eq!(
                 silent
                     .iter()
-                    .map(|line| (line.attempt, line.level))
+                    .map(|line| (attempt(line), line.level))
                     .collect::<Vec<_>>(),
                 vec![(Some(2), info), (Some(3), debug), (Some(4), info)],
                 "the ticker's silent repairs are attempts 2,3,4 of the streak"
@@ -1923,7 +1834,7 @@ mod tests {
             fake.set_start_outcome(StartOutcome::Ok);
             state.ndi_reconnect_once().await;
 
-            let reconnected = lines_containing(&events, RECONNECT_LINE);
+            let reconnected = capture.events_with_message(RECONNECT_LINE);
             assert_eq!(
                 reconnected
                     .iter()

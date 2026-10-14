@@ -71,5 +71,7 @@ count has to live where the outcome is decided and travel IN the outcome.
   reservation state machine — both rejected in #858. One VA-API init per 30 s on an idle box is accepted.
 - **Asserting log lines in a test:** a scoped capture subscriber loses events when a sibling test's
   thread registers the callsite first while only one dispatcher is live (tracing-core caches the
-  interest). Keep a SECOND live `Dispatch` for the test's duration — `capture_events()` in
-  `state/integrations.rs` tests (`silent_streak_logs`).
+  interest). Use the ONE shared helper, `crate::tracing_capture::Capture::install()`
+  (`src/tracing_capture.rs`, test-only; it keeps the SECOND live `Dispatch` for you) and
+  `events_with_message(needle)` — see `silent_streak_logs` in `state/integrations.rs` tests. Never add
+  another capture subscriber.

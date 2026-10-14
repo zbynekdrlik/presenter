@@ -7,18 +7,26 @@
 //! itself.
 //!
 //! Polls and assets that every open tab / stage display repeats every few
-//! seconds ([`is_quiet_path`]) get NO span and NO response line, so the journal
-//! keeps the requests a person made. A 5xx is never hidden: tower-http's
-//! `on_failure` still logs it (WARN, without the request fields on a quiet
-//! path). Client-controlled strings are recorded as `&str`, so they print
-//! quoted and a hostile header cannot forge a field.
+//! seconds ([`is_quiet_request`]) get NO span and NO response line, so the
+//! journal keeps the requests a person made. A 5xx is never hidden:
+//! tower-http's `on_failure` still logs it (WARN, without the request fields on
+//! a quiet path). Client-controlled strings are recorded as `&str`, so they
+//! print quoted and a hostile header cannot forge a field.
+//!
+//! One poll cannot be told apart before it is answered: a stage display whose
+//! NDI broadcaster is silent POSTs `/ndi/whep/{id}` every 5 s and gets a 204
+//! ([`is_silent_whep_poll`]). Its span exists (the status is unknown when the
+//! span opens) but its response line is skipped; a 201 session start and every
+//! error stay logged. [`with_request_log`] installs the layer pair.
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{header::USER_AGENT, Request, Response};
+use axum::http::{header::USER_AGENT, Method, Request, Response, StatusCode, Uri};
+use axum::middleware::{self, Next};
+use axum::Router;
 use tower_http::classify::{ServerErrorsAsFailures, SharedClassifier};
 use tower_http::trace::{
     DefaultOnBodyChunk, DefaultOnFailure, DefaultOnResponse, OnResponse, TraceLayer,
@@ -26,10 +34,10 @@ use tower_http::trace::{
 use tower_http::LatencyUnit;
 use tracing::{Level, Span};
 
-/// The layer `build_router` installs: our span (none for a quiet path), no
-/// "started" line, one DEBUG response line, no "end of stream" line, a WARN
-/// line for a 5xx.
-pub(super) type RequestTraceLayer = TraceLayer<
+/// The trace layer: our span (none for a quiet path), no "started" line, one
+/// DEBUG response line (none for a silent WHEP poll), no "end of stream" line,
+/// a WARN line for a 5xx.
+type RequestTraceLayer = TraceLayer<
     SharedClassifier<ServerErrorsAsFailures>,
     fn(&Request<Body>) -> Span,
     (),
@@ -48,15 +56,36 @@ pub(super) struct RequestFields {
     pub(super) client_ip: String,
 }
 
+/// The request a response answers. `OnResponse` sees only the response, so
+/// [`tag_request_line`] (installed INSIDE the trace layer) stamps it on the
+/// response extensions.
+#[derive(Debug, Clone)]
+struct RequestLine {
+    method: Method,
+    uri: Uri,
+}
+
+/// Stamp the request's method and URI on its response (both clone without a
+/// heap copy), for [`RequestOnResponse`] to read.
+async fn tag_request_line(request: Request<Body>, next: Next) -> Response<Body> {
+    let line = RequestLine {
+        method: request.method().clone(),
+        uri: request.uri().clone(),
+    };
+    let mut response = next.run(request).await;
+    response.extensions_mut().insert(line);
+    response
+}
+
 /// tower-http's DEBUG response line (status, latency in ms), skipped when the
 /// request span is disabled — a quiet path (`Span::none()`) has nothing to
-/// attach the line to.
+/// attach the line to — and for a silent WHEP poll ([`is_silent_whep_poll`]).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RequestOnResponse;
 
 impl<B> OnResponse<B> for RequestOnResponse {
     fn on_response(self, response: &Response<B>, latency: Duration, span: &Span) {
-        if span.is_disabled() {
+        if span.is_disabled() || answers_a_silent_whep_poll(response) {
             return;
         }
         DefaultOnResponse::new()
@@ -66,7 +95,19 @@ impl<B> OnResponse<B> for RequestOnResponse {
     }
 }
 
-pub(super) fn request_trace_layer() -> RequestTraceLayer {
+/// Install the request log on `router`: the trace layer OUTSIDE, the tagging
+/// middleware inside it (axum applies the layer added last first, so the tag is
+/// already on the response when the trace layer logs it).
+pub(super) fn with_request_log<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
+        .layer(middleware::from_fn(tag_request_line))
+        .layer(request_trace_layer())
+}
+
+fn request_trace_layer() -> RequestTraceLayer {
     TraceLayer::new_for_http()
         .make_span_with(request_span as fn(&Request<Body>) -> Span)
         .on_request(())
@@ -79,9 +120,28 @@ pub(super) fn request_trace_layer() -> RequestTraceLayer {
         )
 }
 
+/// A stage display's WHEP offer while its broadcaster is silent: `POST
+/// /ndi/whep/{source_id}` answered 204 No Content. The reconnect loop repeats it
+/// every 5 s per display (~720 lines/h each). A 201 session start, an error and
+/// every other WHEP request (the session-scoped POST / PATCH / DELETE) are not.
+pub(super) fn is_silent_whep_poll(method: &Method, path: &str, status: StatusCode) -> bool {
+    *method == Method::POST
+        && status == StatusCode::NO_CONTENT
+        && path
+            .strip_prefix("/ndi/whep/")
+            .is_some_and(|source_id| !source_id.is_empty() && !source_id.contains('/'))
+}
+
+fn answers_a_silent_whep_poll<B>(response: &Response<B>) -> bool {
+    response
+        .extensions()
+        .get::<RequestLine>()
+        .is_some_and(|line| is_silent_whep_poll(&line.method, line.uri.path(), response.status()))
+}
+
 /// Polls and assets repeated every few seconds by every open operator tab and
-/// stage display: the resolume / AI status and `/healthz` polls, the NDI
-/// clock and client-stats posts, and the WASM bundle files.
+/// stage display, whatever the method: the resolume / AI status and `/healthz`
+/// polls, the NDI clock and client-stats posts, and the WASM bundle files.
 pub(super) fn is_quiet_path(path: &str) -> bool {
     const POLLS: [&str; 5] = [
         "/healthz",
@@ -96,6 +156,29 @@ pub(super) fn is_quiet_path(path: &str) -> bool {
             .strip_prefix("/ndi/sessions/")
             .and_then(|rest| rest.strip_suffix("/client-stats"))
             .is_some_and(|session_id| !session_id.is_empty() && !session_id.contains('/'))
+}
+
+/// Quiet by path ([`is_quiet_path`]), or a timer-polled GET ([`is_quiet_get_path`]).
+pub(super) fn is_quiet_request(method: &Method, path: &str) -> bool {
+    is_quiet_path(path) || (*method == Method::GET && is_quiet_get_path(path))
+}
+
+/// The list / status GETs a page re-fetches on a timer: the tablet's 10 s
+/// presentation list (`pages/tablet.rs`) and the Settings tab's 5 s pollers (the
+/// Resolume and Android lists in `list_card.rs`, AbleSet + OSC status in
+/// `ableton.rs`, NDI source status in `video_sources.rs`). Only the GET is
+/// quiet: the same paths take a person's POST / PUT / DELETE (create, edit,
+/// remove), and those stay logged.
+pub(super) fn is_quiet_get_path(path: &str) -> bool {
+    const POLLED_GETS: [&str; 6] = [
+        "/bible/presentations",
+        "/integrations/resolume/hosts",
+        "/integrations/android-stage/displays",
+        "/integrations/ableset/status",
+        "/integrations/osc/status",
+        "/integrations/video-sources/status",
+    ];
+    POLLED_GETS.contains(&path)
 }
 
 pub(super) fn request_fields<B>(request: &Request<B>) -> RequestFields {
@@ -120,7 +203,7 @@ pub(super) fn request_fields<B>(request: &Request<B>) -> RequestFields {
 }
 
 fn request_span(request: &Request<Body>) -> Span {
-    if is_quiet_path(request.uri().path()) {
+    if is_quiet_request(request.method(), request.uri().path()) {
         return Span::none();
     }
     let fields = request_fields(request);
@@ -139,11 +222,9 @@ fn request_span(request: &Request<Body>) -> Span {
 mod tests {
     use super::*;
     use crate::router::build_router;
-    use crate::router::tracing_capture::{quoted, Capture};
     use crate::state::AppState;
-    use axum::http::StatusCode;
-    use axum::routing::get;
-    use axum::Router;
+    use crate::tracing_capture::{quoted, Capture};
+    use axum::routing::{delete, get, post};
     use tower::ServiceExt;
 
     const MAKE_SPAN: &str = "tower_http::trace::make_span";
@@ -169,10 +250,16 @@ mod tests {
     /// GET `uri` through `app` as a phone behind the tunnel, drain the body (the
     /// end-of-stream callback fires there) and return the status.
     async fn call(app: &Router, uri: &str) -> StatusCode {
+        call_with(app, Method::GET, uri).await
+    }
+
+    /// `method` `uri` through `app`, like [`call`].
+    async fn call_with(app: &Router, method: Method, uri: &str) -> StatusCode {
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
+                    .method(method)
                     .uri(uri)
                     .header(USER_AGENT, "Mozilla/5.0 (iPhone)")
                     .header("x-forwarded-for", "203.0.113.9")
@@ -240,6 +327,8 @@ mod tests {
 
     #[test]
     fn every_other_path_stays_logged() {
+        // WHEP stays a logged REQUEST (span + response line); only the 204 answer to the
+        // offer POST is dropped, at response time (`is_silent_whep_poll`, tested below).
         for path in [
             "/",
             "/ndi/status",
@@ -255,6 +344,99 @@ mod tests {
             "/integrations/resolume/hosts",
         ] {
             assert!(!is_quiet_path(path), "{path} must be logged");
+        }
+    }
+
+    #[test]
+    fn the_timer_polled_gets_are_quiet_but_a_persons_writes_are_not() {
+        for path in [
+            "/bible/presentations",
+            "/integrations/resolume/hosts",
+            "/integrations/android-stage/displays",
+            "/integrations/ableset/status",
+            "/integrations/osc/status",
+            "/integrations/video-sources/status",
+        ] {
+            assert!(is_quiet_request(&Method::GET, path), "GET {path} is polled");
+            assert!(!is_quiet_path(path), "{path} is quiet by GET only");
+            for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+                assert!(
+                    !is_quiet_request(&method, path),
+                    "{method} {path} is a person's write and stays logged"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_get_nobody_polls_stays_logged_and_the_quiet_paths_ignore_the_method() {
+        for path in [
+            "/bible/presentations/abc",
+            "/bible/presentations/",
+            "/integrations/video-sources",
+            "/integrations/resolume/hosts/abc",
+            "/integrations/android-stage/displays/abc",
+            "/integrations/ableset/settings",
+            "/integrations/osc/status/extra",
+            "/settings/features",
+        ] {
+            assert!(
+                !is_quiet_request(&Method::GET, path),
+                "GET {path} must be logged"
+            );
+        }
+        assert!(is_quiet_request(&Method::POST, "/ndi/client-stats"));
+        assert!(is_quiet_request(&Method::GET, "/healthz"));
+        assert!(is_quiet_request(&Method::GET, "/ui-pkg/presenter_ui.js"));
+    }
+
+    #[test]
+    fn only_a_204_to_the_whep_offer_post_is_a_silent_poll() {
+        let (offer, no_content) = (&Method::POST, StatusCode::NO_CONTENT);
+        assert!(is_silent_whep_poll(
+            offer,
+            "/ndi/whep/STREAM-SNV",
+            no_content
+        ));
+        // A session start and every error stay logged.
+        for status in [
+            StatusCode::CREATED,
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(
+                !is_silent_whep_poll(offer, "/ndi/whep/STREAM-SNV", status),
+                "POST whep answered {status} must be logged"
+            );
+        }
+        // Another method, another path, or a session-scoped WHEP path is not the poll.
+        assert!(!is_silent_whep_poll(
+            &Method::GET,
+            "/ndi/whep/STREAM-SNV",
+            no_content
+        ));
+        assert!(!is_silent_whep_poll(offer, "/ndi/status", no_content));
+        for path in [
+            "/ndi/whep/",
+            "/ndi/whep",
+            "/ndi/whep/a/b",
+            "/ndi/whep/a/b/c",
+        ] {
+            assert!(
+                !is_silent_whep_poll(offer, path, no_content),
+                "POST {path} {no_content} must be logged"
+            );
+        }
+        for method in [Method::DELETE, Method::PATCH, Method::PUT] {
+            assert!(
+                !is_silent_whep_poll(&method, "/ndi/whep/STREAM-SNV", no_content),
+                "{method} whep answered 204 must be logged"
+            );
+            assert!(
+                !is_silent_whep_poll(&method, "/ndi/whep/STREAM-SNV/6f1a9c52", no_content),
+                "{method} whep session answered 204 must be logged"
+            );
         }
     }
 
@@ -314,22 +496,86 @@ mod tests {
         assert!(capture.events(ON_RESPONSE).is_empty());
         assert!(capture.events(ON_EOS).is_empty());
 
+        // The tablet's 10 s list refresh is a quiet GET too (#850 O1 review).
+        let list = call(&app, "/bible/presentations").await;
+        assert_eq!(list, StatusCode::OK);
+        assert!(capture.spans(MAKE_SPAN).is_empty(), "no span for the poll");
+        assert!(capture.events(ON_RESPONSE).is_empty());
+
         // The capture is live: the next, non-quiet request IS logged.
         call(&app, "/bible/active-slide").await;
         assert_eq!(capture.spans(MAKE_SPAN).len(), 1);
         assert_eq!(capture.events(ON_RESPONSE).len(), 1);
     }
 
+    /// A router answering the WHEP shapes with fixed statuses, behind the real
+    /// request log.
+    fn whep_app() -> Router {
+        with_request_log(
+            Router::new()
+                .route("/ndi/whep/idle", post(|| async { StatusCode::NO_CONTENT }))
+                .route("/ndi/whep/live", post(|| async { StatusCode::CREATED }))
+                .route(
+                    "/ndi/whep/busy",
+                    post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+                )
+                .route(
+                    "/ndi/whep/live/s1",
+                    delete(|| async { StatusCode::NO_CONTENT }),
+                )
+                .route("/ndi/other", post(|| async { StatusCode::NO_CONTENT })),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_silent_whep_poll_logs_no_response_line_and_every_other_answer_does() {
+        let capture = Capture::install();
+        let app = whep_app();
+
+        // The silent broadcaster's 5 s reconnect poll: answered 204, no line.
+        let idle = call_with(&app, Method::POST, "/ndi/whep/idle").await;
+        assert_eq!(idle, StatusCode::NO_CONTENT);
+        assert!(
+            capture.events(ON_RESPONSE).is_empty(),
+            "a silent WHEP poll must not log a response line: {:?}",
+            capture.events(ON_RESPONSE)
+        );
+
+        // Everything else about WHEP stays visible: the session start, the 503
+        // back-pressure (response line AND WARN), the teardown DELETE answered
+        // 204, and a 204 from another path.
+        for (method, uri) in [
+            (Method::POST, "/ndi/whep/live"),
+            (Method::POST, "/ndi/whep/busy"),
+            (Method::DELETE, "/ndi/whep/live/s1"),
+            (Method::POST, "/ndi/other"),
+        ] {
+            call_with(&app, method, uri).await;
+        }
+        let responses = capture.events(ON_RESPONSE);
+        let statuses: Vec<Option<&str>> =
+            responses.iter().map(|line| line.field("status")).collect();
+        assert_eq!(
+            statuses,
+            vec![Some("201"), Some("503"), Some("204"), Some("204")],
+            "every non-silent answer keeps its response line: {responses:?}"
+        );
+        let failures = capture.events(ON_FAILURE);
+        assert_eq!(failures.len(), 1, "the 503 stays a WARN: {failures:?}");
+        assert_eq!(failures[0].level, Level::WARN);
+    }
+
     #[tokio::test]
     async fn a_5xx_stays_visible_as_a_warning_even_on_a_quiet_path() {
         let capture = Capture::install();
-        let app = Router::new()
-            .route(
-                "/ndi/time",
-                get(|| async { StatusCode::SERVICE_UNAVAILABLE }),
-            )
-            .route("/boom", get(|| async { StatusCode::SERVICE_UNAVAILABLE }))
-            .layer(request_trace_layer());
+        let app = with_request_log(
+            Router::new()
+                .route(
+                    "/ndi/time",
+                    get(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+                )
+                .route("/boom", get(|| async { StatusCode::SERVICE_UNAVAILABLE })),
+        );
 
         assert_eq!(
             call(&app, "/ndi/time").await,

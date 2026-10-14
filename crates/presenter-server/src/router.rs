@@ -343,7 +343,7 @@ pub fn build_router(state: AppState) -> Router {
         "/test/ndi/kill-pipeline/{source_id}",
         post(integrations::ndi_whep::kill_pipeline_for_test),
     );
-    router
+    let router = router
         .route("/group-colors", get(presentations::get_group_colors))
         // #555 sync + trash. The STATIC /presentations/trash route MUST be
         // registered before the dynamic /presentations/{id} route so matchit
@@ -439,10 +439,9 @@ pub fn build_router(state: AppState) -> Router {
         // files. Static `/stream/api/playback*` + `/stream/playback/*`
         // prefixes; "playback" is a reserved slug, so `/stream/{slug}` never
         // collides.
-        .merge(stream_playback::routes())
-        // #850 O1: one DEBUG request span + response line per request.
-        .layer(request_log::request_trace_layer())
-        .with_state(state)
+        .merge(stream_playback::routes());
+    // #850 O1: one DEBUG request span + response line per request (polls quiet).
+    request_log::with_request_log(router).with_state(state)
 }
 
 /// Application version from Cargo.toml
@@ -759,7 +758,5 @@ mod stream_tests;
 mod sync_tests;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tracing_capture;
 #[cfg(test)]
 mod video_source_tests;
