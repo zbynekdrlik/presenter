@@ -1,10 +1,10 @@
-# DRAFT — awaiting owner approval
+# APPROVED by the owner 2026-10-14 (#852)
 
 # Sermon listening, verse suggestions and interpreter assist (#850 part C + #852) — Design
 
 **Issues:** #850 part C (Presenter listens to the sermon and suggests Bible verses), #852 (interpreter assist:
 live transcript of the English guest, suggested Slovak translation, šepkár tips).
-**Date:** 2026-10-14. **Status:** written spec, NOT approved. Built from the 2026-10-14 draft
+**Date:** 2026-10-14. **Status:** written spec, APPROVED by the owner 2026-10-14 (#852). Built from the 2026-10-14 draft
 (`850c-852-design-draft.md`) plus the owner's decisions of 2026-10-14 (#852).
 **Presenter baseline:** `dev` @ 9c726944 (v0.4.318). **Songplayer baseline:** `dev` @ dd551b7d (v0.81.0).
 **Builds on:** the approved A + B spec `docs/superpowers/specs/2026-10-13-bible-verses-any-device-design.md`
