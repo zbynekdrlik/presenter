@@ -37,7 +37,8 @@ paths:
 - **Rate limit:** exact sliding window per (client IP, lower-cased name) 5 / 60 s + 30 / 60 s overall,
   tokio `Instant`, in memory (reset on restart). One WARN per 60 s per key with `suppressed`. The
   limiter itself is pure (`state/interpreter_tips/rate_limit.rs`, the caller passes `now`), so its
-  tests use explicit instants and never sleep.
+  tests use explicit instants and never sleep. A key that still holds refused-but-unreported tips
+  (`suppressed > 0`) is never forgotten: its next WARN carries the count.
 - **Dismiss / dismiss-all** are single conditional `UPDATE … WHERE dismissed_at IS NULL` calls in the
   repository (first time wins, no read-then-write transaction).
 - **Live event:** `InterpreterTips` = FULL active list, newest first, capped at 20, after every write.
@@ -46,7 +47,10 @@ paths:
   it publishes once at start (seeds the published ids, so a restart mid-service still sends the
   boundary event), then each minute runs retention once per service date and the tick, which
   re-publishes when the active ids changed. The tick reads nothing while the last published list is
-  empty. Tick failures WARN on #484 power-of-two streaks and log ONE recovery line (pinned by
+  empty — EXCEPT after a failed publish: `publish_interpreter_tips` sets `publish_stale` on a failure
+  (and clears it on success, both under `publish_lock`), and the tick publishes while it is set, so a
+  failed seed or create publish is never lost behind an empty `published` (pinned by
+  `a_failed_publish_is_retried_by_the_next_tick_even_when_nothing_was_published`). Tick failures WARN on #484 power-of-two streaks and log ONE recovery line (pinned by
   `a_failing_boundary_check_warns_on_power_of_two_streaks_and_logs_the_recovery`, which takes the
   table away with `ALTER TABLE … RENAME` through `repository().connection()`).
 - **Clock in tests:** `test_support::ManualTipClock::at("…+02:00")` + `set_interpreter_tip_clock`;
@@ -55,6 +59,8 @@ paths:
 - **Client IP** = `integrations::extract_client_ip` (#793). `sender_ip` / `user_agent` are audit
   columns and never appear in a DTO.
 - **Logs:** INFO `presenter::interpreter::tip` (`action` create/dismiss/restore/dismiss_all, `id`,
-  `sender_name`, `client_ip`, `chars`, `duplicate`), pinned with `tracing_capture::Capture`. The
+  `sender_name`, `client_ip`, `chars`, `duplicate`), pinned with `tracing_capture::Capture`. A
+  duplicate create logs the REQUESTER's `sender_name` and `client_ip` plus `duplicate_of` (the earlier
+  tip's id), never the earlier sender. The
   routes are person-triggered (no timer polling), so `router/request_log.rs` quiet lists stay as they
   are.

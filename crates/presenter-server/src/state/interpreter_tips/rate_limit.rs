@@ -80,8 +80,12 @@ impl Window {
         Some(std::mem::take(&mut self.suppressed))
     }
 
+    /// Nothing left to remember: no accepted instant in the window, the WARN
+    /// window is over, and no refusal is waiting to be reported — a key
+    /// holding suppressed refusals stays until its next WARN carries the count.
     fn is_idle(&self, now: Instant, window: Duration) -> bool {
         self.accepted.is_empty()
+            && self.suppressed == 0
             && self
                 .last_warn
                 .is_none_or(|at| now.saturating_duration_since(at) >= window)
@@ -287,6 +291,63 @@ mod tests {
                 }
             ),
             "{verdict:?}"
+        );
+    }
+
+    #[test]
+    fn retry_after_counts_a_started_second_as_a_whole_one() {
+        let mut limiter = TipRateLimiter::new();
+        let base = Instant::now();
+        for _ in 0..5 {
+            assert_eq!(limiter.check(IP, "Peter", base), RateVerdict::Allowed);
+        }
+        assert_eq!(
+            limiter.check(IP, "Peter", base + Duration::from_millis(50_500)),
+            RateVerdict::Refused {
+                scope: RateScope::Sender,
+                retry_after_secs: 10,
+                warn: Some(0)
+            },
+            "9.5 s left rounds up to 10, not down to 9"
+        );
+    }
+
+    #[test]
+    fn a_sender_with_unreported_refusals_is_not_forgotten() {
+        let mut limiter = TipRateLimiter::new();
+        let base = Instant::now();
+        for _ in 0..5 {
+            assert_eq!(limiter.check(IP, "Peter", base), RateVerdict::Allowed);
+        }
+        assert!(matches!(
+            limiter.check(IP, "Peter", secs(base, 1)),
+            RateVerdict::Refused { warn: Some(0), .. }
+        ));
+        assert!(matches!(
+            limiter.check(IP, "Peter", secs(base, 2)),
+            RateVerdict::Refused { warn: None, .. }
+        ));
+        assert_eq!(
+            limiter.check(IP, "Jana", secs(base, 125)),
+            RateVerdict::Allowed
+        );
+        assert_eq!(
+            limiter.senders.len(),
+            2,
+            "Peter's second refusal was never reported, so his entry stays"
+        );
+        for _ in 0..5 {
+            assert_eq!(
+                limiter.check(IP, "Peter", secs(base, 125)),
+                RateVerdict::Allowed
+            );
+        }
+        assert!(
+            matches!(
+                limiter.check(IP, "Peter", secs(base, 126)),
+                RateVerdict::Refused { warn: Some(1), .. }
+            ),
+            "the next WARN carries the refusal that was suppressed before"
         );
     }
 }

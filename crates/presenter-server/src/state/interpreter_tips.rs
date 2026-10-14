@@ -26,6 +26,7 @@ use presenter_core::interpreter_tips::{
 };
 use presenter_persistence::NewInterpreterTip;
 use rate_limit::{RateScope, RateVerdict, TipRateLimiter};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use tokio::time::{interval, Duration, Instant, MissedTickBehavior};
 
@@ -108,8 +109,12 @@ pub(crate) struct InterpreterTipsState {
     /// Held across "read the active list + publish it".
     publish_lock: Arc<tokio::sync::Mutex<()>>,
     /// Ids of the last published list. The minute tick reads the database
-    /// only while it is non-empty.
+    /// only while it is non-empty or the last publish failed.
     published: Arc<Mutex<Vec<i64>>>,
+    /// The last publish FAILED (written under `publish_lock`): the clients
+    /// may be missing a change, so the minute tick publishes again — even
+    /// when `published` is empty — until one succeeds.
+    publish_stale: Arc<AtomicBool>,
 }
 
 impl InterpreterTipsState {
@@ -120,6 +125,7 @@ impl InterpreterTipsState {
             create_lock: Arc::new(tokio::sync::Mutex::new(())),
             publish_lock: Arc::new(tokio::sync::Mutex::new(())),
             published: Arc::new(Mutex::new(Vec::new())),
+            publish_stale: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -142,6 +148,14 @@ impl InterpreterTipsState {
             .published
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = ids;
+    }
+
+    fn set_publish_stale(&self, stale: bool) {
+        self.publish_stale.store(stale, Ordering::Relaxed);
+    }
+
+    fn publish_is_stale(&self) -> bool {
+        self.publish_stale.load(Ordering::Relaxed)
     }
 }
 
@@ -175,7 +189,7 @@ fn ids(tips: &[TipDto]) -> Vec<i64> {
     tips.iter().map(|tip| tip.id).collect()
 }
 
-fn log_tip(action: &'static str, tip: &TipDto, client_ip: &str, duplicate: bool) {
+fn log_tip(action: &'static str, tip: &TipDto, client_ip: &str) {
     tracing::info!(
         target: "presenter::interpreter::tip",
         action,
@@ -183,8 +197,25 @@ fn log_tip(action: &'static str, tip: &TipDto, client_ip: &str, duplicate: bool)
         sender_name = tip.sender_name.as_str(),
         client_ip,
         chars = tip.chars(),
-        duplicate,
+        duplicate = false,
         "šepkár tip"
+    );
+}
+
+/// A create that repeats `earlier`: no row, no event. The line names who sent
+/// the repeat (`sender_name`, `client_ip`) and the tip it matched
+/// (`duplicate_of`, `id` — the tip the sender ends up with).
+fn log_duplicate_tip(earlier: &TipDto, sender_name: &str, client_ip: &str) {
+    tracing::info!(
+        target: "presenter::interpreter::tip",
+        action = "create",
+        id = earlier.id,
+        duplicate_of = earlier.id,
+        sender_name,
+        client_ip,
+        chars = earlier.chars(),
+        duplicate = true,
+        "šepkár tip repeats an earlier one"
     );
 }
 
@@ -241,7 +272,7 @@ impl AppState {
     ) -> anyhow::Result<CreatedTip> {
         let snapshot = self.tips_snapshot().await?;
         if let Some(earlier) = find_recent_duplicate(&snapshot.todays, &valid, snapshot.now) {
-            log_tip("create", earlier, &origin.client_ip, true);
+            log_duplicate_tip(earlier, &valid.sender_name, &origin.client_ip);
             return Ok(CreatedTip {
                 tip: earlier.clone(),
                 duplicate: true,
@@ -261,7 +292,7 @@ impl AppState {
                 created_at: snapshot.now,
             })
             .await?;
-        log_tip("create", &tip, &origin.client_ip, false);
+        log_tip("create", &tip, &origin.client_ip);
         Ok(CreatedTip {
             tip,
             duplicate: false,
@@ -308,7 +339,7 @@ impl AppState {
     ) -> anyhow::Result<TipDto> {
         let now = self.interpreter_tips.clock().now();
         let tip = self.repository.dismiss_interpreter_tip(id, now).await?;
-        log_tip("dismiss", &tip, client_ip, false);
+        log_tip("dismiss", &tip, client_ip);
         self.publish_interpreter_tips_logged().await;
         Ok(tip)
     }
@@ -322,7 +353,7 @@ impl AppState {
         let clock = self.interpreter_tips.clock();
         let today = clock.service_date(clock.now());
         let tip = self.repository.restore_interpreter_tip(id, today).await?;
-        log_tip("restore", &tip, client_ip, false);
+        log_tip("restore", &tip, client_ip);
         self.publish_interpreter_tips_logged().await;
         Ok(tip)
     }
@@ -353,7 +384,13 @@ impl AppState {
     /// ids. Serialized: the last publish always reflects the last commit.
     pub(crate) async fn publish_interpreter_tips(&self) -> anyhow::Result<()> {
         let _serialized = self.interpreter_tips.publish_lock.lock().await;
-        let snapshot = self.tips_snapshot().await?;
+        let snapshot = match self.tips_snapshot().await {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.interpreter_tips.set_publish_stale(true);
+                return Err(err);
+            }
+        };
         let mut tips = snapshot.active();
         tips.truncate(TIP_LIVE_LIST_CAP);
         self.interpreter_tips.set_published_ids(ids(&tips));
@@ -361,6 +398,7 @@ impl AppState {
             service_date: service_date_string(snapshot.today),
             tips,
         });
+        self.interpreter_tips.set_publish_stale(false);
         Ok(())
     }
 
@@ -369,14 +407,18 @@ impl AppState {
             tracing::warn!(
                 target: "presenter::interpreter::tip",
                 ?err,
-                "publishing the šepkár tips failed — clients resync on reconnect"
+                "publishing the šepkár tips failed — the next minute tick publishes again"
             );
         }
     }
 
-    /// The minute boundary check: re-publish when midnight or the 4 h window
-    /// changed the active list. Reads nothing while the last list was empty.
+    /// The minute boundary check: re-publish when the last publish failed, or
+    /// when midnight or the 4 h window changed the active list. Reads nothing
+    /// while the last list was empty and its publish succeeded.
     pub(crate) async fn interpreter_tips_tick(&self) -> anyhow::Result<()> {
+        if self.interpreter_tips.publish_is_stale() {
+            return self.publish_interpreter_tips().await;
+        }
         let published = self.interpreter_tips.published_ids();
         if published.is_empty() {
             return Ok(());
@@ -538,7 +580,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::{last_tips_event, ManualTipClock};
     use super::*;
-    use crate::tracing_capture::Capture;
+    use crate::tracing_capture::{quoted, Capture};
     use tokio::sync::broadcast::error::RecvError;
 
     fn origin() -> TipOrigin {
@@ -780,6 +822,80 @@ mod tests {
         let recovered = capture.events_with_message("šepkár tip boundary check recovered");
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].field("failures"), Some("3"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_publish_is_retried_by_the_next_tick_even_when_nothing_was_published() {
+        let (state, _clock) = state_at("2026-10-18T17:00:00+02:00").await;
+        let now = state.interpreter_tips.clock().now();
+        let tip = state
+            .repository()
+            .insert_interpreter_tip(stored(day(10, 18), now, "stored while the publish failed"))
+            .await
+            .expect("insert");
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute_unprepared(
+            conn,
+            "ALTER TABLE interpreter_tips RENAME TO interpreter_tips_off",
+        )
+        .await
+        .expect("take the table away");
+        // The startup seed publish fails: nothing was ever published.
+        state.publish_interpreter_tips_logged().await;
+        assert!(state.interpreter_tips.publish_is_stale());
+        assert!(
+            state.interpreter_tips_tick().await.is_err(),
+            "the tick tries again while the publish is stale, and fails with the table"
+        );
+
+        sea_orm::ConnectionTrait::execute_unprepared(
+            conn,
+            "ALTER TABLE interpreter_tips_off RENAME TO interpreter_tips",
+        )
+        .await
+        .expect("give the table back");
+        let mut rx = state.live_hub().subscribe();
+        state.interpreter_tips_tick().await.expect("tick");
+        let (date, tips) = last_tips_event(&mut rx).expect("the retry publishes the list");
+        assert_eq!(date, "2026-10-18");
+        assert_eq!(ids(&tips), vec![tip.id]);
+        assert!(!state.interpreter_tips.publish_is_stale());
+
+        state.interpreter_tips_tick().await.expect("tick");
+        assert!(
+            last_tips_event(&mut rx).is_none(),
+            "one successful publish ends the retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_logs_who_repeated_it_and_which_tip_it_matched() {
+        let capture = Capture::install();
+        let (state, _clock) = state_at("2026-10-18T19:00:00+02:00").await;
+        let first = state
+            .create_interpreter_tip(&note("Peter", "same word"), origin())
+            .await
+            .expect("create");
+        let repeat = TipOrigin {
+            client_ip: "192.0.2.7".to_string(),
+            user_agent: None,
+        };
+        let again = state
+            .create_interpreter_tip(&note("Jana", "Same word"), repeat)
+            .await
+            .expect("duplicate");
+        assert!(again.duplicate);
+        let lines = capture.events("presenter::interpreter::tip");
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let line = &lines[1];
+        let first_id = first.tip.id.to_string();
+        assert_eq!(line.level, tracing::Level::INFO);
+        assert_eq!(line.field("action"), Some(quoted("create").as_str()));
+        assert_eq!(line.field("sender_name"), Some(quoted("Jana").as_str()));
+        assert_eq!(line.field("client_ip"), Some(quoted("192.0.2.7").as_str()));
+        assert_eq!(line.field("duplicate"), Some("true"));
+        assert_eq!(line.field("duplicate_of"), Some(first_id.as_str()));
+        assert_eq!(line.field("id"), Some(first_id.as_str()));
     }
 
     #[tokio::test]
