@@ -174,6 +174,24 @@ mod tests {
         assert!(css.contains("font-weight:900;"), "{css}");
     }
 
+    /// #860: the stored shadow px are px at the 1080-px output canvas, emitted in
+    /// `vh` (value / 10.8) so the shadow scales with the text (`size_pct` is `vh`)
+    /// in the box-sized editor preview exactly as it does in OBS at 1080p.
+    #[test]
+    fn shadow_scales_with_the_canvas_height() {
+        let css = text_style_css(&wire_style(serde_json::json!({
+            "shadow": { "xPx": 2.0, "yPx": 2.0, "blurPx": 12.0, "color": "#000000" }
+        })));
+        assert!(
+            css.contains("text-shadow:0.1852vh 0.1852vh 1.1111vh #000000;"),
+            "{css}"
+        );
+        assert!(
+            !css.contains("px "),
+            "no absolute px render value left: {css}"
+        );
+    }
+
     #[test]
     fn no_italic_renders_no_font_style() {
         for extra in [
