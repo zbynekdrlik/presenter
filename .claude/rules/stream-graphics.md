@@ -252,8 +252,7 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   closure.** `<Show>` children are `move` closures that must OWN their captures. A single `line_style(...)`
   String reused across two `<Show>` children (e.g. the same `reference_style` for BOTH the main and
   secondary reference lines) is a double-move compile error — build ONE owned String per `<Show>`
-  child (the verse block (#863) destructures a cloned `LineStyles` array: one String per line).
-  Inside each child, `style=css.clone()`
+  child. Inside each child, `style=css.clone()`
   (the child is `Fn`, may run on every mount, so clone). The reactive text closures (`main_text` etc.)
   ARE reusable in both the `<Show when=>` guard and the `{text}` child because they capture only the
   `Copy` `ctx.stage`/`ctx.bible` signal, so the closure is itself `Copy` (read the needed field via
@@ -305,39 +304,47 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
     - `content: Memo<String>`, a content KEY: the Memo dedups, so unchanged re-derived content never
       animates;
     - a `ContentTransition`;
-    - the wrapper's role / class / style;
+    - the wrapper's role and class;
     - a `fill` flag;
-    - `render: LayerRender` (`Arc<dyn Fn(Signal<String>) -> AnyView + Send + Sync>`): draws ONE
-      layer. It gets the layer's key as a `Signal` read by seq, because `Cut` updates a layer in
-      place (the keyed-`<For>` trap above). `Send + Sync` because the layers render inside a `<Show>`;
-      the `<For>` children closure is built once outside the `view!` and `.clone()`d into it.
-  - `CrossfadeText` (`text: Memo<String>` + the same wrapper props) is a thin wrapper whose layer is
-    the bare text. Lyrics use it: their main and translation lines still fade on their own.
-  - **The VERSE fades as ONE block (#863).** Its key is the four shown lines as a JSON array
-    (`element_verse.rs::block_key`; empty when nothing is shown, the hidden secondary pair is left
-    empty so it never fades the block). Each layer renders the whole stack (`verse_layer`, one line
-    div per non-empty line). The wrapper `.stream-verse__block` fills the Frame (`height:100%`,
-    `grid-template-rows: minmax(0,1fr)`), so every layer is the same box, and each layer is its own
-    vertically centred flex column. Before #863 the four lines were independent `CrossfadeText`s in a
-    centred flex column: an unchanged reference never faded, and it JUMPED (151 px measured on dev)
-    when the taller outgoing text layer was removed and its grid cell shrank. Any two-line element
-    that should move together needs this block pattern, never two `CrossfadeText`s.
-  - Mid-fade a verse has TWO `stream-verse-text` / `stream-verse-reference` nodes (one per layer).
-    A Playwright `toHaveText` on a 2-match locator fails AT ONCE with a strict-mode violation (not
-    retried, it is thrown inside the evaluate), so assert a verse line after `toHaveCount(1)` or on a
-    freshly shown verse. The wrapper role is `stream-verse-block`.
+    - `render: LayerRender` (`Arc<dyn Fn(CrossfadeLayer) -> AnyView + Send + Sync>`): draws ONE
+      layer. `CrossfadeLayer { content, leaving }` are `Signal`s read by seq, because `Cut` updates a
+      layer in place and `leaving` flips later (the keyed-`<For>` trap above). `Send + Sync` because
+      the layers render inside a `<Show>`; the `<For>` children closure is built once outside the
+      `view!` and `.clone()`d into it.
   - Layers stack in ONE CSS grid cell: `.stream-crossfade { display:grid }`, every layer
-    `grid-area:1/1`, and `--fill` (`grid-template-columns: minmax(0,1fr)`) lets lyrics/verse text
-    wrap.
+    `grid-area:1/1`, and `--fill` (`grid-template-columns: minmax(0,1fr)`) lets the text wrap.
   - `Fade` marks old layers leaving and adds the new one. `Cut` replaces atomically (never 2
     layers). `FadeThrough` is described below.
   - The wrapper renders ONLY when a layer exists, so empty or cleared content is DOM-ABSENT. That
     preserves the #710 `toHaveCount(0)` count-0-on-clear/toggle contract.
-  - E2E for "nothing visible moves" (`stream-verse-block-fade.spec.ts`): an init-script rAF recorder
-    gives every reference node a stable id (WeakMap on node identity) and records its top and its
-    EFFECTIVE opacity (its own times every ancestor's; the layer fades, not the line). Assert no
-    node is seen at opacity >= 0.99 at two tops > 2 px apart, and that the reference is sampled
-    mid-fade.
+- **Verse AND lyrics fade as ONE text block (#863, `components/stream/text_block.rs`).** Never give
+  the lines of one element separate crossfades: before #863 each line was its own crossfade in a
+  centred flex column, so an unchanged line (the verse reference, the lyrics translation) never
+  faded and JUMPED (151 px measured on dev) when the taller outgoing layer of the line above was
+  removed and its grid cell shrank.
+  - The element encodes the lines it SHOWS into one key, `block_key(&[String])`: a JSON array, empty
+    when nothing is shown. A toggled-off line (`show_secondary`, `show_main`, `show_translation`) is
+    passed as `""`, so it is never rendered and never fades the block.
+  - `block_render(Vec<BlockLine { role, class, style }>)` is the `LayerRender`: every layer renders
+    the whole stack, one line div per non-empty line, read reactively from the key.
+  - CSS `.stream-text-block` (the wrapper class): `height:100%` + `grid-template-rows:
+    minmax(0,1fr)`, so every layer is the Frame box, and each layer is its own vertically centred
+    flex column. The element container is just `frame_css`.
+  - **A line's `data-role` is withdrawn while its layer leaves** (`data-role=move ||
+    (!leaving.get()).then_some(role)`). Mid-fade both layers hold a line div, and a Playwright
+    `toHaveText` on a 2-match locator fails AT ONCE with a strict-mode violation (thrown inside the
+    evaluate, never retried). So a role always names the copy that stays: specs that assert the new
+    text right after a change keep working, and a clear drops the roles when the fade-out STARTS
+    (the DOM still fades out and empties after it). The wrapper roles are `stream-verse-block` /
+    `stream-lyrics-block`; the layers keep `stream-crossfade-layer`.
+  - E2E for "nothing visible moves" (`stream-verse-block-fade.spec.ts`, verse + lyrics): an
+    init-script rAF recorder records line nodes BY CLASS (`.stream-verse__reference`,
+    `.stream-lyrics__line`; the class stays on the leaving copy, the role does not) with a stable id
+    (WeakMap on node identity), their top and their EFFECTIVE opacity (own times every ancestor's;
+    the layer fades, not the line). Assert no node is seen at opacity >= 0.99 at two tops > 2 px
+    apart, and that the unchanged line is sampled mid-fade. Trigger the FIRST content before
+    `page.goto`: a connect-time cold-load response (`GET /bible/active-slide`, `GET /stage/snapshot`)
+    handled after a live event would overwrite it.
 - **Scene reconcile = a `RwSignal<Vec<SceneLayer>>` + one Effect on `def`+`show_state`.** A
   `config_revision` bump ⇒ rebuild fresh (config edits are not the smooth path); same revision ⇒
   crossfade the base + reconcile overlays individually. Read `layers` only via `with_untracked`/`update`

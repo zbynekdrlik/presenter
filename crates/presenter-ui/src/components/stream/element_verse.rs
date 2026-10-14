@@ -9,13 +9,8 @@
 //! `show_secondary` IS the "translation toggle vs combined SK+translation" the
 //! epic-#718 architecture (§4) describes.
 //!
-//! The four lines crossfade as ONE block (#863). A change of any shown line
-//! fades the whole stack, and each crossfade layer renders the full stack,
-//! vertically centred on its own in the same grid cell. The old block fades
-//! out where it stands and the new one fades in where it will stay, so nothing
-//! visible ever moves. Before #863 each line crossfaded on its own: an
-//! unchanged reference never faded, and it jumped once the taller outgoing
-//! text layer was removed.
+//! The four lines crossfade as ONE block (#863, `text_block.rs`): a change of
+//! any shown line fades the whole stack, and nothing visible ever moves.
 //!
 //! Visibility (AC "BibleCleared ⇒ verse gone / no active content ⇒ nothing"): a
 //! line is shown only when its source string is non-empty (and, for the
@@ -23,25 +18,18 @@
 //! block key, so the element is DOM-empty and the transparent output stays
 //! clean.
 
-use std::sync::Arc;
-
 use leptos::prelude::*;
 use presenter_core::{BibleSlideOutput, ContentTransition, Frame, TextStyle};
 
-use super::style::{frame_css, text_style_css};
-use super::transition::{Crossfade, LayerRender};
+use super::style::frame_css;
+use super::text_block::{block_key, block_render, line_style, BlockLine};
+use super::transition::Crossfade;
 use super::StreamContext;
 
-/// The four lines of a verse block, in render order (#863).
-type VerseLines = [String; 4];
-const TEXT: usize = 0;
-const REFERENCE: usize = 1;
-const SECONDARY_TEXT: usize = 2;
-const SECONDARY_REFERENCE: usize = 3;
-
-/// The lines a block shows for `output`: the secondary pair stays empty when
-/// the element hides it, so a change there never fades the block.
-fn verse_lines(output: &BibleSlideOutput, show_secondary: bool) -> VerseLines {
+/// The lines a block shows for `output`, in render order: text, reference,
+/// secondary text, secondary reference. The secondary pair stays empty when the
+/// element hides it, so a change there never fades the block.
+fn verse_lines(output: &BibleSlideOutput, show_secondary: bool) -> [String; 4] {
     let secondary = |line: &str| {
         if show_secondary {
             line.to_string()
@@ -57,100 +45,35 @@ fn verse_lines(output: &BibleSlideOutput, show_secondary: bool) -> VerseLines {
     ]
 }
 
-/// The block's crossfade content key: empty when no line is shown (the element
-/// is then DOM-empty), else the four lines as a JSON array. JSON escapes quotes
-/// and newlines, so no verse text can fake a line boundary.
-fn block_key(lines: &VerseLines) -> String {
-    if lines.iter().all(String::is_empty) {
-        return String::new();
-    }
-    serde_json::to_string(lines).unwrap_or_default()
-}
-
-/// The lines encoded in a [`block_key`]; an empty or unreadable key shows
-/// nothing.
-fn lines_from_key(key: &str) -> VerseLines {
-    serde_json::from_str(key).unwrap_or_default()
-}
-
-/// Container CSS: just the `Frame` box. The crossfade wrapper fills it and each
-/// layer centres the stacked lines vertically (`.stream-verse__block` CSS).
-fn container_style(frame: &Frame, z: i32) -> String {
-    frame_css(frame, z)
-}
-
-/// A single verse line's CSS: its `TextStyle` plus `width:100%` so `text-align`
-/// positions the text across the full frame width.
-fn line_style(style: &TextStyle) -> String {
-    format!("{}width:100%;", text_style_css(style))
-}
-
-/// The inline CSS of the four lines, in [`VerseLines`] order. Both references
-/// share `reference_style`.
-#[derive(Clone)]
-struct LineStyles([String; 4]);
-
-impl LineStyles {
-    fn new(text: &TextStyle, secondary: &TextStyle, reference: &TextStyle) -> Self {
-        Self([
-            line_style(text),
-            line_style(reference),
-            line_style(secondary),
-            line_style(reference),
-        ])
-    }
-}
-
-/// One line of a block layer, absent while its text is empty. The text is read
-/// reactively: the `Cut` path updates a layer's lines in place.
-fn verse_line(
-    lines: Memo<VerseLines>,
-    index: usize,
-    role: &'static str,
-    class: &'static str,
-    style: String,
-) -> impl IntoView {
-    move || {
-        let text = lines.with(|l| l[index].clone());
-        (!text.is_empty()).then(|| {
-            view! {
-                <div class=class data-role=role style=style.clone()>
-                    {text}
-                </div>
-            }
-        })
-    }
-}
-
-/// One crossfade layer: the whole stack decoded from the layer's block key.
-fn verse_layer(key: Signal<String>, styles: &LineStyles) -> AnyView {
-    let lines = Memo::new(move |_| lines_from_key(&key.get()));
-    let [text_css, reference_css, secondary_css, secondary_reference_css] = styles.0.clone();
-    view! {
-        {verse_line(lines, TEXT, "stream-verse-text", "stream-verse__text", text_css)}
-        {verse_line(
-            lines,
-            REFERENCE,
-            "stream-verse-reference",
-            "stream-verse__reference",
-            reference_css,
-        )}
-        {verse_line(
-            lines,
-            SECONDARY_TEXT,
-            "stream-verse-secondary-text",
-            "stream-verse__text stream-verse__secondary",
-            secondary_css,
-        )}
-        {verse_line(
-            lines,
-            SECONDARY_REFERENCE,
-            "stream-verse-secondary-reference",
-            "stream-verse__reference stream-verse__secondary-reference",
-            secondary_reference_css,
-        )}
-    }
-    .into_any()
+/// The look of the four lines, in [`verse_lines`] order. Both references share
+/// `reference_style`.
+fn verse_block_lines(
+    text: &TextStyle,
+    secondary: &TextStyle,
+    reference: &TextStyle,
+) -> Vec<BlockLine> {
+    vec![
+        BlockLine {
+            role: "stream-verse-text",
+            class: "stream-verse__text",
+            style: line_style(text),
+        },
+        BlockLine {
+            role: "stream-verse-reference",
+            class: "stream-verse__reference",
+            style: line_style(reference),
+        },
+        BlockLine {
+            role: "stream-verse-secondary-text",
+            class: "stream-verse__text stream-verse__secondary",
+            style: line_style(secondary),
+        },
+        BlockLine {
+            role: "stream-verse-secondary-reference",
+            class: "stream-verse__reference stream-verse__secondary-reference",
+            style: line_style(reference),
+        },
+    ]
 }
 
 #[component]
@@ -170,8 +93,13 @@ pub fn ElementVerse(
     content_transition: ContentTransition,
 ) -> impl IntoView {
     let ctx = use_context::<StreamContext>().expect("StreamContext not provided");
-    let container = container_style(&frame, z);
-    let styles = LineStyles::new(&text_style, &secondary_style, &reference_style);
+    // The Frame box only: the block wrapper fills it (`.stream-text-block`).
+    let container = frame_css(&frame, z);
+    let render = block_render(verse_block_lines(
+        &text_style,
+        &secondary_style,
+        &reference_style,
+    ));
 
     // A `Memo` over the (small) Bible output so the block crossfades only on a
     // genuine change of a SHOWN line. `show_secondary` is static element config
@@ -184,7 +112,6 @@ pub fn ElementVerse(
                 .unwrap_or_default()
         })
     });
-    let render: LayerRender = Arc::new(move |key: Signal<String>| verse_layer(key, &styles));
 
     view! {
         <div
@@ -197,7 +124,7 @@ pub fn ElementVerse(
                 content=block
                 transition=content_transition
                 role="stream-verse-block"
-                wrapper_class="stream-verse__block"
+                wrapper_class="stream-text-block"
                 fill=true
                 render=render
             />
@@ -225,26 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn the_key_round_trips_every_line_even_with_separator_like_text() {
-        let lines: VerseLines = [
-            "Riekol: \"Ja som\",\na \"\\\" | ; \u{1f} ]".to_string(),
-            "Ján 3:16-17 (SEB)".to_string(),
-            "\",\"".to_string(),
-            "John 3:16 (KJV)".to_string(),
-        ];
-        assert_eq!(lines_from_key(&block_key(&lines)), lines);
-    }
-
-    #[test]
-    fn nothing_shown_is_the_empty_key_and_back() {
-        let empty = VerseLines::default();
-        assert_eq!(block_key(&empty), "");
-        assert_eq!(lines_from_key(""), empty);
-        assert_eq!(
-            lines_from_key("not json"),
-            empty,
-            "an unreadable key shows nothing"
-        );
+    fn only_hidden_lines_is_nothing_shown() {
         let hidden_only = verse_lines(&output("", "", "Lebo tak", "Ján 3:16"), false);
         assert_eq!(
             block_key(&hidden_only),
@@ -287,18 +195,43 @@ mod tests {
         let a = verse_lines(&output("Text", "Ref", "Secondary A", "Sec ref A"), false);
         let b = verse_lines(&output("Text", "Ref", "Secondary B", "Sec ref B"), false);
         assert_eq!(block_key(&a), block_key(&b));
-        assert_eq!(a[SECONDARY_TEXT], "");
-        assert_eq!(a[SECONDARY_REFERENCE], "");
+        assert_eq!(a[2], "");
+        assert_eq!(a[3], "");
     }
 
     #[test]
-    fn shown_secondary_lines_are_part_of_the_block() {
+    fn shown_secondary_lines_are_part_of_the_block_in_role_order() {
         let lines = verse_lines(&output("Text", "Ref", "Secondary", "Sec ref"), true);
-        assert_eq!(lines[TEXT], "Text");
-        assert_eq!(lines[REFERENCE], "Ref");
-        assert_eq!(lines[SECONDARY_TEXT], "Secondary");
-        assert_eq!(lines[SECONDARY_REFERENCE], "Sec ref");
+        assert_eq!(
+            lines,
+            ["Text", "Ref", "Secondary", "Sec ref"].map(String::from)
+        );
+        let roles: Vec<_> = verse_block_lines(&style(), &style(), &style())
+            .iter()
+            .map(|l| l.role)
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                "stream-verse-text",
+                "stream-verse-reference",
+                "stream-verse-secondary-text",
+                "stream-verse-secondary-reference",
+            ]
+        );
         let other = verse_lines(&output("Text", "Ref", "Secondary 2", "Sec ref"), true);
         assert_ne!(block_key(&lines), block_key(&other));
+    }
+
+    fn style() -> TextStyle {
+        serde_json::from_value(serde_json::json!({
+            "fontFamily": "Inter",
+            "sizePct": 6,
+            "color": "#ffffff",
+            "weight": 700,
+            "align": "center",
+            "lineHeight": 1.2
+        }))
+        .expect("a valid TextStyle")
     }
 }

@@ -105,7 +105,7 @@ pub fn ElementCountdown(
 
     // A countdown MUST swap digits with NO transition — a hard cut per tick (the
     // owner's report #776: "nema tam byt ziaden prechod zatial"). So it renders
-    // ONE stable text node (never `CrossfadeText`): a tick is an in-place text
+    // ONE stable text node (never the `Crossfade` layers): a tick is an in-place text
     // update of the SAME `<span>`, never a re-mount and never a fade. The
     // `content_transition` field stays on `StreamElementProps::Countdown` (no
     // wire/API/schema change) but is deliberately ignored for the countdown kind;

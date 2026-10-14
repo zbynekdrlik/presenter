@@ -2,16 +2,14 @@
 //! generalised to a block in #863).
 //!
 //! `Crossfade` animates content whose VALUE changes over time. The content is a
-//! `Memo<String>` KEY: a lyric line, or the encoded lines of a whole verse
-//! block (#863). It renders the current content plus — transiently, during a
+//! `Memo<String>` KEY: since #863 the encoded lines of a whole text block (the
+//! verse, the lyrics: `text_block.rs`). It renders the current content plus — transiently, during a
 //! `Fade` — the OUTGOING content, each as a stacked `.stream-crossfade__layer`,
 //! so the old fades out while the new fades in. A `Cut` swaps atomically (never
 //! two layers, no overlap frame). A `FadeThrough` (#834) fades the old content
 //! out FIRST and mounts the new one only after it is gone (the pure state lives
 //! in `content_layers.rs`). A caller-supplied [`LayerRender`] draws ONE layer
-//! from its content key, so the layer machinery lives in ONE place:
-//! `CrossfadeText` (a single text line: lyrics) and the verse block both sit on
-//! it.
+//! from its content key, so the layer machinery lives in ONE place.
 //!
 //! Change detection rides the `Memo<String>` the caller passes: a Memo only
 //! notifies on a genuine value change, so re-derived but unchanged content
@@ -35,54 +33,25 @@ use super::content_layers::{fade_through_change, fade_through_settle, ContentLay
 /// opacity transition has fully completed before the node leaves the DOM.
 const FADE_REMOVE_BUFFER_MS: u32 = 80;
 
-/// Draws ONE crossfade layer from its content key (#863).
+/// One crossfade layer as its [`LayerRender`] sees it (#863).
 ///
-/// Called once per layer, when the layer mounts. The key arrives as a REACTIVE
-/// [`Signal`] read by the layer's `seq`, because the `Cut` path updates a
-/// layer's content IN PLACE (same `seq`), and a keyed `<For>` does not re-run
-/// its children for an unchanged key — a captured value would go stale
-/// (#496/#693/#716/#776 keyed-`<For>` reactive-field trap). `Send + Sync`
-/// because the layers render inside a `<Show>`.
-pub type LayerRender = Arc<dyn Fn(Signal<String>) -> AnyView + Send + Sync>;
-
-/// A single text line that crossfades on change (lyrics): a [`Crossfade`] whose
-/// layer is the bare text.
-#[component]
-pub fn CrossfadeText(
-    /// The reactive current text (empty ⇒ no visible content). A `Memo` so the
-    /// crossfade fires only on a genuine value change.
-    text: Memo<String>,
-    /// How a content change animates: `Cut` = instant, `Fade` = crossfade,
-    /// `FadeThrough` = fade out, then fade the new text in (#834).
-    transition: ContentTransition,
-    /// `data-role` for the wrapper (e.g. `"stream-lyrics-main"`) — the element the
-    /// E2E targets for text/geometry/count.
-    #[prop(into)]
-    role: String,
-    /// Extra CSS classes for the wrapper (e.g. `"stream-lyrics__line ..."`); the
-    /// text style + wrapping is carried here and INHERITED by the layers.
-    #[prop(into, optional)]
-    wrapper_class: String,
-    /// Inline CSS for the wrapper (text style + width).
-    #[prop(into, optional)]
-    wrapper_style: String,
-    /// Fill the wrapper width (`minmax(0,1fr)`) so text wraps within the Frame.
-    #[prop(optional)]
-    fill: bool,
-) -> impl IntoView {
-    let render: LayerRender = Arc::new(|text: Signal<String>| (move || text.get()).into_any());
-    view! {
-        <Crossfade
-            content=text
-            transition=transition
-            role=role
-            wrapper_class=wrapper_class
-            wrapper_style=wrapper_style
-            fill=fill
-            render=render
-        />
-    }
+/// Both fields are REACTIVE, read by the layer's `seq`: the `Cut` path updates a
+/// layer's content IN PLACE (same `seq`) and `leaving` flips later, and a keyed
+/// `<For>` does not re-run its children for an unchanged key — a captured value
+/// would go stale (#496/#693/#716/#776 keyed-`<For>` reactive-field trap).
+#[derive(Clone, Copy)]
+pub struct CrossfadeLayer {
+    /// The layer's content key.
+    pub content: Signal<String>,
+    /// `true` once the layer fades out (or is about to be removed). A block
+    /// withdraws its line `data-role`s then, so a role always names the copy
+    /// that stays (#863).
+    pub leaving: Signal<bool>,
 }
+
+/// Draws ONE crossfade layer (#863). Called once per layer, when it mounts.
+/// `Send + Sync` because the layers render inside a `<Show>`.
+pub type LayerRender = Arc<dyn Fn(CrossfadeLayer) -> AnyView + Send + Sync>;
 
 /// The generic content crossfade (#716; generalised in #863): one layer per
 /// content value, drawn by `render`, stacked in one grid cell.
@@ -97,14 +66,9 @@ pub fn Crossfade(
     /// `data-role` for the wrapper — the element the E2E targets.
     #[prop(into)]
     role: String,
-    /// Extra CSS classes for the wrapper; a text style carried here is
-    /// INHERITED by the layers.
+    /// Extra CSS classes for the wrapper (e.g. `stream-text-block`).
     #[prop(into, optional)]
     wrapper_class: String,
-    /// Inline CSS for the wrapper. Empty when the caller styles the content
-    /// inside each layer instead.
-    #[prop(into, optional)]
-    wrapper_style: String,
     /// Fill the wrapper width (`minmax(0,1fr)`) so text wraps within the Frame —
     /// lyrics/verse. Off ⇒ the wrapper is content-sized.
     #[prop(optional)]
@@ -176,15 +140,17 @@ pub fn Crossfade(
         // #496/#693: read `leaving` REACTIVELY by seq — a keyed `<For>` does not
         // re-run children when only the leaving flag flips, so a captured bool
         // would never apply the fade-out class.
+        let leaving = Signal::derive(move || {
+            layers
+                .with(|ls| ls.iter().find(|x| x.seq == seq).map(|x| x.leaving))
+                .unwrap_or(true)
+        });
         let class = move || {
             let mut c = String::from("stream-crossfade__layer");
             if fade {
                 c.push_str(" stream-crossfade__layer--fade");
             }
-            let leaving = layers
-                .with(|ls| ls.iter().find(|x| x.seq == seq).map(|x| x.leaving))
-                .unwrap_or(true);
-            if leaving {
+            if leaving.get() {
                 c.push_str(" stream-crossfade__layer--leaving");
             }
             c
@@ -204,18 +170,14 @@ pub fn Crossfade(
         };
         view! {
             <div class=class data-role="stream-crossfade-layer" style=style>
-                {render(layer_content)}
+                {render(CrossfadeLayer { content: layer_content, leaving })}
             </div>
         }
     };
 
     view! {
         <Show when=has_layers>
-            <div
-                class=wrapper_classes.clone()
-                data-role=role.clone()
-                style=wrapper_style.clone()
-            >
+            <div class=wrapper_classes.clone() data-role=role.clone()>
                 <For each=layers_for_each key=|l| l.seq children=layer_view.clone() />
             </div>
         </Show>
