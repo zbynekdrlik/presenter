@@ -1,5 +1,8 @@
 mod parsers;
 
+#[cfg(test)]
+mod import_fixes_tests;
+
 use anyhow::{anyhow, Context, Result};
 use presenter_core::bible::BibleIngestionBatch;
 use presenter_core::BibleTranslation;
@@ -635,14 +638,14 @@ mod tests {
             [],
         )
         .unwrap();
-        // Include variant marker to test stripping
+        // A translator's note in its real `<FI>[ … ]<Fi>` form (#851 D1).
         conn.execute(
             "INSERT INTO Bible (Book, Chapter, Verse, Scripture) VALUES (?1, ?2, ?3, ?4)",
             (
                 1,
                 1,
                 1,
-                "Na počiatku stvoril Boh nebo a zem. <f>[++]</f> [ Var.: + vám.]",
+                "Na počiatku stvoril Boh nebo a zem. <f>[++]</f> <FI>[ Var.: + vám.]<Fi>",
             ),
         )
         .unwrap();

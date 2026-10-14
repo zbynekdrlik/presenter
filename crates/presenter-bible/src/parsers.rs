@@ -815,9 +815,11 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_mysword_strips_bracketed_variants() {
+    fn sanitize_mysword_strips_bracketed_notes() {
+        // A SEB translator's note is always `<FI>[ … ]<Fi>`; a bare `[ … ]` is
+        // translation text and stays (#851 D1, `import_fixes_tests`).
         assert_eq!(
-            sanitize_mysword_text("text [ Var.: + extra] more"),
+            sanitize_mysword_text("text <FI>[ Var.: + extra]<Fi> more"),
             "text more"
         );
     }

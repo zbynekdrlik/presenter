@@ -64,4 +64,15 @@ mod tests {
             "08f06e2c00ab9ba6aed0980a436856b02feec3435bae117aeb8bdb2b35b444ba",
         );
     }
+
+    #[test]
+    fn the_d1_import_fixes_change_every_stored_digest() {
+        // #851 D1 changed the parsed text of every translation: a digest stored
+        // under parser version 1 must not match, so the next deploy re-imports
+        // all five translations instead of printing "Skipping … (up-to-date)".
+        assert_ne!(
+            compute_source_digest(b"archive", PARSER_VERSION),
+            compute_source_digest(b"archive", 1),
+        );
+    }
 }
