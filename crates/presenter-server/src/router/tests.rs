@@ -257,6 +257,8 @@ async fn home_route_links_match_live_routes() {
         "/ui/bible",
         "/ui/settings",
         "/ui/stream",
+        "/ui/sepkar",
+        "/ui/interpreter",
         "/stream/stream",
         "/stream/timer",
         "/stage",

@@ -58,6 +58,10 @@ fn App() -> impl IntoView {
             view! { <pages::settings::SettingsPage /> }.into_any()
         } else if p == "/ui/stream" {
             view! { <pages::stream_editor::StreamEditorPage /> }.into_any()
+        } else if p == "/ui/interpreter" {
+            view! { <pages::interpreter::InterpreterPage /> }.into_any()
+        } else if p == "/ui/sepkar" {
+            view! { <pages::sepkar::SepkarPage /> }.into_any()
         } else {
             view! {
                 <div data-role="not-found">

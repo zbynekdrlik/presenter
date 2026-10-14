@@ -43,6 +43,13 @@ fn HomeDocument() -> impl IntoView {
                             <li><a href="/stream/timer">"Timer Overlay"</a></li>
                         </ul>
                     </section>
+                    <section class="home__section">
+                        <h2>"Tlmočenie"</h2>
+                        <ul class="home__links">
+                            <li><a href="/ui/sepkar">"Šepkár — tipy pre tlmočníka"</a></li>
+                            <li><a href="/ui/interpreter">"Tlmočník — tablet"</a></li>
+                        </ul>
+                    </section>
                 </main>
             </body>
         </html>

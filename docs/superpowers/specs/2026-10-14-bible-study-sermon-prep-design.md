@@ -106,7 +106,8 @@ service's Bible presentation: no Gmail, no Discord, no helper, no re-checking.
 - A re-import deletes the translation row and its passages by FK cascade (`PRAGMA foreign_keys = ON`,
   `repository/mod.rs:142`), then reinserts, inside one transaction with the FTS triggers dropped
   (`import.rs:31-110`).
-- Every deploy runs `ingest_bibles` with the server stopped. A translation is skipped when
+- Every deploy runs `ingest_bibles` (dev and PP with the server stopped; SNV after the binary swap,
+  with the new server running — see `.claude/rules/bible-import.md`). A translation is skipped when
   SHA-256(file bytes ‖ `PARSER_VERSION`) equals the stored digest (`bible_digest.rs:10`,
   `ingest_bibles.rs:64-87`). Bumping `PARSER_VERSION` (today 1) re-imports all translations.
 - E2E servers ingest through the same binary (`tests/e2e/support.ts` `refreshDevData` →

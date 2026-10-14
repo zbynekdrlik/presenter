@@ -625,3 +625,107 @@ export async function startMockAbleSet(): Promise<MockAbleSetHandle> {
       }),
   };
 }
+
+// ─── Device profiles + phone/tablet fit checks (A+B spec §11; first used by #852) ───
+
+/** iPhone-class phone, portrait. */
+export const PHONE_390 = {
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+  hasTouch: true,
+  userAgent:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+};
+
+/** Landscape tablet, touch (#852 interpreter target, spec §8.2). */
+export const TABLET_1180 = {
+  viewport: { width: 1180, height: 820 },
+  deviceScaleFactor: 2,
+  isMobile: true,
+  hasTouch: true,
+};
+
+/** No visible element reaches past the right edge and the page is not wider than the viewport. */
+export async function assertNoHorizontalOverflow(page: Page): Promise<void> {
+  const report = await page.evaluate(() => {
+    const width = window.innerWidth;
+    const pageOverflow =
+      Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - width;
+    const offenders = Array.from(document.body.querySelectorAll<HTMLElement>("*"))
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.right > width + 1;
+      })
+      .slice(0, 5)
+      .map(
+        (el) =>
+          `${el.tagName.toLowerCase()}[data-role=${el.dataset.role ?? ""}] right=${Math.round(
+            el.getBoundingClientRect().right,
+          )}`,
+      );
+    return { pageOverflow, offenders };
+  });
+  expect(report.offenders, "elements past the right edge").toEqual([]);
+  expect(report.pageOverflow, "page wider than the viewport").toBeLessThanOrEqual(0);
+}
+
+/** Every element the locator matches has a computed font size ≥ `minPx` (iOS zooms below 16 px). */
+export async function assertMinFontSize(locator: Locator, minPx: number): Promise<void> {
+  const sizes = await locator.evaluateAll((els) =>
+    els.map((el) => parseFloat(getComputedStyle(el).fontSize)),
+  );
+  expect(sizes.length, "the locator must match something").toBeGreaterThan(0);
+  for (const size of sizes) expect(size).toBeGreaterThanOrEqual(minPx);
+}
+
+/** Every element the locator matches is at least `minPx` × `minPx`. */
+export async function assertMinTapTarget(locator: Locator, minPx: number): Promise<void> {
+  const boxes = await locator.evaluateAll((els) =>
+    els.map((el) => {
+      const rect = el.getBoundingClientRect();
+      return { w: rect.width, h: rect.height };
+    }),
+  );
+  expect(boxes.length, "the locator must match something").toBeGreaterThan(0);
+  for (const box of boxes) {
+    expect(box.w).toBeGreaterThanOrEqual(minPx);
+    expect(box.h).toBeGreaterThanOrEqual(minPx);
+  }
+}
+
+/**
+ * A one-finger drag through CDP touch events (Playwright's touchscreen only
+ * taps). `whileHeld` runs after the last move and BEFORE the finger lifts, so
+ * a test can assert what the page shows mid-drag.
+ */
+export async function touchDrag(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  steps = 8,
+  whileHeld?: () => Promise<void>,
+): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: from.x, y: from.y }],
+  });
+  for (let i = 1; i <= steps; i += 1) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [
+        {
+          x: from.x + ((to.x - from.x) * i) / steps,
+          y: from.y + ((to.y - from.y) * i) / steps,
+        },
+      ],
+    });
+  }
+  try {
+    if (whileHeld) await whileHeld();
+  } finally {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.detach();
+  }
+}

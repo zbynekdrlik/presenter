@@ -1,3 +1,4 @@
+pub mod passive;
 pub mod stage;
 pub mod stage_diag;
 pub mod stream;

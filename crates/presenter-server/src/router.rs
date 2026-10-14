@@ -5,6 +5,7 @@ mod api_stage;
 mod bible;
 mod features;
 mod integrations;
+mod interpreter_tips;
 mod libraries;
 pub mod network_mode;
 mod playlists;
@@ -167,6 +168,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
         .route("/ui/tablet", get(wasm_ui::wasm_ui_shell))
         .route("/ui/camera", get(wasm_ui::wasm_ui_shell))
+        // #852: šepkár page + interpreter display (WASM pages).
+        .route("/ui/sepkar", get(wasm_ui::wasm_ui_shell))
+        .route("/ui/interpreter", get(wasm_ui::wasm_ui_shell))
         // Settings is now a WASM page (#347 — migrated from settings_script.js)
         .route("/ui/settings", get(wasm_ui::wasm_ui_shell))
         // Stream-graphics operator editor (#713, epic #718) — WASM page.
@@ -420,6 +424,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/clear", post(ai::clear_conversation))
         .route("/ai/status", get(ai::check_status))
         .route("/api/network-mode", get(network_mode::get_network_mode))
+        // #852: šepkár tips for the interpreter (/interpreter/tips*).
+        .merge(interpreter_tips::router())
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).
         .merge(stream::router())
         // #779: lower-third nameplate list + show-state (/stream/api/*). Static

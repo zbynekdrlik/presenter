@@ -78,6 +78,8 @@ impl CompanionVariableState {
                 // this sync path.
                 false
             }
+            // #852: šepkár tips are for the interpreter page, not Companion.
+            crate::live::LiveEvent::InterpreterTips { .. } => false,
         }
     }
 

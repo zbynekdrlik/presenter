@@ -176,11 +176,10 @@ jobs:
           touch ~/.ssh/known_hosts
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          # #674: drop any STALE key for this host first, so a re-deploy never
-          # accumulates duplicate entries for the same host (the dominant
-          # source of this file's unbounded growth on a persistent self-hosted
-          # runner). Best-effort — a first-ever run has nothing to remove.
-          ssh-keygen -R ${{ env.DEPLOY_HOST }} -f ~/.ssh/known_hosts >/dev/null 2>&1 || true
+          # #674: the host's STALE key is replaced (ssh-keygen -R, inside the loop below,
+          # only after a successful scan), so a re-deploy never accumulates duplicate
+          # entries for the same host (the dominant source of this file's unbounded
+          # growth on a persistent self-hosted runner).
           # #674: a bare `ssh-keyscan ... 2>/dev/null` here used to abort the
           # WHOLE step via this step's `-e` shell the instant keyscan itself
           # returned non-zero (a transient connect timeout) — BEFORE ever
@@ -188,14 +187,22 @@ jobs:
           # exactly that failure. Wrapping the call in `if ...; then` exempts
           # it from `-e`; the retry loop then also tolerates a genuine blip.
           KEYSCAN_OK=0
+          SCANNED=$(mktemp)
           for attempt in 1 2 3 4 5; do
-            if ssh-keyscan -T 5 ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null; then
+            if ssh-keyscan -T 5 ${{ env.DEPLOY_HOST }} > "$SCANNED" 2>/dev/null && [ -s "$SCANNED" ]; then
+              # Replace the host's entry only now that fresh keys are in hand: removing it
+              # BEFORE a scan that then failed (host offline) left this shared runner's
+              # ~/.ssh/known_hosts without the host, breaking every later ssh to it (PP
+              # internet outage, 2026-10-14).
+              ssh-keygen -R ${{ env.DEPLOY_HOST }} -f ~/.ssh/known_hosts >/dev/null 2>&1 || true
+              cat "$SCANNED" >> ~/.ssh/known_hosts
               KEYSCAN_OK=1
               break
             fi
             echo "ssh-keyscan attempt $attempt/5 failed, retrying in 3s..."
             sleep 3
           done
+          rm -f "$SCANNED"
           if [ "$KEYSCAN_OK" -ne 1 ] || [ ! -s ~/.ssh/known_hosts ]; then
             echo "::error::ssh-keyscan failed after 5 attempts — known_hosts is empty. Cannot verify host."
             exit 1
@@ -399,25 +406,13 @@ jobs:
           DB_PATH="/opt/presenter/presenter.db"
           if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
             echo "Fresh database - running ProPresenter import"
+            # The STAGED tool: /opt/presenter/import_propresenter is the previous
+            # release's (absent on a first deploy) until the swap step.
             PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
-              /opt/presenter/import_propresenter --root "/opt/presenter/libraries"
+              /opt/presenter/staging.new/import_propresenter --root "/opt/presenter/libraries"
           else
             echo "Existing database found - preserving presentations"
           fi
-          REMOTE_SCRIPT
-
-      - name: Import Bible translations
-        run: |
-          ssh deploy-target << 'REMOTE_SCRIPT'
-          set -e
-          echo "Importing Bible translations..."
-          export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
-          export PRESENTER_BIBLE_KJV=/opt/presenter/bibles/kjv.usfm.zip
-          export PRESENTER_BIBLE_SEB=/opt/presenter/bibles/seb.bbl.mybible.zip
-          export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
-          export PRESENTER_BIBLE_SEVP=/opt/presenter/bibles/sevp.obohu.mybible.zip
-          export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
-          /opt/presenter/ingest_bibles
           REMOTE_SCRIPT
 
       - name: Deploy systemd service
@@ -742,6 +737,31 @@ jobs:
             sudo cloudflared service install ${TUNNEL_TOKEN}
             sudo systemctl enable --now cloudflared
           "
+
+      # #851 D1: AFTER the swap and the /healthz wait, never before. Until the
+      # swap /opt/presenter/ingest_bibles is the PREVIOUS release's binary
+      # (old parser: it skips every translation as up-to-date), and the
+      # staged one would migrate the DB the old service is still running on.
+      # Here the new service has migrated, so ingest's own migration run is a
+      # no-op. Each translation is replaced in ONE transaction (WAL): the
+      # running service keeps reading the old text until the commit, and its
+      # writes wait at most one translation (~1.9 s on SNV's N100, 8.2 s for
+      # all five; an unchanged digest skips the translation). Placed after the
+      # smoke test, the AI check, the NDI self-heal and cloudflared so an
+      # import failure never skips them; the RUST_LOG check stays last.
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          echo "Importing Bible translations..."
+          export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
+          export PRESENTER_BIBLE_KJV=/opt/presenter/bibles/kjv.usfm.zip
+          export PRESENTER_BIBLE_SEB=/opt/presenter/bibles/seb.bbl.mybible.zip
+          export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_SEVP=/opt/presenter/bibles/sevp.obohu.mybible.zip
+          export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
+          /opt/presenter/ingest_bibles
+          REMOTE_SCRIPT
 
       # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
       # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement
