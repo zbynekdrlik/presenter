@@ -3,6 +3,10 @@ paths:
   - "crates/presenter-server/src/ableset.rs"
   - "crates/presenter-server/src/resolume/**"
   - "crates/presenter-ndi/src/manager/**"
+  - "crates/presenter-ndi/src/pipeline/build.rs"
+  - "crates/presenter-ndi/src/pipeline/encoder_timing.rs"
+  - "crates/presenter-server/src/state/integrations.rs"
+  - "crates/presenter-server/src/state/background_tasks.rs"
   - "crates/presenter-server/src/android_stage.rs"
 ---
 
@@ -39,3 +43,33 @@ UNDERLYING contention/retry-storm (e.g. `#741`: `start_pipeline` holding `active
 wait; `#740`: the debug-keystore-per-CI-run behind `adb install -r` failing) is usually a
 cross-cutting/concurrency or build change — split it to its own ticket, don't bundle it with the
 log fix.
+
+## Repeats driven by a TIMER, not a poll loop: count the streak where the OUTCOME is decided (#858)
+
+SNV's silent Resolume made the 30 s NDI reconnect ticker rebuild a whole pipeline every tick and log
+5 INFO lines each (600/h — the entire journal). The repeats were invisible to every log site: the
+count has to live where the outcome is decided and travel IN the outcome.
+
+- **The streak:** `NdiManager.silent_streaks` (`presenter-ndi/src/manager/silent_streak.rs`) counts
+  consecutive `SourceSilent` outcomes per source and hands it out as
+  `PipelineStartError::SourceSilent { attempt }`. It ends when the source reaches Streaming
+  (`reset`, on every promote), on delete (`stop_pipeline` → `reset`), on deactivate
+  (`stop_all` → `clear`) and on a switch / leftover reap (`stop_other_pipelines` →
+  `retain_only(keep)`, which keeps the kept source's streak).
+- **The gate:** `should_log_silent_attempt(attempt)` (= `attempt.is_power_of_two()`, pure, unit-tested)
+  — INFO on attempts 1,2,4,8,..., DEBUG in between, on every line about a silent attempt (the
+  server's #448 line carries `attempt=N`). A 24 h night is 12 INFO lines, not 14 400.
+- **Build-time lines are DEBUG** (`pipeline built`, `pinned to system monotonic clock`, `timestamp guard
+  installed`): a rebuild that never reaches Streaming has nothing worth an INFO line. The recovery
+  line is ONE INFO `NDI pipeline streaming encoder=… timestamp_guard=… silent_attempts_before=N`,
+  logged on every promote.
+- **Recovery = ONE INFO line**, the manager's `NDI pipeline streaming`. The ticker's repair line
+  (`re-activated the source's pipeline`) is DEBUG and reported only when the repair produced a
+  STREAMING pipeline — `reconnect_active_video_source` returns `Some` only then.
+- **Cadence unchanged.** A backoff on the 30 s repair would delay the picture after Resolume starts
+  (acceptance: <= 30 s), and keeping a built pipeline waiting past the 8 s budget changes the #741
+  reservation state machine — both rejected in #858. One VA-API init per 30 s on an idle box is accepted.
+- **Asserting log lines in a test:** a scoped capture subscriber loses events when a sibling test's
+  thread registers the callsite first while only one dispatcher is live (tracing-core caches the
+  interest). Keep a SECOND live `Dispatch` for the test's duration — `capture_events()` in
+  `state/integrations.rs` tests (`silent_streak_logs`).

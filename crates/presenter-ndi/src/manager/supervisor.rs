@@ -520,6 +520,9 @@ impl NdiManager {
             // fresh watcher via `state_watcher_for`.
             Finalize::Promote => {
                 tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
+                // #858: the rebuilt pipeline is a real one — the same single
+                // "NDI pipeline streaming" line (the build-time lines are DEBUG).
+                self.note_streaming(source_id, ndi_name, &reserved);
                 Ok(())
             }
             Finalize::Removed(WaitOutcome::Errored(e)) => Err(anyhow!("pipeline errored: {e}")),

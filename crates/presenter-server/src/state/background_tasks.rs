@@ -151,37 +151,47 @@ impl AppState {
                     let encoder_available =
                         manager_loaded && presenter_ndi::hw_h264_encoder().is_some();
                     if should_auto_restore_ndi(manager_loaded, encoder_available) {
-                        // #747: the read (active source) + activate is done atomically
-                        // under `activation_lock` inside `reconnect_active_video_source`,
-                        // so an operator deactivate cannot land in a read→activate gap
-                        // and get its source revived by this ticker.
-                        match ndi_state
-                            .reconnect_active_video_source(
-                                presenter_persistence::SettingsAuditSource::StartupDefault,
-                                "system",
-                            )
-                            .await
-                        {
-                            Ok(Some(source)) => {
-                                // A repair (no live pipeline). Not "restored":
-                                // a silent broadcaster (#448) also lands here,
-                                // after its own "not yet producing" line.
-                                tracing::info!(
-                                    ndi_name = %source.ndi_name,
-                                    "NDI auto-reconnect: re-activated the source's pipeline"
-                                );
-                            }
-                            Ok(None) => {}
-                            Err(err) => {
-                                tracing::debug!(
-                                    ?err,
-                                    "NDI auto-reconnect: source not yet available or DB query failed"
-                                );
-                            }
-                        }
+                        ndi_state.ndi_reconnect_once().await;
                     }
                 }
             });
+        }
+    }
+
+    /// One NDI auto-reconnect attempt: the 30 s ticker's body (#747, #858).
+    ///
+    /// #747: the read (active source) + activate is done atomically under
+    /// `activation_lock` inside `reconnect_active_video_source`, so an operator
+    /// deactivate cannot land in a read→activate gap and get its source revived
+    /// by this ticker.
+    ///
+    /// #858: the repair is reported (at DEBUG) only when it produced a STREAMING
+    /// pipeline (`Some`). The recovery is already marked by the manager's ONE INFO
+    /// `NDI pipeline streaming` line (with `silent_attempts_before`), so this line
+    /// adds nothing at INFO. A silent broadcaster (#448) is repaired every tick for
+    /// hours; that is not a reconnect and its own "not yet producing" line is
+    /// already power-of-two gated.
+    pub(super) async fn ndi_reconnect_once(&self) {
+        match self
+            .reconnect_active_video_source(
+                presenter_persistence::SettingsAuditSource::StartupDefault,
+                "system",
+            )
+            .await
+        {
+            Ok(Some(source)) => {
+                tracing::debug!(
+                    ndi_name = %source.ndi_name,
+                    "NDI auto-reconnect: re-activated the source's pipeline"
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!(
+                    ?err,
+                    "NDI auto-reconnect: source not yet available or DB query failed"
+                );
+            }
         }
     }
 }

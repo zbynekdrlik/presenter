@@ -256,6 +256,12 @@ pub(crate) struct FakeNdiControl {
     /// `activate_video_source` serializes (or, pre-fix, interleaves) two concurrent
     /// activations. `None` = no gate (every start runs to completion immediately).
     start_gate: Mutex<Option<StartGate>>,
+    /// #858: consecutive silent starts per source, mirroring the real manager's
+    /// silent-start streak (`SourceSilent { attempt }`): bumped by a silent start,
+    /// ended by a streaming start and by `stop_pipeline` / `stop_all`;
+    /// `stop_other_pipelines(keep)` keeps only `keep`'s (it runs after EVERY silent
+    /// activation).
+    silent_attempts: Mutex<std::collections::HashMap<String, u32>>,
 }
 
 /// A one-source start-gate for the #745(a) concurrency test. `start_pipeline` for
@@ -335,6 +341,12 @@ impl FakeNdiControl {
         let fake = Self::default();
         *fake.start_outcome.lock().expect("start_outcome lock") = outcome;
         Arc::new(fake)
+    }
+
+    /// #858: change what `start_pipeline` returns mid-test (a source that was
+    /// silent starts broadcasting).
+    pub(crate) fn set_start_outcome(&self, outcome: StartOutcome) {
+        *self.start_outcome.lock().expect("start_outcome lock") = outcome;
     }
 
     /// A fake whose `whep_signaller_call` returns the chosen outcome (#630).
@@ -482,11 +494,24 @@ impl FakeNdiControl {
             parked.notify_one();
             release.notified().await;
         }
-        match *self.start_outcome.lock().expect("start_outcome lock") {
-            StartOutcome::Ok => Ok(()),
-            StartOutcome::SilentSource => Err(PipelineStartError::SourceSilent {
-                ndi_name: ndi_name.to_string(),
-            }),
+        let outcome = *self.start_outcome.lock().expect("start_outcome lock");
+        match outcome {
+            StartOutcome::Ok => {
+                self.silent_attempts
+                    .lock()
+                    .expect("silent_attempts lock")
+                    .remove(source_id);
+                Ok(())
+            }
+            StartOutcome::SilentSource => {
+                let mut attempts = self.silent_attempts.lock().expect("silent_attempts lock");
+                let attempt = attempts.entry(source_id.to_string()).or_insert(0);
+                *attempt += 1;
+                Err(PipelineStartError::SourceSilent {
+                    ndi_name: ndi_name.to_string(),
+                    attempt: *attempt,
+                })
+            }
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(
                 "simulated start failure"
             ))),
@@ -495,16 +520,28 @@ impl FakeNdiControl {
     }
 
     async fn stop_pipeline(&self, source_id: &str) {
+        self.silent_attempts
+            .lock()
+            .expect("silent_attempts lock")
+            .remove(source_id);
         self.record(NdiCall::StopPipeline {
             source_id: source_id.to_string(),
         });
     }
 
     async fn stop_all(&self) {
+        self.silent_attempts
+            .lock()
+            .expect("silent_attempts lock")
+            .clear();
         self.record(NdiCall::StopAll);
     }
 
     async fn stop_other_pipelines(&self, keep_id: &str) {
+        self.silent_attempts
+            .lock()
+            .expect("silent_attempts lock")
+            .retain(|id, _| id == keep_id);
         self.record(NdiCall::StopOtherPipelines {
             keep_id: keep_id.to_string(),
         });

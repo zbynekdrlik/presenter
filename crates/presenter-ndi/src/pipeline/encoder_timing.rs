@@ -610,7 +610,11 @@ pub(crate) fn install(
     let meter_ok = install_lead_meter(&timing, appsink);
     if guard_ok && meter_ok {
         timing.installed.store(true, Ordering::Relaxed);
-        tracing::info!(
+        // DEBUG, not INFO (#858): built again every 30 s for a silent source. The
+        // manager's single `NDI pipeline streaming` INFO line reports this state
+        // (`timestamp_guard=installed`) once per pipeline that reaches Streaming;
+        // the ERROR below for a missing pad stays ERROR.
+        tracing::debug!(
             encoder = %timing.encoder_factory,
             source = %label,
             "NDI encoder timestamp guard installed on {} (#854)",
