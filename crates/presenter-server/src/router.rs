@@ -760,4 +760,6 @@ mod sync_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tracing_capture;
+#[cfg(test)]
 mod video_source_tests;

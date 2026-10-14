@@ -13,7 +13,8 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -165,6 +166,79 @@ class OutputTests(unittest.TestCase):
             os.unlink(handle.name)
         self.assertEqual(code, 0)
         self.assertEqual(calls[1:], [("POST", "/accounts/<cloudflare-account-id>/access/apps")] * 2)
+
+
+def run_main(config: dict, call, *flags: str) -> tuple[int, str, str]:
+    """main() against a fake API: (exit code, stdout, stderr)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(config, handle)
+    try:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = pa.main(["--config", handle.name, *flags], call=call)
+    finally:
+        os.unlink(handle.name)
+    return code, out.getvalue(), err.getvalue()
+
+
+def page_of(path: str) -> int:
+    return int(parse_qs(urlparse(path).query)["page"][0])
+
+
+class ListingTests(unittest.TestCase):
+    def test_an_app_on_the_second_page_is_not_created_twice(self):
+        config = example_config()
+        foreign = {"id": "other", "domain": "other.example.com", "policies": []}
+        pages = [[foreign], live_apps(config)]
+        calls = []
+
+        def fake(method, path, body):
+            calls.append((method, path))
+            if method != "GET":
+                return 200, {"success": True, "result": {"id": "new"}}
+            page = page_of(path)
+            return 200, {"success": True, "result": pages[page - 1],
+                         "result_info": {"page": page, "per_page": pa.PER_PAGE, "total_pages": len(pages)}}
+
+        code, out, _ = run_main(config, fake, "--apply")
+        self.assertEqual(code, 0)
+        self.assertEqual([(m, page_of(p)) for m, p in calls], [("GET", 1), ("GET", 2)])
+        self.assertNotIn("create", out)
+        self.assertEqual([line.split()[0] for line in out.splitlines()], ["ok"] * 4)
+
+    def test_a_single_page_without_result_info_is_one_request(self):
+        config = example_config()
+        calls = []
+
+        def fake(method, path, body):
+            calls.append(method)
+            return 200, {"success": True, "result": live_apps(config)}
+
+        code, _, _ = run_main(config, fake)
+        self.assertEqual((code, calls), (0, ["GET"]))
+
+    def test_a_runaway_page_count_fails_instead_of_looping(self):
+        calls = []
+
+        def fake(method, path, body):
+            calls.append(method)
+            return 200, {"success": True, "result": [], "result_info": {"total_pages": 10**6}}
+
+        code, _, err = run_main(example_config(), fake, "--apply")
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, ["GET"] * pa.MAX_PAGES)
+        self.assertIn("pages of Access apps", err)
+
+    def test_a_listing_error_stops_before_any_write(self):
+        calls = []
+
+        def fake(method, path, body):
+            calls.append(method)
+            return 403, {"success": False, "errors": [{"message": "denied"}]}
+
+        code, _, err = run_main(example_config(), fake, "--apply")
+        self.assertEqual((code, calls), (1, ["GET"]))
+        self.assertIn("HTTP 403", err)
 
 
 if __name__ == "__main__":

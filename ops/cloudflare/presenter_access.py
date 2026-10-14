@@ -39,12 +39,18 @@ APP_KEYS = ("name", "domain", "type", "session_duration", *APP_DEFAULTS)
 BYPASS_NAME = "presenter on-site network (no login)"
 ALLOW_NAME = "presenter allowed users"
 HEALTHZ_NAME = "presenter healthz probe bypass"
+PER_PAGE = 100
+MAX_PAGES = 50
 
 Call = Callable[[str, str, "dict[str, Any] | None"], "tuple[int, dict[str, Any]]"]
 
 
 class ConfigError(ValueError):
     """The Access config is missing a key or holds an unusable value."""
+
+
+class ListingError(RuntimeError):
+    """Listing the Access apps failed (an HTTP error or a runaway page count)."""
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -168,6 +174,24 @@ def http_call(method: str, path: str, body: dict[str, Any] | None = None) -> tup
             return err.code, {}
 
 
+def list_apps(account_id: str, call: Call) -> list[dict[str, Any]]:
+    """Every Access app of the account: GET pages 1.. until ``result_info.total_pages``.
+
+    One page holds at most PER_PAGE apps; planning against page 1 alone would miss an
+    app that lives on a later page and ``create`` a duplicate of it.
+    """
+    apps: list[dict[str, Any]] = []
+    for page in range(1, MAX_PAGES + 1):
+        code, body = call("GET", f"/accounts/{account_id}/access/apps?per_page={PER_PAGE}&page={page}", None)
+        if code != 200:
+            raise ListingError(f"HTTP {code} {[e.get('message') for e in body.get('errors') or []]}")
+        apps.extend(body.get("result") or [])
+        total_pages = (body.get("result_info") or {}).get("total_pages")
+        if not isinstance(total_pages, int) or page >= total_pages:
+            return apps
+    raise ListingError(f"more than {MAX_PAGES} pages of Access apps")
+
+
 def main(argv: list[str] | None = None, call: Call = http_call) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--apply", action="store_true", help="write the changes (default: dry run)")
@@ -183,13 +207,13 @@ def main(argv: list[str] | None = None, call: Call = http_call) -> int:
     except (OSError, ValueError) as err:
         print(f"::error::access config: {err}", file=sys.stderr)
         return 2
-    code, body = call("GET", f"/accounts/{config['account_id']}/access/apps?per_page=100", None)
-    if code != 200:
-        print(f"::error::listing Access apps failed: HTTP {code} {[e.get('message') for e in body.get('errors', [])]}",
-              file=sys.stderr)
+    try:
+        existing = list_apps(config["account_id"], call)
+    except ListingError as err:
+        print(f"::error::listing Access apps failed: {err}", file=sys.stderr)
         return 1
     failures = 0
-    for action in plan(body.get("result") or [], desired):
+    for action in plan(existing, desired):
         line = describe(action)
         if action["op"] in ("ok", "extra_policy"):
             print(line)
