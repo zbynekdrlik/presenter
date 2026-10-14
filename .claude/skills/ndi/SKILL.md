@@ -416,7 +416,7 @@ curl -s http://<host>/healthz | jq '.ndi_pipelines[] | {source_id, state, consum
   timestampLeadMs30s, encoderTimestampCorrectionMs, encoderTimestampGuard, driftRebuilds}'
 curl -s http://<host>/ndi/snapshot/<id> | jq '{encoderTiming, s: [.sessions[] | {id,
   dropRatio30s, v: .link.verdict, l: .link.latenessMs, c: .client}]}'
-journalctl -u presenter --since -1h | grep -E '#854|ndi_client_stats'
+journalctl -u presenter --since -1h | grep -E '#854|ndi_client_stats|NDI pipeline streaming'
 ```
 Expect: guard `true`, lead `<= 50`, `driftRebuilds` 0, consumers `dropRatio30s ≈ 0`, verdict
 `healthy`. Read `encoderTiming.rawLeadMaxMs`, `framesPulledBack` and `correctionMs` (plus
