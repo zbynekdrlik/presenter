@@ -81,13 +81,19 @@ fn text_of(passages: &[BiblePassage], book: &str, chapter: u16, verse: u16) -> S
 
 #[test]
 fn a_seb_note_goes_with_the_space_before_it() {
-    let texts = mysword_texts(&[(
-        1,
-        2,
-        14,
-        "Tretia rieka je Tigris <FI>[ Pozn.: iný názov.]<Fi>. Tečie na východ <FI>[ Hebr. slovo.]<Fi>.",
-    )]);
-    assert_eq!(texts, ["Tretia rieka je Tigris. Tečie na východ."]);
+    let texts = mysword_texts(&[
+        (
+            1,
+            2,
+            14,
+            "Tretia rieka je Tigris <FI>[ Pozn.: iný názov.]<Fi>. Tečie na východ <FI>[ Hebr. slovo.]<Fi>.",
+        ),
+        (1, 2, 15, "Pôjdeš <FI>[ Pozn.: iný tvar.]<Fi>ďalej."),
+    ]);
+    assert_eq!(
+        texts,
+        ["Tretia rieka je Tigris. Tečie na východ.", "Pôjdeš ďalej."]
+    );
 }
 
 #[test]
@@ -242,8 +248,18 @@ fn the_bundled_kjv_has_no_import_defects() {
         .iter()
         .filter(|p| footnote.is_match(&p.text))
         .count();
-    let markers = passages.iter().filter(|p| p.text.contains('\\')).count();
-    assert_eq!((pilcrows, footnotes, markers), (0, 0, 0));
+    assert_eq!((pilcrows, footnotes), (0, 0));
+    // Survival: no rule may wipe verse text. The pre-D1 parser kept 4,377,552
+    // characters here (footnotes, `¶` and glued headings included); the cleaned
+    // corpus keeps 4,107,378 (94 %), so a floor just under it fails the moment a
+    // rule over-reaches.
+    let empty = passages.iter().filter(|p| p.text.trim().is_empty()).count();
+    let total: usize = passages.iter().map(|p| p.text.chars().count()).sum();
+    assert_eq!(empty, 0);
+    assert!(
+        total >= 4_100_000,
+        "the cleaned KJV kept only {total} chars"
+    );
     assert!(text_of(passages, "Genesis", 2, 14).ends_with("the fourth river is Euphrates."));
     assert!(text_of(passages, "John", 3, 16).starts_with("For God so loved the world"));
     assert_eq!(

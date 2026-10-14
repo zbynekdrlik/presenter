@@ -63,7 +63,7 @@ Ship recipe (every unit's "Ship" step, `<V>` = the unit's version, `<title>` giv
 
 The five inputs the spec implies but its own test list does not exercise, most likely first; each line names the test that pins it in its owning task:
 
-1. **USFM paragraph lines between verses** (`\s1 \tl ב BETH.\tl*` inside PSA 119, `\s1 Written to the Hebrews from Italy by Timothy.` after an epistle's last verse). §5.1 lists five defects; this sixth one is on the walls today in 37 KJV verses (`HEB 13:25` = "Grace be with you all. Amen. Written to the Hebrews…"). Tests: `heading_lines_never_join_a_verse` and `the_bundled_kjv_has_no_import_defects` (Task 2), `heading_lines_are_recognised_by_the_marker_name` (Task 3).
+1. **USFM paragraph lines between verses** (`\s1 \tl ב BETH.\tl*` inside PSA 119, `\s1 Written to the Hebrews from Italy by Timothy.` after an epistle's last verse). §5.1 lists five defects; this sixth one is on the walls today in 35 KJV verses (`HEB 13:25` = "Grace be with you all. Amen. Written to the Hebrews…"). Tests: `heading_lines_never_join_a_verse` and `the_bundled_kjv_has_no_import_defects` (Task 2), `heading_lines_are_recognised_by_the_marker_name` (Task 3).
 2. **Nested and adjacent MySword markup** (SEB Mk 16:20: a bare `[ … ]` shorter ending that itself contains an `<FI>[ … ]<Fi>` note; `<FR>` quote spacing leaving " ." / " ,"; lower-case `<ts>`). The old `\[[^\]]*\]` regex ate from the outer `[` to the inner `]`. Tests: `bare_brackets_belong_to_the_translation_and_stay`, `whitespace_before_punctuation_goes_in_mysword_modules`, `a_roh_heading_is_dropped_from_its_verse` (Task 2).
 3. **Edits at awkward edges** — a dash token at an end cut, an inner verse cut at both edges, a cut verse ending in `.`, every token of a middle verse struck, emphasis on Slovak diacritics. Tests: `an_end_cut_drops_a_trailing_dash_or_comma_but_adds_no_period`, `inner_edges_get_ellipses_but_never_after_a_full_stop`, `a_struck_verse_splits_the_label` (`5-7a, 9`), `emphasis_is_unicode_upper_case_and_struck_beats_emphasized` (Task 8).
 4. **Two devices** — a stale revision, a write landing between load and commit, a reorder with a different item set, an add right after another add. Tests: `a_stale_revision_is_a_conflict_and_changes_nothing` (in-transaction check, Task 16), `a_stale_revision_is_refused_before_anything_changes` (Task 31), `deleting_and_reordering_items` (stale set, Task 34), `item_refusals_are_422_409_and_404` (Task 32).
@@ -89,7 +89,7 @@ The five inputs the spec implies but its own test list does not exercise, most l
 
 ## PR unit D1 — Bible import fixes (v0.4.318, bug fix: RED before GREEN)
 
-Spec §5.1 + T1. Simulated 2026-10-14 on the five archives with a Python mirror of exactly these rules (current parser → D1 parser): KJV `¶` 2,970 → 0, KJV verses with footnote residue `+ N.N` 5,844 → 0, KJV verses with a glued `\s1` line 37 → 0, SEB verses with whitespace before `. , ; : ! ?` 674 → 0, ROH 5 → 0, bare `[…]` kept: SEB 2 / ROH 4 verses, ROH `<TS>` headings 2,785 dropped; KJV verse count 31,102 unchanged; MIL unchanged. (On dev's DB the T1 GLOB counts 548 SEB rows today, not the spec's 490; the target is 0 either way.)
+Spec §5.1 + T1. Simulated 2026-10-14 on the five archives with a Python mirror of exactly these rules (current parser → D1 parser): KJV `¶` 2,970 → 0, KJV verses with footnote residue `+ N.N` 5,844 → 0, KJV verses with a glued `\s1` line 35 → 0, SEB verses with whitespace before `. , ; : ! ?` 674 → 0, ROH 5 → 0, bare `[…]` kept: SEB 2 / ROH 4 verses, ROH `<TS>` headings 2,785 dropped; KJV verse count 31,102 unchanged; MIL unchanged. (On dev's DB the T1 GLOB counts 548 SEB rows today, not the spec's 490; the target is 0 either way.)
 
 ### Task 1: Pre-flight — versions, #859, the "before" values
 
@@ -829,13 +829,15 @@ paths:
   stripped (`\v 16 \wj ¶ \+w For…`). A heading line is never verse text — matched by the
   marker NAME (`s`, `ms`, `mr`, `sr`, `r`, `d`, `sp`, `mt`, `mte`, `cl`, `cd`, `qa`, `h` +
   optional digits + whitespace), not by prefix, so `\sig` is not one. PSA 119's acrostic
-  letters ("ב BETH.") and the 16 Pauline subscriptions ("Written to the Hebrews from Italy by
-  Timothy.") were glued to the verse before them (37 verses) — spec §5.1 did not list it.
+  letters ("ב BETH.", 21 verses) and the 14 epistle subscriptions ("Written to the Hebrews
+  from Italy by Timothy.", Romans to Hebrews) were glued to the verse before them (35 verses
+  in all, counted on the bundled archive by a Python mirror of the parser) — spec §5.1 did
+  not list it.
 - **Obohu (SEVP)** is unchanged: its 3 rows with a space before punctuation stay (the rule is
   MySword-only, spec §5.1).
 - D2a (`markup/`) replaces these helpers, keeps notes and headings as study markup, and must
   reproduce D1's KJV `content` byte for byte (`testdata/kjv-content.sha256`, computed from
-  this parser). The 37 heading lines become `Heading` segments there, not text.
+  this parser). The 35 glued heading lines become `Heading` segments there, not text.
 
 ## Every parse change bumps `PARSER_VERSION`
 
@@ -885,7 +887,7 @@ Commit — paths `.claude/rules/bible-import.md CLAUDE.md`, message `docs(playbo
 
 - [ ] **Step 5: PP** — after `release.yml`: the same `t1.sql` through `ssh -o BatchMode=yes newlevel@companion-pp.lan "sqlite3 -readonly -header /opt/presenter/presenter.db" < "$SCRATCH/t1.sql"` (python fallback if the CLI is missing there), same expected values.
 
-- [ ] **Step 6:** `playbook-review`; comment on #851: D1 shipped, the Task 1 vs Task 4 numbers, the sixth defect (glued `\s1` lines, 37 KJV verses) as a FINDING, and that D2a's `testdata/kjv-content.sha256` must be computed from this parser's KJV output.
+- [ ] **Step 6:** `playbook-review`; comment on #851: D1 shipped, the Task 1 vs Task 4 numbers, the sixth defect (glued `\s1` lines, 35 KJV verses) as a FINDING, and that D2a's `testdata/kjv-content.sha256` must be computed from this parser's KJV output.
 
 ---
 
@@ -7979,7 +7981,7 @@ Expected: `409`; `2 Hebrejom 11:1a (SEB) 1. VIERA je zárukou toho, v čo dúfam
 
 ## Spec gaps found while planning
 
-1. **§5.1 misses a sixth defect.** KJV paragraph lines between verses are appended to the previous verse: 37 verses — PSA 119's 21 acrostic headings ("…utterly. ב BETH.") and 16 Pauline subscriptions (HEB 13:25 = "Grace be with you all. Amen. Written to the Hebrews from Italy by Timothy." on dev today). D1 fixes it (same defect class, and it must precede D2a's KJV content digest); D2a should map those lines to `Heading` segments rather than drop them.
+1. **§5.1 misses a sixth defect.** KJV paragraph lines between verses are appended to the previous verse: 35 verses — PSA 119's 21 acrostic headings ("…utterly. ב BETH.") and 14 epistle subscriptions, Romans to Hebrews (HEB 13:25 = "Grace be with you all. Amen. Written to the Hebrews from Italy by Timothy." on dev today). D1 fixes it (same defect class, and it must precede D2a's KJV content digest); D2a should map those lines to `Heading` segments rather than drop them.
 2. **§15 sizes are ≈ 2.1× low.** Measured (rustfmt-formatted, non-blank, non-comment, tests included): D1 ≈ 390, P1 ≈ 636, P2 ≈ 1,100, P3 ≈ 720, P4 ≈ 2,200 — ≈ 5,050 lines vs ≈ 2,900 estimated; the DTO layer and SeaORM's verbosity dominate. Re-cut into D1, P1, P2a, P2b, P3, P4a–P4d (nine PRs to M1). P3 stays ≈ 720: generation's only production caller is the commit path, whose only P3 caller is the character-limit pass — any split leaves dead code at a PR head (`-D warnings`). If the owner prefers fewer release cycles, P2a+P2b (≈ 1,100) and P4b–P4d (≈ 1,540) can each ship as one PR by waiving the cap.
 3. **§7.1 "entities in `entities.rs`"**: that file is at 927 production lines (not in the §4 near-cap list); the sermon entities go to `entities/sermon.rs`, re-exported as `entities::{bible_sermon, bible_sermon_item}`.
 4. **§7.1 `sermon_date` wiring**: the spec adds it to the core types and the UI DTOs in P2 but never mentions the server's router DTOs (`BiblePresentationSummaryDto` / `BiblePresentationDetailDto`), without which it never reaches the wire. The plan adds it there in P4b and leaves the UI DTOs to H1, their first consumer (§15 calls P1–P4 "server only").

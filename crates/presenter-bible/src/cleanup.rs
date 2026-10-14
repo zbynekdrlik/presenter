@@ -1,7 +1,8 @@
 //! #851 D1 import fixes (spec §5.1): the spans a verse must not carry.
 //!
-//! - MySword (SEB, ROH, MIL): a translator's note is `<FI>[ … ]<Fi>`; it goes,
-//!   with the whitespace before it. A BARE `[ … ]` is translation text (ROH
+//! - MySword (SEB, ROH, MIL): a translator's note is `<FI>[ … ]<Fi>`; it goes
+//!   and leaves one space (the whitespace pass and the punctuation rule below
+//!   remove it where it is not needed). A BARE `[ … ]` is translation text (ROH
 //!   Mt 17:21 "[a pôstom]", SEB 1 Thes 3:13 "[Amen.]") and stays. A
 //!   `<TS>…<Ts>` span is a section heading (ROH, 2,785 verses); it goes. After
 //!   the tags are stripped, whitespace before `. , ; : ! ?` goes (the modules'
@@ -42,9 +43,12 @@ fn replace_all<'a>(re: &Option<Regex>, text: &'a str, with: &str) -> Cow<'a, str
 }
 
 /// MySword: the verse without its `<FI>[ … ]<Fi>` notes and `<TS>…<Ts>`
-/// headings. Runs BEFORE the tags are stripped.
+/// headings. A note (with the whitespace around it) leaves ONE space, so two
+/// words it sat between never fuse; the whitespace normalization and
+/// `drop_space_before_punctuation` take the leftover space away. Runs BEFORE
+/// the tags are stripped.
 pub(crate) fn strip_mysword_notes_and_headings(input: &str) -> String {
-    let without_notes = replace_all(&MYSWORD_NOTE_RE, input, "");
+    let without_notes = replace_all(&MYSWORD_NOTE_RE, input, " ");
     replace_all(&MYSWORD_HEADING_RE, &without_notes, "").into_owned()
 }
 
@@ -98,7 +102,7 @@ mod tests {
     fn a_mysword_note_needs_its_fi_wrapper() {
         assert_eq!(
             strip_mysword_notes_and_headings("Rieka <FI>[ Pozn.: iný názov.]<Fi>. Tečie"),
-            "Rieka. Tečie"
+            "Rieka . Tečie"
         );
         assert_eq!(
             strip_mysword_notes_and_headings("iba modlitbou [a pôstom]."),
@@ -107,6 +111,22 @@ mod tests {
         assert_eq!(
             strip_mysword_notes_and_headings("<FI>slovo<Fi> ostáva"),
             "<FI>slovo<Fi> ostáva"
+        );
+    }
+
+    #[test]
+    fn a_mysword_note_between_words_leaves_a_gap() {
+        assert_eq!(
+            strip_mysword_notes_and_headings("slovo <FI>[ Pozn.: iný názov.]<Fi>ďalšie"),
+            "slovo ďalšie"
+        );
+        assert_eq!(
+            strip_mysword_notes_and_headings("slovo<FI>[ Pozn.]<Fi>ďalšie"),
+            "slovo ďalšie"
+        );
+        assert_eq!(
+            strip_mysword_notes_and_headings("slovo  <FI> [ Pozn.] <Fi>ďalšie"),
+            "slovo ďalšie"
         );
     }
 

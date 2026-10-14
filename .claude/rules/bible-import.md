@@ -11,7 +11,9 @@ paths:
 ## What a verse may carry (`presenter-bible/src/cleanup.rs`)
 
 - **MySword (SEB, ROH, MIL).** `<FI>[ … ]<Fi>` is a translator's note: it goes WITH the
-  whitespace before it (else "Tigris ." on the wall). A BARE `[ … ]` is translation text
+  whitespace around it, leaving ONE space (so "slovo <FI>[…]<Fi>ďalšie" never fuses into
+  "slovoďalšie"; the whitespace pass and the punctuation rule below drop the space where it is
+  not needed, else "Tigris ." would reach the wall). A BARE `[ … ]` is translation text
   (ROH Mt 17:21 "[a pôstom]", SEB 1 Thes 3:13 "[Amen.]", SEB Mk 16:20's bracketed shorter
   ending, which itself contains an `<FI>` note): it stays, the preacher strikes it per sermon
   item. `<TS>…<Ts>` is a section heading (ROH, 2,785 verses): it goes, case-insensitive. After
@@ -49,7 +51,8 @@ the constant.
   (`import_fixes_tests.rs` `mysword_archive`) — made-up sentences in the real markup, never
   committed module text beyond the spec's own quotes.
 - The KJV is public domain and stays in `data/bibles/`: `the_bundled_kjv_has_no_import_defects`
-  parses the real zip (31,102 verses, 0 `¶`, 0 footnote residue `+ N.N`, 0 backslashes).
+  parses the real zip (31,102 verses, 0 `¶`, 0 footnote residue `+ N.N`, no empty verse, and a
+  survival floor of 4,100,000 characters in total: pre-D1 4,377,552, cleaned 4,107,378).
 - A fixture that pins the old wrong behaviour is corrected IN THE RED COMMIT with the reason in
   the message (D1: two fixtures wrote a note without its `<FI>` wrapper and asserted it vanishes).
 - New patterns are `LazyLock<Option<Regex>>` with `every_pattern_compiles` (no `expect` in new
