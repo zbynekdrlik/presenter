@@ -154,11 +154,13 @@ chmod +x /tmp/ai-eval-bin/ai_eval
 #    bible-authoring/adversarial cases ALSO need the 5 env vars below set FIRST (LOCAL files,
 #    never network — crates/presenter-bible/src/lib.rs default_translation_specs; unset ⇒ drive
 #    exits NON-ZERO naming the unseeded cases, see "Smoke-run defect fixes" below).
+#    KJV is in the repo; the other four are licence-restricted and live in the private repo
+#    (#859): git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private
 export PRESENTER_BIBLE_KJV=$(pwd)/data/bibles/kjv.usfm.zip
-export PRESENTER_BIBLE_SEB=$(pwd)/data/bibles/seb.bbl.mybible.zip
-export PRESENTER_BIBLE_ROHACEK=$(pwd)/data/bibles/rohacek.bbl.mybible.zip
-export PRESENTER_BIBLE_SEVP=$(pwd)/data/bibles/sevp.obohu.mybible.zip
-export PRESENTER_BIBLE_MILOST=$(pwd)/data/bibles/milost.bbl.mybible.zip
+export PRESENTER_BIBLE_SEB=$(pwd)/data/bibles-private/seb.bbl.mybible.zip
+export PRESENTER_BIBLE_ROHACEK=$(pwd)/data/bibles-private/rohacek.bbl.mybible.zip
+export PRESENTER_BIBLE_SEVP=$(pwd)/data/bibles-private/sevp.obohu.mybible.zip
+export PRESENTER_BIBLE_MILOST=$(pwd)/data/bibles-private/milost.bbl.mybible.zip
 
 /tmp/ai-eval-bin/ai_eval drive --candidate-url https://openrouter.ai/api/v1 --model google/gemini-3.8-flash \
   --corpus-dir scripts/dev/ai-eval/corpus --traces-dir scripts/dev/ai-eval/traces
@@ -180,7 +182,8 @@ defects, all fixed (this doc section is the corrected recipe):
 
 - **The 5 bible env vars above are MANDATORY for bible-authoring/adversarial slices, and
   `drive` now enforces this loudly.** `PRESENTER_BIBLE_KJV/SEB/ROHACEK/SEVP/MILOST` must each
-  point at the matching zip under `data/bibles/` — `AppState::refresh_default_bible_translations`
+  point at the matching zip (KJV under `data/bibles/`, the other four under the private clone
+  `data/bibles-private/`, #859) — `AppState::refresh_default_bible_translations`
   reads these LOCAL files (never the network — the "needs network access" wording in an earlier
   version of this harness was simply wrong). **Unset a var and `drive` now exits NON-ZERO**,
   printing exactly which case(s) could not be seeded and why, and marks each such trace
