@@ -267,6 +267,11 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
 - **Shared text-style CSS helpers live in `components/stream/style.rs`** (`frame_css`, `text_style_css`,
   `css_font_family`/`css_align`/`css_justify`) — used by countdown/lyrics/verse. Add a new text element
   by reusing these, not by re-inlining the mapping (the #709 countdown was refactored onto them).
+- **Shadow px are px at the 1080-px canvas, emitted in `vh` (#860).** `Shadow.{x_px,y_px,blur_px}` render
+  as `value / 10.8` `vh` (`style.rs::px_at_1080_to_vh`, four decimals), because the font size is `vh` and
+  the editor preview iframe is box-sized, not a scaled 1920×1080 page: an absolute-px shadow was 2-2.4×
+  too big there relative to the text. OBS at 1080p is unchanged, no data migration. NEVER add another
+  absolute-px render value to the stream output (every length scales with the canvas height: `vh`/`%`).
 
 ## Transitions — scene crossfade + content fade/cut (#716)
 
