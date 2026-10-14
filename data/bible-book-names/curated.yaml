@@ -1,0 +1,114 @@
+# Hand-curated inputs of scripts/dev/gen_bible_book_names.py (#850 spec §5.2).
+# Regenerate after any edit: python3 scripts/dev/gen_bible_book_names.py
+
+# Keys of at most two letters (folded: ordinal digit + letters) -> book codes,
+# best first. The resolver puts these first, then the other matches by score.
+# Source: #850 Finding 6 / the "ambiguous short inputs" table.
+short_defaults:
+  e: [EPH, EZK, EXO, EZR]
+  ez: [EZK, EZR]
+  f: [PHP, PHM]
+  g: [GEN, GAL]
+  h: [HEB, HOS, HAB, HAG]
+  j: [JHN, JER, JOB, JAS, JOS, JOL]
+  jd: [JUD, JDG]
+  jn: [JHN, 1JN, 2JN, 3JN, JON]
+  jo: [JOB, JOS, JOL, JON, JHN]
+  ju: [JUD, JDG]
+  kr: [1KI, 2KI, 1CH, 2CH]
+  l: [LUK, LEV, LAM]
+  m: [MAT, MRK, MIC, MAL]
+  na: [LAM, NAM]
+  pt: [1PE, 2PE]
+  r: [ROM, RUT, REV]
+  s: [ACT, JDG, ZEP, 1SA]
+  z: [PSA, REV, HEB, ZEC, LAM, ZEP]
+  za: [PSA, ZEC, LAM]
+  1p: [1PE, 1CH]
+  2p: [2PE, 2CH]
+
+# Initialisms matched BEFORE folding (BPRP slk marks "PŠ" normalize: none);
+# folded they would collide with Psalms ("ps").
+no_fold:
+  - {form: "P.Š.", code: SNG}
+  - {form: "PŠ", code: SNG}
+
+# (form, code) pairs dropped from every source. "Ab" is Habakkuk in SEP and
+# BPRP; Obadiah is "Abd" / "Ob.".
+remove:
+  - {form: "Ab", code: OBA}
+
+# Forms no source carries. "Mr" (Mark) is used in ai/style_guide.md.
+# SEB's stored "Filimonovi" (sic) comes from presenter-stored.json — keep it.
+add:
+  - {form: "Mr", code: MRK, tier: 1}
+
+# OpenBible.info cross-reference votes per book, rank 1 = most cited
+# (https://a.openbible.info/data/cross-references.zip, CC-BY, 2026-10-12).
+frequency_rank:
+  GEN: 16
+  EXO: 19
+  LEV: 30
+  NUM: 28
+  DEU: 12
+  JOS: 33
+  JDG: 46
+  RUT: 63
+  1SA: 27
+  2SA: 39
+  1KI: 32
+  2KI: 38
+  1CH: 41
+  2CH: 29
+  EZR: 53
+  NEH: 47
+  EST: 58
+  JOB: 21
+  PSA: 1
+  PRO: 8
+  ECC: 43
+  SNG: 57
+  ISA: 2
+  JER: 6
+  LAM: 49
+  EZK: 15
+  DAN: 31
+  HOS: 40
+  JOL: 52
+  AMO: 50
+  OBA: 66
+  JON: 61
+  MIC: 44
+  NAM: 60
+  HAB: 55
+  ZEP: 56
+  HAG: 59
+  ZEC: 35
+  MAL: 51
+  MAT: 4
+  MRK: 22
+  LUK: 7
+  JHN: 3
+  ACT: 9
+  ROM: 5
+  1CO: 14
+  2CO: 17
+  GAL: 25
+  EPH: 13
+  PHP: 26
+  COL: 23
+  1TH: 36
+  2TH: 48
+  1TI: 37
+  2TI: 34
+  TIT: 45
+  PHM: 64
+  HEB: 11
+  JAS: 24
+  1PE: 18
+  2PE: 42
+  1JN: 20
+  2JN: 62
+  3JN: 65
+  JUD: 54
+  REV: 10
