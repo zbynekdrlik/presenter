@@ -14,6 +14,14 @@
  *    name, and the slug and OBS URL stay.
  *  - Phone width: the open form causes no horizontal scroll.
  *
+ * #855: delete an output from the bar. The inline confirmation names the
+ * output and its OBS address; „Zrušiť" / Escape keep it; „Zmazať" removes it
+ * from the bar and the server and moves the editor to the first remaining
+ * output. The seeded `stream` output (Companion's default) has its button
+ * disabled with the reason in the tooltip. A delete the server answers with a
+ * real 404 (another operator was first) is a Slovak error toast plus a list
+ * re-sync.
+ *
  * Clean console is asserted last in every test.
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -52,11 +60,36 @@ const nameField = (page: Page) => page.locator('[data-role="stream-output-name"]
 const slugPreview = (page: Page) => page.locator('[data-role="stream-output-slug"]');
 const saveButton = (page: Page) => page.locator('[data-role="stream-output-save"]');
 const formError = (page: Page) => page.locator('[data-role="stream-output-error"]');
+const deleteButton = (page: Page) => page.locator('[data-role="stream-output-delete"]');
+const deleteConfirm = (page: Page) => page.locator('[data-role="stream-output-delete-confirm"]');
+const deleteYes = (page: Page) => page.locator('[data-role="stream-output-delete-confirm-yes"]');
+const deleteCancel = (page: Page) =>
+  page.locator('[data-role="stream-output-delete-confirm-cancel"]');
+const toast = (page: Page) => page.locator('[data-role="toast"]');
+const sceneCard = (page: Page, id: number) =>
+  page.locator(`[data-role="stream-scene"][data-scene-id="${id}"]`);
 
 async function listOutputs(page: Page): Promise<OutputSummary[]> {
   const res = await page.request.get(`${baseURL}/stream/api/outputs`);
   expect(res.ok()).toBeTruthy();
   return (await res.json()) as OutputSummary[];
+}
+
+async function createOutput(page: Page, slug: string, name: string): Promise<void> {
+  const res = await page.request.post(`${baseURL}/stream/api/outputs`, { data: { slug, name } });
+  expect(res.ok(), `create output ${slug} -> ${res.status()}`).toBeTruthy();
+}
+
+/** HTTP status of an output's def: 200 while it exists, 404 once deleted. */
+async function defStatus(page: Page, slug: string): Promise<number> {
+  return (await page.request.get(`${baseURL}/stream/api/outputs/${slug}/def`)).status();
+}
+
+/** The slugs the bar's select lists, in the order the operator sees them. */
+async function barSlugs(page: Page): Promise<string[]> {
+  return outputSelect(page)
+    .locator("option")
+    .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
 }
 
 async function openEditor(page: Page, output?: string): Promise<void> {
@@ -67,6 +100,24 @@ async function openEditor(page: Page, output?: string): Promise<void> {
   if (output) {
     await expect(outputSelect(page)).toHaveValue(output);
   }
+}
+
+/**
+ * `openEditor` on `slug`, and wait until the editor's own mount requests for
+ * it (def, plate list, active plate) were answered. A test that changes the
+ * output behind the editor's back must not race those reads: a late one would
+ * 404 with a URL of its own, or a "Načítanie zlyhalo" toast would replace the
+ * toast under test.
+ */
+async function openEditorSettled(page: Page, slug: string): Promise<void> {
+  const answered = ["def", "nameplates", "nameplates/active"].map((tail) =>
+    page.waitForResponse(
+      (res) =>
+        res.url() === `${baseURL}/stream/api/outputs/${slug}/${tail}` &&
+        res.request().method() === "GET",
+    ),
+  );
+  await Promise.all([...answered, openEditor(page, slug)]);
 }
 
 test("#842 a new output is created from its name, selected, and its OBS URL shown", async ({
@@ -214,6 +265,273 @@ test("#842 a click on the OBS URL selects all of it, and an empty rename is refu
   await nameField(page).fill("   ");
   await saveButton(page).click();
   await expect(formError(page)).toHaveText("Zadaj názov výstupu.");
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#855 an output is deleted from the bar after a confirmation, and the editor moves to the first remaining one", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const n = Date.now() % 100_000;
+  const slug = `del-855-${n}`;
+  const name = `Na zmazanie ${n}`;
+  await createOutput(page, slug, name);
+  const scene = await page.request.post(`${baseURL}/stream/api/outputs/${slug}/scenes`, {
+    data: { name: `Scéna ${n}`, kind: "base" },
+  });
+  expect(scene.ok(), `create scene -> ${scene.status()}`).toBeTruthy();
+  const sceneId = (await scene.json()).id as number;
+
+  await openEditor(page, slug);
+  await expect(sceneCard(page, sceneId)).toBeVisible({ timeout: 15_000 });
+  await expect(deleteButton(page)).toBeEnabled();
+  await expect(deleteConfirm(page)).toHaveCount(0);
+
+  // The confirmation names the output, its OBS address and what goes with it,
+  // and nothing is deleted before it is answered.
+  await deleteButton(page).click();
+  await expect(deleteConfirm(page)).toBeVisible();
+  await expect(deleteConfirm(page).locator('[data-role="stream-output-delete-name"]')).toHaveText(
+    `Zmazať výstup „${name}“?`,
+  );
+  await expect(deleteConfirm(page).locator('[data-role="stream-output-delete-url"]')).toHaveText(
+    `${baseURL}/stream/${slug}`,
+  );
+  await expect(
+    deleteConfirm(page).locator('[data-role="stream-output-delete-effects"]'),
+  ).toContainText("scény, prvky a menovky");
+  expect(await defStatus(page, slug)).toBe(200);
+
+  // „Zrušiť" keeps the output.
+  await deleteCancel(page).click();
+  await expect(deleteConfirm(page)).toHaveCount(0);
+  expect(await defStatus(page, slug)).toBe(200);
+  await expect(outputSelect(page)).toHaveValue(slug);
+
+  // Escape cancels too.
+  await deleteButton(page).click();
+  await deleteCancel(page).focus();
+  await page.keyboard.press("Escape");
+  await expect(deleteConfirm(page)).toHaveCount(0);
+  expect(await defStatus(page, slug)).toBe(200);
+  await expect(outputSelect(page)).toHaveValue(slug);
+
+  // „Zmazať": gone from the bar and the server, the editor is on the first
+  // remaining output.
+  const first = (await barSlugs(page)).find((candidate) => candidate !== slug);
+  expect(first, "another output exists").toBeTruthy();
+  const firstDef = await page.request.get(`${baseURL}/stream/api/outputs/${first}/def`);
+  const firstScenes = ((await firstDef.json()) as { scenes: Array<{ id: number }> }).scenes;
+  await deleteButton(page).click();
+  await deleteYes(page).click();
+
+  await expect(deleteConfirm(page)).toHaveCount(0);
+  await expect(outputSelect(page).locator(`option[value="${slug}"]`)).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect(outputSelect(page)).toHaveValue(first as string);
+  await expect(urlField(page)).toHaveValue(`${baseURL}/stream/${first}`);
+  await expect.poll(() => new URL(page.url()).searchParams.get("output")).toBe(first);
+  await expect(toast(page)).toHaveText(`Výstup ${name} bol zmazaný.`);
+  await expect(toast(page)).toHaveAttribute("data-state", "success");
+  await expect(sceneCard(page, sceneId)).toHaveCount(0);
+  if (firstScenes.length > 0) {
+    await expect(sceneCard(page, firstScenes[0].id)).toBeVisible({ timeout: 15_000 });
+  }
+  expect(await defStatus(page, slug), "the deleted output's def is gone").toBe(404);
+  expect((await listOutputs(page)).some((output) => output.slug === slug)).toBe(false);
+
+  // The deleted output does not come back after a reload.
+  await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await expect(outputSelect(page).locator("option")).not.toHaveCount(0, { timeout: 15_000 });
+  await expect(outputSelect(page)).toHaveValue(first as string);
+  await expect(outputSelect(page).locator(`option[value="${slug}"]`)).toHaveCount(0);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#855 the seeded stream output cannot be deleted, and the button follows the selected output", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const n = Date.now() % 100_000;
+  const slug = `keep-855-${n}`;
+  await createOutput(page, slug, `Ostáva ${n}`);
+
+  await openEditor(page, "stream");
+  await expect(deleteButton(page)).toBeDisabled();
+  await expect(deleteButton(page)).toHaveAttribute(
+    "title",
+    "Predvolený výstup pre Companion – nedá sa zmazať",
+  );
+  await expect(deleteConfirm(page)).toHaveCount(0);
+
+  await outputSelect(page).selectOption(slug);
+  await expect(outputSelect(page)).toHaveValue(slug);
+  await expect(deleteButton(page)).toBeEnabled();
+  await outputSelect(page).selectOption("stream");
+  await expect(outputSelect(page)).toHaveValue("stream");
+  await expect(deleteButton(page)).toBeDisabled();
+
+  expect(await defStatus(page, "stream"), "the stream output still exists").toBe(200);
+  expect(await defStatus(page, slug), "the other output was not touched").toBe(200);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#855 a delete of an output another operator already removed is an error toast and re-syncs the bar", async ({
+  page,
+}) => {
+  // The refused DELETE is a REAL 404 (the output was removed behind the
+  // editor's back), and Chrome logs it as a console error by itself. Collect
+  // exactly that line apart, scoped by its URL; every other line stays an error.
+  const errors: string[] = [];
+  const refusals: string[] = [];
+  const n = Date.now() % 100_000;
+  const slug = `race-855-${n}`;
+  const deleteUrl = `${baseURL}/stream/api/outputs/${slug}`;
+  page.on("console", (msg) => {
+    const type = msg.type();
+    if (type !== "error" && type !== "warning") return;
+    const url = msg.location()?.url ?? "";
+    if (msg.text().includes("Failed to load resource") && url === deleteUrl) {
+      refusals.push(`${msg.text()} ${url}`);
+      return;
+    }
+    errors.push(`[${type}] ${msg.text()}`);
+  });
+  page.on("pageerror", (err) => errors.push(`[pageerror] ${err.message}`));
+  await createOutput(page, slug, `Súbeh ${n}`);
+
+  await openEditorSettled(page, slug);
+  const first = (await barSlugs(page)).find((candidate) => candidate !== slug);
+  expect(first, "another output exists").toBeTruthy();
+  const removed = await page.request.delete(deleteUrl);
+  expect(removed.status(), "the output is removed behind the editor's back").toBe(204);
+
+  await deleteButton(page).click();
+  await deleteYes(page).click();
+  await expect(toast(page)).toHaveText("Výstup už neexistuje.");
+  await expect(toast(page)).toHaveAttribute("data-state", "error");
+  await expect(deleteConfirm(page)).toHaveCount(0);
+
+  // The list re-syncs: the vanished output leaves the bar, the editor moves on.
+  await expect(outputSelect(page).locator(`option[value="${slug}"]`)).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect(outputSelect(page)).toHaveValue(first as string);
+
+  await expect.poll(() => refusals.length, { message: refusals.join(" | ") }).toBe(1);
+  expect(
+    refusals.every((line) => /status of 404\b/.test(line)),
+    `only a 404 for the DELETE: ${refusals.join(" | ")}`,
+  ).toBeTruthy();
+  // Re-checked last, so a late second refusal still fails the test.
+  expect(refusals, "exactly the one refused DELETE").toHaveLength(1);
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#855 a long output name and the delete confirmation fit a phone without horizontal scroll", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const n = Date.now() % 100_000;
+  const slug = `phone-855-${n}`;
+  // ~90 characters WITHOUT a space: it is an <option> of the header select AND
+  // the confirmation's question, and neither may widen the page.
+  await createOutput(page, slug, `${"Dlhý".repeat(22)}${n}`);
+  await page.setViewportSize({ width: 360, height: 740 });
+
+  const overflowPx = () =>
+    page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+
+  await openEditor(page, slug);
+  expect(await overflowPx(), "overflow with the long name in the header select").toBeLessThanOrEqual(
+    0,
+  );
+  await deleteButton(page).click();
+  await expect(deleteConfirm(page)).toBeVisible();
+  await expect(deleteYes(page)).toBeVisible();
+  await expect(deleteCancel(page)).toBeVisible();
+  expect(await overflowPx(), "overflow with the confirmation open").toBeLessThanOrEqual(0);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+const DISCARD_Q = "Zahodiť neuložené zmeny prvku?";
+
+test("#855 deleting an output asks about unsaved element edits first: declining keeps everything, accepting deletes without a second question", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  // `window.confirm` is the editor's dirty-draft question; an un-handled one
+  // is auto-dismissed, so every question is recorded and answered here.
+  const questions: string[] = [];
+  let accept = false;
+  page.on("dialog", (dialog) => {
+    questions.push(dialog.message());
+    void (accept ? dialog.accept() : dialog.dismiss());
+  });
+  const n = Date.now() % 100_000;
+  const slug = `dirty-855-${n}`;
+  const name = `Rozpracovaný ${n}`;
+  await createOutput(page, slug, name);
+  const scene = await page.request.post(`${baseURL}/stream/api/outputs/${slug}/scenes`, {
+    data: { name: `Scéna ${n}`, kind: "base" },
+  });
+  expect(scene.ok(), `create scene -> ${scene.status()}`).toBeTruthy();
+  const sceneId = (await scene.json()).id as number;
+
+  await openEditor(page, slug);
+  await expect(sceneCard(page, sceneId)).toBeVisible({ timeout: 15_000 });
+  const first = (await barSlugs(page)).find((candidate) => candidate !== slug);
+  expect(first, "another output exists").toBeTruthy();
+
+  // A new colour element, selected, with an UNSAVED frame edit (the default
+  // frame is x=10, w=80, so 15 is inside the allowed range and differs).
+  await sceneCard(page, sceneId).locator('[data-role="stream-scene-edit"]').click();
+  await page.waitForSelector('[data-role="stream-element-panel"]', { timeout: 15_000 });
+  await page.locator('[data-role="stream-add-element-color"]').click();
+  await expect(
+    page.locator('[data-role="stream-overlay-element"][data-selected="true"]'),
+  ).toHaveCount(1, { timeout: 15_000 });
+  const frameX = page.locator('[data-role="stream-frame-x"]');
+  const saveProps = page.locator('[data-role="stream-prop-save"]');
+  await frameX.fill("15");
+  await expect(saveProps).toHaveAttribute("data-dirty", "true");
+
+  // Declined: asked once, and the output, the confirmation and the edit stay.
+  await deleteButton(page).click();
+  await expect(deleteConfirm(page)).toBeVisible();
+  await deleteYes(page).click();
+  await expect.poll(() => questions.length).toBe(1);
+  expect(questions[0]).toBe(DISCARD_Q);
+  await expect(deleteConfirm(page)).toBeVisible();
+  expect(await defStatus(page, slug)).toBe(200);
+  await expect(outputSelect(page)).toHaveValue(slug);
+  await expect(frameX).toHaveValue("15");
+  await expect(saveProps).toHaveAttribute("data-dirty", "true");
+
+  // Accepted: the output is deleted and the editor moves on. One question per
+  // click, so none was asked again after the DELETE.
+  accept = true;
+  await deleteYes(page).click();
+  await expect(outputSelect(page).locator(`option[value="${slug}"]`)).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect(outputSelect(page)).toHaveValue(first as string);
+  await expect(page.locator('[data-role="stream-element-panel"]')).toHaveCount(0);
+  await expect(toast(page)).toHaveText(`Výstup ${name} bol zmazaný.`);
+  expect(await defStatus(page, slug), "the output is deleted").toBe(404);
+  expect(questions, "the question was asked once per click").toEqual([DISCARD_Q, DISCARD_Q]);
 
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });
