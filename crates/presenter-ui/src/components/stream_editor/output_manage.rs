@@ -13,6 +13,10 @@
 //!   buttons and OBS sources keep working (the "stream" output became "Strih"
 //!   this way, slug unchanged). The form remembers the output it opened for
 //!   and closes when the operator switches output.
+//! - „Zmazať výstup" (#855) asks inline, naming the output and its OBS address,
+//!   then DELETEs it and moves the editor to the first remaining output. The
+//!   seeded `stream` output (Companion's default) and the last output are not
+//!   deletable from here; the server DELETE stays open for scripted cleanup.
 //! - The OBS URL of the selected output sits in a read-only field that selects
 //!   itself on focus and keeps the selection on every click. There is no copy
 //!   button:
@@ -25,17 +29,22 @@ use serde::Serialize;
 use wasm_bindgen::JsCast;
 
 use super::output_paths::output_path;
-use super::StreamEditorCtx;
+use super::{StreamEditorCtx, DEFAULT_OUTPUT_SLUG};
 use crate::api::ApiError;
 
 const OUTPUTS_PATH: &str = "/stream/api/outputs";
 /// The server caps output names like scene names (`repository/stream.rs`).
 const OUTPUT_NAME_MAX: usize = STREAM_SCENE_NAME_MAX;
+/// What the delete confirmation says goes with the output (#855).
+const DELETE_EFFECTS: &str = "Zmažú sa jeho scény, prvky a menovky a prehliadačový zdroj v OBS, \
+     ktorý na túto adresu ukazuje, zostane prázdny.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManageMode {
     Create,
     Rename,
+    /// The inline delete confirmation (#855), not the name form.
+    Delete,
 }
 
 impl ManageMode {
@@ -44,6 +53,7 @@ impl ManageMode {
         match self {
             ManageMode::Create => "Vytvorenie",
             ManageMode::Rename => "Premenovanie",
+            ManageMode::Delete => "Zmazanie",
         }
     }
 }
@@ -151,6 +161,40 @@ fn rename_request(
     Ok(name.to_string())
 }
 
+/// Why output `slug` cannot be deleted from the editor, or `None` when it can
+/// (#855). Pure, so it is host-tested.
+///
+/// The seeded `stream` output is Companion's default (its stream commands name
+/// it unless a button picks another), so deleting it would silently break
+/// every such button. The editor also needs one output to show, so the last
+/// one stays. The server DELETE itself is unrestricted.
+fn delete_blocked(slug: &str, outputs: &[StreamOutputSummary]) -> Option<&'static str> {
+    if slug == DEFAULT_OUTPUT_SLUG {
+        return Some("Predvolený výstup pre Companion – nedá sa zmazať");
+    }
+    if !outputs.iter().any(|output| output.slug == slug) {
+        return Some("Zoznam výstupov sa ešte načítava");
+    }
+    if outputs.len() < 2 {
+        return Some("Posledný výstup sa nedá zmazať");
+    }
+    None
+}
+
+/// The output the editor moves to once `deleted` is gone: the first remaining
+/// one in list order (#855). `None` when nothing else is left.
+fn next_output_after_delete(deleted: &str, outputs: &[StreamOutputSummary]) -> Option<String> {
+    outputs
+        .iter()
+        .find(|output| output.slug != deleted)
+        .map(|output| output.slug.clone())
+}
+
+/// The question of the delete confirmation.
+fn delete_title(name: &str) -> String {
+    format!("Zmazať výstup „{name}“?")
+}
+
 /// The OBS browser-source URL of output `slug`.
 fn obs_url(origin: &str, slug: &str) -> String {
     format!("{origin}/stream/{slug}")
@@ -160,9 +204,13 @@ fn obs_url(origin: &str, slug: &str) -> String {
 fn refusal_message(mode: ManageMode, err: &ApiError) -> String {
     let action = mode.action();
     match err {
-        ApiError::Status(409, _) => "Výstup s touto adresou už existuje.".to_string(),
+        ApiError::Status(409, _) if mode != ManageMode::Delete => {
+            "Výstup s touto adresou už existuje.".to_string()
+        }
         ApiError::Status(404, _) => "Výstup už neexistuje.".to_string(),
-        ApiError::Status(422, detail) => format!("Server názov odmietol ({detail})."),
+        ApiError::Status(422, detail) if mode != ManageMode::Delete => {
+            format!("Server názov odmietol ({detail}).")
+        }
         ApiError::Status(code, _) => format!("{action} zlyhalo (HTTP {code})."),
         ApiError::Network(_) => "Server nie je dostupný, skús to znova.".to_string(),
         other => format!("{action} zlyhalo: {other}"),
@@ -268,6 +316,68 @@ fn submit_rename(ctx: StreamEditorCtx, form: OutputForm) {
     });
 }
 
+/// DELETE the output the confirmation was opened for. Success moves the editor
+/// on ([`finish_delete`]); a refusal is a toast and the output stays, except a
+/// 404 (another operator was first), which also reloads the list.
+fn submit_delete(ctx: StreamEditorCtx, form: OutputForm) {
+    if form.busy.get_untracked() {
+        return;
+    }
+    let slug = form.slug.get_untracked();
+    let name = form.name.get_untracked();
+    if let Some(reason) = ctx
+        .outputs
+        .with_untracked(|outputs| delete_blocked(&slug, outputs))
+    {
+        form.close();
+        ctx.show_toast(reason, "error");
+        return;
+    }
+    // Unsaved element edits die with the output: ask BEFORE the request, so
+    // declining keeps the output and the edits (every draft-dropping path asks).
+    if !ctx.confirm_discard_draft() {
+        return;
+    }
+    form.busy.set(true);
+    leptos::task::spawn_local(async move {
+        let result = crate::api::delete_detail(&output_path(&slug)).await;
+        form.busy.set(false);
+        form.close();
+        match result {
+            Ok(()) => finish_delete(ctx, &slug, &name),
+            Err(err) => {
+                let message = refusal_message(ManageMode::Delete, &err);
+                leptos::logging::log!("stream editor: deleting output {slug:?} refused: {message}");
+                ctx.show_toast(&message, "error");
+                if matches!(err, ApiError::Status(404, _)) {
+                    ctx.reload_outputs();
+                }
+            }
+        }
+    });
+}
+
+/// The server deleted output `slug`: drop it from the list and, when the editor
+/// is still on it, move to the first remaining output through the usual switch
+/// (URL, storage, def, nameplates). The edits were asked about before the
+/// request, so the switch itself asks nothing. An editor the operator moved
+/// elsewhere meanwhile stays where it is.
+fn finish_delete(ctx: StreamEditorCtx, slug: &str, name: &str) {
+    leptos::logging::log!("stream editor: deleted output {slug:?}");
+    let next = ctx
+        .outputs
+        .with_untracked(|outputs| next_output_after_delete(slug, outputs));
+    ctx.outputs
+        .update(|outputs| outputs.retain(|output| output.slug != slug));
+    ctx.show_toast(&format!("Výstup {name} bol zmazaný."), "success");
+    if ctx.output_slug.get_untracked() == slug {
+        if let Some(next) = next {
+            ctx.enter_output(next);
+        }
+    }
+    ctx.reload_outputs();
+}
+
 /// Show a refused request inline, or as a toast when the operator closed the
 /// form meanwhile (e.g. by switching output), so the refusal is never lost.
 fn show_refusal(ctx: StreamEditorCtx, form: OutputForm, message: String) {
@@ -310,13 +420,23 @@ fn reselect_on_mousedown(ev: leptos::ev::MouseEvent) {
 }
 
 /// The output bar under the editor header: the selected output's OBS URL plus
-/// „Nový výstup" / „Premenovať" and their inline form.
+/// „Nový výstup" / „Premenovať" / „Zmazať výstup" and their inline form or
+/// confirmation.
 #[component]
 pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
     let form = OutputForm::new();
     let name_input = NodeRef::<leptos::html::Input>::new();
-    let origin = window_origin();
-    let url = move || obs_url(&origin, &ctx.output_slug.get());
+    let delete_cancel = NodeRef::<leptos::html::Button>::new();
+    // `Copy`, so the bar's URL and the confirmation's address share it.
+    let origin = StoredValue::new(window_origin());
+    let url = move || origin.with_value(|origin| obs_url(origin, &ctx.output_slug.get()));
+    let delete_url = move || origin.with_value(|origin| obs_url(origin, &form.slug.get()));
+    let delete_text = move || delete_title(&form.name.get());
+    // Why the selected output cannot be deleted (None = it can).
+    let delete_block = move || {
+        let slug = ctx.output_slug.get();
+        ctx.outputs.with(|outputs| delete_blocked(&slug, outputs))
+    };
 
     // A form opened for one output must never act on another one.
     Effect::new(move |previous: Option<String>| {
@@ -326,13 +446,21 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
         }
         slug
     });
-    // Focus the name field when the form opens (the node mounts later).
-    Effect::new(move |_| {
-        if form.mode.get().is_some() {
+    // Focus the name field when the form opens, and „Zrušiť" (the safe answer)
+    // when the delete confirmation does. The nodes mount later, and the
+    // NodeRefs re-run this Effect when they do.
+    Effect::new(move |_| match form.mode.get() {
+        Some(ManageMode::Create | ManageMode::Rename) => {
             if let Some(input) = name_input.get() {
                 let _ = input.focus();
             }
         }
+        Some(ManageMode::Delete) => {
+            if let Some(button) = delete_cancel.get() {
+                let _ = button.focus();
+            }
+        }
+        None => {}
     });
 
     let open_create = move |_| form.open(ManageMode::Create, String::new(), String::new());
@@ -340,6 +468,14 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
         let slug = ctx.slug();
         let name = current_name(ctx, &slug);
         form.open(ManageMode::Rename, slug, name);
+    };
+    let open_delete = move |_| {
+        if delete_block().is_some() {
+            return;
+        }
+        let slug = ctx.slug();
+        let name = current_name(ctx, &slug);
+        form.open(ManageMode::Delete, slug, name);
     };
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -349,7 +485,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
         match form.mode.get_untracked() {
             Some(ManageMode::Create) => submit_create(ctx, form),
             Some(ManageMode::Rename) => submit_rename(ctx, form),
-            None => {}
+            Some(ManageMode::Delete) | None => {}
         }
     };
     let on_key = move |ev: leptos::ev::KeyboardEvent| {
@@ -358,6 +494,13 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
         }
     };
     let is_create = move || form.mode.get() == Some(ManageMode::Create);
+    let is_edit = move || {
+        matches!(
+            form.mode.get(),
+            Some(ManageMode::Create | ManageMode::Rename)
+        )
+    };
+    let is_delete = move || form.mode.get() == Some(ManageMode::Delete);
     let busy = move || form.busy.get();
     let slug_preview = move || {
         let slug = slug_from_name(&form.name.get());
@@ -400,7 +543,51 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             >
                 "Premenovať"
             </button>
-            <Show when=move || form.mode.get().is_some()>
+            <button
+                type="button"
+                class="stream-editor__btn stream-editor__btn--danger"
+                data-role="stream-output-delete"
+                title=move || delete_block().unwrap_or("Zmazať vybraný výstup")
+                prop:disabled=move || busy() || delete_block().is_some()
+                on:click=open_delete
+            >
+                "Zmazať výstup"
+            </button>
+            <Show when=is_delete>
+                <div
+                    class="stream-editor__output-confirm"
+                    role="group"
+                    aria-label="Potvrdenie zmazania výstupu"
+                    data-role="stream-output-delete-confirm"
+                    on:keydown=on_key
+                >
+                    <div class="stream-editor__output-confirm-body">
+                        <strong data-role="stream-output-delete-name">{delete_text}</strong>
+                        <span>"Adresa v OBS: "<code data-role="stream-output-delete-url">{delete_url}</code></span>
+                        <span data-role="stream-output-delete-effects">{DELETE_EFFECTS}</span>
+                    </div>
+                    <button
+                        type="button"
+                        class="stream-editor__btn stream-editor__btn--danger"
+                        data-role="stream-output-delete-confirm-yes"
+                        prop:disabled=busy
+                        on:click=move |_| submit_delete(ctx, form)
+                    >
+                        "Zmazať"
+                    </button>
+                    <button
+                        type="button"
+                        class="stream-editor__btn stream-editor__btn--ghost"
+                        data-role="stream-output-delete-confirm-cancel"
+                        node_ref=delete_cancel
+                        prop:disabled=busy
+                        on:click=move |_| form.close()
+                    >
+                        "Zrušiť"
+                    </button>
+                </div>
+            </Show>
+            <Show when=is_edit>
                 <form
                     class="stream-editor__output-form"
                     data-role="stream-output-form"
@@ -569,5 +756,81 @@ mod tests {
             refusal_message(ManageMode::Rename, &status(503, "busy")),
             "Premenovanie zlyhalo (HTTP 503)."
         );
+    }
+
+    #[test]
+    fn a_refused_delete_never_reads_like_a_refused_create_or_rename() {
+        let status = |code: u16, detail: &str| ApiError::Status(code, detail.to_string());
+        let refused = |code: u16| refusal_message(ManageMode::Delete, &status(code, "detail"));
+        assert_eq!(
+            refused(404),
+            "Výstup už neexistuje.",
+            "another operator was first"
+        );
+        assert_eq!(refused(500), "Zmazanie zlyhalo (HTTP 500).");
+        assert_eq!(
+            refused(409),
+            "Zmazanie zlyhalo (HTTP 409).",
+            "not the create message about an existing address"
+        );
+        assert_eq!(
+            refused(422),
+            "Zmazanie zlyhalo (HTTP 422).",
+            "not the rename message about a rejected name"
+        );
+    }
+
+    #[test]
+    fn the_seeded_stream_output_is_never_deletable_from_the_editor() {
+        let companion = Some("Predvolený výstup pre Companion – nedá sa zmazať");
+        assert_eq!(delete_blocked("stream", &outputs()), companion);
+        assert_eq!(
+            delete_blocked("stream", &[output("stream", "Strih")]),
+            companion,
+            "the Companion reason wins over the last-output one"
+        );
+    }
+
+    #[test]
+    fn another_listed_output_is_deletable_while_a_second_one_remains() {
+        assert_eq!(delete_blocked("timer", &outputs()), None);
+    }
+
+    #[test]
+    fn the_last_output_and_an_unlisted_one_are_not_deletable() {
+        assert_eq!(
+            delete_blocked("timer", &[output("timer", "Timer")]),
+            Some("Posledný výstup sa nedá zmazať")
+        );
+        let loading = Some("Zoznam výstupov sa ešte načítava");
+        assert_eq!(delete_blocked("timer", &[]), loading, "list not loaded yet");
+        assert_eq!(delete_blocked("gone", &outputs()), loading, "stale slug");
+    }
+
+    #[test]
+    fn after_a_delete_the_editor_moves_to_the_first_remaining_output() {
+        let list = vec![
+            output("moderator", "Moderátor"),
+            output("stream", "Strih"),
+            output("timer", "Timer"),
+        ];
+        assert_eq!(
+            next_output_after_delete("moderator", &list),
+            Some("stream".to_string()),
+            "the deleted first entry is skipped"
+        );
+        assert_eq!(
+            next_output_after_delete("timer", &list),
+            Some("moderator".to_string())
+        );
+        assert_eq!(
+            next_output_after_delete("only", &[output("only", "Jediný")]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_delete_question_names_the_output() {
+        assert_eq!(delete_title("Strih 2"), "Zmazať výstup „Strih 2“?");
     }
 }

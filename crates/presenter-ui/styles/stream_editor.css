@@ -996,6 +996,45 @@ html[data-stream-editor="true"] {
   color: #ff9aa6;
 }
 
+/* #855: a disabled bar button (the seeded `stream` output is not deletable)
+ * must read as unavailable, and keep its tooltip reachable by hover. */
+.stream-editor__outputs .stream-editor__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stream-editor__outputs .stream-editor__btn:disabled:hover {
+  background: #262b38;
+}
+
+/* #855: the inline delete confirmation in the output bar — the output's name,
+ * its OBS address (it may be long: wrap anywhere) and what goes with it. */
+.stream-editor__output-confirm {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #6b2b34;
+  border-radius: 6px;
+  background: #2a1a1f;
+}
+
+.stream-editor__output-confirm-body {
+  display: flex;
+  flex: 1 1 18rem;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.stream-editor__output-confirm-body code {
+  overflow-wrap: anywhere;
+  color: #e6eaf2;
+  font-family: ui-monospace, monospace;
+}
+
 /* #829: phone width — tighter gutters, and the element panel / scene preview
  * drop their 20rem minimum, so the tabs and an open scene fit 320 px.
  * Kept LAST so it overrides the base rules above. */

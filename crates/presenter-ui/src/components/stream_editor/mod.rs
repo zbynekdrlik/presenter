@@ -300,6 +300,14 @@ impl StreamEditorCtx {
         if slug == self.output_slug.get_untracked() || !self.confirm_discard_draft() {
             return false;
         }
+        self.enter_output(slug);
+        true
+    }
+
+    /// The switch itself, with no question: [`Self::switch_output`] after its
+    /// dirty guard, and the output bar after the edited output was DELETED
+    /// (#855; the edits went with it and were asked about before the request).
+    fn enter_output(self, slug: String) {
         self.output_slug.set(slug.clone());
         output_paths::persist_output_slug(&slug);
         output_paths::mirror_output_to_url(&slug);
@@ -313,7 +321,6 @@ impl StreamEditorCtx {
         self.refresh();
         self.reload_nameplates();
         self.reload_active_nameplate();
-        true
     }
 
     /// Exclusive base activation; `None` clears the base (transparent). The

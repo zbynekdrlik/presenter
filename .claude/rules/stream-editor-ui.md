@@ -127,7 +127,7 @@ Rules that MUST hold when touching the editor:
 - EVERY output-scoped call reads `ctx.output_slug.get_untracked()` (captured at the
   top of the method, before `spawn_local`) — grep for a bare `DEFAULT_OUTPUT_SLUG`
   before pushing; it should survive ONLY as the default value + `initial_output_slug`'s
-  fallback.
+  fallback + `output_manage::delete_blocked`'s "Companion's default is not deletable" guard (#855).
 - The page's WS-event filters compare `output == ctx.output_slug.get_untracked()`
   (not the constant), so a switched editor reflects the RIGHT output's live events.
 - `switch_output` asks about unsaved element edits first (#787 reopen; it returns `false`
@@ -459,7 +459,7 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB
   (0.9 % of 5.6 MB, measured dev vs prod 2026-10-12). Accepted; a hand-written fold table would
   save that if the bundle size ever matters.
-- `components/stream_editor/mod.rs` is at ~785 production lines (800 = warning). Move something
+- `components/stream_editor/mod.rs` is at ~794 production lines (800 = warning). Move something
   into a sibling module (the #742 split pattern) BEFORE the next addition there.
 - **Live check on SNV/PP: never press „Vytvoriť" with a fresh name.** The duplicate refusal
   only fires for a name or slug that already exists, so a "test" name creates a real output, and
@@ -469,6 +469,43 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   duplicate refused inline, rename (prefilled, option text, slug + URL unchanged), the rename form
   closes on an output switch, a click selects the whole URL, an empty rename is refused, 360 px no
   horizontal overflow with the form open.
+
+### Delete an output (#855, `output_manage.rs`)
+- „Zmazať výstup" (`stream-output-delete`) opens an INLINE confirmation, not `window.confirm`: a
+  `ManageMode::Delete` of the same `OutputForm` (one mode signal, so it closes on an output switch,
+  on Escape and when Nový / Premenovať opens). Roles: `stream-output-delete-confirm` (box),
+  `-delete-name` / `-delete-url` / `-delete-effects` (the question with the name, the OBS address,
+  what goes with it) and `-delete-confirm-yes` / `-delete-confirm-cancel`. „Zrušiť" is focused on
+  open, so Enter cancels. It is NOT a `<form>`: only the name form submits on Enter.
+- **Not deletable from the UI** (`delete_blocked`, pure + host-tested): the seeded `stream` output
+  (`DEFAULT_OUTPUT_SLUG`: Companion's stream commands default to it, so deleting it silently breaks
+  every such button) and the last output (the editor needs one to show). The button is `disabled`,
+  its `title` carries the reason (a disabled button shows no tooltip on a phone: accepted). The
+  server DELETE stays unrestricted for scripted cleanup. This is the one legitimate use of
+  `DEFAULT_OUTPUT_SLUG` besides the default value; every output-scoped call still reads `ctx.slug()`.
+- Success (`finish_delete`): drop the output from `ctx.outputs`, toast, move to the FIRST remaining
+  output of the list (`next_output_after_delete`) through `StreamEditorCtx::enter_output` (the
+  switch body split out of `switch_output` in #855: persist, `?output=`, `close_panel`, def reset,
+  refetch), then `reload_outputs` confirms. An editor that was moved elsewhere meanwhile stays put.
+- **The dirty-draft question comes BEFORE the request** (`confirm_discard_draft` in
+  `submit_delete`): the draft dies with the output, and declining must keep the output. After the
+  DELETE `enter_output` asks nothing, so the operator is never asked twice. A NEW path that
+  switches because the current output vanished must use `enter_output`, not `switch_output`.
+- A refusal is a toast and the output stays (`refusal_message(ManageMode::Delete, …)`; the
+  create/rename-only 409 / 422 texts are guarded out). A 404 (another operator was first) also
+  reloads the list, so the vanished output leaves the bar and the fallback switches.
+- The server's `delete_output` broadcasts NOTHING, so a second editor on the deleted output only
+  finds out at its next list reload / failed request.
+- E2E (`stream-editor-outputs.spec.ts`): a real-UI delete (confirmation text, Zrušiť, Escape,
+  Zmazať → gone from the bar and `/stream/api/outputs/{slug}/def` 404, editor on the first
+  remaining output, survives a reload), `stream` disabled with the tooltip and the button follows
+  the select, a REAL 404 (the output deleted via `page.request` first) = error toast + re-sync
+  with exactly that one console line collected apart by its URL (never a mocked non-2xx in a
+  zero-console spec), 360 px no overflow with the confirmation open. `GET /stream/{slug}` is the
+  WASM shell and answers 200 for any slug, so only the def endpoint proves a delete.
+- **Live check on SNV/PP: never press „Zmazať" on a real output** — deleting prod data needs the
+  owner. Check the disabled `stream` button + tooltip, open the confirmation on a throwaway
+  output the owner named, then Zrušiť.
 
 ## Playback form (#843, `playback_fields.rs` + pure `playback_status.rs`)
 - The kind wiring follows "Adding a new element KIND" (stream-graphics.md): `+ Prehrávanie`
