@@ -1,5 +1,7 @@
-//! Pure layer-list model behind `CrossfadeText` (#716; "fade through empty"
-//! #834). Host-tested — no signals, no timers.
+//! Pure layer-list model behind `transition::Crossfade` (#716; "fade through
+//! empty" #834). Host-tested — no signals, no timers. A layer's `text` is the
+//! crossfade's content key: since #863 the encoded lines of a whole text block
+//! (`text_block.rs`).
 //!
 //! A content element renders a list of [`ContentLayer`]s stacked in one grid
 //! cell: the current text plus any outgoing text still fading out. For the

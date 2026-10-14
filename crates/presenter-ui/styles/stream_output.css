@@ -138,9 +138,9 @@ body.stream {
     line-height: 1;
 }
 
-/* Lyrics + verse elements (#710): the Frame is a vertically-centered flex
- * column (set inline in each element's container style) whose stacked text
- * lines each carry their own TextStyle inline. The line rules below only govern
+/* Lyrics + verse elements (#710): the Frame holds ONE crossfade block (#863,
+ * `.stream-text-block` below) whose layers stack the text lines, each line
+ * carrying its own TextStyle inline. The line rules below only govern
  * WRAPPING — a long/multi-line SlideText wraps within the Frame and anything
  * past the box is clipped by `.stream-element { overflow:hidden }` (the
  * 4000-char acceptance criterion: text never spills outside its Frame). */
@@ -149,24 +149,22 @@ body.stream {
 .stream-verse__reference {
     /* Honour newlines in slide/verse text AND wrap; `anywhere` breaks even a
      * space-less 4000-char run at the box edge so it can never overflow
-     * horizontally. The crossfade LAYERS inherit these (they hold the text). */
+     * horizontally. */
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
 
-/* CONTENT CROSSFADE (#716): a per-element text line (lyric line / verse line /
- * countdown text) whose CONTENT changes. `CrossfadeText` renders the current
- * text plus, transiently, the OUTGOING text, each as a `.stream-crossfade__layer`
- * inside this wrapper. The layers stack in ONE grid cell (`grid-area:1/1`) so old
- * and new overlap during a `Fade` while the wrapper keeps its intrinsic size; a
- * `Cut` never keeps two layers, so it swaps with no overlap frame. */
+/* CONTENT CROSSFADE (#716): an element whose CONTENT changes. `Crossfade`
+ * (components/stream/transition.rs) renders the current content plus,
+ * transiently, the OUTGOING content, each as a `.stream-crossfade__layer` inside
+ * this wrapper. The layers stack in ONE grid cell (`grid-area:1/1`) so old and
+ * new overlap during a `Fade`; a `Cut` never keeps two layers, so it swaps with
+ * no overlap frame. (The countdown swaps its digits in place, #776.) */
 .stream-crossfade {
     display: grid;
 }
-/* Lyrics/verse lines fill the element width so their text WRAPS within the Frame
- * (a single `minmax(0, 1fr)` column; the `0` min lets a long run break instead of
- * overflowing). The countdown wrapper omits this — it stays content-sized so the
- * element's flex `justify-content` keeps the digits centered. */
+/* A single `minmax(0, 1fr)` column: the lines fill the element width and WRAP
+ * within the Frame (the `0` min lets a long run break instead of overflowing). */
 .stream-crossfade--fill {
     grid-template-columns: minmax(0, 1fr);
 }
@@ -189,6 +187,24 @@ body.stream {
 }
 .stream-crossfade__layer--leaving {
     opacity: 0;
+}
+
+/* TEXT BLOCK (#863): the verse and lyrics lines crossfade as ONE block. The
+ * wrapper has a FIXED height (the element's Frame) and its single row is exactly
+ * that height, so every layer (old + new) is the same box; each layer centres
+ * its own stack of lines vertically. Removing the outgoing layer therefore never
+ * moves the incoming one: before #863 each line crossfaded alone in a centred
+ * column, and an unchanged line (verse reference, lyrics translation) jumped
+ * when the taller old line above it left. Overflowing text is clipped by the
+ * element. */
+.stream-text-block {
+    height: 100%;
+    grid-template-rows: minmax(0, 1fr);
+}
+.stream-text-block > .stream-crossfade__layer {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
 }
 
 /* PLAYBACK (#843): a Drive folder's photos/videos in a loop. Each item is a
