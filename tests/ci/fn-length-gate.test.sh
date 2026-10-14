@@ -91,6 +91,9 @@ echo ""
 echo "[2] Buggy checker (abs/rel bug reintroduced), RELATIVE target:"
 BUGGY="$WORK/fn_length_check_buggy.py"
 sed 's/if targets and rel not in targets:/if targets and path not in targets:/' "$CHECKER" > "$BUGGY"
+# The checker imports the no-panic gate's lexer from its own directory; the
+# copy needs it next to it.
+cp "$(dirname "$CHECKER")/no_panic_check.py" "$WORK/"
 if ! grep -q 'if targets and path not in targets:' "$BUGGY"; then
   bad "could not reintroduce the abs/rel bug into the checker copy (the fixed line moved?) — update this self-test"
 else
