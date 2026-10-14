@@ -822,6 +822,83 @@ async fn validate_startup_mode_starts_no_integrations_but_serves_healthz() {
     );
 }
 
+/// #852 C1a: the Normal boot starts the VBAN receiver from
+/// `spawn_background_tasks` (`from_config`'s last start). With no microphone
+/// saved it stays idle and binds nothing; the test fails if that start is
+/// ever dropped.
+#[tokio::test]
+async fn the_normal_boot_starts_the_vban_receiver_idle_without_mics() {
+    use presenter_core::listen::status::SocketState;
+
+    let state = AppState::in_memory().await.expect("in-memory state");
+    assert_eq!(state.listen_status().socket.state, SocketState::NotStarted);
+    state.spawn_background_tasks();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        let status = state.listen_status();
+        if status.socket.state == SocketState::Idle {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the receiver task never started: {status:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert_eq!(
+        status.socket.bind_addr,
+        Some(crate::listen::vban_bind_addr().to_string())
+    );
+    assert_eq!(
+        status.socket.local_addr, None,
+        "nothing bound without a mic"
+    );
+    assert!(status.mics.is_empty());
+}
+
+/// #852 C1a: the schema probe boot must not bind the VBAN port either — a
+/// stored `listen.mics` would otherwise make the probe take 6980 next to the
+/// live service. The receiver is started only from `spawn_background_tasks`.
+#[tokio::test]
+async fn validate_startup_mode_never_starts_the_vban_receiver() {
+    use presenter_core::listen::mics::LISTEN_MICS_KEY;
+    use presenter_core::listen::status::SocketState;
+
+    let tmp = tempfile::NamedTempFile::new().expect("temp file");
+    let url = format!("sqlite://{}?mode=rwc", tmp.path().display());
+    {
+        let repo = presenter_persistence::Repository::connect(
+            &presenter_persistence::DatabaseSettings::new(&url),
+        )
+        .await
+        .expect("seed connection");
+        repo.set_app_setting(
+            LISTEN_MICS_KEY,
+            r#"[{"id":"guest","name":"Hosť","streamName":"GUEST_EN","senderIp":null,"channel":"left","language":"en","role":"guest"}]"#,
+        )
+        .await
+        .expect("seed listen.mics");
+    }
+    let mut config = config_for_db(url);
+    config.startup_mode = crate::state::StartupMode::Validate;
+    let state = AppState::from_config(config)
+        .await
+        .expect("from_config (validate)");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let status = state.listen_status();
+    assert_eq!(
+        status.socket.state,
+        SocketState::NotStarted,
+        "validate mode never starts the receiver"
+    );
+    assert!(status.mics.is_empty(), "nothing was loaded for it");
+    assert_eq!(
+        state.listen_mics().await.expect("stored list").len(),
+        1,
+        "the stored list is untouched"
+    );
+}
+
 /// Regression for issue #384: the selected stage layout MUST survive a server
 /// restart. Before the fix `set_stage_layout_code` only wrote the in-memory
 /// `RwLock`, so every `presenter.service` restart silently reset the layout to

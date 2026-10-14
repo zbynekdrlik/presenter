@@ -362,6 +362,11 @@ export async function startTestServer(
       process.env.PRESENTER_DRIVE_URL ?? "http://127.0.0.1:1",
     PRESENTER_DRIVE_DOWNLOAD_URL:
       process.env.PRESENTER_DRIVE_DOWNLOAD_URL ?? "http://127.0.0.1:1",
+    // #852 C1a: a test server's VBAN receiver must never take the dev
+    // service's 0.0.0.0:6980 (the runner host) — a copied DB may carry
+    // listen.mics. A spec that sends VBAN reads the port from /listen/status.
+    PRESENTER_LISTEN_VBAN_ADDR:
+      process.env.PRESENTER_LISTEN_VBAN_ADDR ?? "127.0.0.1:0",
     RUST_LOG:
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };
