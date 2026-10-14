@@ -151,3 +151,169 @@ fn refresh_keeps_only_the_edits_of_unchanged_verses() {
     );
     assert_eq!(kept, edits(&[(1, &[0], &[])]));
 }
+
+fn texts(item: &RenderedItem) -> Vec<(u16, &str)> {
+    item.verses
+        .iter()
+        .map(|verse| (verse.verse, verse.text.as_str()))
+        .collect()
+}
+
+#[test]
+fn the_mockup_example_cuts_to_1a_with_emphasis() {
+    let item = render_item(
+        &source(&[(1, HEB_11_1)]),
+        &edits(&[(1, &[7, 8, 9, 10, 11], &[0])]),
+    );
+    assert_eq!(texts(&item), [(1, "VIERA je zárukou toho, v čo dúfame")]);
+    assert_eq!(item.suffix, "1a");
+    assert_eq!(
+        item_label("Hebrejom", 11, &item.suffix, "slk-seb"),
+        "Hebrejom 11:1a (SEB)"
+    );
+    assert_eq!(
+        item.numbered_text(),
+        "1. VIERA je zárukou toho, v čo dúfame"
+    );
+}
+
+#[test]
+fn a_start_cut_is_b_in_the_original_case() {
+    let item = render_item(&source(&[(1, HEB_11_1)]), &edits(&[(1, &[0, 1], &[])]));
+    assert_eq!(
+        texts(&item),
+        [(
+            1,
+            "zárukou toho, v čo dúfame, a zdôvodnením toho, čo nevidíme,"
+        )]
+    );
+    assert_eq!(item.suffix, "1b");
+}
+
+#[test]
+fn a_range_cut_at_both_edges_is_b_to_a() {
+    let item = render_item(
+        &source(&[
+            (16, "Prvý verš má päť slov."),
+            (17, "Druhý verš ostáva celý."),
+            (18, "Tretí verš končí čiarkou, a pokračuje"),
+        ]),
+        &edits(&[(16, &[0], &[]), (18, &[4, 5], &[])]),
+    );
+    assert_eq!(
+        texts(&item),
+        [
+            (16, "verš má päť slov."),
+            (17, "Druhý verš ostáva celý."),
+            (18, "Tretí verš končí čiarkou"),
+        ]
+    );
+    assert_eq!(item.suffix, "16b-18a");
+}
+
+#[test]
+fn a_gap_inside_a_verse_reads_as_an_ellipsis() {
+    let item = render_item(&source(&[(1, HEB_11_1)]), &edits(&[(1, &[3, 4, 5], &[])]));
+    assert_eq!(
+        texts(&item),
+        [(
+            1,
+            "Viera je zárukou … dúfame, a zdôvodnením toho, čo nevidíme,"
+        )]
+    );
+    assert_eq!(item.suffix, "1");
+}
+
+#[test]
+fn one_verse_cut_at_both_ends_has_ellipses_and_no_letter() {
+    let item = render_item(&source(&[(1, HEB_11_1)]), &edits(&[(1, &[0, 1, 11], &[])]));
+    assert_eq!(
+        texts(&item),
+        [(1, "… zárukou toho, v čo dúfame, a zdôvodnením toho, čo …")]
+    );
+    assert_eq!(item.suffix, "1");
+}
+
+#[test]
+fn inner_edges_get_ellipses_but_never_after_a_full_stop() {
+    let item = render_item(
+        &source(&[
+            (16, "Prvý verš končí bodkou. A pokračuje"),
+            (17, "Stredný verš má na začiatku aj na konci niečo navyše,"),
+            (18, "Posledný verš."),
+        ]),
+        &edits(&[(16, &[4, 5], &[]), (17, &[0, 9], &[])]),
+    );
+    assert_eq!(
+        texts(&item),
+        [
+            (16, "Prvý verš končí bodkou."),
+            (17, "… verš má na začiatku aj na konci niečo …"),
+            (18, "Posledný verš."),
+        ]
+    );
+    assert_eq!(item.suffix, "16-18");
+}
+
+#[test]
+fn a_struck_verse_splits_the_label() {
+    let item = render_item(
+        &source(&[
+            (5, "a b,"),
+            (6, "c d"),
+            (7, "e f, g"),
+            (8, "h i"),
+            (9, "j k"),
+        ]),
+        &edits(&[(7, &[2], &[]), (8, &[0, 1], &[])]),
+    );
+    assert_eq!(
+        texts(&item),
+        [(5, "a b,"), (6, "c d"), (7, "e f"), (9, "j k")]
+    );
+    assert_eq!(item.suffix, "5-7a, 9");
+}
+
+#[test]
+fn an_end_cut_drops_a_trailing_dash_or_comma_but_adds_no_period() {
+    let item = render_item(
+        &source(&[(
+            20,
+            "Zošle kliatbu na všetko, čo budeš podnikať — až kým nezahynieš",
+        )]),
+        &edits(&[(20, &[8, 9, 10], &[])]),
+    );
+    assert_eq!(
+        texts(&item),
+        [(20, "Zošle kliatbu na všetko, čo budeš podnikať")]
+    );
+    assert_eq!(item.suffix, "20a");
+}
+
+#[test]
+fn an_item_with_every_token_struck_renders_nothing() {
+    let item = render_item(
+        &source(&[(1, "a b"), (2, "c d")]),
+        &edits(&[(1, &[0, 1], &[]), (2, &[0, 1], &[])]),
+    );
+    assert!(item.is_empty());
+    assert_eq!(item.suffix, "1-2");
+}
+
+#[test]
+fn emphasis_is_unicode_upper_case_and_struck_beats_emphasized() {
+    let item = render_item(
+        &source(&[(14, "aby sme skrze vieru dostali prisľúbeného Ducha.")]),
+        &edits(&[(14, &[], &[3, 4, 5])]),
+    );
+    assert_eq!(
+        texts(&item),
+        [(14, "aby sme skrze VIERU DOSTALI PRISĽÚBENÉHO Ducha.")]
+    );
+    let normalized = normalize_edits(
+        &source(&[(1, HEB_11_1)]),
+        &edits(&[(1, &[2, 0, 2], &[0, 4, 4])]),
+    )
+    .expect("valid edits");
+    assert_eq!(normalized, edits(&[(1, &[0, 2], &[4])]));
+}

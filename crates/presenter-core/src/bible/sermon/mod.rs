@@ -12,11 +12,13 @@
 mod dates;
 mod edits;
 mod label;
+mod render;
 mod tokens;
 
 pub use dates::{default_sermon_title, default_service_date};
 pub use edits::{normalize_edits, retain_unchanged_edits, EditError};
 pub use label::{item_label, translation_short_code, verse_suffix, VerseMark};
+pub use render::{render_item, RenderedItem, RenderedVerse};
 pub use tokens::{token_texts, tokenize, Token};
 
 use serde::{Deserialize, Serialize};
