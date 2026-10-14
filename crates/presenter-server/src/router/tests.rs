@@ -3375,3 +3375,33 @@ async fn restore_presentation_endpoint_returns_409_when_library_is_tombstoned() 
         .unwrap();
     assert_eq!(restore_response.status(), StatusCode::CONFLICT);
 }
+
+// #850 O1: the trigger handlers now extract the headers and the optional
+// ConnectInfo for the `presenter::bible::show` line. A router served without
+// connect-info (this test, `tower::ServiceExt::oneshot`) must still accept a show.
+#[tokio::test]
+async fn trigger_slide_without_connect_info_still_shows_the_verse() {
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/bible/trigger-slide")
+                .header("content-type", "application/json")
+                .header("x-forwarded-for", "203.0.113.9")
+                .body(Body::from(
+                    json!({
+                        "mainText": "Viera je podstatou toho, v čo dúfame",
+                        "mainReference": "Hebrejom 11:1 (SEB)"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let active = state.active_bible_slide_output().await.unwrap();
+    assert_eq!(active.main_reference, "Hebrejom 11:1 (SEB)");
+}
