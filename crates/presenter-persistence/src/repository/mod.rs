@@ -2,6 +2,7 @@ mod android_stage;
 mod audit;
 mod bible;
 mod group_color;
+mod interpreter_tips;
 mod library;
 mod library_sync;
 #[cfg(test)]
@@ -59,6 +60,7 @@ mod video_source;
 #[cfg(test)]
 mod video_source_tests;
 
+pub use interpreter_tips::NewInterpreterTip;
 pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;
 pub use stream_assets::NewStreamAsset;
