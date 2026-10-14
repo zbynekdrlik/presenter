@@ -168,6 +168,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
         .route("/ui/tablet", get(wasm_ui::wasm_ui_shell))
         .route("/ui/camera", get(wasm_ui::wasm_ui_shell))
+        // #852: šepkár page + interpreter display (WASM pages).
+        .route("/ui/sepkar", get(wasm_ui::wasm_ui_shell))
+        .route("/ui/interpreter", get(wasm_ui::wasm_ui_shell))
         // Settings is now a WASM page (#347 — migrated from settings_script.js)
         .route("/ui/settings", get(wasm_ui::wasm_ui_shell))
         // Stream-graphics operator editor (#713, epic #718) — WASM page.

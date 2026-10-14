@@ -1,5 +1,6 @@
 pub mod bible;
 pub mod bible_range;
+pub mod interpreter;
 pub mod operator;
 pub mod session;
 pub mod slide_columns;
