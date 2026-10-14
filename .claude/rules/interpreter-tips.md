@@ -7,6 +7,14 @@ paths:
   - "crates/presenter-server/src/state/interpreter_tips.rs"
   - "crates/presenter-server/src/state/interpreter_tips/**"
   - "crates/presenter-server/src/router/interpreter_tips.rs"
+  - "crates/presenter-ui/src/pages/interpreter.rs"
+  - "crates/presenter-ui/src/pages/sepkar.rs"
+  - "crates/presenter-ui/src/components/interpreter/**"
+  - "crates/presenter-ui/src/ws/passive.rs"
+  - "crates/presenter-ui/src/state/interpreter.rs"
+  - "crates/presenter-ui/styles/interpreter.css"
+  - "crates/presenter-ui/styles/sepkar.css"
+  - "tests/e2e/interpreter-tips.spec.ts"
 ---
 
 # Šepkár tips (#852 spec §9, units S1a/S1b)
@@ -64,3 +72,40 @@ paths:
   tip's id), never the earlier sender. The
   routes are person-triggered (no timer polling), so `router/request_log.rs` quiet lists stay as they
   are.
+
+## Pages (S1b): /ui/sepkar and /ui/interpreter
+
+- **Socket = `ws::passive::use_passive_websocket`** (per event, presence-free, "connected" on the
+  first frame, 5 s silent → reconnect, back after > 30 s hidden → reconnect, every attempt numbered
+  so an older socket / timer stands down). Never `use_live_websocket` (its latest-value slot
+  coalesces) and never the stage socket (it registers a stage display).
+- **Resync** = `GET /interpreter/tips` on load and on every `connects` change; `FetchGuard` lets only
+  the newest fetch land and drops it when a live list or an own write arrived meanwhile.
+- **The interpreter page is not a stage layout.** `?layout=tv` shows a notice until C5b. Areas render
+  only with data: `data-transcript="absent"` makes the side column the whole page; C5a adds its slots
+  to `TabletLayout`, never a second page.
+- **Tips area:** keyed `<For>` by id (tips are immutable). Highlight = `data-new` fixed at mount + a
+  CSS animation (no timer). Swipe = pointer events with `touch-action: pan-y`; the card captures the
+  pointer so a mouse drag that leaves it still ends, but NEVER on a press that starts on ✕ (capture
+  would retarget that click). A hide is optimistic: `pending_dismiss` keeps the tip out of every list
+  until its POST answered, and a Späť pressed meanwhile waits for it (`restore_after`). The undo
+  offer is a ticketed 5 s `Timeout` (`try_` signal calls inside timers).
+- **Errors:** the tablet shows `tip_error_text` (the server's message only for 404 / 409 / 422 / 429,
+  else a fixed Slovak line — never raw network or proxy text); the šepkár page shows
+  `sepkar_error_text` (the server's text verbatim for 422 / 429 only) and keeps the fields.
+- **Šepkár page:** never blocks a send. The page's ROOT element is `.sepkar__root` — the `<body>` itself
+  carries the class `sepkar` (like `interpreter`), so a bare `.sepkar` rule would also style the body.
+  A success clears only the fields still holding what was sent (the šepkár may have typed on) and
+  refocuses Slovo only when none was touched. Enter: name → Slovo → Preklad; Preklad / Poznámka send
+  (an IME-composition Enter never does). User text is a text node, never HTML.
+- **CSS** is bundled globally: scope to `body.sepkar` / `body.interpreter`. `tablet.css` sets
+  `html { overflow: hidden }`, so `body.sepkar` is the scroll box. Dimmed rows keep ≥ 4.5:1 (dim the
+  text colour, never an `opacity` on the row).
+- **E2E (`interpreter-tips.spec.ts`):** one server per file, `beforeEach` dismiss-all, a distinct
+  sender name per test, ≤ 30 accepted tips per minute across the file (20 today). The šepkár list
+  shows ALL of today's tips, dismissed ones too, so every word a test looks for there is unique across
+  the file. 422 / 429 come from the REAL server (empty / over-long note, a 6th tip in a minute):
+  Chrome logs each as "Failed to load resource", so that test asserts exactly one 422 line and one 429
+  line and an otherwise empty console. Device profiles + fit helpers (`PHONE_390`, `TABLET_1180`,
+  `assertNoHorizontalOverflow`, `assertMinFontSize`, `assertMinTapTarget`, `touchDrag`) live in
+  `support.ts`. Lost frames: `page.routeWebSocket` + `close({code: 4000})`.
