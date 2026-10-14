@@ -287,7 +287,12 @@ mod tests {
             }
         }
 
-        let status = poll_status(&http, &base, |s| s["mics"][0]["packets"] == 94).await;
+        // the 5th frame completes with the 93rd packet (the Python mirror of
+        // rubato's Fft), so both are awaited: the 94th may still be in flight
+        let status = poll_status(&http, &base, |s| {
+            s["mics"][0]["packets"] == 94 && s["mics"][0]["framesOut"] == 5
+        })
+        .await;
         let mic = &status["mics"][0];
         assert_eq!(mic["state"], "receiving");
         assert_eq!(mic["packets"], json!(94));
@@ -296,9 +301,31 @@ mod tests {
             json!({"rateHz": 48000, "channels": 1, "sampleType": "int16"})
         );
         assert_eq!(mic["framesPerPacket"], json!(256));
+        assert_chain_fields(mic);
+        assert_eq!(status["rejected"][0]["notVban"], json!(1));
         assert_eq!(mic["sender"], json!(tx.local_addr().unwrap().to_string()));
         assert_eq!(status["unmatched"][0]["streamName"], "Stream1");
         assert_eq!(status["unmatched"][0]["format"]["channels"], json!(2));
+    }
+
+    /// C1a-3: the counter rule's and the chain's fields of the integration
+    /// test's mic (counter 10 was left out; a 1 kHz tone at half scale).
+    fn assert_chain_fields(mic: &Value) {
+        assert_eq!(mic["lostPackets"], json!(1));
+        assert_eq!(
+            (
+                mic["latePackets"].clone(),
+                mic["resyncs"].clone(),
+                mic["droppedBlocks"].clone()
+            ),
+            (json!(0), json!(0), json!(0))
+        );
+        let level = mic["levelDbfs"].as_f64().unwrap();
+        assert!(
+            (-9.6..=-8.5).contains(&level),
+            "1 kHz at half scale ≈ −9.03 dBFS: {level}"
+        );
+        assert_eq!(mic["voiced"], json!(true));
     }
 
     async fn poll_status(

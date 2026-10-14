@@ -4,6 +4,7 @@
 //! loopback UDP tests on `127.0.0.1:0` with bounded 5 s polls (`wait_for`).
 
 use super::health::{ListenHealth, PacketSeen, UnmatchedCount, RECENT_CAP};
+use super::mic_chain::QUEUE_CAPACITY;
 use super::vban_rx::{receive, MicRouter, SocketEnd, Streak};
 use super::*;
 use crate::tracing_capture::{quoted, Capture};
@@ -787,4 +788,267 @@ async fn a_chain_of_an_older_update_cannot_write_and_a_kept_mics_chain_can() {
         (silent.state, silent.level_dbfs, silent.voiced),
         (MicState::NoAudio, None, false)
     );
+}
+
+// ---- the hand-over (C1a-3): via handle_datagram, explicit instants ---------
+// On the current-thread test runtime a mic's chain task cannot run before the
+// test awaits, so `queued` shows exactly what the receive path handed over.
+
+#[tokio::test]
+async fn a_counter_gap_inserts_silence_and_counts_the_lost_packets() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    for _ in 0..2 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    guest.skip(2);
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!(
+        (mic.packets, mic.lost_packets, mic.late_packets, mic.resyncs),
+        (3, 2, 0, 0)
+    );
+    assert_eq!(router.queued("guest"), vec![(0, 256), (0, 256), (512, 256)]);
+}
+
+#[tokio::test]
+async fn a_late_or_duplicate_packet_is_dropped_and_counted() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    let packets: Vec<Vec<u8>> = (0..3).map(|_| next_packet(&mut guest)).collect();
+    for packet in packets.iter().chain([&packets[1], &packets[2]]) {
+        router.handle_datagram(packet, addr(GUEST), t0);
+    }
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!((mic.packets, mic.late_packets, mic.lost_packets), (5, 2, 0));
+    assert_eq!(
+        router.queued("guest").len(),
+        3,
+        "late packets never reach the chain"
+    );
+}
+
+#[tokio::test]
+async fn a_jump_of_more_than_a_second_resyncs_and_counting_goes_on() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    guest.skip(187); // exactly one second of 256-frame packets
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    guest.skip(188); // one packet more than a second: a sender restart
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!((mic.lost_packets, mic.resyncs, mic.packets), (187, 1, 4));
+    let silences: Vec<usize> = router
+        .queued("guest")
+        .iter()
+        .map(|(silence, _)| *silence)
+        .collect();
+    assert_eq!(
+        silences,
+        vec![0, 187 * 256, 0, 0],
+        "a resync inserts nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_counter_wraps_at_u32_max_without_a_gap() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder().starting_at(u32::MAX - 1);
+    for _ in 0..4 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    let mic = status_of(&service, "guest", t0);
+    assert_eq!(
+        (mic.packets, mic.lost_packets, mic.late_packets, mic.resyncs),
+        (4, 0, 0, 0)
+    );
+}
+
+#[tokio::test]
+async fn a_full_queue_drops_the_oldest_block_and_counts_it() {
+    // The chain task cannot run before this test awaits (current-thread
+    // runtime), so the queue fills exactly as on a box whose chain fell
+    // behind — and the receive path never waits.
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    for _ in 0..QUEUE_CAPACITY + 5 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    assert_eq!(status_of(&service, "guest", t0).dropped_blocks, 5);
+    assert_eq!(router.queued("guest").len(), QUEUE_CAPACITY);
+}
+
+#[tokio::test]
+async fn a_second_sender_of_the_stream_is_ignored_until_the_first_is_silent_for_3_s() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let (mut first, mut second) = (guest_encoder(), guest_encoder().starting_at(5_000));
+    router.handle_datagram(&next_packet(&mut first), addr(GUEST), t0);
+    let t1 = t0 + Duration::from_millis(1_000);
+    router.handle_datagram(&next_packet(&mut second), addr(OTHER), t1);
+    let mic = status_of(&service, "guest", t1);
+    assert_eq!((mic.packets, mic.other_sender_packets), (1, 1));
+    assert_eq!(mic.sender.as_deref(), Some(GUEST));
+    let t3 = t0 + Duration::from_millis(3_000);
+    router.handle_datagram(&next_packet(&mut second), addr(OTHER), t3);
+    let mic = status_of(&service, "guest", t3);
+    assert_eq!(
+        (mic.packets, mic.other_sender_packets, mic.resyncs),
+        (2, 1, 0),
+        "the new sender starts its own count: no resync"
+    );
+    assert_eq!(mic.sender.as_deref(), Some(OTHER));
+}
+
+#[tokio::test]
+async fn lost_packet_warnings_follow_the_power_of_two_gate() {
+    let capture = Capture::install();
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    for _ in 0..5 {
+        guest.skip(1);
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    assert_eq!(status_of(&service, "guest", t0).lost_packets, 5);
+    let warnings = capture.events_with_message("mic lost VBAN packets");
+    let events: Vec<&str> = warnings.iter().filter_map(|w| w.field("events")).collect();
+    assert_eq!(events, vec!["1", "2", "4"]);
+}
+
+#[tokio::test]
+async fn a_rename_keeps_the_chain_and_a_new_channel_restarts_it() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut guest = guest_encoder();
+    for _ in 0..3 {
+        router.handle_datagram(&next_packet(&mut guest), addr(GUEST), t0);
+    }
+    let mut renamed = mic("guest", "GUEST_EN", None);
+    renamed.name = "Hosť z Londýna".into();
+    router.update(&[renamed]);
+    assert_eq!(
+        router.queued("guest").len(),
+        3,
+        "the same chain (and its queue) goes on"
+    );
+    assert_eq!(status_of(&service, "guest", t0).packets, 3);
+    let mut right = mic("guest", "GUEST_EN", None);
+    right.channel = MicChannel::Right;
+    router.update(&[right]);
+    assert!(
+        router.queued("guest").is_empty(),
+        "another channel: a new chain"
+    );
+    assert_eq!(status_of(&service, "guest", t0).packets, 0);
+}
+
+#[tokio::test]
+async fn rejects_are_counted_per_sender_and_kind() {
+    let (service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let good = next_packet(&mut guest_encoder());
+    let with = |index: usize, value: u8| {
+        let mut bytes = good.clone();
+        bytes[index] = value;
+        bytes
+    };
+    router.handle_datagram(b"hello", addr(GUEST), t0);
+    router.handle_datagram(&with(4, 0x40 | 3), addr(GUEST), t0); // VBAN-TEXT
+    router.handle_datagram(&with(7, 0x10 | 1), addr(GUEST), t0); // VBCA codec
+    router.handle_datagram(&with(7, 0x05), addr(GUEST), t0); // FLOAT64
+    router.handle_datagram(&good[..good.len() - 2], addr(GUEST), t0); // one sample short
+    router.handle_datagram(b"x", addr(OTHER), t0);
+    let status = service.with_health(|health| health.snapshot(&[], t0));
+    assert_eq!(status.rejected.len(), 2);
+    let guest = status
+        .rejected
+        .iter()
+        .find(|r| r.sender == "192.0.2.10")
+        .unwrap();
+    assert_eq!(
+        (
+            guest.not_vban,
+            guest.non_audio,
+            guest.unsupported_codec,
+            guest.unsupported_type,
+            guest.corrupt
+        ),
+        (1, 1, 1, 1, 1)
+    );
+    assert_eq!(status_of(&service, "guest", t0).packets, 0);
+}
+
+#[tokio::test]
+async fn non_audio_vban_is_counted_but_logged_at_debug_only() {
+    let capture = Capture::install();
+    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let mut text = next_packet(&mut guest_encoder());
+    text[4] = 0x40 | 3;
+    for _ in 0..4 {
+        router.handle_datagram(&text, addr(GUEST), t0);
+    }
+    let warnings: Vec<_> = capture
+        .events(MIC_TARGET)
+        .into_iter()
+        .filter(|event| event.level == tracing::Level::WARN)
+        .collect();
+    assert!(
+        warnings.is_empty(),
+        "VB-Matrix's VBAN-TEXT is normal traffic: {warnings:?}"
+    );
+    router.handle_datagram(b"garbage", addr(GUEST), t0);
+    let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
+    assert_eq!(
+        warned.len(),
+        0,
+        "the sender's 5th reject is not a power of two"
+    );
+    router.handle_datagram(b"garbage", addr(OTHER), t0);
+    let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
+    assert_eq!(warned.len(), 1, "another sender's 1st reject warns");
+}
+
+#[tokio::test]
+async fn real_udp_packets_come_out_as_16_khz_frames_at_the_tone_level() {
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
+    service.start(addr("127.0.0.1:0"));
+    let bound = wait_for(&service, "bound", |s| s.socket.state == SocketState::Bound).await;
+    let vban: SocketAddr = bound.socket.local_addr.unwrap().parse().unwrap();
+    let tx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut guest = guest_encoder();
+    // 75 packets = 19 200 frames = 20 chunks of 20 ms = 6 400 samples = 4
+    // frames; the 4th completes only with the 75th packet (the Python mirror
+    // of rubato's Fft: the last frame −9.03 dBFS)
+    let block = tone(48_000, 1_000.0, 0.5, 0, 75 * 256, 1);
+    for (k, chunk) in block.chunks(256).enumerate() {
+        tx.send_to(&guest.packet(chunk).unwrap(), vban)
+            .await
+            .unwrap();
+        if k % 4 == 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    let status = wait_for(&service, "4 frames counted", |s| s.mics[0].frames_out == 4).await;
+    let mic = &status.mics[0];
+    assert_eq!(
+        (mic.packets, mic.lost_packets, mic.state),
+        (75, 0, MicState::Receiving)
+    );
+    let level = mic.level_dbfs.unwrap();
+    assert!(
+        (-9.6..=-8.5).contains(&level),
+        "1 kHz at half scale ≈ −9.03 dBFS: {level}"
+    );
+    assert!(mic.voiced);
 }

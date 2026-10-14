@@ -3,15 +3,20 @@
 //! never waits on anything downstream (spec rev. 13 p. 11): decode, route and
 //! count, synchronously. [`supervise`] binds (retrying 1, 2, 4 … 60 s) and
 //! closes the socket when the list is emptied; [`MicRouter`] keeps a mic whose
-//! stream name and sender stay across a save. Repeated log lines go through
-//! the #484 power-of-two gate.
+//! stream name, sender and channel stay across a save. Per mic: a sender lock
+//! (a second sender of the same stream is ignored until the locked one is
+//! silent for 3 s), the counter rule and a bounded drop-oldest queue to the
+//! mic's chain (`mic_chain`). Refused datagrams are counted per sender.
+//! Repeated log lines go through the #484 power-of-two gate, read from the
+//! health counters.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use presenter_core::audio::vban::{decode_packet, VbanPacket};
+use presenter_core::audio::sequence::{SequenceVerdict, StreamSequencer};
+use presenter_core::audio::vban::{decode_packet, VbanPacket, VbanReject};
 use presenter_core::listen::mics::MicConfig;
 use presenter_core::listen::status::SocketState;
 use tokio::net::UdpSocket;
@@ -19,12 +24,13 @@ use tokio::sync::watch;
 use tokio::time::{interval, sleep, Instant, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use super::health::{ListenHealth, PacketSeen, UnmatchedCount, RECENT_CAP};
+use super::health::{ListenHealth, PacketSeen, PacketTally, UnmatchedCount, RECENT_CAP};
+use super::mic_chain::{run_chain, Block, BlockQueue, QUEUE_CAPACITY};
 use super::{bind_retry_delay, should_log_event, ListenService, MIC_TARGET, NO_AUDIO_AFTER};
 
 /// Big enough for any datagram (a conformant VBAN packet is ≤ 1464 bytes).
 const RECV_BUFFER_LEN: usize = 65_536;
-/// The "lost audio" line is evaluated this often.
+/// Packets per second and the "lost audio" line are evaluated this often.
 const TICK: Duration = Duration::from_secs(1);
 /// A socket is healthy once it received a datagram or stayed bound this long;
 /// only then does a later failure start the retry pause at 1 s again.
@@ -207,9 +213,21 @@ struct MicInput {
     config: MicConfig,
     /// Parsed once per saved list, never per packet.
     sender_ip: Option<IpAddr>,
+    /// The sender (`ip:port`) the mic is locked to.
+    source: Option<SocketAddr>,
     last_packet: Option<Instant>,
     /// "receives" was logged and "lost audio" not yet.
     receiving: bool,
+    sequencer: StreamSequencer,
+    queue: Arc<BlockQueue>,
+}
+
+impl Drop for MicInput {
+    /// The chain drains its queue and ends (the mic was dropped or changed,
+    /// or the socket closed).
+    fn drop(&mut self) {
+        self.queue.close();
+    }
 }
 
 impl MicRouter {
@@ -222,9 +240,10 @@ impl MicRouter {
         router
     }
 
-    /// A saved list: a mic whose stream name and sender stay keeps its state
-    /// and counters (a rename or a language change resets nothing); every
-    /// other mic starts fresh; an unlisted one goes.
+    /// A saved list: a mic whose stream name, sender and channel stay keeps
+    /// its state, counters and chain (a rename or a language change resets
+    /// nothing); every other mic starts fresh with a new chain counting with
+    /// this update's generation; an unlisted one goes (its chain drains).
     pub(super) fn update(&mut self, configs: &[MicConfig]) {
         let mut old: HashMap<String, MicInput> = self
             .mics
@@ -244,8 +263,10 @@ impl MicRouter {
             .map(|config| config.id.as_str())
             .filter(|id| !kept.contains(id))
             .collect();
-        self.service
+        let generation = self
+            .service
             .with_health(|health| health.set_mics(&kept, &fresh));
+        let service = self.service.clone();
         self.mics = configs
             .iter()
             .map(|config| match old.remove(&config.id) {
@@ -253,7 +274,7 @@ impl MicRouter {
                     input.config = config.clone();
                     input
                 }
-                _ => MicInput::new(config),
+                _ => MicInput::start(&service, config, generation),
             })
             .collect();
     }
@@ -262,12 +283,7 @@ impl MicRouter {
         let packet = match decode_packet(datagram) {
             Ok(packet) => packet,
             Err(reject) => {
-                debug!(
-                    target: MIC_TARGET,
-                    %from,
-                    %reject,
-                    "dropped a datagram that is not usable VBAN audio"
-                );
+                self.reject(from, reject, now);
                 return;
             }
         };
@@ -279,12 +295,13 @@ impl MicRouter {
             .iter()
             .position(|mic| mic.matches(&packet.stream_name, sender));
         match index {
-            Some(index) => self.mics[index].accept(&self.service, &packet, from, now),
+            Some(index) => self.mics[index].accept(&self.service, packet, from, now),
             None => self.unmatched(&packet, from, now),
         }
     }
 
     pub(super) fn on_tick(&mut self, now: Instant) {
+        self.service.with_health(|health| health.on_tick(now));
         for mic in &mut self.mics {
             let stale = mic
                 .last_packet
@@ -298,6 +315,37 @@ impl MicRouter {
                     "mic lost audio — no VBAN packet for 3 s"
                 );
             }
+        }
+    }
+
+    /// `(silence_frames, samples)` of the blocks a mic's chain has not taken yet.
+    #[cfg(test)]
+    pub(super) fn queued(&self, mic_id: &str) -> Vec<(usize, usize)> {
+        self.mics
+            .iter()
+            .find(|mic| mic.config.id == mic_id)
+            .map(|mic| mic.queue.peek())
+            .unwrap_or_default()
+    }
+
+    /// A refused datagram: counted per sender (canonical IP, as routing reads
+    /// it) and kind, WARN on the sender's power-of-two totals.
+    fn reject(&self, from: SocketAddr, reject: VbanReject, now: Instant) {
+        let sender = from.ip().to_canonical();
+        let total = self
+            .service
+            .with_health(|health| health.note_reject(sender, reject, now));
+        if matches!(reject, VbanReject::NonAudio(_)) {
+            // VB-Matrix also speaks VBAN-TEXT / SERVICE: counted, never a WARN.
+            debug!(target: MIC_TARGET, %from, %reject, total, "ignored a non-audio VBAN packet");
+        } else if should_log_event(total) {
+            warn!(
+                target: MIC_TARGET,
+                %from,
+                %reject,
+                total,
+                "dropped a datagram that is not usable VBAN audio"
+            );
         }
     }
 
@@ -354,18 +402,33 @@ fn unmatched_lines(seen: UnmatchedCount) -> (bool, bool) {
 }
 
 impl MicInput {
-    fn new(config: &MicConfig) -> Self {
+    /// The mic's state and its chain task, counting with `generation`.
+    fn start(service: &ListenService, config: &MicConfig, generation: u64) -> Self {
+        let queue = Arc::new(BlockQueue::new(QUEUE_CAPACITY));
+        tokio::spawn(run_chain(
+            service.clone(),
+            config.id.clone(),
+            config.channel,
+            generation,
+            Arc::clone(&queue),
+        ));
         Self {
             sender_ip: config.sender_ip_addr(),
             config: config.clone(),
+            source: None,
             last_packet: None,
             receiving: false,
+            sequencer: StreamSequencer::default(),
+            queue,
         }
     }
 
-    /// The same stream name and sender: the mic keeps its state on a save.
+    /// The same stream name, sender and channel: the mic keeps its state,
+    /// counters and chain on a save (a rename or a language change).
     fn receives_like(&self, config: &MicConfig) -> bool {
-        self.config.stream_name == config.stream_name && self.config.sender_ip == config.sender_ip
+        self.config.stream_name == config.stream_name
+            && self.config.sender_ip == config.sender_ip
+            && self.config.channel == config.channel
     }
 
     /// Exact stream name, and the configured sender if there is one.
@@ -373,18 +436,28 @@ impl MicInput {
         self.config.stream_name == stream_name && self.sender_ip.is_none_or(|ip| ip == from)
     }
 
+    /// Sender lock → counter rule → the chain's queue (never waits) → counters.
     fn accept(
         &mut self,
         service: &ListenService,
-        packet: &VbanPacket,
+        packet: VbanPacket,
         from: SocketAddr,
         now: Instant,
     ) {
         let silent = self
             .last_packet
             .is_none_or(|at| now.saturating_duration_since(at) >= NO_AUDIO_AFTER);
+        if !silent && self.source.is_some_and(|source| source != from) {
+            self.other_sender(service, from);
+            return;
+        }
+        if self.source != Some(from) {
+            // a new sender starts its own count: never read as a gap or a resync
+            self.sequencer.reset();
+            self.source = Some(from);
+        }
         if silent {
-            self.log_receiving(packet, from);
+            self.log_receiving(&packet, from);
         }
         self.last_packet = Some(now);
         let seen = PacketSeen {
@@ -393,7 +466,77 @@ impl MicInput {
             frames: packet.frames,
             at: now,
         };
-        service.with_health(|health| health.record_packet(&self.config.id, seen));
+        let counter = packet.counter;
+        let verdict =
+            self.sequencer
+                .observe(counter, usize::from(packet.frames), packet.format.rate_hz);
+        let silence_frames = match verdict {
+            SequenceVerdict::Gap { silence_frames, .. } => silence_frames,
+            _ => 0,
+        };
+        let dropped = verdict != SequenceVerdict::Late
+            && self.queue.push(Block {
+                format: packet.format,
+                silence_frames,
+                samples: packet.samples,
+            });
+        let tally = service
+            .with_health(|health| health.record_packet(&self.config.id, seen, verdict, dropped));
+        self.log_verdict(verdict, counter, tally);
+    }
+
+    fn other_sender(&self, service: &ListenService, from: SocketAddr) {
+        let packets = service.with_health(|health| health.record_other_sender(&self.config.id));
+        if should_log_event(packets) {
+            warn!(
+                target: MIC_TARGET,
+                mic = self.config.id.as_str(),
+                locked = ?self.source,
+                %from,
+                packets,
+                "mic ignores a second sender of its VBAN stream"
+            );
+        }
+    }
+
+    /// WARN on the 1st and every power-of-two event of a kind, read from the
+    /// health counters (`PacketTally`), never from a second set of counters.
+    fn log_verdict(&self, verdict: SequenceVerdict, counter: u32, tally: PacketTally) {
+        let mic = self.config.id.as_str();
+        if should_log_event(tally.events) {
+            match verdict {
+                SequenceVerdict::Gap { missing, .. } => warn!(
+                    target: MIC_TARGET,
+                    mic,
+                    missing,
+                    events = tally.events,
+                    "mic lost VBAN packets — silence inserted"
+                ),
+                SequenceVerdict::Late => warn!(
+                    target: MIC_TARGET,
+                    mic,
+                    counter,
+                    events = tally.events,
+                    "mic dropped a late or duplicate VBAN packet"
+                ),
+                SequenceVerdict::Resync => warn!(
+                    target: MIC_TARGET,
+                    mic,
+                    counter,
+                    events = tally.events,
+                    "mic VBAN counter jumped more than a second — resynced"
+                ),
+                SequenceVerdict::InOrder => {}
+            }
+        }
+        if should_log_event(tally.dropped_blocks) {
+            warn!(
+                target: MIC_TARGET,
+                mic,
+                dropped_blocks = tally.dropped_blocks,
+                "mic chain queue full — dropped the oldest block"
+            );
+        }
     }
 
     fn log_receiving(&mut self, packet: &VbanPacket, from: SocketAddr) {
