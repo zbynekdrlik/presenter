@@ -100,6 +100,27 @@ pub(crate) fn no_fold_candidate(book_text: &str) -> Option<BookCandidate> {
     Some(candidate(index, score, book_text.trim()))
 }
 
+/// Per book index: does a table form or a stored name carry `ordinal`? The
+/// ordinal comes from the name, not the USFM code: `1` = `1. Mojžišova` (GEN)
+/// as well as `1 Kor`, `3` also = Roháček's `Tretia kniha Kráľov` (1KI).
+pub(crate) fn books_with_ordinal(ordinal: u8, stored: &[StoredName]) -> [bool; 66] {
+    let mut books = [false; 66];
+    let table = BOOK_KEYS
+        .iter()
+        .filter(|row| row.3 & 0x0F == ordinal)
+        .map(|row| row.2);
+    let names = stored
+        .iter()
+        .filter(|name| name.ordinal == ordinal)
+        .map(|name| name.index);
+    for index in table.chain(names) {
+        if let Some(slot) = books.get_mut(usize::from(index)) {
+            *slot = true;
+        }
+    }
+    books
+}
+
 pub(crate) fn index_of(code: &str) -> Option<u8> {
     BOOK_CODES
         .iter()

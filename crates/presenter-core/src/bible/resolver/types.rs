@@ -166,7 +166,8 @@ pub enum Resolution {
         book: BookRef,
         alternatives: Vec<BookRef>,
     },
-    /// Only an ordinal typed (`1`, `I.`, `prvý`).
+    /// Only an ordinal typed (`1`, `I.`, `prvý`, `4.`); `books` = every book
+    /// with a name under that ordinal (`1` → 1. Mojžišova … 1 Ján), canonical order.
     Incomplete { ordinal: u8, books: Vec<BookRef> },
     /// `11:1` → hint "Napíš aj knihu"; words only → text search (no hint).
     NoBook {

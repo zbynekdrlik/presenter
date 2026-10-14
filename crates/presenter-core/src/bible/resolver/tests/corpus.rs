@@ -209,8 +209,12 @@ fn resolution_problems(
         }
         ("incomplete", Resolution::Incomplete { ordinal, books })
             if *ordinal == 1
-                && !books.is_empty()
-                && books.iter().all(|b| b.code.starts_with('1')) =>
+                && books.iter().any(|b| b.code == "GEN")
+                && structure
+                    .books()
+                    .iter()
+                    .filter(|b| b.code.starts_with('1'))
+                    .all(|b| books.iter().any(|got| got.code == b.code)) =>
         {
             Vec::new()
         }

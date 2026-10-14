@@ -69,8 +69,16 @@ Jonah, Job …) are skipped by the generator.
   names (a new translation's own names work without regenerating the table). So a corpus
   `alternatives` code must already be a table candidate, and `match: fuzzy` is checked on the
   table-only `parse` candidates.
-- Typing in progress is normal input: trailing `:` `,` `-` `až` are ignored, words after the
-  numbers go to `leftover`, at most 64 chapter/verse tokens are parsed.
+- Typing in progress is normal input: separators after the parsed numbers with no number behind
+  them — `:` `,` `.` `-` and a dangling `až`/`az` (`zid 11:1 až` = `zid 11:1-`) — are swallowed,
+  never `leftover`; words after the numbers go to `leftover` (`zid 11:1 až viera` → `viera`); a
+  failed tail that still holds a number stays (`zid 11,1:3` → `3`). At most 64 chapter/verse
+  tokens are parsed. `split_input` NFC-normalises first: NFD `az` + U+030C is a combining mark,
+  not a letter, so without it the `až` range broke.
+- An ordinal alone (`1`–`5`, `I.`–`V.`, `prvá` … `piata`, exactly as the fold reads them) is
+  `Incomplete`; its `books` are the main translation's books whose table forms or stored names
+  carry that ORDINAL (`row.3 & 0x0F`), in canonical order — never the USFM code's digit:
+  `1` → 1. Mojžišova (GEN) … 1 Ján, `4.` → 4. Mojžišova + Roháček's `Štvrtá kniha Kráľov` (2KI).
 - Single-chapter books (OBA PHM 2JN 3JN JUD): a lone `n > 1` and `n-m` are verses, `1` is the book.
 - `counted()` lives here (`hint.rs`); presenter-ui's `state/bible_range.rs` imports it, so the
   Bible page hint and the resolver hints share one wording.

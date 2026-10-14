@@ -76,16 +76,45 @@ fn out_of_range_fix_labels() {
 }
 
 #[test]
-fn incomplete_and_no_book_inputs() {
+fn an_ordinal_alone_lists_the_books_named_with_it() {
     let structure = seb();
-    for input in ["1", "1.", "I.", "prvý"] {
+    let first = [
+        "GEN", "1SA", "1KI", "1CH", "1CO", "1TH", "1TI", "1PE", "1JN",
+    ];
+    let second = [
+        "EXO", "2SA", "2KI", "2CH", "2CO", "2TH", "2TI", "2PE", "2JN",
+    ];
+    let cases: [(&str, u8, &[&str]); 13] = [
+        ("1", 1, &first),
+        ("1.", 1, &first),
+        ("I.", 1, &first),
+        ("prvý", 1, &first),
+        ("prvá", 1, &first),
+        ("2", 2, &second),
+        ("III.", 3, &["LEV", "1KI", "3JN"]),
+        ("IV.", 4, &["NUM", "2KI"]),
+        ("4.", 4, &["NUM", "2KI"]),
+        ("štvrtá", 4, &["NUM", "2KI"]),
+        ("V.", 5, &["DEU"]),
+        ("piata", 5, &["DEU"]),
+        ("5", 5, &["DEU"]),
+    ];
+    for (input, want_ordinal, want_books) in cases {
         let Resolution::Incomplete { ordinal, books } = lookup(input, &structure) else {
             panic!("{input} must be incomplete");
         };
-        assert_eq!(ordinal, 1, "{input}");
-        assert!(books.iter().any(|b| b.code == "1CO"), "{input}");
-        assert!(books.iter().all(|b| b.code.starts_with('1')), "{input}");
+        let codes: Vec<&str> = books.iter().map(|b| b.code.as_str()).collect();
+        assert_eq!(
+            (ordinal, codes.as_slice()),
+            (want_ordinal, want_books),
+            "{input}"
+        );
     }
+}
+
+#[test]
+fn no_book_inputs() {
+    let structure = seb();
     let no_book = |segments: Vec<Segment>, hint: Option<&str>| Resolution::NoBook {
         segments,
         hint: hint.map(str::to_string),

@@ -62,6 +62,10 @@ fn the_book_text_ends_at_the_first_digit_after_an_ordinal() {
     }
     assert_eq!(split_input("1").bare_ordinal, Some(1));
     assert_eq!(split_input("2.").bare_ordinal, Some(2));
+    assert_eq!(split_input("4.").bare_ordinal, Some(4));
+    assert_eq!(split_input("5").bare_ordinal, Some(5));
+    assert_eq!(split_input("6").bare_ordinal, None);
+    assert_eq!(split_input("6").spec, Some(RawSpec::Chapter(6)));
     assert_eq!(split_input("11").bare_ordinal, None);
     assert_eq!(split_input("11").spec, Some(RawSpec::Chapter(11)));
 }
@@ -71,8 +75,10 @@ fn trailing_separators_are_ignored_and_unused_text_is_leftover() {
     for (input, want, leftover) in [
         ("zid 11:", RawSpec::Chapter(11), ""),
         ("zid 11:1-", verses(11, &[(1, 1)]), ""),
-        ("zid 11:1 až", verses(11, &[(1, 1)]), "až"),
+        ("zid 11:1 až", verses(11, &[(1, 1)]), ""),
+        ("zid 11 až", RawSpec::Chapter(11), ""),
         ("zid 11:1 viera", verses(11, &[(1, 1)]), "viera"),
+        ("zid 11:1 až viera", verses(11, &[(1, 1)]), "viera"),
         ("zid 11,1:3", verses(11, &[(1, 1)]), "3"),
         ("zid 99999999", RawSpec::Chapter(u16::MAX), ""),
     ] {
@@ -80,6 +86,18 @@ fn trailing_separators_are_ignored_and_unused_text_is_leftover() {
         assert_eq!(split.spec, Some(want), "{input}");
         assert_eq!(split.leftover, leftover, "{input}");
     }
+}
+
+#[test]
+fn an_nfd_az_is_a_range_like_the_nfc_one() {
+    let nfd = split_input("zid 11,1 az\u{30C} 3");
+    let nfc = split_input("zid 11,1 až 3");
+    assert_eq!(nfd.spec, Some(verses(11, &[(1, 3)])));
+    assert_eq!(nfd.leftover, "");
+    assert_eq!(
+        (nfd.spec, nfd.leftover, nfd.book_text),
+        (nfc.spec, nfc.leftover, nfc.book_text)
+    );
 }
 
 #[test]

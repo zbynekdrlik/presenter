@@ -4,10 +4,13 @@
 //! (`1kor13:4`). Chapter–verse separator: `:` (then `,` and `.` list verses),
 //! else `,` (then `.` lists), else the first `.`, else a space between two
 //! numbers. `-`, `–`, `—`, `až`, `az` make ranges. The console resolves on
-//! every keystroke, so trailing separators are ignored and text the grammar
-//! cannot use is returned as `leftover`.
+//! every keystroke, so trailing separators (a dangling `až` too) are ignored
+//! and text the grammar cannot use is returned as `leftover`. The input is
+//! NFC-normalised first, so an NFD `až` (`a` + `z` + U+030C) is still a range.
 
 use std::cmp::Ordering;
+
+use unicode_normalization::UnicodeNormalization;
 
 use super::fold::strip_marks;
 use super::types::RawSpec;
@@ -40,7 +43,7 @@ impl Tok {
 }
 
 pub(crate) fn split_input(input: &str) -> SplitInput {
-    let text: String = input.trim().chars().map(normalize_dash).collect();
+    let text: String = input.trim().nfc().map(normalize_dash).collect();
     let Some(cut) = spec_start(&text) else {
         return SplitInput {
             book_text: text,
@@ -111,13 +114,16 @@ fn leading_ordinal_end(text: &str) -> Option<usize> {
     None
 }
 
-/// `1`, `2.`, `3 ` alone: an ordinal waiting for its book.
+/// `1`–`5` alone, optionally with a `.` (`1`, `4.`): an ordinal waiting for
+/// its book — the same range the fold reads (`4.` = the fourth book of Moses).
 fn bare_ordinal(spec_text: &str) -> Option<u8> {
     let trimmed = spec_text.trim();
     match trimmed.strip_suffix('.').unwrap_or(trimmed).trim_end() {
         "1" => Some(1),
         "2" => Some(2),
         "3" => Some(3),
+        "4" => Some(4),
+        "5" => Some(5),
         _ => None,
     }
 }
@@ -168,6 +174,8 @@ fn tokenize(text: &str) -> (Vec<Tok>, Vec<usize>) {
 }
 
 /// Parse the longest prefix the grammar understands; the rest is leftover.
+/// Separators after that prefix with no number behind them (`11:1-`,
+/// `11:1 až` typed half-way) are swallowed, never leftover.
 fn parse_spec(text: &str) -> (Option<RawSpec>, String) {
     let (toks, ends) = tokenize(text);
     let usable = toks
@@ -182,7 +190,9 @@ fn parse_spec(text: &str) -> (Option<RawSpec>, String) {
             break;
         }
         if let Some(spec) = parse_exact(&toks[..used]) {
-            let rest = &text[ends[used - 1]..];
+            let tail_has_number = toks[used..].iter().any(|t| matches!(t, Tok::Num(_)));
+            let last = if tail_has_number { used } else { toks.len() };
+            let rest = &text[ends[last - 1]..];
             let leftover = rest
                 .trim_start_matches(|c: char| c.is_whitespace() || ":,.-".contains(c))
                 .trim_end();

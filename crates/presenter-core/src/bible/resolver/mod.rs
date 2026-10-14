@@ -158,14 +158,19 @@ fn candidates_in<'s>(
         .collect()
 }
 
+/// The main translation's books that have a name under `ordinal` (table forms
+/// and its own stored names), in canonical order.
 fn incomplete(ordinal: u8, structure: &Versification) -> Resolution {
-    let prefix = char::from_digit(u32::from(ordinal), 10);
+    let numbered = rank::books_with_ordinal(ordinal, structure.stored_names());
     Resolution::Incomplete {
         ordinal,
         books: structure
             .books()
             .iter()
-            .filter(|book| prefix.is_some_and(|digit| book.code.starts_with(digit)))
+            .filter(|book| {
+                rank::index_of(&book.code)
+                    .is_some_and(|index| numbered.get(usize::from(index)) == Some(&true))
+            })
             .map(book_ref)
             .collect(),
     }
