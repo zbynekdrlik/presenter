@@ -147,9 +147,15 @@ paths:
   → off + WARN). `ListenService` holds it in a `watch<Option<NaiveDate>>`; the recorder records only
   while that date is TODAY — a restart (auto-deploy) the same day resumes, the next day it is off, a
   forgotten switch costs at most one day (VB-Matrix sends silence all day). Never make it a plain
-  on/off flag. `ListenStatus.recorder` (`RecorderStatus`): `enabled` (records today), `enabledFor`,
-  `root`, and one `MicRecording` per configured mic (`off` / `waiting` / `recording` / `error`, file,
-  bytes, `droppedFrames`, Slovak `error`).
+  on/off flag. A stored day AFTER today (switched on while the clock was ahead, NTP corrected it since)
+  would start the recorder by itself on that day: the startup read (`apply_stored_recorder`) keeps it
+  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`). A failed
+  audit row WARNs under the setting's own target (`presenter::listen::recorder` for this key). Dev
+  never inherits prod's switch: pipeline.yml's "Redirect integrations to mock endpoints" step deletes
+  the `listen.recorder` row from the prod snapshot (no row = off).
+  `ListenStatus.recorder` (`RecorderStatus`): `enabled` (records today), `enabledFor`, `root`, and one
+  `MicRecording` per configured mic (`off` / `waiting` / `recording` / `error`, file, bytes,
+  `droppedFrames`, Slovak `error`) — every mic is `off` until the writers (C1b-4).
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
   card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status

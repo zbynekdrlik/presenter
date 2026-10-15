@@ -110,11 +110,19 @@ kept for 30 days and deleted on the 31st day after its day. The retention pass r
 date: the first one 10 minutes after the service starts (so a box that boots with a wrong clock cannot
 read a date weeks ahead and delete everything), then in the first minute after each midnight. It
 deletes only the recorder's own `<mic id>_<HHMMSS>.wav` files, never a link or a foreign file, and
-removes the folder once nothing else is left in it. The recorder is OFF by default and switched per
-day (`PUT /listen/recorder` `{"enabled": true}` stores today's date in `listen.recorder`; Settings →
-"Počúvanie" → "Nahrávať dnes"): it records only on that date, so a restart the same day resumes and
-the switch turns itself off at midnight. `GET /listen/status` → `recorder` shows the switch, the
-folder and each microphone's file, bytes, dropped frames and error.
+removes the folder once nothing else is left in it.
+
+The recorder is OFF by default and switched per day: `PUT /listen/recorder` `{"enabled": true}` stores
+today's date in `listen.recorder` (`{"enabled": false}` stores `null`). It records only on that date,
+so a restart the same day resumes and the switch turns itself off at midnight; a stored date AFTER
+today (the clock was ahead when it was switched on) is cleared at startup, never obeyed later.
+`GET /listen/status` → `recorder` shows the switch (`enabled`, `enabledFor`), the folder (`root`) and
+one entry per microphone. What exists so far, by unit of #852 C1b:
+
+- C1b-3 (now): the API switch and the status; every microphone shows `off` and nothing is written yet.
+- C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` become live.
+- C1b-7: the Settings → "Počúvanie" card with the "Nahrávať dnes" switch; until then the switch is
+  reachable only through the API.
 
 | Variable                          | Default                               | Purpose |
 | --------------------------------- | ------------------------------------- | ------- |
