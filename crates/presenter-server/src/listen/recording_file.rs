@@ -3,9 +3,10 @@
 //!
 //! Retention deletes only what the recorder makes: day folders named
 //! `YYYY-MM-DD` (canonical spelling) and in them the `<mic id>_<HHMMSS>[-n].wav`
-//! regular files; a folder is removed only when that emptied it. Entries are
-//! judged by `DirEntry::file_type`, which never follows a symlink, so a linked
-//! folder or file is never entered or deleted.
+//! regular files; an expired folder is removed once it holds nothing (the pass
+//! emptied it, or it was empty already) and kept when anything else is in it.
+//! Entries are judged by `DirEntry::file_type`, which never follows a symlink,
+//! so a linked folder or file is never entered or deleted.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -31,8 +32,8 @@ pub(crate) struct PruneReport {
 }
 
 /// Delete the day folders under `root` older than the retention: their
-/// recordings, then the folder when that emptied it. A missing root is nothing
-/// to do; one folder's failure never stops the others.
+/// recordings, then the folder once it holds nothing else. A missing root is
+/// nothing to do; one folder's failure never stops the others.
 pub(crate) fn prune_recordings(root: &Path, today: NaiveDate) -> io::Result<PruneReport> {
     let opened = fs::read_dir(root).map(|entries| entries.map(root_entry));
     prune_scan(root, opened, today)

@@ -126,11 +126,19 @@ paths:
   is a temp dir, never `./recordings` in the crate — tests set their own folder and a settable clock
   with `ListenService::set_recorder_env`. ONE supervisor task, spawned by `ListenService::start` with
   the socket task (never in validate mode), ticks every 60 s even without a mic (a stated deviation
-  from C-S8: on SNV / PP it only runs the daily retention). Retention once per local date (startup,
-  then the first tick after midnight): a canonical `YYYY-MM-DD` folder whose day is more than 30 days
-  ago (`recording_expired`), only `is_recording_file_name` regular files (`DirEntry::file_type` never
-  follows a link; a linked folder is skipped), the folder only once empty; one INFO per deleted file,
-  an INFO for a folder kept, a WARN for one that failed. All I/O in `spawn_blocking`.
+  from C-S8: on SNV / PP it only runs the daily retention). Retention once per local date: the FIRST
+  pass waits `FIRST_PASS_DELAY` = 10 min after the start (`RecorderEnv::first_pass_delay`, zero under
+  `cfg(test)`, `retention_tick`) — a box that boots with a wrong clock (RTC lost, NTP not yet synced)
+  could read a date more than 30 days ahead and delete every recording; then the first tick after each
+  midnight. A canonical `YYYY-MM-DD` folder is deleted once its day is more than 30 days ago
+  (`recording_expired`: 30 days old is kept, the 31st day goes), only `is_recording_file_name` regular
+  files (`DirEntry::file_type` never follows a link; a linked folder is skipped), the folder once it
+  holds nothing else (an already empty expired folder goes too; one with a foreign file is kept). Only
+  opening the root can fail a pass: an entry that cannot be read or cleaned is a `PruneReport::failed`
+  finding and the scan goes on (`prune_scan`, the seam tests feed a failing iterator). One INFO per
+  deleted file, an INFO for a folder kept, a WARN per failed entry. All I/O in `spawn_blocking`. Like
+  the mic target, `presenter::listen::recorder` is hidden on dev by `gst-debug.conf` (observability
+  rule) — read these lines on SNV / PP.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
   card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status

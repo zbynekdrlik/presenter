@@ -1,8 +1,8 @@
 //! The recorder (#852 C1b, spec §5.5, §12). C1b-2: its folder and its
 //! retention — the day folders older than 30 days are deleted once per local
 //! date (the first pass [`FIRST_PASS_DELAY`] after the start, then in the first
-//! minute after each midnight), so a recording can never outlive 30 days.
-//! C1b-4 adds the writers.
+//! minute after each midnight), so no recording outlives its 30 days (its day
+//! folder goes on the 31st). C1b-4 adds the writers.
 //!
 //! The folder: `PRESENTER_LISTEN_RECORDINGS_DIR`, else `recordings` next to the
 //! sqlite file of `PRESENTER_DB_URL` (prod / PP `/opt/presenter/recordings`, the
