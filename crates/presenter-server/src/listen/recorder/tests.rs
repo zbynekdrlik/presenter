@@ -1353,3 +1353,33 @@ async fn a_quiet_writer_open_at_midnight_is_closed_as_the_day_ended() {
     })
     .await;
 }
+
+/// A file that was just created but whose FIRST append failed holds nothing but
+/// its header: it is removed again, like a file whose header could not be
+/// written, and no `recording stopped` line speaks of a file that never started.
+#[tokio::test]
+async fn a_first_append_that_fails_leaves_no_file_behind() {
+    let capture = Capture::install();
+    let root = tempfile::tempdir().unwrap();
+    let start = "2026-10-18T19:42:05.100";
+    let (service, _) = recording_service(root.path(), start, vec![mic("guest", "GUEST_EN")]).await;
+    fail_appends_under(root.path());
+    send(&service, "guest", 1);
+    wait_for(&service, "the write failed", |s| {
+        recording(s, "guest").state == RecordingState::Error
+    })
+    .await;
+    assert_eq!(
+        day_files(root.path()),
+        Vec::<String>::new(),
+        "no 44-byte file is kept"
+    );
+    let rec = recording(&service.status(), "guest");
+    assert_eq!((rec.file, rec.bytes), (None, 0));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        capture.events_with_message("recording stopped").is_empty(),
+        "a file that never started is not reported as stopped"
+    );
+    assert!(capture.events_with_message("recording started").is_empty());
+}
