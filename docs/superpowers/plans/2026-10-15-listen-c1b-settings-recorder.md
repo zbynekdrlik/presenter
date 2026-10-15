@@ -8433,3 +8433,10 @@ The implementer of the named lane applies these on top of the task text (they ov
   then once per new local date); writer reconciliation is a separate path that still starts IMMEDIATELY after a restart
   (a same-day restart resumes recording at once). The supervise-level paused-clock test added in C1b-2 (no deletion
   before the delay, deletion after it) must stay green unchanged.
+- **C1b-3 changed (review):** the startup read clears a FUTURE `enabledFor` (clock was ahead when switched on): off,
+  row stored as `{"enabledFor":null}`, one WARN on `RECORDER_TARGET`, a system audit row (`apply_stored_recorder`).
+  **C1b-4's reconcile tick applies the same rule at runtime** (NTP can step the clock back while the server runs:
+  an in-memory day after today = off + clear the row + WARN), with a test using the injectable clock. The audit-failure
+  WARN picks its target by key (`RECORDER_TARGET` for `listen.recorder`). The dev-deploy scrub in `pipeline.yml`
+  deletes `listen.recorder` so dev never inherits prod's switch. C1b-4 / C1b-7 update the "what each unit delivers"
+  list in `docs/configuration.md` and the rule when they land. Lane C1b-3 measures 202 prod lines.
