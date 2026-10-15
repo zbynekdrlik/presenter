@@ -115,8 +115,9 @@ removes the folder once nothing else is left in it.
 The recorder is OFF by default and switched per day: `PUT /listen/recorder` `{"enabled": true}` stores
 today's date in `listen.recorder` (`{"enabled": false}` stores `null`). It records only on that date,
 so a restart the same day resumes and the switch turns itself off at midnight; a stored date AFTER
-today (the clock was ahead when it was switched on) is cleared at the next startup; a server that keeps
-running after the clock was corrected gets the same rule from the recorder's reconcile in C1b-5.
+today (the clock was ahead when it was switched on) is cleared at the next startup, and a server that
+keeps running gets the same rule when the clock is corrected under it (the recorder looks every
+minute: it switches off, clears the stored date and logs one WARN).
 While it is on, every microphone that receives audio is written to
 `<folder>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav` (16 kHz mono 16-bit, exactly what the speech recognition
 gets; ≈ 115 MB per hour), named by the time its first sample was heard; a microphone without audio
@@ -127,11 +128,11 @@ last `file`, the audio `bytes` in it, the `droppedFrames` lost when the disk fel
 server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 
 - C1b-3: the API switch and the status.
-- C1b-4 (now): the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` are live; a
+- C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` are live; a
   failed write is retried at the next minute.
-- C1b-5: a new file whenever the audio drifts more than a second from the clock, the split at midnight,
-  the 1, 2, 4 … 60 minute back-off after a failed write, and the day-after-today check on a running
-  server.
+- C1b-5 (first part now): the day-after-today check on a running server; still to come: a new file
+  whenever the audio drifts more than a second from the clock, the split at midnight, the 1, 2, 4 … 60
+  minute back-off after a failed write.
 - C1b-7: the Settings → "Počúvanie" card with the "Nahrávať dnes" switch; until then the switch is
   reachable only through the API.
 

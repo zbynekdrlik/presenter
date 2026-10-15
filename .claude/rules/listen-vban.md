@@ -153,9 +153,16 @@ paths:
   forgotten switch costs at most one day (VB-Matrix sends silence all day). Never make it a plain
   on/off flag. A stored day AFTER today (switched on while the clock was ahead, NTP corrected it since)
   would start the recorder by itself on that day: the startup read (`apply_stored_recorder`) keeps it
-  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`) — at startup
-  only; a running server needs the same check in the reconcile (NTP can step back mid-run): C1b-5. A failed
-  audit row WARNs under the setting's own target (`presenter::listen::recorder` for this key). Dev
+  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`). A RUNNING
+  server applies the same rule in every reconcile (C1b-5, NTP can step back mid-run): `recording_day`
+  switches the in-memory day off with a compare-and-switch (`ListenService::switch_off_future_day`: only
+  while the toggle still names that day, so an operator's switch made meanwhile wins), WARNs once on
+  `presenter::listen::recorder`, and tells the state layer through `recorder_cleared` (a `watch`,
+  subscribed BEFORE the supervisor starts): `spawn_recorder_row_cleaner` then clears the stored row and
+  writes the same system audit row — only while the row still names that day
+  (`clear_future_recorder_row`, under the save lock). No `SettingsAuditSource` variant fits a runtime
+  write the server makes itself, so the row keeps `startup_default` / `system`. A failed audit row WARNs
+  under the setting's own target (`presenter::listen::recorder` for this key). Dev
   never inherits prod's switch: pipeline.yml's "Redirect integrations to mock endpoints" step deletes
   the `listen.recorder` row from the prod snapshot (no row = off).
   `ListenStatus.recorder` (`RecorderStatus`): `enabled` (records today), `enabledFor`, `root`, and one
