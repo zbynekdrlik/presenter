@@ -142,6 +142,25 @@ pub(crate) struct UnmatchedCount {
     pub(crate) total: u64,
 }
 
+/// What [`ListenHealth::note_reject_seen`] saw: the input of the #484 gate of
+/// the refused-datagram WARN. Like [`UnmatchedCount`], the per-sender count
+/// lives in a bounded map and restarts when its sender is evicted, so the gate
+/// also reads two session-wide counts a sender cycling through the map cannot
+/// reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RejectSeen {
+    /// This reject's count: a non-audio packet's own count (DEBUG only), else
+    /// the sender's total of every other kind while it stayed in the map.
+    pub(crate) count: u64,
+    /// Senders whose first WARN-class reject was counted this socket session:
+    /// new ones, and ones that came back after an eviction.
+    pub(crate) senders: u64,
+    /// WARN-class rejects this socket session, every sender, non-audio left out.
+    pub(crate) total: u64,
+    /// The reject was non-audio VBAN: DEBUG only, no part of the WARN gate.
+    pub(crate) non_audio: bool,
+}
+
 /// A map that keeps the [`RECENT_CAP`] most recently seen keys.
 #[derive(Debug)]
 struct Recent<K, V> {
@@ -198,6 +217,13 @@ pub(crate) struct ListenHealth {
     unmatched_total: u64,
     /// Refused datagrams per sender IP; each total is that sender's WARN gate.
     rejected: Recent<IpAddr, RejectCounts>,
+    /// Senders whose first WARN-class reject was counted this session, again
+    /// after an eviction too: the gate of a returning sender's line, so more
+    /// senders than the map keeps cannot log every datagram.
+    reject_senders: u64,
+    /// WARN-class rejects this session (non-audio left out): the second gate of
+    /// a repeat line.
+    reject_total: u64,
 }
 
 impl ListenHealth {
@@ -231,7 +257,8 @@ impl ListenHealth {
 
     /// The socket closed: the session's counters go, so a later bind (or a
     /// failed rebind under a new stream name) never shows the last session's
-    /// numbers, and the unassigned-stream and reject log gates start over.
+    /// numbers, and the unassigned-stream and reject log gates (their
+    /// session-wide counts included) start over.
     pub(crate) fn end_session(&mut self) {
         self.mics.clear();
         self.unmatched = Recent::default();
@@ -239,6 +266,8 @@ impl ListenHealth {
         self.new_names = 0;
         self.unmatched_total = 0;
         self.rejected = Recent::default();
+        self.reject_senders = 0;
+        self.reject_total = 0;
     }
 
     /// Packets per second over the time since the last tick.
@@ -341,10 +370,37 @@ impl ListenHealth {
             })
     }
 
-    /// A refused datagram of `from`; the count its log line reads (non-audio:
-    /// its own count; else the sender's WARN-gate total, non-audio left out).
+    /// A refused datagram of `from`, counted per sender and kind for the
+    /// status and session-wide for the log gate. A non-audio packet leaves the
+    /// session counts alone; any other reject adds to the session total, and
+    /// to the session's senders when it is its sender's first one in the map.
+    pub(crate) fn note_reject_seen(
+        &mut self,
+        from: IpAddr,
+        reject: VbanReject,
+        now: Instant,
+    ) -> RejectSeen {
+        let non_audio = matches!(reject, VbanReject::NonAudio(_));
+        let count = self.rejected.touch(from, now).0.count(reject);
+        if !non_audio {
+            self.reject_total += 1;
+            if count == 1 {
+                self.reject_senders += 1;
+            }
+        }
+        RejectSeen {
+            count,
+            senders: self.reject_senders,
+            total: self.reject_total,
+            non_audio,
+        }
+    }
+
+    /// [`Self::note_reject_seen`]'s count only: non-audio, its own count; else
+    /// the sender's WARN-gate total, non-audio left out.
+    #[cfg(test)]
     pub(crate) fn note_reject(&mut self, from: IpAddr, reject: VbanReject, now: Instant) -> u64 {
-        self.rejected.touch(from, now).0.count(reject)
+        self.note_reject_seen(from, reject, now).count
     }
 
     /// A stream no mic takes: counted per (name, sender) for the status and

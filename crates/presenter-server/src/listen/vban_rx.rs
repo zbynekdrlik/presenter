@@ -24,7 +24,9 @@ use tokio::sync::watch;
 use tokio::time::{interval, sleep, Instant, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use super::health::{ListenHealth, PacketSeen, PacketTally, UnmatchedCount, RECENT_CAP};
+use super::health::{
+    ListenHealth, PacketSeen, PacketTally, RejectSeen, UnmatchedCount, RECENT_CAP,
+};
 use super::mic_chain::{run_chain, Block, BlockQueue, QUEUE_CAPACITY};
 use super::{bind_retry_delay, should_log_event, ListenService, MIC_TARGET, NO_AUDIO_AFTER};
 
@@ -35,7 +37,9 @@ const TICK: Duration = Duration::from_secs(1);
 /// A socket is healthy once it received a datagram or stayed bound this long;
 /// only then does a later failure start the retry pause at 1 s again.
 const HEALTHY_AFTER: Duration = Duration::from_secs(30);
-/// The new-name count at which the bounded name map evicts for the first time.
+/// The new-name (or new-sender) count at which a bounded map evicts for the
+/// first time: where the summary line of the unassigned-stream and the
+/// refused-datagram gate is logged.
 const FIRST_EVICTION: u64 = RECENT_CAP as u64 + 1;
 
 pub(super) type ConfigRx = watch::Receiver<Arc<Vec<MicConfig>>>;
@@ -329,24 +333,37 @@ impl MicRouter {
     }
 
     /// A refused datagram: counted per sender (canonical IP, as routing reads
-    /// it) and kind, WARN on the power-of-two totals of the sender's rejects
-    /// other than non-audio.
+    /// it) and kind, logged through [`reject_lines`] (WARN on the power-of-two
+    /// totals of the sender's rejects other than non-audio, bounded session-wide).
     fn reject(&self, from: SocketAddr, reject: VbanReject, now: Instant) {
         let sender = from.ip().to_canonical();
-        let count = self
+        let seen = self
             .service
-            .with_health(|health| health.note_reject(sender, reject, now));
-        if matches!(reject, VbanReject::NonAudio(_)) {
+            .with_health(|health| health.note_reject_seen(sender, reject, now));
+        if seen.non_audio {
             // VB-Matrix also speaks VBAN-TEXT / SERVICE: counted, never a WARN,
-            // and kept out of the WARN gate's total.
-            debug!(target: MIC_TARGET, %from, %reject, non_audio = count, "ignored a non-audio VBAN packet");
-        } else if should_log_event(count) {
+            // and kept out of the WARN gate's counts.
+            debug!(target: MIC_TARGET, %from, %reject, non_audio = seen.count, "ignored a non-audio VBAN packet");
+            return;
+        }
+        let (line, summary) = reject_lines(seen);
+        if line {
             warn!(
                 target: MIC_TARGET,
                 %from,
                 %reject,
-                total = count,
+                total = seen.count,
                 "dropped a datagram that is not usable VBAN audio"
+            );
+        }
+        if summary {
+            warn!(
+                target: MIC_TARGET,
+                %from,
+                senders = seen.senders,
+                kept = RECENT_CAP,
+                "senders of unusable datagrams rotate through more than the senders kept — \
+                 a returning sender is logged on power-of-two counts of such senders only"
             );
         }
     }
@@ -398,6 +415,30 @@ fn unmatched_lines(seen: UnmatchedCount) -> (bool, bool) {
     } else {
         (
             should_log_event(seen.packets) && should_log_event(seen.total),
+            false,
+        )
+    }
+}
+
+/// The #484 gates of the refused-datagram lines, `(line, summary)`, for a
+/// WARN-class reject (non-audio never reaches it). A sender whose first reject
+/// enters the bounded map (new, or back after an eviction) logs on the
+/// power-of-two count of such senders this session; a sender's later rejects
+/// log when its own count AND the session's reject total are both on the
+/// power-of-two gate. Each gate passes at most log2(N) + 1 times in N
+/// datagrams, so more senders than the map keeps, in bursts or not, log at
+/// most 2 (log2(N) + 1) lines plus the summary, which marks the first
+/// eviction once per session. A single sender logs as before (both counts are
+/// the same).
+fn reject_lines(seen: RejectSeen) -> (bool, bool) {
+    if seen.count == 1 {
+        (
+            should_log_event(seen.senders),
+            seen.senders == FIRST_EVICTION,
+        )
+    } else {
+        (
+            should_log_event(seen.count) && should_log_event(seen.total),
             false,
         )
     }

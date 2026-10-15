@@ -1071,6 +1071,44 @@ async fn non_audio_packets_take_no_slot_of_the_reject_warn_gate() {
 }
 
 #[tokio::test]
+async fn rejected_senders_rotating_past_the_kept_count_cannot_warn_on_every_datagram() {
+    // 40 senders take turns, more than the 16 the reject map keeps: each one is
+    // evicted before it returns, so its own count restarts at 1 every time and
+    // would pass the per-sender gate on every datagram. The session-wide counts
+    // must bound the WARN like they bound the unassigned-stream lines.
+    let capture = Capture::install();
+    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    let senders: Vec<SocketAddr> = (1..=40)
+        .map(|k| addr(&format!("198.51.100.{k}:6980")))
+        .collect();
+    let mut sent = 0u64;
+    for _ in 0..5 {
+        for from in &senders {
+            let at = t0 + Duration::from_millis(sent);
+            router.handle_datagram(b"garbage", *from, at);
+            sent += 1;
+        }
+    }
+    assert_eq!(sent, 200);
+    let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
+    // each gate passes at most log2(N) + 1 times in N datagrams
+    let bound = 2 * (u64::from(sent.ilog2()) + 1);
+    let lines = u64::try_from(warned.len()).unwrap();
+    assert!(
+        (1..=bound).contains(&lines),
+        "40 senders rotating through a map of {RECENT_CAP}: {lines} WARN lines for {sent} \
+         garbage datagrams (bound {bound})"
+    );
+    let summaries = capture.events_with_message("rotate through more than the senders kept");
+    assert_eq!(
+        summaries.len(),
+        1,
+        "one summary marks the first eviction of a refused sender"
+    );
+}
+
+#[tokio::test]
 async fn real_udp_packets_come_out_as_16_khz_frames_at_the_tone_level() {
     let service = ListenService::new();
     service.apply(vec![mic("guest", "GUEST_EN", Some("127.0.0.1"))]);
