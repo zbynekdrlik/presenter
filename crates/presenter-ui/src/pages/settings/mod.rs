@@ -23,6 +23,7 @@ mod host_editor;
 mod list_card;
 mod list_sync;
 mod listen;
+mod listen_form;
 mod preferences;
 mod resolume;
 mod row_status;
