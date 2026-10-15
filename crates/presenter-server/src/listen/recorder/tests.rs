@@ -282,3 +282,24 @@ async fn without_a_delay_the_first_tick_is_immediate() {
         .await
         .unwrap();
 }
+
+#[test]
+fn the_status_says_whether_the_recorder_records_today() {
+    let service = ListenService::new();
+    let (clock, now) = clock("2026-10-18T19:42:05");
+    service.set_recorder_env(RecorderEnv {
+        root: PathBuf::from("/srv/recordings"),
+        clock,
+        first_pass_delay: Duration::ZERO,
+    });
+    let off = service.status().recorder;
+    assert_eq!((off.enabled, off.enabled_for), (false, None));
+    assert_eq!(off.root, "/srv/recordings");
+    let day: NaiveDate = "2026-10-18".parse().unwrap();
+    service.apply_recorder(Some(day));
+    let on = service.status().recorder;
+    assert_eq!((on.enabled, on.enabled_for), (true, Some(day)));
+    *now.lock().unwrap() = at("2026-10-19T00:00:01");
+    assert!(!service.status().recorder.enabled, "the day is over");
+    assert_eq!(service.today(), "2026-10-19".parse::<NaiveDate>().unwrap());
+}

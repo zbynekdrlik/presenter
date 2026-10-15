@@ -112,6 +112,19 @@ read a date weeks ahead and delete everything), then in the first minute after e
 deletes only the recorder's own `<mic id>_<HHMMSS>.wav` files, never a link or a foreign file, and
 removes the folder once nothing else is left in it.
 
+The recorder is OFF by default and switched per day: `PUT /listen/recorder` `{"enabled": true}` stores
+today's date in `listen.recorder` (`{"enabled": false}` stores `null`). It records only on that date,
+so a restart the same day resumes and the switch turns itself off at midnight; a stored date AFTER
+today (the clock was ahead when it was switched on) is cleared at the next startup; a server that keeps
+running after the clock was corrected gets the same rule from the recorder's reconcile in C1b-4.
+`GET /listen/status` → `recorder` shows the switch (`enabled`, `enabledFor`), the folder (`root`) and
+one entry per microphone. What exists so far, by unit of #852 C1b:
+
+- C1b-3 (now): the API switch and the status; every microphone shows `off` and nothing is written yet.
+- C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` become live.
+- C1b-7: the Settings → "Počúvanie" card with the "Nahrávať dnes" switch; until then the switch is
+  reachable only through the API.
+
 | Variable                          | Default                               | Purpose |
 | --------------------------------- | ------------------------------------- | ------- |
 | `PRESENTER_LISTEN_VBAN_ADDR`      | `0.0.0.0:6980`                        | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |

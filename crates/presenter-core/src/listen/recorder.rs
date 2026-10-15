@@ -73,6 +73,20 @@ pub struct MicRecording {
     pub error: Option<String>,
 }
 
+impl MicRecording {
+    /// A mic no writer ran for.
+    pub fn off(id: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            state: RecordingState::Off,
+            file: None,
+            bytes: 0,
+            dropped_frames: 0,
+            error: None,
+        }
+    }
+}
+
 /// The recorder's part of `GET /listen/status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
