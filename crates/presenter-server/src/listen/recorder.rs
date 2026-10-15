@@ -148,9 +148,8 @@ async fn prune_if_new_day(env: &RecorderEnv, pruned_on: &mut Option<NaiveDate>) 
     }
 }
 
-/// One INFO per deleted file and per folder kept, a WARN per expired folder that
-/// failed — or, when the failed path is the recordings folder `root` itself, per
-/// listing item that could not be read.
+/// One INFO per deleted file and per folder kept, a WARN per failure (a failure
+/// listed against `root` itself is a listing item that could not be read).
 fn log_prune(report: &PruneReport, root: &Path) {
     for (file, bytes) in &report.deleted {
         info!(
@@ -169,22 +168,17 @@ fn log_prune(report: &PruneReport, root: &Path) {
         );
     }
     for (path, error) in &report.failed {
-        if path == root {
-            // an item the folder listing itself failed to deliver: no path of its own
-            warn!(
-                target: RECORDER_TARGET,
-                dir = %path.display(),
-                error = error.as_str(),
-                "an entry of the recordings folder could not be read — next try tomorrow"
-            );
+        let what = if path == root {
+            "an entry of the recordings folder could not be read"
         } else {
-            warn!(
-                target: RECORDER_TARGET,
-                dir = %path.display(),
-                error = error.as_str(),
-                "an expired recordings folder could not be read or cleaned — next try tomorrow"
-            );
-        }
+            "an expired recordings folder could not be read or cleaned"
+        };
+        warn!(
+            target: RECORDER_TARGET,
+            dir = %path.display(),
+            error = error.as_str(),
+            "{what} — next try tomorrow"
+        );
     }
 }
 
