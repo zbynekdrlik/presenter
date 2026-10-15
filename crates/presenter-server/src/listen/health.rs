@@ -13,6 +13,7 @@ use presenter_core::audio::level::is_voiced;
 use presenter_core::audio::sequence::SequenceVerdict;
 use presenter_core::audio::vban::{VbanAudioFormat, VbanReject};
 use presenter_core::listen::mics::MicConfig;
+use presenter_core::listen::recorder::{MicRecording, RecorderStatus};
 use presenter_core::listen::status::{
     ListenStatus, MicState, MicStatus, RejectedSender, SocketState, SocketStatus, UnmatchedStream,
 };
@@ -446,6 +447,11 @@ impl ListenHealth {
                 .collect(),
             unmatched: self.unmatched_streams(now),
             rejected: self.rejected_senders(now),
+            // every configured mic, off; `ListenService::status` adds the toggle
+            recorder: RecorderStatus {
+                mics: mics.iter().map(|mic| MicRecording::off(&mic.id)).collect(),
+                ..RecorderStatus::default()
+            },
         }
     }
 
