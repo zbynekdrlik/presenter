@@ -11,7 +11,7 @@
 //! socket task (never in validate mode).
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -132,7 +132,7 @@ async fn prune_if_new_day(env: &RecorderEnv, pruned_on: &mut Option<NaiveDate>) 
     let root = env.root.clone();
     let shown = root.display().to_string();
     match tokio::task::spawn_blocking(move || prune_recordings(&root, today)).await {
-        Ok(Ok(report)) => log_prune(&report),
+        Ok(Ok(report)) => log_prune(&report, &env.root),
         Ok(Err(err)) => warn!(
             target: RECORDER_TARGET,
             root = %shown,
@@ -148,8 +148,10 @@ async fn prune_if_new_day(env: &RecorderEnv, pruned_on: &mut Option<NaiveDate>) 
     }
 }
 
-/// One INFO per deleted file and per folder kept, a WARN per folder that failed.
-fn log_prune(report: &PruneReport) {
+/// One INFO per deleted file and per folder kept, a WARN per expired folder that
+/// failed — or, when the failed path is the recordings folder `root` itself, per
+/// listing item that could not be read.
+fn log_prune(report: &PruneReport, root: &Path) {
     for (file, bytes) in &report.deleted {
         info!(
             target: RECORDER_TARGET,
@@ -166,13 +168,23 @@ fn log_prune(report: &PruneReport) {
             "expired recordings folder kept — it holds files the recorder did not write"
         );
     }
-    for (dir, error) in &report.failed {
-        warn!(
-            target: RECORDER_TARGET,
-            dir = %dir.display(),
-            error = error.as_str(),
-            "an expired recordings folder could not be read or cleaned — next try tomorrow"
-        );
+    for (path, error) in &report.failed {
+        if path == root {
+            // an item the folder listing itself failed to deliver: no path of its own
+            warn!(
+                target: RECORDER_TARGET,
+                dir = %path.display(),
+                error = error.as_str(),
+                "an entry of the recordings folder could not be read — next try tomorrow"
+            );
+        } else {
+            warn!(
+                target: RECORDER_TARGET,
+                dir = %path.display(),
+                error = error.as_str(),
+                "an expired recordings folder could not be read or cleaned — next try tomorrow"
+            );
+        }
     }
 }
 

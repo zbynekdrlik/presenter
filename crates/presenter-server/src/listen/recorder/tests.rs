@@ -2,7 +2,7 @@
 //! temp dirs; the clock is a settable local time.
 
 use super::*;
-use crate::tracing_capture::Capture;
+use crate::tracing_capture::{quoted, Capture};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -115,6 +115,64 @@ async fn a_started_service_prunes_at_once_and_logs_each_file() {
     };
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].field("bytes"), Some("1234"));
+}
+
+#[test]
+fn a_failure_listed_against_the_folder_itself_does_not_claim_an_expired_day_folder() {
+    let capture = Capture::install();
+    let root = PathBuf::from("/srv/rec");
+    let report = PruneReport {
+        failed: vec![
+            (root.clone(), "readdir failed".to_string()),
+            (root.join("2026-08-01"), "Permission denied".to_string()),
+        ],
+        ..PruneReport::default()
+    };
+    log_prune(&report, &root);
+    let listing = capture.events_with_message("an entry of the recordings folder");
+    assert_eq!(listing.len(), 1, "{listing:?}");
+    assert_eq!(listing[0].level, tracing::Level::WARN);
+    assert_eq!(listing[0].field("dir"), Some("/srv/rec"));
+    assert_eq!(
+        listing[0].field("error"),
+        Some(quoted("readdir failed").as_str())
+    );
+    let expired = capture.events_with_message("an expired recordings folder");
+    assert_eq!(expired.len(), 1, "{expired:?}");
+    assert_eq!(expired[0].level, tracing::Level::WARN);
+    assert_eq!(expired[0].field("dir"), Some("/srv/rec/2026-08-01"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_started_supervisor_prunes_nothing_until_the_first_pass_delay_is_over() {
+    let root = tempfile::tempdir().unwrap();
+    let (clock, _) = clock("2026-10-15T10:00:00");
+    let expired = put(root.path(), "2026-09-01", "guest_194205.wav", 10);
+    let young = put(root.path(), "2026-10-14", "guest_194205.wav", 10);
+    let service = ListenService::new();
+    service.set_recorder_env(RecorderEnv {
+        root: root.path().to_path_buf(),
+        clock,
+        first_pass_delay: FIRST_PASS_DELAY,
+    });
+    assert!(service.start("127.0.0.1:0".parse().unwrap()));
+    // The paused clock moves only while every task is idle, and not at all while
+    // a `spawn_blocking` task runs (tokio test-util): a pass that started early
+    // would have deleted the file before this sleep returns.
+    tokio::time::sleep(FIRST_PASS_DELAY - Duration::from_secs(1)).await;
+    assert!(expired.exists(), "no pass before the delay is over");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    for _ in 0..100 {
+        if !expired.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !expired.exists(),
+        "the first pass runs once the delay is over"
+    );
+    assert!(young.exists(), "only the expired folder goes");
 }
 
 #[tokio::test(start_paused = true)]
