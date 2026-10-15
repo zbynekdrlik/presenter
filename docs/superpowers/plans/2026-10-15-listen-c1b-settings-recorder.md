@@ -8416,3 +8416,14 @@ The implementer of the named lane applies these on top of the task text (they ov
   restart happens at `failed_at + 1 min` even when the next reconcile runs 50 s after the failure.
 - **N4 (lane C1b-7) — `settings/listen.rs` lands at ~767 lines** (warning at 800). Leave it; the next UI unit that
   touches the card splits it (`listen_health.rs`). Do not add to it in C1b beyond the plan.
+
+## Addendum 2 — what lanes C1b-1 / C1b-2 changed after their reviews (later lanes adapt)
+
+- **C1b-1:** `mic_id_for_role` iterates `1..=taken.len() + 1` (never a taken id); the connection cards' `UNSAVED_TITLE` /
+  `SAVING_TITLE` live in `settings/connection_form.rs` (not `host_editor.rs`).
+- **C1b-2:** `RecorderEnv` gained `first_pass_delay: Duration` (production 10 min, `cfg(test)` default zero — the first
+  retention pass waits for NTP after a boot). Every `RecorderEnv { root, clock }` literal in lanes C1b-3 … C1b-5 (plan
+  lines ~3856, ~4165, ~5340, ~5442, ~5492) must add `first_pass_delay: Duration::ZERO` (or use
+  `..RecorderEnv::from_env()`), else E0063. The retention scan is `prune_scan(root, opened, today)` over an entry
+  iterator; per-entry errors go to `report.failed` and the pass continues. `.gitignore` has `/recordings/` and
+  `/stream-assets/`. Lane C1b-2 measures 592 prod lines.
