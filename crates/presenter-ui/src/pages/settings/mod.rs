@@ -17,6 +17,7 @@ use crate::components::version_label::VersionLabel;
 mod ableton;
 mod android;
 mod companion;
+mod connection_form;
 mod host_editor;
 mod list_card;
 mod list_sync;

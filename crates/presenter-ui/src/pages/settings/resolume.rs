@@ -10,31 +10,43 @@
 
 use leptos::prelude::*;
 
-use super::host_editor::{EditorSpec, Submission};
+use super::connection_form::{ConnectionForm, ConnectionSpec, DraftValues, Submission};
+use super::host_editor::{EditorSpec, SAVING_TITLE, UNSAVED_TITLE};
 use super::list_card::{CardItem, CardText, ListCard, RowParts};
-use super::row_status::{latency_text, resolume_state, resolume_warning, HostWarning};
+use super::row_status::{
+    latency_text, resolume_state, resolume_warning, updated_created, HostWarning,
+};
 use super::{capitalize, ToastHandle};
 use crate::api::settings::{self, ResolumeHostDraft, ResolumeHostDto, ResolumeStatusDto};
 use crate::api::ApiError;
 
-static TEXT: CardText = CardText {
+static TEXT: CardText<ConnectionForm> = CardText {
     editor: EditorSpec {
         role: "host",
         message_id: "resolume-form-status",
         message_role: "form-status",
-        label_placeholder: "Main Arena",
-        host_placeholder: "resolume.lan",
         new_title: "New Resolume connection",
         new_submit: "Add connection",
         edit_title: "Edit Resolume connection",
+        save_text: "Save",
+        cancel_text: "Cancel",
+        unsaved_title: UNSAVED_TITLE,
+        saving_title: SAVING_TITLE,
+    },
+    form: ConnectionSpec {
+        label_placeholder: "Main Arena",
+        host_placeholder: "resolume.lan",
+        // Arena's default web-server port.
+        default_port: 8090,
         extra: None,
     },
-    // Arena's default web-server port.
-    default_port: 8090,
     list_role: "resolume-host-list",
     add_text: "+ Add connection",
     empty_text: "No Resolume connections defined yet.",
     fallback_name: "this connection",
+    edit_text: "Edit",
+    delete_text: "Delete",
+    delete_question: ("Remove ", "? Presenter will stop reconnecting."),
     saving: "Saving changes…",
     creating: "Creating connection…",
     updated: "Updated Resolume connection.",
@@ -59,6 +71,7 @@ fn row_key(h: &ResolumeHostDto) -> (String, String, String, u16, bool) {
 }
 
 impl CardItem for ResolumeHostDto {
+    type Form = ConnectionForm;
     type Status = ResolumeStatusDto;
     type Key = (String, String, String, u16, bool);
 
@@ -74,12 +87,18 @@ impl CardItem for ResolumeHostDto {
         &self.label
     }
 
-    fn host(&self) -> &str {
-        &self.host
+    fn address(&self) -> (String, String) {
+        (self.host.clone(), format!(":{}", self.port))
     }
 
-    fn port(&self) -> u16 {
-        self.port
+    fn values(&self) -> DraftValues {
+        DraftValues {
+            label: self.label.clone(),
+            host: self.host.clone(),
+            port: self.port.to_string(),
+            enabled: self.is_enabled,
+            extra: String::new(),
+        }
     }
 
     fn is_enabled(&self) -> bool {
@@ -90,12 +109,8 @@ impl CardItem for ResolumeHostDto {
         self.status.clone()
     }
 
-    fn created_at(&self) -> &str {
-        &self.created_at
-    }
-
-    fn updated_at(&self) -> &str {
-        &self.updated_at
+    fn timestamps(&self) -> Option<String> {
+        Some(updated_created(&self.updated_at, &self.created_at))
     }
 
     async fn list() -> Result<Vec<Self>, ApiError> {
