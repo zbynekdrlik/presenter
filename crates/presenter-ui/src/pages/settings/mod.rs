@@ -4,8 +4,9 @@
 //! Reproduces every card the vanilla-JS page managed — Companion (feature
 //! flags), operator Preferences (line-limit pref persisted in localStorage,
 //! #272), Resolume hosts, Android stage launchers, Ableton/OSC, and NDI video
-//! sources — using Leptos signals + `on:*` handlers + the `api::settings` /
-//! `api::ndi` client fns. A 5s interval polls live status (matching the old
+//! sources, plus (#852 C1b) the listening microphones ("Počúvanie") — using
+//! Leptos signals + `on:*` handlers + the `api::settings` / `api::ndi` client
+//! fns. A 5s interval polls live status (matching the old
 //! `STATUS_REFRESH_MS`), and a toast (the original `settings__toast` element)
 //! gives feedback. The server `/integrations/*` + `/settings/features`
 //! contracts are unchanged.
@@ -21,6 +22,7 @@ mod connection_form;
 mod host_editor;
 mod list_card;
 mod list_sync;
+mod listen;
 mod preferences;
 mod resolume;
 mod row_status;
@@ -30,6 +32,7 @@ mod video_sources;
 use ableton::AbletonCard;
 use android::AndroidCard;
 use companion::CompanionCard;
+use listen::ListenCard;
 use preferences::PreferencesCard;
 use resolume::ResolumeCard;
 use trash::TrashCard;
@@ -158,6 +161,7 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
                 <PreferencesCard />
                 <ResolumeCard toast=toast />
                 <AndroidCard toast=toast />
+                <ListenCard toast=toast />
                 <AbletonCard toast=toast />
                 <VideoSourcesCard toast=toast />
                 <TrashCard toast=toast />

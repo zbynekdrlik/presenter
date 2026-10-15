@@ -211,7 +211,8 @@ body.settings {
 }
 
 .settings__form-row input[type="text"],
-.settings__form-row input[type="number"] {
+.settings__form-row input[type="number"],
+.settings__form-row select {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
@@ -227,7 +228,8 @@ body.settings {
     box-shadow 0.2s ease;
 }
 
-.settings__form-row input:focus {
+.settings__form-row input:focus,
+.settings__form-row select:focus {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
