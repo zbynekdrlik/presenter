@@ -8459,3 +8459,20 @@ The implementer of the named lane applies these on top of the task text (they ov
   after review, cb6ac718).
 - Lane C1b-4 measures exactly 600 prod lines (base 9e98a272). `main.rs` has no graceful shutdown: a deploy's SIGTERM
   leaves files unclosed but playable (per-batch header) — documented in the rule.
+
+## Addendum 4 — lane C1b-6 as merged, what C1b-7 must adapt
+
+- **Files moved:** `MicDraft` (now with `id: Option<String>`), `MicForm`, the selects and the option captions live in
+  `settings/listen_form.rs` (with their test); `settings/listen.rs` keeps `ListenCard`, which opens with
+  `provide_context(TakenIds(taken))` + an `Effect` mirroring the listed ids for the editor's "Identifikátor: … (podľa
+  roly, nemení sa)" line. Task 26's `listen.rs` hunks 1 (module doc + imports) and 4 (`ListenCard`) no longer apply —
+  merge them by hand (`mic_aside` is imported from `listen_form`); hunks 2, 3, 5, 6 and the `api/listen.rs` patch apply.
+- **Fold into C1b-7 (C1b-6 re-review 🔵, same file):** replace the `RwSignal` + `Effect` behind `TakenIds` with a derived
+  `Signal<Vec<String>>` / `Memo` of the listed ids (no Effect hop, no one-tick lag); fix the `settings-ui.md` E2E bullet
+  ("one 422 line per test" — test 3 has none) and re-wrap it.
+- **E2E spec changed:** test titles differ from the plan (test 3 is the seeded two-mic edit); `recordings` is
+  `string | undefined` (guarded `afterAll`), so Task 27's `readdirSync(recordings)` / `path.join(recordings, …)` need a
+  local non-undefined root under strict `tsc`; `STREAM` is `"E2E_INTERP"` (rename or add a guest stream for C1b-7's
+  real-sender test). Serial mode was dropped — C1b-7's tests must stay order-independent.
+- `settings/listen.rs` lands at ~525 prod lines after C1b-7 (not 767): Addendum 1 N4's split note no longer applies.
+- Lane C1b-6 measures 566 prod lines (base f05ebb50).
