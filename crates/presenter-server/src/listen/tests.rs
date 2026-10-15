@@ -1152,8 +1152,10 @@ async fn rejected_senders_rotating_past_the_kept_count_cannot_warn_on_every_data
     }
     assert_eq!(sent, 200);
     let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
-    // each gate passes at most log2(N) + 1 times in N datagrams
-    let bound = 2 * (u64::from(sent.ilog2()) + 1);
+    // Below the 17th counted sender nothing can have been evicted yet, so up to
+    // RECENT_CAP senders log their first reject on their own count; from the
+    // 17th on each session gate passes at most log2(N) + 1 times in N datagrams.
+    let bound = RECENT_CAP as u64 + 2 * (u64::from(sent.ilog2()) + 1);
     let lines = u64::try_from(warned.len()).unwrap();
     assert!(
         (1..=bound).contains(&lines),
