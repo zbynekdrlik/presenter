@@ -224,6 +224,18 @@ paths:
   `format` / `sender` / `error` and `recorder.{enabled,enabledFor,root,mics[]}` through the core types, so
   a wire change goes together with the card and `tests/e2e/settings-listen.spec.ts` (real sender → WAV
   on disk). Rules of the card: `.claude/rules/settings-ui.md`.
+- **Replay (`vban_send.py --file`, #852 engine evaluation):** a recording (a YouTube sermon, EN guest,
+  maybe the SK interpreter on the same track) is replayed through the REAL VBAN input in real time, so the
+  evaluation never waits for a live service. `ffmpeg -nostdin -v error [-ss] [-t] -i FILE -f s16le -ac C
+  -ar R -` is read incrementally (never an hour in memory) and the s16le goes into packets as it is
+  (`build_packet_int16`, no re-quantising). ONE anchor paces the send — group g (`--burst` packets) leaves
+  at `anchor + first frame / rate`, taken when the first group is in hand, never from a summed sleep; a
+  late sender catches up without re-anchoring (`paced`, injectable `clock` / `sleep`, tests run it on a
+  virtual clock, pattern of songplayer `dub_live_session.py` `frame_deadline`). The summary line ends with
+  `late_max_ms`. A missing ffmpeg, an unreadable file, an ffmpeg exit != 0 or a recording that decodes to
+  nothing exits 1 with the reason; the quality job installs ffmpeg and its replay test fails (never skips)
+  without it. NEVER commit downloaded sermon audio (YouTube content is copyrighted): keep it under
+  `~/.claude/work-products/presenter/eval-audio/`.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (Settings →
   "Počúvanie", whose ids are `guest` / `interp`, or `PUT /listen/mics` with the spec §5.6 list) and the

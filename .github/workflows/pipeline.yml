@@ -503,6 +503,17 @@ jobs:
       # #852 C1a: the VBAN box tools (scripts/dev/listen). The sender's golden
       # packet is the one the Rust decoder test pins (presenter-core
       # audio/vban/tests.rs).
+      # The sender's file replay decodes with the real `ffmpeg` binary (its test
+      # must FAIL, never skip, without it). gstreamer1.0-libav ships the libraries,
+      # not the binary. The apt lists are fresh: the job's first step ran
+      # `apt-get update`.
+      - name: Install ffmpeg for the VBAN replay test (#852)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq ffmpeg
+          ffmpeg -version | sed -n '1p'
+
       - name: Test VBAN box tools (#852)
         run: |
           set -euo pipefail
