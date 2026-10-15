@@ -12,7 +12,7 @@
 //! (fetch / save / delete / rows) is `list_card`. What the editor edits is the
 //! card's [`EditorForm`] (#852 C1b): `connection_form::ConnectionForm` — label,
 //! host, port, an optional extra field, "Enabled" — for Resolume and Android,
-//! `listen::MicForm` for the microphones. The draft lives at CARD level, outside
+//! `listen_form::MicForm` for the microphones. The draft lives at CARD level, outside
 //! the keyed `<For>` rows, so the 5 s status poll can never reset what the
 //! operator is typing. Its guards ([`trigger_lock`], round 2):
 //! - one save at a time; while it is in flight no editor opens or switches and the

@@ -2,6 +2,7 @@ pub mod ai;
 pub mod bible;
 pub mod interpreter_tips;
 pub mod libraries;
+pub mod listen;
 pub mod ndi;
 pub mod network;
 pub mod playlists;
@@ -245,6 +246,24 @@ pub async fn post_json_refusal<B: serde::Serialize, T: DeserializeOwned>(
     response.json().await.map_err(ApiError::Deserialize)
 }
 
+/// `put_json`, but a non-2xx whose body is the server's JSON error body is an
+/// [`ApiError::Refused`] carrying that message (see [`status_with_refusal`]).
+pub async fn put_json_refusal<B: serde::Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
+    let response = Request::put(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_refusal(response).await);
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
 /// `post_json`, but a non-2xx carries the server error-body message (see
 /// [`status_with_detail`]).
 pub async fn post_json_detail<B: serde::Serialize, T: DeserializeOwned>(
@@ -307,7 +326,8 @@ pub enum ApiError {
     Network(gloo_net::Error),
     Status(u16, String),
     /// A non-2xx whose body was the server's own JSON error body: the text is
-    /// the server's message (only [`post_json_refusal`] produces it).
+    /// the server's message (only [`post_json_refusal`] / [`put_json_refusal`]
+    /// produce it).
     Refused(u16, String),
     Serialize(gloo_net::Error),
     Deserialize(gloo_net::Error),

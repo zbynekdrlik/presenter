@@ -96,6 +96,41 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
   matches the editor: same open generation AND same target (`save_is_current`,
   unit-tested); otherwise the card toasts the error.
 
+## Listening microphones card (#852 C1b-6): whole list behind per-mic save / delete
+
+`settings/listen.rs` is a thin `ListCard<MicConfig>` with Slovak copy in its
+`CardText` (incl. `unsaved_title` / `saving_title`); its `EditorForm` lives in
+`settings/listen_form.rs` (`MicForm`: name, VBAN stream, optional sender IP,
+channel / language / role `<select>`s with `prop:selected` per option, the #827
+rule; split out so `listen.rs` can grow the health / switch lines under 800).
+
+- The API is the WHOLE list (`GET|PUT /listen/mics`). `CardItem::save` / `delete`
+  read the list, change one mic (`apply_draft`) and `PUT` it back. Two tabs saving
+  within that one round trip can lose one edit: accepted for one Settings card and
+  ≤ 4 mics — do not add per-mic endpoints or ETags for it. A save of a mic deleted
+  meanwhile is refused with `ApiError::NotFound("Tento mikrofón medzitým niekto
+  odstránil.")`, never re-added.
+- The server validates the whole list; its 422 text shows in the editor line
+  (`put_json_refusal` → `ApiError::Refused` → `failure_text`). The card checks only
+  name and stream itself.
+- A new mic's id is `mic_id_for_role` (`guest` / `interp` / `preacher`, then `-2` …),
+  never derived from the name; it never changes on edit (it names the recordings)
+  and the row's aside ends with "id <id>". The editor shows it too (`listen-id`,
+  `id_line`): an existing mic's own id, a new mic's `mic_id_for_role` over the listed
+  ids, recomputed from the role select — so the server's refusal ("Mikrofón „guest-2“:
+  …") names an id the operator has seen. The listed ids reach `MicForm::new` through
+  the `TakenIds` context `ListenCard` provides (a form cannot see the list); the
+  save still assigns the id from the list it just read.
+- `GET /listen/mics` is a quiet GET (`request_log.rs`): the card's 5 s list poll.
+- E2E `settings-listen.spec.ts` drives the three selects with real `selectOption`
+  (a broken `on_change` must fail it), reads the stored list back through the API
+  (a whole-list PUT must leave the other mic unchanged) and measures `.settings-layout`
+  at 360 px with the editor open. It count-asserts the `Failed to load resource …
+  422` lines of its refused saves (one per test), then `toEqual([])` on the rest; it resets the mics
+  and the recorder through `request.put` before each test, and its server records
+  into a temp folder (`PRESENTER_LISTEN_RECORDINGS_DIR` set around
+  `startTestServer`).
+
 ## The editor's guards: `trigger_lock` (pure, unit-tested)
 
 Every row's Edit and "+ Add" read `ListEditor::trigger_lock(target)` through a
