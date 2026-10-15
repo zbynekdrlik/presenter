@@ -389,6 +389,14 @@ mod tests {
             .unwrap();
         assert_eq!(audit.len(), 2, "one audit row per toggle");
         assert!(audit.iter().all(|row| row.actor == "203.0.113.9"));
+        let changes: Vec<(Option<Value>, Value)> = audit
+            .iter()
+            .map(|row| (row.before_json.clone(), row.after_json.clone()))
+            .collect();
+        let on = json!({"enabledFor": day});
+        for expected in [(None, on.clone()), (Some(on), json!({"enabledFor": null}))] {
+            assert!(changes.contains(&expected), "{expected:?} in {changes:?}");
+        }
     }
 
     /// C1a-3: the counter rule's and the chain's fields of the integration

@@ -364,4 +364,74 @@ mod tests {
             "the day the old row named arrives: still off"
         );
     }
+
+    /// One microphone, as the settings card saves it.
+    const GUEST_MIC: &str = r#"[{"id": "guest", "name": "Hosť", "streamName": "GUEST_EN",
+        "senderIp": null, "channel": "left", "language": "en", "role": "guest"}]"#;
+
+    async fn stored_recorder(state: &AppState) -> Option<String> {
+        state
+            .repository()
+            .get_app_setting(LISTEN_RECORDER_KEY)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn switching_on_stores_todays_local_date_and_switching_off_stores_null() {
+        let state = AppState::in_memory().await.unwrap();
+        state.listen.set_recorder_env(fixed("2026-10-18T19:42:05"));
+        let on = state.set_listen_recorder(true, "test").await.unwrap();
+        assert_eq!(
+            on,
+            RecorderSetting {
+                enabled_for: Some("2026-10-18".parse().unwrap())
+            }
+        );
+        assert_eq!(
+            stored_recorder(&state).await.as_deref(),
+            Some(r#"{"enabledFor":"2026-10-18"}"#)
+        );
+        assert!(state.listen_status().recorder.enabled);
+        let off = state.set_listen_recorder(false, "test").await.unwrap();
+        assert_eq!(off, RecorderSetting::default());
+        assert_eq!(
+            stored_recorder(&state).await.as_deref(),
+            Some(r#"{"enabledFor":null}"#)
+        );
+        assert!(!state.listen_status().recorder.enabled);
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_recorder_row_warns_once_and_the_mics_still_load() {
+        let capture = Capture::install();
+        let state = AppState::in_memory().await.unwrap();
+        state
+            .repository()
+            .set_app_setting(LISTEN_RECORDER_KEY, "not a row")
+            .await
+            .unwrap();
+        state
+            .repository()
+            .set_app_setting(LISTEN_MICS_KEY, GUEST_MIC)
+            .await
+            .unwrap();
+        assert!(state.start_listen("127.0.0.1:0".parse().unwrap()).await);
+        let warned = capture.events_with_message("listen.recorder cannot be read");
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert_eq!(warned[0].target, RECORDER_TARGET);
+        assert_eq!(warned[0].level, tracing::Level::WARN);
+        let status = state.listen_status();
+        let ids: Vec<&str> = status
+            .mics
+            .iter()
+            .map(|mic| mic.config.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["guest"],
+            "a broken recorder row never blocks the mics"
+        );
+        assert!(!status.recorder.enabled);
+    }
 }
