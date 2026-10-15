@@ -178,13 +178,39 @@ paths:
   batch began `now − (its frames + the frames still queued) × 100 ms`. The header sizes are patched
   after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close (a deploy's
   SIGTERM does not close: no graceful shutdown, the per-batch header keeps the file playable); a failed
-  write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events; a failed
-  write → state `error` + Slovak text, WARN on power-of-two failures in a row, the writer ends and the
-  next reconcile starts it again (C1b-5 adds the back-off). Switching off or removing the mic closes
-  the file (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`,
-  last file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select). `RecorderHealth` lives in
+  write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events, and the
+  batch being filled ENDS there (`collect_batch`: the frames before and after lost frames are not one
+  stretch of audio; the batch's start is read BEFORE collecting, while `frames.len()` still counts the
+  lost frames). A failed write → state `error` + Slovak text, WARN on power-of-two failures in a row,
+  and the writer CLOSES the file it already had (`write_batch` returns `Written { open, created,
+  failure }`: a failed write keeps the file; `recording stopped`, why `a write failed`) and ends; the
+  supervisor restarts it after its back-off (below). Switching off or removing the mic closes the file
+  (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`, last
+  file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select, pinned
+  by a 20-round test). A `Writer` knows its day: reconcile ends one whose day is not the toggle's
+  (a switch-on for D+1 in the first minute after midnight starts D+1's writer at once, why `the day
+  ended`; the stop signal is a `oneshot<Ended>` carrying the reason). `RecorderHealth` lives in
   `ListenHealth` but is not part of the socket session (`end_session` keeps it). Tests drive the real
-  supervisor with a settable clock (`recording_service`) and send frames into the mic's channel.
+  supervisor with a settable clock (`recording_service`) and send frames into the mic's channel; a
+  failure after the file exists comes from the cfg(test) hook `recording_file::fail_appends_under`.
+- **Continuous files** (#852 C1b-5): before each batch, `drifted(file start, data bytes, batch start)`
+  — more than 1 s between the end of the file's audio and the batch's start, in EITHER direction
+  (`.abs()`: a pause of the sender, a resync, a lag or a slow disk put the audio behind the clock; a
+  sender clock running fast, ~1 s after 3 h at 100 ppm, puts it ahead; exactly 1 s keeps the file)
+  — closes the file (why `a gap in the audio`) and opens a new one named at the batch's start; the
+  `recording started` INFO carries `started` = `%H:%M:%S%.3f`. So every file is continuous audio from
+  the time in its name (the bake-off places the `presenter::bible::show` times by it); never reopen,
+  append to or truncate an existing file, and never rotate on the wall-clock gap between two batches
+  alone (sender pauses of 0.1–2 s add up). `split_at_midnight`: the frames of a batch heard after
+  midnight are dropped (frame `i` was heard at `start + i × 100 ms`), the rest is written, then the
+  writer ends `the day ended`; no writer starts until the toggle names the new day.
+  **Restart back-off:** a failed writer restarts after `restart_delay` 1, 2, 4 … 60 min counted from
+  the FAILURE — `failed_at` is recorded in `RecorderHealth` with the failure (`failed_at` /
+  `last_failure`), `backing_off` compares the wall clock with `failed_at + restart_delay(failures)`, so a
+  reconcile up to one 60 s tick later never stretches the pause and the WARN's `retry_in_min` is exact.
+  No separate retry map: a successful write, switching off (`all_stopped`) or removing the mic clears
+  the failure streak and with it the pause. Tests move the settable clock. `RecordingFile::begin`
+  removes a new file whose header cannot be written (a full disk): no empty files.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
   card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status

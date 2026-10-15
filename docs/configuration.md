@@ -121,18 +121,20 @@ minute: it switches off, clears the stored date and logs one WARN).
 While it is on, every microphone that receives audio is written to
 `<folder>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav` (16 kHz mono 16-bit, exactly what the speech recognition
 gets; ≈ 115 MB per hour), named by the time its first sample was heard; a microphone without audio
-leaves no file.
+leaves no file. A gap of more than 1 s between the audio in the file and the clock — either way: the
+sender paused, the recorder fell behind, or the sender's clock runs fast — starts a new file, so every
+file is continuous audio from the time in its name. Frames heard after midnight are not written.
 `GET /listen/status` → `recorder` shows the switch (`enabled`, `enabledFor`), the folder (`root`) and
 one entry per microphone (`off`, `waiting` for its first audio, `recording`, `error`) with its current or
 last `file`, the audio `bytes` in it, the `droppedFrames` lost when the disk fell behind (since the
 server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 
 - C1b-3: the API switch and the status.
-- C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` are live; a
-  failed write is retried at the next minute.
-- C1b-5 (first part now): the day-after-today check on a running server; still to come: a new file
-  whenever the audio drifts more than a second from the clock, the split at midnight, the 1, 2, 4 … 60
-  minute back-off after a failed write.
+- C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` are live.
+- C1b-5: the day-after-today check on a running server; a new file whenever the audio is more than a
+  second from the clock; the split at midnight; a failed write restarted after 1, 2, 4 … 60 minutes,
+  counted from the failure (the status shows `error` until a write succeeds); no empty file is left when
+  not even its header can be written.
 - C1b-7: the Settings → "Počúvanie" card with the "Nahrávať dnes" switch; until then the switch is
   reachable only through the API.
 
