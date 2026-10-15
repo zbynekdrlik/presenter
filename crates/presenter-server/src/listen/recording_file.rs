@@ -201,4 +201,56 @@ mod tests {
         let report = prune_recordings(&root.path().join("never-made"), day("2026-10-15")).unwrap();
         assert!(report.deleted.is_empty() && report.kept.is_empty() && report.failed.is_empty());
     }
+
+    /// A folder entry whose type could not be read, as the scan sees it.
+    fn unreadable(root: &Path, name: &str, why: &'static str) -> io::Result<RootEntry> {
+        Ok(RootEntry {
+            path: root.join(name),
+            is_dir: Err(io::Error::other(why)),
+        })
+    }
+
+    fn folder(root: &Path, name: &str) -> io::Result<RootEntry> {
+        Ok(RootEntry {
+            path: root.join(name),
+            is_dir: Ok(true),
+        })
+    }
+
+    #[test]
+    fn an_entry_that_cannot_be_read_never_stops_the_rest_of_the_pass() {
+        let root = tempfile::tempdir().unwrap();
+        let before = put(root.path(), "2026-08-01", "guest_194205.wav", 10);
+        let after = put(root.path(), "2026-09-01", "interp_100000.wav", 20);
+        let entries = vec![
+            folder(root.path(), "2026-08-01"),
+            Err(io::Error::other("readdir failed")),
+            unreadable(root.path(), "2026-08-15", "stat failed"),
+            unreadable(root.path(), "notes", "not a day folder"),
+            unreadable(root.path(), "2026-10-01", "not expired"),
+            folder(root.path(), "2026-09-01"),
+        ];
+        let report = prune_scan(root.path(), Ok(entries.into_iter()), day("2026-10-15"))
+            .expect("one bad entry is a finding of the pass, not the end of it");
+        let mut deleted = report.deleted.clone();
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            vec![(before, 10), (after, 20)],
+            "the folders before AND after the bad entries are pruned and reported"
+        );
+        assert!(!root.path().join("2026-08-01").exists());
+        assert!(!root.path().join("2026-09-01").exists());
+        let mut failed = report.failed.clone();
+        failed.sort();
+        assert_eq!(
+            failed,
+            vec![
+                (root.path().to_path_buf(), "readdir failed".to_string()),
+                (root.path().join("2026-08-15"), "stat failed".to_string()),
+            ],
+            "the unreadable item is reported against the folder, an unreadable expired \
+             day against its path; an entry that is no expired day folder is not reported"
+        );
+    }
 }
