@@ -180,8 +180,10 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::listen::recorder::RecorderEnv;
+    use crate::tracing_capture::Capture;
     use chrono::NaiveDateTime;
     use presenter_core::listen::status::SocketState;
+    use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -263,5 +265,55 @@ mod tests {
         assert!(state.start_listen("127.0.0.1:0".parse().unwrap()).await);
         let status = state.listen_status().recorder;
         assert_eq!((status.enabled, status.enabled_for), (false, None));
+    }
+
+    /// Switched on while the clock was ahead, then NTP corrected it: the stored
+    /// day is still to come, and on that day the recorder would start by itself.
+    #[tokio::test]
+    async fn a_stored_day_in_the_future_never_switches_the_recorder_on() {
+        let capture = Capture::install();
+        let state = AppState::in_memory().await.unwrap();
+        state.listen.set_recorder_env(fixed("2026-10-18T19:42:05"));
+        state
+            .repository()
+            .set_app_setting(LISTEN_RECORDER_KEY, r#"{"enabledFor":"2026-10-21"}"#)
+            .await
+            .unwrap();
+        assert!(state.start_listen("127.0.0.1:0".parse().unwrap()).await);
+        let status = state.listen_status().recorder;
+        assert_eq!((status.enabled, status.enabled_for), (false, None));
+        assert_eq!(
+            state
+                .repository()
+                .get_app_setting(LISTEN_RECORDER_KEY)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(r#"{"enabledFor":null}"#),
+            "the row is cleared, never left to switch the recorder on later"
+        );
+        let warned = capture.events_with_message("day in the future");
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert_eq!(warned[0].target, RECORDER_TARGET);
+        assert_eq!(warned[0].level, tracing::Level::WARN);
+        assert_eq!(warned[0].field("day"), Some("2026-10-21"));
+        let audit = state
+            .repository()
+            .list_settings_audit(Some("app_settings"), Some(LISTEN_RECORDER_KEY), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(audit.len(), 1, "one audit row for the clearing");
+        assert_eq!(audit[0].actor, "system");
+        assert_eq!(audit[0].source, SettingsAuditSource::StartupDefault);
+        assert_eq!(
+            audit[0].before_json,
+            Some(json!({"enabledFor": "2026-10-21"}))
+        );
+        assert_eq!(audit[0].after_json, json!({"enabledFor": null}));
+        state.listen.set_recorder_env(fixed("2026-10-21T08:00:00"));
+        assert!(
+            !state.listen_status().recorder.enabled,
+            "the day the old row named arrives: still off"
+        );
     }
 }
