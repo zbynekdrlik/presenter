@@ -131,10 +131,11 @@ fn frames_duration(frames: usize) -> TimeDelta {
     TimeDelta::try_milliseconds(frames.saturating_mul(FRAME_MS)).unwrap_or(TimeDelta::MAX)
 }
 
-/// A running writer and the way to stop it.
+/// A running writer, the day it records and the way to stop it.
 struct Writer {
-    stop: oneshot::Sender<()>,
+    stop: oneshot::Sender<Ended>,
     task: JoinHandle<()>,
+    day: NaiveDate,
 }
 
 impl Writer {
@@ -150,12 +151,26 @@ impl Writer {
             root: root.to_path_buf(),
         };
         let task = tokio::spawn(run_writer(service.clone(), job, frames, stopped));
-        Self { stop, task }
+        Self { stop, task, day }
     }
 
-    /// Ask the writer to close its file and wait until it has.
-    async fn stop(self) {
-        let _unheard = self.stop.send(());
+    /// Why the supervisor ends this writer now, if it does: its mic is no longer
+    /// wanted (the toggle is off or the mic was removed), the toggle names
+    /// another day, or the task ended by itself (a failed write, its day over)
+    /// and is collected.
+    fn ending(&self, wanted: bool, day: Option<NaiveDate>) -> Option<Ended> {
+        if !wanted || self.task.is_finished() {
+            Some(Ended::Stopped)
+        } else if day.is_some_and(|day| day != self.day) {
+            Some(Ended::DayOver)
+        } else {
+            None
+        }
+    }
+
+    /// Tell the writer why to close its file, and wait until it has.
+    async fn stop(self, why: Ended) {
+        let _unheard = self.stop.send(why);
         if let Err(err) = self.task.await {
             warn!(target: RECORDER_TARGET, %err, "a recorder writer ended abnormally");
         }
@@ -170,7 +185,8 @@ struct Writers {
 
 impl Writers {
     /// One writer per configured mic while recording `day`, none otherwise; a
-    /// writer that ended (a failed write, its day over) is replaced.
+    /// writer of another day is ended, one that ended by itself (a failed write,
+    /// its day over) is replaced.
     async fn reconcile(
         &mut self,
         service: &ListenService,
@@ -180,15 +196,17 @@ impl Writers {
     ) {
         let configured: Vec<&str> = mics.iter().map(|mic| mic.id.as_str()).collect();
         let wanted: &[&str] = if day.is_some() { &configured } else { &[] };
-        let ended: Vec<String> = self
+        let ended: Vec<(String, Ended)> = self
             .running
             .iter()
-            .filter(|(id, writer)| !wanted.contains(&id.as_str()) || writer.task.is_finished())
-            .map(|(id, _)| id.clone())
+            .filter_map(|(id, writer)| {
+                let ending = writer.ending(wanted.contains(&id.as_str()), day);
+                ending.map(|why| (id.clone(), why))
+            })
             .collect();
-        for id in ended {
+        for (id, why) in ended {
             if let Some(writer) = self.running.remove(&id) {
-                writer.stop().await;
+                writer.stop(why).await;
             }
         }
         service.with_health(|health| health.recorder.retain(&configured));
@@ -205,7 +223,7 @@ impl Writers {
 
     async fn stop_all(self) {
         for writer in self.running.into_values() {
-            writer.stop().await;
+            writer.stop(Ended::Stopped).await;
         }
     }
 }
@@ -313,13 +331,13 @@ async fn run_writer(
     service: ListenService,
     job: WriterJob,
     mut frames: broadcast::Receiver<MicFrame>,
-    mut stop: oneshot::Receiver<()>,
+    mut stop: oneshot::Receiver<Ended>,
 ) {
     let mut open: Option<OpenFile> = None;
     let ended = loop {
         let received = tokio::select! {
             biased;
-            _ = &mut stop => Err(RecvError::Closed),
+            why = &mut stop => break why.unwrap_or(Ended::Stopped),
             received = frames.recv() => received,
         };
         let first = match received {
@@ -330,23 +348,23 @@ async fn run_writer(
             }
             Err(RecvError::Closed) => break Ended::Stopped,
         };
-        let batch = collect_batch(&service, &job.mic_id, first, &mut frames);
-        // the batch began its own length, plus whatever is still queued, ago
-        let behind = frames_duration(batch.len() + frames.len());
+        // The batch's first frame began this long ago: itself and every frame
+        // sent since — those a lag inside the batch is about to cost included.
+        let behind = frames_duration(frames.len().saturating_add(1));
         let now = service.recorder_env().now();
         let start = now.checked_sub_signed(behind).unwrap_or(now);
+        let batch = collect_batch(&service, &job.mic_id, first, &mut frames);
         if now.date() != job.day {
             break Ended::DayOver;
         }
-        match write_batch(open.take(), &job, start, batch).await {
-            Ok((written, created)) => {
-                note_written(&service, &job, &written, created);
-                open = Some(written);
-            }
-            Err(error) => {
-                note_failed(&service, &job, &error);
-                break Ended::Failed;
-            }
+        let written = write_batch(open.take(), &job, start, batch).await;
+        open = written.open;
+        if let Some(error) = &written.failure {
+            note_failed(&service, &job, error);
+            break Ended::Failed;
+        }
+        if let Some(file) = &open {
+            note_written(&service, &job, file, written.created);
         }
     };
     if let Some(last) = open {
@@ -358,7 +376,8 @@ async fn run_writer(
 }
 
 /// The frame just received and whatever else is already waiting, at most
-/// [`MAX_BATCH`].
+/// [`MAX_BATCH`]. A lag ends the batch: the frames before it and the frames
+/// after it are not one stretch of audio, so the later ones are the next batch.
 fn collect_batch(
     service: &ListenService,
     mic_id: &str,
@@ -369,36 +388,71 @@ fn collect_batch(
     while batch.len() < MAX_BATCH {
         match frames.try_recv() {
             Ok(frame) => batch.push(frame),
-            Err(TryRecvError::Lagged(missed)) => note_dropped(service, mic_id, missed),
+            Err(TryRecvError::Lagged(missed)) => {
+                note_dropped(service, mic_id, missed);
+                break;
+            }
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
         }
     }
     batch
 }
 
+/// What a blocking write left behind: the file as it stands (none when it could
+/// not even be created), whether this write created it, and the Slovak reason
+/// when it failed. A failed write keeps the file, so the writer can close it.
+struct Written {
+    open: Option<OpenFile>,
+    created: bool,
+    failure: Option<String>,
+}
+
 /// Write a batch off the runtime, into the open file or into a new one whose
-/// first sample was heard at `start`; the Slovak reason when it failed (the
-/// file is then dropped, its header covering the last good batch).
+/// first sample was heard at `start`.
 async fn write_batch(
     open: Option<OpenFile>,
     job: &WriterJob,
     start: NaiveDateTime,
     batch: Vec<MicFrame>,
-) -> Result<(OpenFile, bool), String> {
+) -> Written {
     let (root, mic_id) = (job.root.clone(), job.mic_id.clone());
-    let joined = tokio::task::spawn_blocking(move || -> Result<(OpenFile, bool), RecordError> {
-        let created = open.is_none();
-        let mut open = match open {
-            Some(open) => open,
-            None => OpenFile::create(&root, start, &mic_id)?,
-        };
-        open.file.append(&batch)?;
-        Ok((open, created))
+    let joined =
+        tokio::task::spawn_blocking(move || append_batch(open, &root, &mic_id, start, &batch))
+            .await;
+    joined.unwrap_or_else(|err| Written {
+        open: None,
+        created: false,
+        failure: Some(format!("zápis nahrávky sa prerušil: {err}")),
     })
-    .await;
-    match joined {
-        Ok(result) => result.map_err(|err| err.to_string()),
-        Err(err) => Err(format!("zápis nahrávky sa prerušil: {err}")),
+}
+
+/// The blocking part of [`write_batch`].
+fn append_batch(
+    open: Option<OpenFile>,
+    root: &Path,
+    mic_id: &str,
+    start: NaiveDateTime,
+    batch: &[MicFrame],
+) -> Written {
+    let created = open.is_none();
+    let mut open = match open {
+        Some(open) => open,
+        None => match OpenFile::create(root, start, mic_id) {
+            Ok(open) => open,
+            Err(err) => {
+                return Written {
+                    open: None,
+                    created: false,
+                    failure: Some(err.to_string()),
+                }
+            }
+        },
+    };
+    let failure = open.file.append(batch).err().map(|err| err.to_string());
+    Written {
+        open: Some(open),
+        created,
+        failure,
     }
 }
 
