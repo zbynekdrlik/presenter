@@ -295,6 +295,7 @@ async fn run_writer(
     let mut open: Option<OpenFile> = None;
     let ended = loop {
         let received = tokio::select! {
+            biased;
             _ = &mut stop => Err(RecvError::Closed),
             received = frames.recv() => received,
         };

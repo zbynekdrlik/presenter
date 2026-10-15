@@ -169,11 +169,13 @@ paths:
   `RecordingFile::create` makes the day folder, refuses a linked one, opens `create_new` only (a taken
   name or a symlink at it → the next `-n`; the 10th in one second is refused, never overwritten). A
   batch began `now − (its frames + the frames still queued) × 100 ms`. The header sizes are patched
-  after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close; a failed
+  after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close (a deploy's
+  SIGTERM does not close: no graceful shutdown, the per-batch header keeps the file playable); a failed
   write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events; a failed
   write → state `error` + Slovak text, WARN on power-of-two failures in a row, the writer ends and the
   next reconcile starts it again (C1b-5 adds the back-off). Switching off or removing the mic closes
-  the file (INFO `recording stopped`: bytes + why) and the status entry. `RecorderHealth` lives in
+  the file (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`,
+  last file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select). `RecorderHealth` lives in
   `ListenHealth` but is not part of the socket session (`end_session` keeps it). Tests drive the real
   supervisor with a settable clock (`recording_service`) and send frames into the mic's channel.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
