@@ -1,4 +1,4 @@
-# APPROVED by the owner 2026-10-14 (#852)
+# APPROVED by the owner 2026-10-14 (#852) — AMENDED 2026-10-15 by the owner's decision on the evaluation (§13, §19, §20)
 
 # Sermon listening, verse suggestions and interpreter assist (#850 part C + #852) — Design
 
@@ -36,7 +36,7 @@ During a sermon with an English-speaking guest and a Slovak interpreter, Present
 | C-S2 | Guest speech → English word on the interpreter display: p90 ≤ 1.0 s | token `end_ms` vs display arrival, replay + live (§13) |
 | C-S3 | End of an English sentence → its Slovak suggestion: p90 ≤ 2.0 s (hard ceiling 3 s, CAI research [TICKET #852 F1]) | same harness |
 | C-S4 | A cited reference (English on the guest mic or Slovak on the interpreter mic) → the Slovak Bible text in the Bible area AND an operator card ≤ 1.5 s after the reference's last word | replay test with timestamps |
-| C-S5 | On the bake-off recordings: ≥ 90 % of the references read aloud become a card (both mics fused), ≤ 2 false cards per hour | bake-off scorer (§13) |
+| C-S5 | On the replayed guest sermons (§13): ≥ 90 % of the references read aloud become a card (both mics fused), ≤ 2 false cards per hour | bake-off scorer (§13) |
 | C-S6 | Verse text is ALWAYS from the database, never machine translation. Nothing goes on the wall without the operator (tap = preview, ZOBRAZIŤ = show) | E2E: a suggestion produces 0 `POST /bible/trigger-slide` until ZOBRAZIŤ |
 | C-S7 | Internet / provider outage → banner on the interpreter display + chip on the console within 3 s; the manual console and šepkár tips keep working (they do not depend on the cloud) | E2E with the mock provider killed |
 | C-S8 | No microphone configured = no audio subsystem runs and nothing is billed (PP). A daily cap stops streaming | unit test + `/listen/status` |
@@ -168,12 +168,12 @@ Every reject is a typed error counted per sender; nothing panics on network data
 - **Level:** RMS dBFS per 100 ms; voiced above −50 dBFS (songplayer's `VOICED_DBFS` [SP]).
 - **Health:** packets/s, `lost_packets`, `late_packets`, `resyncs`, last-packet age, level, current format.
 
-### 5.5 Recorder (bake-off + debugging)
+### 5.5 Recorder (debugging)
 
 - Off by default. A Settings toggle writes each mic's 16 kHz mono stream to
   `/opt/presenter/recordings/<date>/<mic>.wav` (exactly what the ASR gets). ~115 MB per mic-hour. Deleted by the
   server after 30 days, or right after the bake-off report.
-- Used only with the owner's consent (§19).
+- Not an evaluation input (§13); used for debugging a real service.
 
 ### 5.6 Configuration
 
@@ -609,46 +609,54 @@ service; with Live Translate ≈ $2.5–3.7. Upstream bandwidth 2 × 256 kbit/s.
 
 - Audio leaves the building only to the chosen ASR/translation provider, only while listening runs (cloud approved,
   §2).
-- Audio is stored only with the recorder on (§5.5), with the owner's consent (§19).
+- Audio is stored only with the recorder on (§5.5, per-day switch).
 - Final sentences + suggestions go to `listen_transcript` / `listen_suggestions` (incremental migration), deleted
   after 7 days; tips after 30 days (§9.9).
 - No key in the repo: `/etc/presenter/listen.env` (0600) written by the deploy workflows from GitHub secrets, the
   `ai.env` pattern (#761). The repo is public: no e-mails, IPs or keys committed.
 
-## 13. Bake-off on our own recorded SNV services
+## 13. Evaluation — published guest sermons replayed through Presenter's VBAN inputs (owner decision 2026-10-15)
 
-songplayer's evaluations do not settle this: its ASR numbers are on SUNG lyrics (batch), and its Live Translate
-verdict was by ear on dub audio, not on text latency or interpreter usefulness.
+**No live-service recordings, no consent question, no waiting for a guest.** The owner (2026-10-15): the engine
+selection was already worked through for months in songplayer — reuse it; a guest preaches only exceptionally, so an
+evaluation that needs 3–5 recorded guest services would stall the work; the church's YouTube channel has plenty of
+guest services. "Bake-off" elsewhere in this spec means THIS evaluation.
 
-**Inputs.** The recorder captures 3–5 services with a guest (`guest.wav` EN + `interp.wav` SK, 16 kHz mono =
-production input). Labels:
+**Inputs** (downloaded with `yt-dlp` on dev2 — no cookies needed on 2026-10-15 — kept under
+`~/.claude/work-products/presenter/eval-audio/<youtube id>/`, NEVER committed: published church video, not ours to
+redistribute):
 
-- references shown: the `presenter::bible::show` INFO lines (A+B §8, unit O1) give time + reference;
-- references read without being shown: added by hand from the transcripts;
-- WER gold: Gemini 3.5 Transcribe drafts (songplayer's `eval/lyrics/backends/gemini_3_5_transcribe.py`, verbatim
-  mode, word timestamps), a 10-min excerpt per service hand-corrected.
+- NEW LEVEL CHURCH (`UCrF2k6feQUQASgbB8i1ybAw`) "Bohoslužba s hosťom" — English guest + Slovak interpreter
+  alternating on ONE track: Marty Sloan `vvlEx3pIa44` / `-I-cO-U06RA`, Nicolas Robinson `9PDaTGxvYxY`, Dr. Debbie
+  Rich `xOkLny747Y4`, Todd Holmes `pGdCwFZZZwE` / `Bv8-cpCnrsk`, Ben Kroeske `qtTNpq34uFY`, John Huizing
+  `jkw5aq8FxW0`, Dr. Peter Gammons `5dauIYkCrhg`. The sermon is located by a pause map (100 ms frames below −40 dBFS
+  per minute: worship ≈ 0 %, sermon with interpretation 15–35 %); e.g. `vvlEx3pIa44` worship 14–48 min, sermon
+  ≈ 50–135 min.
+- songplayer's dubbing sample `Dhp-qrZDK1g` 02:00–04:00 (English only), with songplayer's Gemini 3.5 Transcribe
+  transcript (word timings) and its EN/SK line pairs (`seg_spec.json`) — the reference text for the EN transcript.
 
-**Arms** (keys via `airuleset.py secret request` / `secret exec`, never on argv [SP practice]):
+**Replay.** `scripts/dev/listen/vban_send.py --file <audio> --start S --duration D --stream <mic stream>` decodes with
+ffmpeg and streams INT16 VBAN to the dev server at 1.0× on ONE wall-clock anchor (songplayer's pacer pattern,
+injectable clock). The whole Presenter path runs on real sermon audio: VBAN receive → per-mic chain → 16 kHz frames →
+(C3) transcription → (C4) suggestions → (C5) interpreter display. The mixed track goes to the guest mic, so the
+interleaved Slovak interpretation is part of the test (language per segment, interpreter speech not mistaken for the
+guest's English).
 
-| Arm | What runs | Reuse |
-|---|---|---|
-| Soniox `stt-rt-v5` EN (+ built-in SK) and SK | replay script: a WAV at 1.0× in 100 ms frames on one wall-clock anchor (songplayer's pacer pattern, injectable clock), every token logged with its arrival time | `dub_live_session.py` pattern |
-| Gemini Live Translate | `eval/dubbing/live_translate_continuous_probe.py --audio guest.wav --voice none` | **unchanged songplayer script** |
-| LLM sentence MT | Soniox finals → one call per sentence via OpenRouter, the owner's model, glossary incl. tip pairs | `ai-proxy.md` prompt rules |
-| (only if Soniox EN WER misses the bar) another streaming EN ASR from the #852 shortlist | same replay script | [TICKET #852 F1] |
+**Engine (reuse, not research).** songplayer's production EN→SK path is Gemini Live Translate
+(`gemini-3.5-live-translate-preview`): one continuous session, 16 kHz mono s16le 100 ms frames, input (EN) + output
+(SK) transcription, first voiced SK output ≈ 3.1 s, the EN input transcription ≈ 4–5 s after the onset (songplayer
+`dabing.md` round H, `dubbing-eval.md`). C3 starts with it; songplayer's probe
+`eval/dubbing/live_translate_continuous_probe.py` is the reference tool. A second engine (Soniox real-time) is added
+only if the replay MEASURES an EN latency the interpreter cannot use — measured, not re-researched.
 
-**Metrics** (state every denominator; errored items stay in it [SP]): EN WER on the gold; word latency = arrival −
-token `end_ms` (p50/p90); sentence end → SK latency; SK quality on ~200 sentences, blind side-by-side, rated by the
-church's interpreters (1–5 adequacy/fluency) [TICKET #852 F1]; reference recall per mic and fused, lead time to the
-operator's show, false cards/hour; cost per hour.
+**Metrics (from the replays, every denominator stated):** EN transcript arrival − input position (p50/p90), SK output
+arrival − input position, the EN transcript of `Dhp-qrZDK1g` against songplayer's reference text (WER), what the
+engine does with the interpreter's Slovak on the guest track, reference detection (C4) on the replayed sermons
+(references labelled from the transcripts) and false cards per hour, cost per hour. Interpreter ratings come from real
+use later; they are not a precondition.
 
-**Decision rule (written before the run):** EN engine = lowest WER unless its word-latency p90 > 1.0 s. SK engine =
-best interpreter rating with sentence→SK p90 ≤ 2.5 s; a tie goes to the cheaper one. Detection ships when fused
-recall ≥ 90 % with ≤ 2 false cards/h; otherwise misses are classified (ASR / normaliser / relative / quote without
-reference) before any LLM or quote-matching step is added.
-
-**Where:** dev2, Python under `scripts/dev/listen-eval/` (Tier-0 safe); a small Python VBAN sender (from the ported
-header layout) can replay a recording into the dev server.
+**Where:** dev2, Python under `scripts/dev/listen-eval/` + the replay tool, against the dev server; keys via
+`airuleset.py secret exec`, never on argv.
 
 ## 14. Observability
 
@@ -718,8 +726,8 @@ usable tablet page right away.**
 | — | **Milestone M-T:** šepkár tips usable at the next guest service (T-S1–T-S3) | | | |
 | C1a | **VBAN ingest core** | `presenter-core/src/audio/vban.rs` (ported codec + decode), `listen/vban_rx.rs`, per-mic chain + resampler, `listen.mics` config, `GET /listen/status` | 450 + 250 | — |
 | C1b | **Settings + recorder** | Settings "Počúvanie" card (shared `ListCard`, health), recorder toggle + retention | 350 + 150 | C1a |
-| — | **Owner action:** two VBAN streams → box acceptance (§5.8) → record 3–5 services (with consent, §19) | | | C1b |
-| C2 | **Bake-off harness** (scripts only, alongside C3) | replay script, songplayer probe run, LLM arm, scorer, report → owner picks engines | scripts | recordings, keys |
+| — | **Owner action:** two VBAN streams → box acceptance (§5.8) (no recordings needed, §13) | | | C1b |
+| C2 | **Replay evaluation** (scripts only, alongside C3) | `vban_send.py --file` replay, downloads + sermon map of the §13 guest services, songplayer probe run, metrics + report | scripts | Gemini key (for the engine runs) |
 | C3 | **Transcription** | provider trait, Soniox client (`tokio-tungstenite` 0.29 — today a dev-dependency + axum's `ws` — moves to `[dependencies]` with a rustls TLS feature), mock provider, session lifecycle (auto start/stop, paid gate, silence gate, reconnect, cap, cost meter), transcript assembly, `/listen/ws` + snapshot, retention tables | 550 + 250 | C1a, Soniox key |
 | C4 | **Verse suggestions** | detectors EN/SK + state + fusion (core), `LiveEvent::BibleSuggestions`, console "Návrhy AI" + listening chip | 500 + 250 | C3, A1a/A1b (resolver), B2d (sections) |
 | C5a | **Interpreter tablet: transcript + Bible** | in the S1b shell: EN history, scroll/pause + "Naživo", Bible area (detected / on-air, DB text, numbering warning), numbers/names, status bar, A−/A+ | 500 + 200 | C3, C4, S1b |
@@ -765,23 +773,19 @@ SK mic).
     cannot be edited (send a new one); active tips = today's, last 4 h, not dismissed.
 11. Marking "already interpreted" sentences is not in v1.
 
-## 19. Open owner question (Slovak)
+## 19. Owner question — withdrawn (2026-10-15)
 
-**Otázka — nahrávky na porovnanie služieb.** Aby sme vybrali najlepšiu službu na prepis a preklad na našom zvuku,
-potrebujem nahrať oba mikrofóny (hosť a tlmočník) na 3–5 bohoslužbách s hosťom. Nahrávky ostanú len na našom
-serveri a po vyhodnotení ich zmažem.
-
-- áno, nahrávaj (odporúčam)
-- nie → služba sa vyberie bez porovnania (Soniox), s väčším rizikom horšej kvality
+The recording-consent question is withdrawn: the evaluation replays published guest sermons (§13). The C1b recorder
+stays a debugging tool (off by default, per-day switch).
 
 ## 20. Owner actions (not questions)
 
 - **VBAN streams:** on the FOH PC (VB-Matrix on fohabl, or Voicemeeter) send the guest mic and the interpreter mic
   as two VBAN streams to `10.77.9.205:6980`, 48 kHz, 16-bit, names `GUEST_EN` / `INTERP_SK`, taken after the channel
   mute. Claude can do the VB-Matrix routing instead, with the owner's go, following songplayer's FOH rule.
-- **Keys for Presenter (its own, not songplayer's):** a Soniox API key (production + bake-off) and a Gemini API key
-  for the bake-off's Live Translate arm, each through the one-time secret-request page; stored as GitHub secrets
-  for the deploy and in the dev2 vault for the bake-off.
+- **Key for Presenter (its own, not songplayer's):** a Gemini API key for Live Translate (C3 + the replay
+  evaluation), through the one-time secret-request page; stored as a GitHub secret for the deploy and in the dev2
+  vault for the evaluation. A Soniox key only if the replay measures a need for a second engine (§13).
 - None needed for the šepkár units.
 
 ## 21. Sources
