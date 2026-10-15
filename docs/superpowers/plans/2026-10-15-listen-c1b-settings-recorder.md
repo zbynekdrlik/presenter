@@ -8427,3 +8427,9 @@ The implementer of the named lane applies these on top of the task text (they ov
   `..RecorderEnv::from_env()`), else E0063. The retention scan is `prune_scan(root, opened, today)` over an entry
   iterator; per-entry errors go to `report.failed` and the pass continues. `.gitignore` has `/recordings/` and
   `/stream-assets/`. Lane C1b-2 measures 592 prod lines.
+- **C1b-4 must keep the first-pass delay (review of C1b-2, 🟡).** The plan's C1b-4 `supervise` patch (~L4971–4995) was
+  written before `first_pass_delay` existed: it calls `prune_if_new_day` at the top of the loop before the `select!`
+  and resets the tick. Do NOT apply it that way. Retention keeps its own gate (no pass before `start + first_pass_delay`,
+  then once per new local date); writer reconciliation is a separate path that still starts IMMEDIATELY after a restart
+  (a same-day restart resumes recording at once). The supervise-level paused-clock test added in C1b-2 (no deletion
+  before the delay, deletion after it) must stay green unchanged.
