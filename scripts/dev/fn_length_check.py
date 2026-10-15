@@ -30,7 +30,12 @@ import os
 import re
 import sys
 
-fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from no_panic_check import SourceError, mask_source  # noqa: E402
+
+# `<` or `(` after the name: a generic fn (`fn x<'a>(…)`) used to be invisible.
+fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*[<(]")
 
 # Exempt patterns per CLAUDE.md:
 # - Migration up()/down() functions (declarative schema)
@@ -93,20 +98,30 @@ def analyze(root, targets, advisory):
             if targets and rel not in targets:
                 continue
             with open(path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+                text = f.read()
+            lines = text.splitlines(keepends=True)
+            # Count braces and find `fn` lines in CODE only: string / raw-string /
+            # char literals and comments are blanked (same lexer as the no-panic
+            # gate), so a "{" in a string no longer runs a function on into the
+            # next one, nor a "}" ends it early. A file the lexer cannot read
+            # falls back to the raw text.
+            try:
+                code = mask_source(text)[0].splitlines(keepends=True)
+            except SourceError:
+                code = lines
             i = 0
-            while i < len(lines):
-                match = fn_start.match(lines[i])
+            while i < len(code):
+                match = fn_start.match(code[i])
                 if match:
                     fn_name = match.group(1)
                     # find first '{'
                     j = i
                     brace = 0
                     started = False
-                    while j < len(lines):
-                        brace += lines[j].count("{")
-                        brace -= lines[j].count("}")
-                        if "{" in lines[j]:
+                    while j < len(code):
+                        brace += code[j].count("{")
+                        brace -= code[j].count("}")
+                        if "{" in code[j]:
                             started = True
                         if started and brace == 0:
                             length = j - i + 1

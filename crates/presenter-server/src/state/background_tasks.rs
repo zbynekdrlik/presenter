@@ -130,6 +130,9 @@ impl AppState {
         // #852: šepkár tips — midnight / 4 h boundary event + 30-day retention.
         self.spawn_interpreter_tips_task();
 
+        // #852 C1a: the VBAN receiver — binds only while listen.mics is non-empty.
+        self.spawn_listen_task();
+
         // NDI auto-reconnect: if a source is marked active in DB but no stream
         // is running, retry activation every 30 seconds. Handles the case where
         // the NDI source comes online after server startup.

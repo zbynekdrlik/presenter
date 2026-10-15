@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- File cap ≤ 1000 production lines (warn > 800) via `bash scripts/dev/count_prod_lines.sh <file>`; function cap ≤ 120 lines (warn > 80) via `QC_TARGETS="<files>" python3 scripts/dev/fn_length_check.py .` — generic fns are invisible to the checker, size them by hand.
+- File cap ≤ 1000 production lines (warn > 800) via `bash scripts/dev/count_prod_lines.sh <file>`; function cap ≤ 120 lines (warn > 80) via `QC_TARGETS="<files>" python3 scripts/dev/fn_length_check.py .` (it measures generic fns too since 2026-10-14).
 - No `unwrap()` / `expect()` / `panic!` in server or core production code (tests and the WASM `presenter-ui` crate are exempt). Enforced in CI since 2026-10-14 by `scripts/dev/no_panic_check.py` (quality-check section 10; the old rg pattern never parsed).
 - Tier-0: NO local compiling cargo (`build`/`check`/`clippy`/`test`/`run`); allowed locally: `cargo fmt --all -- --check`, `(cd crates/presenter-ui && cargo fmt --check)`, `cargo metadata --offline`, `rustfmt`, Python. Every Rust test below is verified by CI after the unit's push.
 - Public repo: no e-mails, egress IPs or Cloudflare account ids committed — tests use RFC 5737 addresses (`192.0.2.x`, `203.0.113.x`); the real Access config lives in `~/.config/presenter/presenter-access.json` (0600), never in the repo.

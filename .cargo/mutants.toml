@@ -24,6 +24,9 @@ exclude_globs = [
     "crates/presenter-importer/proto/**",
     "crates/presenter-importer/vendor/**",
     "crates/presenter-server/src/companion/protocol.rs",
+    # #852 C1a: the ported songplayer encoder is a test-only packet generator
+    # (cfg(any(test, feature = "test-helpers"))), never production behaviour.
+    "crates/presenter-core/src/audio/vban_encode.rs",
     "**/build.rs",
 ]
 
