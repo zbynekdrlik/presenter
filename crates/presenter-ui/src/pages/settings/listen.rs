@@ -13,7 +13,9 @@
 
 use leptos::prelude::*;
 use presenter_core::listen::mics::{mic_id_for_role, MicChannel, MicConfig, MicLanguage, MicRole};
-use presenter_core::listen::recorder::{MicRecording, RecorderStatus, RecordingState};
+use presenter_core::listen::recorder::{
+    MicRecording, RecorderStatus, RecordingState, RECORDING_RETENTION_DAYS,
+};
 use presenter_core::listen::status::{
     ListenStatus, MicState, MicStatus, SocketState, SocketStatus,
 };
@@ -281,18 +283,28 @@ fn socket_line(socket: &SocketStatus) -> String {
 fn recorder_line(recorder: &RecorderStatus) -> String {
     match (recorder.enabled, recorder.enabled_for) {
         (true, Some(day)) => format!(
-            "Nahráva sa do {}/{} — vypne sa samo o polnoci. Nahrávky sa mažú po 30 dňoch.",
+            "Nahráva sa do {}/{} — vypne sa samo o polnoci. \
+             Nahrávky sa mažú po {RECORDING_RETENTION_DAYS} dňoch.",
             recorder.root,
             day.format("%Y-%m-%d")
         ),
         _ if recorder.mics.is_empty() => {
             "Nahrávanie je vypnuté. Najprv pridaj mikrofón — bez neho niet čo nahrávať.".to_string()
         }
-        _ => {
-            "Nahrávanie je vypnuté. Zapína sa vždy len na dnešný deň; nahrávky sa mažú po 30 dňoch."
-                .to_string()
-        }
+        _ => format!(
+            "Nahrávanie je vypnuté. Zapína sa vždy len na dnešný deň; \
+             nahrávky sa mažú po {RECORDING_RETENTION_DAYS} dňoch."
+        ),
     }
+}
+
+/// The line under the switch: the recorder's own, or that its state is unknown
+/// (no status yet, or the polls failed).
+fn recorder_state_line(recorder: Option<&RecorderStatus>) -> String {
+    recorder.map_or_else(
+        || "Stav nahrávania nie je známy.".to_string(),
+        recorder_line,
+    )
 }
 
 /// What the card shows after a status poll whose answer is `fresh`: the fresh
@@ -313,9 +325,33 @@ fn after_poll(
     }
 }
 
-/// Fetch `/listen/status` now and every 2 s while `section` is on screen (the
-/// operator's Settings panel stays mounted while hidden); returns the fetch for
-/// an immediate refresh. Numbered: an older answer never replaces a newer one.
+/// What one tick of the poll does.
+#[derive(Debug, PartialEq, Eq)]
+enum Tick {
+    /// The card is on screen: fetch the status.
+    Fetch,
+    /// The card is hidden and still holds a status: drop it.
+    Forget,
+    /// The card is hidden and holds nothing.
+    Idle,
+}
+
+/// The operator keeps the Settings panel mounted under `display: none`: a hidden
+/// card fetches nothing and forgets its last status, so an hours-old "prijíma" or
+/// a checked switch never greets whoever opens Settings (the badges read "—"
+/// until the first visible tick).
+fn tick(visible: bool, holds_status: bool) -> Tick {
+    match (visible, holds_status) {
+        (true, _) => Tick::Fetch,
+        (false, true) => Tick::Forget,
+        (false, false) => Tick::Idle,
+    }
+}
+
+/// Fetch `/listen/status` now and every 2 s while `section` is on screen (see
+/// [`tick`]); returns the fetch for an immediate refresh. Numbered: an older
+/// answer never replaces a newer one, nor, once the card was hidden, one that
+/// was still in flight.
 fn start_status_poll(
     status: RwSignal<Option<ListenStatus>>,
     section: NodeRef<leptos::html::Section>,
@@ -344,19 +380,35 @@ fn start_status_poll(
     };
     fetch();
     gloo_timers::callback::Interval::new(LISTEN_STATUS_REFRESH_MS, move || {
-        if section
+        let visible = section
             .get_untracked()
-            .is_some_and(|el| el.offset_parent().is_some())
-        {
-            fetch();
+            .is_some_and(|el| el.offset_parent().is_some());
+        match tick(visible, status.with_untracked(Option::is_some)) {
+            Tick::Fetch => fetch(),
+            Tick::Forget => {
+                // numbering a request nobody sends drops any answer still in flight
+                let seq = order.begin();
+                order.accept(seq);
+                failures.set_value(0);
+                status.set(None);
+            }
+            Tick::Idle => {}
         }
     })
     .forget();
     fetch
 }
 
-/// The recorder switch: `PUT /listen/recorder`, a toast, a fresh status. On a
-/// failure the box goes back to what the server has, not the click.
+/// The switch's box shows `checked`.
+fn set_switch(switch_ref: NodeRef<leptos::html::Input>, checked: bool) {
+    if let Some(el) = switch_ref.get_untracked() {
+        el.set_checked(checked);
+    }
+}
+
+/// The recorder switch: `PUT /listen/recorder`, a toast, a fresh status. Once the
+/// PUT is answered the box shows what the server stored; when it fails, the state
+/// from before the click.
 fn recorder_switch<R>(
     toast: ToastHandle,
     switching: RwSignal<bool>,
@@ -371,18 +423,19 @@ where
         switching.set(true);
         leptos::task::spawn_local(async move {
             match listen::set_recorder(enabled).await {
-                Ok(_) => toast.show(
-                    if enabled {
-                        "Nahrávanie je zapnuté na dnešný deň."
-                    } else {
-                        "Nahrávanie je vypnuté."
-                    },
-                    "success",
-                ),
+                Ok(setting) => {
+                    set_switch(switch_ref, setting.enabled_for.is_some());
+                    toast.show(
+                        if enabled {
+                            "Nahrávanie je zapnuté na dnešný deň."
+                        } else {
+                            "Nahrávanie je vypnuté."
+                        },
+                        "success",
+                    );
+                }
                 Err(err) => {
-                    if let Some(el) = switch_ref.get_untracked() {
-                        el.set_checked(!enabled);
-                    }
+                    set_switch(switch_ref, !enabled);
                     let message = failure_text("Nahrávanie sa nepodarilo prepnúť.", &err);
                     toast.show(&message, "error");
                 }
@@ -479,6 +532,8 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
     let refresh = start_status_poll(status, section);
     let recorder = Memo::new(move |_| status.with(|s| s.as_ref().map(|s| s.recorder.clone())));
     let recording_on = Memo::new(move |_| recorder.with(|r| r.as_ref().is_some_and(|r| r.enabled)));
+    // no status: the box is neither on nor off (indeterminate, never "not recording")
+    let unknown = Memo::new(move |_| recorder.with(Option::is_none));
     // no switch without a status, nor ON without a mic (it stays switchable OFF)
     let locked = Memo::new(move |_| {
         recorder.with(|r| r.as_ref().is_none_or(|r| !r.enabled && r.mics.is_empty()))
@@ -509,13 +564,14 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
                 <label class="settings__form-checkbox">
                     <input type="checkbox" node_ref=switch_ref data-role="listen-recorder-toggle"
                         prop:checked=move || recording_on.get()
+                        prop:indeterminate=move || unknown.get()
                         prop:disabled=move || switching.get() || locked.get()
                         on:change=on_switch />
                     <span>"Nahrávať dnes"</span>
                 </label>
             </div>
             <p class="settings__list-meta settings__list-meta--muted" data-role="listen-recorder-state">
-                {move || recorder.with(|r| r.as_ref().map(recorder_line).unwrap_or_default())}
+                {move || recorder.with(|r| recorder_state_line(r.as_ref()))}
             </p>
             {card.render_list(row)}
         </section>
@@ -711,6 +767,37 @@ mod tests {
         assert!(
             recorder_line(&RecorderStatus::default()).contains("Najprv pridaj mikrofón"),
             "no mic: the hint the disabled switch needs"
+        );
+        // the retention is the core's number, not a copy of it
+        let days = format!("po {RECORDING_RETENTION_DAYS} dňoch.");
+        assert!(recorder_line(&on).ends_with(&days));
+        assert!(recorder_line(&off).ends_with(&days));
+    }
+
+    #[test]
+    fn an_unknown_status_says_so_instead_of_reading_as_not_recording() {
+        assert_eq!(
+            recorder_state_line(None),
+            "Stav nahrávania nie je známy.",
+            "no status: not a claim about the recorder"
+        );
+        let known = RecorderStatus::default();
+        assert_eq!(recorder_state_line(Some(&known)), recorder_line(&known));
+    }
+
+    #[test]
+    fn a_hidden_card_fetches_nothing_and_forgets_what_it_held() {
+        assert_eq!(tick(true, false), Tick::Fetch, "on screen: the first fetch");
+        assert_eq!(tick(true, true), Tick::Fetch);
+        assert_eq!(
+            tick(false, true),
+            Tick::Forget,
+            "hidden: an old status must not greet whoever opens Settings"
+        );
+        assert_eq!(
+            tick(false, false),
+            Tick::Idle,
+            "hidden, nothing held: nothing to do"
         );
     }
 

@@ -23,8 +23,10 @@ import {
 // tests (C1b-7) cover the live part of the card: one plays a 1 kHz tone from the
 // real VBAN sender scripts/dev/listen/vban_send.py into this server's loopback
 // socket, watches the row's health, switches the recorder on for today and off
-// again and reads the WAV back from this file's temp folder; the other fails the
-// status poll twice and sees the card show nothing instead of stale numbers.
+// again and reads the WAV back from this file's temp folder; one fails the status
+// poll twice and sees the card show nothing instead of stale numbers; one hides the
+// operator's Settings panel (mounted under display: none) and sees it fetch nothing
+// and open again without the status it held.
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
@@ -293,7 +295,11 @@ function recordingsRoot(): string {
   return recordings;
 }
 
-/** A 1 kHz half-scale tone, 48 kHz INT16, into the test server's VBAN socket. */
+/**
+ * A 1 kHz half-scale tone, 48 kHz INT16, into the test server's VBAN socket.
+ * `stopSender` ends it on every path (a `finally`); `seconds` only keeps a leaked
+ * process finite, the test's own timeout bounds the test.
+ */
 function startSender(port: number, seconds: number): ChildProcess {
   return spawn(
     "python3",
@@ -350,33 +356,33 @@ test("a received microphone shows its health and the recorder writes today's WAV
   await seed(page, [{ ...GUEST, name: "Hosť E2E", streamName: GUEST_STREAM }]);
   const row = card.locator('li[data-id="guest"]');
   const state = row.locator('[data-role="listen-state"]');
-  await expect(state).toHaveAttribute("data-state", "waiting", { timeout: 10_000 });
-  await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na 127.0.0.1:", { timeout: 10_000 });
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na 127.0.0.1:");
   await expect(toggle).toBeEnabled();
   const localAddr = (await listenStatus(page)).socket.localAddr ?? "";
   const port = Number(localAddr.split(":").pop());
   expect(port).toBeGreaterThan(0);
 
-  const sender = startSender(port, 40);
+  const sender = startSender(port, 100);
   try {
-    await expect(state).toHaveAttribute("data-state", "receiving", { timeout: 10_000 });
-    await expect(row.locator('[data-role="listen-health"]')).toContainText("dBFS ● hlas", { timeout: 10_000 });
+    await expect(state).toHaveAttribute("data-state", "receiving");
+    await expect(row.locator('[data-role="listen-health"]')).toContainText("dBFS ● hlas");
     await expect(row.locator('[data-role="listen-health"]')).toContainText("48000 Hz · 1 kan. · int16");
 
     // the recorder: on for today
     await toggle.check();
-    await expect(recorderState).toContainText("vypne sa samo o polnoci", { timeout: 10_000 });
-    await expect(row.locator('[data-role="listen-recording"]')).toContainText(/Nahráva: guest_\d{6}(-\d)?\.wav/, { timeout: 10_000 });
+    await expect(recorderState).toContainText("vypne sa samo o polnoci");
+    await expect(row.locator('[data-role="listen-recording"]')).toContainText(/Nahráva: guest_\d{6}(-\d)?\.wav/);
     expect((await listenStatus(page)).recorder.enabled).toBe(true);
     // more than half a second recorded before it is switched off
     await expect
-      .poll(async () => (await listenStatus(page)).recorder.mics[0].bytes, { timeout: 10_000 })
+      .poll(async () => (await listenStatus(page)).recorder.mics[0].bytes)
       .toBeGreaterThan(16_000);
 
     // off again: the file is closed with its header
     await toggle.uncheck();
-    await expect(recorderState).toContainText("Nahrávanie je vypnuté", { timeout: 10_000 });
-    await expect.poll(async () => (await listenStatus(page)).recorder.mics[0].state, { timeout: 10_000 }).toBe("off");
+    await expect(recorderState).toContainText("Nahrávanie je vypnuté");
+    await expect.poll(async () => (await listenStatus(page)).recorder.mics[0].state).toBe("off");
   } finally {
     await stopSender(sender);
   }
@@ -406,7 +412,7 @@ test("a received microphone shows its health and the recorder writes today's WAV
     for (let at = 0; at + 1 < data.length; at += 2) peak = Math.max(peak, Math.abs(data.readInt16LE(at)));
   }
   expect(peak).toBeGreaterThan(8_000);
-  await expect(row.locator('[data-role="listen-recording"]')).toContainText("Posledná nahrávka:", { timeout: 10_000 });
+  await expect(row.locator('[data-role="listen-recording"]')).toContainText("Posledná nahrávka:");
   expect(errors).toEqual([]);
 });
 
@@ -419,34 +425,87 @@ test("a status poll that fails twice shows the card as unknown, not stale, and i
   const toggle = card.locator('[data-role="listen-recorder-toggle"]');
   const row = card.locator('li[data-id="guest"]');
   const state = row.locator('[data-role="listen-state"]');
-  await expect(state).toHaveAttribute("data-state", "waiting", { timeout: 10_000 });
+  await expect(state).toHaveAttribute("data-state", "waiting");
   await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na");
   await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveJSProperty("indeterminate", false);
 
-  // the status endpoint goes down: two failed polls in a row and the card shows
-  // nothing it cannot vouch for (a real 503 for the page's own fetch)
+  // The status answer turns unreadable: a malformed 200, because Chrome logs its
+  // own console error for every mocked non-2xx (ui skill #598). Two failed polls
+  // in a row and the card shows nothing it cannot vouch for.
   let refused = 0;
   await page.route("**/listen/status", async (route) => {
     refused += 1;
-    await route.fulfill({ status: 503, contentType: "text/plain", body: "down" });
+    await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
   });
-  await expect(state).toHaveAttribute("data-state", "unknown", { timeout: 15_000 });
+  await expect(state).toHaveAttribute("data-state", "unknown");
   await expect(state).toHaveText("—");
   await expect(row.locator('[data-role="listen-health"]')).toHaveText("");
   await expect(card.locator('[data-role="listen-socket"]')).toHaveText("");
+  // the switch is neither on nor off now, and the line says why
+  await expect(card.locator('[data-role="listen-recorder-state"]')).toHaveText("Stav nahrávania nie je známy.");
   await expect(toggle).toBeDisabled();
+  await expect(toggle).toHaveJSProperty("indeterminate", true);
   expect(refused).toBeGreaterThanOrEqual(2);
 
   // it answers again: the card is back with what the server says
   await page.unroute("**/listen/status");
-  await expect(state).toHaveAttribute("data-state", "waiting", { timeout: 15_000 });
+  await expect(state).toHaveAttribute("data-state", "waiting");
   await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na");
   await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveJSProperty("indeterminate", false);
 
-  // the console holds exactly the refused polls and the ONE warn at the second failure
-  const refusedLine = /^\[error\] Failed to load resource: the server responded with a status of 503\b/;
-  const staleWarn = /^\[warning\] listen status poll failed 2x in a row — showing it as unknown: HTTP 503: /;
-  expect(errors.filter((line) => refusedLine.test(line))).toHaveLength(refused);
+  // the console holds exactly ONE line: the warn at the second failure in a row
+  const staleWarn = /^\[warning\] listen status poll failed 2x in a row — showing it as unknown/;
   expect(errors.filter((line) => staleWarn.test(line))).toHaveLength(1);
-  expect(errors.filter((line) => !refusedLine.test(line) && !staleWarn.test(line))).toEqual([]);
+  expect(errors.filter((line) => !staleWarn.test(line))).toEqual([]);
+});
+
+test("the operator's hidden Settings panel fetches nothing and shows no old status when it opens again", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await seed(page, [GUEST]);
+  let statusRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/listen/status") statusRequests += 1;
+  });
+  await page.goto(url("/ui/operator/settings"));
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const card = page.locator('[data-role="listen-card"]');
+  const state = card.locator('li[data-id="guest"] [data-role="listen-state"]');
+  const toggle = card.locator('[data-role="listen-recorder-toggle"]');
+  await expect(card).toBeVisible();
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(toggle).toBeEnabled();
+
+  // Another view: the Settings panel stays mounted but hidden (display: none), and
+  // within a tick the card forgets the status it held ...
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+  await expect(card).toBeHidden();
+  await expect(state).toHaveAttribute("data-state", "unknown");
+  await expect(toggle).toBeDisabled();
+  // ... and asks for nothing while hidden: no request over more than one 2 s tick
+  const whenHidden = statusRequests;
+  await page.waitForTimeout(2_500);
+  expect(statusRequests).toBe(whenHidden);
+
+  // Settings again, the first answer held back: until it comes the card claims nothing
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/listen/status", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.locator('[data-role="view-toggle"][data-view="settings"]').click();
+  await expect(card).toBeVisible();
+  await expect.poll(() => statusRequests).toBeGreaterThan(whenHidden);
+  await expect(state).toHaveAttribute("data-state", "unknown");
+  await expect(toggle).toBeDisabled();
+  release();
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(toggle).toBeEnabled();
+  await page.unroute("**/listen/status");
+  expect(errors).toEqual([]);
 });
