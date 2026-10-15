@@ -217,9 +217,17 @@ paths:
   No separate retry map: a successful write, switching off (`all_stopped`) or removing the mic clears
   the failure streak and with it the pause. Tests move the settable clock. `RecordingFile::begin`
   removes a new file whose header cannot be written (a full disk): no empty files.
+- **Settings card** (#852 C1b-7, UI `pages/settings/listen.rs`): the only consumer of `GET /listen/status`
+  besides the box acceptance — one poll every 2 s while the card is on screen, a state badge, health line
+  and recorder line per mic, the socket line and the "Nahrávať dnes" switch (`PUT /listen/recorder`). It
+  reads `socket.{state,localAddr,bindAddr,error}`, each mic's counters / `level_dbfs` / `voiced` /
+  `format` / `sender` / `error` and `recorder.{enabled,enabledFor,root,mics[]}` through the core types, so
+  a wire change goes together with the card and `tests/e2e/settings-listen.spec.ts` (real sender → WAV
+  on disk). Rules of the card: `.claude/rules/settings-ui.md`.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
-  (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
-  card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status
-  before / after, a 10-min `tcpdump`, `scripts/dev/listen/vban_capture_check.py` (added at that step).
+  (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (Settings →
+  "Počúvanie", whose ids are `guest` / `interp`, or `PUT /listen/mics` with the spec §5.6 list) and the
+  box acceptance runs (spec §5.8): status before / after, a 10-min `tcpdump`,
+  `scripts/dev/listen/vban_capture_check.py` (added at that step).
 - **FOH routing** (VB-Matrix on fohabl, songplayer `vban-out.md`): only with the owner's go; `Mute` only
   (VB-Matrix ignores `dBGain=-inf`); record the prior values; read back every point after each write.

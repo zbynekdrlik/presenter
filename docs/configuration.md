@@ -135,8 +135,10 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
   second from the clock; the split at midnight; a failed write restarted after 1, 2, 4 … 60 minutes,
   counted from the failure (the status shows `error` until a write succeeds); no empty file is left when
   not even its header can be written.
-- C1b-7: the Settings → "Počúvanie" card with the "Nahrávať dnes" switch; until then the switch is
-  reachable only through the API.
+- C1b-7: Settings → "Počúvanie" shows each microphone's state (`prijíma`, `žiadny zvuk`, `čaká na zvuk`,
+  `chyba`), its health and recording line and the socket line, refreshed every 2 s while the card is on
+  screen (after two failed refreshes it shows nothing instead of old numbers), and has the "Nahrávať
+  dnes" switch — the same per-day switch as `PUT /listen/recorder`, locked until a microphone exists.
 
 | Variable                          | Default                               | Purpose |
 | --------------------------------- | ------------------------------------- | ------- |
