@@ -269,4 +269,41 @@ mod tests {
              day against its path; an entry that is no expired day folder is not reported"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_expired_folder_that_cannot_be_cleaned_is_reported_and_the_others_still_go() {
+        use std::os::unix::fs::PermissionsExt;
+
+        /// Gives the folder its write permission back, so the temp dir can be
+        /// removed even when an assertion fails.
+        struct Writable(PathBuf);
+        impl Drop for Writable {
+            fn drop(&mut self) {
+                let _restored = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let stuck = put(root.path(), "2026-08-01", "guest_194205.wav", 10);
+        let other = put(root.path(), "2026-09-01", "guest_100000.wav", 20);
+        let stuck_dir = root.path().join("2026-08-01");
+        // read-only: the folder lists, its recording cannot be removed
+        fs::set_permissions(&stuck_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let _writable = Writable(stuck_dir.clone());
+        let report = prune_recordings(root.path(), day("2026-10-15")).unwrap();
+        assert!(stuck.exists(), "the recording behind the failure stays");
+        assert!(
+            !root.path().join("2026-09-01").exists(),
+            "the other expired folder is pruned"
+        );
+        assert_eq!(report.deleted, vec![(other, 20)]);
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].0, stuck_dir);
+        assert!(
+            report.failed[0].1.contains("ermission denied"),
+            "{report:?}"
+        );
+        assert!(report.kept.is_empty(), "{report:?}");
+    }
 }

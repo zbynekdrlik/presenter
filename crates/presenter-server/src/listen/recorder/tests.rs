@@ -147,6 +147,76 @@ async fn the_first_pass_waits_for_the_delay_then_ticks_every_minute() {
         .unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_folder_that_cannot_be_cleaned_warns_and_a_folder_with_foreign_files_is_kept() {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Gives the folder its write permission back, so the temp dir can be
+    /// removed even when an assertion fails.
+    struct Writable(PathBuf);
+    impl Drop for Writable {
+        fn drop(&mut self) {
+            let _restored =
+                std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let capture = Capture::install();
+    let root = tempfile::tempdir().unwrap();
+    let (clock, _) = clock("2026-10-15T10:00:00");
+    let env = RecorderEnv {
+        root: root.path().to_path_buf(),
+        clock,
+        first_pass_delay: Duration::ZERO,
+    };
+    let stuck = put(root.path(), "2026-08-01", "guest_194205.wav", 10);
+    let stuck_dir = root.path().join("2026-08-01");
+    // read-only: the folder lists, its recording cannot be removed
+    std::fs::set_permissions(&stuck_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let _writable = Writable(stuck_dir.clone());
+    let foreign = put(root.path(), "2026-08-02", "notes.txt", 5);
+    let recording = put(root.path(), "2026-08-02", "guest_100000.wav", 7);
+    let mut pruned_on = None;
+    prune_if_new_day(&env, &mut pruned_on).await;
+    assert!(
+        stuck.exists() && foreign.exists(),
+        "nothing foreign is lost"
+    );
+    assert!(
+        !recording.exists(),
+        "the pass went on past the failed folder"
+    );
+    let failed = capture.events_with_message("could not be read or cleaned");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0].level, tracing::Level::WARN);
+    assert_eq!(
+        failed[0].field("dir"),
+        Some(stuck_dir.display().to_string().as_str())
+    );
+    assert!(
+        failed[0]
+            .field("error")
+            .is_some_and(|error| error.contains("ermission denied")),
+        "{failed:?}"
+    );
+    let kept = capture.events_with_message("expired recordings folder kept");
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(kept[0].level, tracing::Level::INFO);
+    assert_eq!(
+        kept[0].field("dir"),
+        Some(
+            root.path()
+                .join("2026-08-02")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    let deleted = capture.events_with_message("recording deleted (retention)");
+    assert_eq!(deleted.len(), 1, "{deleted:?}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn without_a_delay_the_first_tick_is_immediate() {
     let mut tick = retention_tick(Duration::ZERO);
