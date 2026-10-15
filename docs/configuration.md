@@ -110,7 +110,10 @@ kept for 30 days and deleted on the 31st day after its day. The retention pass r
 date: the first one 10 minutes after the service starts (so a box that boots with a wrong clock cannot
 read a date weeks ahead and delete everything), then in the first minute after each midnight. It
 deletes only the recorder's own `<mic id>_<HHMMSS>.wav` files, never a link or a foreign file, and
-removes the folder once nothing else is left in it.
+removes the folder once nothing else is left in it. There is no free-space check: recordings share
+the disk with the database (two microphones left on all day ≈ 5.5 GB), so the switch is meant for the
+service days only. The day boundary and the retention follow the box clock — keep NTP on (SNV's
+`systemd-timesyncd` was inactive on 2026-10-15; enable it before the first recording).
 
 The recorder is OFF by default and switched per day: `PUT /listen/recorder` `{"enabled": true}` stores
 today's date in `listen.recorder` (`{"enabled": false}` stores `null`). It records only on that date,
@@ -131,6 +134,9 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 
 - C1b-3: the API switch and the status.
 - C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` are live.
+- C1b-6: Settings → "Počúvanie" lists, adds, edits and deletes the microphones (the whole-list
+  `PUT /listen/mics`); a new microphone's id comes from its role (`guest`, `interp`, `preacher`, then
+  `-2` …) and is shown in the editor before saving; a refused list shows the server's Slovak message.
 - C1b-5: the day-after-today check on a running server; a new file whenever the audio is more than a
   second from the clock; the split at midnight; a failed write restarted after 1, 2, 4 … 60 minutes,
   counted from the failure (the status shows `error` until a write succeeds); no empty file is left when

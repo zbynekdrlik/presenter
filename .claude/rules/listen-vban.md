@@ -228,6 +228,8 @@ paths:
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (Settings →
   "Počúvanie", whose ids are `guest` / `interp`, or `PUT /listen/mics` with the spec §5.6 list) and the
   box acceptance runs (spec §5.8): status before / after, a 10-min `tcpdump`,
-  `scripts/dev/listen/vban_capture_check.py` (added at that step).
+  `scripts/dev/listen/vban_capture_check.py` (added at that step). Before the first recording, NTP must
+  run on SNV (`timedatectl` showed "NTP service: inactive" on 2026-10-15): the recorder's day and the
+  30-day retention follow the box clock; the 10-min first-pass delay only helps where NTP runs.
 - **FOH routing** (VB-Matrix on fohabl, songplayer `vban-out.md`): only with the owner's go; `Mute` only
   (VB-Matrix ignores `dBGain=-inf`); record the prior values; read back every point after each write.
