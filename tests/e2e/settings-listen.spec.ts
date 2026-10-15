@@ -1,8 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  REPO_ROOT,
   attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
@@ -16,14 +19,21 @@ import {
 // through their real `change` events), gets the server's Slovak 422 rule inline
 // naming the id the editor showed, saves (the id comes from the role), edits a
 // mic in place (the other mic comes back unchanged: the whole-list PUT) and
-// removes one; the card fits a 360 px phone, also with the editor open. This
-// file's server records into its own temp folder (the recording test, C1b-7,
-// writes there).
+// removes one; the card fits a 360 px phone, also with the editor open. Two more
+// tests (C1b-7) cover the live part of the card: one plays a 1 kHz tone from the
+// real VBAN sender scripts/dev/listen/vban_send.py into this server's loopback
+// socket, watches the row's health, switches the recorder on for today and off
+// again and reads the WAV back from this file's temp folder; one fails the status
+// poll twice and sees the card show nothing instead of stale numbers; one hides the
+// operator's Settings panel (mounted under display: none) and sees it fetch nothing
+// and open again without the status it held.
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
 let recordings: string | undefined;
 const STREAM = "E2E_INTERP";
+// The guest the real sender plays as (a stream of its own, like STREAM).
+const GUEST_STREAM = "E2E_GUEST";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -256,5 +266,246 @@ test("a microphone is edited in place, the other stays, and the card fits a 360 
   ]);
 
   await assertFitsPhone(page);
+  expect(errors).toEqual([]);
+});
+
+type RecorderMic = {
+  id: string;
+  state: string;
+  file: string | null;
+  bytes: number;
+  droppedFrames: number;
+  error: string | null;
+};
+
+type ListenStatus = {
+  socket: { state: string; localAddr: string | null };
+  recorder: { enabled: boolean; mics: RecorderMic[] };
+};
+
+async function listenStatus(page: Page): Promise<ListenStatus> {
+  const reply = await page.request.get(url("/listen/status"));
+  expect(reply.ok()).toBe(true);
+  return reply.json();
+}
+
+/** The recordings folder of this file's server (set in `beforeAll`). */
+function recordingsRoot(): string {
+  if (!recordings) throw new Error("the recordings folder was not created");
+  return recordings;
+}
+
+/**
+ * A 1 kHz half-scale tone, 48 kHz INT16, into the test server's VBAN socket.
+ * `stopSender` ends it on every path (a `finally`); `seconds` only keeps a leaked
+ * process finite, the test's own timeout bounds the test.
+ */
+function startSender(port: number, seconds: number): ChildProcess {
+  return spawn(
+    "python3",
+    [
+      path.join(REPO_ROOT, "scripts", "dev", "listen", "vban_send.py"),
+      "--to",
+      `127.0.0.1:${port}`,
+      "--stream",
+      GUEST_STREAM,
+      "--seconds",
+      String(seconds),
+    ],
+    { stdio: "inherit" },
+  );
+}
+
+async function stopSender(sender: ChildProcess): Promise<void> {
+  if (sender.exitCode !== null || sender.signalCode !== null) return;
+  sender.kill("SIGTERM");
+  await once(sender, "exit");
+}
+
+/**
+ * A recorded WAV after its header is checked against the file: PCM, mono, 16 kHz,
+ * 16 bit, `length = 44 + data`, RIFF size = `36 + data`. Returns its audio.
+ */
+function readWav(file: string): Buffer {
+  const wav = readFileSync(file);
+  expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
+  expect(wav.subarray(8, 16).toString("ascii")).toBe("WAVEfmt ");
+  expect(wav.readUInt16LE(20)).toBe(1); // PCM
+  expect(wav.readUInt16LE(22)).toBe(1); // mono
+  expect(wav.readUInt32LE(24)).toBe(16_000);
+  expect(wav.readUInt16LE(34)).toBe(16); // bits per sample
+  expect(wav.subarray(36, 40).toString("ascii")).toBe("data");
+  const dataBytes = wav.readUInt32LE(40);
+  expect(wav.length).toBe(44 + dataBytes);
+  expect(wav.readUInt32LE(4)).toBe(36 + dataBytes);
+  return wav.subarray(44);
+}
+
+test("a received microphone shows its health and the recorder writes today's WAV", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await openSettings(page);
+  const card = page.locator('[data-role="listen-card"]');
+  const toggle = card.locator('[data-role="listen-recorder-toggle"]');
+  const recorderState = card.locator('[data-role="listen-recorder-state"]');
+  // no mic: no socket, and nothing to record — the switch says so
+  await expect(card.locator('[data-role="listen-socket"]')).toContainText("nečinný");
+  await expect(recorderState).toContainText("Najprv pridaj mikrofón");
+  await expect(toggle).toBeDisabled();
+
+  await seed(page, [{ ...GUEST, name: "Hosť E2E", streamName: GUEST_STREAM }]);
+  const row = card.locator('li[data-id="guest"]');
+  const state = row.locator('[data-role="listen-state"]');
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na 127.0.0.1:");
+  await expect(toggle).toBeEnabled();
+  const localAddr = (await listenStatus(page)).socket.localAddr ?? "";
+  const port = Number(localAddr.split(":").pop());
+  expect(port).toBeGreaterThan(0);
+
+  const sender = startSender(port, 100);
+  try {
+    await expect(state).toHaveAttribute("data-state", "receiving");
+    await expect(row.locator('[data-role="listen-health"]')).toContainText("dBFS ● hlas");
+    await expect(row.locator('[data-role="listen-health"]')).toContainText("48000 Hz · 1 kan. · int16");
+
+    // the recorder: on for today
+    await toggle.check();
+    await expect(recorderState).toContainText("vypne sa samo o polnoci");
+    await expect(row.locator('[data-role="listen-recording"]')).toContainText(/Nahráva: guest_\d{6}(-\d)?\.wav/);
+    expect((await listenStatus(page)).recorder.enabled).toBe(true);
+    // more than half a second recorded before it is switched off
+    await expect
+      .poll(async () => (await listenStatus(page)).recorder.mics[0].bytes)
+      .toBeGreaterThan(16_000);
+
+    // off again: the file is closed with its header
+    await toggle.uncheck();
+    await expect(recorderState).toContainText("Nahrávanie je vypnuté");
+    await expect.poll(async () => (await listenStatus(page)).recorder.mics[0].state).toBe("off");
+  } finally {
+    await stopSender(sender);
+  }
+
+  // The WAVs on disk: one day folder; one file per continuous stretch (a stall of
+  // more than a second on a loaded runner starts a new one, as designed — never
+  // loosen the 1 s rule for it), each with a header that matches its audio.
+  const root = recordingsRoot();
+  const days = readdirSync(root);
+  expect(days).toHaveLength(1);
+  expect(days[0]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  const dayDir = path.join(root, days[0]);
+  const files = readdirSync(dayDir);
+  expect(files.length).toBeGreaterThanOrEqual(1);
+  for (const name of files) expect(name).toMatch(/^guest_\d{6}(-\d)?\.wav$/);
+  const audio = files.map((name) => readWav(path.join(dayDir, name)));
+  expect(audio.reduce((sum, data) => sum + data.length, 0)).toBeGreaterThan(16_000);
+  // the status names the last file and its audio bytes: the file's own data size
+  const last = (await listenStatus(page)).recorder.mics[0];
+  expect(last.error).toBeNull();
+  const lastName = path.basename(last.file ?? "");
+  expect(files).toContain(lastName);
+  expect(audio[files.indexOf(lastName)].length).toBe(last.bytes);
+  // real audio, not silence: the half-scale tone peaks near 16 384
+  let peak = 0;
+  for (const data of audio) {
+    for (let at = 0; at + 1 < data.length; at += 2) peak = Math.max(peak, Math.abs(data.readInt16LE(at)));
+  }
+  expect(peak).toBeGreaterThan(8_000);
+  await expect(row.locator('[data-role="listen-recording"]')).toContainText("Posledná nahrávka:");
+  expect(errors).toEqual([]);
+});
+
+test("a status poll that fails twice shows the card as unknown, not stale, and it recovers", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await seed(page, [GUEST]);
+  await openSettings(page);
+  const card = page.locator('[data-role="listen-card"]');
+  const toggle = card.locator('[data-role="listen-recorder-toggle"]');
+  const row = card.locator('li[data-id="guest"]');
+  const state = row.locator('[data-role="listen-state"]');
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na");
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveJSProperty("indeterminate", false);
+
+  // The status answer turns unreadable: a malformed 200, because Chrome logs its
+  // own console error for every mocked non-2xx (ui skill #598). Two failed polls
+  // in a row and the card shows nothing it cannot vouch for.
+  let refused = 0;
+  await page.route("**/listen/status", async (route) => {
+    refused += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+  });
+  await expect(state).toHaveAttribute("data-state", "unknown");
+  await expect(state).toHaveText("—");
+  await expect(row.locator('[data-role="listen-health"]')).toHaveText("");
+  await expect(card.locator('[data-role="listen-socket"]')).toHaveText("");
+  // the switch is neither on nor off now, and the line says why
+  await expect(card.locator('[data-role="listen-recorder-state"]')).toHaveText("Stav nahrávania nie je známy.");
+  await expect(toggle).toBeDisabled();
+  await expect(toggle).toHaveJSProperty("indeterminate", true);
+  expect(refused).toBeGreaterThanOrEqual(2);
+
+  // it answers again: the card is back with what the server says
+  await page.unroute("**/listen/status");
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(card.locator('[data-role="listen-socket"]')).toContainText("Počúva na");
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveJSProperty("indeterminate", false);
+
+  // the console holds exactly ONE line: the warn at the second failure in a row
+  const staleWarn = /^\[warning\] listen status poll failed 2x in a row — showing it as unknown/;
+  expect(errors.filter((line) => staleWarn.test(line))).toHaveLength(1);
+  expect(errors.filter((line) => !staleWarn.test(line))).toEqual([]);
+});
+
+test("the operator's hidden Settings panel fetches nothing and shows no old status when it opens again", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await seed(page, [GUEST]);
+  let statusRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/listen/status") statusRequests += 1;
+  });
+  await page.goto(url("/ui/operator/settings"));
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const card = page.locator('[data-role="listen-card"]');
+  const state = card.locator('li[data-id="guest"] [data-role="listen-state"]');
+  const toggle = card.locator('[data-role="listen-recorder-toggle"]');
+  await expect(card).toBeVisible();
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(toggle).toBeEnabled();
+
+  // Another view: the Settings panel stays mounted but hidden (display: none), and
+  // within a tick the card forgets the status it held ...
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+  await expect(card).toBeHidden();
+  await expect(state).toHaveAttribute("data-state", "unknown");
+  await expect(toggle).toBeDisabled();
+  // ... and asks for nothing while hidden: no request over more than one 2 s tick
+  const whenHidden = statusRequests;
+  await page.waitForTimeout(2_500);
+  expect(statusRequests).toBe(whenHidden);
+
+  // Settings again, the first answer held back: until it comes the card claims nothing
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/listen/status", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.locator('[data-role="view-toggle"][data-view="settings"]').click();
+  await expect(card).toBeVisible();
+  await expect.poll(() => statusRequests).toBeGreaterThan(whenHidden);
+  await expect(state).toHaveAttribute("data-state", "unknown");
+  await expect(toggle).toBeDisabled();
+  release();
+  await expect(state).toHaveAttribute("data-state", "waiting");
+  await expect(toggle).toBeEnabled();
+  await page.unroute("**/listen/status");
   expect(errors).toEqual([]);
 });

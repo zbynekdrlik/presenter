@@ -14,10 +14,11 @@ use presenter_core::listen::mics::{mic_id_for_role, MicChannel, MicConfig, MicLa
 
 use super::host_editor::{EditorForm, EditorSpec};
 
-/// The ids of the listed mics: the card provides it as a context (`ListenCard`)
-/// and keeps it current, [`MicForm`] reads it for a new mic's id line.
+/// The ids of the listed mics: the card provides it as a context (`ListenCard`,
+/// derived from the list itself, so it is never a tick behind), [`MicForm`]
+/// reads it for a new mic's id line.
 #[derive(Clone, Copy)]
-pub(super) struct TakenIds(pub(super) RwSignal<Vec<String>>);
+pub(super) struct TakenIds(pub(super) Signal<Vec<String>>);
 
 /// (value, the wire name = the `<option>` value, the caption).
 const CHANNELS: &[(MicChannel, &str, &str)] = &[
@@ -134,7 +135,7 @@ pub(super) struct MicForm {
     language: RwSignal<MicLanguage>,
     role: RwSignal<MicRole>,
     /// The listed ids ([`TakenIds`]; empty when no card provided them).
-    taken: RwSignal<Vec<String>>,
+    taken: Signal<Vec<String>>,
 }
 
 impl EditorForm for MicForm {
@@ -152,7 +153,7 @@ impl EditorForm for MicForm {
             channel: RwSignal::new(blank.channel),
             language: RwSignal::new(blank.language),
             role: RwSignal::new(blank.role),
-            taken: use_context::<TakenIds>().map_or_else(|| RwSignal::new(Vec::new()), |ids| ids.0),
+            taken: use_context::<TakenIds>().map_or_else(|| Signal::derive(Vec::new), |ids| ids.0),
         }
     }
 
