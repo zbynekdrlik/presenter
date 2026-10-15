@@ -67,8 +67,15 @@ paths:
   rubato `=5.0.1` `Fft` + `FixedSync::Both` with **20 ms** chunks (delay 160 samples = 10 ms; a
   whole-100-ms FFT would add 50 ms, over spec §8.5); 16 kHz passes through, 11 025 Hz is refused
   (`error`, mic state `error`); a format change starts a fresh converter. Frames = 1600 s16 samples,
-  counted (`framesOut`) with the last one's level (`levelDbfs`); **no frame channel until its first
-  consumer** (C1b recorder / C3 ASR) adds it.
+  counted (`framesOut`) with the last one's level (`levelDbfs`).
+- **Frame channel** (#852 C1b-2, `ListenService::frame_sender`): ONE `broadcast::Sender<MicFrame>`
+  (`Arc<[i16]>`, 1600 samples) per mic id, created on first use and kept for the life of the process —
+  every chain of the mic (a save that changes its stream starts a new chain) sends into the same
+  channel, so a consumer never re-subscribes. A chain sends only when `record_chain` returned `true`
+  (its generation is current) and only while someone listens (`receiver_count`). Capacity
+  `FRAME_CHANNEL_CAPACITY` = 128 frames (12.8 s; tokio rounds a capacity up to a power of two, so keep
+  one): `send` never waits; a consumer that falls behind gets `Lagged(n)` and counts it. Never make a
+  chain wait for a consumer (no `mpsc::send().await`, no lock held by a consumer).
 - **rubato's lock footprint:** 13 packages, byte-identical to songplayer's lock — incl.
   `audio-codec-algorithms` (a dependency of `audioadapter-sample`, 0BSD OR Apache-2.0). Resolve a
   dependency change with `cargo metadata` (non-compiling) and diff `Cargo.lock`: only `+` lines, no
@@ -109,6 +116,21 @@ paths:
   1 kHz half-scale tone, pulse peak at 4160, 899 crossings) come from a Python mirror of rubato's
   `FftResampler`; if CI measures outside a window, compare `output_delay()` with the measurement before
   touching the test — never widen it.
+- **Recorder — contract and retention** (#852 C1b-2; core `listen/recorder.rs` + `audio/wav.rs`,
+  server `listen/recorder.rs` + `recording_file.rs`): files `<root>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav`
+  (`-2` … `-9` within one second, `RECORDING_NAMES_PER_SECOND`), canonical 44-byte PCM header for
+  16 kHz mono s16 (byte-checked against Python's `wave`; `wav_riff_size` saturates, no 4 GiB guard: a
+  mic's day is ≤ 2.76 GB). Root = `PRESENTER_LISTEN_RECORDINGS_DIR`, else `recordings` next to the
+  sqlite file (`state::stream_assets::dir_next_to_db`: prod / PP `/opt/presenter/recordings`, dev
+  `/opt/presenter-dev/recordings`, inside the units' `ReadWritePaths`); under `cfg(test)` the default
+  is a temp dir, never `./recordings` in the crate — tests set their own folder and a settable clock
+  with `ListenService::set_recorder_env`. ONE supervisor task, spawned by `ListenService::start` with
+  the socket task (never in validate mode), ticks every 60 s even without a mic (a stated deviation
+  from C-S8: on SNV / PP it only runs the daily retention). Retention once per local date (startup,
+  then the first tick after midnight): a canonical `YYYY-MM-DD` folder whose day is more than 30 days
+  ago (`recording_expired`), only `is_recording_file_name` regular files (`DirEntry::file_type` never
+  follows a link; a linked folder is skipped), the folder only once empty; one INFO per deleted file,
+  an INFO for a folder kept, a WARN for one that failed. All I/O in `spawn_blocking`.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
   card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status
