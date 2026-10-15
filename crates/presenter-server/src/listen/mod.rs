@@ -4,9 +4,10 @@
 //! (a `watch`), the health (a std mutex, never held across an `.await`), the
 //! start-once flag and the save lock. Started from `spawn_background_tasks`
 //! only, so validate mode never binds. Each mic has a chain (counter rule →
-//! 16 kHz → level, `mic_chain`); no frame channel yet: it arrives with its
-//! first consumer (C1b recorder / C3 ASR). The recorder (`recorder`,
-//! `recording_file`, #852 C1b) has its own supervisor task, started with the
+//! 16 kHz → level, `mic_chain`) that hands its frames to the mic's frame
+//! channel (#852 C1b): one `broadcast` per mic id that never makes the chain
+//! wait, read by the recorder (C1b) and later the ASR (C3). The recorder
+//! (`recorder`, `recording_file`) has its own supervisor task, started with the
 //! socket task; it deletes day folders older than 30 days once per local date.
 
 pub(crate) mod health;
@@ -18,6 +19,7 @@ mod resample;
 mod tests;
 mod vban_rx;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -26,7 +28,7 @@ use std::time::Duration;
 use presenter_core::audio::vban::VBAN_DEFAULT_PORT;
 use presenter_core::listen::mics::MicConfig;
 use presenter_core::listen::status::ListenStatus;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
 use self::health::ListenHealth;
@@ -42,6 +44,13 @@ pub(crate) const DEFAULT_VBAN_ADDR: SocketAddr =
 /// A mic whose last packet is this old has no audio ("žiadny zvuk" within 3 s, C-S1).
 pub(crate) const NO_AUDIO_AFTER: Duration = Duration::from_secs(3);
 const BIND_RETRY_CAP: Duration = Duration::from_secs(60);
+/// One 100 ms frame of a mic: 1600 samples of 16 kHz mono s16 — exactly what
+/// the ASR gets (spec §5.4). Shared: every consumer reads the same buffer.
+pub(crate) type MicFrame = Arc<[i16]>;
+/// A consumer that falls this many frames (12.8 s) behind loses the oldest ones
+/// and is told how many (`RecvError::Lagged`): no consumer can slow a chain.
+/// tokio rounds a broadcast capacity up to a power of two, so this is one.
+pub(crate) const FRAME_CHANNEL_CAPACITY: usize = 128;
 
 /// The listen state every `AppState` clone shares.
 #[derive(Clone)]
@@ -54,6 +63,10 @@ struct Inner {
     health: Mutex<ListenHealth>,
     started: AtomicBool,
     save_lock: tokio::sync::Mutex<()>,
+    /// One frame channel per mic id, kept for the life of the process: every
+    /// chain of a mic (a save that changes its stream starts a new one) sends
+    /// into the same channel, so a consumer never re-subscribes (#852 C1b).
+    frames: Mutex<HashMap<String, broadcast::Sender<MicFrame>>>,
     /// Where the recorder writes and what time it is (#852 C1b).
     recorder_env: Mutex<RecorderEnv>,
 }
@@ -67,6 +80,7 @@ impl ListenService {
                 health: Mutex::new(ListenHealth::default()),
                 started: AtomicBool::new(false),
                 save_lock: tokio::sync::Mutex::new(()),
+                frames: Mutex::new(HashMap::new()),
                 recorder_env: Mutex::new(RecorderEnv::from_env()),
             }),
         }
@@ -117,6 +131,19 @@ impl ListenService {
 
     fn config_receiver(&self) -> watch::Receiver<Arc<Vec<MicConfig>>> {
         self.inner.config.subscribe()
+    }
+
+    /// The mic's frame channel, created on first use.
+    fn frame_sender(&self, mic_id: &str) -> broadcast::Sender<MicFrame> {
+        let mut frames = self
+            .inner
+            .frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        frames
+            .entry(mic_id.to_string())
+            .or_insert_with(|| broadcast::Sender::new(FRAME_CHANNEL_CAPACITY))
+            .clone()
     }
 
     /// The recorder's folder and clock.
