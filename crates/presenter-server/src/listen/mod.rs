@@ -75,7 +75,7 @@ struct Inner {
     /// The day the recorder records (`listen.recorder`); `None` = off.
     recorder: watch::Sender<Option<NaiveDate>>,
     /// The day the supervisor switched the recorder off because it lay after
-    /// today: the state layer clears the stored row (#852 C1b-4).
+    /// today: the state layer clears the stored row (#852 C1b-5).
     recorder_cleared: watch::Sender<Option<NaiveDate>>,
 }
 

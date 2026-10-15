@@ -175,7 +175,8 @@ paths:
   never a wait in the chain. The file opens with the first frame (a mic without audio leaves no file):
   `RecordingFile::create` makes the day folder, refuses a linked one, opens `create_new` only (a taken
   name or a symlink at it → the next `-n`; the 10th in one second is refused, never overwritten). A
-  batch began `now − (its frames + the frames still queued) × 100 ms`. The header sizes are patched
+  batch's first frame began `now − (1 + frames.len()) × 100 ms`, `frames.len()` read BEFORE the batch
+  is collected. The header sizes are patched
   after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close (a deploy's
   SIGTERM does not close: no graceful shutdown, the per-batch header keeps the file playable); a failed
   write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events, and the
@@ -183,13 +184,17 @@ paths:
   stretch of audio; the batch's start is read BEFORE collecting, while `frames.len()` still counts the
   lost frames). A failed write → state `error` + Slovak text, WARN on power-of-two failures in a row,
   and the writer CLOSES the file it already had (`write_batch` returns `Written { open, created,
-  failure }`: a failed write keeps the file; `recording stopped`, why `a write failed`) and ends; the
-  supervisor restarts it after its back-off (below). Switching off or removing the mic closes the file
+  failure }`: a failed write keeps the file; `recording stopped`, why `a write failed`) and ends — but
+  a file this very write created whose FIRST append failed holds only its header, so it is removed
+  (`RecordingFile::discard`, shared with `begin`; no `open` returned, no `recording stopped`) — and the
+  supervisor restarts the writer after its back-off (below). Switching off or removing the mic closes the file
   (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`, last
   file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select, pinned
-  by a 20-round test). A `Writer` knows its day: reconcile ends one whose day is not the toggle's
-  (a switch-on for D+1 in the first minute after midnight starts D+1's writer at once, why `the day
-  ended`; the stop signal is a `oneshot<Ended>` carrying the reason). `RecorderHealth` lives in
+  by a 20-round test). A `Writer` knows its day: `Writer::ending` ends one whose day is not TODAY
+  BEFORE it tests whether the mic is still wanted (a switch-on for D+1 in the first minute after
+  midnight starts D+1's writer at once; a writer left open without frames at midnight — the toggle
+  still names yesterday, so the mic looks switched off — ends `the day ended`, never as a switch-off;
+  a finished task stays `Stopped`; the stop signal is a `oneshot<Ended>` carrying the reason). `RecorderHealth` lives in
   `ListenHealth` but is not part of the socket session (`end_session` keeps it). Tests drive the real
   supervisor with a settable clock (`recording_service`) and send frames into the mic's channel; a
   failure after the file exists comes from the cfg(test) hook `recording_file::fail_appends_under`.
