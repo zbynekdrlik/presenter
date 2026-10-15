@@ -15,6 +15,9 @@ use std::net::SocketAddr;
 
 /// `settings_audit.setting_table` of the row (as `ai-settings`).
 const LISTEN_AUDIT_TABLE: &str = "app_settings";
+/// The WARN of a failed audit row, under the target of the setting it is about.
+const AUDIT_FAILED: &str =
+    "failed to record a listen setting's audit row (the save itself succeeded)";
 
 /// A stored `listen.mics` that is not a valid list: a 500, never replaced silently.
 #[derive(Debug, thiserror::Error)]
@@ -214,12 +217,12 @@ impl AppState {
             .record_settings_audit(LISTEN_AUDIT_TABLE, key, source, actor, before, after)
             .await;
         if let Err(err) = recorded {
-            tracing::warn!(
-                target: MIC_TARGET,
-                ?err,
-                key,
-                "failed to record a listen setting's audit row (the save itself succeeded)"
-            );
+            // a tracing target is a constant: one call per target
+            if key == LISTEN_RECORDER_KEY {
+                tracing::warn!(target: RECORDER_TARGET, ?err, key, "{AUDIT_FAILED}");
+            } else {
+                tracing::warn!(target: MIC_TARGET, ?err, key, "{AUDIT_FAILED}");
+            }
         }
     }
 }
