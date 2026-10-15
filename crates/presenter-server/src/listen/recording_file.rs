@@ -50,6 +50,33 @@ fn io_error(path: &Path, source: io::Error) -> RecordError {
     }
 }
 
+/// Folders whose recordings refuse an append, as a full disk would (tests only).
+#[cfg(test)]
+static FAILING_FOLDERS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// From now on every append to a recording under `dir` fails (tests only).
+#[cfg(test)]
+pub(super) fn fail_appends_under(dir: &Path) {
+    FAILING_FOLDERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(dir.to_path_buf());
+}
+
+/// The injected full disk, when `path` lies under a folder that fails (tests only).
+#[cfg(test)]
+fn fail_if_injected(path: &Path) -> Result<(), RecordError> {
+    let failing = FAILING_FOLDERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|dir| path.starts_with(dir));
+    if failing {
+        return Err(io_error(path, io::Error::other("no space left on device")));
+    }
+    Ok(())
+}
+
 /// One continuous stretch of a mic's audio, in its own file.
 #[derive(Debug)]
 pub(crate) struct RecordingFile {
@@ -99,6 +126,8 @@ impl RecordingFile {
     /// Append `frames`, then patch the header sizes: a crash after this leaves
     /// a file whose header covers them. A failed write changes no size.
     pub(crate) fn append(&mut self, frames: &[MicFrame]) -> Result<(), RecordError> {
+        #[cfg(test)]
+        fail_if_injected(&self.path)?;
         let mut bytes = Vec::with_capacity(frames.iter().map(|frame| frame.len() * 2).sum());
         for sample in frames.iter().flat_map(|frame| frame.iter()) {
             bytes.extend_from_slice(&sample.to_le_bytes());

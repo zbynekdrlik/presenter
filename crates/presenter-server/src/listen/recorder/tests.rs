@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::listen::health::ListenHealth;
+use crate::listen::recording_file::fail_appends_under;
 use crate::tracing_capture::{quoted, Capture};
 use presenter_core::audio::level::rms_dbfs;
 use presenter_core::audio::vban::VbanSampleType;
@@ -916,4 +917,91 @@ fn a_switch_made_since_wins_over_the_future_day_switch_off() {
         "already off"
     );
     assert!(!cleared.has_changed().unwrap(), "reported once");
+}
+
+// ---- review items of C1b-4, fixed in C1b-5 ----------------------------------
+
+/// A switch-on for the next day in the first minute after midnight must not keep
+/// the old day's writer: its day is over, and the first frame of the new day
+/// belongs in the new day's folder.
+#[tokio::test]
+async fn a_switch_on_for_the_next_day_replaces_the_old_days_writer() {
+    let root = tempfile::tempdir().unwrap();
+    let mics = vec![mic("guest", "GUEST_EN")];
+    let (service, now) = recording_service(root.path(), "2026-10-18T23:59:30", mics).await;
+    *now.lock().unwrap() = at("2026-10-19T00:00:10.100");
+    service.apply_recorder(Some(day("2026-10-19"))); // wakes the supervisor
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    send(&service, "guest", 7);
+    wait_for(&service, "the new day's first frame", |s| {
+        recording(s, "guest").bytes == 3_200
+    })
+    .await;
+    // the frame began 0.1 s before the clock: 00:00:10.000
+    let file = root.path().join("2026-10-19").join("guest_000010.wav");
+    assert_eq!(read_wav(&file).1[0], 7);
+    assert!(
+        !root.path().join(DAY).exists(),
+        "nothing was written to the old day"
+    );
+}
+
+/// A write that fails after the file exists still closes the file: header,
+/// `fsync` and the `recording stopped` line with the reason.
+#[tokio::test]
+async fn a_failed_write_closes_the_file_it_leaves_behind() {
+    let capture = Capture::install();
+    let root = tempfile::tempdir().unwrap();
+    let start = "2026-10-18T19:42:05.100";
+    let (service, _) = recording_service(root.path(), start, vec![mic("guest", "GUEST_EN")]).await;
+    send(&service, "guest", 1);
+    wait_for(&service, "first frame", |s| {
+        recording(s, "guest").bytes == 3_200
+    })
+    .await;
+    fail_appends_under(root.path());
+    send(&service, "guest", 2);
+    wait_for(&service, "the write failed", |s| {
+        recording(s, "guest").state == RecordingState::Error
+    })
+    .await;
+    wait_until("the file was closed", || {
+        !capture.events_with_message("recording stopped").is_empty()
+    })
+    .await;
+    let stopped = capture.events_with_message("recording stopped");
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    assert_eq!(
+        stopped[0].field("why"),
+        Some(quoted("a write failed").as_str())
+    );
+    assert_eq!(stopped[0].field("bytes"), Some("3200"));
+    let (header, samples) = read_wav(&day_file(root.path(), "guest_194205.wav"));
+    assert_eq!(
+        (header, samples.len()),
+        (wav_header(3_200).to_vec(), 1_600),
+        "the failed batch changed nothing in the file"
+    );
+}
+
+/// A lag found while a batch is being filled ends the batch there: the frames
+/// before it and the frames after it are not one stretch of audio.
+#[tokio::test]
+async fn a_batch_ends_at_a_lag_and_the_frames_after_it_come_next() {
+    let service = ListenService::new();
+    service.apply(vec![mic("guest", "GUEST_EN")]);
+    let (frames, mut receiver) = broadcast::channel::<MicFrame>(4);
+    // six frames into a channel of four: the first two are lost, and the
+    // receiver is told at its next read
+    for k in 0..6i16 {
+        frames.send(frame(k)).unwrap();
+    }
+    let batch = collect_batch(&service, "guest", frame(100), &mut receiver);
+    assert_eq!(batch.len(), 1, "the batch ends where frames were lost");
+    assert_eq!(recording(&service.status(), "guest").dropped_frames, 2);
+    assert_eq!(
+        receiver.try_recv().unwrap()[0],
+        2,
+        "the frames after the lag are the next batch"
+    );
 }
