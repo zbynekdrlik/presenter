@@ -1314,3 +1314,42 @@ async fn a_stop_with_frames_waiting_writes_nothing() {
         "a stop wins over the waiting frames"
     );
 }
+
+// ---- review of C1b-5: the day's end for a quiet writer, a first append that fails ----
+
+/// A writer still open at midnight with no frames (the FOH PC is off after the
+/// service) is closed by the first reconcile after midnight, and the reason is
+/// the day, not a switch-off: the toggle still names yesterday, so the mic is no
+/// longer wanted, but that is not why the file ends.
+#[tokio::test]
+async fn a_quiet_writer_open_at_midnight_is_closed_as_the_day_ended() {
+    let capture = Capture::install();
+    let root = tempfile::tempdir().unwrap();
+    let mics = vec![mic("guest", "GUEST_EN")];
+    let start = "2026-10-18T23:59:58.100";
+    let (service, now) = recording_service(root.path(), start, mics.clone()).await;
+    send(&service, "guest", 1);
+    wait_for(&service, "first frame", |s| {
+        recording(s, "guest").bytes == 3_200
+    })
+    .await;
+    *now.lock().unwrap() = at("2026-10-19T00:00:30");
+    service.apply(mics); // the minute tick would do the same
+    wait_until("the file was closed", || {
+        !capture.events_with_message("recording stopped").is_empty()
+    })
+    .await;
+    let stopped = capture.events_with_message("recording stopped");
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    assert_eq!(
+        stopped[0].field("why"),
+        Some(quoted("the day ended").as_str())
+    );
+    assert_eq!(stopped[0].field("bytes"), Some("3200"));
+    let (header, _) = read_wav(&day_file(root.path(), "guest_235958.wav"));
+    assert_eq!(header, wav_header(3_200).to_vec(), "closed with its header");
+    wait_for(&service, "the writer ended", |s| {
+        recording(s, "guest").state == RecordingState::Off
+    })
+    .await;
+}
