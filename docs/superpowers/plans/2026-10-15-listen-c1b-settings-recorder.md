@@ -8440,3 +8440,22 @@ The implementer of the named lane applies these on top of the task text (they ov
   WARN picks its target by key (`RECORDER_TARGET` for `listen.recorder`). The dev-deploy scrub in `pipeline.yml`
   deletes `listen.recorder` so dev never inherits prod's switch. C1b-4 / C1b-7 update the "what each unit delivers"
   list in `docs/configuration.md` and the rule when they land. Lane C1b-3 measures 202 prod lines.
+
+## Addendum 3 — lane C1b-4 as merged, and what moves to C1b-5
+
+- **The runtime future-day check is C1b-5's, NOT C1b-4's** (supersedes the "C1b-4's reconcile tick applies the same rule
+  at runtime" line above). Lane C1b-4 measured 712 with it, so it was split out: branch `c1b5-lane` (commits e69ca857 +
+  ce4b0e73 on top of the C1b-4 tip) carries `recording_day`, `ListenService::switch_off_future_day`, the
+  `recorder_cleared` watch + the state-layer row cleaner (`clear_recorder_row`, audit `StartupDefault`/`system`), its
+  4 tests and docs (107 prod lines). C1b-5 starts from that branch, then adds Task 18 (drift rotation, midnight split,
+  back-off, header-failure cleanup) + the N1/N3 items of Addendum 1.
+- **C1b-4 review 🔵 deferred to C1b-5** (same code as Task 18): (2) `Writer` remembers its day — `writer.day != day`
+  ends it in reconcile with the reason "the day ended" (a switch-on for D+1 in the first minute must not keep D's
+  writer); (3) a write failure after the file exists returns the `OpenFile` with the error and closes it as `Failed`
+  (fsync + `recording stopped` line; the `Ended::Failed` text becomes reachable); (4) `collect_batch` ends the batch at a
+  `Lagged` (the drift rotation's start estimate assumes a continuous batch); (6) a paused-clock test pins the 60 s
+  reconcile tick without `apply` (fail once, advance 61 s, expect a subscriber, with `first_pass_delay =
+  FIRST_PASS_DELAY`); plus a test pinning that a stop with frames waiting writes nothing (the `biased` select added
+  after review, cb6ac718).
+- Lane C1b-4 measures exactly 600 prod lines (base 9e98a272). `main.rs` has no graceful shutdown: a deploy's SIGTERM
+  leaves files unclosed but playable (per-batch header) — documented in the rule.
