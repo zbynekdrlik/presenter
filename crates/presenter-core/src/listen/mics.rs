@@ -412,7 +412,9 @@ mod tests {
     fn a_new_mics_id_is_free_even_past_the_list_limit() {
         // Not reachable through a valid list (≤ 4 mics), but the fallback must
         // never hand out a taken id whatever the caller passes.
-        let taken = ["guest", "guest-2", "guest-3", "guest-4", "guest-5", "guest-7"];
+        let taken = [
+            "guest", "guest-2", "guest-3", "guest-4", "guest-5", "guest-7",
+        ];
         let id = mic_id_for_role(MicRole::Guest, &taken);
         assert!(!taken.contains(&id.as_str()), "{id} is taken");
         assert_eq!(id, "guest-6");
