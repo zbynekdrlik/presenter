@@ -1363,8 +1363,12 @@ jobs:
           # (REPLACE strips prior ' (mock)' suffixes before appending exactly one;
           # note REPLACE strips ALL occurrences, so a prod label with a literal
           # mid-string ' (mock)' would collapse — implausible, dev-only cosmetic).
-          sqlite3 /opt/presenter-dev/presenter.db "UPDATE resolume_hosts SET host='127.0.0.1', port=8091, label=REPLACE(label, ' (mock)', '') || ' (mock)'; UPDATE ableset_settings SET host='127.0.0.1', http_port=39042; DELETE FROM android_stage_displays; DELETE FROM video_sources;"
-          echo "Integration tables redirected to localhost mock endpoints"
+          # #852 C1b-3: the snapshot also carries prod's listening-recorder switch
+          # (`listen.recorder`, a per-day date). Dev never inherits it: the row is
+          # deleted (no row = off), so a dev server records nothing even on the day
+          # prod's switch names. Re-running on a cleared DB is a no-op.
+          sqlite3 /opt/presenter-dev/presenter.db "UPDATE resolume_hosts SET host='127.0.0.1', port=8091, label=REPLACE(label, ' (mock)', '') || ' (mock)'; UPDATE ableset_settings SET host='127.0.0.1', http_port=39042; DELETE FROM android_stage_displays; DELETE FROM video_sources; DELETE FROM app_settings WHERE key='listen.recorder';"
+          echo "Integration tables redirected to localhost mock endpoints; listen.recorder switch cleared"
           REMOTE_SCRIPT
 
       - name: Validate database schema (dev DB)
