@@ -105,9 +105,17 @@ for a refused sample rate), the streams seen but not assigned and the senders wh
 refused. Senders: VB-Matrix or Voicemeeter on the FOH PC, 48 kHz, 16-bit, stream names
 `GUEST_EN` / `INTERP_SK` (spec §5.7). `scripts/dev/listen/vban_send.py` sends a test tone.
 
-| Variable                     | Default        | Purpose |
-| ---------------------------- | -------------- | ------- |
-| `PRESENTER_LISTEN_VBAN_ADDR` | `0.0.0.0:6980` | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
+Recordings (spec §5.5, §12) live in day folders `<recordings folder>/<YYYY-MM-DD>/`. A day folder is
+kept for 30 days and deleted on the 31st day after its day. The retention pass runs once per local
+date: the first one 10 minutes after the service starts (so a box that boots with a wrong clock cannot
+read a date weeks ahead and delete everything), then in the first minute after each midnight. It
+deletes only the recorder's own `<mic id>_<HHMMSS>.wav` files, never a link or a foreign file, and
+removes the folder once nothing else is left in it.
+
+| Variable                          | Default                               | Purpose |
+| --------------------------------- | ------------------------------------- | ------- |
+| `PRESENTER_LISTEN_VBAN_ADDR`      | `0.0.0.0:6980`                        | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
+| `PRESENTER_LISTEN_RECORDINGS_DIR` | `recordings` next to the sqlite file  | Folder of the listening recordings: prod / PP `/opt/presenter/recordings`, dev `/opt/presenter-dev/recordings` (inside the units' `ReadWritePaths`). Unit tests use a temp folder. |
 
 ### Companion Integration
 

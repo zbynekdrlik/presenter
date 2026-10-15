@@ -336,6 +336,7 @@ impl ListenHealth {
     }
 
     /// A chain's output; ignored unless `generation` is the mic's current one.
+    /// Returns whether it was (only a current chain hands its frames on).
     pub(crate) fn record_chain(
         &mut self,
         mic_id: &str,
@@ -343,19 +344,20 @@ impl ListenHealth {
         frames: u64,
         level_dbfs: Option<f32>,
         error: Option<&str>,
-    ) {
+    ) -> bool {
         let Some(mic) = self
             .mics
             .get_mut(mic_id)
             .filter(|mic| mic.generation == generation)
         else {
-            return;
+            return false;
         };
         mic.frames_out += frames;
         if level_dbfs.is_some() {
             mic.level_dbfs = level_dbfs;
         }
         mic.error = error.map(str::to_string);
+        true
     }
 
     /// A format the mic's chain switched to; the mic's formats this session

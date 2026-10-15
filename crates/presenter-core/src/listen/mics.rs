@@ -162,7 +162,7 @@ fn normalize_mic(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
     Ok(mic)
 }
 
-fn is_valid_mic_id(id: &str) -> bool {
+pub(crate) fn is_valid_mic_id(id: &str) -> bool {
     (1..=MIC_ID_MAX_CHARS).contains(&id.len())
         && id
             .bytes()
