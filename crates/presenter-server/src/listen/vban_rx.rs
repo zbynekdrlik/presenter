@@ -423,11 +423,11 @@ fn unmatched_lines(seen: UnmatchedCount) -> (bool, bool) {
 /// The #484 gates of the refused-datagram lines, `(line, summary)`, for a
 /// WARN-class reject (non-audio never reaches it).
 ///
-/// While fewer than [`FIRST_EVICTION`] senders have been counted this session
-/// no sender can have been evicted yet, so each sender's own count is a true
-/// count and it logs on its own power-of-two counts, exactly as it did before
-/// there was a session gate; those are at most 16 senders in the map. From the
-/// 17th counted sender on, a count can restart after an eviction, so the
+/// While fewer than [`FIRST_EVICTION`] senders have been counted this session,
+/// a sender logs on its own power-of-two counts, exactly as it did before
+/// there was a session gate. A sender evicted by non-audio-only senders and
+/// back again is counted again, so at most 16 map entries ever log this way.
+/// From the 17th counted sender on, a count can restart after an eviction, so the
 /// session gates take over: a sender whose first reject enters the bounded map
 /// (new, or back after an eviction) logs on the power-of-two count of such
 /// senders this session; a sender's later rejects log when its own count AND
