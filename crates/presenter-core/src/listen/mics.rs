@@ -113,6 +113,25 @@ pub fn validate_mics(mics: Vec<MicConfig>) -> Result<Vec<MicConfig>, MicsValidat
     Ok(valid)
 }
 
+/// The id of a new mic (#852 C1b: the Settings card never asks for one; the id
+/// names the mic's recording files and never changes): its role's short name —
+/// `guest`, `interp`, `preacher`, the spec §5.6 ids — then `-2`, `-3` … while
+/// that is taken. Always a valid id.
+pub fn mic_id_for_role(role: MicRole, taken: &[&str]) -> String {
+    let base = match role {
+        MicRole::Guest => "guest",
+        MicRole::Interpreter => "interp",
+        MicRole::Preacher => "preacher",
+    };
+    (1..=LISTEN_MAX_MICS + 1)
+        .map(|n| match n {
+            1 => base.to_string(),
+            n => format!("{base}-{n}"),
+        })
+        .find(|id| !taken.contains(&id.as_str()))
+        .unwrap_or_else(|| format!("{base}-{}", taken.len() + 1))
+}
+
 fn normalize_mic(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
     if !is_valid_mic_id(&mic.id) {
         return Err(MicsValidationError::BadId(mic.id));
@@ -362,5 +381,30 @@ mod tests {
     fn unknown_enum_values_are_refused_by_serde() {
         let json = SPEC_EXAMPLE.replacen(r#""channel": "left""#, r#""channel": "center""#, 1);
         assert!(serde_json::from_str::<Vec<MicConfig>>(&json).is_err());
+    }
+
+    #[test]
+    fn a_new_mics_id_comes_from_its_role_and_is_never_taken_twice() {
+        assert_eq!(mic_id_for_role(MicRole::Guest, &[]), "guest");
+        assert_eq!(mic_id_for_role(MicRole::Interpreter, &[]), "interp");
+        assert_eq!(mic_id_for_role(MicRole::Preacher, &[]), "preacher");
+        assert_eq!(mic_id_for_role(MicRole::Guest, &["guest"]), "guest-2");
+        assert_eq!(
+            mic_id_for_role(MicRole::Guest, &["guest", "guest-2", "guest-3", "guest-4"]),
+            "guest-5",
+            "a full list of 4 still gets a free id"
+        );
+        for id in ["guest", "interp", "preacher", "guest-5"] {
+            assert!(is_valid_mic_id(id), "{id}");
+        }
+        let spec = validate_mics(serde_json::from_str(SPEC_EXAMPLE).unwrap()).unwrap();
+        assert_eq!(
+            (spec[0].id.as_str(), spec[1].id.as_str()),
+            (
+                mic_id_for_role(MicRole::Guest, &[]).as_str(),
+                mic_id_for_role(MicRole::Interpreter, &[]).as_str()
+            ),
+            "the spec §5.6 ids"
+        );
     }
 }
