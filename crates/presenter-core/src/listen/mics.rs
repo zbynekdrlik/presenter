@@ -116,14 +116,15 @@ pub fn validate_mics(mics: Vec<MicConfig>) -> Result<Vec<MicConfig>, MicsValidat
 /// The id of a new mic (#852 C1b: the Settings card never asks for one; the id
 /// names the mic's recording files and never changes): its role's short name —
 /// `guest`, `interp`, `preacher`, the spec §5.6 ids — then `-2`, `-3` … while
-/// that is taken. Always a valid id.
+/// that is taken. Always a valid id, never a taken one: of the first
+/// `taken.len() + 1` candidates at least one is free.
 pub fn mic_id_for_role(role: MicRole, taken: &[&str]) -> String {
     let base = match role {
         MicRole::Guest => "guest",
         MicRole::Interpreter => "interp",
         MicRole::Preacher => "preacher",
     };
-    (1..=LISTEN_MAX_MICS + 1)
+    (1..=taken.len() + 1)
         .map(|n| match n {
             1 => base.to_string(),
             n => format!("{base}-{n}"),
