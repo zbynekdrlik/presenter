@@ -64,6 +64,7 @@ async fn retention_runs_once_per_local_date() {
     let env = RecorderEnv {
         root: root.path().to_path_buf(),
         clock,
+        first_pass_delay: Duration::ZERO,
     };
     let expired = put(root.path(), "2026-09-14", "guest_194205.wav", 10);
     let mut pruned_on = None;
@@ -92,6 +93,7 @@ async fn a_started_service_prunes_at_once_and_logs_each_file() {
     service.set_recorder_env(RecorderEnv {
         root: root.path().to_path_buf(),
         clock,
+        first_pass_delay: Duration::ZERO,
     });
     assert!(service.start("127.0.0.1:0".parse().unwrap()));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -113,4 +115,42 @@ async fn a_started_service_prunes_at_once_and_logs_each_file() {
     };
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].field("bytes"), Some("1234"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_pass_waits_for_the_delay_then_ticks_every_minute() {
+    assert_eq!(
+        FIRST_PASS_DELAY,
+        Duration::from_secs(600),
+        "a booting box gets ten minutes to set its clock"
+    );
+    let mut tick = retention_tick(FIRST_PASS_DELAY);
+    let just_before = FIRST_PASS_DELAY - Duration::from_secs(1);
+    assert!(
+        tokio::time::timeout(just_before, tick.tick())
+            .await
+            .is_err(),
+        "no pass before the delay is over"
+    );
+    tokio::time::timeout(Duration::from_secs(2), tick.tick())
+        .await
+        .unwrap();
+    let almost_a_minute = RECONCILE_EVERY - Duration::from_secs(1);
+    assert!(
+        tokio::time::timeout(almost_a_minute, tick.tick())
+            .await
+            .is_err(),
+        "then one tick a minute"
+    );
+    tokio::time::timeout(Duration::from_secs(2), tick.tick())
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_a_delay_the_first_tick_is_immediate() {
+    let mut tick = retention_tick(Duration::ZERO);
+    tokio::time::timeout(Duration::from_millis(1), tick.tick())
+        .await
+        .unwrap();
 }
