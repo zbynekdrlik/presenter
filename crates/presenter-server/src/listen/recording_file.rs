@@ -1,6 +1,14 @@
 //! The recorder's files on disk (#852 C1b, spec §5.5, §12) — blocking
 //! `std::fs`, run in `spawn_blocking` only.
 //!
+//! A recording ([`RecordingFile`]) is one continuous stretch of a mic's audio:
+//! `<root>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav` (`-2` … `-9` for more stretches
+//! started in the same second), 16 kHz mono s16le behind the 44-byte header,
+//! whose two sizes are patched after every batch — a crash leaves a file whose
+//! header covers the audio up to the last batch. A file is only ever created
+//! (`create_new`: an existing name, a symlink included, is never opened) and
+//! never inside a linked day folder.
+//!
 //! Retention deletes only what the recorder makes: day folders named
 //! `YYYY-MM-DD` (canonical spelling) and in them the `<mic id>_<HHMMSS>[-n].wav`
 //! regular files; an expired folder is removed once it holds nothing (the pass
@@ -9,14 +17,132 @@
 //! so a linked folder or file is never entered or deleted.
 
 use std::ffi::OsStr;
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDate;
-use presenter_core::listen::recorder::{
-    is_recording_file_name, parse_recording_day, recording_expired,
+use chrono::{NaiveDate, NaiveDateTime};
+use presenter_core::audio::wav::{
+    wav_header, wav_riff_size, WAV_DATA_SIZE_AT, WAV_HEADER_LEN, WAV_RIFF_SIZE_AT,
 };
+use presenter_core::listen::recorder::{
+    is_recording_file_name, parse_recording_day, recording_day_dir, recording_expired,
+    recording_file_name, RECORDING_NAMES_PER_SECOND,
+};
+
+use super::MicFrame;
+
+/// Why a recording could not be written (Slovak: the status shows it).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RecordError {
+    #[error("zápis nahrávky {path} zlyhal: {source}")]
+    Io { path: String, source: io::Error },
+    #[error("priečinok nahrávok {path} je odkaz — nenahrávam doň")]
+    Linked { path: String },
+    #[error("v {path} už je 9 nahrávok z tej istej sekundy")]
+    NamesTaken { path: String },
+}
+
+fn io_error(path: &Path, source: io::Error) -> RecordError {
+    RecordError::Io {
+        path: path.display().to_string(),
+        source,
+    }
+}
+
+/// One continuous stretch of a mic's audio, in its own file.
+#[derive(Debug)]
+pub(crate) struct RecordingFile {
+    path: PathBuf,
+    file: File,
+    /// Audio bytes written (whole samples). One mic's day is at most 2.76 GB,
+    /// far below what the u32 size fields hold: the day ends at midnight.
+    data_bytes: u32,
+}
+
+impl RecordingFile {
+    /// A new file for `mic_id`'s audio whose first sample was heard at
+    /// `started` (local time); its header says "no audio yet".
+    pub(crate) fn create(
+        root: &Path,
+        started: NaiveDateTime,
+        mic_id: &str,
+    ) -> Result<Self, RecordError> {
+        let dir = root.join(recording_day_dir(started.date()));
+        fs::create_dir_all(&dir).map_err(|err| io_error(&dir, err))?;
+        if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(RecordError::Linked {
+                path: dir.display().to_string(),
+            });
+        }
+        for attempt in 1..=RECORDING_NAMES_PER_SECOND {
+            let path = dir.join(recording_file_name(mic_id, started.time(), attempt));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => {
+                    let mut recording = Self {
+                        path,
+                        file,
+                        data_bytes: 0,
+                    };
+                    recording.io(|file| file.write_all(&wav_header(0)))?;
+                    return Ok(recording);
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(io_error(&path, err)),
+            }
+        }
+        Err(RecordError::NamesTaken {
+            path: dir.display().to_string(),
+        })
+    }
+
+    /// Append `frames`, then patch the header sizes: a crash after this leaves
+    /// a file whose header covers them. A failed write changes no size.
+    pub(crate) fn append(&mut self, frames: &[MicFrame]) -> Result<(), RecordError> {
+        let mut bytes = Vec::with_capacity(frames.iter().map(|frame| frame.len() * 2).sum());
+        for sample in frames.iter().flat_map(|frame| frame.iter()) {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        let at = WAV_HEADER_LEN as u64 + u64::from(self.data_bytes);
+        self.io(|file| {
+            file.seek(SeekFrom::Start(at))?;
+            file.write_all(&bytes)
+        })?;
+        let added = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        self.data_bytes = self.data_bytes.saturating_add(added);
+        self.patch_sizes()
+    }
+
+    /// The header and the audio on disk (`fsync`); the audio bytes written.
+    pub(crate) fn finish(mut self) -> Result<u32, RecordError> {
+        self.patch_sizes()?;
+        self.io(|file| file.sync_all())?;
+        Ok(self.data_bytes)
+    }
+
+    pub(crate) fn data_bytes(&self) -> u32 {
+        self.data_bytes
+    }
+
+    pub(crate) fn path_text(&self) -> String {
+        self.path.display().to_string()
+    }
+
+    fn patch_sizes(&mut self) -> Result<(), RecordError> {
+        let riff = wav_riff_size(self.data_bytes).to_le_bytes();
+        let data = self.data_bytes.to_le_bytes();
+        self.io(|file| {
+            file.seek(SeekFrom::Start(WAV_RIFF_SIZE_AT))?;
+            file.write_all(&riff)?;
+            file.seek(SeekFrom::Start(WAV_DATA_SIZE_AT))?;
+            file.write_all(&data)
+        })
+    }
+
+    fn io<T>(&mut self, op: impl FnOnce(&mut File) -> io::Result<T>) -> Result<T, RecordError> {
+        op(&mut self.file).map_err(|err| io_error(&self.path, err))
+    }
+}
 
 /// What a retention pass did.
 #[derive(Debug, Default)]
@@ -306,5 +432,127 @@ mod tests {
             "{report:?}"
         );
         assert!(report.kept.is_empty(), "{report:?}");
+    }
+
+    fn at(text: &str) -> NaiveDateTime {
+        text.parse().unwrap()
+    }
+
+    fn frame(value: i16) -> MicFrame {
+        std::sync::Arc::from(vec![value; 1_600])
+    }
+
+    #[test]
+    fn every_batch_leaves_a_header_that_covers_it() {
+        let root = tempfile::tempdir().unwrap();
+        let mut file =
+            RecordingFile::create(root.path(), at("2026-10-18T19:42:05"), "guest").unwrap();
+        let path = root.path().join("2026-10-18").join("guest_194205.wav");
+        assert_eq!(file.path_text(), path.display().to_string());
+        assert_eq!(fs::read(&path).unwrap(), wav_header(0));
+        file.append(&[frame(1), frame(-2)]).unwrap();
+        // no finish: exactly what a crash right now would leave on disk
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 44 + 6_400);
+        assert_eq!(&bytes[..44], &wav_header(6_400)[..]);
+        assert_eq!(&bytes[44..46], &1i16.to_le_bytes());
+        assert_eq!(&bytes[44 + 3_200..44 + 3_202], &(-2i16).to_le_bytes());
+        file.append(&[frame(3)]).unwrap();
+        assert_eq!(&fs::read(&path).unwrap()[..44], &wav_header(9_600)[..]);
+        assert_eq!(file.finish().unwrap(), 9_600);
+    }
+
+    #[test]
+    fn a_second_file_in_the_same_second_never_touches_the_first() {
+        let root = tempfile::tempdir().unwrap();
+        let started = at("2026-10-18T19:42:05");
+        let mut first = RecordingFile::create(root.path(), started, "guest").unwrap();
+        first.append(&[frame(7)]).unwrap();
+        assert_eq!(first.finish().unwrap(), 3_200);
+        let second = RecordingFile::create(root.path(), started, "guest").unwrap();
+        assert!(
+            second.path_text().ends_with("guest_194205-2.wav"),
+            "{}",
+            second.path_text()
+        );
+        let old = fs::read(root.path().join("2026-10-18").join("guest_194205.wav")).unwrap();
+        assert_eq!(old.len(), 44 + 3_200);
+        assert_eq!(&old[44..46], &7i16.to_le_bytes());
+    }
+
+    #[test]
+    fn a_tenth_file_in_one_second_is_refused_not_overwritten() {
+        let root = tempfile::tempdir().unwrap();
+        let started = at("2026-10-18T19:42:05");
+        for _ in 0..RECORDING_NAMES_PER_SECOND {
+            RecordingFile::create(root.path(), started, "guest").unwrap();
+        }
+        let err = RecordingFile::create(root.path(), started, "guest").unwrap_err();
+        assert!(matches!(err, RecordError::NamesTaken { .. }), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_never_written_through() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("2026-10-18")).unwrap();
+        let err =
+            RecordingFile::create(root.path(), at("2026-10-18T19:42:05"), "guest").unwrap_err();
+        assert!(matches!(err, RecordError::Linked { .. }), "{err}");
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        let target = outside.path().join("keep.wav");
+        fs::write(&target, b"keep").unwrap();
+        fs::create_dir_all(root.path().join("2026-10-19")).unwrap();
+        let link = root.path().join("2026-10-19").join("guest_194205.wav");
+        std::os::unix::fs::symlink(&target, link).unwrap();
+        let file = RecordingFile::create(root.path(), at("2026-10-19T19:42:05"), "guest").unwrap();
+        assert!(
+            file.path_text().ends_with("guest_194205-2.wav"),
+            "a link at the name is a taken name"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn a_failing_write_after_a_good_create_changes_no_size_and_says_why() {
+        let root = tempfile::tempdir().unwrap();
+        let mut good =
+            RecordingFile::create(root.path(), at("2026-10-18T19:42:05"), "guest").unwrap();
+        good.append(&[frame(1)]).unwrap();
+        // the disk refuses the next write: the same file through a handle that cannot write
+        let mut full = RecordingFile {
+            path: good.path.clone(),
+            file: File::open(&good.path).unwrap(),
+            data_bytes: good.data_bytes(),
+        };
+        let err = full.append(&[frame(2)]).unwrap_err();
+        assert!(matches!(err, RecordError::Io { .. }), "{err}");
+        assert!(err.to_string().starts_with("zápis nahrávky "), "{err}");
+        assert_eq!(
+            full.data_bytes(),
+            3_200,
+            "nothing counted that was not written"
+        );
+        let bytes = fs::read(&good.path).unwrap();
+        assert_eq!(
+            &bytes[..44],
+            &wav_header(3_200)[..],
+            "the header still covers the audio"
+        );
+        assert_eq!(bytes.len(), 44 + 3_200);
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_made_is_a_slovak_error_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("not-a-folder");
+        fs::write(&root, b"x").unwrap();
+        let err = RecordingFile::create(&root, at("2026-10-18T19:42:05"), "guest").unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.starts_with("zápis nahrávky ") && text.contains("not-a-folder"),
+            "{text}"
+        );
     }
 }
