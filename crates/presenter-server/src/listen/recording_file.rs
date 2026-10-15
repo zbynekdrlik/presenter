@@ -7,6 +7,7 @@
 //! judged by `DirEntry::file_type`, which never follows a symlink, so a linked
 //! folder or file is never entered or deleted.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -32,7 +33,35 @@ pub(crate) struct PruneReport {
 /// recordings, then the folder when that emptied it. A missing root is nothing
 /// to do; one folder's failure never stops the others.
 pub(crate) fn prune_recordings(root: &Path, today: NaiveDate) -> io::Result<PruneReport> {
-    let entries = match fs::read_dir(root) {
+    let opened = fs::read_dir(root).map(|entries| entries.map(root_entry));
+    prune_scan(root, opened, today)
+}
+
+/// One entry of the recordings folder as the scan sees it: its path and whether
+/// it is a directory.
+struct RootEntry {
+    path: PathBuf,
+    is_dir: io::Result<bool>,
+}
+
+/// A directory entry as the scan sees it; a failed read of the entry itself
+/// stays an error item of the iterator.
+fn root_entry(entry: io::Result<fs::DirEntry>) -> io::Result<RootEntry> {
+    let entry = entry?;
+    Ok(RootEntry {
+        is_dir: entry.file_type().map(|kind| kind.is_dir()),
+        path: entry.path(),
+    })
+}
+
+/// The retention pass over the entries of `root`, given the result of opening it
+/// (a seam for tests: a real directory cannot be made to fail mid-scan).
+fn prune_scan(
+    _root: &Path,
+    opened: io::Result<impl Iterator<Item = io::Result<RootEntry>>>,
+    today: NaiveDate,
+) -> io::Result<PruneReport> {
+    let entries = match opened {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(PruneReport::default()),
         Err(err) => return Err(err),
@@ -40,14 +69,15 @@ pub(crate) fn prune_recordings(root: &Path, today: NaiveDate) -> io::Result<Prun
     let mut report = PruneReport::default();
     for entry in entries {
         let entry = entry?;
-        let expired = entry.file_type()?.is_dir()
+        let expired = entry.is_dir?
             && entry
+                .path
                 .file_name()
-                .to_str()
+                .and_then(OsStr::to_str)
                 .and_then(parse_recording_day)
                 .is_some_and(|day| recording_expired(day, today));
         if expired {
-            let dir = entry.path();
+            let dir = entry.path;
             if let Err(err) = prune_day(&dir, &mut report) {
                 report.failed.push((dir, err.to_string()));
             }
