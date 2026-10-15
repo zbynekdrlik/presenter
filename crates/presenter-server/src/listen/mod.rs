@@ -5,10 +5,14 @@
 //! start-once flag and the save lock. Started from `spawn_background_tasks`
 //! only, so validate mode never binds. Each mic has a chain (counter rule →
 //! 16 kHz → level, `mic_chain`); no frame channel yet: it arrives with its
-//! first consumer (C1b recorder / C3 ASR).
+//! first consumer (C1b recorder / C3 ASR). The recorder (`recorder`,
+//! `recording_file`, #852 C1b) has its own supervisor task, started with the
+//! socket task; it deletes day folders older than 30 days once per local date.
 
 pub(crate) mod health;
 mod mic_chain;
+pub(crate) mod recorder;
+mod recording_file;
 mod resample;
 #[cfg(test)]
 mod tests;
@@ -26,6 +30,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use self::health::ListenHealth;
+use self::recorder::RecorderEnv;
 
 /// The target of every receiver log line (spec §14 `presenter::listen::mic`).
 pub(crate) const MIC_TARGET: &str = "presenter::listen::mic";
@@ -49,6 +54,8 @@ struct Inner {
     health: Mutex<ListenHealth>,
     started: AtomicBool,
     save_lock: tokio::sync::Mutex<()>,
+    /// Where the recorder writes and what time it is (#852 C1b).
+    recorder_env: Mutex<RecorderEnv>,
 }
 
 impl ListenService {
@@ -60,6 +67,7 @@ impl ListenService {
                 health: Mutex::new(ListenHealth::default()),
                 started: AtomicBool::new(false),
                 save_lock: tokio::sync::Mutex::new(()),
+                recorder_env: Mutex::new(RecorderEnv::from_env()),
             }),
         }
     }
@@ -80,13 +88,15 @@ impl ListenService {
         self.with_health(|health| health.snapshot(&mics, Instant::now()))
     }
 
-    /// Start the socket task once; `false` when it was already started.
+    /// Start the socket task and the recorder's supervisor once; `false` when
+    /// they were already started.
     pub(crate) fn start(&self, bind: SocketAddr) -> bool {
         if self.inner.started.swap(true, Ordering::SeqCst) {
             return false;
         }
         self.with_health(|health| health.socket.bind_addr = Some(bind));
         tokio::spawn(vban_rx::supervise(self.clone(), bind));
+        tokio::spawn(recorder::supervise(self.clone()));
         true
     }
 
@@ -107,6 +117,25 @@ impl ListenService {
 
     fn config_receiver(&self) -> watch::Receiver<Arc<Vec<MicConfig>>> {
         self.inner.config.subscribe()
+    }
+
+    /// The recorder's folder and clock.
+    fn recorder_env(&self) -> RecorderEnv {
+        self.inner
+            .recorder_env
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Point the recorder at a test folder and a test clock.
+    #[cfg(test)]
+    pub(crate) fn set_recorder_env(&self, env: RecorderEnv) {
+        *self
+            .inner
+            .recorder_env
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = env;
     }
 }
 

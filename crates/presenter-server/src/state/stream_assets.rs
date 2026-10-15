@@ -375,13 +375,20 @@ pub(crate) fn resolve_dir() -> PathBuf {
 /// `db_url`. An in-memory / empty / relative-filename url falls back to
 /// `./stream-assets`.
 pub(crate) fn stream_assets_dir_from_db_url(db_url: &str) -> PathBuf {
+    dir_next_to_db(db_url, "stream-assets")
+}
+
+/// Pure: the folder `name` next to the sqlite file named in `db_url` (#852 C1b:
+/// the listening recordings go there too); `./<name>` for an in-memory / empty /
+/// relative-filename url.
+pub(crate) fn dir_next_to_db(db_url: &str, name: &str) -> PathBuf {
     let parent = sqlite_file_path(db_url)
         .as_deref()
         .and_then(Path::parent)
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    parent.join("stream-assets")
+    parent.join(name)
 }
 
 fn sqlite_file_path(db_url: &str) -> Option<PathBuf> {
