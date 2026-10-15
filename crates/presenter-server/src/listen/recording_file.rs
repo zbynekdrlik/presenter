@@ -25,7 +25,8 @@ pub(crate) struct PruneReport {
     /// An expired folder left in place: it still holds something the recorder
     /// did not write.
     pub(crate) kept: Vec<PathBuf>,
-    /// An expired folder that could not be cleaned, and why.
+    /// An expired folder that could not be read or cleaned, and why; an entry the
+    /// scan could not read at all is listed against the recordings folder itself.
     pub(crate) failed: Vec<(PathBuf, String)>,
 }
 
@@ -55,9 +56,11 @@ fn root_entry(entry: io::Result<fs::DirEntry>) -> io::Result<RootEntry> {
 }
 
 /// The retention pass over the entries of `root`, given the result of opening it
-/// (a seam for tests: a real directory cannot be made to fail mid-scan).
+/// (a seam for tests: a real directory cannot be made to fail mid-scan). Only
+/// opening the folder can fail the pass; an entry that cannot be read or cleaned
+/// is a finding in the report and the scan goes on.
 fn prune_scan(
-    _root: &Path,
+    root: &Path,
     opened: io::Result<impl Iterator<Item = io::Result<RootEntry>>>,
     today: NaiveDate,
 ) -> io::Result<PruneReport> {
@@ -68,22 +71,35 @@ fn prune_scan(
     };
     let mut report = PruneReport::default();
     for entry in entries {
-        let entry = entry?;
-        let expired = entry.is_dir?
-            && entry
-                .path
-                .file_name()
-                .and_then(OsStr::to_str)
-                .and_then(parse_recording_day)
-                .is_some_and(|day| recording_expired(day, today));
-        if expired {
-            let dir = entry.path;
-            if let Err(err) = prune_day(&dir, &mut report) {
-                report.failed.push((dir, err.to_string()));
-            }
+        match entry {
+            Ok(entry) => prune_entry(entry, today, &mut report),
+            Err(err) => report.failed.push((root.to_path_buf(), err.to_string())),
         }
     }
     Ok(report)
+}
+
+/// One entry of the folder: an expired day folder is pruned, anything else is
+/// left alone (and, being no day folder, never reported).
+fn prune_entry(entry: RootEntry, today: NaiveDate, report: &mut PruneReport) {
+    let expired = entry
+        .path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(parse_recording_day)
+        .is_some_and(|day| recording_expired(day, today));
+    if !expired {
+        return;
+    }
+    match entry.is_dir {
+        Ok(true) => {
+            if let Err(err) = prune_day(&entry.path, report) {
+                report.failed.push((entry.path, err.to_string()));
+            }
+        }
+        Ok(false) => {}
+        Err(err) => report.failed.push((entry.path, err.to_string())),
+    }
 }
 
 /// One expired day folder: its recordings, then the folder if nothing else is in it.

@@ -141,7 +141,7 @@ fn log_prune(report: &PruneReport) {
             target: RECORDER_TARGET,
             dir = %dir.display(),
             error = error.as_str(),
-            "an expired recordings folder could not be cleaned — next try tomorrow"
+            "an expired recordings folder could not be read or cleaned — next try tomorrow"
         );
     }
 }
