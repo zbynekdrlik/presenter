@@ -37,9 +37,10 @@ const TICK: Duration = Duration::from_secs(1);
 /// A socket is healthy once it received a datagram or stayed bound this long;
 /// only then does a later failure start the retry pause at 1 s again.
 const HEALTHY_AFTER: Duration = Duration::from_secs(30);
-/// The new-name (or new-sender) count at which a bounded map evicts for the
-/// first time: where the summary line of the unassigned-stream and the
-/// refused-datagram gate is logged.
+/// The 17th counted name (or sender): one more than a bounded map keeps, where
+/// the summary line of the unassigned-stream and the refused-datagram gate is
+/// logged. The name map evicts for the first time there; the reject map may
+/// evict earlier, since a non-audio-only sender takes a slot uncounted.
 const FIRST_EVICTION: u64 = RECENT_CAP as u64 + 1;
 
 pub(super) type ConfigRx = watch::Receiver<Arc<Vec<MicConfig>>>;
@@ -434,7 +435,7 @@ fn unmatched_lines(seen: UnmatchedCount) -> (bool, bool) {
 /// the session's reject total are both on the power-of-two gate. Each gate
 /// passes at most log2(N) + 1 times in N datagrams, so more senders than the
 /// map keeps, in bursts or not, log at most 2 (log2(N) + 1) further lines plus
-/// the summary, which marks the first eviction once per session.
+/// the summary, which marks the 17th counted sender once per session.
 fn reject_lines(seen: RejectSeen) -> (bool, bool) {
     if seen.senders < FIRST_EVICTION {
         (should_log_event(seen.count), false)
