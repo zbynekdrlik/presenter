@@ -6,8 +6,9 @@
 //! started in the same second), 16 kHz mono s16le behind the 44-byte header,
 //! whose two sizes are patched after every batch — a crash leaves a file whose
 //! header covers the audio up to the last batch. A file is only ever created
-//! (`create_new`: an existing name, a symlink included, is never opened) and
-//! never inside a linked day folder.
+//! (`create_new`: an existing name, a symlink included, is never opened), never
+//! inside a linked day folder, and removed again when not even its header can
+//! be written (a full disk).
 //!
 //! Retention deletes only what the recorder makes: day folders named
 //! `YYYY-MM-DD` (canonical spelling) and in them the `<mic id>_<HHMMSS>[-n].wav`
@@ -105,15 +106,7 @@ impl RecordingFile {
         for attempt in 1..=RECORDING_NAMES_PER_SECOND {
             let path = dir.join(recording_file_name(mic_id, started.time(), attempt));
             match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(file) => {
-                    let mut recording = Self {
-                        path,
-                        file,
-                        data_bytes: 0,
-                    };
-                    recording.io(|file| file.write_all(&wav_header(0)))?;
-                    return Ok(recording);
-                }
+                Ok(file) => return Self::begin(path, file),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(io_error(&path, err)),
             }
@@ -121,6 +114,25 @@ impl RecordingFile {
         Err(RecordError::NamesTaken {
             path: dir.display().to_string(),
         })
+    }
+
+    /// The header of a file just created. When not even that can be written (a
+    /// full disk), the empty file is removed again, best effort.
+    fn begin(path: PathBuf, file: File) -> Result<Self, RecordError> {
+        let mut recording = Self {
+            path,
+            file,
+            data_bytes: 0,
+        };
+        match recording.io(|file| file.write_all(&wav_header(0))) {
+            Ok(()) => Ok(recording),
+            Err(err) => {
+                let path = recording.path.clone();
+                drop(recording); // closes the handle first
+                let _removed = fs::remove_file(&path);
+                Err(err)
+            }
+        }
     }
 
     /// Append `frames`, then patch the header sizes: a crash after this leaves
@@ -570,6 +582,17 @@ mod tests {
             "the header still covers the audio"
         );
         assert_eq!(bytes.len(), 44 + 3_200);
+    }
+
+    #[test]
+    fn a_header_that_cannot_be_written_leaves_no_file_behind() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("guest_194205.wav");
+        fs::write(&path, b"").unwrap();
+        // a read-only handle: the header write fails like a full disk would
+        let err = RecordingFile::begin(path.clone(), File::open(&path).unwrap()).unwrap_err();
+        assert!(matches!(err, RecordError::Io { .. }), "{err}");
+        assert!(!path.exists(), "a full disk leaves no empty file");
     }
 
     #[test]

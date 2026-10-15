@@ -1005,3 +1005,312 @@ async fn a_batch_ends_at_a_lag_and_the_frames_after_it_come_next() {
         "the frames after the lag are the next batch"
     );
 }
+
+// ---- continuous files, the midnight split, the back-off (C1b-5) -------------
+
+#[test]
+fn a_batch_more_than_a_second_after_the_files_audio_drifted() {
+    let started = at("2026-10-18T19:42:05");
+    // the file holds 2 s of audio: it ends at 19:42:07
+    assert!(!drifted(started, 64_000, at("2026-10-18T19:42:07.900")));
+    assert!(
+        !drifted(started, 64_000, at("2026-10-18T19:42:08")),
+        "exactly 1 s after: kept"
+    );
+    assert!(drifted(started, 64_000, at("2026-10-18T19:42:08.001")));
+}
+
+/// A sender clock 100 ppm fast runs about 1 s ahead after 3 h: the audio is
+/// ahead of the wall clock, and the file names must keep matching the show log.
+#[test]
+fn a_batch_more_than_a_second_before_the_files_audio_ends_drifted_too() {
+    let started = at("2026-10-18T19:42:05");
+    // the file holds 2 s of audio: it ends at 19:42:07
+    assert!(
+        !drifted(started, 64_000, at("2026-10-18T19:42:06")),
+        "exactly 1 s ahead: kept"
+    );
+    assert!(
+        drifted(started, 64_000, at("2026-10-18T19:42:05.800")),
+        "1.2 s ahead: a new file"
+    );
+    assert!(!drifted(started, 64_000, at("2026-10-18T19:42:07")));
+}
+
+#[test]
+fn only_the_frames_heard_before_midnight_stay_in_a_batch() {
+    let batch: Vec<MicFrame> = (0..30).map(frame).collect();
+    let (kept, cut) = split_at_midnight(batch.clone(), at("2026-10-18T23:59:58.100"), day(DAY));
+    assert_eq!(
+        (kept.len(), cut),
+        (19, true),
+        "frame 19 is heard at 00:00:00.000"
+    );
+    assert_eq!(kept[18][0], 18);
+    let (kept, cut) = split_at_midnight(batch, at("2026-10-18T12:00:00"), day(DAY));
+    assert_eq!((kept.len(), cut), (30, false));
+}
+
+#[test]
+fn a_failed_writer_waits_1_2_4_up_to_60_minutes() {
+    let minutes: Vec<i64> = (1..=8).map(|f| restart_delay(f).num_minutes()).collect();
+    assert_eq!(minutes, vec![1, 2, 4, 8, 16, 32, 60, 60]);
+    assert_eq!(restart_delay(u64::MAX).num_minutes(), 60);
+}
+
+#[tokio::test]
+async fn a_pause_of_the_sender_starts_a_new_file_named_by_its_start() {
+    let capture = Capture::install();
+    let root = tempfile::tempdir().unwrap();
+    let start = "2026-10-18T19:42:05.100";
+    let (service, now) =
+        recording_service(root.path(), start, vec![mic("guest", "GUEST_EN")]).await;
+    send(&service, "guest", 1);
+    wait_for(&service, "first frame", |s| {
+        recording(s, "guest").bytes == 3_200
+    })
+    .await;
+    *now.lock().unwrap() = at("2026-10-18T19:42:05.800"); // a 0.6 s pause: the same file
+    send(&service, "guest", 2);
+    wait_for(&service, "second frame", |s| {
+        recording(s, "guest").bytes == 6_400
+    })
+    .await;
+    *now.lock().unwrap() = at("2026-10-18T19:42:07.300"); // a 1.5 s pause: a new file
+    send(&service, "guest", 3);
+    let second = day_file(root.path(), "guest_194207.wav")
+        .display()
+        .to_string();
+    wait_for(&service, "a new file", |s| {
+        recording(s, "guest").file.as_deref() == Some(second.as_str())
+    })
+    .await;
+    let (header, samples) = read_wav(&day_file(root.path(), "guest_194205.wav"));
+    assert_eq!((header, samples[1_600]), (wav_header(6_400).to_vec(), 2));
+    assert_eq!(
+        read_wav(Path::new(&second)).1[0],
+        3,
+        "the audio after the pause is kept"
+    );
+    let started: Vec<String> = capture
+        .events_with_message("recording started")
+        .iter()
+        .filter_map(|line| line.field("started").map(str::to_string))
+        .collect();
+    assert_eq!(
+        started,
+        vec!["19:42:05.000", "19:42:07.200"],
+        "the millisecond start"
+    );
+    let stopped = capture.events_with_message("recording stopped");
+    assert_eq!(stopped.len(), 1);
+    assert_eq!(
+        stopped[0].field("why"),
+        Some(quoted("a gap in the audio").as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_lag_in_the_middle_of_a_file_starts_a_new_one_at_the_right_time() {
+    let root = tempfile::tempdir().unwrap();
+    let start = "2026-10-18T19:42:05.100";
+    let (service, now) =
+        recording_service(root.path(), start, vec![mic("guest", "GUEST_EN")]).await;
+    send(&service, "guest", -1);
+    wait_for(&service, "first frame", |s| {
+        recording(s, "guest").bytes == 3_200
+    })
+    .await;
+    // 15 s later the writer gets 15 s of frames at once (a stall): 22 are lost
+    *now.lock().unwrap() = at("2026-10-18T19:42:20.100");
+    let frames = service.frame_sender("guest");
+    for k in 0..150i16 {
+        frames.send(frame(k)).unwrap();
+    }
+    wait_for(&service, "the rest written", |s| {
+        let rec = recording(s, "guest");
+        rec.bytes == 128 * 3_200 && rec.dropped_frames == 22
+    })
+    .await;
+    // the 128 frames kept began 12.8 s before the clock: 19:42:07.300
+    assert_eq!(
+        day_files(root.path()),
+        vec!["guest_194205.wav", "guest_194207.wav"]
+    );
+    let (_, first) = read_wav(&day_file(root.path(), "guest_194205.wav"));
+    assert_eq!(
+        first.len(),
+        1_600,
+        "the file before the lag ends where its audio ended"
+    );
+    assert_eq!(
+        read_wav(&day_file(root.path(), "guest_194207.wav")).1[0],
+        22
+    );
+}
+
+#[tokio::test]
+async fn a_batch_across_midnight_keeps_only_the_frames_heard_before_it() {
+    let root = tempfile::tempdir().unwrap();
+    let start = "2026-10-18T23:59:58.100";
+    let (service, now) =
+        recording_service(root.path(), start, vec![mic("guest", "GUEST_EN")]).await;
+    send(&service, "guest", -1);
+    wait_for(&service, "first frame", |s| {
+        recording(s, "guest").bytes == 3_200
+    })
+    .await;
+    // 3 s of frames arrive at once at 00:00:01.100: they began at 23:59:58.100
+    *now.lock().unwrap() = at("2026-10-19T00:00:01.100");
+    let frames = service.frame_sender("guest");
+    for k in 0..30i16 {
+        frames.send(frame(k)).unwrap();
+    }
+    wait_for(&service, "the day ended", |s| {
+        recording(s, "guest").state == RecordingState::Off
+    })
+    .await;
+    let (header, samples) = read_wav(&day_file(root.path(), "guest_235958.wav"));
+    assert_eq!(
+        header,
+        wav_header(20 * 3_200).to_vec(),
+        "1 + the 19 frames before midnight"
+    );
+    assert_eq!(samples[samples.len() - 1], 18);
+    assert!(!root.path().join("2026-10-19").exists());
+}
+
+/// A mic whose recorder root is a plain file: every write fails at once.
+fn unwritable_root(dir: &tempfile::TempDir) -> PathBuf {
+    let root = dir.path().join("not-a-folder");
+    std::fs::write(&root, b"x").unwrap();
+    root
+}
+
+#[tokio::test]
+async fn a_failed_writer_is_not_restarted_before_its_pause() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = unwritable_root(&dir);
+    let mics = vec![mic("guest", "GUEST_EN")];
+    let (service, now) = recording_service(&root, "2026-10-18T19:42:05", mics.clone()).await;
+    let frames = service.frame_sender("guest");
+    fail_once(&frames).await;
+    service.apply(mics.clone()); // collected: back off 1 min
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(frames.receiver_count(), 0, "no restart at once");
+    *now.lock().unwrap() = at("2026-10-18T19:42:35");
+    service.apply(mics.clone());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(frames.receiver_count(), 0, "30 s later: still backing off");
+    *now.lock().unwrap() = at("2026-10-18T19:43:06");
+    service.apply(mics);
+    wait_until("restarted after its minute", || {
+        frames.receiver_count() == 1
+    })
+    .await;
+}
+
+/// The pause counts from the failure, not from the reconcile that finds the
+/// writer ended: a reconcile 50 s after the failure must not push the restart
+/// to 110 s.
+#[tokio::test]
+async fn the_pause_counts_from_the_failure_and_not_from_the_reconcile() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = unwritable_root(&dir);
+    let mics = vec![mic("guest", "GUEST_EN")];
+    let (service, now) = recording_service(&root, "2026-10-18T19:42:05", mics.clone()).await;
+    let frames = service.frame_sender("guest");
+    fail_once(&frames).await;
+    *now.lock().unwrap() = at("2026-10-18T19:42:55");
+    service.apply(mics.clone()); // the first reconcile after the failure: 50 s later
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(frames.receiver_count(), 0, "50 s after the failure");
+    *now.lock().unwrap() = at("2026-10-18T19:43:04");
+    service.apply(mics.clone());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(frames.receiver_count(), 0, "59 s after the failure");
+    *now.lock().unwrap() = at("2026-10-18T19:43:05");
+    service.apply(mics);
+    wait_until("restarted exactly 1 min after the failure", || {
+        frames.receiver_count() == 1
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn switching_the_recorder_off_forgets_the_pause_of_a_failed_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = unwritable_root(&dir);
+    let mics = vec![mic("guest", "GUEST_EN")];
+    let (service, _) = recording_service(&root, "2026-10-18T19:42:05", mics).await;
+    let frames = service.frame_sender("guest");
+    fail_once(&frames).await;
+    service.apply_recorder(None);
+    wait_for(&service, "switched off", |s| {
+        recording(s, "guest").state == RecordingState::Off
+    })
+    .await;
+    service.apply_recorder(Some(day(DAY)));
+    wait_until("a writer at once, no pause", || {
+        frames.receiver_count() == 1
+    })
+    .await;
+}
+
+/// The 60 s reconcile tick alone restarts a failed writer once its pause is
+/// over: no mic-list or toggle change wakes the supervisor, and the retention
+/// tick (10 min after the start) is not what does it.
+#[tokio::test(start_paused = true)]
+async fn the_minute_tick_restarts_a_failed_writer_without_any_other_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = unwritable_root(&dir);
+    let (clock, now) = clock("2026-10-18T19:42:05");
+    let service = ListenService::new();
+    service.set_recorder_env(RecorderEnv {
+        root,
+        clock,
+        first_pass_delay: FIRST_PASS_DELAY,
+    });
+    service.apply(vec![mic("guest", "GUEST_EN")]);
+    service.apply_recorder(Some(day(DAY)));
+    tokio::spawn(supervise(service.clone()));
+    let frames = service.frame_sender("guest");
+    fail_once(&frames).await;
+    *now.lock().unwrap() = at("2026-10-18T19:43:06"); // past the 1 min pause
+    tokio::time::sleep(RECONCILE_EVERY + Duration::from_secs(1)).await;
+    wait_until("restarted by the minute tick", || {
+        frames.receiver_count() == 1
+    })
+    .await;
+}
+
+/// A stop wins over frames already waiting: nothing queued is written once the
+/// supervisor has said stop (the `biased` select). Repeated, because an
+/// unbiased select would pick the frame about every other time.
+#[tokio::test]
+async fn a_stop_with_frames_waiting_writes_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let (clock, _) = clock("2026-10-18T19:42:05.100");
+    let service = ListenService::new();
+    service.set_recorder_env(RecorderEnv {
+        root: root.path().to_path_buf(),
+        clock,
+        first_pass_delay: Duration::ZERO,
+    });
+    for _ in 0..20 {
+        let job = WriterJob {
+            mic_id: "guest".to_string(),
+            day: day(DAY),
+            root: root.path().to_path_buf(),
+        };
+        let (frames, receiver) = broadcast::channel::<MicFrame>(8);
+        let (stop, stopped) = oneshot::channel();
+        frames.send(frame(1)).unwrap();
+        stop.send(Ended::Stopped).unwrap();
+        run_writer(service.clone(), job, receiver, stopped).await;
+    }
+    assert!(
+        !root.path().join(DAY).exists(),
+        "a stop wins over the waiting frames"
+    );
+}

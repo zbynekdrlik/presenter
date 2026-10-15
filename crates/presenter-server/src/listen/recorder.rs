@@ -4,11 +4,13 @@
 //! mic reads the mic's frame channel and never slows its chain (12.8 s behind,
 //! the oldest frames go and are counted); each batch (≤ 5 s) is written in
 //! `spawn_blocking`. A file opens with the mic's first frame and is named by the
-//! time it was heard; the writer ends at the first frame after midnight; a
-//! failed write ends it too, and the supervisor starts it again. Day folders
-//! older than 30 days go once per local date, the first pass
-//! [`FIRST_PASS_DELAY`] after the start. (C1b-5 adds: a new file on a drift,
-//! the midnight split, the restart back-off.)
+//! time it was heard, and is continuous audio from that time: a batch that
+//! begins more than 1 s from the end of the file's audio (a pause of the sender,
+//! a resync, frames lost, a sender clock running fast) starts a new file.
+//! Frames heard after midnight are not written; a failed write ends the writer,
+//! restarted after 1, 2, 4 … 60 min counted from the failure. Day folders older
+//! than 30 days go once per local date, the first pass [`FIRST_PASS_DELAY`]
+//! after the start.
 //!
 //! The folder: `PRESENTER_LISTEN_RECORDINGS_DIR`, else `recordings` next to the
 //! sqlite file of `PRESENTER_DB_URL` (prod / PP `/opt/presenter/recordings`, the
@@ -43,8 +45,14 @@ const RECORDINGS_DIR_NAME: &str = "recordings";
 const RECONCILE_EVERY: Duration = Duration::from_secs(60);
 /// At most this many frames (5 s) per blocking write.
 const MAX_BATCH: usize = 50;
-/// One frame is 100 ms.
+/// One frame is 100 ms; one millisecond of audio is 32 bytes (16 kHz mono s16).
 const FRAME_MS: i64 = 100;
+const BYTES_PER_MS: i64 = 32;
+/// A batch that begins more than this before or after the end of the file's
+/// audio starts a new file.
+const MAX_DRIFT_MS: i64 = 1_000;
+/// The longest pause before a failed writer is restarted.
+const RESTART_CAP_MINUTES: i64 = 60;
 /// How long a production start waits before its first retention pass. A box that
 /// boots with a wrong clock (RTC lost, NTP not yet synced) can read a date more
 /// than 30 days ahead, and a pass at that moment would delete every recording;
@@ -131,6 +139,61 @@ fn frames_duration(frames: usize) -> TimeDelta {
     TimeDelta::try_milliseconds(frames.saturating_mul(FRAME_MS)).unwrap_or(TimeDelta::MAX)
 }
 
+/// Whether a batch that began at `batch_start` cannot follow the file's audio:
+/// the file's first sample was heard at `file_start` and it holds `audio_bytes`.
+/// More than 1 s between the end of that audio and the batch's start, in EITHER
+/// direction (audio behind the clock: a pause, a lag, a slow disk; audio ahead
+/// of it: a sender clock running fast), starts a new file; exactly 1 s keeps it.
+/// There is no rule on the gap between two batches alone: sender pauses of
+/// 0.1–2 s would either split constantly or add up unseen.
+fn drifted(file_start: NaiveDateTime, audio_bytes: u32, batch_start: NaiveDateTime) -> bool {
+    let audio = TimeDelta::milliseconds(i64::from(audio_bytes) / BYTES_PER_MS);
+    let audio_end = file_start
+        .checked_add_signed(audio)
+        .unwrap_or(NaiveDateTime::MAX);
+    let apart = batch_start.signed_duration_since(audio_end).abs();
+    apart > TimeDelta::milliseconds(MAX_DRIFT_MS)
+}
+
+/// The frames of a batch that began at `start` heard on `day`, and whether
+/// frames from after midnight were left out (frame `i` was heard at
+/// `start + i × 100 ms`).
+fn split_at_midnight(
+    mut batch: Vec<MicFrame>,
+    start: NaiveDateTime,
+    day: NaiveDate,
+) -> (Vec<MicFrame>, bool) {
+    let keep = (0..batch.len())
+        .take_while(|index| {
+            let heard = start.checked_add_signed(frames_duration(*index));
+            heard.is_some_and(|heard| heard.date() <= day)
+        })
+        .count();
+    let cut = keep < batch.len();
+    batch.truncate(keep);
+    (batch, cut)
+}
+
+/// The pause before a writer is restarted after `failures` failed writes in a
+/// row: 1, 2, 4 … 60 minutes (the #484 `backoff_interval` shape).
+fn restart_delay(failures: u64) -> TimeDelta {
+    let doublings = failures.saturating_sub(1).min(6);
+    TimeDelta::minutes((1i64 << doublings).min(RESTART_CAP_MINUTES))
+}
+
+/// Whether the mic's writer failed so recently that it must not start yet. The
+/// pause counts from the failure itself (recorded in the health), never from the
+/// reconcile that happens to find the writer ended — a reconcile up to one tick
+/// later would otherwise stretch it.
+fn backing_off(service: &ListenService, mic_id: &str, now: NaiveDateTime) -> bool {
+    let failure = service.with_health(|health| health.recorder.last_failure(mic_id));
+    failure.is_some_and(|(failed_at, failures)| {
+        failed_at
+            .checked_add_signed(restart_delay(failures))
+            .is_none_or(|retry_at| now < retry_at)
+    })
+}
+
 /// A running writer, the day it records and the way to stop it.
 struct Writer {
     stop: oneshot::Sender<Ended>,
@@ -185,8 +248,8 @@ struct Writers {
 
 impl Writers {
     /// One writer per configured mic while recording `day`, none otherwise; a
-    /// writer of another day is ended, one that ended by itself (a failed write,
-    /// its day over) is replaced.
+    /// writer of another day is ended, one that ended by itself (its day over, a
+    /// failed write) is replaced — a failed one only after its back-off.
     async fn reconcile(
         &mut self,
         service: &ListenService,
@@ -214,9 +277,12 @@ impl Writers {
             service.with_health(|health| health.recorder.all_stopped());
             return;
         };
+        let now = env.now();
         for id in wanted {
             if let Entry::Vacant(slot) = self.running.entry((*id).to_string()) {
-                slot.insert(Writer::start(service, id, day, &env.root));
+                if !backing_off(service, id, now) {
+                    slot.insert(Writer::start(service, id, day, &env.root));
+                }
             }
         }
     }
@@ -310,6 +376,7 @@ impl OpenFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ended {
     Stopped,
+    Gap,
     DayOver,
     Failed,
 }
@@ -318,15 +385,17 @@ impl Ended {
     fn as_str(self) -> &'static str {
         match self {
             Self::Stopped => "switched off or the mic was removed",
+            Self::Gap => "a gap in the audio",
             Self::DayOver => "the day ended",
             Self::Failed => "a write failed",
         }
     }
 }
 
-/// One mic's writer: frames in, batches written off the runtime. Ends when told
-/// to stop, at its first frame after midnight, or on a failed write (the
-/// supervisor starts it again).
+/// One mic's writer: frames in, batches written off the runtime, a new file
+/// whenever the audio drifts more than 1 s from the wall clock. Ends when told
+/// to stop, after its day's last frame, or on a failed write (the supervisor
+/// restarts it after its back-off).
 async fn run_writer(
     service: ListenService,
     job: WriterJob,
@@ -354,8 +423,13 @@ async fn run_writer(
         let now = service.recorder_env().now();
         let start = now.checked_sub_signed(behind).unwrap_or(now);
         let batch = collect_batch(&service, &job.mic_id, first, &mut frames);
-        if now.date() != job.day {
-            break Ended::DayOver;
+        let (batch, day_over) = split_at_midnight(batch, start, job.day);
+        if batch.is_empty() {
+            break Ended::DayOver; // every frame of it was heard after midnight
+        }
+        let is_gap = |open: &mut OpenFile| drifted(open.started, open.file.data_bytes(), start);
+        if let Some(gone) = open.take_if(is_gap) {
+            close(&job, gone.file, Ended::Gap).await;
         }
         let written = write_batch(open.take(), &job, start, batch).await;
         open = written.open;
@@ -365,6 +439,9 @@ async fn run_writer(
         }
         if let Some(file) = &open {
             note_written(&service, &job, file, written.created);
+        }
+        if day_over {
+            break Ended::DayOver;
         }
     };
     if let Some(last) = open {
@@ -489,9 +566,14 @@ fn note_dropped(service: &ListenService, mic_id: &str, missed: u64) {
     }
 }
 
-/// A failed write: the mic's state `error`; WARN on power-of-two failures in a row.
+/// A failed write: the mic's state `error` and the time of the failure (the
+/// restart pause counts from it); WARN on power-of-two failures in a row.
 fn note_failed(service: &ListenService, job: &WriterJob, error: &str) {
-    let failures = service.with_health(|health| health.recorder.failed(&job.mic_id, error));
+    let failed_at = service.recorder_env().now();
+    let failures = service.with_health(|health| {
+        health.recorder.failed_at(&job.mic_id, failed_at);
+        health.recorder.failed(&job.mic_id, error)
+    });
     if should_log_event(failures) {
         warn!(
             target: RECORDER_TARGET,
@@ -499,7 +581,8 @@ fn note_failed(service: &ListenService, job: &WriterJob, error: &str) {
             day = %job.day,
             error,
             failures,
-            "recording write failed — the writer starts again within a minute"
+            retry_in_min = restart_delay(failures).num_minutes(),
+            "recording write failed — the writer restarts after a pause"
         );
     }
 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 
+use chrono::NaiveDateTime;
 use presenter_core::audio::level::is_voiced;
 use presenter_core::audio::sequence::SequenceVerdict;
 use presenter_core::audio::vban::{VbanAudioFormat, VbanReject};
@@ -178,8 +179,11 @@ struct MicRecorder {
     /// Times the writer fell behind: the #484 gate of the "fell behind" WARN.
     lag_events: u64,
     error: Option<String>,
-    /// Failed writes in a row: the #484 gate of the "write failed" WARN.
+    /// Failed writes in a row: the #484 gate of the "write failed" WARN and the
+    /// restart pause (1, 2, 4 … 60 min).
     failures: u64,
+    /// The wall time of the last failed write: the pause counts from it.
+    failed_at: Option<NaiveDateTime>,
 }
 
 impl MicRecorder {
@@ -225,6 +229,20 @@ impl RecorderHealth {
         mic.error = Some(error.to_string());
         mic.failures += 1;
         mic.failures
+    }
+
+    /// The wall time of the failure `failed` just counted.
+    pub(crate) fn failed_at(&mut self, mic_id: &str, at: NaiveDateTime) {
+        self.mics.entry(mic_id.to_string()).or_default().failed_at = Some(at);
+    }
+
+    /// When the mic's last write failed and how many failed in a row; `None`
+    /// once a write succeeded or the recorder was switched off.
+    pub(crate) fn last_failure(&self, mic_id: &str) -> Option<(NaiveDateTime, u64)> {
+        let mic = self.mics.get(mic_id)?;
+        mic.failed_at
+            .filter(|_| mic.failures > 0)
+            .map(|at| (at, mic.failures))
     }
 
     /// The writer ended (switched off, the day over): off; the last file and
