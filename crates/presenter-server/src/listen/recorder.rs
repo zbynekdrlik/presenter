@@ -217,15 +217,19 @@ impl Writer {
         Self { stop, task, day }
     }
 
-    /// Why the supervisor ends this writer now, if it does: its mic is no longer
-    /// wanted (the toggle is off or the mic was removed), the toggle names
-    /// another day, or the task ended by itself (a failed write, its day over)
-    /// and is collected.
-    fn ending(&self, wanted: bool, day: Option<NaiveDate>) -> Option<Ended> {
-        if !wanted || self.task.is_finished() {
+    /// Why the supervisor ends this writer now, if it does: the task ended by
+    /// itself (a failed write, its day over) and is collected; its day is not
+    /// `today` — checked BEFORE the toggle, which still names yesterday at
+    /// midnight and would make the mic look switched off, so a writer left open
+    /// without frames ends as "the day ended"; or its mic is no longer wanted
+    /// (the toggle is off or the mic was removed).
+    fn ending(&self, wanted: bool, today: NaiveDate) -> Option<Ended> {
+        if self.task.is_finished() {
             Some(Ended::Stopped)
-        } else if day.is_some_and(|day| day != self.day) {
+        } else if self.day != today {
             Some(Ended::DayOver)
+        } else if !wanted {
+            Some(Ended::Stopped)
         } else {
             None
         }
@@ -259,11 +263,12 @@ impl Writers {
     ) {
         let configured: Vec<&str> = mics.iter().map(|mic| mic.id.as_str()).collect();
         let wanted: &[&str] = if day.is_some() { &configured } else { &[] };
+        let now = env.now();
         let ended: Vec<(String, Ended)> = self
             .running
             .iter()
             .filter_map(|(id, writer)| {
-                let ending = writer.ending(wanted.contains(&id.as_str()), day);
+                let ending = writer.ending(wanted.contains(&id.as_str()), now.date());
                 ending.map(|why| (id.clone(), why))
             })
             .collect();
@@ -277,7 +282,6 @@ impl Writers {
             service.with_health(|health| health.recorder.all_stopped());
             return;
         };
-        let now = env.now();
         for id in wanted {
             if let Entry::Vacant(slot) = self.running.entry((*id).to_string()) {
                 if !backing_off(service, id, now) {
