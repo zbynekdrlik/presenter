@@ -57,8 +57,14 @@ impl AppState {
             "listen mics saved"
         );
         let after = serde_json::to_value(&mics).unwrap_or_default();
-        self.audit_listen_setting(LISTEN_MICS_KEY, before, after, actor)
-            .await;
+        self.audit_listen_setting(
+            LISTEN_MICS_KEY,
+            SettingsAuditSource::HttpSetter,
+            before,
+            after,
+            actor,
+        )
+        .await;
         Ok(mics)
     }
 
@@ -83,9 +89,7 @@ impl AppState {
         };
         let _save = self.listen.save_guard().await;
         let before = self.repository.get_app_setting(LISTEN_RECORDER_KEY).await?;
-        self.repository
-            .set_app_setting(LISTEN_RECORDER_KEY, &serde_json::to_string(&setting)?)
-            .await?;
+        self.store_listen_recorder(setting).await?;
         self.listen.apply_recorder(setting.enabled_for);
         match setting.enabled_for {
             Some(day) => tracing::info!(
@@ -97,9 +101,59 @@ impl AppState {
             None => tracing::info!(target: RECORDER_TARGET, actor, "listen recorder switched off"),
         }
         let after = serde_json::to_value(setting).unwrap_or_default();
-        self.audit_listen_setting(LISTEN_RECORDER_KEY, before, after, actor)
-            .await;
+        self.audit_listen_setting(
+            LISTEN_RECORDER_KEY,
+            SettingsAuditSource::HttpSetter,
+            before,
+            after,
+            actor,
+        )
+        .await;
         Ok(setting)
+    }
+
+    /// Write the toggle row.
+    async fn store_listen_recorder(&self, setting: RecorderSetting) -> anyhow::Result<()> {
+        let row = serde_json::to_string(&setting)?;
+        self.repository
+            .set_app_setting(LISTEN_RECORDER_KEY, &row)
+            .await
+    }
+
+    /// Apply the toggle read at startup (the caller holds the save lock). A day
+    /// AFTER today — switched on while the clock was ahead, corrected since —
+    /// would start the recorder by itself on that day, with nobody having
+    /// switched it on then (spec §19): it stays off, the row is cleared, one WARN.
+    async fn apply_stored_recorder(&self, setting: RecorderSetting) {
+        let today = self.listen.today();
+        let Some(day) = setting.enabled_for.filter(|day| *day > today) else {
+            self.listen.apply_recorder(setting.enabled_for);
+            return;
+        };
+        self.listen.apply_recorder(None);
+        tracing::warn!(
+            target: RECORDER_TARGET,
+            %day,
+            %today,
+            "listen.recorder names a day in the future — the recorder stays off and the row is cleared"
+        );
+        let cleared = RecorderSetting::default();
+        if let Err(err) = self.store_listen_recorder(cleared).await {
+            tracing::warn!(
+                target: RECORDER_TARGET,
+                error = %err,
+                "the future day could not be cleared from listen.recorder — it stays off until it is switched again"
+            );
+            return;
+        }
+        self.audit_listen_setting(
+            LISTEN_RECORDER_KEY,
+            SettingsAuditSource::StartupDefault,
+            serde_json::to_string(&setting).ok(),
+            serde_json::to_value(cleared).unwrap_or_default(),
+            "system",
+        )
+        .await;
     }
 
     /// `GET /listen/status`.
@@ -124,7 +178,7 @@ impl AppState {
                 ),
             }
             match self.listen_recorder().await {
-                Ok(setting) => self.listen.apply_recorder(setting.enabled_for),
+                Ok(setting) => self.apply_stored_recorder(setting).await,
                 Err(err) => tracing::warn!(
                     target: RECORDER_TARGET,
                     error = %err,
@@ -147,6 +201,7 @@ impl AppState {
     async fn audit_listen_setting(
         &self,
         key: &str,
+        source: SettingsAuditSource,
         before: Option<String>,
         after: serde_json::Value,
         actor: &str,
@@ -156,14 +211,7 @@ impl AppState {
         });
         let recorded = self
             .repository
-            .record_settings_audit(
-                LISTEN_AUDIT_TABLE,
-                key,
-                SettingsAuditSource::HttpSetter,
-                actor,
-                before,
-                after,
-            )
+            .record_settings_audit(LISTEN_AUDIT_TABLE, key, source, actor, before, after)
             .await;
         if let Err(err) = recorded {
             tracing::warn!(
