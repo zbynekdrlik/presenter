@@ -67,8 +67,15 @@ paths:
   rubato `=5.0.1` `Fft` + `FixedSync::Both` with **20 ms** chunks (delay 160 samples = 10 ms; a
   whole-100-ms FFT would add 50 ms, over spec §8.5); 16 kHz passes through, 11 025 Hz is refused
   (`error`, mic state `error`); a format change starts a fresh converter. Frames = 1600 s16 samples,
-  counted (`framesOut`) with the last one's level (`levelDbfs`); **no frame channel until its first
-  consumer** (C1b recorder / C3 ASR) adds it.
+  counted (`framesOut`) with the last one's level (`levelDbfs`).
+- **Frame channel** (#852 C1b-2, `ListenService::frame_sender`): ONE `broadcast::Sender<MicFrame>`
+  (`Arc<[i16]>`, 1600 samples) per mic id, created on first use and kept for the life of the process —
+  every chain of the mic (a save that changes its stream starts a new chain) sends into the same
+  channel, so a consumer never re-subscribes. A chain sends only when `record_chain` returned `true`
+  (its generation is current) and only while someone listens (`receiver_count`). Capacity
+  `FRAME_CHANNEL_CAPACITY` = 128 frames (12.8 s; tokio rounds a capacity up to a power of two, so keep
+  one): `send` never waits; a consumer that falls behind gets `Lagged(n)` and counts it. Never make a
+  chain wait for a consumer (no `mpsc::send().await`, no lock held by a consumer).
 - **rubato's lock footprint:** 13 packages, byte-identical to songplayer's lock — incl.
   `audio-codec-algorithms` (a dependency of `audioadapter-sample`, 0BSD OR Apache-2.0). Resolve a
   dependency change with `cargo metadata` (non-compiling) and diff `Cargo.lock`: only `+` lines, no
@@ -93,6 +100,7 @@ paths:
   `[a-z0-9-]{1,20}` unique, name 1–40, stream 1–16 printable ASCII without edge spaces, IP canonical,
   no two mics one packet could match) → 422 Slovak text; a corrupt stored value → 500, receiver idle.
   Every save writes one best-effort `settings_audit` row (`app_settings` / `listen.mics`).
+  `GET /listen/mics` is a quiet GET too (the Settings card polls it every 5 s, C1b-6).
 - **Logs** (`presenter::listen::mic`): INFO socket bound / closed, `listen mics saved`, `mic receives
   VBAN` (first packet or after ≥ 3 s silence), `mic lost audio`, format change, unassigned stream (gated);
   WARN through the #484 power-of-two gate (lost / late / resync / dropped / second sender per mic, rejects
@@ -109,9 +117,119 @@ paths:
   1 kHz half-scale tone, pulse peak at 4160, 899 crossings) come from a Python mirror of rubato's
   `FftResampler`; if CI measures outside a window, compare `output_delay()` with the measurement before
   touching the test — never widen it.
+- **Recorder — contract and retention** (#852 C1b-2; core `listen/recorder.rs` + `audio/wav.rs`,
+  server `listen/recorder.rs` + `recording_file.rs`): files `<root>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav`
+  (`-2` … `-9` within one second, `RECORDING_NAMES_PER_SECOND`), canonical 44-byte PCM header for
+  16 kHz mono s16 (byte-checked against Python's `wave`; `wav_riff_size` saturates, no 4 GiB guard: a
+  mic's day is ≤ 2.76 GB). Root = `PRESENTER_LISTEN_RECORDINGS_DIR`, else `recordings` next to the
+  sqlite file (`state::stream_assets::dir_next_to_db`: prod / PP `/opt/presenter/recordings`, dev
+  `/opt/presenter-dev/recordings`, inside the units' `ReadWritePaths`); under `cfg(test)` the default
+  is a temp dir, never `./recordings` in the crate — tests set their own folder and a settable clock
+  with `ListenService::set_recorder_env`. ONE supervisor task, spawned by `ListenService::start` with
+  the socket task (never in validate mode), ticks every 60 s even without a mic (a stated deviation
+  from C-S8: on SNV / PP it only runs the daily retention). The task has TWO independent gates in one
+  `select!` (C1b-4): the retention tick (below, delayed) and the writer reconcile (a 60 s tick plus every
+  mic-list / toggle change), and the reconcile runs at once after the start — a same-day restart records
+  on without waiting for the retention delay. Never put the retention gate in front of the reconcile.
+  Retention once per local date: the FIRST
+  pass waits `FIRST_PASS_DELAY` = 10 min after the start (`RecorderEnv::first_pass_delay`, zero under
+  `cfg(test)`, `retention_tick`) — a box that boots with a wrong clock (RTC lost, NTP not yet synced)
+  could read a date more than 30 days ahead and delete every recording; then the first tick after each
+  midnight. A canonical `YYYY-MM-DD` folder is deleted once its day is more than 30 days ago
+  (`recording_expired`: 30 days old is kept, the 31st day goes), only `is_recording_file_name` regular
+  files (`DirEntry::file_type` never follows a link; a linked folder is skipped), the folder once it
+  holds nothing else (an already empty expired folder goes too; one with a foreign file is kept). Only
+  opening the root can fail a pass: an entry that cannot be read or cleaned is a `PruneReport::failed`
+  finding and the scan goes on (`prune_scan`, the seam tests feed a failing iterator). One INFO per
+  deleted file, an INFO for a folder kept, a WARN per failed entry. All I/O in `spawn_blocking`. Like
+  the mic target, `presenter::listen::recorder` is hidden on dev by `gst-debug.conf` (observability
+  rule) — read these lines on SNV / PP.
+- **Recorder toggle** (#852 C1b-3) — a per-DAY switch: `app_settings` `listen.recorder` =
+  `{"enabledFor": "YYYY-MM-DD"}` or `{"enabledFor": null}` (`RecorderSetting`), written only by
+  `PUT /listen/recorder` `{"enabled": bool}` (on = the server's local date today) under the listen save
+  lock, with one best-effort `settings_audit` row (`audit_listen_setting`, shared with `listen.mics`)
+  and an INFO naming the actor; read at startup with `listen.mics`, under the same lock (a corrupt row
+  → off + WARN). `ListenService` holds it in a `watch<Option<NaiveDate>>`; the recorder records only
+  while that date is TODAY — a restart (auto-deploy) the same day resumes, the next day it is off, a
+  forgotten switch costs at most one day (VB-Matrix sends silence all day). Never make it a plain
+  on/off flag. A stored day AFTER today (switched on while the clock was ahead, NTP corrected it since)
+  would start the recorder by itself on that day: the startup read (`apply_stored_recorder`) keeps it
+  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`). A RUNNING
+  server applies the same rule in every reconcile (C1b-5, NTP can step back mid-run): `recording_day`
+  switches the in-memory day off with a compare-and-switch (`ListenService::switch_off_future_day`: only
+  while the toggle still names that day, so an operator's switch made meanwhile wins), WARNs once on
+  `presenter::listen::recorder`, and tells the state layer through `recorder_cleared` (a `watch`,
+  subscribed BEFORE the supervisor starts): `spawn_recorder_row_cleaner` then clears the stored row and
+  writes the same system audit row — only while the row still names that day
+  (`clear_future_recorder_row`, under the save lock). No `SettingsAuditSource` variant fits a runtime
+  write the server makes itself, so the row keeps `startup_default` / `system`. A failed audit row WARNs
+  under the setting's own target (`presenter::listen::recorder` for this key). Dev
+  never inherits prod's switch: pipeline.yml's "Redirect integrations to mock endpoints" step deletes
+  the `listen.recorder` row from the prod snapshot (no row = off).
+  `ListenStatus.recorder` (`RecorderStatus`): `enabled` (records today), `enabledFor`, `root`, and one
+  `MicRecording` per configured mic (`off` / `waiting` / `recording` / `error`, file, bytes,
+  `droppedFrames`, Slovak `error`); a mic no writer ran for is `off`.
+- **Writers** (#852 C1b-4, server `listen/recorder.rs`): while the toggle names today,
+  `Writers::reconcile` keeps ONE writer per configured mic (on every mic-list / toggle change and every
+  60 s tick). A writer subscribes (`subscribe_frames`) BEFORE the mic is marked `waiting`, takes up to
+  50 frames per batch and writes each batch with ONE `spawn_blocking` — never a file op on the runtime,
+  never a wait in the chain. The file opens with the first frame (a mic without audio leaves no file):
+  `RecordingFile::create` makes the day folder, refuses a linked one, opens `create_new` only (a taken
+  name or a symlink at it → the next `-n`; the 10th in one second is refused, never overwritten). A
+  batch's first frame began `now − (1 + frames.len()) × 100 ms`, `frames.len()` read BEFORE the batch
+  is collected. The header sizes are patched
+  after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close (a deploy's
+  SIGTERM does not close: no graceful shutdown, the per-batch header keeps the file playable); a failed
+  write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events, and the
+  batch being filled ENDS there (`collect_batch`: the frames before and after lost frames are not one
+  stretch of audio; the batch's start is read BEFORE collecting, while `frames.len()` still counts the
+  lost frames). A failed write → state `error` + Slovak text, WARN on power-of-two failures in a row,
+  and the writer CLOSES the file it already had (`write_batch` returns `Written { open, created,
+  failure }`: a failed write keeps the file; `recording stopped`, why `a write failed`) and ends — but
+  a file this very write created whose FIRST append failed holds only its header, so it is removed
+  (`RecordingFile::discard`, shared with `begin`; no `open` returned, no `recording stopped`) — and the
+  supervisor restarts the writer after its back-off (below). Switching off or removing the mic closes the file
+  (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`, last
+  file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select, pinned
+  by a 20-round test). A `Writer` knows its day: `Writer::ending` ends one whose day is not TODAY
+  BEFORE it tests whether the mic is still wanted (a switch-on for D+1 in the first minute after
+  midnight starts D+1's writer at once; a writer left open without frames at midnight — the toggle
+  still names yesterday, so the mic looks switched off — ends `the day ended`, never as a switch-off;
+  a finished task stays `Stopped`; the stop signal is a `oneshot<Ended>` carrying the reason). `RecorderHealth` lives in
+  `ListenHealth` but is not part of the socket session (`end_session` keeps it). Tests drive the real
+  supervisor with a settable clock (`recording_service`) and send frames into the mic's channel; a
+  failure after the file exists comes from the cfg(test) hook `recording_file::fail_appends_under`.
+- **Continuous files** (#852 C1b-5): before each batch, `drifted(file start, data bytes, batch start)`
+  — more than 1 s between the end of the file's audio and the batch's start, in EITHER direction
+  (`.abs()`: a pause of the sender, a resync, a lag or a slow disk put the audio behind the clock; a
+  sender clock running fast, ~1 s after 3 h at 100 ppm, puts it ahead; exactly 1 s keeps the file)
+  — closes the file (why `a gap in the audio`) and opens a new one named at the batch's start; the
+  `recording started` INFO carries `started` = `%H:%M:%S%.3f`. So every file is continuous audio from
+  the time in its name (the bake-off places the `presenter::bible::show` times by it); never reopen,
+  append to or truncate an existing file, and never rotate on the wall-clock gap between two batches
+  alone (sender pauses of 0.1–2 s add up). `split_at_midnight`: the frames of a batch heard after
+  midnight are dropped (frame `i` was heard at `start + i × 100 ms`), the rest is written, then the
+  writer ends `the day ended`; no writer starts until the toggle names the new day.
+  **Restart back-off:** a failed writer restarts after `restart_delay` 1, 2, 4 … 60 min counted from
+  the FAILURE — `failed_at` is recorded in `RecorderHealth` with the failure (`failed_at` /
+  `last_failure`), `backing_off` compares the wall clock with `failed_at + restart_delay(failures)`, so a
+  reconcile up to one 60 s tick later never stretches the pause and the WARN's `retry_in_min` is exact.
+  No separate retry map: a successful write, switching off (`all_stopped`) or removing the mic clears
+  the failure streak and with it the pause. Tests move the settable clock. `RecordingFile::begin`
+  removes a new file whose header cannot be written (a full disk): no empty files.
+- **Settings card** (#852 C1b-7, UI `pages/settings/listen.rs`): the only consumer of `GET /listen/status`
+  besides the box acceptance — one poll every 2 s while the card is on screen, a state badge, health line
+  and recorder line per mic, the socket line and the "Nahrávať dnes" switch (`PUT /listen/recorder`). It
+  reads `socket.{state,localAddr,bindAddr,error}`, each mic's counters / `level_dbfs` / `voiced` /
+  `format` / `sender` / `error` and `recorder.{enabled,enabledFor,root,mics[]}` through the core types, so
+  a wire change goes together with the card and `tests/e2e/settings-listen.spec.ts` (real sender → WAV
+  on disk). Rules of the card: `.claude/rules/settings-ui.md`.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
-  (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
-  card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status
-  before / after, a 10-min `tcpdump`, `scripts/dev/listen/vban_capture_check.py` (added at that step).
+  (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (Settings →
+  "Počúvanie", whose ids are `guest` / `interp`, or `PUT /listen/mics` with the spec §5.6 list) and the
+  box acceptance runs (spec §5.8): status before / after, a 10-min `tcpdump`,
+  `scripts/dev/listen/vban_capture_check.py` (added at that step). Before the first recording, NTP must
+  run on SNV (`timedatectl` showed "NTP service: inactive" on 2026-10-15): the recorder's day and the
+  30-day retention follow the box clock; the 10-min first-pass delay only helps where NTP runs.
 - **FOH routing** (VB-Matrix on fohabl, songplayer `vban-out.md`): only with the owner's go; `Mute` only
   (VB-Matrix ignores `dBGain=-inf`); record the prior values; read back every point after each write.

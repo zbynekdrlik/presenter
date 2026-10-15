@@ -1,14 +1,16 @@
 //! #852 C1a: `GET|PUT /listen/mics` (the whole list; 422 with the Slovak rule)
-//! and `GET /listen/status` (polled → a quiet GET in `request_log.rs`).
+//! and `GET /listen/status` (polled → a quiet GET in `request_log.rs`). C1b:
+//! `PUT /listen/recorder`, the recorder's per-day toggle (a person's write, logged).
 
 use super::integrations::extract_actor;
 use super::AppError;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use presenter_core::listen::mics::{MicConfig, MicsValidationError};
+use presenter_core::listen::recorder::{RecorderSetting, RecorderToggle};
 use presenter_core::listen::status::ListenStatus;
 use tracing::instrument;
 
@@ -17,6 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/listen/mics", get(get_mics).put(put_mics))
         .route("/listen/status", get(get_status))
+        .route("/listen/recorder", put(put_recorder))
 }
 
 #[instrument(skip_all)]
@@ -42,6 +45,18 @@ async fn get_status(State(state): State<AppState>) -> Json<ListenStatus> {
     Json(state.listen_status())
 }
 
+#[instrument(skip_all)]
+async fn put_recorder(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(toggle): Json<RecorderToggle>,
+) -> Result<Json<RecorderSetting>, AppError> {
+    let actor = extract_actor(&headers);
+    Ok(Json(
+        state.set_listen_recorder(toggle.enabled, &actor).await?,
+    ))
+}
+
 /// `MicsValidationError` → 422 with its Slovak text; everything else → the
 /// central mapping (a corrupt stored list → 500).
 fn map_mics_error(err: anyhow::Error) -> AppError {
@@ -60,6 +75,7 @@ mod tests {
     use presenter_core::audio::vban::VbanSampleType;
     use presenter_core::audio::vban_encode::{tone, VbanEncoder};
     use presenter_core::listen::mics::LISTEN_MICS_KEY;
+    use presenter_core::listen::recorder::LISTEN_RECORDER_KEY;
     use presenter_core::listen::status::SocketState;
     use serde_json::{json, Value};
     use std::net::SocketAddr;
@@ -306,6 +322,81 @@ mod tests {
         assert_eq!(mic["sender"], json!(tx.local_addr().unwrap().to_string()));
         assert_eq!(status["unmatched"][0]["streamName"], "Stream1");
         assert_eq!(status["unmatched"][0]["format"]["channels"], json!(2));
+    }
+
+    #[tokio::test]
+    async fn put_listen_recorder_switches_it_on_for_today_audits_and_shows_in_the_status() {
+        let (state, app) = app().await;
+        state
+            .set_listen_mics(serde_json::from_str(SPEC_MICS).unwrap(), "test")
+            .await
+            .unwrap();
+        let (status, reply) = send(
+            &app,
+            Method::PUT,
+            "/listen/recorder",
+            Some(json!({"enabled": true})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let day = reply["enabledFor"].as_str().unwrap().to_string();
+        assert!(
+            chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d").is_ok(),
+            "{reply}"
+        );
+        let (_, live) = send(&app, Method::GET, "/listen/status", None).await;
+        assert_eq!(
+            (
+                live["recorder"]["enabled"].clone(),
+                live["recorder"]["enabledFor"].clone()
+            ),
+            (json!(true), json!(day))
+        );
+        assert_eq!(
+            live["recorder"]["mics"],
+            json!([
+                {"id": "guest", "state": "off", "file": null, "bytes": 0, "droppedFrames": 0, "error": null},
+                {"id": "interp", "state": "off", "file": null, "bytes": 0, "droppedFrames": 0, "error": null}
+            ]),
+            "every configured mic, off until the writers arrive (C1b-4)"
+        );
+        let stored = state
+            .repository()
+            .get_app_setting(LISTEN_RECORDER_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&stored).unwrap(),
+            json!({"enabledFor": day})
+        );
+        assert_eq!(
+            send(
+                &app,
+                Method::PUT,
+                "/listen/recorder",
+                Some(json!({"enabled": false}))
+            )
+            .await,
+            (StatusCode::OK, json!({"enabledFor": null}))
+        );
+        let (_, live) = send(&app, Method::GET, "/listen/status", None).await;
+        assert_eq!(live["recorder"]["enabled"], json!(false));
+        let audit = state
+            .repository()
+            .list_settings_audit(Some("app_settings"), Some(LISTEN_RECORDER_KEY), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(audit.len(), 2, "one audit row per toggle");
+        assert!(audit.iter().all(|row| row.actor == "203.0.113.9"));
+        let changes: Vec<(Option<Value>, Value)> = audit
+            .iter()
+            .map(|row| (row.before_json.clone(), row.after_json.clone()))
+            .collect();
+        let on = json!({"enabledFor": day});
+        for expected in [(None, on.clone()), (Some(on), json!({"enabledFor": null}))] {
+            assert!(changes.contains(&expected), "{expected:?} in {changes:?}");
+        }
     }
 
     /// C1a-3: the counter rule's and the chain's fields of the integration

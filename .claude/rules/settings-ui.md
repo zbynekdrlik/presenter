@@ -50,20 +50,30 @@ faded the secondary text (3.0:1), the warning (3.9:1) and the status badges
 (3.6–4.5:1) below 4.5:1, while only the label stayed readable. Before adding a
 colour to a row, compute its ratio against `#334155` and `#263346`.
 
-## Resolume / Android lists: `list_card::ListCard` + `host_editor::ListEditor`
+## List cards: `list_card::ListCard` + `host_editor::ListEditor<F>` over an `EditorForm`
 
-The two cards are thin. Each implements `CardItem` for its DTO (id, key, fields,
-status, and the `list` / `save` / `delete` API calls as `async fn`s), gives a
-`static CardText` (copy, roles, `EditorSpec`), and builds the card-specific row
-parts (`RowParts`: status badge + aside, meta lines, warning, extra buttons).
+The list cards are thin (Resolume, Android; from #852 C1b-6 the listening
+microphones). Each implements `CardItem` for its DTO (id, key, label, `address()`,
+`values()` for the editor, optional `timestamps()`, status, and the `list` /
+`save` / `delete` API calls as `async fn`s), gives a `static CardText<Form>` (ALL
+copy — buttons, delete question, tooltips, editor texts — plus the form's config),
+and builds the card-specific row parts (`RowParts`: status badge + aside, meta
+lines, warning, extra buttons). What the editor edits is the card's `EditorForm`
+(#852 C1b-1): `connection_form::ConnectionForm` (label / host / port / extra field
+/ "Enabled", config `ConnectionSpec`) for the connection cards. A new kind of item
+gets its own `EditorForm` (values, `validate`, `render_fields`), never fields
+bolted onto `DraftValues`; `host_editor.rs` holds only the shared editor (state machine,
+`render_editor`, focus), and form-specific copy lives with its form (the connection cards' lock
+tooltips are in `connection_form.rs`).
 Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
-`host_editor.rs`, never in one card.
+`host_editor.rs`, never in one card. A failed save / delete line is
+`failure_text` (the server's own message for `ApiError::Refused` / `NotFound`).
 
 - **Edit** renders the editor IN the row; "+ Add …" renders it as the first `<li>`
   (`<role>-new-item`). `EditTarget` = Closed / New / Item(id). The draft lives at
   CARD level (`ListEditor`), outside the keyed rows, so a poll can never reset typing.
 - A card's extra field (Android's launch package) is part of the draft
-  (`DraftValues.extra`, `EditorSpec.extra`): `open_*` loads it, `begin_save`
+  (`DraftValues.extra`, `ConnectionSpec.extra`): `open_*` loads it, `begin_save`
   validates it via `validate_draft`. Never a separate signal with its own paths.
 - Field `data-role`s (`host-label`, `android-component`, …) and the message ids
   (`resolume-form-status`, `android-form-status`) stay unique ONLY because one
@@ -86,6 +96,90 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
   matches the editor: same open generation AND same target (`save_is_current`,
   unit-tested); otherwise the card toasts the error.
 
+## Listening microphones card (#852 C1b-6): whole list behind per-mic save / delete
+
+`settings/listen.rs` is a thin `ListCard<MicConfig>` with Slovak copy in its
+`CardText` (incl. `unsaved_title` / `saving_title`); its `EditorForm` lives in
+`settings/listen_form.rs` (`MicForm`: name, VBAN stream, optional sender IP,
+channel / language / role `<select>`s with `prop:selected` per option, the #827
+rule; split out so `listen.rs` can grow the health / switch lines under 800).
+
+- The API is the WHOLE list (`GET|PUT /listen/mics`). `CardItem::save` / `delete`
+  read the list, change one mic (`apply_draft`) and `PUT` it back. Two tabs saving
+  within that one round trip can lose one edit: accepted for one Settings card and
+  ≤ 4 mics — do not add per-mic endpoints or ETags for it. A save of a mic deleted
+  meanwhile is refused with `ApiError::NotFound("Tento mikrofón medzitým niekto
+  odstránil.")`, never re-added.
+- The server validates the whole list; its 422 text shows in the editor line
+  (`put_json_refusal` → `ApiError::Refused` → `failure_text`). The card checks only
+  name and stream itself.
+- A new mic's id is `mic_id_for_role` (`guest` / `interp` / `preacher`, then `-2` …),
+  never derived from the name; it never changes on edit (it names the recordings)
+  and the row's aside ends with "id <id>". The editor shows it too (`listen-id`,
+  `id_line`): an existing mic's own id, a new mic's `mic_id_for_role` over the listed
+  ids, recomputed from the role select — so the server's refusal ("Mikrofón „guest-2“:
+  …") names an id the operator has seen. The listed ids reach `MicForm::new` through
+  the `TakenIds` context `ListenCard` provides (a form cannot see the list): a
+  `Signal` DERIVED from the list, never an `RwSignal` mirrored by an `Effect` (that
+  lags a tick behind the list). The form is built inside `ListCard::new`, before the
+  list exists, so the signal reads a cell `ListenCard` fills right after the card;
+  the save still assigns the id from the list it just read.
+- `GET /listen/mics` is a quiet GET (`request_log.rs`): the card's 5 s list poll.
+- E2E `settings-listen.spec.ts` drives the three selects with real `selectOption`
+  (a broken `on_change` must fail it), reads the stored list back through the API
+  (a whole-list PUT must leave the other mic unchanged) and measures `.settings-layout`
+  at 360 px with the editor open. The two tests that provoke a refused save
+  count-assert its `Failed to load resource … 422` line (one each), then
+  `toEqual([])` on the rest; the edit test has none and asserts `toEqual([])`.
+  Every test resets the mics and the recorder through `request.put` first
+  (order-independent, no serial mode), and the server records into a temp folder
+  (`PRESENTER_LISTEN_RECORDINGS_DIR` set around `startTestServer`).
+
+Health, socket and recorder (#852 C1b-7):
+- One `GET /listen/status` poll every 2 s (`start_status_poll`), numbered by
+  `ResponseOrder`. `tick(visible, holds_status)` decides each tick (pure, unit-tested):
+  the card is on screen (`offsetParent`) → fetch; hidden → fetch NOTHING and drop the
+  status it held (the operator keeps the Settings panel mounted under `display: none`,
+  so an hours-old "prijíma" or a checked switch would greet whoever opens Settings;
+  the badges read "—" until the first visible tick). Dropping also numbers a request
+  nobody sends, so an answer still in flight is discarded. After 2 failed polls in a
+  row the status is `None` too (`video_sources::is_stale`, one console warn when it
+  goes stale): every badge shows "—" and the lines are empty rather than old numbers.
+  The status never enters a row's key; a row reads its own mic through `Memo`s over
+  the one signal.
+- The recorder switch "Nahrávať dnes" is a checkbox bound to a `Memo<bool>` of
+  `recorder.enabled` ONLY (`prop:checked`), so a poll that changes bytes or files
+  never re-renders it. It PUTs `/listen/recorder`; once the PUT is answered the box
+  shows what the server stored (`enabled_for.is_some()`), a failed PUT restores the
+  state from before the click, and the next fetch confirms. It is disabled with no
+  status, and when it is off and no mic exists ("Najprv pridaj mikrofón") — an ON
+  switch always stays switchable off. With no status it is `indeterminate`
+  (`prop:indeterminate` on a `Memo<bool>`) and the line says "Stav nahrávania nie je
+  známy." — a disabled, unchecked box must never read as "not recording". The
+  retention in its text is core's `RECORDING_RETENTION_DAYS`, not a copy.
+- Badges reuse the existing `.settings__status--<state>` modifiers (`live`,
+  `not-broadcasting`, `error`, `checking`, `unknown`); add none for the card.
+- The E2E plays a real tone with `scripts/dev/listen/vban_send.py` (a
+  `child_process` with its own guest stream, `--to 127.0.0.1:<port>`, the port from
+  `/listen/status` `socket.localAddr`; stopped with SIGTERM and awaited in a
+  `finally`, `--seconds` only bounds a leaked process) into the test server's
+  loopback socket, waits until the status shows > 16 000 recorded bytes BEFORE it
+  switches off, then reads the WAV header from the temp folder. A stall on a loaded
+  runner can split the recording: assert ONE day folder and ≥ 1 file, check every
+  header against its file, and compare the status's last `file` / `bytes` with THAT
+  file's data size — never `toHaveLength(1)` on the files. Waits use the config's
+  expect timeout, no per-assertion `timeout` overrides.
+- Two more tests cover the poll. The failing poll serves a MALFORMED 200
+  (`body: "not-json"`), never a mocked non-2xx — Chrome logs its own
+  `Failed to load resource` line for those (ui skill #598) — and sees the badge,
+  lines and switch fall back to unknown / indeterminate, then recover; exactly ONE
+  console line may match the stale warn (`listen status poll failed 2x in a row`),
+  then `toEqual([])` on the rest. The operator test opens `/ui/operator/settings`,
+  switches to Worship (the card is hidden, its badge becomes `unknown`, no
+  `/listen/status` request over more than one 2 s tick), then back to Settings with
+  the first answer held by `page.route`: the card still claims nothing until it
+  arrives.
+
 ## The editor's guards: `trigger_lock` (pure, unit-tested)
 
 Every row's Edit and "+ Add" read `ListEditor::trigger_lock(target)` through a
@@ -96,9 +190,10 @@ same lock, so a locked trigger can never open the editor:
   disabled and Escape is ignored (`ListEditor::cancel`). The late result can then
   never land on a different editor.
 - **`unsaved`** — the draft differs from what the editor was opened with (the
-  `dirty` Memo: current `DraftValues` != `loaded`, every field incl. the extra
-  one). Every OTHER trigger is locked, with the title "Save or cancel the open
-  editor first". Typing the stored value back unlocks again.
+  `dirty` Memo: the form's current `Values` != `loaded`, every field incl. the
+  extra one). Every OTHER trigger is locked, with the card's
+  `EditorSpec.unsaved_title` ("Save or cancel the open editor first" on the
+  connection cards). Typing the stored value back unlocks again.
 - **`open`** — the trigger's own editor is already open ("+ Add" while adding).
 - A clean editor locks nothing: Edit on another row switches in one click.
 

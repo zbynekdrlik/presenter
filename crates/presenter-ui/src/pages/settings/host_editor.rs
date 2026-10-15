@@ -1,4 +1,6 @@
-//! #819: the inline add / edit editor shared by the Resolume and Android list cards.
+//! #819: the inline add / edit editor shared by the settings list cards — the
+//! Resolume connections, the Android stage displays and (#852 C1b) the listening
+//! microphones.
 //!
 //! Before #819 each card had ONE permanent add/edit form at its top, and a row's
 //! **Edit** only loaded that form — measured 1170 px above the row the operator had
@@ -7,27 +9,24 @@
 //! list. One editor per card is open at a time ([`EditTarget`]).
 //!
 //! [`ListEditor`] is the card's editor state machine; the card plumbing around it
-//! (fetch / save / delete / rows) is `list_card`. The draft lives at CARD level,
-//! outside the keyed `<For>` rows, so the 5 s status poll can never reset what the
+//! (fetch / save / delete / rows) is `list_card`. What the editor edits is the
+//! card's [`EditorForm`] (#852 C1b): `connection_form::ConnectionForm` — label,
+//! host, port, an optional extra field, "Enabled" — for Resolume and Android,
+//! `listen_form::MicForm` for the microphones. The draft lives at CARD level, outside
+//! the keyed `<For>` rows, so the 5 s status poll can never reset what the
 //! operator is typing. Its guards ([`trigger_lock`], round 2):
 //! - one save at a time; while it is in flight no editor opens or switches and the
 //!   operator cannot close it (every Edit and "+ Add" is disabled, Escape and Cancel
 //!   are ignored) — only a row deleted elsewhere still closes its editor;
 //! - unsaved changes lock the other triggers until they are saved or cancelled;
 //! - a save that finishes late never closes a newer editor ([`save_is_current`]);
-//! - only a real open focuses the Label field, never a remount ([`takes_focus`]);
+//! - only a real open focuses the first field, never a remount ([`takes_focus`]);
 //! - focus returns to the button that opened the editor, or to "+ Add" when the
 //!   row was deleted elsewhere — once that button is unlocked ([`focus_on_close`]).
 
 use leptos::prelude::*;
 
-use super::parse_port_in_range;
 use crate::utils::keyboard::KEY_ESCAPE;
-
-/// The tooltip of an Edit / "+ Add" button locked by unsaved changes.
-const UNSAVED_TITLE: &str = "Save or cancel the open editor first";
-/// The tooltip of an Edit / "+ Add" button locked by a save in flight.
-const SAVING_TITLE: &str = "Wait until the save has finished";
 
 /// Which item a card's single inline editor is open on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -67,104 +66,46 @@ impl EditTarget {
     }
 }
 
-/// The validated label / host / port of an editor submission.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ConnectionFields {
-    pub(super) label: String,
-    pub(super) host: String,
-    pub(super) port: u16,
+/// What one card's inline editor edits (#852 C1b). The target, the locks, the save
+/// ticket, the focus and the message line are the same for every card
+/// ([`ListEditor`]); the fields, their values and their checks are the form's.
+pub(super) trait EditorForm: Copy + Send + Sync + 'static {
+    /// What the fields hold: the editor has unsaved changes exactly while they
+    /// differ from the values it was opened with.
+    type Values: Clone + Default + PartialEq + Send + Sync + 'static;
+    /// A validated submission.
+    type Submission: 'static;
+    /// What differs between two cards using the same form (placeholders, the
+    /// extra field, the new item's port).
+    type Config: Copy + Send + Sync + 'static;
+
+    /// The form's signals (created once per card).
+    fn new(config: Self::Config) -> Self;
+    /// The values a new item ("+ Add …") starts with.
+    fn new_values(self) -> Self::Values;
+    fn load(self, values: &Self::Values);
+    /// Tracked: the values on screen.
+    fn values(self) -> Self::Values;
+    fn values_untracked(self) -> Self::Values;
+    /// Check the values in the order the operator sees the fields.
+    fn validate(self, values: &Self::Values) -> Result<Self::Submission, &'static str>;
+    /// The field rows. `first` is the input that takes the caret once per open;
+    /// every field's `aria-describedby` is `spec.message_id`, and it is
+    /// `aria-invalid` while `invalid` holds (the message line shows an error).
+    fn render_fields(
+        self,
+        spec: EditorSpec,
+        first: NodeRef<leptos::html::Input>,
+        invalid: Signal<bool>,
+    ) -> AnyView;
+    /// Controls in front of Save / Cancel on the actions row (the connection
+    /// form's "Enabled"); an empty view for none.
+    fn render_action_lead(self, spec: EditorSpec) -> AnyView;
 }
 
-/// Validate the fields both editors share, in the order the operator sees them.
-///
-/// The port input has no native `min`/`max`, so an out-of-range value (99999)
-/// reaches this check and gets the styled message instead of the browser silently
-/// blocking the submit — this is the single authority for the 1..=65535 range (#455).
-pub(super) fn validate_connection(
-    label: &str,
-    host: &str,
-    port: &str,
-) -> Result<ConnectionFields, &'static str> {
-    let label = label.trim();
-    if label.is_empty() {
-        return Err("Label cannot be empty.");
-    }
-    let host = host.trim();
-    if host.is_empty() {
-        return Err("Host cannot be empty.");
-    }
-    let port = parse_port_in_range(port).ok_or("Port must be between 1 and 65535.")?;
-    Ok(ConnectionFields {
-        label: label.to_string(),
-        host: host.to_string(),
-        port,
-    })
-}
-
-/// A card's own extra text field in the editor (Android's launch package). Its value
-/// is part of the draft like every other field.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ExtraField {
-    pub(super) caption: &'static str,
-    pub(super) role: &'static str,
-    pub(super) placeholder: &'static str,
-    /// The value a new item starts with.
-    pub(super) default: &'static str,
-    /// The message when it is left empty.
-    pub(super) empty_message: &'static str,
-}
-
-/// What an editor holds: the values it was opened with, and what is on screen. The
-/// two differ exactly when the editor has unsaved changes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct DraftValues {
-    pub(super) label: String,
-    pub(super) host: String,
-    /// The port as typed (the input's text), validated only on save.
-    pub(super) port: String,
-    pub(super) enabled: bool,
-    /// The card's extra field (Android's launch package); empty when it has none.
-    pub(super) extra: String,
-}
-
-/// A validated editor submission.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Submission {
-    pub(super) fields: ConnectionFields,
-    pub(super) enabled: bool,
-    /// The trimmed extra field; empty when the card has none.
-    pub(super) extra: String,
-}
-
-/// Validate an editor's values: the shared fields first, then the card's extra field
-/// (required when the card has one), in the order the operator sees them.
-pub(super) fn validate_draft(
-    values: &DraftValues,
-    extra: Option<&ExtraField>,
-) -> Result<Submission, &'static str> {
-    let fields = validate_connection(&values.label, &values.host, &values.port)?;
-    let extra_value = values.extra.trim();
-    if let Some(field) = extra {
-        if extra_value.is_empty() {
-            return Err(field.empty_message);
-        }
-    }
-    Ok(Submission {
-        fields,
-        enabled: values.enabled,
-        extra: extra_value.to_string(),
-    })
-}
-
-/// The open editor's values plus its message line. `Copy` (signals only), so every
-/// handler and row closure can hold it.
+/// The editor's message line and its save-in-flight flag. `Copy` (signals only).
 #[derive(Clone, Copy)]
-struct ConnectionDraft {
-    label: RwSignal<String>,
-    host: RwSignal<String>,
-    port: RwSignal<String>,
-    enabled: RwSignal<bool>,
-    extra: RwSignal<String>,
+struct EditorStatus {
     /// The line under the editor: "Saving changes…" or a validation / save error.
     message: RwSignal<String>,
     /// `idle` / `info` / `error` — the line's `data-state`; `error` also sets
@@ -174,14 +115,9 @@ struct ConnectionDraft {
     busy: RwSignal<bool>,
 }
 
-impl Default for ConnectionDraft {
+impl Default for EditorStatus {
     fn default() -> Self {
         Self {
-            label: RwSignal::new(String::new()),
-            host: RwSignal::new(String::new()),
-            port: RwSignal::new(String::new()),
-            enabled: RwSignal::new(true),
-            extra: RwSignal::new(String::new()),
             message: RwSignal::new(String::new()),
             state: RwSignal::new(String::from("idle")),
             busy: RwSignal::new(false),
@@ -189,44 +125,13 @@ impl Default for ConnectionDraft {
     }
 }
 
-impl ConnectionDraft {
-    /// Fill the editor.
-    fn load(self, values: &DraftValues) {
-        self.label.set(values.label.clone());
-        self.host.set(values.host.clone());
-        self.port.set(values.port.clone());
-        self.enabled.set(values.enabled);
-        self.extra.set(values.extra.clone());
-        self.clear_message();
-    }
-
-    /// Tracked: the values on screen.
-    fn values(self) -> DraftValues {
-        DraftValues {
-            label: self.label.get(),
-            host: self.host.get(),
-            port: self.port.get(),
-            enabled: self.enabled.get(),
-            extra: self.extra.get(),
-        }
-    }
-
-    fn values_untracked(self) -> DraftValues {
-        DraftValues {
-            label: self.label.get_untracked(),
-            host: self.host.get_untracked(),
-            port: self.port.get_untracked(),
-            enabled: self.enabled.get_untracked(),
-            extra: self.extra.get_untracked(),
-        }
-    }
-
+impl EditorStatus {
     fn show(self, state: &str, message: &str) {
         self.state.set(state.to_string());
         self.message.set(message.to_string());
     }
 
-    fn clear_message(self) {
+    fn clear(self) {
         self.show("idle", "");
     }
 }
@@ -255,11 +160,11 @@ impl TriggerLock {
         }
     }
 
-    /// The button's tooltip.
-    pub(super) fn title(self) -> Option<&'static str> {
+    /// The button's tooltip, in the card's words.
+    pub(super) fn title(self, spec: &EditorSpec) -> Option<&'static str> {
         match self {
-            Self::Saving => Some(SAVING_TITLE),
-            Self::Unsaved => Some(UNSAVED_TITLE),
+            Self::Saving => Some(spec.saving_title),
+            Self::Unsaved => Some(spec.unsaved_title),
             Self::Open => None,
         }
     }
@@ -286,27 +191,25 @@ fn trigger_lock(
 }
 
 /// The open editor shows values other than the ones it was opened with.
-fn is_dirty(open: &EditTarget, current: &DraftValues, loaded: &DraftValues) -> bool {
+fn is_dirty<V: PartialEq>(open: &EditTarget, current: &V, loaded: &V) -> bool {
     *open != EditTarget::Closed && current != loaded
 }
 
 /// An editor mount takes focus only for an open that has not been focused yet. A
 /// remount of the same editor (its row re-keyed by an edit elsewhere) must not pull
-/// the caret back to Label while the operator types in another field.
+/// the caret back to the first field while the operator types in another one.
 fn takes_focus(focused_generation: u64, generation: u64) -> bool {
     focused_generation != generation
 }
 
-/// One card's inline-editor state machine. `Copy` (signals only).
-#[derive(Clone, Copy)]
-pub(super) struct ListEditor {
+/// One card's inline-editor state machine over its form `F`. `Copy` (signals only).
+pub(super) struct ListEditor<F: EditorForm> {
     editing: RwSignal<EditTarget>,
-    draft: ConnectionDraft,
+    form: F,
+    status: EditorStatus,
     /// What the open editor was filled with; [`is_dirty`] compares against it.
-    loaded: RwSignal<DraftValues>,
+    loaded: RwSignal<F::Values>,
     dirty: Memo<bool>,
-    /// The card's extra field, validated by [`Self::begin_save`].
-    extra: Option<ExtraField>,
     /// Bumped on every open: a save that finishes after the operator re-opened an
     /// editor (even on the same row) must not close or overwrite that newer editor.
     generation: RwSignal<u64>,
@@ -316,6 +219,14 @@ pub(super) struct ListEditor {
     /// when its editor closes.
     focus_return: RwSignal<Option<EditTarget>>,
 }
+
+impl<F: EditorForm> Clone for ListEditor<F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<F: EditorForm> Copy for ListEditor<F> {}
 
 /// What a save in flight was started from.
 pub(super) struct SaveTicket {
@@ -330,55 +241,46 @@ impl SaveTicket {
     }
 }
 
-impl ListEditor {
-    /// A card's editor; `extra` is the card's own extra field, if it has one.
-    pub(super) fn new(extra: Option<ExtraField>) -> Self {
+impl<F: EditorForm> ListEditor<F> {
+    /// A card's editor over a form built from the card's `config`.
+    pub(super) fn new(config: F::Config) -> Self {
         let editing = RwSignal::new(EditTarget::Closed);
-        let draft = ConnectionDraft::default();
-        let loaded = RwSignal::new(DraftValues::default());
+        let form = F::new(config);
+        let loaded = RwSignal::new(F::Values::default());
         let dirty = Memo::new(move |_| {
-            let current = draft.values();
+            let current = form.values();
             editing.with(|open| loaded.with(|opened_with| is_dirty(open, &current, opened_with)))
         });
         Self {
             editing,
-            draft,
+            form,
+            status: EditorStatus::default(),
             loaded,
             dirty,
-            extra,
             generation: RwSignal::new(0),
             focused: StoredValue::new(0),
             focus_return: RwSignal::new(None),
         }
     }
 
-    /// Open the "+ Add …" editor: blank label and host, `default_port`, enabled, the
-    /// extra field's default.
-    pub(super) fn open_new(self, default_port: u16) {
-        let values = DraftValues {
-            port: default_port.to_string(),
-            enabled: true,
-            extra: self
-                .extra
-                .map(|e| e.default)
-                .unwrap_or_default()
-                .to_string(),
-            ..DraftValues::default()
-        };
+    /// Open the "+ Add …" editor with the form's new-item values.
+    pub(super) fn open_new(self) {
+        let values = self.form.new_values();
         self.open(EditTarget::New, values);
     }
 
     /// Open the editor on an existing row, filled with its `values`.
-    pub(super) fn open_item(self, id: String, values: DraftValues) {
+    pub(super) fn open_item(self, id: String, values: F::Values) {
         self.open(EditTarget::Item(id), values);
     }
 
     /// The same guard the disabled buttons show: a locked trigger never opens.
-    fn open(self, target: EditTarget, values: DraftValues) {
+    fn open(self, target: EditTarget, values: F::Values) {
         if self.trigger_lock_untracked(&target).is_some() {
             return;
         }
-        self.draft.load(&values);
+        self.form.load(&values);
+        self.status.clear();
         self.loaded.set(values);
         self.generation.update(|g| *g += 1);
         self.editing.set(target);
@@ -387,7 +289,7 @@ impl ListEditor {
     /// Cancel / Escape: close without saving. Ignored while a save is in flight —
     /// the save settles the editor itself.
     pub(super) fn cancel(self) {
-        if !self.draft.busy.get_untracked() {
+        if !self.status.busy.get_untracked() {
             self.close();
         }
     }
@@ -404,7 +306,7 @@ impl ListEditor {
     /// Close without moving focus.
     fn discard(self) {
         self.editing.set(EditTarget::Closed);
-        self.draft.clear_message();
+        self.status.clear();
     }
 
     /// The row being edited was deleted from this card.
@@ -438,14 +340,14 @@ impl ListEditor {
 
     /// Tracked: why `trigger` (a row's Edit, or "+ Add" for `New`) is locked now.
     pub(super) fn trigger_lock(self, trigger: &EditTarget) -> Option<TriggerLock> {
-        let busy = self.draft.busy.get();
+        let busy = self.status.busy.get();
         let dirty = self.dirty.get();
         self.editing
             .with(|open| trigger_lock(open, busy, dirty, trigger))
     }
 
     fn trigger_lock_untracked(self, trigger: &EditTarget) -> Option<TriggerLock> {
-        let busy = self.draft.busy.get_untracked();
+        let busy = self.status.busy.get_untracked();
         let dirty = self.dirty.get_untracked();
         self.editing
             .with_untracked(|open| trigger_lock(open, busy, dirty, trigger))
@@ -454,18 +356,18 @@ impl ListEditor {
     /// Validate and start a save. `None` when no editor is open, a save is already in
     /// flight (held Enter, a double click), or a field is invalid (its message is
     /// shown).
-    pub(super) fn begin_save(self) -> Option<(SaveTicket, Submission)> {
+    pub(super) fn begin_save(self) -> Option<(SaveTicket, F::Submission)> {
         let target = self.editing.get_untracked();
-        if target == EditTarget::Closed || self.draft.busy.get_untracked() {
+        if target == EditTarget::Closed || self.status.busy.get_untracked() {
             return None;
         }
-        match validate_draft(&self.draft.values_untracked(), self.extra.as_ref()) {
+        match self.form.validate(&self.form.values_untracked()) {
             Ok(submission) => {
                 let generation = self.generation.get_untracked();
                 Some((SaveTicket { target, generation }, submission))
             }
             Err(message) => {
-                self.draft.show("error", message);
+                self.status.show("error", message);
                 None
             }
         }
@@ -474,8 +376,8 @@ impl ListEditor {
     /// The request is going out: Save, Cancel and every trigger stay locked until
     /// [`Self::finish_save`].
     pub(super) fn mark_saving(self, message: &str) {
-        self.draft.busy.set(true);
-        self.draft.show("info", message);
+        self.status.busy.set(true);
+        self.status.show("info", message);
     }
 
     /// A save finished (after a success, call it AFTER the list reload; a failure
@@ -492,10 +394,10 @@ impl ListEditor {
         if current {
             match error {
                 None => self.close(),
-                Some(message) => self.draft.show("error", message),
+                Some(message) => self.status.show("error", message),
             }
         }
-        self.draft.busy.set(false);
+        self.status.busy.set(false);
         current
     }
 
@@ -536,8 +438,8 @@ fn save_is_current(ticket: &SaveTicket, generation: u64, editing: &EditTarget) -
 /// the save settles. The focus itself runs one task later, after the render effects
 /// already queued by the same change (the button's own `disabled`, the editor's
 /// removal) — a newly woken Effect is not ordered against them otherwise.
-pub(super) fn focus_on_close(
-    editor: ListEditor,
+pub(super) fn focus_on_close<F: EditorForm>(
+    editor: ListEditor<F>,
     button: NodeRef<leptos::html::Button>,
     target: EditTarget,
 ) {
@@ -565,7 +467,7 @@ fn focus_is_free() -> bool {
         .is_none_or(|el| el.tag_name() == "BODY")
 }
 
-/// What differs between the Resolume and the Android editor.
+/// What differs between two cards' editors besides their fields.
 #[derive(Clone, Copy)]
 pub(super) struct EditorSpec {
     /// The `data-role` prefix: `host` → `host-label`, `host-submit`, `host-cancel`, …
@@ -574,43 +476,47 @@ pub(super) struct EditorSpec {
     pub(super) message_id: &'static str,
     /// `data-role` of that message line.
     pub(super) message_role: &'static str,
-    pub(super) label_placeholder: &'static str,
-    pub(super) host_placeholder: &'static str,
     /// The editor heading and the Save button text for a NEW item.
     pub(super) new_title: &'static str,
     pub(super) new_submit: &'static str,
     /// The editor heading when editing an existing item in place.
     pub(super) edit_title: &'static str,
-    pub(super) extra: Option<ExtraField>,
+    /// The Save button of an existing item, and Cancel.
+    pub(super) save_text: &'static str,
+    pub(super) cancel_text: &'static str,
+    /// The tooltips of a locked Edit / "+ Add" ([`TriggerLock::title`]).
+    pub(super) unsaved_title: &'static str,
+    pub(super) saving_title: &'static str,
 }
 
 /// The inline editor. `creating` = the "+ Add …" item (Save creates); otherwise an
 /// existing row (Save updates). `on_save` validates and saves; Cancel and Escape
 /// close the editor without saving. Only one editor exists in a card at a time, so
 /// the field `data-role`s and the `id`s stay unique on the page.
-pub(super) fn render_connection_editor<S>(
+pub(super) fn render_editor<F, S>(
     spec: EditorSpec,
-    editor: ListEditor,
+    editor: ListEditor<F>,
     creating: bool,
     on_save: S,
 ) -> AnyView
 where
+    F: EditorForm,
     S: Fn() + Copy + Send + 'static,
 {
-    let draft = editor.draft;
+    let status = editor.status;
     let role = move |field: &str| format!("{}-{field}", spec.role);
-    let invalid = move || (draft.state.get() == "error").to_string();
+    let invalid = Signal::derive(move || status.state.get() == "error");
     let (mode, title, submit_text) = if creating {
         ("create", spec.new_title, spec.new_submit)
     } else {
-        ("edit", spec.edit_title, "Save")
+        ("edit", spec.edit_title, spec.save_text)
     };
 
     // The operator clicked Edit / "+ Add" to type: put the caret in the first field —
     // once per open, never again when this editor is remounted.
-    let label_ref = NodeRef::<leptos::html::Input>::new();
+    let first = NodeRef::<leptos::html::Input>::new();
     Effect::new(move || {
-        if let Some(el) = label_ref.get() {
+        if let Some(el) = first.get() {
             if editor.take_first_focus() {
                 let _ = el.focus();
             }
@@ -630,10 +536,8 @@ where
             editor.cancel();
         }
     };
-
-    let extra = spec
-        .extra
-        .map(|field| render_extra_field(field, spec.message_id, draft));
+    let fields = editor.form.render_fields(spec, first, invalid);
+    let lead = editor.form.render_action_lead(spec);
 
     view! {
         <form class="settings__form settings__form--inline-editor" data-role=role("editor")
@@ -641,91 +545,34 @@ where
             autocomplete="off" on:submit=on_submit on:keydown=on_keydown>
             <h3 class="settings__editor-title" id=role("editor-title")
                 data-role=role("editor-title")>{title}</h3>
-            <div class="settings__form-row settings__form-row--connection">
-                <label>
-                    <span>"Label"</span>
-                    <input type="text" node_ref=label_ref data-role=role("label")
-                        placeholder=spec.label_placeholder required
-                        aria-required="true"
-                        aria-describedby=spec.message_id
-                        aria-invalid=invalid
-                        prop:value=move || draft.label.get()
-                        on:input=move |ev| draft.label.set(event_target_value(&ev)) />
-                </label>
-                <label>
-                    <span>"Hostname or DNS"</span>
-                    <input type="text" data-role=role("host") placeholder=spec.host_placeholder required
-                        aria-required="true"
-                        aria-describedby=spec.message_id
-                        aria-invalid=invalid
-                        prop:value=move || draft.host.get()
-                        on:input=move |ev| draft.host.set(event_target_value(&ev)) />
-                </label>
-                <label class="settings__form-control--small">
-                    <span>"Port"</span>
-                    // No native min/max/required — see `validate_connection` (#455).
-                    <input type="number" data-role=role("port")
-                        aria-required="true"
-                        aria-describedby=spec.message_id
-                        aria-invalid=invalid
-                        prop:value=move || draft.port.get()
-                        on:input=move |ev| draft.port.set(event_target_value(&ev)) />
-                </label>
-            </div>
-            {extra}
+            {fields}
             <div class="settings__form-row settings__form-row--inline">
-                <label class="settings__form-checkbox">
-                    <input type="checkbox" data-role=role("enabled")
-                        prop:checked=move || draft.enabled.get()
-                        on:change=move |ev| draft.enabled.set(event_target_checked(&ev)) />
-                    <span>"Enabled"</span>
-                </label>
+                {lead}
                 <div class="settings__form-actions">
                     <button type="submit" class="settings__button settings__button--primary"
-                        data-role=role("submit") prop:disabled=move || draft.busy.get()>
+                        data-role=role("submit") prop:disabled=move || status.busy.get()>
                         {submit_text}
                     </button>
                     <button type="button" class="settings__button settings__button--ghost"
-                        data-role=role("cancel") prop:disabled=move || draft.busy.get()
-                        on:click=move |_| editor.cancel()>"Cancel"</button>
+                        data-role=role("cancel") prop:disabled=move || status.busy.get()
+                        on:click=move |_| editor.cancel()>{spec.cancel_text}</button>
                 </div>
             </div>
             <p id=spec.message_id class="settings__form-status" data-role=spec.message_role
-                data-state=move || draft.state.get()>
-                {move || draft.message.get()}
+                data-state=move || status.state.get()>
+                {move || status.message.get()}
             </p>
         </form>
     }
     .into_any()
 }
 
-/// The card's extra text field (Android's launch package), on its own row.
-fn render_extra_field(
-    field: ExtraField,
-    message_id: &'static str,
-    draft: ConnectionDraft,
-) -> impl IntoView {
-    view! {
-        <div class="settings__form-row">
-            <label>
-                <span>{field.caption}</span>
-                <input type="text" data-role=field.role placeholder=field.placeholder required
-                    aria-required="true"
-                    aria-describedby=message_id
-                    aria-invalid=move || (draft.state.get() == "error").to_string()
-                    prop:value=move || draft.extra.get()
-                    on:input=move |ev| draft.extra.set(event_target_value(&ev)) />
-            </label>
-        </div>
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::connection_form::{DraftValues, SAVING_TITLE, UNSAVED_TITLE};
     use super::{
-        is_dirty, save_is_current, takes_focus, trigger_lock, validate_connection, validate_draft,
-        ConnectionFields, DraftValues, EditTarget, ExtraField, SaveTicket, Submission, TriggerLock,
-        UNSAVED_TITLE,
+        is_dirty, save_is_current, takes_focus, trigger_lock, EditTarget, EditorSpec, SaveTicket,
+        TriggerLock,
     };
 
     #[test]
@@ -796,94 +643,6 @@ mod tests {
     }
 
     #[test]
-    fn valid_fields_are_trimmed() {
-        assert_eq!(
-            validate_connection("  Main Arena ", " resolume.lan ", " 8090 "),
-            Ok(ConnectionFields {
-                label: "Main Arena".into(),
-                host: "resolume.lan".into(),
-                port: 8090,
-            })
-        );
-    }
-
-    #[test]
-    fn a_blank_label_or_host_is_rejected_in_field_order() {
-        assert_eq!(
-            validate_connection("   ", "", "x"),
-            Err("Label cannot be empty.")
-        );
-        assert_eq!(
-            validate_connection("Main", "  ", "x"),
-            Err("Host cannot be empty.")
-        );
-    }
-
-    #[test]
-    fn an_out_of_range_port_is_rejected_not_truncated() {
-        // #455: 99999 must show the range message, never save a wrapped / default port.
-        for port in ["99999", "0", "", "80x"] {
-            assert_eq!(
-                validate_connection("Main", "resolume.lan", port),
-                Err("Port must be between 1 and 65535."),
-                "port {port:?}"
-            );
-        }
-    }
-
-    const PACKAGE: ExtraField = ExtraField {
-        caption: "Launch Package",
-        role: "android-component",
-        placeholder: "com.tcl.browser",
-        default: "com.tcl.browser",
-        empty_message: "Launch component cannot be empty.",
-    };
-
-    fn values(label: &str, port: &str, extra: &str) -> DraftValues {
-        DraftValues {
-            label: label.into(),
-            host: "sd1l.lan".into(),
-            port: port.into(),
-            enabled: false,
-            extra: extra.into(),
-        }
-    }
-
-    #[test]
-    fn the_extra_field_is_part_of_the_submission_and_required_when_the_card_has_one() {
-        // Round 2, item 7: Android's launch package is validated like every field.
-        assert_eq!(
-            validate_draft(
-                &values("Stage", "5555", "  com.example/.Main "),
-                Some(&PACKAGE)
-            ),
-            Ok(Submission {
-                fields: ConnectionFields {
-                    label: "Stage".into(),
-                    host: "sd1l.lan".into(),
-                    port: 5555,
-                },
-                enabled: false,
-                extra: "com.example/.Main".into(),
-            })
-        );
-        assert_eq!(
-            validate_draft(&values("Stage", "5555", "   "), Some(&PACKAGE)),
-            Err("Launch component cannot be empty.")
-        );
-        // The shared fields come first, in screen order.
-        assert_eq!(
-            validate_draft(&values("Stage", "99999", ""), Some(&PACKAGE)),
-            Err("Port must be between 1 and 65535.")
-        );
-        // A card without an extra field never rejects (or sends) one.
-        assert_eq!(
-            validate_draft(&values("Stage", "5555", ""), None).map(|s| s.extra),
-            Ok(String::new())
-        );
-    }
-
-    #[test]
     fn a_save_in_flight_locks_every_trigger() {
         // Round 2, item 4: no editor opens or switches until the save settles.
         let open = EditTarget::Item("a".into());
@@ -935,15 +694,38 @@ mod tests {
         }
     }
 
+    const SPEC: EditorSpec = EditorSpec {
+        role: "host",
+        message_id: "resolume-form-status",
+        message_role: "form-status",
+        new_title: "New Resolume connection",
+        new_submit: "Add connection",
+        edit_title: "Edit Resolume connection",
+        save_text: "Save",
+        cancel_text: "Cancel",
+        unsaved_title: UNSAVED_TITLE,
+        saving_title: SAVING_TITLE,
+    };
+
     #[test]
     fn a_lock_says_why_on_the_button() {
-        assert_eq!(TriggerLock::Unsaved.title(), Some(UNSAVED_TITLE));
+        assert_eq!(TriggerLock::Unsaved.title(&SPEC), Some(UNSAVED_TITLE));
         assert_eq!(UNSAVED_TITLE, "Save or cancel the open editor first");
-        assert!(TriggerLock::Saving.title().is_some());
-        assert_eq!(TriggerLock::Open.title(), None);
+        assert_eq!(TriggerLock::Saving.title(&SPEC), Some(SAVING_TITLE));
+        assert_eq!(TriggerLock::Open.title(&SPEC), None);
         assert_eq!(TriggerLock::Saving.data_lock(), "saving");
         assert_eq!(TriggerLock::Unsaved.data_lock(), "unsaved");
         assert_eq!(TriggerLock::Open.data_lock(), "open");
+    }
+
+    fn values(label: &str, port: &str, extra: &str) -> DraftValues {
+        DraftValues {
+            label: label.into(),
+            host: "sd1l.lan".into(),
+            port: port.into(),
+            enabled: false,
+            extra: extra.into(),
+        }
     }
 
     #[test]

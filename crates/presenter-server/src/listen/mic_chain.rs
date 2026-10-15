@@ -7,8 +7,9 @@
 //! last one's level; it spends a unit of its coop budget per block, so a full
 //! queue never pins a worker. A format change rebuilds the converter; its log
 //! line goes through the #484 gate on the mic's format count (health). The
-//! frames themselves reach no consumer yet: the channel arrives with C1b's
-//! recorder / C3's ASR.
+//! frames go to the mic's frame channel (`ListenService::frame_sender`) only
+//! while the chain's generation is the mic's current one; `broadcast::send`
+//! never waits — a consumer that falls behind loses the oldest frames.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -16,11 +17,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use presenter_core::audio::level::rms_dbfs;
 use presenter_core::audio::vban::VbanAudioFormat;
 use presenter_core::listen::mics::MicChannel;
-use tokio::sync::Notify;
+use tokio::sync::{broadcast, Notify};
 use tracing::{info, warn};
 
 use super::resample::Resampler16k;
-use super::{should_log_event, ListenService, MIC_TARGET};
+use super::{should_log_event, ListenService, MicFrame, MIC_TARGET};
 
 /// ≈ 340 ms of 256-frame packets at 48 kHz — far above the ≥ 6 × 256
 /// samples a Voicemeeter receiver keeps (songplayer `vban-out.md`).
@@ -193,6 +194,7 @@ pub(crate) async fn run_chain(
     generation: u64,
     queue: Arc<BlockQueue>,
 ) {
+    let frames_out = service.frame_sender(&mic_id);
     let mut chain = MicChain::new(channel);
     while let Some(block) = queue.pop().await {
         let before = chain.format();
@@ -205,13 +207,27 @@ pub(crate) async fn run_chain(
         }
         let level = frames.last().map(Vec::as_slice).map(rms_dbfs);
         let produced = frames.len() as u64;
-        service.with_health(|health| {
-            health.record_chain(&mic_id, generation, produced, level, chain.error());
+        let current = service.with_health(|health| {
+            health.record_chain(&mic_id, generation, produced, level, chain.error())
         });
+        if current {
+            send_frames(&frames_out, frames);
+        }
         // `pop` touches no tokio resource: while blocks are queued (a sender
         // flooding counter jumps queues a second of silence per packet) the
         // task must still give its worker back once its coop budget is spent.
         tokio::task::coop::consume_budget().await;
+    }
+}
+
+/// The frames to every consumer of the mic. Never waits: `broadcast::send`
+/// overwrites the oldest frame a consumer has not read yet.
+fn send_frames(frames_out: &broadcast::Sender<MicFrame>, frames: Vec<Vec<i16>>) {
+    if frames_out.receiver_count() == 0 {
+        return;
+    }
+    for frame in frames {
+        let _receivers = frames_out.send(MicFrame::from(frame));
     }
 }
 
@@ -251,7 +267,7 @@ mod tests {
     use crate::listen::health::PacketSeen;
     use crate::tracing_capture::Capture;
     use presenter_core::audio::sequence::SequenceVerdict;
-    use presenter_core::audio::vban::VbanSampleType;
+    use presenter_core::audio::vban::{f32_to_int16, VbanSampleType};
     use presenter_core::audio::vban_encode::tone;
     use presenter_core::listen::mics::{MicConfig, MicLanguage, MicRole};
     use std::time::Duration;
@@ -516,6 +532,41 @@ mod tests {
             formats,
             vec!["2", "4", "8", "16", "32", "64"],
             "64 formats (63 changes): 6 lines, not 63"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_current_chain_hands_its_frames_on_and_a_stale_chain_does_not() {
+        let service = ListenService::new();
+        let stale = service.with_health(|health| health.set_mics(&[], &["guest"]));
+        let current = service.with_health(|health| health.set_mics(&[], &["guest"]));
+        let mut frames = service.frame_sender("guest").subscribe();
+        for generation in [stale, current] {
+            let queue = Arc::new(BlockQueue::new(QUEUE_CAPACITY));
+            // 16 kHz passes through: one block of 1600 samples = one 100 ms frame
+            queue.push(block(MONO_16K, 0, vec![0.25; 1_600]));
+            queue.close();
+            let chain = tokio::spawn(run_chain(
+                service.clone(),
+                "guest".to_string(),
+                MicChannel::Left,
+                generation,
+                Arc::clone(&queue),
+            ));
+            tokio::time::timeout(Duration::from_secs(5), chain)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let frame = frames.try_recv().unwrap();
+        assert_eq!(frame.len(), 1_600);
+        assert!(
+            frame.iter().all(|&s| s == f32_to_int16(0.25)),
+            "the current chain's frame"
+        );
+        assert!(
+            frames.try_recv().is_err(),
+            "exactly one frame: the stale chain sent none"
         );
     }
 

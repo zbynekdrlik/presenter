@@ -58,3 +58,10 @@ ops/cloudflare/*.json
 # SEVP / Milosť, licence-restricted). Local dev:
 #   git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private
 data/bibles-private/
+
+# Runtime data folders that sit next to the sqlite file: a dev checkout run with a
+# RELATIVE PRESENTER_DB_URL (e.g. sqlite://presenter_dev.db) puts them in the repo
+# root. The listening recordings (#852 C1b, sermon audio) and the stream-graphics
+# assets (#708, uploaded images / fonts) must never be committable from there.
+/recordings/
+/stream-assets/

@@ -1,11 +1,13 @@
 //! `GET /listen/status` (#852 C1a, spec §5.4 "Health", §14): the socket, each
 //! configured mic's counters, the streams seen but not used (they help the
-//! first setup) and the senders whose datagrams were refused. Read by
+//! first setup), the senders whose datagrams were refused and the recorder
+//! (C1b). Read by
 //! the C1b Settings card and the box acceptance (§5.8: counters read before
 //! and after a capture and diffed).
 
 use crate::audio::vban::VbanAudioFormat;
 use crate::listen::mics::MicConfig;
+use crate::listen::recorder::RecorderStatus;
 use serde::{Deserialize, Serialize};
 
 /// The VBAN receive socket's life cycle.
@@ -103,6 +105,8 @@ pub struct ListenStatus {
     pub mics: Vec<MicStatus>,
     pub unmatched: Vec<UnmatchedStream>,
     pub rejected: Vec<RejectedSender>,
+    /// The recorder (#852 C1b): the per-day toggle, the folder, each mic's file.
+    pub recorder: RecorderStatus,
 }
 
 #[cfg(test)]
@@ -177,6 +181,7 @@ mod tests {
                 corrupt: 0,
                 last_packet_age_ms: 10,
             }],
+            recorder: RecorderStatus::default(),
         };
         let wire = serde_json::to_value(&status).unwrap();
         assert_eq!(
@@ -198,7 +203,8 @@ mod tests {
                     "packets": 3, "lastPacketAgeMs": 40}],
                 "rejected": [{"sender": "198.51.100.7", "notVban": 1, "nonAudio": 2,
                     "unsupportedCodec": 0, "unsupportedType": 0, "corrupt": 0,
-                    "lastPacketAgeMs": 10}]
+                    "lastPacketAgeMs": 10}],
+                "recorder": {"enabled": false, "enabledFor": null, "root": "", "mics": []}
             })
         );
         let back: ListenStatus = serde_json::from_value(wire).unwrap();

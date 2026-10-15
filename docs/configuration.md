@@ -105,9 +105,53 @@ for a refused sample rate), the streams seen but not assigned and the senders wh
 refused. Senders: VB-Matrix or Voicemeeter on the FOH PC, 48 kHz, 16-bit, stream names
 `GUEST_EN` / `INTERP_SK` (spec §5.7). `scripts/dev/listen/vban_send.py` sends a test tone.
 
-| Variable                     | Default        | Purpose |
-| ---------------------------- | -------------- | ------- |
-| `PRESENTER_LISTEN_VBAN_ADDR` | `0.0.0.0:6980` | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
+Recordings (spec §5.5, §12) live in day folders `<recordings folder>/<YYYY-MM-DD>/`. A day folder is
+kept for 30 days and deleted on the 31st day after its day. The retention pass runs once per local
+date: the first one 10 minutes after the service starts (so a box that boots with a wrong clock cannot
+read a date weeks ahead and delete everything), then in the first minute after each midnight. It
+deletes only the recorder's own `<mic id>_<HHMMSS>.wav` files, never a link or a foreign file, and
+removes the folder once nothing else is left in it. There is no free-space check: recordings share
+the disk with the database (two microphones left on all day ≈ 5.5 GB), so the switch is meant for the
+service days only. The day boundary and the retention follow the box clock — keep NTP on (SNV's
+`systemd-timesyncd` was inactive on 2026-10-15; enable it before the first recording).
+
+The recorder is OFF by default and switched per day: `PUT /listen/recorder` `{"enabled": true}` stores
+today's date in `listen.recorder` (`{"enabled": false}` stores `null`). It records only on that date,
+so a restart the same day resumes and the switch turns itself off at midnight; a stored date AFTER
+today (the clock was ahead when it was switched on) is cleared at the next startup, and a server that
+keeps running gets the same rule when the clock is corrected under it (the recorder looks every
+minute: it switches off, clears the stored date and logs one WARN).
+While it is on, every microphone that receives audio is written to
+`<folder>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav` (16 kHz mono 16-bit, exactly what the speech recognition
+gets; ≈ 115 MB per hour), named by the time its first sample was heard; a microphone without audio
+leaves no file. A gap of more than 1 s between the audio in the file and the clock — either way: the
+sender paused, the recorder fell behind, or the sender's clock runs fast — starts a new file, so every
+file is continuous audio from the time in its name. Frames heard after midnight are not written.
+`GET /listen/status` → `recorder` shows the switch (`enabled`, `enabledFor`), the folder (`root`) and
+one entry per microphone (`off`, `waiting` for its first audio, `recording`, `error`) with its current or
+last `file`, the audio `bytes` in it, the `droppedFrames` lost when the disk fell behind (since the
+server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
+
+- C1b-3: the API switch and the status.
+- C1b-4: the writers — each microphone's `file`, `bytes`, `droppedFrames` and `error` are live.
+- C1b-6: Settings → "Počúvanie" lists, adds, edits and deletes the microphones (the whole-list
+  `PUT /listen/mics`); a new microphone's id comes from its role (`guest`, `interp`, `preacher`, then
+  `-2` …) and is shown in the editor before saving; a refused list shows the server's Slovak message.
+- C1b-5: the day-after-today check on a running server; a new file whenever the audio is more than a
+  second from the clock; the split at midnight; a failed write restarted after 1, 2, 4 … 60 minutes,
+  counted from the failure (the status shows `error` until a write succeeds); no empty file is left when
+  not even its header can be written.
+- C1b-7: Settings → "Počúvanie" shows each microphone's state (`prijíma`, `žiadny zvuk`, `čaká na zvuk`,
+  `chyba`), its health and recording line and the socket line, refreshed every 2 s while the card is on
+  screen (after two failed refreshes, or while its panel is hidden in the operator, it shows nothing
+  instead of old numbers), and has the "Nahrávať dnes" switch — the same per-day switch as
+  `PUT /listen/recorder`, locked until a microphone exists and shown as undecided while the state is
+  unknown.
+
+| Variable                          | Default                               | Purpose |
+| --------------------------------- | ------------------------------------- | ------- |
+| `PRESENTER_LISTEN_VBAN_ADDR`      | `0.0.0.0:6980`                        | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
+| `PRESENTER_LISTEN_RECORDINGS_DIR` | `recordings` next to the sqlite file  | Folder of the listening recordings: prod / PP `/opt/presenter/recordings`, dev `/opt/presenter-dev/recordings` (inside the units' `ReadWritePaths`). Unit tests use a temp folder. |
 
 ### Companion Integration
 
