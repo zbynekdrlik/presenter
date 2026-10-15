@@ -227,6 +227,30 @@ async fn a_closed_socket_ends_the_session_counters() {
 }
 
 #[test]
+fn a_closed_socket_resets_the_session_reject_counts() {
+    // The refused-datagram gate reads two session-wide counts; a later socket
+    // session must start them over, or its first rejects would be gated like
+    // the 18th sender of the last one.
+    let t0 = Instant::now();
+    let mut health = ListenHealth::default();
+    let mut last = (0, 0);
+    for k in 1..=17u64 {
+        let from = addr(&format!("198.51.100.{k}:6980")).ip();
+        let seen =
+            health.note_reject_seen(from, VbanReject::NotVban, t0 + Duration::from_millis(k));
+        last = (seen.senders, seen.total);
+    }
+    assert_eq!(last, (17, 17), "17 senders, one reject each");
+    health.end_session();
+    let seen = health.note_reject_seen(addr(OTHER).ip(), VbanReject::NotVban, t0);
+    assert_eq!(
+        (seen.count, seen.senders, seen.total),
+        (1, 1, 1),
+        "the session counts start over"
+    );
+}
+
+#[test]
 fn a_socket_failing_right_after_each_bind_backs_off_and_logs_on_power_of_two() {
     let mut streak = Streak::default();
     let mut bound_lines = Vec::new();
@@ -1071,6 +1095,42 @@ async fn non_audio_packets_take_no_slot_of_the_reject_warn_gate() {
 }
 
 #[tokio::test]
+async fn a_second_persistent_reject_sender_keeps_its_own_power_of_two_warnings() {
+    // Below the 17th sender nothing was evicted yet, so every sender's own
+    // count is a true count: a second host sending garbage after the first
+    // one logs its 1st, 2nd, 4th, 8th … reject like the first did, instead of
+    // being gated by the session total the first host already pushed up.
+    const FIRST: &str = "198.51.100.1:6980";
+    const SECOND: &str = "198.51.100.2:6980";
+    let capture = Capture::install();
+    let (_service, mut router) = router_for(vec![mic("guest", "GUEST_EN", None)]);
+    let t0 = Instant::now();
+    for _ in 0..3 {
+        router.handle_datagram(b"garbage", addr(FIRST), t0);
+    }
+    for _ in 0..8 {
+        router.handle_datagram(b"garbage", addr(SECOND), t0);
+    }
+    let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
+    let totals: Vec<(&str, &str)> = warned
+        .iter()
+        .filter_map(|line| Some((line.field("from")?, line.field("total")?)))
+        .collect();
+    assert_eq!(
+        totals,
+        vec![
+            (FIRST, "1"),
+            (FIRST, "2"),
+            (SECOND, "1"),
+            (SECOND, "2"),
+            (SECOND, "4"),
+            (SECOND, "8")
+        ],
+        "3 rejects of the first host, then 8 of the second: each on its own 1, 2, 4, 8"
+    );
+}
+
+#[tokio::test]
 async fn rejected_senders_rotating_past_the_kept_count_cannot_warn_on_every_datagram() {
     // 40 senders take turns, more than the 16 the reject map keeps: each one is
     // evicted before it returns, so its own count restarts at 1 every time and
@@ -1092,8 +1152,10 @@ async fn rejected_senders_rotating_past_the_kept_count_cannot_warn_on_every_data
     }
     assert_eq!(sent, 200);
     let warned = capture.events_with_message("dropped a datagram that is not usable VBAN audio");
-    // each gate passes at most log2(N) + 1 times in N datagrams
-    let bound = 2 * (u64::from(sent.ilog2()) + 1);
+    // Below the 17th counted sender nothing can have been evicted yet, so up to
+    // RECENT_CAP senders log their first reject on their own count; from the
+    // 17th on each session gate passes at most log2(N) + 1 times in N datagrams.
+    let bound = RECENT_CAP as u64 + 2 * (u64::from(sent.ilog2()) + 1);
     let lines = u64::try_from(warned.len()).unwrap();
     assert!(
         (1..=bound).contains(&lines),

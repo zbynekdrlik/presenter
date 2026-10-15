@@ -43,11 +43,15 @@ paths:
   totals of that sender's non-audio-free rejects (`RejectCounts::count`), so a VB-Matrix host's
   constant VBAN-TEXT never swallows the slots of its rare corrupt / unsupported datagrams. The
   per-sender map keeps only 16 senders, so an evicted sender's count restarts at 1: the WARN gate
-  (`reject_lines`, same shape as `unmatched_lines`) also reads two session counters from
-  `note_reject_seen` — `reject_senders` (a sender's first WARN-class reject counted in the map, again
-  after an eviction) and `reject_total` (every WARN-class reject). A first reject logs on
-  power-of-two `reject_senders`, a repeat when its own count AND `reject_total` are both powers of
-  two, one summary at the 17th counted sender; both counters go with the socket (`end_session`).
+  (`reject_lines`, `unmatched_lines`' shape plus a per-sender regime below the 17th sender) also reads
+  two session counters from `note_reject_seen` — `reject_senders` (a sender's first WARN-class reject
+  counted in the map, again after an eviction) and `reject_total` (every WARN-class reject). Below the
+  17th counted sender (`FIRST_EVICTION`) nothing can have been evicted, so a sender logs on its OWN
+  power-of-two counts exactly as before (≤ 16 senders — applying the session gate from the first
+  sender silenced a second persistent sender after its 1st line, review of 1c8ab852). From the 17th on
+  a first reject logs on power-of-two `reject_senders`, a repeat when its own count AND `reject_total`
+  are both powers of two (at most 2·(log2 N + 1) further lines), one summary at the 17th counted
+  sender; both counters go with the socket (`end_session`).
 - **A save** (`MicRouter::update`): a mic whose stream name, sender and channel stay keeps its state,
   counters and chain (a rename or a language change resets nothing); another mic starts fresh with a
   new chain and the update's generation; an unlisted mic's input is dropped → its queue closes → its
