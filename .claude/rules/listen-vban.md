@@ -126,7 +126,11 @@ paths:
   is a temp dir, never `./recordings` in the crate — tests set their own folder and a settable clock
   with `ListenService::set_recorder_env`. ONE supervisor task, spawned by `ListenService::start` with
   the socket task (never in validate mode), ticks every 60 s even without a mic (a stated deviation
-  from C-S8: on SNV / PP it only runs the daily retention). Retention once per local date: the FIRST
+  from C-S8: on SNV / PP it only runs the daily retention). The task has TWO independent gates in one
+  `select!` (C1b-4): the retention tick (below, delayed) and the writer reconcile (a 60 s tick plus every
+  mic-list / toggle change), and the reconcile runs at once after the start — a same-day restart records
+  on without waiting for the retention delay. Never put the retention gate in front of the reconcile.
+  Retention once per local date: the FIRST
   pass waits `FIRST_PASS_DELAY` = 10 min after the start (`RecorderEnv::first_pass_delay`, zero under
   `cfg(test)`, `retention_tick`) — a box that boots with a wrong clock (RTC lost, NTP not yet synced)
   could read a date more than 30 days ahead and delete every recording; then the first tick after each
@@ -150,13 +154,28 @@ paths:
   on/off flag. A stored day AFTER today (switched on while the clock was ahead, NTP corrected it since)
   would start the recorder by itself on that day: the startup read (`apply_stored_recorder`) keeps it
   off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`) — at startup
-  only; a running server needs the same check in the C1b-4 reconcile (NTP can step back mid-run). A failed
+  only; a running server needs the same check in the reconcile (NTP can step back mid-run): C1b-5. A failed
   audit row WARNs under the setting's own target (`presenter::listen::recorder` for this key). Dev
   never inherits prod's switch: pipeline.yml's "Redirect integrations to mock endpoints" step deletes
   the `listen.recorder` row from the prod snapshot (no row = off).
   `ListenStatus.recorder` (`RecorderStatus`): `enabled` (records today), `enabledFor`, `root`, and one
   `MicRecording` per configured mic (`off` / `waiting` / `recording` / `error`, file, bytes,
-  `droppedFrames`, Slovak `error`) — every mic is `off` until the writers (C1b-4).
+  `droppedFrames`, Slovak `error`); a mic no writer ran for is `off`.
+- **Writers** (#852 C1b-4, server `listen/recorder.rs`): while the toggle names today,
+  `Writers::reconcile` keeps ONE writer per configured mic (on every mic-list / toggle change and every
+  60 s tick). A writer subscribes (`subscribe_frames`) BEFORE the mic is marked `waiting`, takes up to
+  50 frames per batch and writes each batch with ONE `spawn_blocking` — never a file op on the runtime,
+  never a wait in the chain. The file opens with the first frame (a mic without audio leaves no file):
+  `RecordingFile::create` makes the day folder, refuses a linked one, opens `create_new` only (a taken
+  name or a symlink at it → the next `-n`; the 10th in one second is refused, never overwritten). A
+  batch began `now − (its frames + the frames still queued) × 100 ms`. The header sizes are patched
+  after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close; a failed
+  write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events; a failed
+  write → state `error` + Slovak text, WARN on power-of-two failures in a row, the writer ends and the
+  next reconcile starts it again (C1b-5 adds the back-off). Switching off or removing the mic closes
+  the file (INFO `recording stopped`: bytes + why) and the status entry. `RecorderHealth` lives in
+  `ListenHealth` but is not part of the socket session (`end_session` keeps it). Tests drive the real
+  supervisor with a settable clock (`recording_service`) and send frames into the mic's channel.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
   card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status
