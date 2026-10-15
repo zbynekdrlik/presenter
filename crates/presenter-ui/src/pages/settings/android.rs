@@ -10,9 +10,13 @@
 
 use leptos::prelude::*;
 
-use super::host_editor::{EditorSpec, ExtraField, Submission};
+use super::connection_form::{
+    ConnectionForm, ConnectionSpec, DraftValues, ExtraField, Submission, SAVING_TITLE,
+    UNSAVED_TITLE,
+};
+use super::host_editor::EditorSpec;
 use super::list_card::{CardItem, CardText, ListCard, RowParts};
-use super::row_status::{android_attempts, android_state};
+use super::row_status::{android_attempts, android_state, updated_created};
 use super::ToastHandle;
 use crate::api::settings::{self, AndroidDisplayDraft, AndroidDisplayDto, AndroidStatusDto};
 use crate::api::ApiError;
@@ -20,16 +24,24 @@ use crate::api::ApiError;
 /// The launch package a new display starts with.
 const DEFAULT_COMPONENT: &str = "com.tcl.browser";
 
-static TEXT: CardText = CardText {
+static TEXT: CardText<ConnectionForm> = CardText {
     editor: EditorSpec {
         role: "android",
         message_id: "android-form-status",
         message_role: "android-form-status",
-        label_placeholder: "Stage Left",
-        host_placeholder: "sd1l.lan",
         new_title: "New Android stage display",
         new_submit: "Add display",
         edit_title: "Edit Android stage display",
+        save_text: "Save",
+        cancel_text: "Cancel",
+        unsaved_title: UNSAVED_TITLE,
+        saving_title: SAVING_TITLE,
+    },
+    form: ConnectionSpec {
+        label_placeholder: "Stage Left",
+        host_placeholder: "sd1l.lan",
+        // The adb port.
+        default_port: 5555,
         extra: Some(ExtraField {
             caption: "Launch Package",
             role: "android-component",
@@ -38,12 +50,13 @@ static TEXT: CardText = CardText {
             empty_message: "Launch component cannot be empty.",
         }),
     },
-    // The adb port.
-    default_port: 5555,
     list_role: "android-display-list",
     add_text: "+ Add display",
     empty_text: "No Android stage displays configured yet.",
     fallback_name: "this display",
+    edit_text: "Edit",
+    delete_text: "Delete",
+    delete_question: ("Remove ", "? Presenter will stop reconnecting."),
     saving: "Updating display…",
     creating: "Creating display…",
     updated: "Saved Android stage display.",
@@ -68,6 +81,7 @@ fn row_key(d: &AndroidDisplayDto) -> (String, String, String, u16, String, bool)
 }
 
 impl CardItem for AndroidDisplayDto {
+    type Form = ConnectionForm;
     type Status = AndroidStatusDto;
     type Key = (String, String, String, u16, String, bool);
 
@@ -83,32 +97,30 @@ impl CardItem for AndroidDisplayDto {
         &self.label
     }
 
-    fn host(&self) -> &str {
-        &self.host
+    fn address(&self) -> (String, String) {
+        (self.host.clone(), format!(":{}", self.port))
     }
 
-    fn port(&self) -> u16 {
-        self.port
+    fn values(&self) -> DraftValues {
+        DraftValues {
+            label: self.label.clone(),
+            host: self.host.clone(),
+            port: self.port.to_string(),
+            enabled: self.is_enabled,
+            extra: self.launch_component.clone(),
+        }
     }
 
     fn is_enabled(&self) -> bool {
         self.is_enabled
     }
 
-    fn extra(&self) -> &str {
-        &self.launch_component
-    }
-
     fn status(&self) -> Option<AndroidStatusDto> {
         self.status.clone()
     }
 
-    fn created_at(&self) -> &str {
-        &self.created_at
-    }
-
-    fn updated_at(&self) -> &str {
-        &self.updated_at
+    fn timestamps(&self) -> Option<String> {
+        Some(updated_created(&self.updated_at, &self.created_at))
     }
 
     async fn list() -> Result<Vec<Self>, ApiError> {

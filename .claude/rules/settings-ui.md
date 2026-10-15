@@ -50,20 +50,30 @@ faded the secondary text (3.0:1), the warning (3.9:1) and the status badges
 (3.6–4.5:1) below 4.5:1, while only the label stayed readable. Before adding a
 colour to a row, compute its ratio against `#334155` and `#263346`.
 
-## Resolume / Android lists: `list_card::ListCard` + `host_editor::ListEditor`
+## List cards: `list_card::ListCard` + `host_editor::ListEditor<F>` over an `EditorForm`
 
-The two cards are thin. Each implements `CardItem` for its DTO (id, key, fields,
-status, and the `list` / `save` / `delete` API calls as `async fn`s), gives a
-`static CardText` (copy, roles, `EditorSpec`), and builds the card-specific row
-parts (`RowParts`: status badge + aside, meta lines, warning, extra buttons).
+The list cards are thin (Resolume, Android; from #852 C1b-6 the listening
+microphones). Each implements `CardItem` for its DTO (id, key, label, `address()`,
+`values()` for the editor, optional `timestamps()`, status, and the `list` /
+`save` / `delete` API calls as `async fn`s), gives a `static CardText<Form>` (ALL
+copy — buttons, delete question, tooltips, editor texts — plus the form's config),
+and builds the card-specific row parts (`RowParts`: status badge + aside, meta
+lines, warning, extra buttons). What the editor edits is the card's `EditorForm`
+(#852 C1b-1): `connection_form::ConnectionForm` (label / host / port / extra field
+/ "Enabled", config `ConnectionSpec`) for the connection cards. A new kind of item
+gets its own `EditorForm` (values, `validate`, `render_fields`), never fields
+bolted onto `DraftValues`; `host_editor.rs` holds only the shared editor (state machine,
+`render_editor`, focus), and form-specific copy lives with its form (the connection cards' lock
+tooltips are in `connection_form.rs`).
 Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
-`host_editor.rs`, never in one card.
+`host_editor.rs`, never in one card. A failed save / delete line is
+`failure_text` (the server's own message for `ApiError::Refused` / `NotFound`).
 
 - **Edit** renders the editor IN the row; "+ Add …" renders it as the first `<li>`
   (`<role>-new-item`). `EditTarget` = Closed / New / Item(id). The draft lives at
   CARD level (`ListEditor`), outside the keyed rows, so a poll can never reset typing.
 - A card's extra field (Android's launch package) is part of the draft
-  (`DraftValues.extra`, `EditorSpec.extra`): `open_*` loads it, `begin_save`
+  (`DraftValues.extra`, `ConnectionSpec.extra`): `open_*` loads it, `begin_save`
   validates it via `validate_draft`. Never a separate signal with its own paths.
 - Field `data-role`s (`host-label`, `android-component`, …) and the message ids
   (`resolume-form-status`, `android-form-status`) stay unique ONLY because one
@@ -96,9 +106,10 @@ same lock, so a locked trigger can never open the editor:
   disabled and Escape is ignored (`ListEditor::cancel`). The late result can then
   never land on a different editor.
 - **`unsaved`** — the draft differs from what the editor was opened with (the
-  `dirty` Memo: current `DraftValues` != `loaded`, every field incl. the extra
-  one). Every OTHER trigger is locked, with the title "Save or cancel the open
-  editor first". Typing the stored value back unlocks again.
+  `dirty` Memo: the form's current `Values` != `loaded`, every field incl. the
+  extra one). Every OTHER trigger is locked, with the card's
+  `EditorSpec.unsaved_title` ("Save or cancel the open editor first" on the
+  connection cards). Typing the stored value back unlocks again.
 - **`open`** — the trigger's own editor is already open ("+ Add" while adding).
 - A clean editor locks nothing: Edit on another row switches in one click.
 
