@@ -149,7 +149,8 @@ paths:
   forgotten switch costs at most one day (VB-Matrix sends silence all day). Never make it a plain
   on/off flag. A stored day AFTER today (switched on while the clock was ahead, NTP corrected it since)
   would start the recorder by itself on that day: the startup read (`apply_stored_recorder`) keeps it
-  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`). A failed
+  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`) — at startup
+  only; a running server needs the same check in the C1b-4 reconcile (NTP can step back mid-run). A failed
   audit row WARNs under the setting's own target (`presenter::listen::recorder` for this key). Dev
   never inherits prod's switch: pipeline.yml's "Redirect integrations to mock endpoints" step deletes
   the `listen.recorder` row from the prod snapshot (no row = off).

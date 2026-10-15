@@ -115,7 +115,8 @@ removes the folder once nothing else is left in it.
 The recorder is OFF by default and switched per day: `PUT /listen/recorder` `{"enabled": true}` stores
 today's date in `listen.recorder` (`{"enabled": false}` stores `null`). It records only on that date,
 so a restart the same day resumes and the switch turns itself off at midnight; a stored date AFTER
-today (the clock was ahead when it was switched on) is cleared at startup, never obeyed later.
+today (the clock was ahead when it was switched on) is cleared at the next startup; a server that keeps
+running after the clock was corrected gets the same rule from the recorder's reconcile in C1b-4.
 `GET /listen/status` → `recorder` shows the switch (`enabled`, `enabledFor`), the folder (`root`) and
 one entry per microphone. What exists so far, by unit of #852 C1b:
 
