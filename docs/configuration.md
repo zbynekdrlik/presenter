@@ -110,7 +110,11 @@ kept for 30 days and deleted on the 31st day after its day. The retention pass r
 date: the first one 10 minutes after the service starts (so a box that boots with a wrong clock cannot
 read a date weeks ahead and delete everything), then in the first minute after each midnight. It
 deletes only the recorder's own `<mic id>_<HHMMSS>.wav` files, never a link or a foreign file, and
-removes the folder once nothing else is left in it.
+removes the folder once nothing else is left in it. The recorder is OFF by default and switched per
+day (`PUT /listen/recorder` `{"enabled": true}` stores today's date in `listen.recorder`; Settings →
+"Počúvanie" → "Nahrávať dnes"): it records only on that date, so a restart the same day resumes and
+the switch turns itself off at midnight. `GET /listen/status` → `recorder` shows the switch, the
+folder and each microphone's file, bytes, dropped frames and error.
 
 | Variable                          | Default                               | Purpose |
 | --------------------------------- | ------------------------------------- | ------- |
