@@ -42,7 +42,8 @@ paths:
   stage display repeats every 2–15 s — and `is_quiet_get_path` (GET ONLY) — the list / status GETs a
   page re-fetches on a timer: `/bible/presentations` (tablet, 10 s), `/integrations/resolume/hosts`,
   `/integrations/android-stage/displays`, `/integrations/ableset/status`, `/integrations/osc/status`,
-  `/integrations/video-sources/status` (Settings tab, 5 s). The GET split matters: the same paths take
+  `/integrations/video-sources/status` (Settings tab, 5 s), `/listen/mics` and `/listen/status` (the
+  Počúvanie card, #852 C1b). The GET split matters: the same paths take
   a person's POST / PUT / DELETE (create, edit, remove a host / display / presentation), and those stay
   logged. `RequestOnResponse` skips its line when `span.is_disabled()`. A new timer-polled route
   belongs in one of those two fns (+ the unit test); a route a person triggers never does.

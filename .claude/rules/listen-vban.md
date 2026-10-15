@@ -100,6 +100,7 @@ paths:
   `[a-z0-9-]{1,20}` unique, name 1–40, stream 1–16 printable ASCII without edge spaces, IP canonical,
   no two mics one packet could match) → 422 Slovak text; a corrupt stored value → 500, receiver idle.
   Every save writes one best-effort `settings_audit` row (`app_settings` / `listen.mics`).
+  `GET /listen/mics` is a quiet GET too (the Settings card polls it every 5 s, C1b-6).
 - **Logs** (`presenter::listen::mic`): INFO socket bound / closed, `listen mics saved`, `mic receives
   VBAN` (first packet or after ≥ 3 s silence), `mic lost audio`, format change, unassigned stream (gated);
   WARN through the #484 power-of-two gate (lost / late / resync / dropped / second sender per mic, rejects
