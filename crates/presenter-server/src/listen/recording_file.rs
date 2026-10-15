@@ -6,8 +6,9 @@
 //! started in the same second), 16 kHz mono s16le behind the 44-byte header,
 //! whose two sizes are patched after every batch — a crash leaves a file whose
 //! header covers the audio up to the last batch. A file is only ever created
-//! (`create_new`: an existing name, a symlink included, is never opened) and
-//! never inside a linked day folder.
+//! (`create_new`: an existing name, a symlink included, is never opened), never
+//! inside a linked day folder, and removed again when not even its header can
+//! be written (a full disk).
 //!
 //! Retention deletes only what the recorder makes: day folders named
 //! `YYYY-MM-DD` (canonical spelling) and in them the `<mic id>_<HHMMSS>[-n].wav`
@@ -50,6 +51,33 @@ fn io_error(path: &Path, source: io::Error) -> RecordError {
     }
 }
 
+/// Folders whose recordings refuse an append, as a full disk would (tests only).
+#[cfg(test)]
+static FAILING_FOLDERS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// From now on every append to a recording under `dir` fails (tests only).
+#[cfg(test)]
+pub(super) fn fail_appends_under(dir: &Path) {
+    FAILING_FOLDERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(dir.to_path_buf());
+}
+
+/// The injected full disk, when `path` lies under a folder that fails (tests only).
+#[cfg(test)]
+fn fail_if_injected(path: &Path) -> Result<(), RecordError> {
+    let failing = FAILING_FOLDERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|dir| path.starts_with(dir));
+    if failing {
+        return Err(io_error(path, io::Error::other("no space left on device")));
+    }
+    Ok(())
+}
+
 /// One continuous stretch of a mic's audio, in its own file.
 #[derive(Debug)]
 pub(crate) struct RecordingFile {
@@ -78,15 +106,7 @@ impl RecordingFile {
         for attempt in 1..=RECORDING_NAMES_PER_SECOND {
             let path = dir.join(recording_file_name(mic_id, started.time(), attempt));
             match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(file) => {
-                    let mut recording = Self {
-                        path,
-                        file,
-                        data_bytes: 0,
-                    };
-                    recording.io(|file| file.write_all(&wav_header(0)))?;
-                    return Ok(recording);
-                }
+                Ok(file) => return Self::begin(path, file),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(io_error(&path, err)),
             }
@@ -96,9 +116,36 @@ impl RecordingFile {
         })
     }
 
+    /// The header of a file just created. When not even that can be written (a
+    /// full disk), the empty file is removed again.
+    fn begin(path: PathBuf, file: File) -> Result<Self, RecordError> {
+        let mut recording = Self {
+            path,
+            file,
+            data_bytes: 0,
+        };
+        match recording.io(|file| file.write_all(&wav_header(0))) {
+            Ok(()) => Ok(recording),
+            Err(err) => {
+                recording.discard();
+                Err(err)
+            }
+        }
+    }
+
+    /// Close the handle and delete the file, best effort: a file that never got
+    /// any audio is not kept.
+    pub(crate) fn discard(self) {
+        let Self { path, file, .. } = self;
+        drop(file); // closes the handle first
+        let _removed = fs::remove_file(&path);
+    }
+
     /// Append `frames`, then patch the header sizes: a crash after this leaves
     /// a file whose header covers them. A failed write changes no size.
     pub(crate) fn append(&mut self, frames: &[MicFrame]) -> Result<(), RecordError> {
+        #[cfg(test)]
+        fail_if_injected(&self.path)?;
         let mut bytes = Vec::with_capacity(frames.iter().map(|frame| frame.len() * 2).sum());
         for sample in frames.iter().flat_map(|frame| frame.iter()) {
             bytes.extend_from_slice(&sample.to_le_bytes());
@@ -541,6 +588,17 @@ mod tests {
             "the header still covers the audio"
         );
         assert_eq!(bytes.len(), 44 + 3_200);
+    }
+
+    #[test]
+    fn a_header_that_cannot_be_written_leaves_no_file_behind() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("guest_194205.wav");
+        fs::write(&path, b"").unwrap();
+        // a read-only handle: the header write fails like a full disk would
+        let err = RecordingFile::begin(path.clone(), File::open(&path).unwrap()).unwrap_err();
+        assert!(matches!(err, RecordError::Io { .. }), "{err}");
+        assert!(!path.exists(), "a full disk leaves no empty file");
     }
 
     #[test]

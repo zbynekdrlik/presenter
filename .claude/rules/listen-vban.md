@@ -153,9 +153,16 @@ paths:
   forgotten switch costs at most one day (VB-Matrix sends silence all day). Never make it a plain
   on/off flag. A stored day AFTER today (switched on while the clock was ahead, NTP corrected it since)
   would start the recorder by itself on that day: the startup read (`apply_stored_recorder`) keeps it
-  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`) — at startup
-  only; a running server needs the same check in the reconcile (NTP can step back mid-run): C1b-5. A failed
-  audit row WARNs under the setting's own target (`presenter::listen::recorder` for this key). Dev
+  off, stores `{"enabledFor": null}`, WARNs once and audits it (`startup_default` / `system`). A RUNNING
+  server applies the same rule in every reconcile (C1b-5, NTP can step back mid-run): `recording_day`
+  switches the in-memory day off with a compare-and-switch (`ListenService::switch_off_future_day`: only
+  while the toggle still names that day, so an operator's switch made meanwhile wins), WARNs once on
+  `presenter::listen::recorder`, and tells the state layer through `recorder_cleared` (a `watch`,
+  subscribed BEFORE the supervisor starts): `spawn_recorder_row_cleaner` then clears the stored row and
+  writes the same system audit row — only while the row still names that day
+  (`clear_future_recorder_row`, under the save lock). No `SettingsAuditSource` variant fits a runtime
+  write the server makes itself, so the row keeps `startup_default` / `system`. A failed audit row WARNs
+  under the setting's own target (`presenter::listen::recorder` for this key). Dev
   never inherits prod's switch: pipeline.yml's "Redirect integrations to mock endpoints" step deletes
   the `listen.recorder` row from the prod snapshot (no row = off).
   `ListenStatus.recorder` (`RecorderStatus`): `enabled` (records today), `enabledFor`, `root`, and one
@@ -168,16 +175,47 @@ paths:
   never a wait in the chain. The file opens with the first frame (a mic without audio leaves no file):
   `RecordingFile::create` makes the day folder, refuses a linked one, opens `create_new` only (a taken
   name or a symlink at it → the next `-n`; the 10th in one second is refused, never overwritten). A
-  batch began `now − (its frames + the frames still queued) × 100 ms`. The header sizes are patched
+  batch's first frame began `now − (1 + frames.len()) × 100 ms`, `frames.len()` read BEFORE the batch
+  is collected. The header sizes are patched
   after EVERY batch (a crash leaves a file readable up to its last batch), `fsync` on close (a deploy's
   SIGTERM does not close: no graceful shutdown, the per-batch header keeps the file playable); a failed
-  write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events; a failed
-  write → state `error` + Slovak text, WARN on power-of-two failures in a row, the writer ends and the
-  next reconcile starts it again (C1b-5 adds the back-off). Switching off or removing the mic closes
-  the file (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`,
-  last file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select). `RecorderHealth` lives in
+  write changes no size. `Lagged(n)` → `droppedFrames` += n, WARN on power-of-two lag events, and the
+  batch being filled ENDS there (`collect_batch`: the frames before and after lost frames are not one
+  stretch of audio; the batch's start is read BEFORE collecting, while `frames.len()` still counts the
+  lost frames). A failed write → state `error` + Slovak text, WARN on power-of-two failures in a row,
+  and the writer CLOSES the file it already had (`write_batch` returns `Written { open, created,
+  failure }`: a failed write keeps the file; `recording stopped`, why `a write failed`) and ends — but
+  a file this very write created whose FIRST append failed holds only its header, so it is removed
+  (`RecordingFile::discard`, shared with `begin`; no `open` returned, no `recording stopped`) — and the
+  supervisor restarts the writer after its back-off (below). Switching off or removing the mic closes the file
+  (INFO `recording stopped`: bytes + why); switching off keeps the mic's status entry (`off`, last
+  file and bytes), removing the mic drops it. A stop wins over waiting frames (`biased` select, pinned
+  by a 20-round test). A `Writer` knows its day: `Writer::ending` ends one whose day is not TODAY
+  BEFORE it tests whether the mic is still wanted (a switch-on for D+1 in the first minute after
+  midnight starts D+1's writer at once; a writer left open without frames at midnight — the toggle
+  still names yesterday, so the mic looks switched off — ends `the day ended`, never as a switch-off;
+  a finished task stays `Stopped`; the stop signal is a `oneshot<Ended>` carrying the reason). `RecorderHealth` lives in
   `ListenHealth` but is not part of the socket session (`end_session` keeps it). Tests drive the real
-  supervisor with a settable clock (`recording_service`) and send frames into the mic's channel.
+  supervisor with a settable clock (`recording_service`) and send frames into the mic's channel; a
+  failure after the file exists comes from the cfg(test) hook `recording_file::fail_appends_under`.
+- **Continuous files** (#852 C1b-5): before each batch, `drifted(file start, data bytes, batch start)`
+  — more than 1 s between the end of the file's audio and the batch's start, in EITHER direction
+  (`.abs()`: a pause of the sender, a resync, a lag or a slow disk put the audio behind the clock; a
+  sender clock running fast, ~1 s after 3 h at 100 ppm, puts it ahead; exactly 1 s keeps the file)
+  — closes the file (why `a gap in the audio`) and opens a new one named at the batch's start; the
+  `recording started` INFO carries `started` = `%H:%M:%S%.3f`. So every file is continuous audio from
+  the time in its name (the bake-off places the `presenter::bible::show` times by it); never reopen,
+  append to or truncate an existing file, and never rotate on the wall-clock gap between two batches
+  alone (sender pauses of 0.1–2 s add up). `split_at_midnight`: the frames of a batch heard after
+  midnight are dropped (frame `i` was heard at `start + i × 100 ms`), the rest is written, then the
+  writer ends `the day ended`; no writer starts until the toggle names the new day.
+  **Restart back-off:** a failed writer restarts after `restart_delay` 1, 2, 4 … 60 min counted from
+  the FAILURE — `failed_at` is recorded in `RecorderHealth` with the failure (`failed_at` /
+  `last_failure`), `backing_off` compares the wall clock with `failed_at + restart_delay(failures)`, so a
+  reconcile up to one 60 s tick later never stretches the pause and the WARN's `retry_in_min` is exact.
+  No separate retry map: a successful write, switching off (`all_stopped`) or removing the mic clears
+  the failure streak and with it the pause. Tests move the settable clock. `RecordingFile::begin`
+  removes a new file whose header cannot be written (a full disk): no empty files.
 - **Routing day (owner action, spec §20, after C1b):** the owner routes `GUEST_EN` / `INTERP_SK`
   (48 kHz, 16-bit, after the channel mute) to 10.77.9.205:6980; then the two mics are saved (the C1b
   card, or `PUT /listen/mics` with the spec §5.6 list) and the box acceptance runs (spec §5.8): status
