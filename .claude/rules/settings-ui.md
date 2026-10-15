@@ -136,31 +136,49 @@ rule; split out so `listen.rs` can grow the health / switch lines under 800).
   (`PRESENTER_LISTEN_RECORDINGS_DIR` set around `startTestServer`).
 
 Health, socket and recorder (#852 C1b-7):
-- One `GET /listen/status` poll every 2 s (`start_status_poll`), only while the card
-  is on screen (`offsetParent` — the operator keeps the Settings panel mounted when
-  hidden), numbered by `ResponseOrder`. After 2 failed polls in a row the status is
-  `None` (`video_sources::is_stale`, one console warn when it goes stale): every
-  badge shows "—" and the lines are empty rather than old numbers. The status never
-  enters a row's key; a row reads its own mic through `Memo`s over the one signal.
+- One `GET /listen/status` poll every 2 s (`start_status_poll`), numbered by
+  `ResponseOrder`. `tick(visible, holds_status)` decides each tick (pure, unit-tested):
+  the card is on screen (`offsetParent`) → fetch; hidden → fetch NOTHING and drop the
+  status it held (the operator keeps the Settings panel mounted under `display: none`,
+  so an hours-old "prijíma" or a checked switch would greet whoever opens Settings;
+  the badges read "—" until the first visible tick). Dropping also numbers a request
+  nobody sends, so an answer still in flight is discarded. After 2 failed polls in a
+  row the status is `None` too (`video_sources::is_stale`, one console warn when it
+  goes stale): every badge shows "—" and the lines are empty rather than old numbers.
+  The status never enters a row's key; a row reads its own mic through `Memo`s over
+  the one signal.
 - The recorder switch "Nahrávať dnes" is a checkbox bound to a `Memo<bool>` of
   `recorder.enabled` ONLY (`prop:checked`), so a poll that changes bytes or files
-  never re-renders it; it PUTs `/listen/recorder` and the next fetch confirms (a
-  failed PUT puts the box back to what the server has). It is disabled with no
+  never re-renders it. It PUTs `/listen/recorder`; once the PUT is answered the box
+  shows what the server stored (`enabled_for.is_some()`), a failed PUT restores the
+  state from before the click, and the next fetch confirms. It is disabled with no
   status, and when it is off and no mic exists ("Najprv pridaj mikrofón") — an ON
-  switch always stays switchable off.
+  switch always stays switchable off. With no status it is `indeterminate`
+  (`prop:indeterminate` on a `Memo<bool>`) and the line says "Stav nahrávania nie je
+  známy." — a disabled, unchecked box must never read as "not recording". The
+  retention in its text is core's `RECORDING_RETENTION_DAYS`, not a copy.
 - Badges reuse the existing `.settings__status--<state>` modifiers (`live`,
   `not-broadcasting`, `error`, `checking`, `unknown`); add none for the card.
 - The E2E plays a real tone with `scripts/dev/listen/vban_send.py` (a
   `child_process` with its own guest stream, `--to 127.0.0.1:<port>`, the port from
-  `/listen/status` `socket.localAddr`; stopped with SIGTERM and awaited) into the
-  test server's loopback socket, waits until the status shows > 16 000 recorded bytes
-  BEFORE it switches off, then reads the WAV header from the temp folder. A stall on
-  a loaded runner can split the recording: assert ONE day folder and ≥ 1 file, check
-  every header against its file, and compare the status's last `file` / `bytes` with
-  THAT file's data size — never `toHaveLength(1)` on the files. A second test fails
-  the status poll twice (a real 503 via `page.route`) and recovers; it count-asserts
-  exactly the 503 `Failed to load resource` lines the handler served and matches the
-  ONE stale warn exactly, then `toEqual([])` on the rest.
+  `/listen/status` `socket.localAddr`; stopped with SIGTERM and awaited in a
+  `finally`, `--seconds` only bounds a leaked process) into the test server's
+  loopback socket, waits until the status shows > 16 000 recorded bytes BEFORE it
+  switches off, then reads the WAV header from the temp folder. A stall on a loaded
+  runner can split the recording: assert ONE day folder and ≥ 1 file, check every
+  header against its file, and compare the status's last `file` / `bytes` with THAT
+  file's data size — never `toHaveLength(1)` on the files. Waits use the config's
+  expect timeout, no per-assertion `timeout` overrides.
+- Two more tests cover the poll. The failing poll serves a MALFORMED 200
+  (`body: "not-json"`), never a mocked non-2xx — Chrome logs its own
+  `Failed to load resource` line for those (ui skill #598) — and sees the badge,
+  lines and switch fall back to unknown / indeterminate, then recover; exactly ONE
+  console line may match the stale warn (`listen status poll failed 2x in a row`),
+  then `toEqual([])` on the rest. The operator test opens `/ui/operator/settings`,
+  switches to Worship (the card is hidden, its badge becomes `unknown`, no
+  `/listen/status` request over more than one 2 s tick), then back to Settings with
+  the first answer held by `page.route`: the card still claims nothing until it
+  arrives.
 
 ## The editor's guards: `trigger_lock` (pure, unit-tested)
 

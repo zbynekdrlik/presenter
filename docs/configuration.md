@@ -137,8 +137,10 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
   not even its header can be written.
 - C1b-7: Settings → "Počúvanie" shows each microphone's state (`prijíma`, `žiadny zvuk`, `čaká na zvuk`,
   `chyba`), its health and recording line and the socket line, refreshed every 2 s while the card is on
-  screen (after two failed refreshes it shows nothing instead of old numbers), and has the "Nahrávať
-  dnes" switch — the same per-day switch as `PUT /listen/recorder`, locked until a microphone exists.
+  screen (after two failed refreshes, or while its panel is hidden in the operator, it shows nothing
+  instead of old numbers), and has the "Nahrávať dnes" switch — the same per-day switch as
+  `PUT /listen/recorder`, locked until a microphone exists and shown as undecided while the state is
+  unknown.
 
 | Variable                          | Default                               | Purpose |
 | --------------------------------- | ------------------------------------- | ------- |
