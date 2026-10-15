@@ -10,8 +10,10 @@
 
 use leptos::prelude::*;
 
-use super::connection_form::{ConnectionForm, ConnectionSpec, DraftValues, Submission};
-use super::host_editor::{EditorSpec, SAVING_TITLE, UNSAVED_TITLE};
+use super::connection_form::{
+    ConnectionForm, ConnectionSpec, DraftValues, Submission, SAVING_TITLE, UNSAVED_TITLE,
+};
+use super::host_editor::EditorSpec;
 use super::list_card::{CardItem, CardText, ListCard, RowParts};
 use super::row_status::{
     latency_text, resolume_state, resolume_warning, updated_created, HostWarning,

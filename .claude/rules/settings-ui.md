@@ -62,7 +62,9 @@ lines, warning, extra buttons). What the editor edits is the card's `EditorForm`
 (#852 C1b-1): `connection_form::ConnectionForm` (label / host / port / extra field
 / "Enabled", config `ConnectionSpec`) for the connection cards. A new kind of item
 gets its own `EditorForm` (values, `validate`, `render_fields`), never fields
-bolted onto `DraftValues`; `host_editor.rs` holds only the shared state machine.
+bolted onto `DraftValues`; `host_editor.rs` holds only the shared editor (state machine,
+`render_editor`, focus), and form-specific copy lives with its form (the connection cards' lock
+tooltips are in `connection_form.rs`).
 Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
 `host_editor.rs`, never in one card. A failed save / delete line is
 `failure_text` (the server's own message for `ApiError::Refused` / `NotFound`).

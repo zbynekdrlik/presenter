@@ -28,12 +28,6 @@ use leptos::prelude::*;
 
 use crate::utils::keyboard::KEY_ESCAPE;
 
-/// The connection cards' tooltip of an Edit / "+ Add" button locked by unsaved
-/// changes (every card's [`EditorSpec`] names its own).
-pub(super) const UNSAVED_TITLE: &str = "Save or cancel the open editor first";
-/// The connection cards' tooltip of a button locked by a save in flight.
-pub(super) const SAVING_TITLE: &str = "Wait until the save has finished";
-
 /// Which item a card's single inline editor is open on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) enum EditTarget {
@@ -575,10 +569,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::connection_form::DraftValues;
+    use super::super::connection_form::{DraftValues, SAVING_TITLE, UNSAVED_TITLE};
     use super::{
         is_dirty, save_is_current, takes_focus, trigger_lock, EditTarget, EditorSpec, SaveTicket,
-        TriggerLock, SAVING_TITLE, UNSAVED_TITLE,
+        TriggerLock,
     };
 
     #[test]

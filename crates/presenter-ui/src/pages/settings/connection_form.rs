@@ -99,6 +99,12 @@ pub(super) fn validate_draft(
     })
 }
 
+/// The connection cards' tooltip of an Edit / "+ Add" button locked by unsaved
+/// changes (every card's [`EditorSpec`] names its own; these two are the connection cards').
+pub(super) const UNSAVED_TITLE: &str = "Save or cancel the open editor first";
+/// The connection cards' tooltip of a button locked by a save in flight.
+pub(super) const SAVING_TITLE: &str = "Wait until the save has finished";
+
 /// What differs between the Resolume and the Android connection form.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ConnectionSpec {

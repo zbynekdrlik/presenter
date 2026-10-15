@@ -10,8 +10,11 @@
 
 use leptos::prelude::*;
 
-use super::connection_form::{ConnectionForm, ConnectionSpec, DraftValues, ExtraField, Submission};
-use super::host_editor::{EditorSpec, SAVING_TITLE, UNSAVED_TITLE};
+use super::connection_form::{
+    ConnectionForm, ConnectionSpec, DraftValues, ExtraField, Submission, SAVING_TITLE,
+    UNSAVED_TITLE,
+};
+use super::host_editor::EditorSpec;
 use super::list_card::{CardItem, CardText, ListCard, RowParts};
 use super::row_status::{android_attempts, android_state, updated_created};
 use super::ToastHandle;
