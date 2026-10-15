@@ -7,8 +7,8 @@
 //! time it was heard; the writer ends at the first frame after midnight; a
 //! failed write ends it too, and the supervisor starts it again. Day folders
 //! older than 30 days go once per local date, the first pass
-//! [`FIRST_PASS_DELAY`] after the start. (C1b-5: a new file on a drift, the
-//! midnight split, the restart back-off, the runtime future-day check.)
+//! [`FIRST_PASS_DELAY`] after the start. (C1b-5 adds: a new file on a drift,
+//! the midnight split, the restart back-off.)
 //!
 //! The folder: `PRESENTER_LISTEN_RECORDINGS_DIR`, else `recordings` next to the
 //! sqlite file of `PRESENTER_DB_URL` (prod / PP `/opt/presenter/recordings`, the
@@ -26,7 +26,7 @@ use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use presenter_core::listen::mics::MicConfig;
 use presenter_core::listen::recorder::RECORDING_RETENTION_DAYS;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant, Interval, MissedTickBehavior};
 use tracing::{info, warn};
@@ -210,6 +210,31 @@ impl Writers {
     }
 }
 
+/// The day the recorder records now: the toggle's day while it is today. A day
+/// AFTER today (NTP stepped the clock back while the server ran) would start
+/// the recorder by itself on that day, so it is switched off here, WARNed once,
+/// and the stored row is cleared by the state layer (`recorder_cleared`) — the
+/// same rule the startup read applies.
+fn recording_day(
+    service: &ListenService,
+    toggle: &mut watch::Receiver<Option<NaiveDate>>,
+    today: NaiveDate,
+) -> Option<NaiveDate> {
+    let named = *toggle.borrow_and_update();
+    if let Some(day) = named.filter(|day| *day > today) {
+        if service.switch_off_future_day(day) {
+            warn!(
+                target: RECORDER_TARGET,
+                %day,
+                %today,
+                "the recorder names a day in the future — it is switched off and the stored switch cleared"
+            );
+        }
+    }
+    let current = *toggle.borrow_and_update();
+    current.filter(|day| *day == today)
+}
+
 /// The supervisor: two independent gates. Retention runs once per local date,
 /// the first pass [`FIRST_PASS_DELAY`] after the start; the writers follow the
 /// mic list, the toggle and the date AT ONCE after the start (a same-day restart
@@ -224,9 +249,7 @@ pub(super) async fn supervise(service: ListenService) {
     reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         let env = service.recorder_env();
-        let today = env.now().date();
-        let named = *toggle.borrow_and_update();
-        let day = named.filter(|day| *day == today);
+        let day = recording_day(&service, &mut toggle, env.now().date());
         let mics = Arc::clone(&config.borrow_and_update());
         writers.reconcile(&service, &env, day, &mics).await;
         let gone = tokio::select! {

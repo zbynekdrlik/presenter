@@ -844,3 +844,76 @@ async fn a_same_day_restart_records_at_once_while_the_first_retention_pass_waits
         "retention never touches today's recording"
     );
 }
+
+/// NTP stepped the clock back while the server ran: the toggle names a day
+/// after today. It is switched off in memory, the state layer is told which day
+/// to clear, one WARN, and no writer starts by itself when that day arrives.
+#[tokio::test]
+async fn a_toggle_day_after_today_is_switched_off_reported_once_and_never_resumes() {
+    let capture = Capture::install();
+    let root = tempfile::tempdir().unwrap();
+    let mics = vec![mic("guest", "GUEST_EN")];
+    let (clock, now) = clock("2026-10-18T19:42:05");
+    let service = ListenService::new();
+    service.set_recorder_env(RecorderEnv {
+        root: root.path().to_path_buf(),
+        clock,
+        first_pass_delay: Duration::ZERO,
+    });
+    service.apply(mics.clone());
+    // switched on while the clock was three days ahead
+    service.apply_recorder(Some(day("2026-10-21")));
+    let mut cleared = service.recorder_cleared();
+    tokio::spawn(supervise(service.clone()));
+    tokio::time::timeout(Duration::from_secs(5), cleared.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        *cleared.borrow_and_update(),
+        Some(day("2026-10-21")),
+        "the state layer learns which day to clear"
+    );
+    let status = service.status();
+    assert_eq!(
+        (status.recorder.enabled, status.recorder.enabled_for),
+        (false, None)
+    );
+    assert_eq!(recording(&status, "guest").state, RecordingState::Off);
+    // the day the old switch named arrives: nothing starts by itself
+    *now.lock().unwrap() = at("2026-10-21T08:00:00");
+    service.apply(mics); // wakes the supervisor, as the next minute tick would
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let status = service.status();
+    assert!(!status.recorder.enabled);
+    assert_eq!(recording(&status, "guest").state, RecordingState::Off);
+    assert_eq!(service.frame_sender("guest").receiver_count(), 0);
+    let warned = capture.events_with_message("names a day in the future");
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    assert_eq!(warned[0].target, RECORDER_TARGET);
+    assert_eq!(warned[0].level, tracing::Level::WARN);
+    assert_eq!(warned[0].field("day"), Some("2026-10-21"));
+}
+
+/// The switch-off is a compare-and-switch: a switch made since the supervisor
+/// looked is never undone, and nothing is reported for it.
+#[test]
+fn a_switch_made_since_wins_over_the_future_day_switch_off() {
+    let service = ListenService::new();
+    let mut cleared = service.recorder_cleared();
+    service.apply_recorder(Some(day("2026-10-21")));
+    assert!(!service.switch_off_future_day(day("2026-10-20")));
+    assert!(!cleared.has_changed().unwrap(), "nothing was switched off");
+    assert_eq!(
+        service.status().recorder.enabled_for,
+        Some(day("2026-10-21"))
+    );
+    assert!(service.switch_off_future_day(day("2026-10-21")));
+    assert_eq!(*cleared.borrow_and_update(), Some(day("2026-10-21")));
+    assert_eq!(service.status().recorder.enabled_for, None);
+    assert!(
+        !service.switch_off_future_day(day("2026-10-21")),
+        "already off"
+    );
+    assert!(!cleared.has_changed().unwrap(), "reported once");
+}

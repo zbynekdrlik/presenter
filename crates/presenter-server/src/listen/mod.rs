@@ -74,12 +74,16 @@ struct Inner {
     recorder_env: Mutex<RecorderEnv>,
     /// The day the recorder records (`listen.recorder`); `None` = off.
     recorder: watch::Sender<Option<NaiveDate>>,
+    /// The day the supervisor switched the recorder off because it lay after
+    /// today: the state layer clears the stored row (#852 C1b-4).
+    recorder_cleared: watch::Sender<Option<NaiveDate>>,
 }
 
 impl ListenService {
     pub(crate) fn new() -> Self {
         let (config, _) = watch::channel(Arc::new(Vec::new()));
         let (recorder, _) = watch::channel(None);
+        let (recorder_cleared, _) = watch::channel(None);
         Self {
             inner: Arc::new(Inner {
                 config,
@@ -89,6 +93,7 @@ impl ListenService {
                 frames: Mutex::new(HashMap::new()),
                 recorder_env: Mutex::new(RecorderEnv::from_env()),
                 recorder,
+                recorder_cleared,
             }),
         }
     }
@@ -106,6 +111,11 @@ impl ListenService {
     /// Hand the stored recorder toggle to the recorder (`None` = off).
     pub(crate) fn apply_recorder(&self, enabled_for: Option<NaiveDate>) {
         let _previous = self.inner.recorder.send_replace(enabled_for);
+    }
+
+    /// Told each time the recorder was switched off for a day after today.
+    pub(crate) fn recorder_cleared(&self) -> watch::Receiver<Option<NaiveDate>> {
+        self.inner.recorder_cleared.subscribe()
     }
 
     /// Today's local date, as the recorder counts days.
@@ -177,6 +187,23 @@ impl ListenService {
 
     fn recorder_receiver(&self) -> watch::Receiver<Option<NaiveDate>> {
         self.inner.recorder.subscribe()
+    }
+
+    /// The toggle names `day`, after today: switch it off in memory — unless a
+    /// switch made since replaced it — and tell the state layer to clear the
+    /// stored row. `true` when this call switched it off.
+    fn switch_off_future_day(&self, day: NaiveDate) -> bool {
+        let off = self.inner.recorder.send_if_modified(|stored| {
+            let named = *stored == Some(day);
+            if named {
+                *stored = None;
+            }
+            named
+        });
+        if off {
+            let _previous = self.inner.recorder_cleared.send_replace(Some(day));
+        }
+        off
     }
 
     /// The recorder's folder and clock.
