@@ -41,7 +41,13 @@ paths:
   fresh counter (no gap, no resync). Non-audio VBAN (VB-Matrix's VBAN-TEXT / SERVICE) is counted in
   `rejected`, DEBUG only, and left out of the WARN gate: every other reject WARNs on the power-of-two
   totals of that sender's non-audio-free rejects (`RejectCounts::count`), so a VB-Matrix host's
-  constant VBAN-TEXT never swallows the slots of its rare corrupt / unsupported datagrams.
+  constant VBAN-TEXT never swallows the slots of its rare corrupt / unsupported datagrams. The
+  per-sender map keeps only 16 senders, so an evicted sender's count restarts at 1: the WARN gate
+  (`reject_lines`, same shape as `unmatched_lines`) also reads two session counters from
+  `note_reject_seen` — `reject_senders` (a sender's first WARN-class reject counted in the map, again
+  after an eviction) and `reject_total` (every WARN-class reject). A first reject logs on
+  power-of-two `reject_senders`, a repeat when its own count AND `reject_total` are both powers of
+  two, one summary at the 17th counted sender; both counters go with the socket (`end_session`).
 - **A save** (`MicRouter::update`): a mic whose stream name, sender and channel stay keeps its state,
   counters and chain (a rename or a language change resets nothing); another mic starts fresh with a
   new chain and the update's generation; an unlisted mic's input is dropped → its queue closes → its
@@ -73,7 +79,7 @@ paths:
   the #484 gate on the mic's format count (`ListenHealth::record_format`, cleared with the session).
 - **Health / status:** one `std::sync::Mutex<ListenHealth>`, never across an `.await`; ages at read time
   (no-audio exactly 3 s after the last packet); the WARN gates read the health counters
-  (`PacketTally`, `record_other_sender`, `note_reject`) — no second set of counters. Every session
+  (`PacketTally`, `record_other_sender`, `note_reject_seen`) — no second set of counters. Every session
   counter (mics, unmatched, rejected and their gates) goes when the socket closes (`end_session`).
   `packetsPerSec` is measured on the 1 s tick and shown only while packets arrive (`receiving` /
   `error`); level and `voiced` only while `receiving`. `GET /listen/status` is a quiet GET in
