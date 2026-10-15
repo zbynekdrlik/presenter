@@ -507,7 +507,9 @@ async fn write_batch(
     })
 }
 
-/// The blocking part of [`write_batch`].
+/// The blocking part of [`write_batch`]. A file this very write created and
+/// could not append to holds nothing but its header: it is removed again (no
+/// open file is returned), like one whose header could not be written.
 fn append_batch(
     open: Option<OpenFile>,
     root: &Path,
@@ -530,6 +532,14 @@ fn append_batch(
         },
     };
     let failure = open.file.append(batch).err().map(|err| err.to_string());
+    if created && failure.is_some() {
+        open.file.discard();
+        return Written {
+            open: None,
+            created: false,
+            failure,
+        };
+    }
     Written {
         open: Some(open),
         created,

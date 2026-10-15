@@ -117,7 +117,7 @@ impl RecordingFile {
     }
 
     /// The header of a file just created. When not even that can be written (a
-    /// full disk), the empty file is removed again, best effort.
+    /// full disk), the empty file is removed again.
     fn begin(path: PathBuf, file: File) -> Result<Self, RecordError> {
         let mut recording = Self {
             path,
@@ -127,12 +127,18 @@ impl RecordingFile {
         match recording.io(|file| file.write_all(&wav_header(0))) {
             Ok(()) => Ok(recording),
             Err(err) => {
-                let path = recording.path.clone();
-                drop(recording); // closes the handle first
-                let _removed = fs::remove_file(&path);
+                recording.discard();
                 Err(err)
             }
         }
+    }
+
+    /// Close the handle and delete the file, best effort: a file that never got
+    /// any audio is not kept.
+    pub(crate) fn discard(self) {
+        let Self { path, file, .. } = self;
+        drop(file); // closes the handle first
+        let _removed = fs::remove_file(&path);
     }
 
     /// Append `frames`, then patch the header sizes: a crash after this leaves
