@@ -385,6 +385,7 @@ mod tests {
             "/integrations/osc/status/extra",
             "/settings/features",
             "/listen/recorder",
+            "/listen/mics/guest",
         ] {
             assert!(
                 !is_quiet_request(&Method::GET, path),
