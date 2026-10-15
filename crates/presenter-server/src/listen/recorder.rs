@@ -1,35 +1,50 @@
-//! The recorder (#852 C1b, spec §5.5, §12). C1b-2: its folder and its
-//! retention — the day folders older than 30 days are deleted once per local
-//! date (the first pass [`FIRST_PASS_DELAY`] after the start, then in the first
-//! minute after each midnight), so no recording outlives its 30 days (its day
-//! folder goes on the 31st). C1b-4 adds the writers.
+//! The recorder (#852 C1b, spec §5.5, §12): with the per-day toggle on, every
+//! configured mic's 16 kHz frames — exactly what the ASR gets — go to
+//! `<root>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav` (`recording_file`). A writer per
+//! mic reads the mic's frame channel and never slows its chain (12.8 s behind,
+//! the oldest frames go and are counted); each batch (≤ 5 s) is written in
+//! `spawn_blocking`. A file opens with the mic's first frame and is named by the
+//! time it was heard; the writer ends at the first frame after midnight; a
+//! failed write ends it too, and the supervisor starts it again. Day folders
+//! older than 30 days go once per local date, the first pass
+//! [`FIRST_PASS_DELAY`] after the start. (C1b-5: a new file on a drift, the
+//! midnight split, the restart back-off, the runtime future-day check.)
 //!
 //! The folder: `PRESENTER_LISTEN_RECORDINGS_DIR`, else `recordings` next to the
 //! sqlite file of `PRESENTER_DB_URL` (prod / PP `/opt/presenter/recordings`, the
 //! spec's path; dev `/opt/presenter-dev/recordings`; both inside the units'
 //! `ReadWritePaths`), else `./recordings`. One supervisor task, started with the
-//! socket task (never in validate mode).
+//! socket task (never in validate mode); see [`supervise`].
 
+use std::collections::{hash_map::Entry, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
+use presenter_core::listen::mics::MicConfig;
 use presenter_core::listen::recorder::RECORDING_RETENTION_DAYS;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio::sync::{broadcast, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant, Interval, MissedTickBehavior};
 use tracing::{info, warn};
 
-use super::recording_file::{prune_recordings, PruneReport};
-use super::ListenService;
+use super::recording_file::{prune_recordings, PruneReport, RecordError, RecordingFile};
+use super::{should_log_event, ListenService, MicFrame};
 
 /// The target of every recorder log line.
 pub(crate) const RECORDER_TARGET: &str = "presenter::listen::recorder";
 /// Overrides the recordings folder (tests use temp dirs).
 pub(crate) const RECORDINGS_DIR_ENV: &str = "PRESENTER_LISTEN_RECORDINGS_DIR";
 const RECORDINGS_DIR_NAME: &str = "recordings";
-/// The supervisor looks at the date this often.
+/// The supervisor reconciles the writers at least this often.
 const RECONCILE_EVERY: Duration = Duration::from_secs(60);
+/// At most this many frames (5 s) per blocking write.
+const MAX_BATCH: usize = 50;
+/// One frame is 100 ms.
+const FRAME_MS: i64 = 100;
 /// How long a production start waits before its first retention pass. A box that
 /// boots with a wrong clock (RTC lost, NTP not yet synced) can read a date more
 /// than 30 days ahead, and a pass at that moment would delete every recording;
@@ -110,14 +125,330 @@ fn retention_tick(first_pass_delay: Duration) -> Interval {
     tick
 }
 
-/// The supervisor: the retention pass once per local date, the first one
-/// [`FIRST_PASS_DELAY`] after the start (see there).
+/// The wall-time length of `frames` frames.
+fn frames_duration(frames: usize) -> TimeDelta {
+    let frames = i64::try_from(frames).unwrap_or(i64::MAX);
+    TimeDelta::try_milliseconds(frames.saturating_mul(FRAME_MS)).unwrap_or(TimeDelta::MAX)
+}
+
+/// A running writer and the way to stop it.
+struct Writer {
+    stop: oneshot::Sender<()>,
+    task: JoinHandle<()>,
+}
+
+impl Writer {
+    /// Subscribe to the mic's frames — BEFORE it is marked waiting, so no frame
+    /// after that is missed — and spawn its task.
+    fn start(service: &ListenService, mic_id: &str, day: NaiveDate, root: &Path) -> Self {
+        let frames = service.subscribe_frames(mic_id);
+        service.with_health(|health| health.recorder.writer_started(mic_id));
+        let (stop, stopped) = oneshot::channel();
+        let job = WriterJob {
+            mic_id: mic_id.to_string(),
+            day,
+            root: root.to_path_buf(),
+        };
+        let task = tokio::spawn(run_writer(service.clone(), job, frames, stopped));
+        Self { stop, task }
+    }
+
+    /// Ask the writer to close its file and wait until it has.
+    async fn stop(self) {
+        let _unheard = self.stop.send(());
+        if let Err(err) = self.task.await {
+            warn!(target: RECORDER_TARGET, %err, "a recorder writer ended abnormally");
+        }
+    }
+}
+
+/// The supervisor's writers.
+#[derive(Default)]
+struct Writers {
+    running: HashMap<String, Writer>,
+}
+
+impl Writers {
+    /// One writer per configured mic while recording `day`, none otherwise; a
+    /// writer that ended (a failed write, its day over) is replaced.
+    async fn reconcile(
+        &mut self,
+        service: &ListenService,
+        env: &RecorderEnv,
+        day: Option<NaiveDate>,
+        mics: &[MicConfig],
+    ) {
+        let configured: Vec<&str> = mics.iter().map(|mic| mic.id.as_str()).collect();
+        let wanted: &[&str] = if day.is_some() { &configured } else { &[] };
+        let ended: Vec<String> = self
+            .running
+            .iter()
+            .filter(|(id, writer)| !wanted.contains(&id.as_str()) || writer.task.is_finished())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ended {
+            if let Some(writer) = self.running.remove(&id) {
+                writer.stop().await;
+            }
+        }
+        service.with_health(|health| health.recorder.retain(&configured));
+        let Some(day) = day else {
+            service.with_health(|health| health.recorder.all_stopped());
+            return;
+        };
+        for id in wanted {
+            if let Entry::Vacant(slot) = self.running.entry((*id).to_string()) {
+                slot.insert(Writer::start(service, id, day, &env.root));
+            }
+        }
+    }
+
+    async fn stop_all(self) {
+        for writer in self.running.into_values() {
+            writer.stop().await;
+        }
+    }
+}
+
+/// The supervisor: two independent gates. Retention runs once per local date,
+/// the first pass [`FIRST_PASS_DELAY`] after the start; the writers follow the
+/// mic list, the toggle and the date AT ONCE after the start (a same-day restart
+/// records on without that delay), on every change and every minute.
 pub(super) async fn supervise(service: ListenService) {
+    let mut config = service.config_receiver();
+    let mut toggle = service.recorder_receiver();
+    let mut writers = Writers::default();
     let mut pruned_on: Option<NaiveDate> = None;
-    let mut tick = retention_tick(service.recorder_env().first_pass_delay);
+    let mut retention = retention_tick(service.recorder_env().first_pass_delay);
+    let mut reconcile = interval_at(Instant::now() + RECONCILE_EVERY, RECONCILE_EVERY);
+    reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        tick.tick().await;
-        prune_if_new_day(&service.recorder_env(), &mut pruned_on).await;
+        let env = service.recorder_env();
+        let today = env.now().date();
+        let named = *toggle.borrow_and_update();
+        let day = named.filter(|day| *day == today);
+        let mics = Arc::clone(&config.borrow_and_update());
+        writers.reconcile(&service, &env, day, &mics).await;
+        let gone = tokio::select! {
+            _ = reconcile.tick() => false,
+            _ = retention.tick() => {
+                prune_if_new_day(&service.recorder_env(), &mut pruned_on).await;
+                false
+            }
+            changed = config.changed() => changed.is_err(),
+            changed = toggle.changed() => changed.is_err(),
+        };
+        if gone {
+            break;
+        }
+    }
+    writers.stop_all().await;
+}
+
+/// What a writer writes.
+struct WriterJob {
+    mic_id: String,
+    day: NaiveDate,
+    root: PathBuf,
+}
+
+/// An open file and the wall time its first sample was heard.
+struct OpenFile {
+    file: RecordingFile,
+    started: NaiveDateTime,
+}
+
+impl OpenFile {
+    fn create(root: &Path, started: NaiveDateTime, mic_id: &str) -> Result<Self, RecordError> {
+        let file = RecordingFile::create(root, started, mic_id)?;
+        Ok(Self { file, started })
+    }
+}
+
+/// Why a writer ended or a file was closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Stopped,
+    DayOver,
+    Failed,
+}
+
+impl Ended {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "switched off or the mic was removed",
+            Self::DayOver => "the day ended",
+            Self::Failed => "a write failed",
+        }
+    }
+}
+
+/// One mic's writer: frames in, batches written off the runtime. Ends when told
+/// to stop, at its first frame after midnight, or on a failed write (the
+/// supervisor starts it again).
+async fn run_writer(
+    service: ListenService,
+    job: WriterJob,
+    mut frames: broadcast::Receiver<MicFrame>,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let mut open: Option<OpenFile> = None;
+    let ended = loop {
+        let received = tokio::select! {
+            _ = &mut stop => Err(RecvError::Closed),
+            received = frames.recv() => received,
+        };
+        let first = match received {
+            Ok(frame) => frame,
+            Err(RecvError::Lagged(missed)) => {
+                note_dropped(&service, &job.mic_id, missed);
+                continue;
+            }
+            Err(RecvError::Closed) => break Ended::Stopped,
+        };
+        let batch = collect_batch(&service, &job.mic_id, first, &mut frames);
+        // the batch began its own length, plus whatever is still queued, ago
+        let behind = frames_duration(batch.len() + frames.len());
+        let now = service.recorder_env().now();
+        let start = now.checked_sub_signed(behind).unwrap_or(now);
+        if now.date() != job.day {
+            break Ended::DayOver;
+        }
+        match write_batch(open.take(), &job, start, batch).await {
+            Ok((written, created)) => {
+                note_written(&service, &job, &written, created);
+                open = Some(written);
+            }
+            Err(error) => {
+                note_failed(&service, &job, &error);
+                break Ended::Failed;
+            }
+        }
+    };
+    if let Some(last) = open {
+        close(&job, last.file, ended).await;
+    }
+    if ended != Ended::Failed {
+        service.with_health(|health| health.recorder.writer_stopped(&job.mic_id));
+    }
+}
+
+/// The frame just received and whatever else is already waiting, at most
+/// [`MAX_BATCH`].
+fn collect_batch(
+    service: &ListenService,
+    mic_id: &str,
+    first: MicFrame,
+    frames: &mut broadcast::Receiver<MicFrame>,
+) -> Vec<MicFrame> {
+    let mut batch = vec![first];
+    while batch.len() < MAX_BATCH {
+        match frames.try_recv() {
+            Ok(frame) => batch.push(frame),
+            Err(TryRecvError::Lagged(missed)) => note_dropped(service, mic_id, missed),
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+        }
+    }
+    batch
+}
+
+/// Write a batch off the runtime, into the open file or into a new one whose
+/// first sample was heard at `start`; the Slovak reason when it failed (the
+/// file is then dropped, its header covering the last good batch).
+async fn write_batch(
+    open: Option<OpenFile>,
+    job: &WriterJob,
+    start: NaiveDateTime,
+    batch: Vec<MicFrame>,
+) -> Result<(OpenFile, bool), String> {
+    let (root, mic_id) = (job.root.clone(), job.mic_id.clone());
+    let joined = tokio::task::spawn_blocking(move || -> Result<(OpenFile, bool), RecordError> {
+        let created = open.is_none();
+        let mut open = match open {
+            Some(open) => open,
+            None => OpenFile::create(&root, start, &mic_id)?,
+        };
+        open.file.append(&batch)?;
+        Ok((open, created))
+    })
+    .await;
+    match joined {
+        Ok(result) => result.map_err(|err| err.to_string()),
+        Err(err) => Err(format!("zápis nahrávky sa prerušil: {err}")),
+    }
+}
+
+/// The status after a batch; one INFO with the millisecond start time when the
+/// batch opened a file (the bake-off places the show log by it).
+fn note_written(service: &ListenService, job: &WriterJob, written: &OpenFile, created: bool) {
+    let file = written.file.path_text();
+    let bytes = written.file.data_bytes();
+    service.with_health(|health| health.recorder.wrote(&job.mic_id, &file, bytes));
+    if created {
+        info!(
+            target: RECORDER_TARGET,
+            mic = job.mic_id.as_str(),
+            file = %file,
+            started = %written.started.format("%H:%M:%S%.3f"),
+            "recording started"
+        );
+    }
+}
+
+/// Frames a lagging writer lost: counted; WARN on power-of-two lag events.
+fn note_dropped(service: &ListenService, mic_id: &str, missed: u64) {
+    let (events, dropped_frames) =
+        service.with_health(|health| health.recorder.dropped(mic_id, missed));
+    if should_log_event(events) {
+        warn!(
+            target: RECORDER_TARGET,
+            mic = mic_id,
+            missed,
+            dropped_frames,
+            events,
+            "recorder fell behind — dropped frames"
+        );
+    }
+}
+
+/// A failed write: the mic's state `error`; WARN on power-of-two failures in a row.
+fn note_failed(service: &ListenService, job: &WriterJob, error: &str) {
+    let failures = service.with_health(|health| health.recorder.failed(&job.mic_id, error));
+    if should_log_event(failures) {
+        warn!(
+            target: RECORDER_TARGET,
+            mic = job.mic_id.as_str(),
+            day = %job.day,
+            error,
+            failures,
+            "recording write failed — the writer starts again within a minute"
+        );
+    }
+}
+
+/// Close a file — header and `fsync` off the runtime — and log it.
+async fn close(job: &WriterJob, file: RecordingFile, why: Ended) {
+    let path = file.path_text();
+    let finished = match tokio::task::spawn_blocking(move || file.finish()).await {
+        Ok(result) => result.map_err(|err| err.to_string()),
+        Err(err) => Err(err.to_string()),
+    };
+    match finished {
+        Ok(bytes) => info!(
+            target: RECORDER_TARGET,
+            mic = job.mic_id.as_str(),
+            file = %path,
+            bytes,
+            why = why.as_str(),
+            "recording stopped"
+        ),
+        Err(error) => warn!(
+            target: RECORDER_TARGET,
+            mic = job.mic_id.as_str(),
+            file = %path,
+            error,
+            "closing the recording failed — its header covers the last batch written"
+        ),
     }
 }
 

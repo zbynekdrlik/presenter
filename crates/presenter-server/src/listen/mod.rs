@@ -8,7 +8,8 @@
 //! channel (#852 C1b): one `broadcast` per mic id that never makes the chain
 //! wait, read by the recorder (C1b) and later the ASR (C3). The recorder
 //! (`recorder`, `recording_file`) has its own supervisor task, started with the
-//! socket task; it deletes day folders older than 30 days once per local date.
+//! socket task: it keeps one writer per configured mic while the per-day toggle
+//! names today and deletes day folders older than 30 days once per local date.
 
 pub(crate) mod health;
 mod mic_chain;
@@ -167,6 +168,15 @@ impl ListenService {
             .entry(mic_id.to_string())
             .or_insert_with(|| broadcast::Sender::new(FRAME_CHANNEL_CAPACITY))
             .clone()
+    }
+
+    /// A consumer's receiver of the mic's frames (the recorder; C3: the ASR).
+    fn subscribe_frames(&self, mic_id: &str) -> broadcast::Receiver<MicFrame> {
+        self.frame_sender(mic_id).subscribe()
+    }
+
+    fn recorder_receiver(&self) -> watch::Receiver<Option<NaiveDate>> {
+        self.inner.recorder.subscribe()
     }
 
     /// The recorder's folder and clock.
