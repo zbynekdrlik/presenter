@@ -225,23 +225,28 @@ pub struct AsrToken { pub text: String, pub start_ms: Option<u32>, pub end_ms: O
     pub is_final: bool, pub confidence: f32, pub language: Option<String>, pub is_translation: bool }
 ```
 
-Implementations: `soniox.rs` (first), `mock.rs` (replays a recorded JSONL, behind the existing
-`mock-integrations` feature, used by E2E), later only what the bake-off selects.
+Implementations: `live_translate.rs` (first — songplayer's production engine, §6.2), `mock.rs` (replays a recorded
+JSONL, behind the existing `mock-integrations` feature, used by E2E), `soniox.rs` only if the replay evaluation (§13)
+measures that a second engine is needed.
 
-### 6.2 Why Soniox is the first implementation
+### 6.2 The first implementation is Gemini Live Translate (amended 2026-10-15, owner decision)
 
-Not a leaderboard pick:
+songplayer already selected and runs it in production (dubbing, round H), so it is reused, not re-evaluated:
 
-- songplayer verified Soniox's API family and token model live [SP];
-- the owner already has a Soniox account (songplayer settings, `voiceagent/.env`) [SP];
-- `stt-rt-v5` gives, in ONE stream, English words with timestamps + Slovak translation tokens + a per-token
-  language tag [GAP] — exactly the shared session both consumers need;
-- $0.12/h, translation included (token-billed) [GAP].
+- `gemini-3.5-live-translate-preview`, ONE continuous session per mic: 16 kHz mono s16le 100 ms frames in,
+  `translation_config{target_language_code: "sk", echo_target_language: false}`, **input transcription (EN) + output
+  transcription (SK)** — both consumers (verse suggestions, interpreter display) get their text from one session;
+  `context_window_compression` (trigger 25 000 / sliding target 8 000 tokens) + `session_resumption`; on GoAway the
+  next connection opens with the ACTIVE connection's latest handle while the old one still drains (overlap, never a
+  pause) — songplayer `dabing.md` round H, `scripts/dub_live_session.py::ContinuousSession`.
+- Measured in songplayer: first voiced SK output ≈ 3.1 s, EN input transcription ≈ 4–5 s after the speech onset,
+  0 reconnect failures over 25 min, ≈ $0.037/min.
+- Audio output is not needed by Presenter (text only); whether the model can run with text-only output, or the audio
+  is received and dropped, is checked in C3 against the real API (songplayer: output modality AUDIO).
+- The replay evaluation (§13) measures the EN latency on our guest sermons; Soniox real-time (§6.3) is added as a
+  second engine only if that latency is unusable for the interpreter.
 
-English accuracy and Slovak translation quality are decided by the bake-off (§13) against songplayer's production
-engine (Gemini Live Translate) and an LLM.
-
-### 6.3 Soniox session config [GAP: Soniox real-time docs]
+### 6.3 Soniox session config — fallback engine only (§6.2) [GAP: Soniox real-time docs]
 
 - `wss://stt-rt.soniox.com/transcribe-websocket`, key in the connection's `Authorization` header (`api_key` in the
   config is deprecated), `User-Agent: presenter-listen/<version>` [SP: Cloudflare 1010].
