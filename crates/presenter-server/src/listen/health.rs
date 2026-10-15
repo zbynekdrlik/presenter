@@ -13,7 +13,7 @@ use presenter_core::audio::level::is_voiced;
 use presenter_core::audio::sequence::SequenceVerdict;
 use presenter_core::audio::vban::{VbanAudioFormat, VbanReject};
 use presenter_core::listen::mics::MicConfig;
-use presenter_core::listen::recorder::{MicRecording, RecorderStatus};
+use presenter_core::listen::recorder::{MicRecording, RecorderStatus, RecordingState};
 use presenter_core::listen::status::{
     ListenStatus, MicState, MicStatus, RejectedSender, SocketState, SocketStatus, UnmatchedStream,
 };
@@ -162,6 +162,114 @@ pub(crate) struct RejectSeen {
     pub(crate) non_audio: bool,
 }
 
+/// The recorder's part of the status (#852 C1b): one entry per configured mic
+/// a writer ran for. Not part of the socket session (`end_session` keeps it).
+#[derive(Debug, Default)]
+pub(crate) struct RecorderHealth {
+    mics: HashMap<String, MicRecorder>,
+}
+
+#[derive(Debug, Default)]
+struct MicRecorder {
+    state: RecordingState,
+    file: Option<String>,
+    bytes: u64,
+    dropped_frames: u64,
+    /// Times the writer fell behind: the #484 gate of the "fell behind" WARN.
+    lag_events: u64,
+    error: Option<String>,
+    /// Failed writes in a row: the #484 gate of the "write failed" WARN.
+    failures: u64,
+}
+
+impl MicRecorder {
+    fn stop(&mut self) {
+        self.state = RecordingState::Off;
+        self.error = None;
+        self.failures = 0;
+    }
+}
+
+impl RecorderHealth {
+    /// A writer subscribed to the mic's frames: waiting for audio. A failed
+    /// one keeps its error on show until a write succeeds.
+    pub(crate) fn writer_started(&mut self, mic_id: &str) {
+        let mic = self.mics.entry(mic_id.to_string()).or_default();
+        if mic.state != RecordingState::Error {
+            mic.state = RecordingState::Waiting;
+        }
+    }
+
+    /// A batch reached the file: recording, `bytes` of audio in it.
+    pub(crate) fn wrote(&mut self, mic_id: &str, file: &str, bytes: u32) {
+        let mic = self.mics.entry(mic_id.to_string()).or_default();
+        mic.state = RecordingState::Recording;
+        mic.file = Some(file.to_string());
+        mic.bytes = u64::from(bytes);
+        mic.error = None;
+        mic.failures = 0;
+    }
+
+    /// The writer fell behind and lost `frames`: (lag events, frames lost) so far.
+    pub(crate) fn dropped(&mut self, mic_id: &str, frames: u64) -> (u64, u64) {
+        let mic = self.mics.entry(mic_id.to_string()).or_default();
+        mic.dropped_frames += frames;
+        mic.lag_events += 1;
+        (mic.lag_events, mic.dropped_frames)
+    }
+
+    /// A write failed (`error` in Slovak); the failures in a row.
+    pub(crate) fn failed(&mut self, mic_id: &str, error: &str) -> u64 {
+        let mic = self.mics.entry(mic_id.to_string()).or_default();
+        mic.state = RecordingState::Error;
+        mic.error = Some(error.to_string());
+        mic.failures += 1;
+        mic.failures
+    }
+
+    /// The writer ended (switched off, the day over): off; the last file and
+    /// its size stay on show.
+    pub(crate) fn writer_stopped(&mut self, mic_id: &str) {
+        if let Some(mic) = self.mics.get_mut(mic_id) {
+            mic.stop();
+        }
+    }
+
+    /// The recorder was switched off (or its day ended): every mic off, every
+    /// error and failure streak forgotten.
+    pub(crate) fn all_stopped(&mut self) {
+        self.mics.values_mut().for_each(MicRecorder::stop);
+    }
+
+    /// Only configured mics keep an entry.
+    pub(crate) fn retain(&mut self, mic_ids: &[&str]) {
+        self.mics.retain(|id, _| mic_ids.contains(&id.as_str()));
+    }
+
+    /// Every configured mic, `off` for one no writer ran for. `ListenService`
+    /// fills in `enabled`, `enabledFor` and `root`.
+    pub(crate) fn snapshot(&self, mics: &[MicConfig]) -> RecorderStatus {
+        let mics = mics
+            .iter()
+            .map(|config| match self.mics.get(&config.id) {
+                Some(mic) => MicRecording {
+                    id: config.id.clone(),
+                    state: mic.state,
+                    file: mic.file.clone(),
+                    bytes: mic.bytes,
+                    dropped_frames: mic.dropped_frames,
+                    error: mic.error.clone(),
+                },
+                None => MicRecording::off(&config.id),
+            })
+            .collect();
+        RecorderStatus {
+            mics,
+            ..RecorderStatus::default()
+        }
+    }
+}
+
 /// A map that keeps the [`RECENT_CAP`] most recently seen keys.
 #[derive(Debug)]
 struct Recent<K, V> {
@@ -225,6 +333,8 @@ pub(crate) struct ListenHealth {
     /// WARN-class rejects this session (non-audio left out): the second gate of
     /// a repeat line.
     reject_total: u64,
+    /// The recorder's writers (#852 C1b); not part of the socket session.
+    pub(crate) recorder: RecorderHealth,
 }
 
 impl ListenHealth {
@@ -447,11 +557,7 @@ impl ListenHealth {
                 .collect(),
             unmatched: self.unmatched_streams(now),
             rejected: self.rejected_senders(now),
-            // every configured mic, off; `ListenService::status` adds the toggle
-            recorder: RecorderStatus {
-                mics: mics.iter().map(|mic| MicRecording::off(&mic.id)).collect(),
-                ..RecorderStatus::default()
-            },
+            recorder: self.recorder.snapshot(mics),
         }
     }
 
