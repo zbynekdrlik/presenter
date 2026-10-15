@@ -434,4 +434,39 @@ mod tests {
         );
         assert!(!status.recorder.enabled);
     }
+
+    /// A failed audit row never fails the save; its WARN carries the target of
+    /// the setting it is about, so grepping `presenter::listen::recorder` finds it.
+    #[tokio::test]
+    async fn a_failed_audit_row_is_warned_under_the_target_of_its_own_setting() {
+        let capture = Capture::install();
+        let state = AppState::in_memory().await.unwrap();
+        let conn = state.repository().connection();
+        sea_orm::ConnectionTrait::execute(
+            conn,
+            sea_orm::Statement::from_string(
+                sea_orm::ConnectionTrait::get_database_backend(conn),
+                "DROP TABLE settings_audit".to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+        state.set_listen_recorder(true, "test").await.unwrap();
+        let mics = serde_json::from_str(GUEST_MIC).unwrap();
+        state.set_listen_mics(mics, "test").await.unwrap();
+        let audit_warnings = |target: &str| {
+            capture
+                .events(target)
+                .iter()
+                .filter(|event| {
+                    event.level == tracing::Level::WARN
+                        && event
+                            .field("message")
+                            .is_some_and(|message| message.contains("audit row"))
+                })
+                .count()
+        };
+        assert_eq!(audit_warnings(RECORDER_TARGET), 1, "the recorder's own");
+        assert_eq!(audit_warnings(MIC_TARGET), 1, "the microphones' own");
+    }
 }
