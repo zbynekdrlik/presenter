@@ -16,6 +16,13 @@
 //! text crossfade (#716/#834). An empty playlist (no link yet, nothing synced,
 //! an empty folder) renders an empty, transparent frame.
 //!
+//! While the page is HIDDEN the loop holds (#868): an item that finishes then
+//! is parked and the loop moves on once the page is visible again. OBS hides
+//! a browser source that no view shows (`WasHidden`, also with `shutdown`
+//! off), so an unseen `pre` page used to mount a new photo or video every few
+//! seconds for hours. A removed video also drops its media resource at once
+//! instead of keeping its player and buffers until a major GC.
+//!
 //! Timers are `gloo` timeouts that are never cancelled; every callback goes
 //! through `try_` accessors and a cursor ticket, so a timer that fires after
 //! the element re-rendered (draft preview, def refetch) does nothing.
@@ -23,7 +30,7 @@
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsValue;
-use leptos::web_sys::HtmlVideoElement;
+use leptos::web_sys::{HtmlVideoElement, VisibilityState};
 use presenter_core::{ContentTransition, Frame, ImageFit, PlaybackItem, PlaybackItemKind};
 use wasm_bindgen_futures::JsFuture;
 
@@ -46,6 +53,9 @@ struct Player {
     layers: RwSignal<Vec<MediaLayer>>,
     cursor: StoredValue<Cursor>,
     next_seq: StoredValue<u64>,
+    /// The ticket of an item that finished while the page was hidden (#868);
+    /// [`watch_visibility`] moves on from it once the page is visible again.
+    due: StoredValue<Option<u64>>,
     change: Change,
     image_seconds: u32,
 }
@@ -106,9 +116,11 @@ pub fn ElementPlayback(
         layers: RwSignal::new(Vec::new()),
         cursor: StoredValue::new(Cursor::default()),
         next_seq: StoredValue::new(0),
+        due: StoredValue::new(None),
         change: Change::of(&content_transition).clamped(image_seconds),
         image_seconds,
     };
+    watch_visibility(player);
     // Only a link that names a Drive folder is fetched (the server would 422
     // anything else, and that would log a failed request on the broadcast page).
     if presenter_core::parse_drive_folder_url(&source_url).is_ok() {
@@ -279,6 +291,17 @@ fn PlaybackVideo(
         })
         .forget();
     };
+    // #868: a removed video lets go of its media player and buffers now, not
+    // at the next major GC (a page with a ~2 MB JS heap seldom runs one). With
+    // no source the load algorithm ends at NETWORK_EMPTY without an `error`
+    // event, so the already dropped `on:error` closure never fires. A photo
+    // keeps its `src`: each URL is one memory-cache entry, and removing an
+    // `<img>` src may queue an `error` to a dropped listener.
+    on_cleanup(move || {
+        if let Some(video) = video_ref.try_get_untracked().flatten() {
+            release_video(&video);
+        }
+    });
     let looping = move || player.items.with(|items| items.len() == 1);
     view! {
         <video
@@ -418,10 +441,52 @@ fn schedule_settle(player: Player, leaving: Vec<u64>, pending: Option<MediaLayer
 }
 
 /// The item with `ticket` finished (photo time up, video ended): next item.
+/// While the page is hidden it is parked in `due` instead (#868), and
+/// [`watch_visibility`] moves on once the page is visible again.
 fn item_done(player: Player, ticket: u64) {
-    if player.is_current(ticket) {
-        advance(player);
+    if !player.is_current(ticket) {
+        return;
     }
+    if page_hidden() {
+        let _ = player.due.try_set_value(Some(ticket));
+        return;
+    }
+    advance(player);
+}
+
+/// `true` while the page is hidden (`document.visibilityState`).
+fn page_hidden() -> bool {
+    leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| document.visibility_state() == VisibilityState::Hidden)
+}
+
+/// Hold the loop while the page is hidden (#868): on `visibilitychange` back
+/// to visible, an item that finished meanwhile (`due`) and is still the
+/// current one moves the loop on at once. The event bubbles from the document
+/// to the window; the listener goes with the element.
+fn watch_visibility(player: Player) {
+    let listener = window_event_listener_untyped("visibilitychange", move |_| {
+        if page_hidden() {
+            leptos::logging::log!("stream playback: page hidden — loop paused");
+            return;
+        }
+        let due = player.due.try_update_value(|due| due.take()).flatten();
+        if due.is_some_and(|ticket| player.is_current(ticket)) {
+            leptos::logging::log!("stream playback: page visible — loop resumed");
+            advance(player);
+        } else {
+            leptos::logging::log!("stream playback: page visible");
+        }
+    });
+    on_cleanup(move || listener.remove());
+}
+
+/// Drop a removed video's media resource: pause, no source, `load()`.
+fn release_video(video: &HtmlVideoElement) {
+    let _ = video.pause();
+    let _ = video.remove_attribute("src");
+    video.load();
 }
 
 /// A video that cannot play: move on after a short pause.
