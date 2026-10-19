@@ -16,6 +16,13 @@
  * - Output (`@video-codec` → real Chrome with H.264 and a strict autoplay
  *   policy): the loop plays photo → photo → video (to its `ended`) → the first
  *   photo again.
+ * - #868, hidden page (default chromium project, a photos-only folder): while
+ *   `document.visibilityState` is "hidden" no new layer mounts; once visible
+ *   the next item mounts at once. OBS hides a browser source that no view
+ *   shows (`WasHidden`), and Playwright disables renderer backgrounding, so
+ *   the test overrides `visibilityState` and dispatches `visibilitychange`.
+ * - #868, video release (`@video-codec`): a video layer that left the DOM has
+ *   no `src` and `networkState` NETWORK_EMPTY (its media player is gone).
  *
  * Every test asserts a clean browser console last.
  */
@@ -46,6 +53,9 @@ const CLIP = "1E2EClipVideoAAAAAAAAAAAAAAAAAA3";
 const SUBFOLDER = "1E2ESubfolderAAAAAAAAAAAAAAAAAA4";
 const PDF = "1E2EProgramPdfAAAAAAAAAAAAAAAAA5";
 const FOLDER_LINK = `https://drive.google.com/drive/folders/${FOLDER_ID}?usp=sharing`;
+/** #868: a second folder holding only the two photos (no H.264 needed). */
+const PHOTO_FOLDER_ID = "1E2EPhotoFolderAAAAAAAAAAAAAAAA6";
+const PHOTO_LINK = `https://drive.google.com/drive/folders/${PHOTO_FOLDER_ID}?usp=sharing`;
 const LAST_MODIFIED = "Mon, 12 Oct 2026 08:00:00 GMT";
 
 type MockFile = { mime: string; name: string; bytes: Buffer };
@@ -74,6 +84,16 @@ function fileEntry(id: string, mime: string, name: string): string {
   );
 }
 
+/** A listing page around `entries`. */
+function listingHtml(entries: string): string {
+  return (
+    '<!DOCTYPE html><html><head><title>Playback E2E</title></head><body class="flip-embedded">' +
+    '<div id="flip-contents" class="flip-contents flip-list-view"><div class="flip-entries">' +
+    entries +
+    "</div></div></body></html>"
+  );
+}
+
 /** red, a subfolder (skipped), blue, a PDF (skipped), the clip. */
 function listingPage(): string {
   const folder =
@@ -81,16 +101,18 @@ function listingPage(): string {
     `<a href="https://drive.google.com/drive/folders/${SUBFOLDER}" target="_blank">` +
     `<div class="flip-entry-list-icon"><div aria-label="Folder" class="icon-color-1"></div></div>` +
     `<div class="flip-entry-title">Archív</div></a></div></div>`;
-  return (
-    '<!DOCTYPE html><html><head><title>Playback E2E</title></head><body class="flip-embedded">' +
-    '<div id="flip-contents" class="flip-contents flip-list-view"><div class="flip-entries">' +
+  return listingHtml(
     fileEntry(RED, "image/png", "red.png") +
-    folder +
-    (blueRemoved ? "" : fileEntry(BLUE, "image/png", "blue.png")) +
-    fileEntry(PDF, "application/pdf", "program.pdf") +
-    fileEntry(CLIP, "video/mp4", "clip.mp4") +
-    "</div></div></body></html>"
+      folder +
+      (blueRemoved ? "" : fileEntry(BLUE, "image/png", "blue.png")) +
+      fileEntry(PDF, "application/pdf", "program.pdf") +
+      fileEntry(CLIP, "video/mp4", "clip.mp4"),
   );
+}
+
+/** #868: the photos-only folder — red, blue. */
+function photoListingPage(): string {
+  return listingHtml(fileEntry(RED, "image/png", "red.png") + fileEntry(BLUE, "image/png", "blue.png"));
 }
 
 function startMockDrive(): Promise<http.Server> {
@@ -101,6 +123,11 @@ function startMockDrive(): Promise<http.Server> {
       listingRequests += 1;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(listingPage());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/embeddedfolderview" && id === PHOTO_FOLDER_ID) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(photoListingPage());
       return;
     }
     const file = FILES[id];
@@ -164,10 +191,8 @@ type Playlist = {
   syncing: boolean;
 };
 
-async function playlist(request: APIRequestContext): Promise<Playlist> {
-  const resp = await request.get(
-    `${baseURL}/stream/api/playback?url=${encodeURIComponent(FOLDER_LINK)}`,
-  );
+async function playlist(request: APIRequestContext, link = FOLDER_LINK): Promise<Playlist> {
+  const resp = await request.get(`${baseURL}/stream/api/playback?url=${encodeURIComponent(link)}`);
   expect(resp.ok(), `playlist -> ${resp.status()}`).toBeTruthy();
   return (await resp.json()) as Playlist;
 }
@@ -322,14 +347,22 @@ test("#843 editor: a playback element takes a Drive folder link and shows its sy
 
 const LOOP_SLUG = "t843-loop";
 
+/** The output a loop test seeds: its slug, the folder link and how many items
+ *  the mirror must hold before the page opens. */
+type LoopSeed = { slug: string; link: string; items: number };
+
 /** Seed an own output whose base scene holds one playback element: photos 1 s,
- *  hard cuts, muted. Returns once the mirror holds all three items. */
-async function seedLoopOutput(request: APIRequestContext): Promise<void> {
+ *  hard cuts, muted. Returns once the mirror holds all the folder's items. */
+async function seedLoopOutput(
+  request: APIRequestContext,
+  seed: LoopSeed = { slug: LOOP_SLUG, link: FOLDER_LINK, items: 3 },
+): Promise<void> {
+  const { slug, link, items } = seed;
   const created = await request.post(`${baseURL}/stream/api/outputs`, {
-    data: { slug: LOOP_SLUG, name: "Playback loop" },
+    data: { slug, name: `Playback loop ${slug}` },
   });
   expect(created.ok(), `create output -> ${created.status()}`).toBeTruthy();
-  const scene = await request.post(`${baseURL}/stream/api/outputs/${LOOP_SLUG}/scenes`, {
+  const scene = await request.post(`${baseURL}/stream/api/outputs/${slug}/scenes`, {
     data: { name: "Loop", kind: "base" },
   });
   expect(scene.ok(), `create scene -> ${scene.status()}`).toBeTruthy();
@@ -337,7 +370,7 @@ async function seedLoopOutput(request: APIRequestContext): Promise<void> {
   const element = await request.post(`${baseURL}/stream/api/scenes/${sceneId}/elements`, {
     data: {
       kind: "playback",
-      source_url: FOLDER_LINK,
+      source_url: link,
       fit: "contain",
       frame: { xPct: 10, yPct: 10, wPct: 40, hPct: 40 },
       opacity: 1,
@@ -347,17 +380,17 @@ async function seedLoopOutput(request: APIRequestContext): Promise<void> {
     },
   });
   expect(element.ok(), `create element -> ${element.status()}`).toBeTruthy();
-  const active = await request.put(`${baseURL}/stream/api/outputs/${LOOP_SLUG}/active-scene`, {
+  const active = await request.put(`${baseURL}/stream/api/outputs/${slug}/active-scene`, {
     data: { sceneId },
   });
   expect(active.ok(), `activate -> ${active.status()}`).toBeTruthy();
   const refresh = await request.post(`${baseURL}/stream/api/playback/refresh`, {
-    data: { url: FOLDER_LINK },
+    data: { url: link },
   });
   expect(refresh.status()).toBe(202);
   await expect
-    .poll(async () => (await playlist(request)).items.length, { timeout: 60_000 })
-    .toBe(3);
+    .poll(async () => (await playlist(request, link)).items.length, { timeout: 60_000 })
+    .toBe(items);
 }
 
 /** Record, from the first byte of the page: every playback layer mounted (by
@@ -445,6 +478,125 @@ test("#843 output: the loop plays photo, photo, video to its end, then the first
   expect(record.errors).toEqual([]);
   // Hard cuts: never more than one layer on screen.
   await expect(page.locator('[data-role="stream-playback-layer"]')).toHaveCount(1);
+
+  expect(errors).toEqual([]);
+});
+
+// ── #868: no media churn while hidden; a removed video lets go of its media ──
+
+/** Make the page report itself hidden (`true`) or visible (`false`) and fire
+ *  `visibilitychange`, as obs-browser's `WasHidden` does for a source no view
+ *  shows. The overrides are own properties on `document`, so the WASM
+ *  `visibilityState` getter reads them; deleting them restores the real
+ *  (visible) state. The real event bubbles from the document to the window,
+ *  where the element listens. Returns the layers mounted so far. */
+async function setPageHidden(page: Page, hidden: boolean): Promise<number> {
+  return page.evaluate((hide) => {
+    const doc = document as unknown as Record<string, unknown>;
+    if (hide) {
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    } else {
+      delete doc.visibilityState;
+      delete doc.hidden;
+    }
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+    return (window as unknown as { __playback: { shown: string[] } }).__playback.shown.length;
+  }, hidden);
+}
+
+test("#868 output: the loop holds while the page is hidden and moves on once it is visible", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await seedLoopOutput(page.request, { slug: "t868-hidden", link: PHOTO_LINK, items: 2 });
+  await installLoopRecorder(page);
+
+  await page.goto(`${baseURL}/stream/t868-hidden`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await expect(page.locator('[data-role="stream-element-playback"]')).toHaveAttribute(
+    "data-item-count",
+    "2",
+    { timeout: 30_000 },
+  );
+  // The loop runs (photos at 1 s): at least red → blue.
+  await expect
+    .poll(async () => (await loopRecord(page)).shown.length, { timeout: 15_000 })
+    .toBeGreaterThanOrEqual(2);
+
+  // Hidden: the photo on screen runs out within 1 s, but no new layer mounts.
+  // A fixed wait is the only way to show that nothing happens; 2.5 s covers
+  // two more photos of a loop that kept going.
+  const atHide = await setPageHidden(page, true);
+  await page.waitForTimeout(2_500);
+  expect((await loopRecord(page)).shown.length, "no layer mounts while hidden").toBe(atHide);
+  await expect(page.locator('[data-role="stream-playback-layer"]')).toHaveCount(1);
+
+  // Visible again: the photo that ran out while hidden moves on at once.
+  const atShow = await setPageHidden(page, false);
+  expect(atShow).toBe(atHide);
+  await expect
+    .poll(async () => (await loopRecord(page)).shown.length, { timeout: 1_500 })
+    .toBeGreaterThan(atHide);
+  expect((await loopRecord(page)).errors).toEqual([]);
+
+  expect(errors).toEqual([]);
+});
+
+test("#868 output: a video layer that left the page has no source and no media resource @video-codec", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await seedLoopOutput(page.request, { slug: "t868-video", link: FOLDER_LINK, items: 3 });
+  await installLoopRecorder(page);
+  // Keep every <video> that leaves the DOM (alone or inside its layer).
+  await page.addInitScript(() => {
+    const removed: HTMLVideoElement[] = [];
+    (window as unknown as { __removedVideos: HTMLVideoElement[] }).__removedVideos = removed;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        record.removedNodes.forEach((node) => {
+          if (node instanceof HTMLVideoElement) removed.push(node);
+          else if (node instanceof Element) removed.push(...Array.from(node.querySelectorAll("video")));
+        });
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
+
+  await page.goto(`${baseURL}/stream/t868-video`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await expect(page.locator('[data-role="stream-element-playback"]')).toHaveAttribute(
+    "data-item-count",
+    "3",
+    { timeout: 30_000 },
+  );
+
+  // The clip played to its end and the next photo replaced it (hard cut).
+  await expect
+    .poll(async () => loopedOnce((await loopRecord(page)).shown), { timeout: 60_000 })
+    .toBe(true);
+  const record = await loopRecord(page);
+  expect(record.ended).toContain(CLIP);
+  expect(record.errors).toEqual([]);
+
+  // The removed clip let go of its media: no `src`, NETWORK_EMPTY (0).
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (window as unknown as { __removedVideos: HTMLVideoElement[] }).__removedVideos.map(
+            (video) => ({
+              fileId: video.dataset.fileId ?? "",
+              src: video.getAttribute("src"),
+              networkState: video.networkState,
+            }),
+          ),
+        ),
+      { timeout: 10_000 },
+    )
+    .toContainEqual({ fileId: CLIP, src: null, networkState: 0 });
 
   expect(errors).toEqual([]);
 });
