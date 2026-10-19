@@ -600,6 +600,24 @@ content_transition }` plays a shared Drive folder's photos + videos in a loop. T
   `console.log`, NOT warn: the editor's preview iframe runs in open-source Chromium, which cannot
   decode H.264 (`canPlayType` "", `play()` rejects `NotSupportedError`, no console line of its
   own) — a warn there would red every zero-console editor spec.
+- **Hidden page = the loop holds; a removed video drops its media (#868).** obs-browser calls
+  `WasHidden(true)` for a source no view shows (also with `shutdown` off), so the OBS `pre` page
+  is a HIDDEN page most of a 30 h session. It used to mount a new `<img>`/`<video>` per item
+  unseen, and a removed `<video>` kept its media player + buffers until a major GC that a ~2 MB
+  JS heap seldom runs (the stream-pp renderer reached ~3.3 GB). Now `item_done` parks a finished
+  item's ticket in `Player.due` while `document.visibilityState == "hidden"`, and ONE
+  `window_event_listener_untyped("visibilitychange")` per element (the event bubbles from the
+  document to the window; removed in `on_cleanup`) resumes a still-current `due` once visible:
+  a parked PHOTO gets a fresh full `image_seconds` hold (the page turns visible when a view first
+  shows the output, OBS preview or program, and an item change must not land on that moment), a
+  parked video advances at once. The first mount, the playlist refetch and the settle/fade timers are unchanged.
+  `PlaybackVideo`'s `on_cleanup` runs `pause()` + `removeAttribute("src")` + `load()`: with no
+  source the load algorithm ends at NETWORK_EMPTY without an `error` event, and `load()` cancels
+  queued media events. Not for `<img>` (not needed: each URL is one memory-cache entry). Logs are
+  `console.log`. Playwright disables renderer backgrounding, so a test reaches this path only by
+  overriding `document.visibilityState`/`hidden` as own properties (the WASM getter is
+  structural, it reads them) and dispatching a BUBBLING `visibilitychange` — `new Event(…)`
+  defaults to `bubbles: false`, which a window listener never sees.
 - **E2E (`stream-playback.spec.ts`)**: a Node mock Drive inside the spec (listing + HEAD/GET
   download, fixtures `tests/e2e/fixtures/playback/` = two 64×64 PNGs + a 1 s 64×64 H.264
   baseline MP4, `-movflags +faststart`). The output-loop test is `@video-codec` → the

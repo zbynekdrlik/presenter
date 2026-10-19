@@ -597,7 +597,7 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
-    use zip::write::FileOptions;
+    use zip::write::SimpleFileOptions;
 
     use std::collections::HashSet;
     use std::io::{Cursor, Write};
@@ -621,7 +621,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut buffer);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             let content =
                 "\\id JHN John\n\\c 3\n\\v 16 For God so loved the world\n\\v 17 that He gave\n";
             writer.start_file("JHN.usfm", options).unwrap();
@@ -656,7 +656,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut buffer);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             writer.start_file("SEB.bbl.mybible", options).unwrap();
             writer.write_all(&bytes).unwrap();
             writer.finish().unwrap();
@@ -693,7 +693,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut buffer);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             writer.start_file(filename, options).unwrap();
             writer.write_all(&bytes).unwrap();
             writer.finish().unwrap();
@@ -736,7 +736,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut archive);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             let content = "\\id 1PE 1 Peter\n\\c 1\n\\v 1 \\w Peter|strong=\"G4074\"\\w*, an \\w apostle|strong=\"G0652\"\\w* of \\w Jesus|strong=\"G2424\"\\w* \\w Christ|strong=\"G5547\"\\w*\n";
             writer.start_file("1PE.usfm", options).unwrap();
             writer.write_all(content.as_bytes()).unwrap();
@@ -787,10 +787,10 @@ mod tests {
 
         let mut archive = Vec::new();
         {
-            use zip::write::FileOptions;
+            use zip::write::SimpleFileOptions;
             let cursor = Cursor::new(&mut archive);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             let content = "\\id PSA Psalms\n\\c 23\n\\v 1 The Lord is my shepherd\n";
             writer.start_file("PSA.usfm", options).unwrap();
             writer.write_all(content.as_bytes()).unwrap();

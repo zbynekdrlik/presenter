@@ -73,7 +73,7 @@ mod tests {
     use presenter_persistence::Repository;
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
-    use zip::write::FileOptions;
+    use zip::write::SimpleFileOptions;
 
     use std::collections::{HashMap, HashSet};
     use std::io::{Cursor, Write};
@@ -113,7 +113,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut buffer);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             writer.start_file("JHN.usfm", options).unwrap();
             writer.write_all(CONTENT.as_bytes()).unwrap();
             writer.finish().unwrap();
@@ -140,7 +140,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut buffer);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             writer.start_file("SEB.bbl.mybible", options).unwrap();
             writer.write_all(&bytes).unwrap();
             writer.finish().unwrap();
@@ -177,7 +177,7 @@ mod tests {
         {
             let cursor = Cursor::new(&mut buffer);
             let mut writer = zip::ZipWriter::new(cursor);
-            let options = FileOptions::default();
+            let options = SimpleFileOptions::default();
             writer.start_file(filename, options).unwrap();
             writer.write_all(&bytes).unwrap();
             writer.finish().unwrap();
