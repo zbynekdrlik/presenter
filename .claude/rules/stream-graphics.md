@@ -607,11 +607,13 @@ content_transition }` plays a shared Drive folder's photos + videos in a loop. T
   JS heap seldom runs (the stream-pp renderer reached ~3.3 GB). Now `item_done` parks a finished
   item's ticket in `Player.due` while `document.visibilityState == "hidden"`, and ONE
   `window_event_listener_untyped("visibilitychange")` per element (the event bubbles from the
-  document to the window; removed in `on_cleanup`) advances a still-current `due` once visible.
-  The first mount, the playlist refetch and the settle/fade timers are unchanged.
+  document to the window; removed in `on_cleanup`) resumes a still-current `due` once visible:
+  a parked PHOTO gets a fresh full `image_seconds` hold (the page turns visible exactly at the OBS
+  cut to the output, and an item change must not land on the cut), a parked video advances at
+  once. The first mount, the playlist refetch and the settle/fade timers are unchanged.
   `PlaybackVideo`'s `on_cleanup` runs `pause()` + `removeAttribute("src")` + `load()`: with no
-  source the load algorithm ends at NETWORK_EMPTY without an `error` event. Never for `<img>`
-  (a removed `src` may queue an `error`; each URL is one memory-cache entry). Logs are
+  source the load algorithm ends at NETWORK_EMPTY without an `error` event, and `load()` cancels
+  queued media events. Not for `<img>` (not needed: each URL is one memory-cache entry). Logs are
   `console.log`. Playwright disables renderer backgrounding, so a test reaches this path only by
   overriding `document.visibilityState`/`hidden` as own properties (the WASM getter is
   structural, it reads them) and dispatching a BUBBLING `visibilitychange` — `new Event(…)`

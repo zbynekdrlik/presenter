@@ -17,7 +17,9 @@
 //! an empty folder) renders an empty, transparent frame.
 //!
 //! While the page is HIDDEN the loop holds (#868): an item that finishes then
-//! is parked and the loop moves on once the page is visible again. OBS hides
+//! is parked. Once the page is visible again a parked photo stays a fresh
+//! full `image_seconds` (an OBS cut to the output must not land on an item
+//! change) and a parked video moves on at once. OBS hides
 //! a browser source that no view shows (`WasHidden`, also with `shutdown`
 //! off), so an unseen `pre` page used to mount a new photo or video every few
 //! seconds for hours. A removed video also drops its media resource at once
@@ -294,9 +296,10 @@ fn PlaybackVideo(
     // #868: a removed video lets go of its media player and buffers now, not
     // at the next major GC (a page with a ~2 MB JS heap seldom runs one). With
     // no source the load algorithm ends at NETWORK_EMPTY without an `error`
-    // event, so the already dropped `on:error` closure never fires. A photo
-    // keeps its `src`: each URL is one memory-cache entry, and removing an
-    // `<img>` src may queue an `error` to a dropped listener.
+    // event, and `load()` also cancels any queued media event, so the
+    // `on:error` / `on:ended` closures, dropped right after this cleanup,
+    // never fire. A photo keeps its `src`: not needed, each URL is one
+    // memory-cache entry.
     on_cleanup(move || {
         if let Some(video) = video_ref.try_get_untracked().flatten() {
             release_video(&video);
@@ -463,8 +466,10 @@ fn page_hidden() -> bool {
 
 /// Hold the loop while the page is hidden (#868): on `visibilitychange` back
 /// to visible, an item that finished meanwhile (`due`) and is still the
-/// current one moves the loop on at once. The event bubbles from the document
-/// to the window; the listener goes with the element.
+/// current one resumes the loop — a photo with a fresh full hold (the page
+/// turns visible exactly at an OBS cut to this output; a change right then
+/// would land on the cut), a video at once (it ended or stalled). The event
+/// bubbles from the document to the window; the listener goes with the element.
 fn watch_visibility(player: Player) {
     let listener = window_event_listener_untyped("visibilitychange", move |_| {
         if page_hidden() {
@@ -472,14 +477,34 @@ fn watch_visibility(player: Player) {
             return;
         }
         let due = player.due.try_update_value(|due| due.take()).flatten();
-        if due.is_some_and(|ticket| player.is_current(ticket)) {
-            leptos::logging::log!("stream playback: page visible — loop resumed");
-            advance(player);
-        } else {
-            leptos::logging::log!("stream playback: page visible");
+        match due.filter(|ticket| player.is_current(*ticket)) {
+            Some(ticket) if showing_photo(player) => {
+                leptos::logging::log!("stream playback: page visible — photo held, loop resumed");
+                let hold = hold_ms(player.image_seconds, Change::Cut, true);
+                Timeout::new(hold, move || item_done(player, ticket)).forget();
+            }
+            Some(_) => {
+                leptos::logging::log!("stream playback: page visible — loop resumed");
+                advance(player);
+            }
+            None => leptos::logging::log!("stream playback: page visible"),
         }
     });
     on_cleanup(move || listener.remove());
+}
+
+/// `true` when the item on screen (the newest layer not leaving) is a photo.
+fn showing_photo(player: Player) -> bool {
+    player
+        .layers
+        .try_with_untracked(|layers| {
+            layers
+                .iter()
+                .rev()
+                .find(|layer| !layer.leaving)
+                .is_some_and(|layer| layer.item.kind == PlaybackItemKind::Image)
+        })
+        .unwrap_or(false)
 }
 
 /// Drop a removed video's media resource: pause, no source, `load()`.
