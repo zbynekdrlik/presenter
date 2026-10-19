@@ -9,7 +9,7 @@ use regex::Regex;
 use rusqlite::Connection;
 use std::io::{Cursor, Write};
 use tempfile::NamedTempFile;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 
 const BUNDLED_KJV: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -21,7 +21,7 @@ fn zip_with(name: &str, bytes: &[u8]) -> Vec<u8> {
     {
         let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
         writer
-            .start_file(name, FileOptions::default())
+            .start_file(name, SimpleFileOptions::default())
             .expect("zip entry");
         writer.write_all(bytes).expect("zip write");
         writer.finish().expect("zip finish");
