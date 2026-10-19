@@ -347,17 +347,18 @@ test("#843 editor: a playback element takes a Drive folder link and shows its sy
 
 const LOOP_SLUG = "t843-loop";
 
-/** The output a loop test seeds: its slug, the folder link and how many items
- *  the mirror must hold before the page opens. */
-type LoopSeed = { slug: string; link: string; items: number };
+/** The output a loop test seeds: its slug, the folder link, how many items
+ *  the mirror must hold before the page opens and the photo time (default 1 s). */
+type LoopSeed = { slug: string; link: string; items: number; imageSeconds?: number };
 
-/** Seed an own output whose base scene holds one playback element: photos 1 s,
- *  hard cuts, muted. Returns once the mirror holds all the folder's items. */
+/** Seed an own output whose base scene holds one playback element: photos 1 s
+ *  (or `imageSeconds`), hard cuts, muted. Returns once the mirror holds all the
+ *  folder's items. */
 async function seedLoopOutput(
   request: APIRequestContext,
   seed: LoopSeed = { slug: LOOP_SLUG, link: FOLDER_LINK, items: 3 },
 ): Promise<void> {
-  const { slug, link, items } = seed;
+  const { slug, link, items, imageSeconds = 1 } = seed;
   const created = await request.post(`${baseURL}/stream/api/outputs`, {
     data: { slug, name: `Playback loop ${slug}` },
   });
@@ -374,7 +375,7 @@ async function seedLoopOutput(
       fit: "contain",
       frame: { xPct: 10, yPct: 10, wPct: 40, hPct: 40 },
       opacity: 1,
-      image_seconds: 1,
+      image_seconds: imageSeconds,
       muted: true,
       content_transition: { mode: "cut" },
     },
@@ -505,12 +506,17 @@ async function setPageHidden(page: Page, hidden: boolean): Promise<number> {
   }, hidden);
 }
 
-test("#868 output: the loop holds while the page is hidden and moves on once it is visible", async ({
+test("#868 output: the loop holds while the page is hidden; once visible the photo gets a fresh full time", async ({
   page,
 }) => {
   const errors: string[] = [];
   attachConsoleErrorCollector(page, errors);
-  await seedLoopOutput(page.request, { slug: "t868-hidden", link: PHOTO_LINK, items: 2 });
+  await seedLoopOutput(page.request, {
+    slug: "t868-hidden",
+    link: PHOTO_LINK,
+    items: 2,
+    imageSeconds: 2,
+  });
   await installLoopRecorder(page);
 
   await page.goto(`${baseURL}/stream/t868-hidden`);
@@ -520,24 +526,28 @@ test("#868 output: the loop holds while the page is hidden and moves on once it 
     "2",
     { timeout: 30_000 },
   );
-  // The loop runs (photos at 1 s): at least red → blue.
+  // The loop runs (photos at 2 s): at least red → blue.
   await expect
     .poll(async () => (await loopRecord(page)).shown.length, { timeout: 15_000 })
     .toBeGreaterThanOrEqual(2);
 
-  // Hidden: the photo on screen runs out within 1 s, but no new layer mounts.
-  // A fixed wait is the only way to show that nothing happens; 2.5 s covers
-  // two more photos of a loop that kept going.
+  // Hidden: the photo on screen runs out within 2 s, but no new layer mounts.
+  // A fixed wait is the only way to show that nothing happens; 3.5 s covers
+  // the rest of that photo plus most of the next one of a loop that kept going.
   const atHide = await setPageHidden(page, true);
-  await page.waitForTimeout(2_500);
+  await page.waitForTimeout(3_500);
   expect((await loopRecord(page)).shown.length, "no layer mounts while hidden").toBe(atHide);
   await expect(page.locator('[data-role="stream-playback-layer"]')).toHaveCount(1);
 
-  // Visible again: the photo that ran out while hidden moves on at once.
+  // Visible again (an OBS scene cut to this output): the photo that ran out
+  // while hidden is NOT cut away at that moment. It stays a fresh full 2 s,
+  // then the loop moves on.
   const atShow = await setPageHidden(page, false);
   expect(atShow).toBe(atHide);
+  await page.waitForTimeout(300);
+  expect((await loopRecord(page)).shown.length, "the photo stays right after visible").toBe(atHide);
   await expect
-    .poll(async () => (await loopRecord(page)).shown.length, { timeout: 1_500 })
+    .poll(async () => (await loopRecord(page)).shown.length, { timeout: 6_000 })
     .toBeGreaterThan(atHide);
   expect((await loopRecord(page)).errors).toEqual([]);
 
