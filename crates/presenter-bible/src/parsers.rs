@@ -50,7 +50,7 @@ fn parse_usfm_zip(
         if !file.is_file() {
             continue;
         }
-        let name = file.name().to_string();
+        let name = file.name()?.to_string();
         if !name.ends_with(".usfm") {
             continue;
         }
@@ -77,7 +77,7 @@ fn parse_mysword_sqlite_zip(
         if !file.is_file() {
             continue;
         }
-        let name = file.name().to_ascii_lowercase();
+        let name = file.name()?.to_ascii_lowercase();
         if name.ends_with(".bbl.mybible") {
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
@@ -180,7 +180,7 @@ fn parse_obohu_sqlite_zip(
         if !file.is_file() {
             continue;
         }
-        let name = file.name().to_ascii_lowercase();
+        let name = file.name()?.to_ascii_lowercase();
         if !name.ends_with(".sqlite3") {
             continue;
         }
