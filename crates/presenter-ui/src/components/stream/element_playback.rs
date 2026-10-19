@@ -18,8 +18,9 @@
 //!
 //! While the page is HIDDEN the loop holds (#868): an item that finishes then
 //! is parked. Once the page is visible again a parked photo stays a fresh
-//! full `image_seconds` (an OBS cut to the output must not land on an item
-//! change) and a parked video moves on at once. OBS hides
+//! full `image_seconds` (the moment a view first shows the output, OBS
+//! preview or program, must not land on an item change) and a parked video
+//! moves on at once. OBS hides
 //! a browser source that no view shows (`WasHidden`, also with `shutdown`
 //! off), so an unseen `pre` page used to mount a new photo or video every few
 //! seconds for hours. A removed video also drops its media resource at once
@@ -467,8 +468,9 @@ fn page_hidden() -> bool {
 /// Hold the loop while the page is hidden (#868): on `visibilitychange` back
 /// to visible, an item that finished meanwhile (`due`) and is still the
 /// current one resumes the loop — a photo with a fresh full hold (the page
-/// turns visible exactly at an OBS cut to this output; a change right then
-/// would land on the cut), a video at once (it ended or stalled). The event
+/// turns visible when a view first shows the output, OBS preview or program;
+/// an item change right then would land on that moment), a video at once (it
+/// ended or stalled). The event
 /// bubbles from the document to the window; the listener goes with the element.
 fn watch_visibility(player: Player) {
     let listener = window_event_listener_untyped("visibilitychange", move |_| {

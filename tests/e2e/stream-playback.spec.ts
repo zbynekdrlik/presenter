@@ -501,6 +501,7 @@ async function setPageHidden(page: Page, hidden: boolean): Promise<number> {
       delete doc.visibilityState;
       delete doc.hidden;
     }
+    (window as unknown as { __visibilityAt: number }).__visibilityAt = performance.now();
     document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
     return (window as unknown as { __playback: { shown: string[] } }).__playback.shown.length;
   }, hidden);
@@ -539,16 +540,35 @@ test("#868 output: the loop holds while the page is hidden; once visible the pho
   expect((await loopRecord(page)).shown.length, "no layer mounts while hidden").toBe(atHide);
   await expect(page.locator('[data-role="stream-playback-layer"]')).toHaveCount(1);
 
-  // Visible again (an OBS scene cut to this output): the photo that ran out
-  // while hidden is NOT cut away at that moment. It stays a fresh full 2 s,
-  // then the loop moves on.
+  // Visible again (a view, OBS preview or program, starts showing the output):
+  // the photo that ran out while hidden is NOT changed at that moment. It
+  // stays a fresh full 2 s, then the loop moves on. Both times are taken in
+  // the page (the visibility dispatch and the next layer mount), so runner lag
+  // cannot shorten or stretch the measured gap.
+  await page.evaluate(() => {
+    const w = window as unknown as { __nextMountAt?: number };
+    new MutationObserver((records, observer) => {
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof Element && node.matches('[data-role="stream-playback-layer"]')) {
+            w.__nextMountAt = performance.now();
+            observer.disconnect();
+            return;
+          }
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
   const atShow = await setPageHidden(page, false);
   expect(atShow).toBe(atHide);
-  await page.waitForTimeout(300);
-  expect((await loopRecord(page)).shown.length, "the photo stays right after visible").toBe(atHide);
   await expect
     .poll(async () => (await loopRecord(page)).shown.length, { timeout: 6_000 })
     .toBeGreaterThan(atHide);
+  const gapMs = await page.evaluate(() => {
+    const w = window as unknown as { __visibilityAt: number; __nextMountAt?: number };
+    return (w.__nextMountAt ?? Number.NaN) - w.__visibilityAt;
+  });
+  expect(gapMs, "the parked photo stays a fresh full 2 s after visible").toBeGreaterThanOrEqual(1_800);
   expect((await loopRecord(page)).errors).toEqual([]);
 
   expect(errors).toEqual([]);
