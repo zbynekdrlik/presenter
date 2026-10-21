@@ -736,13 +736,13 @@ test("#871 leaving the page (another window, tab or app, a hidden phone page) sa
   await bName.fill("Preč B skryté");
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
-    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
   await expect.poll(() => savedName(b)).toBe("Preč B skryté");
   expect(patches.get(b)).toEqual(["Preč B skryté"]);
   await page.evaluate(() => {
     delete (document as { visibilityState?: unknown }).visibilityState;
-    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
 
   // C: both at once (the window blur, then the page hidden): ONE save.
@@ -752,13 +752,13 @@ test("#871 leaving the page (another window, tab or app, a hidden phone page) sa
     document.hasFocus = () => false;
     el.dispatchEvent(new FocusEvent("blur"));
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
-    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
   await expect.poll(() => savedName(c)).toBe("Preč C oboje");
   await page.evaluate(() => {
     delete (document as { hasFocus?: unknown }).hasFocus;
     delete (document as { visibilityState?: unknown }).visibilityState;
-    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
   // Back in the page: leaving the field now has nothing left to save.
   await cName.blur();
