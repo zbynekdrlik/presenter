@@ -352,6 +352,10 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
   await expect(view(page).locator('[data-role="operator-nameplates-help"]')).toContainText(
     "tlačidlo na Stream Decku",
   );
+  // Both ways to move a plate: the ↑ ↓ keys and dragging by the handle (its icon).
+  await expect(view(page).locator('[data-role="operator-nameplates-help"]')).toContainText(
+    "Šípkami ↑ ↓ alebo potiahnutím za úchyt ⠿ presuniete menovku na iné tlačidlo.",
+  );
 
   // Button 1 is the song. A fresh DB: no plates, and `stream` has no lower
   // third yet, so the hint says a plate would not show.
