@@ -137,7 +137,7 @@ fn NameplateList(
             <header class="nameplates-view__head">
                 <h2 class="nameplates-view__title">"Menovky"</h2>
                 <p class="nameplates-view__help" data-role="operator-nameplates-help">
-                    "Číslo pri riadku je tlačidlo na Stream Decku: 1 je pieseň, potom menovky v poradí tohto zoznamu. Šípkami ↑ ↓ presuniete menovku na iné tlačidlo."
+                    "Číslo pri riadku je tlačidlo na Stream Decku: 1 je pieseň, potom menovky v poradí tohto zoznamu. Šípkami ↑ ↓ alebo potiahnutím za úchyt ⠿ presuniete menovku na iné tlačidlo."
                 </p>
             </header>
             <Show when=move || has_layer.get() == Some(false)>
