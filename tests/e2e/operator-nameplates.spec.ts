@@ -15,6 +15,9 @@
  *  - a reorder keeps the focus where it was: ↑ / ↓ on the drag handle step on,
  *    and a reorder from elsewhere while typing keeps the focus, the caret and
  *    the text, and saves nothing early;
+ *  - leaving the page (the window loses the focus, the page goes hidden, or
+ *    both) saves the half-typed text, once;
+ *  - a plate deleted elsewhere while half-typed: a toast says it was not saved;
  *  - two saves of one plate go one at a time (the text saved last wins);
  *  - a plate deleted elsewhere mid-drag takes its drop line with it;
  *  - the Companion slot labels (#870) follow a rename and a reorder made here;
@@ -686,6 +689,118 @@ test("#871 a reorder from elsewhere while typing keeps the focus, the caret and 
   expect(consoleErrors).toEqual([]);
 });
 
+test("#871 leaving the page (another window, tab or app, a hidden phone page) saves the half-typed text, once", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b, c] = await seedPlates(request, [
+    ["Preč A", "1"],
+    ["Preč B", "2"],
+    ["Preč C", "3"],
+  ]);
+  const patches = new Map<number, string[]>([
+    [a, []],
+    [b, []],
+    [c, []],
+  ]);
+  page.on("request", (req) => {
+    if (req.method() !== "PATCH") return;
+    const id = Number(req.url().split("/stream/api/nameplates/")[1]);
+    patches.get(id)?.push((JSON.parse(req.postData() ?? "{}") as { primaryText: string }).primaryText);
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b, c]);
+  const savedName = async (id: number) =>
+    (await listPlates(request)).find((p) => p.id === id)?.primaryText;
+
+  // A: the WINDOW loses the focus (alt-tab, OBS, Companion, another browser
+  // tab): the field gets `blur` but stays the document's active element.
+  const aName = row(page, a).locator(NAME);
+  await aName.fill("Preč A okno");
+  await aName.evaluate((el) => {
+    document.hasFocus = () => false;
+    el.dispatchEvent(new FocusEvent("blur"));
+  });
+  expect(await aName.evaluate((el) => document.activeElement === el)).toBe(true);
+  await expect.poll(() => savedName(a)).toBe("Preč A okno");
+  expect(patches.get(a)).toEqual(["Preč A okno"]);
+  await page.evaluate(() => {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+  });
+
+  // B: the page goes hidden (a phone locked or switched to another app, where
+  // the tab may be killed), with no blur at all.
+  const bName = row(page, b).locator(NAME);
+  await bName.fill("Preč B skryté");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => savedName(b)).toBe("Preč B skryté");
+  expect(patches.get(b)).toEqual(["Preč B skryté"]);
+  await page.evaluate(() => {
+    delete (document as { visibilityState?: unknown }).visibilityState;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+
+  // C: both at once (the window blur, then the page hidden): ONE save.
+  const cName = row(page, c).locator(NAME);
+  await cName.fill("Preč C oboje");
+  await cName.evaluate((el) => {
+    document.hasFocus = () => false;
+    el.dispatchEvent(new FocusEvent("blur"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => savedName(c)).toBe("Preč C oboje");
+  await page.evaluate(() => {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+    delete (document as { visibilityState?: unknown }).visibilityState;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  // Back in the page: leaving the field now has nothing left to save.
+  await cName.blur();
+  await expect(cName).toHaveValue("Preč C oboje");
+  expect(patches.get(c)).toEqual(["Preč C oboje"]);
+  expect(patches.get(a)).toEqual(["Preč A okno"]);
+  expect(patches.get(b)).toEqual(["Preč B skryté"]);
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a plate deleted elsewhere while its text is half-typed: a toast says the change was not saved", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b] = await seedPlates(request, [
+    ["Zmaz A", "1"],
+    ["Zmaz B", "2"],
+  ]);
+  const patches: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PATCH") patches.push(req.url());
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b]);
+
+  // Typing in B (not saved yet) when another operator deletes B.
+  const bName = row(page, b).locator(NAME);
+  await bName.fill("Zmaz B rozpísaná");
+  await deletePlate(request, b);
+  await expect(row(page, b)).toHaveCount(0);
+  const toast = page.locator('[data-role="toast"]');
+  await expect(toast).toHaveText("Menovka bola medzičasom zmazaná — zmena sa neuložila.");
+  await expect(toast).toHaveAttribute("data-visible", "true");
+  expect(patches, "nothing is saved for a deleted plate").toEqual([]);
+  await expect.poll(() => rowOrder(page)).toEqual([a]);
+
+  expect(consoleErrors).toEqual([]);
+});
+
 test("#871 two saves of one plate go one at a time, so the text saved last is the one kept", async ({
   page,
   request,
@@ -698,16 +813,25 @@ test("#871 two saves of one plate go one at a time, so the text saved last is th
   const annaRole = row(page, anna).locator(ROLE);
   await expect(annaName).toHaveValue("Ulož Anna");
 
-  // The first save is held at the network. A second save of the same plate
-  // that goes out meanwhile is let through FIRST, as a server applying the two
-  // out of order would. With one save per plate on its way, the second never
-  // goes out before the first is done, so the first is released after 2 s.
+  // The first save is held at the network until the page says the second save
+  // WAITS for it (its own log line), or until a second PATCH arrives, whichever
+  // comes first. A second PATCH that arrives first is let through FIRST, as a
+  // server applying the two out of order would, and fails the test below. No
+  // timer: the page's own signal releases the first save on any runner.
   type Body = { primaryText: string; secondaryText: string };
   const bodies: Body[] = [];
+  let queuedSeen = () => {};
+  const queued = new Promise<"queued">((resolve) => (queuedSeen = () => resolve("queued")));
+  page.on("console", (msg) => {
+    if (msg.text() === `nameplates: plate ${anna} save waits for the one on its way`) {
+      queuedSeen();
+    }
+  });
   let secondSeen = () => {};
-  const second = new Promise<boolean>((resolve) => (secondSeen = () => resolve(true)));
+  const second = new Promise<"second">((resolve) => (secondSeen = () => resolve("second")));
   let secondApplied = () => {};
   const secondDone = new Promise<void>((resolve) => (secondApplied = resolve));
+  let firstReleasedBy: "queued" | "second" | undefined;
   await page.route(`**/stream/api/nameplates/${anna}`, async (route) => {
     if (route.request().method() !== "PATCH") {
       await route.continue();
@@ -715,8 +839,8 @@ test("#871 two saves of one plate go one at a time, so the text saved last is th
     }
     const n = bodies.push(route.request().postDataJSON() as Body);
     if (n === 1) {
-      const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000));
-      if (await Promise.race([second, timeout])) await secondDone;
+      firstReleasedBy = await Promise.race([queued, second]);
+      if (firstReleasedBy === "second") await secondDone;
       await route.continue();
       return;
     }
@@ -735,6 +859,7 @@ test("#871 two saves of one plate go one at a time, so the text saved last is th
   await annaRole.blur();
 
   await expect.poll(() => bodies.length).toBe(2);
+  expect(firstReleasedBy, "the second save waited for the first").toBe("queued");
   expect(bodies).toEqual([
     { primaryText: "Ulož Anna Nová", secondaryText: "kazateľka" },
     { primaryText: "Ulož Anna Nová", secondaryText: "pastorka" },
