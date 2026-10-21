@@ -7,6 +7,9 @@
  *  - the Menovky tab opens the view (after AI, `/ui/operator/menovky`);
  *  - add two plates and rename one: the row text AND the REST list;
  *  - reorder: the button numbers 2 / 3 swap and the REST order follows;
+ *  - half-typed text survives every list refresh until it is saved (blur or
+ *    Enter), even a rename of the same plate from elsewhere;
+ *  - two quick ↑ taps move a plate up two places;
  *  - Zobraziť → on-air highlight + `GET …/nameplates/active`; Skryť → cleared;
  *    the song row shows the live song and puts the song plate on air;
  *  - changes made through REST from outside (add, rename, show) show live;
@@ -142,6 +145,25 @@ async function setActive(
   expect(resp.status(), `set active nameplate ${JSON.stringify(body)}`).toBe(200);
 }
 
+/** Delete every `stream` plate, so a test starts from a known list. */
+async function resetPlates(request: APIRequestContext): Promise<void> {
+  for (const plate of await listPlates(request)) {
+    await deletePlate(request, plate.id);
+  }
+}
+
+/** Create plates in this order (they land at the end of the list). */
+async function seedPlates(
+  request: APIRequestContext,
+  plates: Array<[string, string]>,
+): Promise<number[]> {
+  const ids: number[] = [];
+  for (const [name, role] of plates) {
+    ids.push(await createPlate(request, name, role));
+  }
+  return ids;
+}
+
 /** The id of the plate named `name`, once the server lists it. */
 async function waitForPlate(request: APIRequestContext, name: string): Promise<number> {
   let id = 0;
@@ -236,6 +258,16 @@ async function addThroughUi(page: Page, name: string, role: string): Promise<voi
 
 async function rowOrder(page: Page): Promise<number[]> {
   return rows(page).evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-nameplate-id"))));
+}
+
+/** The REST list, the rows on screen and their Stream Deck numbers all show
+ *  `ids` in this order. */
+async function expectOrder(page: Page, request: APIRequestContext, ids: number[]): Promise<void> {
+  await expect.poll(async () => (await listPlates(request)).map((p) => p.id)).toEqual(ids);
+  await expect.poll(() => rowOrder(page)).toEqual(ids);
+  for (const [index, id] of ids.entries()) {
+    await expect(row(page, id).locator(BUTTON)).toHaveText(String(index + 2));
+  }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -369,6 +401,74 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
   await expect(page.locator("body")).toHaveAttribute("data-view", "menovky");
   await expect(row(page, boris).locator(BUTTON)).toHaveText("2");
   await expect(row(page, anna).locator(NAME)).toHaveValue("Op Anna Externá");
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 typing in a row survives every list refresh until it is saved", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [anna, boris] = await seedPlates(request, [
+    ["Typ Anna", "kazateľka"],
+    ["Typ Boris", "hosť"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaName = row(page, anna).locator(NAME);
+  await expect(annaName).toHaveValue("Typ Anna");
+
+  // Half-typed, not saved (the field keeps the focus).
+  await annaName.fill("Typ Anna rozpísaná");
+  await expect(annaName).toBeFocused();
+
+  // Three refreshes of the list from outside: a new plate, ANOTHER plate
+  // renamed, and THIS plate renamed elsewhere (its role too).
+  const cyril = await createPlate(request, "Typ Cyril", "spevák");
+  await expect(row(page, cyril).locator(NAME)).toHaveValue("Typ Cyril");
+  await patchPlate(request, boris, "Typ Boris Externý", "hosť");
+  await expect(row(page, boris).locator(NAME)).toHaveValue("Typ Boris Externý");
+  await patchPlate(request, anna, "Typ Anna Externá", "kazateľka nová");
+  // The role field (nothing typed there) shows the refresh, so it has landed.
+  await expect(row(page, anna).locator(ROLE)).toHaveValue("kazateľka nová");
+  await expect(annaName).toHaveValue("Typ Anna rozpísaná");
+  await expect(annaName).toBeFocused();
+
+  // Leaving the field saves what was typed (with the role the list now has).
+  await annaName.blur();
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === anna))
+    .toMatchObject({ primaryText: "Typ Anna rozpísaná", secondaryText: "kazateľka nová" });
+  await expect(annaName).toHaveValue("Typ Anna rozpísaná");
+
+  // Enter saves too, and an external rename shows again once nothing is typed.
+  await annaName.fill("Typ Anna Enter");
+  await annaName.press("Enter");
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === anna)?.primaryText)
+    .toBe("Typ Anna Enter");
+  await patchPlate(request, anna, "Typ Anna Zvonka", "kazateľka nová");
+  await expect(annaName).toHaveValue("Typ Anna Zvonka");
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 two quick ↑ taps move a plate up two places", async ({ page, request }) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b, c] = await seedPlates(request, [
+    ["Rýchlo A", "1"],
+    ["Rýchlo B", "2"],
+    ["Rýchlo C", "3"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b, c]);
+
+  const up = row(page, c).locator('[data-role="stream-nameplate-up"]');
+  await up.click();
+  await up.click();
+  await expectOrder(page, request, [c, a, b]);
 
   expect(consoleErrors).toEqual([]);
 });
