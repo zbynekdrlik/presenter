@@ -23,8 +23,13 @@ paths:
 - `components/nameplates/order.rs` — pure order logic: ↑/↓ step, drop slot, drop marker,
   local `apply_order`. `drag.rs` — the DOM side of the drag (pointer capture, row boxes).
 - `components/nameplates/focus.rs` — `keep_focus` (the list keeps its focus across a row
-  move) and `holds_focus`. `save_queue.rs` — pure `SaveQueue`: one PATCH per plate on its
-  way, the newest waiting save replaces an older one. Host-tested.
+  move), `rows_moving` (a move is under way) and the pure `blur_kind` (moved / focus away /
+  left). `save_queue.rs` — pure `SaveQueue`: one PATCH per plate on its way, the newest
+  waiting save replaces an older one, `take_waiting` for a page that hides; `SaveOutcome`
+  (how a save ended) + its toast texts. Host-tested.
+- `api/mod.rs::start_patch_keepalive` + `finish_json` — the plate PATCH as a `keepalive`
+  fetch started before the call returns (the `ndi_video::dispatch_delete` pattern); only the
+  plate saves use it.
 - `components/nameplates/numbering.rs` — pure Stream Deck numbering (#870: button 1 = song,
   person at list index i = button i + 2, grid 4 × 3 = 12 buttons). Host-tested.
 - `components/nameplates/operator_view.rs` — the operator's Menovky view
@@ -52,34 +57,75 @@ paths:
   its DRAFT (set on `input`) else the saved text, both `Memo`s. tachys re-writes a `String`
   `prop:value` on every run with no comparison, so a plain closure over the whole list would
   wipe typing on ANY list refresh. A row saves on BLUR (Enter blurs), one PATCH carrying both
-  fields; `NameplateStore::update` applies the saved plate locally first, then calls `done`,
-  and each draft is dropped only if it is still exactly what was sent (refused = back to
-  the saved text). Never commit on `change` as well as `blur`: that saved twice.
-- **A blur saves only when the field was LEFT** (`RowSave::commit_on_leave`): it decides in
-  a `spawn_local` task, queued after the focus restore below. A field that holds the focus
-  again was only moved by a reorder (Chrome fires `blur` when `insertBefore` moves the
-  focused node) and saves nothing. "Holds the focus" = the document's active element AND
-  `document.hasFocus()` (`focus::holds_focus`): a blur because the WINDOW lost the focus
-  (alt-tab, OBS, Companion, another tab, a locked phone) keeps the field active, and must
-  still save; that regression shipped once in the #871 review round. Never decide
-  synchronously in the blur handler: the half-typed text was saved early on every reorder
-  from elsewhere.
-- **The row's save logic is one `Copy` struct, `RowSave`** (`plate_list.rs`): `commit`,
-  `commit_on_leave`, `commit_if_hidden`, `report_lost`. A page that goes hidden saves what
-  is typed (a per-row window `visibilitychange` listener, removed in `on_cleanup`): a phone
-  browser may kill a hidden tab with no blur. `RowSave.sending` holds the texts of the
-  row's save on its way, so the same texts are never sent twice (the window blur and the
-  page hidden right after = one PATCH). A row whose plate was deleted elsewhere with typed,
-  unsent text toasts "Menovka bola medzičasom zmazaná — zmena sa neuložila." from its
-  `on_cleanup` (cleanups run before the row's signals are disposed); the field saves
-  nothing then.
+  fields; `NameplateStore::update` applies the saved plate locally first, then calls
+  `done(SaveOutcome)`. Saved or refused (an empty name on leaving the field, a 4xx): each
+  draft is dropped only if it is still exactly what was sent (refused = back to the saved
+  text). Never commit on `change` as well as `blur`: that saved twice.
+- **A failed save keeps the typed text** (`SaveOutcome::of_error`, host-tested). A network
+  error (a phone's Wi-Fi asleep after a lock, a cancelled fetch) or a server fault (5xx, 408,
+  429, an unreadable 2xx body) is `Failed`: the drafts STAY, the toast says the text stayed
+  („Uloženie zlyhalo: … Text ostal v poli — uloží sa znova, keď pole opustíte."), and the
+  next save sends it again: leaving the field, Enter, or the page back in view
+  (`RowSave.retry`, read by the `visibilitychange` → visible path). A 404 is `Gone`: the
+  store toasts `DELETED_UNSAVED` (the deleted-plate text) and the row drops its drafts, so
+  the row leaving the list says nothing more. `RowSave::settle` only WRITES signals: the
+  `done` of a save can run after its row was disposed (a write to a disposed signal is a
+  no-op in reactive_graph 0.1.8, a read panics).
+- **A blur saves only when the field was LEFT** (`RowSave::commit_on_leave`). The blur
+  handler reads `focus::rows_moving()` AT ONCE; the decision waits in a `spawn_local` task,
+  queued after the focus restore below (`focus::blur_kind`). Only a blur DURING a move whose
+  field holds the focus again (active element AND `document.hasFocus()`) was a move (the
+  browser fires `blur` when `insertBefore` moves the focused node) and saves nothing. Any
+  other blur saves: a field still active outside a move lost the WINDOW's focus (alt-tab,
+  OBS, Companion, another tab, a locked phone), whatever `hasFocus()` says when the task
+  runs (Chrome already says false, Safari / Firefox are not confirmed; the pre-marker
+  `hasFocus` heuristic would have skipped that save there); a field no longer active was
+  left. `keep_focus` holds the marker from before the list change until its restore task
+  has run: the move, its render effect and the restore run in one go of queued tasks, so no
+  key, click or window event can blur in between. Never decide synchronously in the blur
+  handler: the half-typed text was saved early on every reorder from elsewhere.
+- **The row's save logic is one `Copy` struct, `RowSave`** (`plate_list.rs`): `commit(Why)`,
+  `settle`, `commit_on_leave`, `page_changed`, `report_lost`. `Why` = `FieldLeft` (Tab, a
+  click, Enter) / `FocusAway` (the window lost the focus) / `PageHidden` (`visibilitychange`
+  to hidden, or `pagehide`) / `PageBack` (visible again after a failed save). Only
+  `FieldLeft` refuses an empty name with „Meno nesmie byť prázdne." (and the field shows the
+  saved name again); the other three skip the save and KEEP the draft (the operator cleared
+  the name to retype it, then alt-tabbed or locked the phone). Each branch of `commit` logs
+  its decision after making it (sent / waits / sent now / on its way / empty kept), never a
+  "saved" line ahead of it. Per row, two window listeners removed in `on_cleanup`:
+  `visibilitychange` (hidden → save NOW, a phone may kill a hidden tab with no blur; visible
+  → retry a failed save) and `pagehide` (a reload or a closed tab; Chrome fires it BEFORE
+  `visibilitychange`, Safari may skip `visibilitychange` on unload). `RowSave.sending` holds
+  the texts of the row's save on its way, so the same texts are never sent twice (the
+  window blur and the page hidden right after = one PATCH). A row whose plate was deleted
+  elsewhere with typed, unsent text toasts `DELETED_UNSAVED` from its `on_cleanup`
+  (`report_lost`; cleanups run before the row's signals are disposed); the field saves
+  nothing then. A row that leaves because the EDITOR switched output (its remembered
+  `RowSave.slug` ≠ the store's slug; only kept drafts of a failed save get there, the select
+  click blurs a field first) sends that text instead: the plate still exists and the PATCH
+  is id-scoped.
 - **Saves of one plate go one at a time** (`SaveQueue` in `store.saves`, a
   `StoredValue::new_local`: a waiting save holds its `done` closure). Tab name → role and
   leaving the role are two PATCHes within one round trip; sent at once, a server applying
   them out of order kept the EARLIER text. While one is on its way the newest save waits
   (it carries both fields as they are then) and goes next; a replaced waiting save is
   dropped WITHOUT its `done` (the newer one settles the drafts). The list is reloaded once
-  nothing of that plate is left to send.
+  nothing of that plate is left to send. A page that hides yields that order: `commit`
+  with `PageHidden` (and `update(.., urgent = true, ..)`) takes the waiting save out
+  (`SaveQueue::take_waiting`, `NameplateStore::flush_save`) and sends it NOW beside the one
+  on its way: a waiting save on a frozen or closed page never went out. The server applies
+  the last PATCH it gets, and that one, sent last, carries the newest texts.
+- **Every plate PATCH is a `keepalive` fetch STARTED before `update` returns**
+  (`start_save` → `api::start_patch_keepalive`, then `finish_json` in the task). Chrome
+  cancels a plain fetch when the page unloads, and the old save started on the first poll
+  of a `spawn_local` task: a reload right after typing lost the text (probe: a plain fetch
+  queued in a microtask from `pagehide` / `visibilitychange` never reached the server, every
+  keepalive one did). `page.route` still intercepts keepalive requests, and a
+  `route.abort()` logs ONE `Failed to load resource: net::ERR_FAILED` console line.
+  Residual risk, not solvable in the page: iOS Safari may FREEZE or kill a backgrounded tab
+  without running `visibilitychange` / `pagehide` handlers to the end (killed from the app
+  switcher, memory pressure); Safari before 13 ignores `keepalive`. Text typed then is lost;
+  a save that fails because the Wi-Fi slept goes again when the page is back in view.
 - **A reorder keeps the focus** (`focus::keep_focus`). The keyed `<For>` moves a row with
   `insertBefore` (a one-step swap re-inserts BOTH rows, tachys `view/keyed.rs`), which drops
   the focus to `<body>`: ↑ / ↓ on the drag handle stopped after one step, and a reorder from
@@ -142,16 +188,46 @@ paths:
   once (`document.hasFocus = () => false` + a dispatched `FocusEvent("blur")` that leaves
   the focus on the field; `visibilityState` overridden to "hidden" + a `visibilitychange`
   dispatched with `bubbles: true`, as the browser does, or a window listener never hears
-  it; both at once = one PATCH); a plate deleted by REST while half-typed shows the toast
+  it — helpers `windowBlur` / `setPageHidden`; the window blur and THEN the page hidden =
+  one PATCH, run in TWO evaluates with the blur's PATCH held by `page.route` until the
+  page logs its hidden decision: inside one evaluate no task runs between the dispatches,
+  so the hidden save would go first); a window blur where `hasFocus()` still says true
+  saves (Safari / Firefox timing); a plate deleted by REST while half-typed shows the toast
   and sends no PATCH; two saves of one plate with the first PATCH held by `page.route`
   until the page logs `save waits for the one on its way` (raced against a second PATCH,
   which is let through first via `route.fetch` and fails the test), never a timer; the
   server ends on the later text; a plate deleted by REST mid-drag takes its drop line with
   it.
+- The keepalive / failure tests: an `addInitScript` wrapper around `window.fetch` records
+  each plate PATCH's `Request.keepalive` (wasm-bindgen calls the page's `fetch`, both the
+  gloo binding and `Window::fetch_with_request`); `page.reload()` right after `fill` must
+  leave the typed text on the server; a save waiting behind a held PATCH goes out once the
+  page hides (every PATCH held in arrival order, released one by one with `route.fetch` +
+  `fulfill`); a first PATCH `route.abort()`ed keeps the typed text + the "Text ostal v poli"
+  toast, then the next blur (or the page visible again, for a save that failed while
+  hidden) saves; a 404 (plate deleted by REST while the page's list GETs are held, so the
+  row stays) toasts the deleted-plate text; an emptied name on `windowBlur` /
+  `setPageHidden` logs `name is empty; kept as typed` (the settle signal) with no toast and
+  no PATCH, while leaving the field still toasts „Meno nesmie byť prázdne.". Specs that
+  fail a fetch on purpose split the expected Chrome console line from the rest
+  (`splitConsole`) and assert both. A negative check after a settle signal reads the
+  attribute ONCE (`getAttribute`), never `toHaveAttribute("data-visible", "false")`, which
+  retries until the 3.5 s toast timer hides a wrong toast.
 - Settle signals: a typed field keeps its draft, so prove the refresh landed through a field
   with no draft (the role) before asserting the typed one. A drag needs a tall viewport
-  (1280 × 1200) so every row is on screen.
+  (1280 × 1200) so every row is on screen. A page log line is a fair settle signal for a
+  decision with no DOM trace (`page.waitForEvent("console", { predicate, timeout })`, set
+  up before the action).
 - `tests/e2e/companion-socket.ts` = the real Companion socket helper (`enableCompanionSocket`,
   `createCompanionSocket`), shared with `stream-companion.spec.ts`.
 - `stream-editor-tabs.spec.ts` covers the same list inside the editor (add, Prehrať, Skryť);
-  `stream-editor-output-select.spec.ts` the switch clearing the old plates (list GET held).
+  `stream-editor-output-select.spec.ts` the switch clearing the old plates (list GET held)
+  and a text whose save failed (first PATCH `route.abort()`ed) being saved, not toasted as
+  deleted, when the editor switches output.
+- RED proof on Tier-0: run the new spec against the CI build of the base commit
+  (`gh run download <run> -n build-artifacts`, `target/release/presenter-server` in the
+  worktree) inside `sudo unshare -n` (the binary binds ports the deployed dev service
+  holds), `PRESENTER_DB_URL=sqlite://<tmp>/red.db?mode=rwc` and a temp copy of the spec
+  without `refreshDevData` (the private Bibles are not on dev2). Run each test in its own
+  Playwright invocation: after a failure the worker restarts, and the next server cannot
+  bind the Companion port the previous one still holds. Delete the binary and the copies.
