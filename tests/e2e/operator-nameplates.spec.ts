@@ -16,7 +16,8 @@
  *    and a reorder from elsewhere while typing keeps the focus, the caret and
  *    the text, and saves nothing early;
  *  - leaving the page (the window loses the focus, the page goes hidden, or
- *    both) saves the half-typed text, once;
+ *    the window blur and then the page hidden) saves the half-typed text,
+ *    once;
  *  - a plate deleted elsewhere while half-typed: a toast says it was not saved;
  *  - two saves of one plate go one at a time (the text saved last wins);
  *  - a plate deleted elsewhere mid-drag takes its drop line with it;
@@ -749,16 +750,37 @@ test("#871 leaving the page (another window, tab or app, a hidden phone page) sa
     document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
 
-  // C: both at once (the window blur, then the page hidden): ONE save.
+  // C: both, in the order a phone gives them: the window blur first, whose
+  // save decides in a task after the blur and is then on its way (held here
+  // at the network), THEN the page goes hidden: still ONE save. Two separate
+  // evaluates: inside one, no task runs between the two dispatches, so the
+  // hidden page would save first and the blur's task would find it sent.
   const cName = row(page, c).locator(NAME);
   await cName.fill("Preč C oboje");
+  let releaseC = () => {};
+  const cHeld = new Promise<void>((resolve) => (releaseC = resolve));
+  await page.route(`**/stream/api/nameplates/${c}`, async (route) => {
+    if (route.request().method() === "PATCH") await cHeld;
+    await route.continue();
+  });
   await cName.evaluate((el) => {
     document.hasFocus = () => false;
     el.dispatchEvent(new FocusEvent("blur"));
+  });
+  await expect.poll(() => patches.get(c)?.length).toBe(1);
+  const hiddenDecided = page.waitForEvent("console", {
+    predicate: (msg) =>
+      msg.text().startsWith(`nameplates: plate ${c} save of these texts is on its way`),
+    timeout: 10_000,
+  });
+  await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
+  await hiddenDecided;
+  releaseC();
   await expect.poll(() => savedName(c)).toBe("Preč C oboje");
+  await page.unrouteAll({ behavior: "wait" });
   await page.evaluate(() => {
     delete (document as { hasFocus?: unknown }).hasFocus;
     delete (document as { visibilityState?: unknown }).visibilityState;
