@@ -14,7 +14,7 @@ use wasm_bindgen::JsCast;
 use web_sys::{Element, KeyboardEvent, PointerEvent};
 
 use super::drag::{capture, slot_under_pointer, PlateDrag, PRIMARY_BUTTON};
-use super::focus::holds_focus;
+use super::focus::{holds_focus, page_hidden};
 use super::numbering::{beyond_grid, button_title, person_button, SONG_BUTTON};
 use super::order::drop_marker;
 use super::{song_line, NameplateStore};
@@ -178,51 +178,130 @@ impl PlateText {
     }
 }
 
-/// Save a row's texts when either field leaves focus (Enter blurs). One save
-/// carries both values, so committing the role never sends a stale name.
-fn commit(store: NameplateStore, id: i64, name: PlateText, role: PlateText) {
-    if !name.is_dirty() && !role.is_dirty() {
-        // Nothing changed (typed and typed back): just drop the drafts.
-        name.draft.set(None);
-        role.draft.set(None);
-        return;
-    }
-    let (sent_name, sent_role) = (name.value(), role.value());
-    let (name_value, role_value) = (sent_name.clone(), sent_role.clone());
-    store.update(id, name_value, role_value, move |_saved| {
-        name.settle(&sent_name);
-        role.settle(&sent_role);
-    });
-}
-
-/// A row field lost the focus: save the row, unless the field was only MOVED.
-///
-/// #871 review: a reorder (another operator, Companion, this page's ↑ / ↓ or
-/// drag) moves the row with `insertBefore`, which drops the focus of the field
-/// being typed in, and Chrome fires `blur` on the way. `focus::keep_focus`
-/// gives the focus back right after the move, so the decision waits for that:
-/// this task is queued after it. A field holding the focus again was only
-/// moved and saves nothing (the text stays a draft); a field whose row is
-/// gone (the plate deleted elsewhere) saves nothing either. Any other blur
-/// (Tab, a click elsewhere, Enter) saves.
-fn commit_on_leave(
+/// How one row saves its two texts (#871): on leaving a field, when the page
+/// goes hidden, and what it tells the operator when its plate is deleted
+/// elsewhere with text typed and not saved.
+#[derive(Clone, Copy)]
+struct RowSave {
     store: NameplateStore,
     id: i64,
     name: PlateText,
     role: PlateText,
-    field: Element,
-) {
-    leptos::task::spawn_local(async move {
-        if !field.is_connected() || name.draft.is_disposed() {
-            leptos::logging::log!("nameplates: plate {id} row is gone; nothing to save");
+    /// The texts of this row's save that is on its way. The same texts are
+    /// never sent twice: leaving the window blurs the field, and a phone also
+    /// hides the page right after.
+    sending: StoredValue<Option<(String, String)>>,
+}
+
+impl RowSave {
+    fn new(store: NameplateStore, id: i64, name: PlateText, role: PlateText) -> Self {
+        Self {
+            store,
+            id,
+            name,
+            role,
+            sending: StoredValue::new(None),
+        }
+    }
+
+    /// The texts a save would send now, when they differ from the saved ones.
+    fn unsaved(self) -> Option<(String, String)> {
+        (self.name.is_dirty() || self.role.is_dirty())
+            .then(|| (self.name.value(), self.role.value()))
+    }
+
+    /// Whether a save of exactly `texts` is already on its way.
+    fn is_sending(self, texts: &(String, String)) -> bool {
+        self.sending
+            .with_value(|sending| sending.as_ref() == Some(texts))
+    }
+
+    /// Save the row's texts. One save carries both values, so committing the
+    /// role never sends a stale name.
+    fn commit(self) {
+        let id = self.id;
+        let Some(texts) = self.unsaved() else {
+            // Nothing changed (typed and typed back): just drop the drafts.
+            self.name.draft.set(None);
+            self.role.draft.set(None);
+            return;
+        };
+        if self.is_sending(&texts) {
+            leptos::logging::log!("nameplates: plate {id} save of these texts is on its way");
             return;
         }
-        if holds_focus(&field) {
-            leptos::logging::log!("nameplates: plate {id} field was moved, not left; not saved");
+        self.sending.set_value(Some(texts.clone()));
+        let (name, role, sending) = (self.name, self.role, self.sending);
+        let (primary, secondary) = texts.clone();
+        self.store.update(id, primary, secondary, move |_saved| {
+            name.settle(&texts.0);
+            role.settle(&texts.1);
+            sending.update_value(|on_its_way| {
+                if on_its_way.as_ref() == Some(&texts) {
+                    *on_its_way = None;
+                }
+            });
+        });
+    }
+
+    /// A row field lost the focus: save the row, unless the field was only
+    /// MOVED.
+    ///
+    /// #871 review: a reorder (another operator, Companion, this page's ↑ / ↓
+    /// or drag) moves the row with `insertBefore`, which drops the focus of
+    /// the field being typed in, and Chrome fires `blur` on the way.
+    /// `focus::keep_focus` gives the focus back right after the move, so the
+    /// decision waits for that: this task is queued after it. A field that
+    /// holds the focus again, in a page that holds the window's focus, was
+    /// only moved and saves nothing (the text stays a draft). A blur because
+    /// the WINDOW lost the focus (alt-tab, OBS, another tab) leaves the field
+    /// active too, but the page has no focus then: that saves. A field whose
+    /// row is gone saves nothing ([`Self::report_lost`] tells the operator).
+    /// Any other blur (Tab, a click elsewhere, Enter) saves.
+    fn commit_on_leave(self, field: Element) {
+        let id = self.id;
+        leptos::task::spawn_local(async move {
+            if !field.is_connected() || self.name.draft.is_disposed() {
+                leptos::logging::log!("nameplates: plate {id} row is gone; nothing to save");
+                return;
+            }
+            if holds_focus(&field) {
+                leptos::logging::log!(
+                    "nameplates: plate {id} field was moved, not left; not saved"
+                );
+                return;
+            }
+            self.commit();
+        });
+    }
+
+    /// The page went hidden (another tab or app, a locked phone): save what is
+    /// typed, since a phone browser may kill a hidden page.
+    fn commit_if_hidden(self) {
+        if page_hidden() && self.unsaved().is_some() {
+            leptos::logging::log!(
+                "nameplates: plate {} saved as the page went hidden",
+                self.id
+            );
+            self.commit();
+        }
+    }
+
+    /// The row left the list (its plate deleted elsewhere) with typed text
+    /// that no save carries: say so, instead of dropping it silently.
+    fn report_lost(self) {
+        let Some(texts) = self.unsaved() else {
+            return;
+        };
+        if self.is_sending(&texts) {
             return;
         }
-        commit(store, id, name, role);
-    });
+        leptos::logging::log!("nameplates: plate {} deleted with unsaved text", self.id);
+        self.store.notify(
+            "Menovka bola medzičasom zmazaná — zmena sa neuložila.".to_string(),
+            "error",
+        );
+    }
 }
 
 /// Enter in a row field commits it, by leaving the field.
@@ -262,6 +341,16 @@ fn NameplateRow(
     };
     let name = PlateText::new(field(|p| p.primary_text.clone()));
     let role = PlateText::new(field(|p| p.secondary_text.clone()));
+    let save = RowSave::new(store, id, name, role);
+    // A hidden page may be killed (a phone), so it saves what is typed; and a
+    // row whose plate was deleted elsewhere reports text it could not save.
+    let page_hides = window_event_listener_untyped("visibilitychange", move |_| {
+        save.commit_if_hidden();
+    });
+    on_cleanup(move || {
+        page_hides.remove();
+        save.report_lost();
+    });
     let is_active = move || {
         matches!(
             store.active.get(),
@@ -380,12 +469,12 @@ fn NameplateRow(
                     prop:value=move || name.shown.get()
                     on:input=move |ev| name.draft.set(Some(event_target_value(&ev)))
                     on:keydown=blur_on_enter
-                    on:blur=move |ev| commit_on_leave(store, id, name, role, event_target(&ev)) />
+                    on:blur=move |ev| save.commit_on_leave(event_target(&ev)) />
                 <input type="text" data-role="stream-nameplate-role" aria-label="Pozícia"
                     prop:value=move || role.shown.get()
                     on:input=move |ev| role.draft.set(Some(event_target_value(&ev)))
                     on:keydown=blur_on_enter
-                    on:blur=move |ev| commit_on_leave(store, id, name, role, event_target(&ev)) />
+                    on:blur=move |ev| save.commit_on_leave(event_target(&ev)) />
             </div>
             <div class="nameplates__actions">
                 <button type="button" class="nameplates__btn" data-role="stream-nameplate-show"

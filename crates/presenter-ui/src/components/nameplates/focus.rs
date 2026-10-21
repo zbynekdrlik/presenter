@@ -11,7 +11,7 @@
 //! key is the plate id), so the noted element is the one to focus again.
 
 use wasm_bindgen::JsCast;
-use web_sys::{Element, HtmlElement, HtmlInputElement, Node};
+use web_sys::{Element, HtmlElement, HtmlInputElement, Node, VisibilityState};
 
 use crate::utils::window::{document, focus_is_free};
 
@@ -73,10 +73,21 @@ pub fn keep_focus(change: impl FnOnce()) {
     }
 }
 
-/// Whether `element` holds the focus.
+/// Whether `element` holds the focus INSIDE the page and the page holds the
+/// window's focus. A blur because the WINDOW lost the focus (alt-tab, OBS,
+/// Companion, another browser tab, a locked phone) leaves the field as the
+/// document's active element, but `hasFocus()` is false then: that is a field
+/// LEFT, not one a reorder only moved. An unknown `hasFocus` counts as left.
 pub fn holds_focus(element: &Element) -> bool {
     let node: &Node = element;
-    document()
+    let active_here = document()
         .active_element()
-        .is_some_and(|active| active.is_same_node(Some(node)))
+        .is_some_and(|active| active.is_same_node(Some(node)));
+    active_here && document().has_focus().unwrap_or(false)
+}
+
+/// The page is hidden (another tab or app, a locked phone), where a phone
+/// browser may kill it at any moment.
+pub fn page_hidden() -> bool {
+    document().visibility_state() == VisibilityState::Hidden
 }
