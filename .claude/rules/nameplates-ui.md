@@ -115,7 +115,9 @@ paths:
   Zobraziť, and any commit. A commit that came while the failed PATCH was on its way goes at
   once. Toasts: „Uloženie zlyhalo: … Text ostal v poli ako neuložený — uloží sa znova sám o
   chvíľu, …" (+ the login hint for 401 / 403); prefix „Menovka sa nezobrazila. " when a
-  waiting Zobraziť was dropped. A failure whose plate is no longer in the shown list (an
+  waiting Zobraziť was dropped. A failure that leaves the plate idle (a save sent beside it
+  on a hidden page was already answered saved) is logged, not toasted
+  (`SaveOutcome::is_reported`). A failure whose plate is no longer in the shown list (an
   editor output switch took the row) gives up with `LOST_UNSAVED` „Zmena menovky sa
   neuložila — skúste ju zadať znova.".
 - **Zobraziť** (`RowSave::show`) first commits the row's drafts (iOS Safari may not blur the
