@@ -55,12 +55,24 @@ paths:
   fields; `NameplateStore::update` applies the saved plate locally first, then calls `done`,
   and each draft is dropped only if it is still exactly what was sent (refused = back to
   the saved text). Never commit on `change` as well as `blur`: that saved twice.
-- **A blur saves only when the field was LEFT** (`commit_on_leave`): it decides in a
-  `spawn_local` task, queued after the focus restore below. A field that holds the focus
+- **A blur saves only when the field was LEFT** (`RowSave::commit_on_leave`): it decides in
+  a `spawn_local` task, queued after the focus restore below. A field that holds the focus
   again was only moved by a reorder (Chrome fires `blur` when `insertBefore` moves the
-  focused node) and saves nothing; a field whose row is gone (the plate deleted elsewhere)
-  saves nothing. Never decide synchronously in the blur handler: the half-typed text was
-  saved early on every reorder from elsewhere.
+  focused node) and saves nothing. "Holds the focus" = the document's active element AND
+  `document.hasFocus()` (`focus::holds_focus`): a blur because the WINDOW lost the focus
+  (alt-tab, OBS, Companion, another tab, a locked phone) keeps the field active, and must
+  still save; that regression shipped once in the #871 review round. Never decide
+  synchronously in the blur handler: the half-typed text was saved early on every reorder
+  from elsewhere.
+- **The row's save logic is one `Copy` struct, `RowSave`** (`plate_list.rs`): `commit`,
+  `commit_on_leave`, `commit_if_hidden`, `report_lost`. A page that goes hidden saves what
+  is typed (a per-row window `visibilitychange` listener, removed in `on_cleanup`): a phone
+  browser may kill a hidden tab with no blur. `RowSave.sending` holds the texts of the
+  row's save on its way, so the same texts are never sent twice (the window blur and the
+  page hidden right after = one PATCH). A row whose plate was deleted elsewhere with typed,
+  unsent text toasts "Menovka bola medzičasom zmazaná — zmena sa neuložila." from its
+  `on_cleanup` (cleanups run before the row's signals are disposed); the field saves
+  nothing then.
 - **Saves of one plate go one at a time** (`SaveQueue` in `store.saves`, a
   `StoredValue::new_local`: a waiting save holds its `done` closure). Tab name → role and
   leaving the role are two PATCHes within one round trip; sent at once, a server applying
@@ -126,10 +138,16 @@ paths:
 - The #871 review tests: ↑ ↑ / ↓ ↓ on a handle focused ONCE (`page.keyboard.press`; a
   `locator.press` focuses the handle again before every key and hides a lost focus); a
   REST reorder (`putOrder`) while typing keeps the focus, the caret (`setSelectionRange`,
-  then `keyboard.type`) and the text, with no PATCH until the blur; two saves of one plate
-  with the first PATCH held by `page.route` (a second one that goes out meanwhile is let
-  through first via `route.fetch`, else the first is released after 2 s), the server ends on
-  the later text; a plate deleted by REST mid-drag takes its drop line with it.
+  then `keyboard.type`) and the text, with no PATCH until the blur; leaving the page saves
+  once (`document.hasFocus = () => false` + a dispatched `FocusEvent("blur")` that leaves
+  the focus on the field; `visibilityState` overridden to "hidden" + a `visibilitychange`
+  dispatched with `bubbles: true`, as the browser does, or a window listener never hears
+  it; both at once = one PATCH); a plate deleted by REST while half-typed shows the toast
+  and sends no PATCH; two saves of one plate with the first PATCH held by `page.route`
+  until the page logs `save waits for the one on its way` (raced against a second PATCH,
+  which is let through first via `route.fetch` and fails the test), never a timer; the
+  server ends on the later text; a plate deleted by REST mid-drag takes its drop line with
+  it.
 - Settle signals: a typed field keeps its draft, so prove the refresh landed through a field
   with no draft (the role) before asserting the typed one. A drag needs a tall viewport
   (1280 × 1200) so every row is on screen.
