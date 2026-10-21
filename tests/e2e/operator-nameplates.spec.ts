@@ -12,6 +12,11 @@
  *  - drag to reorder by the handle: above the first, below the last, in the
  *    middle (full id set each time), one plate or none breaks nothing; two
  *    quick ↑ taps move a plate up two places;
+ *  - a reorder keeps the focus where it was: ↑ / ↓ on the drag handle step on,
+ *    and a reorder from elsewhere while typing keeps the focus, the caret and
+ *    the text, and saves nothing early;
+ *  - two saves of one plate go one at a time (the text saved last wins);
+ *  - a plate deleted elsewhere mid-drag takes its drop line with it;
  *  - the Companion slot labels (#870) follow a rename and a reorder made here;
  *  - Zobraziť → on-air highlight + `GET …/nameplates/active`; Skryť → cleared;
  *    the song row shows the live song and puts the song plate on air;
@@ -144,6 +149,14 @@ async function patchPlate(
 async function deletePlate(request: APIRequestContext, id: number): Promise<void> {
   const resp = await request.delete(`${baseURL}/stream/api/nameplates/${id}`);
   expect(resp.ok(), `delete nameplate -> ${resp.status()}`).toBeTruthy();
+}
+
+/** Reorder the `stream` plates from outside (another operator, Companion). */
+async function putOrder(request: APIRequestContext, ids: number[]): Promise<void> {
+  const resp = await request.put(`${baseURL}/stream/api/outputs/${SLUG}/nameplates/order`, {
+    data: { ids },
+  });
+  expect(resp.status(), `reorder nameplates ${JSON.stringify(ids)}`).toBe(204);
 }
 
 async function setActive(
@@ -581,6 +594,196 @@ test("#871 two quick ↑ taps move a plate up two places", async ({ page, reques
   await up.click();
   await up.click();
   await expectOrder(page, request, [c, a, b]);
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 ↑ / ↓ on the drag handle keep its focus, so each press moves the plate one more place", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b, c] = await seedPlates(request, [
+    ["Kláves A", "1"],
+    ["Kláves B", "2"],
+    ["Kláves C", "3"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b, c]);
+
+  // Focus C's handle ONCE. The keys go to whatever holds the focus
+  // (`page.keyboard`, never `locator.press`, which focuses the handle again
+  // before every key and would hide a lost focus).
+  const handle = row(page, c).locator(DRAG);
+  await handle.focus();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expectOrder(page, request, [c, a, b]);
+  await expect(handle).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expectOrder(page, request, [a, b, c]);
+  await expect(handle).toBeFocused();
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a reorder from elsewhere while typing keeps the focus, the caret and the text, and saves nothing early", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b, c] = await seedPlates(request, [
+    ["Pís A", "1"],
+    ["Pís B", "2"],
+    ["Pís C", "3"],
+  ]);
+  const patches: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PATCH" && req.url().endsWith(`/stream/api/nameplates/${b}`)) {
+      patches.push(req.postData() ?? "");
+    }
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b, c]);
+
+  // Half-typed in B's name, the caret put back after "Pís" (index 3).
+  const bName = row(page, b).locator(NAME);
+  await bName.fill("Pís Bé");
+  await bName.evaluate((el) => (el as HTMLInputElement).setSelectionRange(3, 3));
+
+  // Another operator moves B to the top: the page moves B's row.
+  await putOrder(request, [b, a, c]);
+  await expect.poll(() => rowOrder(page)).toEqual([b, a, c]);
+  await expect(row(page, b).locator(BUTTON)).toHaveText("2");
+
+  // Still typing in B: the focus, the caret and the text are kept, and the
+  // move saved nothing (a blur from the move is not "left the field").
+  await expect(bName).toBeFocused();
+  await expect(bName).toHaveValue("Pís Bé");
+  expect(
+    await bName.evaluate((el) => {
+      const input = el as HTMLInputElement;
+      return [input.selectionStart, input.selectionEnd];
+    }),
+  ).toEqual([3, 3]);
+  await page.keyboard.type("!");
+  await expect(bName).toHaveValue("Pís! Bé");
+  expect(patches, "nothing is saved while the operator types").toEqual([]);
+
+  // Leaving the field saves the whole text, once.
+  await bName.blur();
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === b)?.primaryText)
+    .toBe("Pís! Bé");
+  await expect.poll(() => patches.length).toBe(1);
+  expect((JSON.parse(patches[0]) as { primaryText: string }).primaryText).toBe("Pís! Bé");
+  await expect(bName).toHaveValue("Pís! Bé");
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 two saves of one plate go one at a time, so the text saved last is the one kept", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [anna] = await seedPlates(request, [["Ulož Anna", "kazateľka"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaName = row(page, anna).locator(NAME);
+  const annaRole = row(page, anna).locator(ROLE);
+  await expect(annaName).toHaveValue("Ulož Anna");
+
+  // The first save is held at the network. A second save of the same plate
+  // that goes out meanwhile is let through FIRST, as a server applying the two
+  // out of order would. With one save per plate on its way, the second never
+  // goes out before the first is done, so the first is released after 2 s.
+  type Body = { primaryText: string; secondaryText: string };
+  const bodies: Body[] = [];
+  let secondSeen = () => {};
+  const second = new Promise<boolean>((resolve) => (secondSeen = () => resolve(true)));
+  let secondApplied = () => {};
+  const secondDone = new Promise<void>((resolve) => (secondApplied = resolve));
+  await page.route(`**/stream/api/nameplates/${anna}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const n = bodies.push(route.request().postDataJSON() as Body);
+    if (n === 1) {
+      const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000));
+      if (await Promise.race([second, timeout])) await secondDone;
+      await route.continue();
+      return;
+    }
+    if (n === 2) secondSeen();
+    const response = await route.fetch();
+    secondApplied();
+    await route.fulfill({ response });
+  });
+
+  // The name, Tab to the role (save 1), the role, leave it (save 2): both
+  // within one round trip.
+  await annaName.fill("Ulož Anna Nová");
+  await page.keyboard.press("Tab");
+  await expect(annaRole).toBeFocused();
+  await annaRole.fill("pastorka");
+  await annaRole.blur();
+
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies).toEqual([
+    { primaryText: "Ulož Anna Nová", secondaryText: "kazateľka" },
+    { primaryText: "Ulož Anna Nová", secondaryText: "pastorka" },
+  ]);
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === anna))
+    .toMatchObject({ primaryText: "Ulož Anna Nová", secondaryText: "pastorka" });
+  await expect(annaName).toHaveValue("Ulož Anna Nová");
+  await expect(annaRole).toHaveValue("pastorka");
+  await page.unrouteAll({ behavior: "wait" });
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a plate deleted elsewhere while it is dragged leaves no drop line behind", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  const orderPuts: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PUT" && req.url().endsWith(`/stream/api/outputs/${SLUG}/nameplates/order`)) {
+      orderPuts.push(req.postData() ?? "");
+    }
+  });
+  await resetPlates(request);
+  const [a, b, c] = await seedPlates(request, [
+    ["Zmiz A", "1"],
+    ["Zmiz B", "2"],
+    ["Zmiz C", "3"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b, c]);
+
+  // C is held above A (the line on A) when another operator deletes C.
+  const first = await box(row(page, a));
+  await mouseDrag(page, c, first.top - 4, async () => {
+    await expect(row(page, a)).toHaveAttribute("data-drop", "before");
+    await deletePlate(request, c);
+    await expect(row(page, c)).toHaveCount(0);
+    await expect(view(page).locator("[data-drop]")).toHaveCount(0);
+    await expect(view(page).locator('[data-dragging="true"]')).toHaveCount(0);
+  });
+  // The release moves nothing, and the next drag works as usual.
+  await expect.poll(() => rowOrder(page)).toEqual([a, b]);
+  await mouseDrag(page, b, first.top - 4);
+  await expectOrder(page, request, [b, a]);
+  expect(orderPuts.map((body) => (JSON.parse(body) as { ids: number[] }).ids)).toEqual([[b, a]]);
 
   expect(consoleErrors).toEqual([]);
 });
