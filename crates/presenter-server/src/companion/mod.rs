@@ -146,4 +146,6 @@ async fn websocket_entry(ws: WebSocketUpgrade, State(state): State<AppState>) ->
 #[cfg(test)]
 mod catalog_tests;
 #[cfg(test)]
+mod nameplate_slot_tests;
+#[cfg(test)]
 mod tests;

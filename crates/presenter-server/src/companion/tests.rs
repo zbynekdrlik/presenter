@@ -427,7 +427,7 @@ async fn seed_stream(state: &AppState, slug: &str) -> (i64, i64) {
     (base.id, overlay.id)
 }
 
-async fn expect_ack(state: &AppState, command: &str, payload: Value) {
+pub(super) async fn expect_ack(state: &AppState, command: &str, payload: Value) {
     let mut variables = CompanionVariableState::default();
     let response = handle_command(state, &mut variables, command, payload)
         .await
@@ -440,7 +440,7 @@ async fn expect_ack(state: &AppState, command: &str, payload: Value) {
     }
 }
 
-async fn expect_error(state: &AppState, command: &str, payload: Value) -> String {
+pub(super) async fn expect_error(state: &AppState, command: &str, payload: Value) -> String {
     let mut variables = CompanionVariableState::default();
     let response = handle_command(state, &mut variables, command, payload)
         .await

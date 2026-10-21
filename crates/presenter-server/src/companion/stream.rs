@@ -13,6 +13,7 @@
 //! | `stream_scene_clear` | `{ output? }` — base → none (transparent) |
 //! | `stream_overlay_on`/`_off`/`_toggle` | `{ scene, output? }` |
 //! | `stream_clear` | `{ output? }` — base clear + ALL overlays off |
+//! | `stream_nameplate_slot` | `{ slot, mode?, output? }` — #870 grid slot |
 //!
 //! Execution goes through the [`AppState`] show-state methods (never the
 //! repository directly) so every activation publishes [`LiveEvent::StreamState`]
@@ -32,7 +33,7 @@ use crate::state::AppState;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Output slug used when a command omits `output` (matches the plugin default
 /// and the migration-seeded default output). Also the output whose live show
@@ -87,6 +88,25 @@ pub(super) enum StreamCommand {
     NameplateHide {
         output: String,
     },
+    // #870 nameplate grid: a 1-based POSITION in the output's person-plate
+    // list, resolved at press time against the SAME list the
+    // `nameplate_slot_<n>_*` label variables come from.
+    NameplateSlot {
+        output: String,
+        slot: usize,
+        mode: SlotMode,
+    },
+}
+
+/// What a `stream_nameplate_slot` press does with the plate in that slot
+/// (#870). `toggle` (the default) hides it when it is the one on air, else
+/// shows it; `show` always shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum SlotMode {
+    #[default]
+    Toggle,
+    Show,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +135,19 @@ struct NameplatePayload {
     name: Option<String>,
     #[serde(default)]
     song: bool,
+    #[serde(default)]
+    output: Option<String>,
+}
+
+/// `stream_nameplate_slot` payload (#870): `slot` is a 1-based position in the
+/// output's plate list. A negative or non-integer slot fails to deserialize; a
+/// slot of 0 is refused in [`nameplate_slot_command`].
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NameplateSlotPayload {
+    slot: usize,
+    #[serde(default)]
+    mode: SlotMode,
     #[serde(default)]
     output: Option<String>,
 }
@@ -197,6 +230,7 @@ pub(super) fn parse_stream_command(name: &str, payload: Value) -> Result<Compani
         "stream_nameplate_hide" => StreamCommand::NameplateHide {
             output: output_field(name, payload)?,
         },
+        "stream_nameplate_slot" => nameplate_slot_command(name, payload)?,
         other => return Err(format!("unknown command: {other}")),
     };
     Ok(CompanionCommand::Stream(command))
@@ -222,6 +256,22 @@ fn nameplate_fields(name: &str, payload: Value) -> Result<NameplateFields, Strin
         id: data.id,
         name: plate_name,
         song: data.song,
+    })
+}
+
+/// Parse a `stream_nameplate_slot` payload. A missing, negative or
+/// non-integer slot is a serde error; slot 0 is refused here (slots are
+/// 1-based, like the button labels).
+fn nameplate_slot_command(name: &str, payload: Value) -> Result<StreamCommand, String> {
+    let data: NameplateSlotPayload =
+        serde_json::from_value(payload).map_err(|err| format!("invalid {name} payload: {err}"))?;
+    if data.slot == 0 {
+        return Err(format!("{name}: slot must be 1 or higher"));
+    }
+    Ok(StreamCommand::NameplateSlot {
+        output: resolve_output(data.output),
+        slot: data.slot,
+        mode: data.mode,
     })
 }
 
@@ -316,8 +366,61 @@ pub(super) async fn execute_stream_command(
                 .await
                 .map_err(activation_error)?;
         }
+        StreamCommand::NameplateSlot { output, slot, mode } => {
+            fire_nameplate_slot(state, &output, slot, mode).await?;
+        }
     }
     Ok(())
+}
+
+/// Fire slot `slot` (1-based) of an output's person-plate list (#870). The list
+/// is read AT PRESS TIME with the same repository query the
+/// `nameplate_slot_<n>_*` label variables are built from
+/// (`list_stream_nameplates`: position, then id), so a grid button fires the
+/// plate its label shows. An empty slot is a non-fatal refusal and puts
+/// nothing on air. One INFO line per press names the slot and the plate.
+async fn fire_nameplate_slot(
+    state: &AppState,
+    output: &str,
+    slot: usize,
+    mode: SlotMode,
+) -> Result<(), String> {
+    let plates = state
+        .repository()
+        .list_stream_nameplates(output)
+        .await
+        .map_err(|err| format!("unknown stream output {output:?}: {err}"))?;
+    let Some(plate) = slot.checked_sub(1).and_then(|index| plates.get(index)) else {
+        info!(
+            slot,
+            output,
+            plates = plates.len(),
+            "companion nameplate slot is empty"
+        );
+        return Err(format!("nameplate slot {slot} is empty in output {output}"));
+    };
+    let outcome = match mode {
+        SlotMode::Toggle => state.stream_nameplate_toggle_person(output, plate.id).await,
+        SlotMode::Show => state.stream_nameplate_show_person(output, plate.id).await,
+    };
+    match outcome {
+        Ok(active) => {
+            info!(
+                slot,
+                plate_id = plate.id,
+                name = %plate.primary_text,
+                output,
+                ?mode,
+                on_air = active.is_some(),
+                "companion nameplate slot fired"
+            );
+            Ok(())
+        }
+        Err(err) => {
+            warn!(slot, plate_id = plate.id, output, error = %err, "companion nameplate slot failed");
+            Err(activation_error(err))
+        }
+    }
 }
 
 /// Resolve a person plate to its id from an explicit `id` or a case-insensitive
