@@ -90,24 +90,38 @@ pub async fn patch_json<B: serde::Serialize, T: DeserializeOwned>(
 /// set the way `stage::ndi_video::dispatch_delete` sends its DELETE, so it
 /// finishes after a reload or a closed tab too. Await its result with
 /// [`finish_json`]. (Safari before 13 ignores `keepalive`.)
+///
+/// A fetch with no answer after `timeout_ms` is aborted, so its result is a
+/// [`ApiError::Network`] instead of never coming. An `AbortController` and
+/// a timer, not `AbortSignal.timeout()`: Safari before 16 (iPad Air 2,
+/// iPad mini 4) lacks that, and the call would throw into the WASM.
 pub fn start_patch_keepalive<B: serde::Serialize>(
     path: &str,
     body: &B,
+    timeout_ms: u32,
 ) -> Result<js_sys::Promise, ApiError> {
     let json = serde_json::to_string(body).map_err(|e| ApiError::Serialize(e.into()))?;
     let headers = web_sys::Headers::new().map_err(js_error)?;
     headers
         .set("Content-Type", "application/json")
         .map_err(js_error)?;
+    let abort = web_sys::AbortController::new().map_err(js_error)?;
     let init = web_sys::RequestInit::new();
     init.set_method("PATCH");
     init.set_headers(&headers);
     init.set_body(&JsValue::from_str(&json));
+    init.set_signal(Some(&abort.signal()));
     let _ = js_sys::Reflect::set(&init, &"keepalive".into(), &JsValue::TRUE);
     let request =
         web_sys::Request::new_with_str_and_init(&api_url(path), &init).map_err(js_error)?;
     let window = web_sys::window().ok_or_else(|| js_error(JsValue::from_str("no window")))?;
-    Ok(window.fetch_with_request(&request))
+    let fetch = window.fetch_with_request(&request);
+    // Aborting a fetch that already answered does nothing.
+    wasm_bindgen_futures::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(timeout_ms).await;
+        abort.abort();
+    });
+    Ok(fetch)
 }
 
 /// The JSON body of a fetch started by [`start_patch_keepalive`], or its
