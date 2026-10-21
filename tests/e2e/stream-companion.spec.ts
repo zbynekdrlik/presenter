@@ -61,7 +61,7 @@ import {
   type Browser,
   type Page,
 } from "@playwright/test";
-import WebSocket from "ws";
+import { createCompanionSocket, enableCompanionSocket } from "./companion-socket";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
@@ -74,107 +74,6 @@ import {
 
 const SLUG = "stream"; // the migration-seeded default output.
 const PNG_FIXTURE = path.join(REPO_ROOT, "tests", "e2e", "fixtures", "stream-1x1.png");
-
-// ── companion socket helper (mirrors companion-session.spec.ts) ────────────────
-
-type VarEntry = { name?: unknown; value?: unknown };
-type WsMsg = Record<string, unknown>;
-
-const HELLO_PAYLOAD = {
-  type: "hello",
-  client: "Playwright",
-  instanceName: "stream-companion-spec",
-};
-
-/** Open a companion WebSocket, expose handshake + send + variable helpers. */
-function createCompanionSocket(wsURL: string) {
-  const socket = new WebSocket(wsURL);
-  const errors: Error[] = [];
-  // Running, merged companion variable state — updated on EVERY `variables`
-  // frame (delta or full). `stream_scene` / `stream_overlays` land here after
-  // the async live-loop resolves them, so tests poll this map.
-  const vars = new Map<string, string>();
-
-  socket.on("message", (raw: WebSocket.RawData) => {
-    try {
-      const parsed = JSON.parse(raw.toString()) as WsMsg;
-      if (parsed.type === "variables" && Array.isArray(parsed.values)) {
-        for (const e of parsed.values as VarEntry[]) {
-          vars.set(String(e.name ?? ""), String(e.value ?? ""));
-        }
-      }
-    } catch (error) {
-      errors.push(error as Error);
-    }
-  });
-
-  const waitForMessage = (
-    predicate: (msg: WsMsg) => boolean,
-    timeoutMs = 5_000,
-  ) =>
-    new Promise<WsMsg>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("Timed out waiting for expected Companion message"));
-      }, timeoutMs);
-      const cleanup = () => {
-        clearTimeout(timeout);
-        socket.off("message", handleMessage);
-      };
-      const handleMessage = (raw: WebSocket.RawData) => {
-        try {
-          const parsed = JSON.parse(raw.toString()) as WsMsg;
-          if (predicate(parsed)) {
-            cleanup();
-            resolve(parsed);
-          }
-        } catch (error) {
-          cleanup();
-          reject(error as Error);
-        }
-      };
-      socket.on("message", handleMessage);
-    });
-
-  /** Connect, send hello, receive welcome + the initial variables frame. */
-  async function handshake() {
-    await new Promise<void>((resolve, reject) => {
-      socket.once("error", (err) => reject(err));
-      socket.once("open", () => {
-        socket.send(JSON.stringify(HELLO_PAYLOAD));
-        resolve();
-      });
-    });
-    await waitForMessage((msg) => msg.type === "welcome");
-    await waitForMessage((msg) => msg.type === "variables");
-  }
-
-  /** Send a stream command; resolve with its ack/error reply. */
-  async function sendCommand(
-    command: string,
-    payload: Record<string, unknown> = {},
-  ): Promise<WsMsg> {
-    socket.send(JSON.stringify({ type: "command", command, payload }));
-    return waitForMessage(
-      (msg) =>
-        (msg.type === "ack" && msg.command === command) || msg.type === "error",
-    );
-  }
-
-  /** Send a command and assert the server ACKed it (no error reply). */
-  async function expectAck(
-    command: string,
-    payload: Record<string, unknown> = {},
-  ): Promise<void> {
-    const reply = await sendCommand(command, payload);
-    expect(
-      reply.type,
-      `${command} ${JSON.stringify(payload)} -> ${JSON.stringify(reply)}`,
-    ).toBe("ack");
-  }
-
-  return { socket, errors, vars, handshake, waitForMessage, sendCommand, expectAck };
-}
 
 // ── module state ───────────────────────────────────────────────────────────────
 
@@ -523,34 +422,9 @@ test.beforeAll(async ({}, testInfo) => {
   await refreshDevData(config.dbUrl);
   serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
 
-  // Enable the companion socket and discover its bound port (mirrors
-  // companion-session.spec.ts).
-  const desiredPort = config.port + 100;
-  const enable = await fetch(new URL("/settings/features", baseURL).toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ companionEnabled: true, companionPort: desiredPort }),
-  });
-  if (!enable.ok) {
-    throw new Error(`Failed to enable companion websocket (${enable.status})`);
-  }
-  const features = await fetch(new URL("/settings/features", baseURL).toString(), {
-    headers: { Accept: "application/json" },
-  });
-  if (!features.ok) {
-    throw new Error(`Failed to fetch feature flags (${features.status})`);
-  }
-  const payload = (await features.json()) as {
-    companionPort?: number;
-    companion_port?: number;
-  };
-  const base = new URL(baseURL);
-  const rawPortValue =
-    payload.companionPort ?? payload.companion_port ?? desiredPort;
-  const parsedPort = Number.parseInt(String(rawPortValue), 10);
-  const companionPort =
-    Number.isFinite(parsedPort) && parsedPort >= 1 ? parsedPort : desiredPort;
-  wsURL = `${base.protocol.replace("http", "ws")}//${base.hostname}:${companionPort}/companion/ws`;
+  // Enable the companion socket and discover its bound port
+  // (`companion-socket.ts`, mirrors companion-session.spec.ts).
+  wsURL = await enableCompanionSocket(baseURL, config.port + 100);
 
   // Build the user's scene/element setup once.
   const api = await playwrightRequest.newContext();

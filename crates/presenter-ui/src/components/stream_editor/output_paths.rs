@@ -14,6 +14,8 @@
 //! These live in a sibling module (not `mod.rs`) purely to keep `mod.rs` under
 //! the file-size gate. The id-scoped path builders (`/stream/api/scenes/{id}`,
 //! `/stream/api/elements/{id}`, …) stay in `mod.rs`: they are not output-scoped.
+//! The plate paths live with the shared plate store (`components/nameplates`,
+//! #871).
 
 use leptos::prelude::*;
 use presenter_core::StreamOutputSummary;
@@ -45,18 +47,6 @@ pub(super) fn active_scene_path(slug: &str) -> String {
 
 pub(super) fn overlay_path(slug: &str, id: i64) -> String {
     format!("/stream/api/outputs/{slug}/overlays/{id}")
-}
-
-pub(super) fn nameplates_path(slug: &str) -> String {
-    format!("/stream/api/outputs/{slug}/nameplates")
-}
-
-pub(super) fn nameplates_order_path(slug: &str) -> String {
-    format!("/stream/api/outputs/{slug}/nameplates/order")
-}
-
-pub(super) fn nameplates_active_path(slug: &str) -> String {
-    format!("/stream/api/outputs/{slug}/nameplates/active")
 }
 
 // ---- Selected-output persistence (localStorage + ?output=) -----------------

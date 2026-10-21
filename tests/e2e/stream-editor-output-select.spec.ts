@@ -13,6 +13,8 @@
  *  - A remembered output that no longer exists: the editor switches to the
  *    first listed output and records it (URL + localStorage), so the select
  *    and the editor agree.
+ *  - #871: an output switch drops the previous output's plates and plate on
+ *    air at once, while the new output's plate list is still on its way.
  *
  * Clean console is asserted last.
  */
@@ -186,5 +188,59 @@ test("#827 a remembered output that no longer exists falls back to the first lis
   ).toBeTruthy();
   // Re-checked last, so a late third refusal still fails the test.
   expect(staleNotFound, "exactly the def + plate-list refusals").toHaveLength(2);
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#871 an output switch drops the previous output's plates at once, before the new list lands", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+
+  // A plate of `stream`, on air.
+  const created = await page.request.post(`${baseURL}/stream/api/outputs/stream/nameplates`, {
+    data: { primaryText: `SW_871_${Date.now() % 100_000}`, secondaryText: "hosť" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const plateId = (await created.json()).id as number;
+  const shown = await page.request.put(`${baseURL}/stream/api/outputs/stream/nameplates/active`, {
+    data: { source: "person", id: plateId },
+  });
+  expect(shown.status()).toBe(200);
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  await expect(plateRow).toHaveAttribute("data-active", "true", { timeout: 15_000 });
+
+  // Hold the other output's plate list: while it is on its way, nothing of
+  // `stream` (its rows, its plate on air) may stay on screen.
+  const listUrl = `${baseURL}/stream/api/outputs/${other}/nameplates`;
+  const route = `**/stream/api/outputs/${other}/nameplates`;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(route, async (held) => {
+    await gate;
+    await held.continue();
+  });
+  const answered = page.waitForResponse(
+    (res) => res.url() === listUrl && res.request().method() === "GET",
+  );
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await expect(page.locator('[data-role="stream-nameplate"][data-active="true"]')).toHaveCount(0);
+  release();
+  await (await answered).finished();
+  await page.unroute(route);
+
+  // Leave `stream` as found.
+  const hidden = await page.request.put(`${baseURL}/stream/api/outputs/stream/nameplates/active`, {
+    data: { source: null },
+  });
+  expect(hidden.status()).toBe(200);
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

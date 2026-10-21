@@ -157,6 +157,9 @@ pub fn Header() -> impl IntoView {
     let set_view = move |view: &str| {
         let v = view.to_string();
         ctx.view.set(v.clone());
+        // #871: on a phone the view list is a full-screen overlay; picking a
+        // view closes it, or it would keep covering the view just picked.
+        op.mobile_nav_open.set(false);
         crate::state::session::set("view", &v);
         // Build URL path: "worship" → /ui/operator, others → /ui/operator/{view}
         let url = if v == "worship" {
@@ -349,13 +352,15 @@ pub fn Header() -> impl IntoView {
                 </form>
             </div>
             <nav class="operator__view-nav">
-                {["worship", "bible", "timers", "ai", "settings"].into_iter().map(|v| {
+                // #871: Menovky = the `stream` plates in Stream Deck grid order.
+                {["worship", "bible", "timers", "ai", "menovky", "settings"].into_iter().map(|v| {
                     let view_name = v.to_string();
                     let label = match v {
                         "worship" => "Worship",
                         "bible" => "Bible",
                         "timers" => "Timers",
                         "ai" => "AI",
+                        "menovky" => "Menovky",
                         "settings" => "Settings",
                         _ => v,
                     };

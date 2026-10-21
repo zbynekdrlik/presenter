@@ -13,6 +13,7 @@
 use leptos::prelude::*;
 use presenter_core::{LiveEvent, StreamShowState};
 
+use crate::components::nameplates::NameplateStore;
 use crate::components::stream_editor::editor_fonts::FontPanel;
 use crate::components::stream_editor::editor_nameplates::NameplatePanel;
 use crate::components::stream_editor::editor_panel::EditorPanel;
@@ -23,7 +24,7 @@ use crate::components::stream_editor::editor_tabs::{
 };
 use crate::components::stream_editor::output_manage::OutputManage;
 use crate::components::stream_editor::output_paths::{initial_output_slug, OutputSelect};
-use crate::components::stream_editor::StreamEditorCtx;
+use crate::components::stream_editor::{show_editor_toast, StreamEditorCtx};
 use crate::components::version_label::VersionLabel;
 
 /// The `/ui/stream` operator editor page.
@@ -52,17 +53,29 @@ pub fn StreamEditorPage() -> impl IntoView {
         }
     });
 
+    // #785: open the output from `?output=` / localStorage / the default.
+    let output_slug = RwSignal::new(initial_output_slug());
+    let toast_msg = RwSignal::new(String::new());
+    let toast_visible = RwSignal::new(false);
+    let toast_state = RwSignal::new(String::from("info"));
+    // #871: the plate list is the shared store (also the operator's Menovky
+    // view); it reports through this page's toast.
+    let plates = NameplateStore::new(
+        output_slug,
+        Callback::new(move |(msg, variant): (String, &'static str)| {
+            show_editor_toast(toast_msg, toast_visible, toast_state, &msg, variant);
+        }),
+    );
     let ctx = StreamEditorCtx {
-        // #785: open the output from `?output=` / localStorage / the default.
-        output_slug: RwSignal::new(initial_output_slug()),
+        output_slug,
         outputs: RwSignal::new(Vec::new()),
         // #829: reopen the tab from `?tab=` / localStorage (default Scény).
         tab: RwSignal::new(initial_tab()),
         def: RwSignal::new(None),
         active: RwSignal::new(crate::components::stream_editor::empty_show_state()),
-        toast_msg: RwSignal::new(String::new()),
-        toast_visible: RwSignal::new(false),
-        toast_state: RwSignal::new(String::from("info")),
+        toast_msg,
+        toast_visible,
+        toast_state,
         selected_scene: RwSignal::new(None),
         selected_element: RwSignal::new(None),
         prop_error: RwSignal::new(None),
@@ -71,9 +84,7 @@ pub fn StreamEditorPage() -> impl IntoView {
         ),
         draft_element_id: RwSignal::new(None),
         fonts: RwSignal::new(Vec::new()),
-        nameplates: RwSignal::new(Vec::new()),
-        active_nameplate: RwSignal::new(None),
-        song_preview: RwSignal::new((String::new(), String::new())),
+        plates,
         selection: StoredValue::new(
             crate::components::stream_editor::selection_intent::SelectionIntent::default(),
         ),
@@ -92,9 +103,7 @@ pub fn StreamEditorPage() -> impl IntoView {
     ctx.reload_fonts();
     crate::components::stream::fonts::ensure_fonts_css_link(0);
     // #779: load the plate list + the plate currently on air + the live song.
-    ctx.reload_nameplates();
-    ctx.reload_active_nameplate();
-    load_song_preview(ctx);
+    ctx.plates.load();
 
     // Live reflection: apply activation events directly, refetch on config bump.
     let (_ws_state, last_event) = crate::ws::use_live_websocket("stream");
@@ -131,26 +140,9 @@ pub fn StreamEditorPage() -> impl IntoView {
                     ctx.refresh();
                 }
             }
-            // #779: a plate went on/off air → update the on-air highlight directly.
-            LiveEvent::StreamNameplate { output, active }
-                if output == ctx.output_slug.get_untracked() =>
-            {
-                ctx.active_nameplate.set(active);
-            }
-            // #779: the plate list changed → refetch it.
-            LiveEvent::StreamNameplatesChanged { output }
-                if output == ctx.output_slug.get_untracked() =>
-            {
-                ctx.reload_nameplates();
-            }
-            // #779: keep the "Pieseň" row's live text current.
-            LiveEvent::Stage { snapshot } => {
-                ctx.song_preview.set((
-                    snapshot.song_name.clone().unwrap_or_default(),
-                    snapshot.library_name.clone().unwrap_or_default(),
-                ));
-            }
-            _ => {}
+            // #779: a plate on/off air (highlight), the plate list changed
+            // (refetch), the live song (the "Pieseň" row): the shared store.
+            other => ctx.plates.apply_event(&other),
         }
     });
 
@@ -199,18 +191,4 @@ pub fn StreamEditorPage() -> impl IntoView {
             </div>
         </div>
     }
-}
-
-/// Cold-load the live song title + library for the "Pieseň" row (#779). The
-/// snapshot's `song_name`/`library_name` are layout-independent, so the selected
-/// snapshot reflects the live worship song the server resolves the plate from.
-fn load_song_preview(ctx: StreamEditorCtx) {
-    leptos::task::spawn_local(async move {
-        if let Ok(snapshot) = crate::api::stage::get_snapshot().await {
-            ctx.song_preview.set((
-                snapshot.song_name.clone().unwrap_or_default(),
-                snapshot.library_name.clone().unwrap_or_default(),
-            ));
-        }
-    });
 }
