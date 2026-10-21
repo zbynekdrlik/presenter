@@ -31,7 +31,14 @@
  *    an older save answered after the newer one makes the page send the
  *    newer texts once more; a 404 drops the save waiting behind it;
  *  - a name cleared to retype it does not hold back a role typed in the same
- *    row when the page hides;
+ *    row when the page hides, and that role goes with the NEWEST name;
+ *  - one controller per list owns the saves: a commit while a save is on its
+ *    way goes after it, once, with the newest texts, and Zobraziť meanwhile
+ *    (or while an older answer is being repaired) waits for it; typed,
+ *    changed and typed back is saved once more and never left marked; an
+ *    empty name on leaving the field is refused before anything is sent; a
+ *    save that never answers is given up after 15 s and goes again;
+ *    Zobraziť with no blur (iOS) saves the typed text first;
  *  - a name cleared to retype it is kept on alt-tab / a hidden page, and
  *    still refused when the field is left;
  *  - a plate deleted elsewhere while half-typed: a toast says it was not saved;
@@ -1730,6 +1737,442 @@ test("#871 a name cleared to retype it does not hold back a role typed in the sa
   const lines = splitConsole(consoleErrors, NETWORK_FAILED);
   expect(lines.expected).toHaveLength(1);
   expect(lines.other).toEqual([]);
+});
+
+/** When row `id` gets its unsaved mark, do `action` at once, inside the
+ *  MutationObserver callback (the same microtask pass that set the mark), so
+ *  the page's own 2 s retry timer can never act first: the window `online`
+ *  event, the page going hidden (`visibilityState` + a bubbling
+ *  `visibilitychange`), or a click on the row's Zobraziť. Install it BEFORE
+ *  the action that fails the save; `unsavedMarkSeen` tells whether it fired. */
+async function onUnsavedMark(page: Page, id: number, action: "online" | "hide" | "show"): Promise<void> {
+  await page.evaluate(
+    ({ id, action }) => {
+      const row = document.querySelector(
+        `[data-role="operator-nameplates"] [data-role="stream-nameplate"][data-nameplate-id="${id}"]`,
+      );
+      if (!row) throw new Error(`row ${id} is not on the page`);
+      const seen = window as unknown as { __unsavedMarkSeen?: number[] };
+      const observer = new MutationObserver(() => {
+        if (row.getAttribute("data-unsaved") !== "true") return;
+        observer.disconnect();
+        seen.__unsavedMarkSeen = [...(seen.__unsavedMarkSeen ?? []), id];
+        if (action === "online") {
+          window.dispatchEvent(new Event("online"));
+        } else if (action === "hide") {
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+          document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+        } else {
+          (row.querySelector('[data-role="stream-nameplate-show"]') as HTMLElement).click();
+        }
+      });
+      observer.observe(row, { attributes: true, attributeFilter: ["data-unsaved"] });
+    },
+    { id, action },
+  );
+}
+
+/** Whether the unsaved mark of row `id` was seen by [`onUnsavedMark`]. */
+async function unsavedMarkSeen(page: Page, id: number): Promise<boolean> {
+  return page.evaluate(
+    (id) =>
+      ((window as unknown as { __unsavedMarkSeen?: number[] }).__unsavedMarkSeen ?? []).includes(id),
+    id,
+  );
+}
+
+/** Hold the first PATCH of plate `id` at the network until `failFirst()`
+ *  makes it fail (the Wi-Fi asleep); later PATCHes go through. Returns the
+ *  body of every PATCH, in order. */
+async function failFirstPatchOnCue(
+  page: Page,
+  id: number,
+): Promise<{ bodies: PatchBody[]; failFirst: () => void }> {
+  const bodies: PatchBody[] = [];
+  let failFirst = () => {};
+  const failed = new Promise<void>((resolve) => (failFirst = resolve));
+  await page.route(`**/stream/api/nameplates/${id}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const n = bodies.push(route.request().postDataJSON() as PatchBody);
+    if (n === 1) {
+      await failed;
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  return { bodies, failFirst };
+}
+
+test("#871 a commit while a save is on its way is sent after it, once, with the newest texts, and Zobraziť meanwhile waits for it", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  await setActive(request, { source: null });
+  const [a] = await seedPlates(request, [["Poradie A", "1"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const aRow = row(page, a);
+  const aName = aRow.locator(NAME);
+  await expect(aName).toHaveValue("Poradie A");
+  const { bodies, held } = await holdPatches(page, a);
+  const logs: string[] = [];
+  page.on("console", (msg) => logs.push(msg.text()));
+  const waitsLine = `nameplates: plate ${a} save waits for the one on its way`;
+
+  // Save 1 is held; two more commits wait behind it (the newest replaces).
+  await aName.fill("Poradie A1");
+  await aName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  await aName.fill("Poradie A2");
+  await aName.blur();
+  await aName.fill("Poradie A3");
+  await aName.blur();
+  await expect.poll(() => logs.filter((line) => line === waitsLine).length).toBe(2);
+
+  // Zobraziť while save 1 is on its way: the server would put "A1" on air.
+  const waitsForSave = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${a} goes on air once its save is through`,
+    timeout: 10_000,
+  });
+  await aRow.locator('[data-role="stream-nameplate-show"]').click();
+  await waitsForSave;
+  expect(await activePlate(request)).toBeNull();
+
+  // Save 1 is back: the newest texts go next, once.
+  held[0].release();
+  await held[0].answered;
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies[1]).toEqual({ primaryText: "Poradie A3", secondaryText: "1" });
+  expect(await activePlate(request)).toBeNull();
+
+  // Save 2 is back: the plate goes on air with the newest text.
+  held[1].release();
+  await held[1].answered;
+  await expect.poll(async () => (await activePlate(request))?.primary).toBe("Poradie A3");
+  await expect(aRow).toHaveAttribute("data-active", "true");
+  await expect(aName).toHaveValue("Poradie A3");
+  expect(bodies).toHaveLength(2);
+  await setActive(request, { source: null });
+  await page.unrouteAll({ behavior: "wait" });
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 Zobraziť while the page repairs an older save answered last waits for the repair, so the newest role goes on air", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  await setActive(request, { source: null });
+  const [anna] = await seedPlates(request, [["Oprava Anna", "kazateľka"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaRow = row(page, anna);
+  const annaName = annaRow.locator(NAME);
+  const annaRole = annaRow.locator(ROLE);
+  await expect(annaName).toHaveValue("Oprava Anna");
+  const { bodies, held } = await holdPatches(page, anna);
+
+  // Save 1 (the name, Tab) is held, save 2 (the role) waits, and the phone
+  // locks: save 2 goes at once beside save 1.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${anna} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await annaName.fill("Oprava Anna Nová");
+  await page.keyboard.press("Tab");
+  await expect(annaRole).toBeFocused();
+  await annaRole.fill("pastorka");
+  await annaRole.blur();
+  await waits;
+  await setPageHidden(page, true);
+  await expect.poll(() => bodies.length).toBe(2);
+  await setPageHidden(page, false);
+
+  // The newer save is answered first, the older one last: the server holds
+  // the OLDER role now, and the page sends the newest texts once more.
+  held[1].release();
+  await held[1].answered;
+  held[0].release();
+  await held[0].answered;
+  await expect.poll(() => bodies.length).toBe(3);
+
+  // Zobraziť while that repair is on its way must wait for it: shown now, the
+  // older role would go on air.
+  await annaRow.locator('[data-role="stream-nameplate-show"]').click();
+  held[2].release();
+  await held[2].answered;
+  await expect
+    .poll(async () => {
+      const active = await activePlate(request);
+      return active && { primary: active.primary, secondary: active.secondary };
+    })
+    .toEqual({ primary: "Oprava Anna Nová", secondary: "pastorka" });
+  await expect(annaRow).toHaveAttribute("data-active", "true");
+  expect(bodies).toHaveLength(3);
+  await setActive(request, { source: null });
+  await page.unrouteAll({ behavior: "wait" });
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a text typed, changed and typed back while its save is on its way is saved once more and never left marked unsaved", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Späť A", "1"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const aRow = row(page, a);
+  const aName = aRow.locator(NAME);
+  await expect(aName).toHaveValue("Späť A");
+  const { bodies, failFirst } = await failFirstPatchOnCue(page, a);
+  const decisions: string[] = [];
+  let decide: (how: "idle" | "third") => void = () => {};
+  const decided = new Promise<"idle" | "third">((resolve) => (decide = resolve));
+  page.on("console", (msg) => {
+    const text = msg.text();
+    if (
+      text === `nameplates: plate ${a} save waits for the one on its way` ||
+      text.startsWith(`nameplates: plate ${a} save of these texts is on its way`)
+    ) {
+      decisions.push(text);
+    }
+    if (text === `nameplates: plate ${a} saved; nothing left to send`) decide("idle");
+  });
+  let patchCount = 0;
+  page.on("request", (req) => {
+    if (req.method() === "PATCH" && req.url().endsWith(`/stream/api/nameplates/${a}`)) {
+      patchCount += 1;
+      if (patchCount === 3) decide("third");
+    }
+  });
+
+  // A (save 1, held), B, and back to A: the text of the save on its way.
+  await aName.fill("Späť A nová");
+  await aName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  await aName.fill("Späť A iná");
+  await aName.blur();
+  await aName.fill("Späť A nová");
+  await aName.blur();
+  await expect.poll(() => decisions.length).toBe(2);
+
+  // Save 1 fails; the network is back in the same pass as the unsaved mark.
+  // The page then sends A once more and is done: either it says so, or a
+  // third PATCH comes first (A sent again after it was saved).
+  await onUnsavedMark(page, a, "online");
+  failFirst();
+  expect(await decided, "nothing more is sent once A is saved").toBe("idle");
+  expect(await unsavedMarkSeen(page, a)).toBe(true);
+  expect(bodies).toEqual([
+    { primaryText: "Späť A nová", secondaryText: "1" },
+    { primaryText: "Späť A nová", secondaryText: "1" },
+  ]);
+  // Read once, now that the page has dealt with the answer.
+  expect(await aRow.getAttribute("data-unsaved")).toBe("false");
+  expect(await savedText(request, a)).toBe("Späť A nová");
+  await expect(aName).toHaveValue("Späť A nová");
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 an empty name on leaving the field is refused before anything is sent: the role's save on its way keeps its text and goes again when it fails", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [b] = await seedPlates(request, [["Prázdna B", "1"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const bRow = row(page, b);
+  const bName = bRow.locator(NAME);
+  const bRole = bRow.locator(ROLE);
+  const toast = page.locator('[data-role="toast"]');
+  await expect(bName).toHaveValue("Prázdna B");
+  const { bodies, failFirst } = await failFirstPatchOnCue(page, b);
+
+  // The role is saved (held at the network) ...
+  await bRole.fill("nová rola");
+  await bRole.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  // ... and the name is cleared and left: refused, the old name stays.
+  await bName.fill("");
+  await bName.blur();
+  await expect(toast).toHaveText("Meno nesmie byť prázdne.");
+  await expect(bName).toHaveValue("Prázdna B");
+
+  // The role's save fails: its text stays typed, the row is marked, and
+  // (the network back at once) it goes again and is saved.
+  await onUnsavedMark(page, b, "online");
+  failFirst();
+  await expect(toast).toContainText("Text ostal v poli");
+  await expect.poll(() => unsavedMarkSeen(page, b), { timeout: 5_000 }).toBe(true);
+  await expect(bRole).toHaveValue("nová rola");
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === b))
+    .toMatchObject({ primaryText: "Prázdna B", secondaryText: "nová rola" });
+  await expect(bRow).toHaveAttribute("data-unsaved", "false");
+  await expect(bName).toHaveValue("Prázdna B");
+  await expect(bRole).toHaveValue("nová rola");
+  expect(bodies).toEqual([
+    { primaryText: "Prázdna B", secondaryText: "nová rola" },
+    { primaryText: "Prázdna B", secondaryText: "nová rola" },
+  ]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a name cleared while its new text is still saving: the role goes with that NEWEST name when the page hides", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Najnovšie A", "1"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const aName = row(page, a).locator(NAME);
+  const aRole = row(page, a).locator(ROLE);
+  await expect(aName).toHaveValue("Najnovšie A");
+  const { bodies, held } = await holdPatches(page, a);
+
+  // The new name is saved (held), the role is typed and left (waits), and
+  // the name is cleared to retype it.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${a} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await aName.fill("Najnovšie A nová");
+  await page.keyboard.press("Tab");
+  await expect(aRole).toBeFocused();
+  await aRole.fill("nová rola");
+  await aName.fill("");
+  await waits;
+  expect(bodies).toHaveLength(1);
+
+  // The phone locks: the role goes now, with the newest name, not the one
+  // the server had before.
+  const decided = page.waitForEvent("console", {
+    predicate: (msg) => msg.text().startsWith(`nameplates: plate ${a} name is empty; kept as typed`),
+    timeout: 10_000,
+  });
+  await setPageHidden(page, true);
+  await decided;
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies[1]).toEqual({ primaryText: "Najnovšie A nová", secondaryText: "nová rola" });
+
+  held[0].release();
+  await held[0].answered;
+  held[1].release();
+  await held[1].answered;
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === a))
+    .toMatchObject({ primaryText: "Najnovšie A nová", secondaryText: "nová rola" });
+  await setPageHidden(page, false);
+  await expect(aRole).toHaveValue("nová rola");
+  await expect(aName).toHaveValue("");
+  expect(bodies).toHaveLength(2);
+  await page.unrouteAll({ behavior: "wait" });
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a save that never answers is given up after 15 s: the row is marked unsaved and the text goes again", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Ticho A", "1"]]);
+  // The first PATCH never gets an answer (a dead network that never errors).
+  const bodies: PatchBody[] = [];
+  let endFirst = () => {};
+  const firstEnds = new Promise<void>((resolve) => (endFirst = resolve));
+  await page.route(`**/stream/api/nameplates/${a}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const n = bodies.push(route.request().postDataJSON() as PatchBody);
+    if (n === 1) {
+      await firstEnds;
+      // The page gave up on it long ago; nothing to answer.
+      await route.abort().catch(() => {});
+      return;
+    }
+    await route.continue();
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  const aRow = row(page, a);
+  const aName = aRow.locator(NAME);
+  await expect(aName).toHaveValue("Ticho A");
+
+  // When the page gives the save up, the network is back in the same pass.
+  await onUnsavedMark(page, a, "online");
+  await aName.fill("Ticho A nová");
+  await aName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  // After 15 s the page gives the save up (an aborted fetch): the row is
+  // marked, and the text goes again and is saved.
+  await expect.poll(() => unsavedMarkSeen(page, a), { timeout: 25_000 }).toBe(true);
+  await expect.poll(() => savedText(request, a)).toBe("Ticho A nová");
+  await expect(aRow).toHaveAttribute("data-unsaved", "false");
+  expect(bodies.map((body) => body.primaryText)).toEqual(["Ticho A nová", "Ticho A nová"]);
+  endFirst();
+  await page.unrouteAll({ behavior: "wait" });
+
+  // An aborted fetch logs nothing in Chrome.
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 Zobraziť tapped while the name field keeps the focus (iOS gives no blur) saves the typed text first and puts it on air", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  await setActive(request, { source: null });
+  const [a] = await seedPlates(request, [["Dotyk A", "1"]]);
+  const patches: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PATCH" && req.url().endsWith(`/stream/api/nameplates/${a}`)) {
+      patches.push((JSON.parse(req.postData() ?? "{}") as { primaryText: string }).primaryText);
+    }
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  const aRow = row(page, a);
+  const aName = aRow.locator(NAME);
+  await expect(aName).toHaveValue("Dotyk A");
+
+  // Typed, then Zobraziť tapped with no blur of the field (a synthetic click
+  // moves no focus, as iOS Safari's tap on a button does not).
+  await aName.fill("Dotyk A nová");
+  await aRow.locator('[data-role="stream-nameplate-show"]').dispatchEvent("click");
+  await expect(aName).toBeFocused();
+  await expect.poll(async () => (await activePlate(request))?.primary).toBe("Dotyk A nová");
+  await expect(aRow).toHaveAttribute("data-active", "true");
+  expect(await savedText(request, a)).toBe("Dotyk A nová");
+  await expect(aName).toHaveValue("Dotyk A nová");
+
+  // Leaving the field later has nothing left to save.
+  await aName.blur();
+  await expect(aName).toHaveValue("Dotyk A nová");
+  expect(patches).toEqual(["Dotyk A nová"]);
+  await setActive(request, { source: null });
+
+  expect(consoleErrors).toEqual([]);
 });
 
 test("#871 a plate deleted elsewhere while it is dragged leaves no drop line behind", async ({
