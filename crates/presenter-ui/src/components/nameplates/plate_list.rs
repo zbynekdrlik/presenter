@@ -5,14 +5,17 @@
 //! The `data-role` contract is the editor's (#779): `stream-nameplate-song`,
 //! `stream-nameplate` rows with `stream-nameplate-name` / `-role` inputs and
 //! `-show` / `-preview` / `-hide` / `-up` / `-down` / `-delete` buttons, and the
-//! `stream-nameplate-add` form. [`RowOptions`] carries the per-page extras.
+//! `stream-nameplate-add` form. #871 adds the drag handle
+//! (`stream-nameplate-drag`). [`RowOptions`] carries the per-page extras.
 
 use leptos::prelude::*;
 use presenter_core::{ActiveNameplate, NameplateSource};
 use wasm_bindgen::JsCast;
-use web_sys::KeyboardEvent;
+use web_sys::{KeyboardEvent, PointerEvent};
 
+use super::drag::{capture, slot_under_pointer, PlateDrag, PRIMARY_BUTTON};
 use super::numbering::{beyond_grid, button_title, person_button, SONG_BUTTON};
+use super::order::drop_marker;
 use super::{song_line, NameplateStore};
 use crate::utils::dom_attr::bool_attr;
 
@@ -89,8 +92,10 @@ pub fn NameplateSongRow(store: NameplateStore, options: RowOptions) -> impl Into
 }
 
 /// The person plates in list order, keyed by plate id (a reorder moves rows).
+/// Owns the one drag in progress, so every row can show the drop line.
 #[component]
 pub fn NameplateRows(store: NameplateStore, options: RowOptions) -> impl IntoView {
+    let drag = RwSignal::new(None::<PlateDrag>);
     let plate_ids = move || {
         store
             .plates
@@ -101,7 +106,7 @@ pub fn NameplateRows(store: NameplateStore, options: RowOptions) -> impl IntoVie
             <For
                 each=plate_ids
                 key=|id| *id
-                children=move |id| view! { <NameplateRow store=store id=id options=options /> }
+                children=move |id| view! { <NameplateRow store=store id=id options=options drag=drag /> }
             />
         </ul>
     }
@@ -192,12 +197,17 @@ fn blur_on_enter(ev: KeyboardEvent) {
     }
 }
 
-/// One person-plate row: (button number), name + role inputs
+/// One person-plate row: drag handle, (button number), name + role inputs
 /// (saved on blur), on-air highlight, Zobraziť / (Prehrať) / Skryť / ↑ / ↓ /
 /// Zmazať. Under the keyed `<For>` the row is reused across reorders, so its
 /// texts and its button number are read from the store by id, never captured.
 #[component]
-fn NameplateRow(store: NameplateStore, id: i64, options: RowOptions) -> impl IntoView {
+fn NameplateRow(
+    store: NameplateStore,
+    id: i64,
+    options: RowOptions,
+    drag: RwSignal<Option<PlateDrag>>,
+) -> impl IntoView {
     let field = move |pick: fn(&presenter_core::Nameplate) -> String| {
         Memo::new(move |_| {
             store.plates.with(|list| {
@@ -216,7 +226,7 @@ fn NameplateRow(store: NameplateStore, id: i64, options: RowOptions) -> impl Int
             Some(ActiveNameplate { source: NameplateSource::Person, nameplate_id: Some(a), .. }) if a == id
         )
     };
-    // The row's POSITION (its Stream Deck button), which a
+    // The row's POSITION (its Stream Deck button, the drop line), which a
     // reorder or a delete elsewhere changes while the id (the key) stays.
     let position = Memo::new(move |_| {
         store
@@ -225,6 +235,69 @@ fn NameplateRow(store: NameplateStore, id: i64, options: RowOptions) -> impl Int
     });
     let button = move || position.get().map(person_button);
     let beyond = move || button().is_some_and(beyond_grid);
+    let dragging = move || drag.with(|d| d.is_some_and(|d| d.id == id));
+    let marker = move || {
+        let len = store.plates.with(Vec::len);
+        match (drag.get(), position.get()) {
+            (Some(d), Some(pos)) if d.id != id => drop_marker(d.from, d.slot, pos, len),
+            _ => None,
+        }
+    };
+
+    // Drag by the handle (pointer events: mouse, finger, pen).
+    let on_down = move |ev: PointerEvent| {
+        if ev.button() != PRIMARY_BUTTON || !capture(&ev) {
+            return;
+        }
+        ev.prevent_default();
+        if let Some(from) = position.get_untracked() {
+            drag.set(Some(PlateDrag {
+                id,
+                from,
+                slot: from,
+            }));
+        }
+    };
+    let on_move = move |ev: PointerEvent| {
+        let Some(current) = drag.get_untracked().filter(|d| d.id == id) else {
+            return;
+        };
+        // No button held any more (a lost release): the drag must end.
+        if ev.buttons() == 0 {
+            drag.set(None);
+            return;
+        }
+        if let Some(slot) = slot_under_pointer(&ev) {
+            if slot != current.slot {
+                drag.set(Some(PlateDrag { slot, ..current }));
+            }
+        }
+    };
+    let on_up = move |ev: PointerEvent| {
+        let Some(current) = drag.get_untracked().filter(|d| d.id == id) else {
+            return;
+        };
+        drag.set(None);
+        let slot = slot_under_pointer(&ev).unwrap_or(current.slot);
+        store.drop_at(id, slot);
+    };
+    let on_cancel = move |_: PointerEvent| {
+        if drag.get_untracked().is_some_and(|d| d.id == id) {
+            drag.set(None);
+        }
+    };
+    // The handle also moves the plate from the keyboard.
+    let on_handle_key = move |ev: KeyboardEvent| match ev.key().as_str() {
+        "ArrowUp" => {
+            ev.prevent_default();
+            store.move_plate(id, true);
+        }
+        "ArrowDown" => {
+            ev.prevent_default();
+            store.move_plate(id, false);
+        }
+        _ => {}
+    };
 
     view! {
         <li
@@ -233,7 +306,24 @@ fn NameplateRow(store: NameplateStore, id: i64, options: RowOptions) -> impl Int
             data-nameplate-id=id.to_string()
             data-active=move || bool_attr(is_active())
             data-beyond-grid=move || options.numbered.then(|| bool_attr(beyond()))
+            data-dragging=move || bool_attr(dragging())
+            data-drop=marker
         >
+            <button
+                type="button"
+                class="nameplates__btn nameplates__btn--ghost nameplates__handle"
+                data-role="stream-nameplate-drag"
+                title="Ťahaním presuniete menovku (alebo šípkami hore / dole)"
+                aria-label="Presunúť menovku"
+                on:pointerdown=on_down
+                on:pointermove=on_move
+                on:pointerup=on_up
+                on:pointercancel=on_cancel
+                on:lostpointercapture=on_cancel
+                on:keydown=on_handle_key
+            >
+                "⠿"
+            </button>
             {options.numbered.then(move || view! {
                 <span
                     class="nameplates__button"

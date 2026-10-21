@@ -10,6 +10,7 @@
 //! numbers and the no-layer hint ([`operator_view`]). There is no second copy of
 //! the plate logic, the REST paths or the request bodies anywhere else.
 
+mod drag;
 pub mod numbering;
 pub mod operator_view;
 pub mod order;
@@ -363,6 +364,13 @@ impl NameplateStore {
     /// Move a plate one step up or down (a new Stream Deck button, #870).
     pub fn move_plate(self, id: i64, up: bool) {
         if let Some(ids) = order::reorder_one_step(&self.ids_now(), id, up) {
+            self.reorder(ids);
+        }
+    }
+
+    /// Drop a dragged plate into `slot` (an [`order::drop_slot`] value).
+    pub fn drop_at(self, id: i64, slot: usize) {
+        if let Some(ids) = order::reorder_to_slot(&self.ids_now(), id, slot) {
             self.reorder(ids);
         }
     }

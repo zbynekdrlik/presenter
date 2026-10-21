@@ -9,14 +9,17 @@
  *  - reorder: the button numbers 2 / 3 swap and the REST order follows;
  *  - half-typed text survives every list refresh until it is saved (blur or
  *    Enter), even a rename of the same plate from elsewhere;
- *  - two quick ↑ taps move a plate up two places;
+ *  - drag to reorder by the handle: above the first, below the last, in the
+ *    middle (full id set each time), one plate or none breaks nothing; two
+ *    quick ↑ taps move a plate up two places;
  *  - Zobraziť → on-air highlight + `GET …/nameplates/active`; Skryť → cleared;
  *    the song row shows the live song and puts the song plate on air;
  *  - changes made through REST from outside (add, rename, show) show live;
  *  - delete asks first; the no-layer hint follows the `stream` def live;
  *  - from button 13 on a plate is outside the 4 × 3 grid (marker + note);
  *  - at 390 px the view fits: nothing past the right edge, 44 px tap targets,
- *    16 px inputs, and picking the view closes the phone menu.
+ *    16 px inputs, picking the view closes the phone menu, and a finger drag
+ *    reorders.
  *
  * The rows are the stream editor's shared plate list (same data-roles), scoped
  * here to `[data-role="operator-nameplates"]`. Clean console is the last
@@ -26,6 +29,7 @@ import {
   test,
   expect,
   type APIRequestContext,
+  type Locator,
   type Page,
 } from "@playwright/test";
 import {
@@ -36,6 +40,7 @@ import {
   refreshDevData,
   startTestServer,
   stopServer,
+  touchDrag,
   type ServerHandle,
 } from "./support";
 
@@ -89,6 +94,7 @@ const songRow = (page: Page) => view(page).locator('[data-role="stream-nameplate
 const BUTTON = '[data-role="stream-nameplate-button"]';
 const NAME = '[data-role="stream-nameplate-name"]';
 const ROLE = '[data-role="stream-nameplate-role"]';
+const DRAG = '[data-role="stream-nameplate-drag"]';
 const noLayerHint = (page: Page) => page.locator('[data-role="operator-nameplates-no-layer"]');
 const gridNote = (page: Page) => page.locator('[data-role="operator-nameplates-grid-note"]');
 
@@ -260,6 +266,35 @@ async function rowOrder(page: Page): Promise<number[]> {
   return rows(page).evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-nameplate-id"))));
 }
 
+type Box = { top: number; bottom: number; centerX: number; centerY: number };
+
+async function box(locator: Locator): Promise<Box> {
+  const rect = await locator.boundingBox();
+  expect(rect, "the element has a box").toBeTruthy();
+  return {
+    top: rect!.y,
+    bottom: rect!.y + rect!.height,
+    centerX: rect!.x + rect!.width / 2,
+    centerY: rect!.y + rect!.height / 2,
+  };
+}
+
+/** Drag plate `id` by its handle with the mouse to the height `toY` (real
+ *  pointer events). `whileHeld` runs before the button is released. */
+async function mouseDrag(
+  page: Page,
+  id: number,
+  toY: number,
+  whileHeld?: () => Promise<void>,
+): Promise<void> {
+  const handle = await box(row(page, id).locator(DRAG));
+  await page.mouse.move(handle.centerX, handle.centerY);
+  await page.mouse.down();
+  await page.mouse.move(handle.centerX, toY, { steps: 12 });
+  if (whileHeld) await whileHeld();
+  await page.mouse.up();
+}
+
 /** The REST list, the rows on screen and their Stream Deck numbers all show
  *  `ids` in this order. */
 async function expectOrder(page: Page, request: APIRequestContext, ids: number[]): Promise<void> {
@@ -302,6 +337,7 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
   await expect(songRow(page).locator(BUTTON)).toHaveText("1");
   expect(await listPlates(request)).toEqual([]);
   await expect(rows(page)).toHaveCount(0);
+  await expect(view(page).locator(DRAG)).toHaveCount(0);
   await expect(noLayerHint(page)).toBeVisible();
   await expect(noLayerHint(page).locator("a")).toHaveAttribute(
     "href",
@@ -322,7 +358,7 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
   await expect(row(page, anna)).toHaveAttribute("data-beyond-grid", "false");
   await expect(view(page).locator('[data-role="stream-nameplate-new-name"]')).toHaveValue("");
 
-  // ── Rename one (the input commits on change).
+  // ── Rename one (the field saves when it loses the focus).
   const annaName = row(page, anna).locator(NAME);
   await annaName.fill("Op Anna Nová");
   await annaName.blur();
@@ -454,6 +490,77 @@ test("#871 typing in a row survives every list refresh until it is saved", async
   expect(consoleErrors).toEqual([]);
 });
 
+test("#871 drag to reorder: above the first, below the last, in the middle; one plate or none breaks nothing", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  const orderPuts: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PUT" && req.url().endsWith(`/stream/api/outputs/${SLUG}/nameplates/order`)) {
+      orderPuts.push(req.postData() ?? "");
+    }
+  });
+
+  // An empty list: no rows, no handles, nothing to drag.
+  await resetPlates(request);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect(view(page)).toBeVisible();
+  await expect(rows(page)).toHaveCount(0);
+  await expect(view(page).locator(DRAG)).toHaveCount(0);
+
+  // One plate: a drag of it changes nothing and sends nothing.
+  const [solo] = await seedPlates(request, [["Ťah Sólo", "hosť"]]);
+  await expect(row(page, solo).locator(BUTTON)).toHaveText("2");
+  const soloBox = await box(row(page, solo));
+  await mouseDrag(page, solo, soloBox.bottom + 120);
+  await expect(row(page, solo)).toHaveAttribute("data-dragging", "false");
+
+  // Four plates: A B C D (buttons 2..5). The positive settle signal for "the
+  // solo drag sent nothing": these creates have landed in the page first.
+  await deletePlate(request, solo);
+  const [a, b, c, d] = await seedPlates(request, [
+    ["Ťah A", "1"],
+    ["Ťah B", "2"],
+    ["Ťah C", "3"],
+    ["Ťah D", "4"],
+  ]);
+  await expect.poll(() => rowOrder(page)).toEqual([a, b, c, d]);
+  expect(orderPuts, "a one-plate drag sends no reorder").toEqual([]);
+
+  // C above the first (A): the drop line shows on A while C is held.
+  const first = await box(row(page, a));
+  await mouseDrag(page, c, first.top - 4, async () => {
+    await expect(row(page, c)).toHaveAttribute("data-dragging", "true");
+    await expect(row(page, a)).toHaveAttribute("data-drop", "before");
+  });
+  await expectOrder(page, request, [c, a, b, d]);
+  await expect(row(page, c)).toHaveAttribute("data-dragging", "false");
+  await expect(view(page).locator("[data-drop]")).toHaveCount(0);
+
+  // C (now first) below the last (D).
+  const last = await box(row(page, d));
+  await mouseDrag(page, c, last.bottom + 4, async () => {
+    await expect(row(page, d)).toHaveAttribute("data-drop", "after");
+  });
+  await expectOrder(page, request, [a, b, d, c]);
+
+  // D (third) into the middle, between A and B.
+  const gap = await box(row(page, a));
+  await mouseDrag(page, d, gap.bottom + 4);
+  await expectOrder(page, request, [a, d, b, c]);
+
+  // Every drop sent the FULL id set.
+  expect(orderPuts.map((body) => (JSON.parse(body) as { ids: number[] }).ids)).toEqual([
+    [c, a, b, d],
+    [a, b, d, c],
+    [a, d, b, c],
+  ]);
+
+  expect(consoleErrors).toEqual([]);
+});
+
 test("#871 two quick ↑ taps move a plate up two places", async ({ page, request }) => {
   const consoleErrors = collectConsole(page);
   await resetPlates(request);
@@ -514,49 +621,70 @@ test("#871 from button 13 on a plate is outside the 4×3 grid: marked, with a no
   expect(consoleErrors).toEqual([]);
 });
 
-test("#871 on a 390 px phone the view fits and the menu closes on the pick", async ({ browser }) => {
+test("#871 on a 390 px phone the view fits, the menu closes on the pick and a finger drag reorders", async ({
+  browser,
+}) => {
   const context = await browser.newContext({ ...PHONE_390, baseURL });
-  const page = await context.newPage();
-  const consoleErrors = collectConsole(page);
-  await openOperator(page);
+  try {
+    const page = await context.newPage();
+    const consoleErrors = collectConsole(page);
+    await resetPlates(page.request);
+    const [first, second] = await seedPlates(page.request, [
+      ["Telefón A", "hosť"],
+      ["Telefón B", "hosť"],
+    ]);
+    await openOperator(page);
 
-  // ≤768 px the views sit behind the menu button; picking one closes the menu.
-  await page.locator('[data-role="mobile-menu-toggle"]').tap();
-  await expect(page.locator("body")).toHaveClass(/operator--mobile-nav-open/);
-  await page.locator('[data-role="view-toggle"][data-view="menovky"]').tap();
-  await expect(page.locator("body")).toHaveAttribute("data-view", "menovky");
-  await expect(page.locator("body")).not.toHaveClass(/operator--mobile-nav-open/);
-  await expect(view(page)).toBeVisible();
+    // ≤768 px the views sit behind the menu button; picking one closes the menu.
+    await page.locator('[data-role="mobile-menu-toggle"]').tap();
+    await expect(page.locator("body")).toHaveClass(/operator--mobile-nav-open/);
+    await page.locator('[data-role="view-toggle"][data-view="menovky"]').tap();
+    await expect(page.locator("body")).toHaveAttribute("data-view", "menovky");
+    await expect(page.locator("body")).not.toHaveClass(/operator--mobile-nav-open/);
+    await expect(view(page)).toBeVisible();
 
-  // A plate added by touch.
-  const name = `Telefón ${Date.now() % 100_000}`;
-  await view(page).locator('[data-role="stream-nameplate-new-name"]').fill(name);
-  await view(page).locator('[data-role="stream-nameplate-new-role"]').fill("hosť");
-  await view(page).locator('[data-role="stream-nameplate-add-submit"]').tap();
-  const id = await waitForPlate(page.request, name);
-  await expect(row(page, id).locator(NAME)).toHaveValue(name);
+    // A plate added by touch.
+    await view(page).locator('[data-role="stream-nameplate-new-name"]').fill("Telefón C");
+    await view(page).locator('[data-role="stream-nameplate-new-role"]').fill("hosť");
+    await view(page).locator('[data-role="stream-nameplate-add-submit"]').tap();
+    const third = await waitForPlate(page.request, "Telefón C");
+    await expect(row(page, third).locator(NAME)).toHaveValue("Telefón C");
+    await expect(row(page, third).locator(BUTTON)).toHaveText("4");
 
-  // Nothing in the view reaches past the screen edges and the panel does not
-  // scroll sideways. (The operator header above is out of this view's scope.)
-  const fit = await page.evaluate(() => {
-    const panel = document.querySelector('[data-view-panel="menovky"]') as HTMLElement;
-    const width = window.innerWidth;
-    const offenders = Array.from(panel.querySelectorAll<HTMLElement>("*"))
-      .filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && (rect.right > width + 1 || rect.left < -1);
-      })
-      .slice(0, 5)
-      .map((el) => `${el.tagName.toLowerCase()}[data-role=${el.dataset.role ?? ""}]`);
-    return { offenders, overflow: panel.scrollWidth - panel.clientWidth };
-  });
-  expect(fit.offenders, "elements past the screen edge").toEqual([]);
-  expect(fit.overflow, "the view scrolls sideways").toBeLessThanOrEqual(0);
+    // A finger drag of C's handle above B: C becomes button 3.
+    await row(page, second).evaluate((el) => el.scrollIntoView({ block: "start" }));
+    const handle = await box(row(page, third).locator(DRAG));
+    const target = await box(row(page, second));
+    await touchDrag(
+      page,
+      { x: handle.centerX, y: handle.centerY },
+      { x: handle.centerX, y: target.top + 4 },
+    );
+    await expectOrder(page, page.request, [first, third, second]);
 
-  // Touch sizes: every button ≥ 44 px, inputs 16 px (no zoom on focus).
-  await assertMinTapTarget(view(page).locator("button"), 44);
-  await assertMinFontSize(view(page).locator("input"), 16);
+    // Nothing in the view reaches past the screen edges and the panel does not
+    // scroll sideways. (The operator header above is out of this view's scope.)
+    const fit = await page.evaluate(() => {
+      const panel = document.querySelector('[data-view-panel="menovky"]') as HTMLElement;
+      const width = window.innerWidth;
+      const offenders = Array.from(panel.querySelectorAll<HTMLElement>("*"))
+        .filter((el) => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && (rect.right > width + 1 || rect.left < -1);
+        })
+        .slice(0, 5)
+        .map((el) => `${el.tagName.toLowerCase()}[data-role=${el.dataset.role ?? ""}]`);
+      return { offenders, overflow: panel.scrollWidth - panel.clientWidth };
+    });
+    expect(fit.offenders, "elements past the screen edge").toEqual([]);
+    expect(fit.overflow, "the view scrolls sideways").toBeLessThanOrEqual(0);
 
-  expect(consoleErrors).toEqual([]);
-  await context.close();
+    // Touch sizes: every button (the drag handle too) ≥ 44 px, inputs 16 px.
+    await assertMinTapTarget(view(page).locator("button"), 44);
+    await assertMinFontSize(view(page).locator("input"), 16);
+
+    expect(consoleErrors).toEqual([]);
+  } finally {
+    await context.close();
+  }
 });

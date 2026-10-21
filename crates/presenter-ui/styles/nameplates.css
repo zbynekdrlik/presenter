@@ -13,6 +13,7 @@
 }
 
 .nameplates__row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -21,6 +22,43 @@
   border: 1px solid #1e293b;
   border-radius: 6px;
   flex-wrap: wrap;
+}
+
+/* Drag to reorder (#871): the handle never scrolls the page under a finger;
+ * the dragged row dims and a line marks where it would land. */
+.nameplates__handle {
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  line-height: 1;
+}
+
+.nameplates__row[data-dragging="true"] {
+  opacity: 0.55;
+}
+
+.nameplates__row[data-dragging="true"] .nameplates__handle {
+  cursor: grabbing;
+}
+
+.nameplates__row[data-drop="before"]::before,
+.nameplates__row[data-drop="after"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: #38bdf8;
+  pointer-events: none;
+}
+
+.nameplates__row[data-drop="before"]::before {
+  top: -6px;
+}
+
+.nameplates__row[data-drop="after"]::after {
+  bottom: -6px;
 }
 
 .nameplates__row--song {
