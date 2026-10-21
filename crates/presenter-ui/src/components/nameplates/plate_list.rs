@@ -11,9 +11,10 @@
 use leptos::prelude::*;
 use presenter_core::{ActiveNameplate, NameplateSource};
 use wasm_bindgen::JsCast;
-use web_sys::{KeyboardEvent, PointerEvent};
+use web_sys::{Element, KeyboardEvent, PointerEvent};
 
 use super::drag::{capture, slot_under_pointer, PlateDrag, PRIMARY_BUTTON};
+use super::focus::holds_focus;
 use super::numbering::{beyond_grid, button_title, person_button, SONG_BUTTON};
 use super::order::drop_marker;
 use super::{song_line, NameplateStore};
@@ -96,6 +97,17 @@ pub fn NameplateSongRow(store: NameplateStore, options: RowOptions) -> impl Into
 #[component]
 pub fn NameplateRows(store: NameplateStore, options: RowOptions) -> impl IntoView {
     let drag = RwSignal::new(None::<PlateDrag>);
+    // #871 review: a plate deleted elsewhere while it is dragged ends its
+    // drag. Its handle is gone, so no release or cancel would ever reach it.
+    Effect::new(move || {
+        let gone = store.plates.with(|list| {
+            drag.with_untracked(|d| d.is_some_and(|d| list.iter().all(|p| p.id != d.id)))
+        });
+        if gone {
+            leptos::logging::log!("nameplates: the dragged plate was deleted; drag ended");
+            drag.set(None);
+        }
+    });
     let plate_ids = move || {
         store
             .plates
@@ -183,6 +195,36 @@ fn commit(store: NameplateStore, id: i64, name: PlateText, role: PlateText) {
     });
 }
 
+/// A row field lost the focus: save the row, unless the field was only MOVED.
+///
+/// #871 review: a reorder (another operator, Companion, this page's ↑ / ↓ or
+/// drag) moves the row with `insertBefore`, which drops the focus of the field
+/// being typed in, and Chrome fires `blur` on the way. `focus::keep_focus`
+/// gives the focus back right after the move, so the decision waits for that:
+/// this task is queued after it. A field holding the focus again was only
+/// moved and saves nothing (the text stays a draft); a field whose row is
+/// gone (the plate deleted elsewhere) saves nothing either. Any other blur
+/// (Tab, a click elsewhere, Enter) saves.
+fn commit_on_leave(
+    store: NameplateStore,
+    id: i64,
+    name: PlateText,
+    role: PlateText,
+    field: Element,
+) {
+    leptos::task::spawn_local(async move {
+        if !field.is_connected() || name.draft.is_disposed() {
+            leptos::logging::log!("nameplates: plate {id} row is gone; nothing to save");
+            return;
+        }
+        if holds_focus(&field) {
+            leptos::logging::log!("nameplates: plate {id} field was moved, not left; not saved");
+            return;
+        }
+        commit(store, id, name, role);
+    });
+}
+
 /// Enter in a row field commits it, by leaving the field.
 fn blur_on_enter(ev: KeyboardEvent) {
     if ev.key() != "Enter" {
@@ -236,12 +278,16 @@ fn NameplateRow(
     let button = move || position.get().map(person_button);
     let beyond = move || button().is_some_and(beyond_grid);
     let dragging = move || drag.with(|d| d.is_some_and(|d| d.id == id));
+    // The drop line on this row, measured on the list as it is NOW: the
+    // dragged plate's place is looked up, so a plate deleted (or moved)
+    // elsewhere mid-drag never leaves a stale line (#871 review).
     let marker = move || {
-        let len = store.plates.with(Vec::len);
-        match (drag.get(), position.get()) {
-            (Some(d), Some(pos)) if d.id != id => drop_marker(d.from, d.slot, pos, len),
-            _ => None,
-        }
+        let d = drag.get().filter(|d| d.id != id)?;
+        let pos = position.get()?;
+        store.plates.with(|list| {
+            let from = list.iter().position(|p| p.id == d.id)?;
+            drop_marker(from, d.slot, pos, list.len())
+        })
     };
 
     // Drag by the handle (pointer events: mouse, finger, pen).
@@ -251,11 +297,7 @@ fn NameplateRow(
         }
         ev.prevent_default();
         if let Some(from) = position.get_untracked() {
-            drag.set(Some(PlateDrag {
-                id,
-                from,
-                slot: from,
-            }));
+            drag.set(Some(PlateDrag { id, slot: from }));
         }
     };
     let on_move = move |ev: PointerEvent| {
@@ -338,12 +380,12 @@ fn NameplateRow(
                     prop:value=move || name.shown.get()
                     on:input=move |ev| name.draft.set(Some(event_target_value(&ev)))
                     on:keydown=blur_on_enter
-                    on:blur=move |_| commit(store, id, name, role) />
+                    on:blur=move |ev| commit_on_leave(store, id, name, role, event_target(&ev)) />
                 <input type="text" data-role="stream-nameplate-role" aria-label="Pozícia"
                     prop:value=move || role.shown.get()
                     on:input=move |ev| role.draft.set(Some(event_target_value(&ev)))
                     on:keydown=blur_on_enter
-                    on:blur=move |_| commit(store, id, name, role) />
+                    on:blur=move |ev| commit_on_leave(store, id, name, role, event_target(&ev)) />
             </div>
             <div class="nameplates__actions">
                 <button type="button" class="nameplates__btn" data-role="stream-nameplate-show"

@@ -13,12 +13,12 @@ use web_sys::PointerEvent;
 
 use super::order;
 
-/// One drag in progress: the dragged plate, its list position when the drag
-/// started, and the slot it would drop into now.
+/// One drag in progress: the dragged plate and the slot it would drop into
+/// now. Its own place is read from the list as it is now, never kept: a plate
+/// deleted or moved elsewhere mid-drag must not leave a stale drop line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlateDrag {
     pub id: i64,
-    pub from: usize,
     pub slot: usize,
 }
 

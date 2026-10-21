@@ -11,16 +11,19 @@
 //! the plate logic, the REST paths or the request bodies anywhere else.
 
 mod drag;
+mod focus;
 pub mod numbering;
 pub mod operator_view;
 pub mod order;
 pub mod plate_list;
+mod save_queue;
 
 use leptos::prelude::*;
 use presenter_core::{
     ActiveNameplate, LiveEvent, Nameplate, StageDisplaySnapshot, StreamElementProps,
     StreamOutputDef,
 };
+use save_queue::SaveQueue;
 use serde::Serialize;
 
 // ---- Client write DTOs (camelCase, mirroring router/stream_nameplates.rs) --
@@ -113,6 +116,13 @@ struct OrderSync {
     next: Option<(String, Vec<i64>)>,
 }
 
+/// A plate save waiting in the [`SaveQueue`]: the texts to PATCH and what
+/// to run once the save is done (the row drops its drafts).
+struct PlateSave {
+    req: NameplateTextReq,
+    done: Box<dyn FnOnce(bool)>,
+}
+
 /// One output's plates, the plate on air and the live song, plus every plate
 /// REST call. `Copy` (signals, stored values and a callback), so it threads
 /// into each row.
@@ -136,6 +146,9 @@ pub struct NameplateStore {
     list_gen: StoredValue<u64>,
     /// The serialized reorder PUTs ([`OrderSync`]).
     order_sync: StoredValue<OrderSync>,
+    /// The serialized saves, one PATCH per plate on its way ([`SaveQueue`]).
+    /// Local storage: a waiting save holds its `done` closure.
+    saves: StoredValue<SaveQueue<PlateSave>, LocalStorage>,
 }
 
 impl NameplateStore {
@@ -149,6 +162,7 @@ impl NameplateStore {
             toast,
             list_gen: StoredValue::new(0),
             order_sync: StoredValue::new(OrderSync::default()),
+            saves: StoredValue::new_local(SaveQueue::default()),
         }
     }
 
@@ -197,7 +211,8 @@ impl NameplateStore {
     /// Re-fetch the plate list (mount, after an own write, on a
     /// `StreamNameplatesChanged`). Applied only while it is the newest list
     /// request, the output is unchanged and no reorder is still being sent
-    /// (that one reloads once it is done).
+    /// (that one reloads once it is done). A new order from elsewhere moves
+    /// rows, so the list keeps its focus ([`focus::keep_focus`]).
     pub fn reload_list(self) {
         let slug = self.output_slug.get_untracked();
         let generation = self.next_gen();
@@ -221,7 +236,7 @@ impl NameplateStore {
                 return;
             }
             match result {
-                Ok(list) => self.plates.set(list),
+                Ok(list) => focus::keep_focus(|| self.plates.set(list)),
                 Err(e) => self.notify(format!("Načítanie menoviek zlyhalo: {e}"), "error"),
             }
         });
@@ -291,6 +306,11 @@ impl NameplateStore {
     /// (before the refetch), then `done(saved)` runs, so a row can drop its
     /// draft without its old text flashing back. A refused save (an empty
     /// name, a server error) calls `done(false)` and toasts.
+    ///
+    /// One save per plate is on its way at a time ([`SaveQueue`], #871
+    /// review): a save made meanwhile waits and goes next (a newer one
+    /// replaces it), so the server never applies an older text last. The list
+    /// is refetched once nothing of the plate is left to send.
     pub fn update(
         self,
         id: i64,
@@ -302,24 +322,49 @@ impl NameplateStore {
             done(false);
             return;
         };
+        let save = PlateSave {
+            req,
+            done: Box::new(done),
+        };
+        let Some(first) = self
+            .saves
+            .try_update_value(|queue| queue.offer(id, save))
+            .flatten()
+        else {
+            leptos::logging::log!("nameplates: plate {id} save waits for the one on its way");
+            return;
+        };
         leptos::task::spawn_local(async move {
-            match crate::api::patch_json::<_, Nameplate>(&nameplate_path(id), &req).await {
-                Ok(saved) => {
-                    self.next_gen();
-                    self.plates.update(|list| {
-                        if let Some(plate) = list.iter_mut().find(|p| p.id == saved.id) {
-                            *plate = saved;
-                        }
-                    });
-                    done(true);
-                    self.reload_list();
-                }
-                Err(e) => {
-                    done(false);
-                    self.notify(format!("Uloženie zlyhalo: {e}"), "error");
-                }
+            let mut next = Some(first);
+            while let Some(save) = next {
+                self.send_save(id, save).await;
+                next = self
+                    .saves
+                    .try_update_value(|queue| queue.finish(id))
+                    .flatten();
             }
+            self.reload_list();
         });
+    }
+
+    /// PATCH one save of plate `id` and report it to its row (`done`).
+    async fn send_save(self, id: i64, save: PlateSave) {
+        let PlateSave { req, done } = save;
+        match crate::api::patch_json::<_, Nameplate>(&nameplate_path(id), &req).await {
+            Ok(saved) => {
+                self.next_gen();
+                self.plates.update(|list| {
+                    if let Some(plate) = list.iter_mut().find(|p| p.id == saved.id) {
+                        *plate = saved;
+                    }
+                });
+                done(true);
+            }
+            Err(e) => {
+                done(false);
+                self.notify(format!("Uloženie zlyhalo: {e}"), "error");
+            }
+        }
     }
 
     /// The trimmed texts of an add / edit, or `None` (with a toast) when the
@@ -376,10 +421,11 @@ impl NameplateStore {
     }
 
     /// Apply a new order: shown at once (the numbers move, and the next move
-    /// builds on it), then sent as the full id set.
+    /// builds on it), then sent as the full id set. The moved rows keep the
+    /// focus (the drag handle under ↑ / ↓, a half-typed field).
     fn reorder(self, ids: Vec<i64>) {
         self.next_gen();
-        self.plates.update(|list| order::apply_order(list, &ids));
+        focus::keep_focus(|| self.plates.update(|list| order::apply_order(list, &ids)));
         self.send_order(self.output_slug.get_untracked(), ids);
     }
 

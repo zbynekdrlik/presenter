@@ -27,6 +27,7 @@
 use leptos::prelude::*;
 
 use crate::utils::keyboard::KEY_ESCAPE;
+use crate::utils::window::focus_is_free;
 
 /// Which item a card's single inline editor is open on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -450,21 +451,16 @@ pub(super) fn focus_on_close<F: EditorForm>(
         if editor.trigger_lock(&target).is_some() || !editor.take_focus_return(&target) {
             return;
         }
+        // Only while nothing has focus (it fell back to `<body>` when the editor
+        // holding it was removed). A save closes its editor one request after the
+        // click; if the operator has clicked into another field meanwhile, focus
+        // stays there.
         leptos::task::spawn_local(async move {
             if focus_is_free() {
                 let _ = el.focus();
             }
         });
     });
-}
-
-/// Nothing has focus (it fell back to `<body>` when the editor holding it was
-/// removed). A save closes its editor one request after the click; if the operator
-/// has clicked into another field meanwhile, focus stays there.
-fn focus_is_free() -> bool {
-    crate::utils::window::document()
-        .active_element()
-        .is_none_or(|el| el.tag_name() == "BODY")
 }
 
 /// What differs between two cards' editors besides their fields.
