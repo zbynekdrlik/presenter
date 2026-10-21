@@ -26,7 +26,10 @@
  *    was deleted;
  *  - a failed save marks its row "neuložené" until it is saved and goes again
  *    by itself (2 s, 5 s, 15 s) and as soon as the network is back;
- *    Zobraziť on such a row saves first and puts the saved text on air;
+ *    Zobraziť on such a row saves first and puts the saved text on air (a
+ *    test that acts on a failed row does it from a MutationObserver on the
+ *    row's `data-unsaved`, in the same pass as the mark: never a race with
+ *    the page's own retry timer);
  *  - a save sent beside another as the page hid keeps the next save waiting;
  *    an older save answered after the newer one makes the page send the
  *    newer texts once more; a 404 drops the save waiting behind it;
@@ -1442,22 +1445,23 @@ test("#871 a failed save goes again as soon as the network is back", async ({ pa
   await expect(aName).toHaveValue("Sieť späť A");
   const toast = page.locator('[data-role="toast"]');
 
-  await aName.fill("Sieť späť A nová");
-  await aName.blur();
-  await expect(toast).toContainText("Text ostal v poli");
-
-  // The phone's Wi-Fi is back and the browser says so: the page sends the
-  // text at once, without waiting for its own retry pause.
+  // The phone's Wi-Fi is back and the browser says so, in the same pass as
+  // the row's unsaved mark (so the page's own 2 s retry can never go first):
+  // the page sends the text at once.
+  await onUnsavedMark(page, a, "online");
   const resent = page.waitForEvent("console", {
     predicate: (msg) =>
       msg.text().startsWith(`nameplates: plate ${a} failed save`) &&
       msg.text().endsWith("(the network is back)"),
     timeout: 10_000,
   });
-  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await aName.fill("Sieť späť A nová");
+  await aName.blur();
   expect((await resent).text()).toBe(
     `nameplates: plate ${a} failed save sent again (the network is back)`,
   );
+  await expect(toast).toContainText("Text ostal v poli");
+  expect(await unsavedMarkSeen(page, a)).toBe(true);
   await expect.poll(() => savedText(request, a)).toBe("Sieť späť A nová");
   await expect(row(page, a)).toHaveAttribute("data-unsaved", "false");
   expect(patches.map((p) => p.primaryText)).toEqual(["Sieť späť A nová", "Sieť späť A nová"]);
@@ -1482,14 +1486,16 @@ test("#871 Zobraziť on a row whose save failed saves the text first and puts th
   const aName = aRow.locator(NAME);
   await expect(aName).toHaveValue("Vzduch A");
 
+  // Zobraziť is pressed in the same pass as the row's unsaved mark, so the
+  // row is still failed (the page's own 2 s retry cannot go first). The
+  // server puts on air the text it HAS: shown at once, the old name would go
+  // on air while the field shows the new one. So the page saves the typed
+  // text first and shows the plate once that is saved.
+  await onUnsavedMark(page, a, "show");
   await aName.fill("Vzduch A nová");
   await aName.blur();
   await expect(page.locator('[data-role="toast"]')).toContainText("Text ostal v poli");
-
-  // The server puts on air the text it HAS: shown at once, the old name would
-  // go on air while the field shows the new one. So the page saves the typed
-  // text first and shows the plate once that is saved.
-  await aRow.locator('[data-role="stream-nameplate-show"]').click();
+  await expect.poll(() => unsavedMarkSeen(page, a)).toBe(true);
   await expect.poll(async () => (await activePlate(request))?.primary).toBe("Vzduch A nová");
   await expect(aRow).toHaveAttribute("data-active", "true");
   await expect(aRow).toHaveAttribute("data-unsaved", "false");
@@ -1699,29 +1705,32 @@ test("#871 a name cleared to retype it does not hold back a role typed in the sa
   const consoleErrors = collectConsole(page);
   await resetPlates(request);
   const [a] = await seedPlates(request, [["Rola A", "1"]]);
-  const patches = await failFirstPatches(page, a, 1);
+  const { bodies: patches, failFirst } = await failFirstPatchOnCue(page, a);
   await openOperator(page, "/ui/operator/menovky");
   const aName = row(page, a).locator(NAME);
   const aRole = row(page, a).locator(ROLE);
   await expect(aName).toHaveValue("Rola A");
 
-  // The role is typed and left, but its save fails (Wi-Fi asleep): the role
-  // stays typed for another try.
+  // The role is typed and left; its save is held at the network.
   await aRole.fill("nová rola");
   await aRole.blur();
-  await expect(page.locator('[data-role="toast"]')).toContainText("Text ostal v poli");
+  await expect.poll(() => patches.length).toBe(1);
 
-  // The name is cleared to retype it, then the phone locks: the name stays as
-  // typed (empty, never saved), and the role goes now, with the saved name.
+  // The name is cleared to retype it. Then the role's save fails (Wi-Fi
+  // asleep) and, in the same pass as the row's unsaved mark (so the page's
+  // own 2 s retry cannot go first), the phone locks: the name stays as typed
+  // (empty, never saved), and the role goes now, with the newest name.
   await aName.fill("");
+  await onUnsavedMark(page, a, "hide");
   const decided = page.waitForEvent("console", {
     predicate: (msg) => msg.text().startsWith(`nameplates: plate ${a} name is empty; kept as typed`),
     timeout: 10_000,
   });
-  await setPageHidden(page, true);
+  failFirst();
   expect((await decided).text()).toBe(
-    `nameplates: plate ${a} name is empty; kept as typed, the role sent with the saved name (the page went hidden)`,
+    `nameplates: plate ${a} name is empty; kept as typed, the role sent with the newest name (the page went hidden)`,
   );
+  await expect(page.locator('[data-role="toast"]')).toContainText("Text ostal v poli");
   await expect
     .poll(async () => (await listPlates(request)).find((p) => p.id === a))
     .toMatchObject({ primaryText: "Rola A", secondaryText: "nová rola" });
