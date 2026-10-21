@@ -40,8 +40,8 @@ pub mod transition_choice;
 
 use leptos::prelude::*;
 use presenter_core::{
-    ActiveNameplate, Frame, Nameplate, SceneKind, StreamElementDef, StreamElementProps, StreamFont,
-    StreamOutputDef, StreamOutputSummary, StreamSceneDef, StreamShowState,
+    Frame, SceneKind, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
+    StreamOutputSummary, StreamSceneDef, StreamShowState,
 };
 use serde::Serialize;
 
@@ -52,6 +52,7 @@ use self::output_paths::{
 use self::prop_error::PropError;
 use self::props_access::with_frame_mut;
 use self::selection_intent::SelectionIntent;
+use crate::components::nameplates::NameplateStore;
 
 /// The default output slug — the editor opens this one unless a `?output=` param
 /// / `localStorage` value selects another (#785). Before #785 the editor was
@@ -173,15 +174,11 @@ pub struct StreamEditorCtx {
     /// Uploaded web-font faces (#778): the picker's extra families + the upload
     /// panel's list. Loaded on mount and after each upload/delete.
     pub fonts: RwSignal<Vec<StreamFont>>,
-    /// #779: the output's person-plate list (the Menovky panel). Loaded on mount
-    /// and refetched on a `StreamNameplatesChanged` live event.
-    pub nameplates: RwSignal<Vec<Nameplate>>,
-    /// #779: the plate currently on air (drives the on-air highlight). Applied
-    /// directly from `StreamNameplate` events + a cold-load.
-    pub active_nameplate: RwSignal<Option<ActiveNameplate>>,
-    /// #779: the live song title + library (for the "Pieseň" row display + its
-    /// Prehrať preview). Fed by the editor page's WS `Stage` snapshot.
-    pub song_preview: RwSignal<(String, String)>,
+    /// #779: the selected output's plate list, the plate on air and the live
+    /// song (the Menovky panel). The store is shared with the operator's
+    /// Menovky view (#871, `components/nameplates`); it reads `output_slug`, so
+    /// an output switch reloads it for the new output.
+    pub plates: NameplateStore,
     /// #787 reopen: monotonic local selection-intent counter. Every selection
     /// change bumps it; an async action that selects on completion
     /// (`add_element`) applies its selection only if its ticket is still current.
@@ -191,11 +188,13 @@ pub struct StreamEditorCtx {
 impl StreamEditorCtx {
     /// Show a transient toast, auto-hiding after `TOAST_HIDE_MS`.
     pub fn show_toast(self, msg: &str, variant: &str) {
-        self.toast_state.set(variant.to_string());
-        self.toast_msg.set(msg.to_string());
-        self.toast_visible.set(true);
-        let visible = self.toast_visible;
-        gloo_timers::callback::Timeout::new(TOAST_HIDE_MS, move || visible.set(false)).forget();
+        show_editor_toast(
+            self.toast_msg,
+            self.toast_visible,
+            self.toast_state,
+            msg,
+            variant,
+        );
     }
 
     /// Re-fetch the full def and reseed `active` from it. Called on mount, after
@@ -685,6 +684,22 @@ impl StreamEditorCtx {
         ws.sort_unstable();
         ws
     }
+}
+
+/// The editor toast from its three signals: [`StreamEditorCtx::show_toast`],
+/// and the plate store's toast callback, which is built before the ctx exists
+/// (#871).
+pub fn show_editor_toast(
+    text: RwSignal<String>,
+    visible: RwSignal<bool>,
+    state: RwSignal<String>,
+    msg: &str,
+    variant: &str,
+) {
+    state.set(variant.to_string());
+    text.set(msg.to_string());
+    visible.set(true);
+    gloo_timers::callback::Timeout::new(TOAST_HIDE_MS, move || visible.set(false)).forget();
 }
 
 /// Render a bool as the `"true"`/`"false"` string used by every `data-active`

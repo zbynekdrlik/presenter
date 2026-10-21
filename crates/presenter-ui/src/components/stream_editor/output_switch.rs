@@ -78,7 +78,7 @@ impl StreamEditorCtx {
         self.active.set(empty_show_state());
         // Refetch everything scoped to the new output.
         self.refresh();
-        self.reload_nameplates();
-        self.reload_active_nameplate();
+        self.plates.reload_list();
+        self.plates.reload_active();
     }
 }

@@ -1,0 +1,138 @@
+/* Lower-third nameplate ("Menovky") plate list (#779), shared since #871 by the
+ * stream editor's Menovky tab (inside .stream-editor__nameplates) and the
+ * operator's Menovky view (.nameplates-view). Markup: components/nameplates/
+ * plate_list.rs. Every row wraps, so the list never forces a horizontal scroll. */
+
+.nameplates__list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nameplates__row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: #111c30;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.nameplates__row--song {
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.nameplates__row[data-active="true"] {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 1px #22c55e inset;
+}
+
+.nameplates__texts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 12rem;
+}
+
+.nameplates__texts input,
+.nameplates__add input {
+  box-sizing: border-box;
+  max-width: 100%;
+  background: #0b1220;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  padding: 0.25rem 0.5rem;
+}
+
+.nameplates__song-live {
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.nameplates__actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.nameplates__add {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.nameplates__add input {
+  padding: 0.4rem 0.6rem;
+  flex: 1 1 10rem;
+  min-width: 8rem;
+}
+
+/* Buttons: the stream editor's __btn look. */
+.nameplates__btn {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #3a4152;
+  border-radius: 6px;
+  background: #262b38;
+  color: #e7e9ee;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.nameplates__btn:hover:not(:disabled) {
+  background: #303646;
+}
+
+.nameplates__btn--primary {
+  background: #4f8cff;
+  border-color: #4f8cff;
+  color: #0e1016;
+  font-weight: 600;
+}
+
+.nameplates__btn--primary:hover:not(:disabled) {
+  background: #6a9dff;
+}
+
+.nameplates__btn--ghost {
+  background: transparent;
+}
+
+.nameplates__btn--danger {
+  border-color: #6b2b34;
+  color: #ff9aa6;
+}
+
+.nameplates__btn--danger:hover:not(:disabled) {
+  background: #3a2027;
+}
+
+/* The Stream Deck button number (operator view, #870 grid order). A plate
+ * past button 12 has no grid button: dashed and dimmer. */
+.nameplates__button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 6px;
+  background: #1e3a5f;
+  color: #f8fafc;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.nameplates__row[data-beyond-grid="true"] .nameplates__button {
+  background: transparent;
+  border: 1px dashed #64748b;
+  color: #cbd5e1;
+}
