@@ -24,6 +24,14 @@
  *  - a save that fails on the network keeps the typed text and goes again on
  *    the next leave or when the page is back in view; a 404 says the plate
  *    was deleted;
+ *  - a failed save marks its row "neuložené" until it is saved and goes again
+ *    by itself (2 s, 5 s, 15 s) and as soon as the network is back;
+ *    Zobraziť on such a row saves first and puts the saved text on air;
+ *  - a save sent beside another as the page hid keeps the next save waiting;
+ *    an older save answered after the newer one makes the page send the
+ *    newer texts once more; a 404 drops the save waiting behind it;
+ *  - a name cleared to retype it does not hold back a role typed in the same
+ *    row when the page hides;
  *  - a name cleared to retype it is kept on alt-tab / a hidden page, and
  *    still refused when the field is left;
  *  - a plate deleted elsewhere while half-typed: a toast says it was not saved;
@@ -858,6 +866,56 @@ function splitConsole(lines: string[], pattern: RegExp): { expected: string[]; o
 
 const NETWORK_FAILED = /^\[error\] Failed to load resource: net::ERR_FAILED$/;
 const DELETED_TOAST = "Menovka bola medzičasom zmazaná — zmena sa neuložila.";
+const UNSAVED = '[data-role="stream-nameplate-unsaved"]';
+
+type PatchBody = { primaryText: string; secondaryText: string };
+
+/** Hold every PATCH of plate `id` at the network, in the order they come (a
+ *  slow phone network), until the test lets it go: `held[n].release()`;
+ *  `held[n].answered` resolves once its answer was handed to the page. */
+async function holdPatches(
+  page: Page,
+  id: number,
+): Promise<{ bodies: PatchBody[]; held: Array<{ release: () => void; answered: Promise<void> }> }> {
+  const bodies: PatchBody[] = [];
+  const held: Array<{ release: () => void; answered: Promise<void> }> = [];
+  await page.route(`**/stream/api/nameplates/${id}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    bodies.push(route.request().postDataJSON() as PatchBody);
+    let release = () => {};
+    let answer = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    held.push({ release, answered: new Promise<void>((resolve) => (answer = resolve)) });
+    await gate;
+    const response = await route.fetch();
+    await route.fulfill({ response });
+    answer();
+  });
+  return { bodies, held };
+}
+
+/** Fail the first `failures` PATCHes of plate `id` at the network (the
+ *  phone's Wi-Fi asleep) and let the later ones through. Returns the body of
+ *  every PATCH, in order. */
+async function failFirstPatches(page: Page, id: number, failures: number): Promise<PatchBody[]> {
+  const patches: PatchBody[] = [];
+  await page.route(`**/stream/api/nameplates/${id}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    patches.push(route.request().postDataJSON() as PatchBody);
+    if (patches.length <= failures) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  return patches;
+}
 
 test("#871 every save is a keepalive request, so a reload right after typing keeps the text", async ({
   page,
@@ -1325,6 +1383,353 @@ test("#871 two saves of one plate go one at a time, so the text saved last is th
   await page.unrouteAll({ behavior: "wait" });
 
   expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a failed save marks its row unsaved and goes again by itself until it is saved", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Znova A", "1"]]);
+  // The first two PATCHes fail at the network (the Wi-Fi still asleep), the
+  // third goes through.
+  const patches = await failFirstPatches(page, a, 2);
+  await openOperator(page, "/ui/operator/menovky");
+  const aRow = row(page, a);
+  const aName = aRow.locator(NAME);
+  await expect(aName).toHaveValue("Znova A");
+  await expect(aRow).toHaveAttribute("data-unsaved", "false");
+  const toast = page.locator('[data-role="toast"]');
+
+  await aName.fill("Znova A nová");
+  await aName.blur();
+  // The row itself says the text is not saved, for as long as it is not (the
+  // toast is gone after 3.5 s), and the toast says it goes again by itself.
+  await expect(aRow).toHaveAttribute("data-unsaved", "true");
+  await expect(aRow.locator(UNSAVED)).toHaveText("neuložené");
+  await expect(toast).toContainText("uloží sa znova sám");
+  await expect(aName).toHaveValue("Znova A nová");
+
+  // No click, no leave, no page change: the page tries again after a short
+  // pause (2 s, then 5 s), and the third try is saved.
+  await expect.poll(() => savedText(request, a), { timeout: 20_000 }).toBe("Znova A nová");
+  await expect(aRow).toHaveAttribute("data-unsaved", "false");
+  await expect(aRow.locator(UNSAVED)).toHaveCount(0);
+  await expect(aName).toHaveValue("Znova A nová");
+  expect(patches.map((p) => p.primaryText)).toEqual(["Znova A nová", "Znova A nová", "Znova A nová"]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(2);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a failed save goes again as soon as the network is back", async ({ page, request }) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Sieť späť A", "1"]]);
+  const patches = await failFirstPatches(page, a, 1);
+  await openOperator(page, "/ui/operator/menovky");
+  const aName = row(page, a).locator(NAME);
+  await expect(aName).toHaveValue("Sieť späť A");
+  const toast = page.locator('[data-role="toast"]');
+
+  await aName.fill("Sieť späť A nová");
+  await aName.blur();
+  await expect(toast).toContainText("Text ostal v poli");
+
+  // The phone's Wi-Fi is back and the browser says so: the page sends the
+  // text at once, without waiting for its own retry pause.
+  const resent = page.waitForEvent("console", {
+    predicate: (msg) =>
+      msg.text().startsWith(`nameplates: plate ${a} failed save`) &&
+      msg.text().endsWith("(the network is back)"),
+    timeout: 10_000,
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  expect((await resent).text()).toBe(
+    `nameplates: plate ${a} failed save sent again (the network is back)`,
+  );
+  await expect.poll(() => savedText(request, a)).toBe("Sieť späť A nová");
+  await expect(row(page, a)).toHaveAttribute("data-unsaved", "false");
+  expect(patches.map((p) => p.primaryText)).toEqual(["Sieť späť A nová", "Sieť späť A nová"]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 Zobraziť on a row whose save failed saves the text first and puts the saved text on air", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  await setActive(request, { source: null });
+  const [a] = await seedPlates(request, [["Vzduch A", "1"]]);
+  const patches = await failFirstPatches(page, a, 1);
+  await openOperator(page, "/ui/operator/menovky");
+  const aRow = row(page, a);
+  const aName = aRow.locator(NAME);
+  await expect(aName).toHaveValue("Vzduch A");
+
+  await aName.fill("Vzduch A nová");
+  await aName.blur();
+  await expect(page.locator('[data-role="toast"]')).toContainText("Text ostal v poli");
+
+  // The server puts on air the text it HAS: shown at once, the old name would
+  // go on air while the field shows the new one. So the page saves the typed
+  // text first and shows the plate once that is saved.
+  await aRow.locator('[data-role="stream-nameplate-show"]').click();
+  await expect.poll(async () => (await activePlate(request))?.primary).toBe("Vzduch A nová");
+  await expect(aRow).toHaveAttribute("data-active", "true");
+  await expect(aRow).toHaveAttribute("data-unsaved", "false");
+  expect(await savedText(request, a)).toBe("Vzduch A nová");
+  expect(patches.map((p) => p.primaryText)).toEqual(["Vzduch A nová", "Vzduch A nová"]);
+  await setActive(request, { source: null });
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a save sent at once as the page hid keeps the next save of the plate waiting until it is back", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [anna] = await seedPlates(request, [["Rad Anna", "kazateľka"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaName = row(page, anna).locator(NAME);
+  const annaRole = row(page, anna).locator(ROLE);
+  await expect(annaName).toHaveValue("Rad Anna");
+  const { bodies, held } = await holdPatches(page, anna);
+  const waitsLine = `nameplates: plate ${anna} save waits for the one on its way`;
+
+  // Save 1 (the name, Tab) is held; save 2 (the role) waits for it; the phone
+  // locks, so save 2 goes at once beside save 1. The name ends in a space,
+  // which the save trims: the field showing the trimmed name later proves the
+  // page has dealt with save 1's answer.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === waitsLine,
+    timeout: 10_000,
+  });
+  await annaName.fill("Rad Anna Nová ");
+  await page.keyboard.press("Tab");
+  await expect(annaRole).toBeFocused();
+  await annaRole.fill("pastorka");
+  await annaRole.blur();
+  await waits;
+  await setPageHidden(page, true);
+  await expect.poll(() => bodies.length).toBe(2);
+  await setPageHidden(page, false);
+
+  // Save 1 is back; save 2 is still on its way.
+  held[0].release();
+  await held[0].answered;
+  await expect(annaName).toHaveValue("Rad Anna Nová");
+
+  // The next save of Anna waits for save 2: sent beside it, a server applying
+  // the two out of order would keep the older role.
+  const decided = page.waitForEvent("console", {
+    predicate: (msg) =>
+      msg.text() === waitsLine || msg.text() === `nameplates: plate ${anna} save sent`,
+    timeout: 10_000,
+  });
+  await annaRole.fill("pastorka 2");
+  await annaRole.blur();
+  expect((await decided).text()).toBe(waitsLine);
+  expect(bodies).toHaveLength(2);
+
+  // Save 2 is back: save 3 goes, and the server ends on the newest role.
+  held[1].release();
+  await held[1].answered;
+  await expect.poll(() => bodies.length).toBe(3);
+  held[2].release();
+  await held[2].answered;
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === anna))
+    .toMatchObject({ primaryText: "Rad Anna Nová", secondaryText: "pastorka 2" });
+  expect(bodies).toEqual([
+    { primaryText: "Rad Anna Nová", secondaryText: "kazateľka" },
+    { primaryText: "Rad Anna Nová", secondaryText: "pastorka" },
+    { primaryText: "Rad Anna Nová", secondaryText: "pastorka 2" },
+  ]);
+  await expect(annaRole).toHaveValue("pastorka 2");
+  await page.unrouteAll({ behavior: "wait" });
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 when an older save of a plate is answered after the newer one, the newer texts are sent once more", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [anna] = await seedPlates(request, [["Skôr Anna", "kazateľka"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaName = row(page, anna).locator(NAME);
+  const annaRole = row(page, anna).locator(ROLE);
+  await expect(annaName).toHaveValue("Skôr Anna");
+  const { bodies, held } = await holdPatches(page, anna);
+  const savedPlate = async () => (await listPlates(request)).find((p) => p.id === anna);
+
+  // Save 1 (the name, Tab) is held, save 2 (the role) waits, and the phone
+  // locks: save 2 goes at once beside save 1.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${anna} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await annaName.fill("Skôr Anna Nová");
+  await page.keyboard.press("Tab");
+  await expect(annaRole).toBeFocused();
+  await annaRole.fill("pastorka");
+  await annaRole.blur();
+  await waits;
+  await setPageHidden(page, true);
+  await expect.poll(() => bodies.length).toBe(2);
+  await setPageHidden(page, false);
+
+  // The newer save reaches the server first, the older one after it: the
+  // server now holds the OLDER role ("sent last" is not "applied last").
+  held[1].release();
+  await held[1].answered;
+  await expect.poll(async () => (await savedPlate())?.secondaryText).toBe("pastorka");
+  held[0].release();
+  await held[0].answered;
+  await expect.poll(async () => (await savedPlate())?.secondaryText).toBe("kazateľka");
+
+  // The page heard the older answer last, so it sends the newest texts once
+  // more, and the server ends on them.
+  await expect.poll(() => bodies.length).toBe(3);
+  expect(bodies[2]).toEqual({ primaryText: "Skôr Anna Nová", secondaryText: "pastorka" });
+  held[2].release();
+  await held[2].answered;
+  await expect
+    .poll(savedPlate)
+    .toMatchObject({ primaryText: "Skôr Anna Nová", secondaryText: "pastorka" });
+  await expect(annaRole).toHaveValue("pastorka");
+  await page.unrouteAll({ behavior: "wait" });
+  expect(bodies).toHaveLength(3);
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a save of a deleted plate (404) drops the save waiting behind it: one toast, no second request", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b] = await seedPlates(request, [
+    ["Zhoda A", "1"],
+    ["Zhoda B", "2"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b]);
+  // The page's list reloads are held, so B's row stays on screen.
+  const heldLists: Array<() => void> = [];
+  let holdLists = true;
+  await page.route(`**/stream/api/outputs/${SLUG}/nameplates`, async (route) => {
+    if (route.request().method() === "GET" && holdLists) {
+      await new Promise<void>((resolve) => heldLists.push(resolve));
+    }
+    await route.continue();
+  });
+  const { bodies, held } = await holdPatches(page, b);
+  const bName = row(page, b).locator(NAME);
+  const bRole = row(page, b).locator(ROLE);
+
+  // Save 1 (the name, Tab) is on its way; save 2 (the role) waits for it.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${b} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await bName.fill("Zhoda B nová");
+  await page.keyboard.press("Tab");
+  await expect(bRole).toBeFocused();
+  await bRole.fill("nová rola");
+  await bRole.blur();
+  await waits;
+
+  // Another operator deletes B meanwhile; the page hears it (list read held).
+  await deletePlate(request, b);
+  await expect.poll(() => heldLists.length).toBeGreaterThan(0);
+  const listReads = heldLists.length;
+  held[0].release();
+  await held[0].answered;
+  await expect(page.locator('[data-role="toast"]')).toHaveText(DELETED_TOAST);
+
+  // Once the 404 is dealt with, the page either sends the waiting save or,
+  // with nothing of B left to send, reloads the list. The waiting save must
+  // not go: it could only be refused again (a second 404 and toast).
+  await expect.poll(() => heldLists.length > listReads || bodies.length > 1).toBe(true);
+  expect(bodies).toHaveLength(1);
+
+  // The list comes back without B.
+  holdLists = false;
+  for (const release of heldLists) release();
+  await expect.poll(() => rowOrder(page)).toEqual([a]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(
+    consoleErrors,
+    /^\[error\] Failed to load resource: the server responded with a status of 404\b/,
+  );
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a name cleared to retype it does not hold back a role typed in the same row when the page hides", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Rola A", "1"]]);
+  const patches = await failFirstPatches(page, a, 1);
+  await openOperator(page, "/ui/operator/menovky");
+  const aName = row(page, a).locator(NAME);
+  const aRole = row(page, a).locator(ROLE);
+  await expect(aName).toHaveValue("Rola A");
+
+  // The role is typed and left, but its save fails (Wi-Fi asleep): the role
+  // stays typed for another try.
+  await aRole.fill("nová rola");
+  await aRole.blur();
+  await expect(page.locator('[data-role="toast"]')).toContainText("Text ostal v poli");
+
+  // The name is cleared to retype it, then the phone locks: the name stays as
+  // typed (empty, never saved), and the role goes now, with the saved name.
+  await aName.fill("");
+  const decided = page.waitForEvent("console", {
+    predicate: (msg) => msg.text().startsWith(`nameplates: plate ${a} name is empty; kept as typed`),
+    timeout: 10_000,
+  });
+  await setPageHidden(page, true);
+  expect((await decided).text()).toBe(
+    `nameplates: plate ${a} name is empty; kept as typed, the role sent with the saved name (the page went hidden)`,
+  );
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === a))
+    .toMatchObject({ primaryText: "Rola A", secondaryText: "nová rola" });
+  await setPageHidden(page, false);
+  await expect(aName).toHaveValue("");
+  await expect(aRole).toHaveValue("nová rola");
+  expect(patches).toEqual([
+    { primaryText: "Rola A", secondaryText: "nová rola" },
+    { primaryText: "Rola A", secondaryText: "nová rola" },
+  ]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
 });
 
 test("#871 a plate deleted elsewhere while it is dragged leaves no drop line behind", async ({

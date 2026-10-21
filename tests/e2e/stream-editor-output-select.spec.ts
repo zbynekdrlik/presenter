@@ -16,8 +16,11 @@
  *  - #871: an output switch drops the previous output's plates and plate on
  *    air at once, while the new output's plate list is still on its way.
  *  - #871: a plate text whose save failed on the network (kept in the field
- *    for another try) is saved when the editor switches output, not dropped
- *    with a "deleted" toast.
+ *    for another try) is saved when the editor switches output, with the
+ *    role it had, not dropped with a "deleted" toast.
+ *  - #871: a save still on its way when the editor switches output goes
+ *    once, with the role it had; if it then fails, the toast says to type
+ *    the change again (its field is gone).
  *
  * Clean console is asserted last.
  */
@@ -63,6 +66,15 @@ async function listOutputs(page: Page): Promise<OutputSummary[]> {
   const res = await page.request.get(`${baseURL}/stream/api/outputs`);
   expect(res.ok()).toBeTruthy();
   return (await res.json()) as OutputSummary[];
+}
+
+type PlateTexts = { id: number; primaryText: string; secondaryText: string };
+
+/** Plate `id` of the `stream` output as the server has it. */
+async function savedPlate(page: Page, id: number): Promise<PlateTexts | undefined> {
+  const res = await page.request.get(`${baseURL}/stream/api/outputs/stream/nameplates`);
+  expect(res.ok()).toBeTruthy();
+  return ((await res.json()) as PlateTexts[]).find((p) => p.id === id);
 }
 
 async function getDef(page: Page, slug: string): Promise<OutputDef> {
@@ -261,12 +273,6 @@ test("#871 a plate text whose save failed is saved, not dropped, when the editor
   });
   expect(created.ok()).toBeTruthy();
   const plateId = (await created.json()).id as number;
-  const savedName = async () => {
-    const res = await page.request.get(`${baseURL}/stream/api/outputs/stream/nameplates`);
-    expect(res.ok()).toBeTruthy();
-    const plates = (await res.json()) as Array<{ id: number; primaryText: string }>;
-    return plates.find((p) => p.id === plateId)?.primaryText;
-  };
 
   // The plate's first PATCH fails at the network (the Wi-Fi asleep), later
   // ones pass.
@@ -301,13 +307,165 @@ test("#871 a plate text whose save failed is saved, not dropped, when the editor
   // the plate (still there) gets the text instead of a "deleted" toast.
   await outputSelect(page).selectOption(other);
   await expect(plateRow).toHaveCount(0);
-  await expect.poll(savedName).toBe(`${name} nová`);
+  // The role (not typed) keeps its saved text: the row's saved texts outlive
+  // the list that was cleared by the switch.
+  await expect
+    .poll(() => savedPlate(page, plateId))
+    .toMatchObject({ primaryText: `${name} nová`, secondaryText: "hosť" });
   expect(patches).toBe(2);
   // Read ONCE, now that the switch has decided: a retrying negative check
   // keeps retrying until a wrong toast is replaced or hidden.
   const toastText = await page.locator('[data-role="toast"]').textContent();
   expect(toastText ?? "", "no deleted-plate toast").not.toContain("zmazaná");
   await page.unroute(patchRoute);
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  // Chrome logs the one aborted fetch itself; nothing else may be logged.
+  const aborted = /Failed to load resource: net::ERR_FAILED$/;
+  expect(errors.filter((line) => aborted.test(line))).toHaveLength(1);
+  expect(
+    errors.filter((line) => !aborted.test(line)),
+    `editor console: ${errors.join(" | ")}`,
+  ).toEqual([]);
+});
+
+type PatchBody = { primaryText: string; secondaryText: string };
+
+async function createStreamPlate(
+  page: Page,
+  primaryText: string,
+  secondaryText: string,
+): Promise<number> {
+  const created = await page.request.post(`${baseURL}/stream/api/outputs/stream/nameplates`, {
+    data: { primaryText, secondaryText },
+  });
+  expect(created.ok()).toBeTruthy();
+  return (await created.json()).id as number;
+}
+
+/** Open the editor's Menovky tab on `stream`, type `typed` into plate
+ *  `plateId` (shown as `name`) and leave the field, with the save's PATCH held
+ *  at the network, then switch the editor to `other` while it is on its way.
+ *  Returns every PATCH body of the plate, and `finishFirst` to let the held
+ *  PATCH through or fail it; it returns once the page has dealt with the
+ *  answer (the list reload that follows the plate's last save). */
+async function switchWhileSaving(
+  page: Page,
+  plateId: number,
+  name: string,
+  typed: string,
+  other: string,
+): Promise<{ bodies: PatchBody[]; finishFirst: (how: "continue" | "abort") => Promise<void> }> {
+  const bodies: PatchBody[] = [];
+  let finish: (how: "continue" | "abort") => void = () => {};
+  const first = new Promise<"continue" | "abort">((resolve) => (finish = resolve));
+  await page.route(`**/stream/api/nameplates/${plateId}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const n = bodies.push(route.request().postDataJSON() as PatchBody);
+    if (n === 1 && (await first) === "abort") {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  const plateName = plateRow.locator('[data-role="stream-nameplate-name"]');
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+  await plateName.fill(typed);
+  await plateName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+
+  // The editor switches output while that save is on its way: the row leaves
+  // the list, and the new output's list read is answered.
+  const otherList = `${baseURL}/stream/api/outputs/${other}/nameplates`;
+  const listed = page.waitForResponse(
+    (res) => res.url() === otherList && res.request().method() === "GET",
+  );
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await listed;
+
+  return {
+    bodies,
+    finishFirst: async (how) => {
+      // Once nothing of the plate is left to send, the page reloads the
+      // list: a second save of the plate would have gone out before it.
+      const reloaded = page.waitForRequest(
+        (req) => req.url() === otherList && req.method() === "GET",
+      );
+      finish(how);
+      await reloaded;
+    },
+  };
+}
+
+test("#871 a save on its way when the editor switches output goes once, with the role it had", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const name = `SW_871_FLY_${Date.now() % 100_000}`;
+  const plateId = await createStreamPlate(page, name, "hosť");
+
+  const { bodies, finishFirst } = await switchWhileSaving(
+    page,
+    plateId,
+    name,
+    `${name} nová`,
+    other,
+  );
+  await finishFirst("continue");
+
+  // One save, with the role the plate had: the row leaving the list while
+  // that save was on its way sent nothing more (no role wiped to "").
+  expect(bodies).toEqual([{ primaryText: `${name} nová`, secondaryText: "hosť" }]);
+  await expect
+    .poll(() => savedPlate(page, plateId))
+    .toMatchObject({ primaryText: `${name} nová`, secondaryText: "hosť" });
+  await page.unrouteAll({ behavior: "wait" });
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#871 a save that fails after the editor switched output says to type the change again", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const name = `SW_871_LOST_${Date.now() % 100_000}`;
+  const plateId = await createStreamPlate(page, name, "hosť");
+
+  const { bodies, finishFirst } = await switchWhileSaving(
+    page,
+    plateId,
+    name,
+    `${name} nová`,
+    other,
+  );
+  await finishFirst("abort");
+
+  // The field that held the text is gone with its row, so the toast says to
+  // type the change again, never that the text stayed in the field.
+  const toast = page.locator('[data-role="toast"]');
+  await expect(toast).toContainText("Zmena menovky sa neuložila — skúste ju zadať znova");
+  const toastText = (await toast.textContent()) ?? "";
+  expect(toastText).not.toContain("Text ostal v poli");
+  expect(bodies).toHaveLength(1);
+  expect(await savedPlate(page, plateId)).toMatchObject({ primaryText: name, secondaryText: "hosť" });
+  await page.unrouteAll({ behavior: "wait" });
 
   const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
   expect(deleted.ok()).toBeTruthy();

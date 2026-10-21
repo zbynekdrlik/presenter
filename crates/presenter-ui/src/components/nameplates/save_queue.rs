@@ -238,6 +238,19 @@ mod tests {
     }
 
     #[test]
+    fn an_expired_login_is_not_the_texts_fault_so_the_text_is_kept() {
+        // Behind Cloudflare Access an expired session answers 401 / 403:
+        // after a new login the same text saves fine.
+        for code in [401, 403] {
+            assert_eq!(
+                SaveOutcome::of_error(&status(code)),
+                SaveOutcome::Failed,
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
     fn a_404_means_the_plate_was_deleted_elsewhere() {
         assert_eq!(SaveOutcome::of_error(&status(404)), SaveOutcome::Gone);
         assert_eq!(
