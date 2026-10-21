@@ -237,13 +237,15 @@ function isSceneActive(value, name) {
 // so `lib/stream.test.js` covers them with `node --test`; `index.js` wires them.
 // --------------------------------------------------------------------------- //
 
-// The four nameplate command NAMES (all `stream_`-prefixed, so the server's
-// parse_command delegation routes them to companion/stream.rs).
+// The nameplate command NAMES (all `stream_`-prefixed, so the server's
+// parse_command delegation routes them to companion/stream.rs). #870 added the
+// grid's `stream_nameplate_slot`.
 const NAMEPLATE_COMMAND_IDS = [
   "stream_nameplate_show",
   "stream_nameplate_song",
   "stream_nameplate_toggle",
   "stream_nameplate_hide",
+  "stream_nameplate_slot",
 ];
 
 // The dropdown value for the virtual song plate (also the `nameplate_active_id`
@@ -288,9 +290,119 @@ function nameplateChoices(plates, includeSong) {
   return list;
 }
 
+// --------------------------------------------------------------------------- //
+// Nameplate GRID (issue #870).
+//
+// A slot is a 1-based POSITION in the output's person-plate list (the editor
+// order). The server resolves BOTH the button label (`nameplate_slot_<n>_name`
+// / `_role` / `_id` variables) and the press (`stream_nameplate_slot {slot}`,
+// read at press time) from that one list, so a grid button fires exactly the
+// plate its label shows — a rename or reorder in Presenter updates the label,
+// and a new person fills the next slot without touching Companion. Slots
+// 1..11 always exist (the 4×3 grid = the song + 11 people); more plates add
+// more slots.
+// --------------------------------------------------------------------------- //
+
+// Slots that always exist — mirrors the server's NAMEPLATE_MIN_SLOTS.
+const NAMEPLATE_MIN_SLOTS = 11;
+
+// The preset category of the grid (song first, then slots 1..11).
+const NAMEPLATE_GRID_CATEGORY = "Menovky — mriežka";
+
+/**
+ * How many slots exist for a plate list: max(11, plates.length).
+ *
+ * @param {unknown} plates The current plate list.
+ * @returns {number}
+ */
+function nameplateSlotCount(plates) {
+  const count = Array.isArray(plates) ? plates.length : 0;
+  return Math.max(NAMEPLATE_MIN_SLOTS, count);
+}
+
+/**
+ * Parse a slot option value (a dropdown string id, a typed custom value or a
+ * number) into a whole number >= 1, or `null` for anything else (0, negative,
+ * fractional, empty, non-numeric).
+ *
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+function parseSlot(value) {
+  let text = "";
+  if (typeof value === "number") text = String(value);
+  else if (typeof value === "string") text = value.trim();
+  if (!/^[0-9]+$/.test(text)) return null;
+  const slot = Number(text);
+  return Number.isSafeInteger(slot) && slot >= 1 ? slot : null;
+}
+
+/**
+ * Dropdown choices for a slot option: one per slot, labelled with the name of
+ * the plate the slot holds NOW (or "(prázdna)" for an empty slot). Ids are
+ * strings (Companion dropdown ids).
+ *
+ * @param {unknown} plates The current plate list.
+ * @returns {Array<{id: string, label: string}>}
+ */
+function nameplateSlotChoices(plates) {
+  const list = Array.isArray(plates) ? plates : [];
+  const choices = [];
+  for (let n = 1; n <= nameplateSlotCount(list); n++) {
+    const plate = list[n - 1];
+    const name = plate ? String(plate.name) : "(prázdna)";
+    choices.push({ id: String(n), label: `Pozícia ${n} — ${name}` });
+  }
+  return choices;
+}
+
+/**
+ * The `slot` option of the grid action + feedback. `allowCustom` so a stored
+ * slot number always passes, even one past the current list.
+ *
+ * @param {unknown} plates The current plate list.
+ * @returns {object}
+ */
+function nameplateSlotOption(plates) {
+  return {
+    type: "dropdown",
+    id: "slot",
+    label: "Pozícia v zozname menoviek",
+    default: "1",
+    choices: nameplateSlotChoices(plates),
+    allowCustom: true,
+  };
+}
+
+// The grid action's `mode` choices (the server's SlotMode).
+const SLOT_MODE_CHOICES = [
+  { id: "toggle", label: "Prepnúť (zobraziť / skryť)" },
+  { id: "show", label: "Zobraziť" },
+];
+
+/**
+ * True when slot `slot` holds a plate and that plate is the one on air: its
+ * `nameplate_slot_<n>_id` variable is non-empty and equals
+ * `nameplate_active_id`. An empty slot, an idle plate (`"-"`), the song plate
+ * and an invalid slot never light.
+ *
+ * @param {{get: Function}} variables The module's variable cache (a Map).
+ * @param {unknown} slot The feedback's slot option value.
+ * @returns {boolean}
+ */
+function isNameplateSlotActive(variables, slot) {
+  const n = parseSlot(slot);
+  if (n === null || !variables || typeof variables.get !== "function") return false;
+  const slotId = variables.get(`nameplate_slot_${n}_id`);
+  const id = typeof slotId === "string" ? slotId.trim() : "";
+  if (id === "") return false;
+  return isNameplateActive(variables.get("nameplate_active_id"), id);
+}
+
 /**
  * Companion action option fields for a nameplate command. Show/toggle get a
- * plate dropdown (incl. song) + an output dropdown; song/hide get only output.
+ * plate dropdown (incl. song) + an output dropdown; song/hide get only output;
+ * the #870 grid slot gets a slot dropdown + a mode + an output dropdown.
  *
  * @param {string} commandId
  * @param {unknown} plates The current plate list.
@@ -298,6 +410,20 @@ function nameplateChoices(plates, includeSong) {
  * @returns {Array<object>}
  */
 function nameplateActionOptions(commandId, plates, outputChoices) {
+  if (commandId === "stream_nameplate_slot") {
+    return [
+      nameplateSlotOption(plates),
+      {
+        type: "dropdown",
+        id: "mode",
+        label: "Režim",
+        default: "toggle",
+        choices: SLOT_MODE_CHOICES,
+        allowCustom: false,
+      },
+      outputOption(outputChoices),
+    ];
+  }
   if (
     commandId === "stream_nameplate_show" ||
     commandId === "stream_nameplate_toggle"
@@ -340,6 +466,14 @@ function buildNameplateInvocation(commandId, options) {
   if (commandId === "stream_nameplate_hide") {
     return { command: "stream_nameplate_hide", payload: { output } };
   }
+  if (commandId === "stream_nameplate_slot") {
+    const slot = parseSlot(opts.slot);
+    if (slot === null) {
+      return { error: `${commandId}: choose a slot (a position 1 or higher)` };
+    }
+    const mode = opts.mode === "show" ? "show" : "toggle";
+    return { command: commandId, payload: { slot, mode, output } };
+  }
 
   // show / toggle: read the plate dropdown value.
   const value = opts.plate;
@@ -377,9 +511,10 @@ function isNameplateActive(activeIdValue, target) {
 
 /**
  * The full nameplate variable-definition id list for a plate list: the static
- * ids plus `nameplate_<id>_name`/`_role` per plate. The plugin unions this with
- * its base defs so `setVariableDefinitions` + the `applyVariablesMessage`
- * allowlist accept the per-plate values the server sends.
+ * ids, `nameplate_<id>_name`/`_role` per plate, and (#870)
+ * `nameplate_slot_<n>_name`/`_role`/`_id` for n = 1..max(11, plates). The
+ * plugin unions this with its base defs so `setVariableDefinitions` + the
+ * `applyVariablesMessage` allowlist accept the values the server sends.
  *
  * @param {unknown} plates The current plate list.
  * @returns {string[]}
@@ -388,6 +523,13 @@ function nameplateVariableIds(plates) {
   const ids = [...NAMEPLATE_STATIC_VARIABLE_IDS];
   for (const p of Array.isArray(plates) ? plates : []) {
     ids.push(`nameplate_${p.id}_name`, `nameplate_${p.id}_role`);
+  }
+  for (let n = 1; n <= nameplateSlotCount(plates); n++) {
+    ids.push(
+      `nameplate_slot_${n}_name`,
+      `nameplate_slot_${n}_role`,
+      `nameplate_slot_${n}_id`,
+    );
   }
   return ids;
 }
@@ -402,11 +544,12 @@ function nameplateVariableIds(plates) {
  * @param {unknown} plates The current plate list.
  * @returns {Object<string, object>}
  */
-function nameplatePresets(plates) {
-  const presets = {};
-  const preset = (target, nameVar, roleVar, label) => ({
+// One nameplate button preset: two-line text from the name + role variables,
+// one down action, one green "on air" feedback.
+function nameplateButtonPreset(category, label, nameVar, roleVar, action, feedback) {
+  return {
     type: "button",
-    category: "Menovky",
+    category,
     name: label,
     style: {
       text: `$(presenter:${nameVar})\\n$(presenter:${roleVar})`,
@@ -414,38 +557,79 @@ function nameplatePresets(plates) {
       color: 0xffffff,
       bgcolor: 0x000000,
     },
-    steps: [
-      {
-        down: [
-          {
-            actionId: "stream_nameplate_toggle",
-            options: { plate: target, output: DEFAULT_OUTPUT },
-          },
-        ],
-        up: [],
-      },
-    ],
-    feedbacks: [
-      {
-        feedbackId: "stream_nameplate_active",
-        options: { target },
-        style: { bgcolor: 0x00aa00 },
-      },
-    ],
-  });
+    steps: [{ down: [action], up: [] }],
+    feedbacks: [{ ...feedback, style: { bgcolor: 0x00aa00 } }],
+  };
+}
 
-  presets["nameplate_song"] = preset(
-    SONG_CHOICE_ID,
+// The song plate's button (toggles the song entry, lit while the song is on air).
+function songPreset(category, label) {
+  return nameplateButtonPreset(
+    category,
+    label,
     "nameplate_song_name",
     "nameplate_song_role",
-    "Menovka: Pieseň",
+    {
+      actionId: "stream_nameplate_toggle",
+      options: { plate: SONG_CHOICE_ID, output: DEFAULT_OUTPUT },
+    },
+    { feedbackId: "stream_nameplate_active", options: { target: SONG_CHOICE_ID } },
   );
+}
+
+function nameplatePresets(plates) {
+  const presets = {};
+  const preset = (target, nameVar, roleVar, label) =>
+    nameplateButtonPreset(
+      "Menovky",
+      label,
+      nameVar,
+      roleVar,
+      {
+        actionId: "stream_nameplate_toggle",
+        options: { plate: target, output: DEFAULT_OUTPUT },
+      },
+      { feedbackId: "stream_nameplate_active", options: { target } },
+    );
+
+  presets["nameplate_song"] = songPreset("Menovky", "Menovka: Pieseň");
   for (const p of Array.isArray(plates) ? plates : []) {
     presets[`nameplate_${p.id}`] = preset(
       String(p.id),
       `nameplate_${p.id}_name`,
       `nameplate_${p.id}_role`,
       `Menovka: ${p.name}`,
+    );
+  }
+  return presets;
+}
+
+/**
+ * The #870 grid presets, in grid order: the song button first, then slots
+ * 1..11. Each slot button takes its text from `nameplate_slot_<n>_*`, fires
+ * `stream_nameplate_slot {slot: n}` and lights on `stream_nameplate_slot_active
+ * {slot: n}` — the SAME n for all three, from one loop, so a button cannot show
+ * one slot and fire another. Independent of the plate list (the server fills
+ * the slots), so the presets never change as people are added.
+ *
+ * @returns {Object<string, object>}
+ */
+function nameplateGridPresets() {
+  const presets = {
+    nameplate_grid_song: songPreset(NAMEPLATE_GRID_CATEGORY, "Mriežka: Pieseň"),
+  };
+  for (let n = 1; n <= NAMEPLATE_MIN_SLOTS; n++) {
+    const slot = String(n);
+    presets[`nameplate_grid_slot_${n}`] = nameplateButtonPreset(
+      NAMEPLATE_GRID_CATEGORY,
+      `Mriežka: pozícia ${n}`,
+      `nameplate_slot_${n}_name`,
+      `nameplate_slot_${n}_role`,
+      {
+        actionId: "stream_nameplate_slot",
+        options: { slot, mode: "toggle", output: DEFAULT_OUTPUT },
+      },
+      { feedbackId: "stream_nameplate_slot_active", options: { slot } },
     );
   }
   return presets;
@@ -471,4 +655,13 @@ module.exports = {
   isNameplateActive,
   nameplateVariableIds,
   nameplatePresets,
+  // #870 nameplate grid.
+  NAMEPLATE_MIN_SLOTS,
+  NAMEPLATE_GRID_CATEGORY,
+  nameplateSlotCount,
+  parseSlot,
+  nameplateSlotChoices,
+  nameplateSlotOption,
+  isNameplateSlotActive,
+  nameplateGridPresets,
 };

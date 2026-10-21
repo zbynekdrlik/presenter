@@ -44,6 +44,7 @@ describe("Companion COMMANDS parity", () => {
     "stream_nameplate_song",
     "stream_nameplate_toggle",
     "stream_nameplate_hide",
+    "stream_nameplate_slot",
   ];
 
   test("COMMANDS array contains all expected command IDs", () => {

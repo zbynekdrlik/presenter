@@ -21,6 +21,13 @@ const {
   isNameplateActive,
   nameplateVariableIds,
   nameplatePresets,
+  NAMEPLATE_MIN_SLOTS,
+  NAMEPLATE_GRID_CATEGORY,
+  nameplateSlotCount,
+  parseSlot,
+  nameplateSlotChoices,
+  isNameplateSlotActive,
+  nameplateGridPresets,
 } = require("./stream");
 
 // --------------------------------------------------------------------------- //
@@ -293,12 +300,13 @@ describe("nameplate pure logic (#779)", () => {
     { id: 7, name: "Eva Malá", role: "" },
   ];
 
-  test("the four nameplate command ids all start with 'stream_'", () => {
+  test("the nameplate command ids (incl. the #870 grid slot) all start with 'stream_'", () => {
     assert.deepEqual(NAMEPLATE_COMMAND_IDS, [
       "stream_nameplate_show",
       "stream_nameplate_song",
       "stream_nameplate_toggle",
       "stream_nameplate_hide",
+      "stream_nameplate_slot",
     ]);
     for (const id of NAMEPLATE_COMMAND_IDS) assert.ok(id.startsWith("stream_"), id);
     assert.ok(isNameplateCommand("stream_nameplate_show"));
@@ -443,5 +451,203 @@ describe("index.js wires nameplates (#779)", () => {
 
   test("nameplate actions send via buildNameplateInvocation (command may remap)", () => {
     assert.match(indexSource, /buildNameplateInvocation\(/);
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// #870 — nameplate GRID: a slot is a position in the plate list; the server
+// resolves both the label variables and the press from that one list.
+// --------------------------------------------------------------------------- //
+describe("nameplate grid pure logic (#870)", () => {
+  const plates = [
+    { id: 9, name: "Ján Novák", role: "pastor" },
+    { id: 4, name: "Eva Malá", role: "" },
+  ];
+  const many = Array.from({ length: 13 }, (_, i) => ({
+    id: 100 + i + 1,
+    name: `Osoba ${i + 1}`,
+    role: "host",
+  }));
+
+  test("parseSlot accepts a whole number >= 1 as a string or number, nothing else", () => {
+    assert.equal(parseSlot("1"), 1);
+    assert.equal(parseSlot(" 12 "), 12);
+    assert.equal(parseSlot(3), 3);
+    for (const bad of ["0", 0, -1, "-1", "2.5", 2.5, "", "  ", "abc", "1e3", undefined, null, {}]) {
+      assert.equal(parseSlot(bad), null, `parseSlot(${JSON.stringify(bad)})`);
+    }
+  });
+
+  test("at least 11 slots exist, more with more plates", () => {
+    assert.equal(NAMEPLATE_MIN_SLOTS, 11);
+    assert.equal(nameplateSlotCount([]), 11);
+    assert.equal(nameplateSlotCount(null), 11);
+    assert.equal(nameplateSlotCount(plates), 11);
+    assert.equal(nameplateSlotCount(many), 13);
+  });
+
+  test("slot choices are labelled with the plate the slot holds now", () => {
+    const choices = nameplateSlotChoices(plates);
+    assert.equal(choices.length, 11);
+    assert.deepEqual(choices[0], { id: "1", label: "Pozícia 1 — Ján Novák" });
+    assert.deepEqual(choices[1], { id: "2", label: "Pozícia 2 — Eva Malá" });
+    assert.deepEqual(choices[2], { id: "3", label: "Pozícia 3 — (prázdna)" });
+    assert.deepEqual(choices[10], { id: "11", label: "Pozícia 11 — (prázdna)" });
+    const grown = nameplateSlotChoices(many);
+    assert.equal(grown.length, 13);
+    assert.deepEqual(grown[12], { id: "13", label: "Pozícia 13 — Osoba 13" });
+  });
+
+  test("the slot action has slot + mode + output options", () => {
+    const opts = nameplateActionOptions("stream_nameplate_slot", plates);
+    assert.deepEqual(
+      opts.map((o) => o.id),
+      ["slot", "mode", "output"],
+    );
+    const [slot, mode, output] = opts;
+    assert.equal(slot.type, "dropdown");
+    assert.equal(slot.allowCustom, true, "a stored slot number always passes");
+    assert.equal(slot.default, "1");
+    assert.deepEqual(slot.choices, nameplateSlotChoices(plates));
+    assert.equal(mode.type, "dropdown");
+    assert.equal(mode.default, "toggle");
+    assert.deepEqual(
+      mode.choices.map((c) => c.id),
+      ["toggle", "show"],
+    );
+    assert.equal(output.id, "output");
+    assert.equal(output.default, DEFAULT_OUTPUT);
+  });
+
+  test("buildNameplateInvocation sends {slot, mode, output}, mode toggle by default", () => {
+    assert.deepEqual(buildNameplateInvocation("stream_nameplate_slot", { slot: "2" }), {
+      command: "stream_nameplate_slot",
+      payload: { slot: 2, mode: "toggle", output: "stream" },
+    });
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_slot", {
+        slot: "11",
+        mode: "show",
+        output: " moderator ",
+      }),
+      {
+        command: "stream_nameplate_slot",
+        payload: { slot: 11, mode: "show", output: "moderator" },
+      },
+    );
+    // A number (a preset option) works too; an unknown mode falls back to toggle.
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_slot", { slot: 3, mode: "hide" }).payload,
+      { slot: 3, mode: "toggle", output: "stream" },
+    );
+  });
+
+  test("buildNameplateInvocation refuses an invalid slot (never throws)", () => {
+    for (const slot of ["0", "", "x", "-1", "2.5", undefined]) {
+      const result = buildNameplateInvocation("stream_nameplate_slot", { slot });
+      assert.ok(result.error, `slot ${JSON.stringify(slot)} must be refused`);
+      assert.equal(result.command, undefined);
+    }
+    assert.ok(buildNameplateInvocation("stream_nameplate_slot", undefined).error);
+  });
+
+  test("variable ids include name/role/id for slots 1..max(11, plates)", () => {
+    const ids = nameplateVariableIds(plates);
+    for (let n = 1; n <= 11; n++) {
+      for (const field of ["name", "role", "id"]) {
+        assert.ok(ids.includes(`nameplate_slot_${n}_${field}`), `missing slot ${n} ${field}`);
+      }
+    }
+    assert.ok(!ids.includes("nameplate_slot_12_name"));
+    // The per-plate ids are still there.
+    assert.ok(ids.includes("nameplate_9_name"));
+    const grown = nameplateVariableIds(many);
+    assert.ok(grown.includes("nameplate_slot_13_id"));
+    assert.ok(!grown.includes("nameplate_slot_14_id"));
+    // An empty list still defines the 11 grid slots.
+    assert.ok(nameplateVariableIds([]).includes("nameplate_slot_11_role"));
+  });
+
+  test("isNameplateSlotActive: lit only when the slot's plate is the one on air", () => {
+    const vars = new Map([
+      ["nameplate_slot_1_id", "9"],
+      ["nameplate_slot_2_id", "4"],
+      ["nameplate_slot_3_id", ""],
+      ["nameplate_active_id", "4"],
+    ]);
+    assert.equal(isNameplateSlotActive(vars, "2"), true);
+    assert.equal(isNameplateSlotActive(vars, 2), true);
+    assert.equal(isNameplateSlotActive(vars, "1"), false);
+    // An empty slot never lights, whatever is on air.
+    assert.equal(isNameplateSlotActive(vars, "3"), false);
+    vars.set("nameplate_active_id", "");
+    assert.equal(isNameplateSlotActive(vars, "3"), false);
+    // Idle and the song plate never light a slot.
+    vars.set("nameplate_active_id", "-");
+    assert.equal(isNameplateSlotActive(vars, "2"), false);
+    vars.set("nameplate_active_id", "song");
+    assert.equal(isNameplateSlotActive(vars, "2"), false);
+    // An unknown slot, an invalid slot, no cache.
+    vars.set("nameplate_active_id", "4");
+    assert.equal(isNameplateSlotActive(vars, "12"), false);
+    assert.equal(isNameplateSlotActive(vars, "0"), false);
+    assert.equal(isNameplateSlotActive(null, "2"), false);
+  });
+
+  test("grid presets: the song first, then 11 slots, each tied to ONE slot number", () => {
+    const presets = nameplateGridPresets();
+    const keys = Object.keys(presets);
+    assert.equal(keys.length, 12, "song + 11 slots (4×3)");
+    assert.equal(keys[0], "nameplate_grid_song", "the song comes first");
+    for (const preset of Object.values(presets)) {
+      assert.equal(preset.type, "button");
+      assert.equal(preset.category, NAMEPLATE_GRID_CATEGORY);
+    }
+
+    const song = presets.nameplate_grid_song;
+    assert.equal(song.style.text, "$(presenter:nameplate_song_name)\\n$(presenter:nameplate_song_role)");
+    assert.deepEqual(song.steps[0].down, [
+      {
+        actionId: "stream_nameplate_toggle",
+        options: { plate: SONG_CHOICE_ID, output: DEFAULT_OUTPUT },
+      },
+    ]);
+    assert.equal(song.feedbacks[0].feedbackId, "stream_nameplate_active");
+    assert.equal(song.feedbacks[0].options.target, SONG_CHOICE_ID);
+
+    for (let n = 1; n <= 11; n++) {
+      const key = `nameplate_grid_slot_${n}`;
+      assert.equal(keys[n], key, `slot ${n} is grid position ${n + 1}`);
+      const preset = presets[key];
+      assert.equal(
+        preset.style.text,
+        `$(presenter:nameplate_slot_${n}_name)\\n$(presenter:nameplate_slot_${n}_role)`,
+      );
+      assert.equal(preset.steps[0].down.length, 1);
+      const action = preset.steps[0].down[0];
+      assert.equal(action.actionId, "stream_nameplate_slot");
+      assert.deepEqual(action.options, { slot: String(n), mode: "toggle", output: DEFAULT_OUTPUT });
+      assert.equal(preset.feedbacks.length, 1);
+      assert.equal(preset.feedbacks[0].feedbackId, "stream_nameplate_slot_active");
+      assert.deepEqual(preset.feedbacks[0].options, { slot: String(n) });
+      assert.equal(preset.feedbacks[0].style.bgcolor, 0x00aa00);
+
+      // The SAME n in the text, the action and the feedback — and the wire
+      // payload the action sends addresses that slot.
+      const textSlots = [...preset.style.text.matchAll(/nameplate_slot_(\d+)_/g)].map((m) =>
+        Number(m[1]),
+      );
+      assert.deepEqual(textSlots, [n, n]);
+      assert.equal(parseSlot(action.options.slot), n);
+      assert.equal(parseSlot(preset.feedbacks[0].options.slot), n);
+      assert.equal(buildNameplateInvocation(action.actionId, action.options).payload.slot, n);
+    }
+  });
+
+  test("the #779 per-plate presets stay in their own category", () => {
+    const presets = nameplatePresets(plates);
+    assert.equal(presets.nameplate_9.category, "Menovky");
+    assert.equal(presets.nameplate_song.category, "Menovky");
+    assert.equal(presets.nameplate_song.steps[0].down[0].options.plate, SONG_CHOICE_ID);
   });
 });

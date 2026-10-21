@@ -27,6 +27,9 @@ const {
   nameplateChoices,
   nameplateVariableIds,
   nameplatePresets,
+  nameplateSlotOption,
+  isNameplateSlotActive,
+  nameplateGridPresets,
 } = require("./lib/stream");
 const {
   normaliseCatalog,
@@ -107,6 +110,10 @@ const COMMANDS = [
   { id: "stream_nameplate_song", label: "Stream: show song nameplate" },
   { id: "stream_nameplate_toggle", label: "Stream: toggle nameplate (menovka)" },
   { id: "stream_nameplate_hide", label: "Stream: hide nameplate" },
+  {
+    id: "stream_nameplate_slot",
+    label: "Stream: nameplate grid slot (menovka podľa pozície)",
+  },
 ];
 
 class PresenterInstance extends InstanceBase {
@@ -376,11 +383,16 @@ class PresenterInstance extends InstanceBase {
     this.setVariableDefinitions(defs);
   }
 
-  // #779: presets — one button per person plate + the song button. Button text
+  // #870: the "Menovky — mriežka" grid first (song + slots 1..11; label and
+  // press both resolve the slot server-side from one plate list), then the
+  // #779 presets — one button per person plate + the song button. Button text
   // is the plate's variables, the down action toggles it, and the active
   // feedback lights it. Rebuilt whenever the plate list changes.
   _setupPresets() {
-    this.setPresetDefinitions(nameplatePresets(this.nameplates));
+    this.setPresetDefinitions({
+      ...nameplateGridPresets(),
+      ...nameplatePresets(this.nameplates),
+    });
   }
 
   _setupActions() {
@@ -619,6 +631,21 @@ class PresenterInstance extends InstanceBase {
           this.variables.get("nameplate_active_id"),
           feedback.options.target,
         ),
+    };
+
+    // #870: lit while the plate in grid slot N is on air — the slot's
+    // `nameplate_slot_<n>_id` is non-empty and equals `nameplate_active_id`
+    // (an empty slot never lights). The slot labels track the plate list.
+    feedbacks["stream_nameplate_slot_active"] = {
+      type: "boolean",
+      name: "Stream: nameplate grid slot on air (menovka podľa pozície)",
+      options: [nameplateSlotOption(this.nameplates)],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0x00aa00,
+      },
+      callback: (feedback) =>
+        isNameplateSlotActive(this.variables, feedback.options.slot),
     };
 
     feedbacks["countdown_running"] = {
