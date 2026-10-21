@@ -12,6 +12,7 @@
  *  - drag to reorder by the handle: above the first, below the last, in the
  *    middle (full id set each time), one plate or none breaks nothing; two
  *    quick ↑ taps move a plate up two places;
+ *  - the Companion slot labels (#870) follow a rename and a reorder made here;
  *  - Zobraziť → on-air highlight + `GET …/nameplates/active`; Skryť → cleared;
  *    the song row shows the live song and puts the song plate on air;
  *  - changes made through REST from outside (add, rename, show) show live;
@@ -32,6 +33,7 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { createCompanionSocket, enableCompanionSocket } from "./companion-socket";
 import {
   assertMinFontSize,
   assertMinTapTarget,
@@ -46,6 +48,7 @@ import {
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
+let wsURL: string;
 
 const SLUG = "stream";
 
@@ -64,6 +67,8 @@ test.beforeAll(async ({}, testInfo) => {
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
   serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
+  // The real Companion socket, for the Stream Deck label checks (#870).
+  wsURL = await enableCompanionSocket(baseURL, config.port + 100);
 });
 
 test.afterAll(async () => {
@@ -576,6 +581,50 @@ test("#871 two quick ↑ taps move a plate up two places", async ({ page, reques
   await up.click();
   await up.click();
   await expectOrder(page, request, [c, a, b]);
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 the Stream Deck labels follow a rename and a reorder made in the Menovky view", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const sock = createCompanionSocket(wsURL, "operator-nameplates-spec");
+  try {
+    await sock.handshake();
+    const [anna, boris] = await seedPlates(request, [
+      ["Slot Anna", "kazateľka"],
+      ["Slot Boris", "hosť"],
+    ]);
+    // #870: slot n = the n-th person plate; the label variables are pushed live.
+    await expect.poll(() => sock.vars.get("nameplate_slot_1_name")).toBe("Slot Anna");
+    await expect.poll(() => sock.vars.get("nameplate_slot_2_name")).toBe("Slot Boris");
+
+    await openOperator(page, "/ui/operator/menovky");
+    await expect(row(page, anna).locator(BUTTON)).toHaveText("2");
+
+    // A rename in the view → slot 1's label.
+    const annaName = row(page, anna).locator(NAME);
+    await annaName.fill("Slot Anna Nová");
+    await annaName.blur();
+    await expect.poll(() => sock.vars.get("nameplate_slot_1_name")).toBe("Slot Anna Nová");
+    expect(sock.vars.get("nameplate_slot_1_id")).toBe(String(anna));
+
+    // A reorder in the view → the slots follow the list.
+    await row(page, anna).locator('[data-role="stream-nameplate-down"]').click();
+    await expect.poll(() => sock.vars.get("nameplate_slot_1_name")).toBe("Slot Boris");
+    await expect.poll(() => sock.vars.get("nameplate_slot_2_name")).toBe("Slot Anna Nová");
+    expect(sock.vars.get("nameplate_slot_1_id")).toBe(String(boris));
+    expect(sock.vars.get("nameplate_slot_2_id")).toBe(String(anna));
+    await expect(row(page, boris).locator(BUTTON)).toHaveText("2");
+    await expect(row(page, anna).locator(BUTTON)).toHaveText("3");
+
+    expect(sock.errors).toHaveLength(0);
+  } finally {
+    sock.socket.close();
+  }
 
   expect(consoleErrors).toEqual([]);
 });
