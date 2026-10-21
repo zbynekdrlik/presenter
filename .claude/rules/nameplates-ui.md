@@ -22,6 +22,9 @@ paths:
   `numbered`, so it stays `Copy`.
 - `components/nameplates/order.rs` — pure order logic: ↑/↓ step, drop slot, drop marker,
   local `apply_order`. `drag.rs` — the DOM side of the drag (pointer capture, row boxes).
+- `components/nameplates/focus.rs` — `keep_focus` (the list keeps its focus across a row
+  move) and `holds_focus`. `save_queue.rs` — pure `SaveQueue`: one PATCH per plate on its
+  way, the newest waiting save replaces an older one. Host-tested.
 - `components/nameplates/numbering.rs` — pure Stream Deck numbering (#870: button 1 = song,
   person at list index i = button i + 2, grid 4 × 3 = 12 buttons). Host-tested.
 - `components/nameplates/operator_view.rs` — the operator's Menovky view
@@ -52,6 +55,31 @@ paths:
   fields; `NameplateStore::update` applies the saved plate locally first, then calls `done`,
   and each draft is dropped only if it is still exactly what was sent (refused = back to
   the saved text). Never commit on `change` as well as `blur`: that saved twice.
+- **A blur saves only when the field was LEFT** (`commit_on_leave`): it decides in a
+  `spawn_local` task, queued after the focus restore below. A field that holds the focus
+  again was only moved by a reorder (Chrome fires `blur` when `insertBefore` moves the
+  focused node) and saves nothing; a field whose row is gone (the plate deleted elsewhere)
+  saves nothing. Never decide synchronously in the blur handler: the half-typed text was
+  saved early on every reorder from elsewhere.
+- **Saves of one plate go one at a time** (`SaveQueue` in `store.saves`, a
+  `StoredValue::new_local`: a waiting save holds its `done` closure). Tab name → role and
+  leaving the role are two PATCHes within one round trip; sent at once, a server applying
+  them out of order kept the EARLIER text. While one is on its way the newest save waits
+  (it carries both fields as they are then) and goes next; a replaced waiting save is
+  dropped WITHOUT its `done` (the newer one settles the drafts). The list is reloaded once
+  nothing of that plate is left to send.
+- **A reorder keeps the focus** (`focus::keep_focus`). The keyed `<For>` moves a row with
+  `insertBefore` (a one-step swap re-inserts BOTH rows, tachys `view/keyed.rs`), which drops
+  the focus to `<body>`: ↑ / ↓ on the drag handle stopped after one step, and a reorder from
+  elsewhere pulled the operator out of a half-typed name. Every list change that can move
+  rows (`reorder`, an applied list response) runs inside `keep_focus`: it notes the focused
+  element of a plate list (an input also its `selectionStart` / `End`), and after the change
+  a `spawn_local` task (queued behind the `<For>`'s render effect, still before the next
+  input event) focuses it again and puts the caret back, only while the focus fell back to
+  `<body>` (`utils::window::focus_is_free`) and the element is still on the page. The row
+  DOM is reused across the move (key = plate id), so the noted element is the one to focus.
+  Not `requestAnimationFrame`: a second key press can arrive before the frame and go to
+  `<body>`.
 - **List responses are sequenced.** `list_gen` is bumped by every list request AND every local
   change (reorder, saved PATCH, `clear`); a response applies only while its number is the
   newest and no reorder PUT is pending. Reorders show at once (`apply_order`) and their PUTs
@@ -62,6 +90,10 @@ paths:
   drop sends the FULL id set through the same `reorder` path as ↑/↓; a drop on the row's own
   place sends nothing; a move with no button held ends the drag. The handle also takes ↑/↓
   keys. No auto-scroll while dragging: a far move on a long phone list uses ↑/↓.
+  `PlateDrag` holds the id and the slot only: the drop line reads the dragged plate's
+  place from the list as it is NOW, so a plate deleted (or moved) elsewhere mid-drag leaves
+  no line, and an `Effect` in `NameplateRows` ends a drag whose plate is gone (its handle is
+  gone, so no release or cancel would ever reach it).
 - **The store owns the slug.** It holds the editor's `output_slug` signal itself, so an output
   switch reloads the right list; `output_switch.rs` calls `plates.clear()` first (the old
   output's rows and plate on air go at once), then `reload_list()` / `reload_active()`; a
@@ -91,6 +123,13 @@ paths:
   labels following a rename and a reorder, the button-13 grid note, and a `PHONE_390` context
   (menu closes, finger drag via `touchDrag`, panel fits, 44 px / 16 px). Tests reset the
   `stream` plates themselves (`resetPlates`), except the first (fresh DB, no-layer hint).
+- The #871 review tests: ↑ ↑ / ↓ ↓ on a handle focused ONCE (`page.keyboard.press`; a
+  `locator.press` focuses the handle again before every key and hides a lost focus); a
+  REST reorder (`putOrder`) while typing keeps the focus, the caret (`setSelectionRange`,
+  then `keyboard.type`) and the text, with no PATCH until the blur; two saves of one plate
+  with the first PATCH held by `page.route` (a second one that goes out meanwhile is let
+  through first via `route.fetch`, else the first is released after 2 s), the server ends on
+  the later text; a plate deleted by REST mid-drag takes its drop line with it.
 - Settle signals: a typed field keeps its draft, so prove the refresh landed through a field
   with no draft (the role) before asserting the typed one. A drag needs a tall viewport
   (1280 × 1200) so every row is on screen.
