@@ -24,9 +24,11 @@ paths:
   local `apply_order`. `drag.rs` — the DOM side of the drag (pointer capture, row boxes).
 - `components/nameplates/focus.rs` — `keep_focus` (the list keeps its focus across a row
   move), `rows_moving` (a move is under way) and the pure `blur_kind` (moved / focus away /
-  left). `save_queue.rs` — pure `SaveQueue`: one PATCH per plate on its way, the newest
-  waiting save replaces an older one, `take_waiting` for a page that hides; `SaveOutcome`
-  (how a save ended) + its toast texts. Host-tested.
+  left). `save_queue.rs` — pure `SaveQueue<T, D>`: per plate the COUNT of saves on their
+  way, the newest waiting save (replaces an older one), `take_waiting` for a page that hides,
+  `finish(id, seq, outcome) -> Next` (send the waiting save / the newest texts once more /
+  busy / idle); `SaveOutcome` (how a save ended), `TextLeft` (where its typed text is now),
+  the toast texts, `retry_delay_ms`. Host-tested.
 - `api/mod.rs::start_patch_keepalive` + `finish_json` — the plate PATCH as a `keepalive`
   fetch started before the call returns (the `ndi_video::dispatch_delete` pattern); only the
   plate saves use it.
@@ -61,16 +63,37 @@ paths:
   `done(SaveOutcome)`. Saved or refused (an empty name on leaving the field, a 4xx): each
   draft is dropped only if it is still exactly what was sent (refused = back to the saved
   text). Never commit on `change` as well as `blur`: that saved twice.
-- **A failed save keeps the typed text** (`SaveOutcome::of_error`, host-tested). A network
-  error (a phone's Wi-Fi asleep after a lock, a cancelled fetch) or a server fault (5xx, 408,
-  429, an unreadable 2xx body) is `Failed`: the drafts STAY, the toast says the text stayed
-  („Uloženie zlyhalo: … Text ostal v poli — uloží sa znova, keď pole opustíte."), and the
-  next save sends it again: leaving the field, Enter, or the page back in view
-  (`RowSave.retry`, read by the `visibilitychange` → visible path). A 404 is `Gone`: the
-  store toasts `DELETED_UNSAVED` (the deleted-plate text) and the row drops its drafts, so
-  the row leaving the list says nothing more. `RowSave::settle` only WRITES signals: the
-  `done` of a save can run after its row was disposed (a write to a disposed signal is a
-  no-op in reactive_graph 0.1.8, a read panics).
+- **The saved-text `Memo` KEEPS its last value when the plate is missing from the list**
+  (`Memo::new(|previous| … .or_else(|| previous.cloned()))`). The editor's output switch
+  `clear()`s the list BEFORE the rows' `on_cleanup` runs, so the row read `""`: a name-only
+  draft PATCHed `secondaryText: ""` (role wiped), a role-only one was dropped as "name
+  empty", and a save on its way no longer matched `sending`, so a second PATCH went out.
+- **A failed save keeps the typed text and is retried** (`SaveOutcome::of_error`,
+  host-tested). A network error (a phone's Wi-Fi asleep after a lock, a cancelled fetch), a
+  server fault (5xx, 408, 429, an unreadable 2xx body) or an expired login (401 / 403:
+  Cloudflare Access, not the text's fault) is `Failed`. The drafts STAY and the row's newest
+  failed texts go to `RowSave.failed` (an `RwSignal`): the row shows `data-unsaved="true"`
+  and the label „neuložené" (`stream-nameplate-unsaved`) until they are saved (the toast
+  is gone after 3.5 s). They are sent again by `RowSave::retry`: after 2 s / 5 s / 15 s
+  (`retry_delay_ms` counts the failures in a row; after three no timer), on the window
+  `online` event, on `visibilitychange` → visible (a phone fires it on unlock BEFORE its
+  Wi-Fi is back, so that try alone usually failed), and on Zobraziť. A retry sends the
+  FAILED texts, not the drafts: text typed since stays a draft until its own save, and the
+  timer never saves half-typed text. A save of other texts replaces the failed ones
+  (`send` → `forget_failed`: the mark goes, the count restarts); typing back to the saved
+  text gives them up. Every timer task checks `is_disposed()` first and finds nothing to do
+  once `failed` is gone, so a stale timer costs nothing (bounded: each failure arms at most
+  one). The toast: „Uloženie zlyhalo: … Text ostal v poli ako neuložený — uloží sa znova
+  sám o chvíľu, po návrate na stránku alebo keď pole opustíte." (+ „Prihlásenie mohlo
+  vypršať — prihláste sa znova v novej karte." for 401 / 403; a reload would lose the
+  draft). A 404 is `Gone`: the store toasts `DELETED_UNSAVED` and the row drops its drafts.
+- **Where the text is decides the failure toast** (`TextLeft`, returned by the row's
+  `done`): `InField` (above), `InFieldNotShown` (prefix „Menovka sa nezobrazila. "),
+  `Nowhere` = the row is gone (an output switch, the page left) or a re-send:
+  `LOST_UNSAVED` „Zmena menovky sa neuložila — skúste ju zadať znova." `RowSave::settle`
+  runs when the answer comes, maybe after the row was disposed: its FIRST access is
+  `sending.try_update_value` (`None` = gone → `Nowhere`), and only then are the row's
+  other signals read (all are disposed together; a read of a disposed one panics).
 - **A blur saves only when the field was LEFT** (`RowSave::commit_on_leave`). The blur
   handler reads `focus::rows_moving()` AT ONCE; the decision waits in a `spawn_local` task,
   queued after the focus restore below (`focus::blur_kind`). Only a blur DURING a move whose
@@ -84,37 +107,58 @@ paths:
   has run: the move, its render effect and the restore run in one go of queued tasks, so no
   key, click or window event can blur in between. Never decide synchronously in the blur
   handler: the half-typed text was saved early on every reorder from elsewhere.
-- **The row's save logic is one `Copy` struct, `RowSave`** (`plate_list.rs`): `commit(Why)`,
-  `settle`, `commit_on_leave`, `page_changed`, `report_lost`. `Why` = `FieldLeft` (Tab, a
-  click, Enter) / `FocusAway` (the window lost the focus) / `PageHidden` (`visibilitychange`
-  to hidden, or `pagehide`) / `PageBack` (visible again after a failed save). Only
-  `FieldLeft` refuses an empty name with „Meno nesmie byť prázdne." (and the field shows the
-  saved name again); the other three skip the save and KEEP the draft (the operator cleared
-  the name to retype it, then alt-tabbed or locked the phone). Each branch of `commit` logs
-  its decision after making it (sent / waits / sent now / on its way / empty kept), never a
-  "saved" line ahead of it. Per row, two window listeners removed in `on_cleanup`:
-  `visibilitychange` (hidden → save NOW, a phone may kill a hidden tab with no blur; visible
-  → retry a failed save) and `pagehide` (a reload or a closed tab; Chrome fires it BEFORE
-  `visibilitychange`, Safari may skip `visibilitychange` on unload). `RowSave.sending` holds
-  the texts of the row's save on its way, so the same texts are never sent twice (the
-  window blur and the page hidden right after = one PATCH). A row whose plate was deleted
-  elsewhere with typed, unsent text toasts `DELETED_UNSAVED` from its `on_cleanup`
-  (`report_lost`; cleanups run before the row's signals are disposed); the field saves
-  nothing then. A row that leaves because the EDITOR switched output (its remembered
-  `RowSave.slug` ≠ the store's slug; only kept drafts of a failed save get there, the select
-  click blurs a field first) sends that text instead: the plate still exists and the PATCH
-  is id-scoped.
+- **The row's save logic is one `Copy` struct, `RowSave`** (`plate_list.rs`): `commit(Why)`
+  (drafts → a save), `send` (the one path into `store.update`), `retry` (the failed texts
+  again), `settle` / `keep_failed` / `show_once_saved` (a save ended), `show` (Zobraziť),
+  `commit_on_leave`, `page_changed`, `report_lost`. `Why` = `FieldLeft` (Tab, a click,
+  Enter) / `FocusAway` (the window lost the focus) / `PageHidden` (`visibilitychange` to
+  hidden, or `pagehide`). Only `FieldLeft` refuses an empty name with „Meno nesmie byť
+  prázdne." (and both fields show the saved texts again); the other two KEEP the empty name
+  as typed (the operator cleared it to retype it, then alt-tabbed or locked the phone), and
+  a role typed in the row goes with the SAVED name (`(name.saved, role)`: the name draft
+  stays `""`, the role's settles). Each branch of `commit` / `retry` logs its decision after
+  making it (sent / waits / sent now / on its way / empty kept / role sent with the saved
+  name / failed save sent again), never a "saved" line ahead of it. Per row, three window
+  listeners removed in `on_cleanup`: `visibilitychange` (hidden → save NOW, a phone may kill
+  a hidden tab with no blur; visible → `retry`), `pagehide` (a reload or a closed tab;
+  Chrome fires it BEFORE `visibilitychange`, Safari may skip `visibilitychange` on unload)
+  and `online` (→ `retry`). `RowSave.sending` holds the texts of the row's NEWEST save while
+  it is on its way or waits, so the same texts are never sent twice (the window blur and the
+  page hidden right after = one PATCH). `report_lost` runs in the row's `on_cleanup`
+  (cleanups run before the row's signals are disposed) when the row leaves with unsaved
+  drafts. Drafts that a save on its way carries (an output switch or a delete while it is
+  in flight) send nothing more: its `done` finds the row gone. Drafts no save carries: a
+  plate deleted elsewhere toasts `DELETED_UNSAVED`; an EDITOR output switch (the row's
+  remembered `RowSave.slug` ≠ the store's slug; kept drafts of a failed save, since the
+  select click blurs a field first) sends them via `commit(FocusAway)`: the plate still
+  exists and the PATCH is id-scoped.
 - **Saves of one plate go one at a time** (`SaveQueue` in `store.saves`, a
   `StoredValue::new_local`: a waiting save holds its `done` closure). Tab name → role and
   leaving the role are two PATCHes within one round trip; sent at once, a server applying
   them out of order kept the EARLIER text. While one is on its way the newest save waits
-  (it carries both fields as they are then) and goes next; a replaced waiting save is
-  dropped WITHOUT its `done` (the newer one settles the drafts). The list is reloaded once
-  nothing of that plate is left to send. A page that hides yields that order: `commit`
-  with `PageHidden` (and `update(.., urgent = true, ..)`) takes the waiting save out
-  (`SaveQueue::take_waiting`, `NameplateStore::flush_save`) and sends it NOW beside the one
-  on its way: a waiting save on a frozen or closed page never went out. The server applies
-  the last PATCH it gets, and that one, sent last, carries the newest texts.
+  (it carries both fields as they are then) and goes once NOTHING of that plate is on its
+  way; a replaced waiting save is dropped WITHOUT its `done` (the newer one settles the
+  drafts). A page that hides breaks that order on purpose: `commit` with `PageHidden` (and
+  `update(.., urgent = true, ..)`) takes the waiting save out (`SaveQueue::take_waiting`,
+  `NameplateStore::flush_save`) and sends it NOW beside the one on its way, since a waiting
+  save on a frozen or closed page never went out. The plate then COUNTS two saves on their
+  way and stays busy until both are back (the first answer used to mark it idle, and a lock
+  → unlock → edit → blur sent a third save beside the flushed one). "Sent last" is not
+  "applied last": when an older save is answered SAVED after the newest one was answered
+  saved, the newest texts go once more (`Next::Send` with `done: None`: one bounded re-send,
+  itself the newest; a waiting save goes instead when there is one). A 404 drops the
+  waiting save (it could only 404 again). `update` and `flush_save` both hand the save to ONE
+  drain, `NameplateStore::send_saves`: it waits for the answer, asks `SaveQueue::finish`,
+  sends what comes next, and reloads the list only when the plate is idle.
+- **Zobraziť waits for the row's save** (`RowSave::show`). The server puts on air the texts
+  it HAS (a PATCH does not change the plate on air), so a Zobraziť while the row's save is on
+  its way (the click's own blur just sent it) or failed (a retry is sent now) goes on air
+  only once that save is through: `show_after` holds a ticket from
+  `NameplateStore::defer_show`, the row's NEWEST save settling Saved / Refused shows the
+  plate if `show_is_current(ticket)`, Failed toasts „Menovka sa nezobrazila. …" and shows
+  nothing, Gone drops it. Every show / hide of THIS page (`set_active`) bumps the ticket,
+  so a Skryť or another Zobraziť in the meantime wins; a Companion / REST show does not. A
+  save that never answers keeps the plate off air (its PUT would hang on the same network).
 - **Every plate PATCH is a `keepalive` fetch STARTED before `update` returns**
   (`start_save` → `api::start_patch_keepalive`, then `finish_json` in the task). Chrome
   cancels a plain fetch when the page unloads, and the old save started on the first poll
@@ -125,7 +169,7 @@ paths:
   Residual risk, not solvable in the page: iOS Safari may FREEZE or kill a backgrounded tab
   without running `visibilitychange` / `pagehide` handlers to the end (killed from the app
   switcher, memory pressure); Safari before 13 ignores `keepalive`. Text typed then is lost;
-  a save that fails because the Wi-Fi slept goes again when the page is back in view.
+  a save that fails because the Wi-Fi slept is retried (timer, `online`, page back in view).
 - **A reorder keeps the focus** (`focus::keep_focus`). The keyed `<For>` moves a row with
   `insertBefore` (a one-step swap re-inserts BOTH rows, tachys `view/keyed.rs`), which drops
   the focus to `<body>`: ↑ / ↓ on the drag handle stopped after one step, and a reorder from
@@ -171,6 +215,8 @@ paths:
   the PANEL (`[data-view-panel="menovky"]`), not `assertNoHorizontalOverflow` on the page.
 - Picking a view in the phone menu closes the menu (`set_view` resets `mobile_nav_open`);
   before #871 the overlay stayed open over the picked view.
+- `plate_list.rs` is at ~766 production lines (800 = warning). Before it grows further, move
+  `PlateText` + `Why` + `RowSave` into their own `row_save.rs` (the #742 split pattern).
 
 ## E2E
 - `tests/e2e/operator-nameplates.spec.ts`: tab order + URL, add / rename (`fill` + `blur`) /
@@ -211,8 +257,31 @@ paths:
   no PATCH, while leaving the field still toasts „Meno nesmie byť prázdne.". Specs that
   fail a fetch on purpose split the expected Chrome console line from the rest
   (`splitConsole`) and assert both. A negative check after a settle signal reads the
-  attribute ONCE (`getAttribute`), never `toHaveAttribute("data-visible", "false")`, which
-  retries until the 3.5 s toast timer hides a wrong toast.
+  attribute or text ONCE (`getAttribute`, `textContent()`), never
+  `toHaveAttribute("data-visible", "false")` / `not.toContainText(…)`, which retry until a
+  wrong toast is replaced or hidden. The keepalive reload test holds the NEW page's list
+  GET (`page.route`) until REST has the saved text: that GET could otherwise reach the
+  server before the keepalive PATCH, and the new page's socket may connect after the
+  save's change event, so nothing would refresh it.
+- The last-round tests (helpers `holdPatches` = every PATCH of a plate held in arrival
+  order, `failFirstPatches(n)` = the first n `route.abort()`ed): a failed save marks its
+  row (`data-unsaved` + „neuložené") and the timer retries it (fails twice, the third try
+  saves, ~7 s, poll timeout 20 s); the window `online` event retries at once (log
+  `failed save sent again (the network is back)`); Zobraziť on a failed row puts the SAVED
+  text on air (`GET …/nameplates/active` `primary`); a flushed save keeps the next one
+  waiting; an older save answered after the newer one triggers the re-send (a third PATCH
+  with the newer texts); a 404 drops the waiting save (one 404 line, the decision proven
+  by "a list GET or a second PATCH, whichever comes"); an emptied name + a failed role on a
+  hidden page sends the role with the saved name. `stream-editor-output-select.spec.ts`
+  adds `switchWhileSaving` (first PATCH held across `selectOption`; `finishFirst` returns
+  once the page GETs the new output's list again, which comes only after the plate's last
+  save): one PATCH with the role kept, and an aborted one toasting `LOST_UNSAVED`.
+- Settle signals that fire on the OLD code too (the RED must fail on the assertion, not a
+  timeout): a decision log matched by BOTH its outcomes (`save sent` OR `save waits …`;
+  `name is empty; kept as typed` + either ending), then the exact line asserted; "the page
+  dealt with save 1's answer" = a typed name ending in a space shows trimmed (the save
+  trims, the settle drops the draft, the field shows the saved text). A test that needs a
+  quiet moment between a failure and its action must act within the first 2 s retry pause.
 - Settle signals: a typed field keeps its draft, so prove the refresh landed through a field
   with no draft (the role) before asserting the typed one. A drag needs a tall viewport
   (1280 × 1200) so every row is on screen. A page log line is a fair settle signal for a
@@ -222,8 +291,8 @@ paths:
   `createCompanionSocket`), shared with `stream-companion.spec.ts`.
 - `stream-editor-tabs.spec.ts` covers the same list inside the editor (add, Prehrať, Skryť);
   `stream-editor-output-select.spec.ts` the switch clearing the old plates (list GET held)
-  and a text whose save failed (first PATCH `route.abort()`ed) being saved, not toasted as
-  deleted, when the editor switches output.
+  and a text whose save failed (first PATCH `route.abort()`ed) being saved with the role it
+  had, not toasted as deleted, when the editor switches output.
 - RED proof on Tier-0: run the new spec against the CI build of the base commit
   (`gh run download <run> -n build-artifacts`, `target/release/presenter-server` in the
   worktree) inside `sudo unshare -n` (the binary binds ports the deployed dev service
