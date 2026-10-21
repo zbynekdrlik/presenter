@@ -76,6 +76,9 @@ impl StreamEditorCtx {
         self.close_panel();
         self.def.set(None);
         self.active.set(empty_show_state());
+        // #871: the previous output's plates and plate on air go at once, not
+        // when the new output's list lands.
+        self.plates.clear();
         // Refetch everything scoped to the new output.
         self.refresh();
         self.plates.reload_list();

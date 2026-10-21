@@ -12,6 +12,7 @@
 
 pub mod numbering;
 pub mod operator_view;
+pub mod order;
 pub mod plate_list;
 
 use leptos::prelude::*;
@@ -68,25 +69,11 @@ fn nameplate_path(id: i64) -> String {
 
 // ---- Pure helpers (host-tested) ---------------------------------------------
 
-/// The id list after moving `id` one step up or down, or `None` when it cannot
-/// move (already first / last, or not in the list). The server's reorder wants
-/// the FULL id set, so the result always holds every id.
-pub fn reorder_one_step(ids: &[i64], id: i64, up: bool) -> Option<Vec<i64>> {
-    let pos = ids.iter().position(|x| *x == id)?;
-    let target = if up {
-        pos.checked_sub(1)?
-    } else if pos + 1 < ids.len() {
-        pos + 1
-    } else {
-        return None;
-    };
-    let mut moved = ids.to_vec();
-    moved.swap(pos, target);
-    Some(moved)
-}
-
-/// The song row's live line: "title · library", the title alone without a
-/// library, "—" while no song is live.
+/// The song row's live line: "title · library", "—" while no song is live.
+///
+/// #871 changed one case on purpose: a song WITHOUT a library shows its title
+/// alone. The editor's row before #871 printed "title · " with a dangling
+/// separator there.
 pub fn song_line(name: &str, library: &str) -> String {
     match (name.is_empty(), library.is_empty()) {
         (true, _) => "—".to_string(),
@@ -115,8 +102,19 @@ pub fn def_has_lower_third(def: &StreamOutputDef) -> bool {
 
 // ---- The store ---------------------------------------------------------------
 
+/// The reorder PUTs of one store, sent one at a time (#871 review): two quick
+/// moves must reach the server in order, and only the newest order matters.
+#[derive(Default)]
+struct OrderSync {
+    /// A PUT is on its way.
+    busy: bool,
+    /// The newest order chosen while it was (output slug, full id set).
+    next: Option<(String, Vec<i64>)>,
+}
+
 /// One output's plates, the plate on air and the live song, plus every plate
-/// REST call. `Copy` (signals + a callback), so it threads into each row.
+/// REST call. `Copy` (signals, stored values and a callback), so it threads
+/// into each row.
 #[derive(Clone, Copy)]
 pub struct NameplateStore {
     /// The output whose plates are listed: the editor's selected output (its
@@ -131,6 +129,12 @@ pub struct NameplateStore {
     pub song: RwSignal<(String, String)>,
     /// The page's own toast: `(message, "success" | "error")`.
     toast: Callback<(String, &'static str)>,
+    /// Bumped by every list request AND every local change of the list: a
+    /// list response is applied only while its number is still the newest, so
+    /// an older (or slower) response never replaces a newer state.
+    list_gen: StoredValue<u64>,
+    /// The serialized reorder PUTs ([`OrderSync`]).
+    order_sync: StoredValue<OrderSync>,
 }
 
 impl NameplateStore {
@@ -142,12 +146,24 @@ impl NameplateStore {
             active: RwSignal::new(None),
             song: RwSignal::new((String::new(), String::new())),
             toast,
+            list_gen: StoredValue::new(0),
+            order_sync: StoredValue::new(OrderSync::default()),
         }
     }
 
     /// Report through the page's toast.
     fn notify(self, message: String, variant: &'static str) {
         self.toast.run((message, variant));
+    }
+
+    /// The next list generation (see `list_gen`).
+    fn next_gen(self) -> u64 {
+        self.list_gen
+            .try_update_value(|generation| {
+                *generation += 1;
+                *generation
+            })
+            .unwrap_or(0)
     }
 
     /// Whether `slug` is still the listed output: a response for an output the
@@ -168,13 +184,39 @@ impl NameplateStore {
         self.reload_song();
     }
 
+    /// Forget the listed output's plates and plate on air at once (the editor's
+    /// output switch), so the previous output's rows never show while the new
+    /// output's list loads. An in-flight list response is dropped too.
+    pub fn clear(self) {
+        self.next_gen();
+        self.plates.set(Vec::new());
+        self.active.set(None);
+    }
+
     /// Re-fetch the plate list (mount, after an own write, on a
-    /// `StreamNameplatesChanged`).
+    /// `StreamNameplatesChanged`). Applied only while it is the newest list
+    /// request, the output is unchanged and no reorder is still being sent
+    /// (that one reloads once it is done).
     pub fn reload_list(self) {
         let slug = self.output_slug.get_untracked();
+        let generation = self.next_gen();
         leptos::task::spawn_local(async move {
             let result = crate::api::get_json::<Vec<Nameplate>>(&nameplates_path(&slug)).await;
             if !self.is_current(&slug) {
+                return;
+            }
+            if self.list_gen.try_get_value() != Some(generation) {
+                leptos::logging::log!("nameplates: dropping an older plate list ({generation})");
+                return;
+            }
+            if self
+                .order_sync
+                .try_with_value(|sync| sync.busy)
+                .unwrap_or(false)
+            {
+                leptos::logging::log!(
+                    "nameplates: a reorder is on its way; keeping the local order"
+                );
                 return;
             }
             match result {
@@ -244,15 +286,37 @@ impl NameplateStore {
         });
     }
 
-    /// Update a plate's texts, then refetch the list.
-    pub fn update(self, id: i64, primary: String, secondary: String) {
+    /// Save a plate's texts. The saved plate goes into the local list at once
+    /// (before the refetch), then `done(saved)` runs, so a row can drop its
+    /// draft without its old text flashing back. A refused save (an empty
+    /// name, a server error) calls `done(false)` and toasts.
+    pub fn update(
+        self,
+        id: i64,
+        primary: String,
+        secondary: String,
+        done: impl FnOnce(bool) + 'static,
+    ) {
         let Some(req) = self.text_req(primary, secondary) else {
+            done(false);
             return;
         };
         leptos::task::spawn_local(async move {
             match crate::api::patch_json::<_, Nameplate>(&nameplate_path(id), &req).await {
-                Ok(_) => self.reload_list(),
-                Err(e) => self.notify(format!("Uloženie zlyhalo: {e}"), "error"),
+                Ok(saved) => {
+                    self.next_gen();
+                    self.plates.update(|list| {
+                        if let Some(plate) = list.iter_mut().find(|p| p.id == saved.id) {
+                            *plate = saved;
+                        }
+                    });
+                    done(true);
+                    self.reload_list();
+                }
+                Err(e) => {
+                    done(false);
+                    self.notify(format!("Uloženie zlyhalo: {e}"), "error");
+                }
             }
         });
     }
@@ -290,21 +354,65 @@ impl NameplateStore {
         });
     }
 
+    /// The plate ids in the order the page shows now (local moves included).
+    fn ids_now(self) -> Vec<i64> {
+        self.plates
+            .with_untracked(|list| list.iter().map(|p| p.id).collect())
+    }
+
     /// Move a plate one step up or down (a new Stream Deck button, #870).
     pub fn move_plate(self, id: i64, up: bool) {
-        let ids: Vec<i64> = self
-            .plates
-            .with_untracked(|list| list.iter().map(|p| p.id).collect());
-        let Some(ids) = reorder_one_step(&ids, id, up) else {
+        if let Some(ids) = order::reorder_one_step(&self.ids_now(), id, up) {
+            self.reorder(ids);
+        }
+    }
+
+    /// Apply a new order: shown at once (the numbers move, and the next move
+    /// builds on it), then sent as the full id set.
+    fn reorder(self, ids: Vec<i64>) {
+        self.next_gen();
+        self.plates.update(|list| order::apply_order(list, &ids));
+        self.send_order(self.output_slug.get_untracked(), ids);
+    }
+
+    /// PUT an order. While a PUT is on its way the newest order waits and goes
+    /// next (older waiting ones are replaced), so the server ends on the order
+    /// the operator chose last; the list is reloaded once nothing is pending.
+    fn send_order(self, slug: String, ids: Vec<i64>) {
+        let queued = self
+            .order_sync
+            .try_update_value(|sync| {
+                if sync.busy {
+                    sync.next = Some((slug.clone(), ids.clone()));
+                    true
+                } else {
+                    sync.busy = true;
+                    false
+                }
+            })
+            .unwrap_or(true);
+        if queued {
             return;
-        };
-        let slug = self.output_slug.get_untracked();
+        }
         leptos::task::spawn_local(async move {
-            let req = ReorderReq { ids };
-            match crate::api::put_no_content(&nameplates_order_path(&slug), &req).await {
-                Ok(()) => self.reload_list(),
-                Err(e) => self.notify(format!("Zmena poradia zlyhala: {e}"), "error"),
+            let mut job = Some((slug, ids));
+            while let Some((slug, ids)) = job {
+                let req = ReorderReq { ids };
+                if let Err(e) =
+                    crate::api::put_no_content(&nameplates_order_path(&slug), &req).await
+                {
+                    self.notify(format!("Zmena poradia zlyhala: {e}"), "error");
+                }
+                job = self
+                    .order_sync
+                    .try_update_value(|sync| {
+                        let next = sync.next.take();
+                        sync.busy = next.is_some();
+                        next
+                    })
+                    .flatten();
             }
+            self.reload_list();
         });
     }
 
@@ -352,22 +460,7 @@ impl NameplateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use presenter_core::{SceneKind, StreamSceneDef};
-
-    #[test]
-    fn a_plate_moves_one_step_and_keeps_the_full_id_set() {
-        assert_eq!(reorder_one_step(&[1, 2, 3], 2, true), Some(vec![2, 1, 3]));
-        assert_eq!(reorder_one_step(&[1, 2, 3], 2, false), Some(vec![1, 3, 2]));
-        assert_eq!(reorder_one_step(&[1, 2, 3], 3, true), Some(vec![1, 3, 2]));
-    }
-
-    #[test]
-    fn the_first_cannot_go_up_the_last_cannot_go_down_an_unknown_id_not_at_all() {
-        assert_eq!(reorder_one_step(&[1, 2, 3], 1, true), None);
-        assert_eq!(reorder_one_step(&[1, 2, 3], 3, false), None);
-        assert_eq!(reorder_one_step(&[1, 2, 3], 9, true), None);
-        assert_eq!(reorder_one_step(&[], 1, false), None);
-    }
+    use presenter_core::{SceneKind, StreamElementDef, StreamSceneDef};
 
     #[test]
     fn the_song_line_shows_title_and_library() {
@@ -375,9 +468,14 @@ mod tests {
             song_line("Ako Ťa mám rád", "Kapela XY"),
             "Ako Ťa mám rád · Kapela XY"
         );
-        assert_eq!(song_line("Ako Ťa mám rád", ""), "Ako Ťa mám rád");
         assert_eq!(song_line("", "Kapela XY"), "—");
         assert_eq!(song_line("", ""), "—");
+    }
+
+    #[test]
+    fn a_song_without_a_library_shows_its_title_alone_with_no_dangling_separator() {
+        assert_eq!(song_line("Ako Ťa mám rád", ""), "Ako Ťa mám rád");
+        assert!(!song_line("Ako Ťa mám rád", "").contains('·'));
     }
 
     #[test]
@@ -397,14 +495,46 @@ mod tests {
         assert_eq!(nameplate_path(7), "/stream/api/nameplates/7");
     }
 
-    fn def_with(kinds: &[&str]) -> StreamOutputDef {
-        let elements = kinds
-            .iter()
+    /// Element props from their wire JSON (the shape the REST API takes).
+    fn props(json: serde_json::Value) -> StreamElementProps {
+        serde_json::from_value(json).unwrap_or_else(|e| panic!("element props: {e}"))
+    }
+
+    fn text_style() -> serde_json::Value {
+        serde_json::json!({
+            "fontFamily": "Arial", "sizePct": 5.0, "color": "#ffffff",
+            "weight": 700, "align": "left", "lineHeight": 1.2
+        })
+    }
+
+    fn frame() -> serde_json::Value {
+        serde_json::json!({ "xPct": 6.0, "yPct": 74.0, "wPct": 46.0, "hPct": 14.0 })
+    }
+
+    fn color() -> StreamElementProps {
+        props(serde_json::json!({
+            "kind": "color", "color": "#000000", "opacity": 1.0, "frame": frame()
+        }))
+    }
+
+    fn lower_third() -> StreamElementProps {
+        props(serde_json::json!({
+            "kind": "lower_third", "frame": frame(), "bar_color": "#0f172a",
+            "bar_opacity": 0.85, "accent_color": "#38bdf8", "accent_width_pct": 2.5,
+            "primary_style": text_style(), "secondary_style": text_style(),
+            "padding_pct": 3.0, "animation": "slide_left", "in_ms": 200, "out_ms": 150,
+            "auto_hide_s": 0
+        }))
+    }
+
+    fn def_with(elements: Vec<StreamElementProps>) -> StreamOutputDef {
+        let elements = elements
+            .into_iter()
             .enumerate()
-            .map(|(i, kind)| presenter_core::StreamElementDef {
+            .map(|(i, props)| StreamElementDef {
                 id: i as i64 + 1,
                 z_order: i as i32,
-                props: crate::components::stream_editor::props_access::default_element_props(kind),
+                props,
             })
             .collect();
         StreamOutputDef {
@@ -430,8 +560,8 @@ mod tests {
 
     #[test]
     fn a_lower_third_in_any_scene_is_a_nameplate_layer() {
-        assert!(def_has_lower_third(&def_with(&["color", "lower_third"])));
-        assert!(!def_has_lower_third(&def_with(&["color", "image"])));
-        assert!(!def_has_lower_third(&def_with(&[])));
+        assert!(def_has_lower_third(&def_with(vec![color(), lower_third()])));
+        assert!(!def_has_lower_third(&def_with(vec![color()])));
+        assert!(!def_has_lower_third(&def_with(Vec::new())));
     }
 }

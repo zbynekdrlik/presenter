@@ -15,7 +15,8 @@
 use leptos::prelude::*;
 
 use super::output_paths::{read_stored, write_stored};
-use super::{bool_attr, StreamEditorCtx};
+use super::StreamEditorCtx;
+use crate::utils::dom_attr::bool_attr;
 
 /// `localStorage` key for the last active editor tab.
 const TAB_STORAGE_KEY: &str = "stream-editor-tab";
