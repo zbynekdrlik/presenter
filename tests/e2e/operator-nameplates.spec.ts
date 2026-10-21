@@ -17,7 +17,15 @@
  *    the text, and saves nothing early;
  *  - leaving the page (the window loses the focus, the page goes hidden, or
  *    the window blur and then the page hidden) saves the half-typed text,
- *    once;
+ *    once, also where `hasFocus()` still says true when the page decides;
+ *  - every save is a keepalive request: a reload right after typing keeps
+ *    the text, and a save waiting in the queue goes at once when the page
+ *    hides;
+ *  - a save that fails on the network keeps the typed text and goes again on
+ *    the next leave or when the page is back in view; a 404 says the plate
+ *    was deleted;
+ *  - a name cleared to retype it is kept on alt-tab / a hidden page, and
+ *    still refused when the field is left;
  *  - a plate deleted elsewhere while half-typed: a toast says it was not saved;
  *  - two saves of one plate go one at a time (the text saved last wins);
  *  - a plate deleted elsewhere mid-drag takes its drop line with it;
@@ -715,6 +723,8 @@ test("#871 leaving the page (another window, tab or app, a hidden phone page) sa
     const id = Number(req.url().split("/stream/api/nameplates/")[1]);
     patches.get(id)?.push((JSON.parse(req.postData() ?? "{}") as { primaryText: string }).primaryText);
   });
+  const logs: string[] = [];
+  page.on("console", (msg) => logs.push(msg.text()));
   await openOperator(page, "/ui/operator/menovky");
   await expect.poll(() => rowOrder(page)).toEqual([a, b, c]);
   const savedName = async (id: number) =>
@@ -777,7 +787,11 @@ test("#871 leaving the page (another window, tab or app, a hidden phone page) sa
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
   });
-  await hiddenDecided;
+  // The hidden page logs its decision once it is made (that save was on its
+  // way already), never a "saved" line ahead of it.
+  expect((await hiddenDecided).text()).toBe(
+    `nameplates: plate ${c} save of these texts is on its way (the page went hidden)`,
+  );
   releaseC();
   await expect.poll(() => savedName(c)).toBe("Preč C oboje");
   await page.unrouteAll({ behavior: "wait" });
@@ -792,6 +806,406 @@ test("#871 leaving the page (another window, tab or app, a hidden phone page) sa
   expect(patches.get(c)).toEqual(["Preč C oboje"]);
   expect(patches.get(a)).toEqual(["Preč A okno"]);
   expect(patches.get(b)).toEqual(["Preč B skryté"]);
+  expect(logs.filter((line) => line.includes("saved as the page went hidden"))).toEqual([]);
+
+  expect(consoleErrors).toEqual([]);
+});
+
+/** Make the page hidden (a locked phone, another app or tab) or visible
+ *  again, as the browser does: `visibilityState` + a bubbling
+ *  `visibilitychange`, so a window listener hears it. */
+async function setPageHidden(page: Page, hidden: boolean): Promise<void> {
+  await page.evaluate((hide) => {
+    if (hide) {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    } else {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+  }, hidden);
+}
+
+/** The window loses the focus (alt-tab, OBS, Companion): `field` gets a blur
+ *  and stays the page's active element. `pageReportsFocus` = what
+ *  `document.hasFocus()` still says when the page decides (Chrome: false;
+ *  Safari / Firefox may still say true). */
+async function windowBlur(field: Locator, pageReportsFocus: boolean): Promise<void> {
+  await field.evaluate((el, focused) => {
+    if (!focused) document.hasFocus = () => false;
+    el.dispatchEvent(new FocusEvent("blur"));
+  }, pageReportsFocus);
+}
+
+async function restoreWindowFocus(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+  });
+}
+
+/** The server's primary text of plate `id`. */
+async function savedText(request: APIRequestContext, id: number): Promise<string | undefined> {
+  return (await listPlates(request)).find((p) => p.id === id)?.primaryText;
+}
+
+/** The console lines Chrome logs itself for a fetch that failed on purpose
+ *  (`pattern`), split from every other line. */
+function splitConsole(lines: string[], pattern: RegExp): { expected: string[]; other: string[] } {
+  return {
+    expected: lines.filter((line) => pattern.test(line)),
+    other: lines.filter((line) => !pattern.test(line)),
+  };
+}
+
+const NETWORK_FAILED = /^\[error\] Failed to load resource: net::ERR_FAILED$/;
+const DELETED_TOAST = "Menovka bola medzičasom zmazaná — zmena sa neuložila.";
+
+test("#871 every save is a keepalive request, so a reload right after typing keeps the text", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b] = await seedPlates(request, [
+    ["Kľúč A", "1"],
+    ["Kľúč B", "2"],
+  ]);
+  // The keepalive flag of every nameplate PATCH the page hands to fetch
+  // (wasm-bindgen calls the page's `fetch`, so this wrapper sees the Request).
+  await page.addInitScript(() => {
+    const flags: boolean[] = [];
+    Object.assign(window, { __plateKeepalive: flags });
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (
+        input instanceof Request &&
+        input.method === "PATCH" &&
+        input.url.includes("/stream/api/nameplates/")
+      ) {
+        flags.push(input.keepalive);
+      }
+      return original(input, init);
+    };
+  });
+  const keepaliveFlags = () =>
+    page.evaluate(() => (window as unknown as { __plateKeepalive: boolean[] }).__plateKeepalive);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b]);
+
+  // A save is a keepalive request: Chrome cancels a plain fetch when the page
+  // unloads, keepalive lets it finish.
+  const aName = row(page, a).locator(NAME);
+  await aName.fill("Kľúč A uložená");
+  await aName.blur();
+  await expect.poll(() => savedText(request, a)).toBe("Kľúč A uložená");
+  expect(await keepaliveFlags()).toEqual([true]);
+
+  // Half-typed in B, then the page is reloaded (a closed tab is the same):
+  // the save made as the page goes away still reaches the server.
+  const bName = row(page, b).locator(NAME);
+  await bName.fill("Kľúč B pred obnovením");
+  await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await expect.poll(() => savedText(request, b)).toBe("Kľúč B pred obnovením");
+  await expect(row(page, b).locator(NAME)).toHaveValue("Kľúč B pred obnovením");
+  await expect(row(page, a).locator(NAME)).toHaveValue("Kľúč A uložená");
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a save waiting for the one on its way goes out at once when the page hides", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [anna] = await seedPlates(request, [["Fronta Anna", "kazateľka"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaName = row(page, anna).locator(NAME);
+  const annaRole = row(page, anna).locator(ROLE);
+  await expect(annaName).toHaveValue("Fronta Anna");
+
+  // Every PATCH of Anna is held at the network until the test lets it go,
+  // in the order they came (a slow phone network).
+  type Body = { primaryText: string; secondaryText: string };
+  const bodies: Body[] = [];
+  const held: Array<{ release: () => void; answered: Promise<void> }> = [];
+  await page.route(`**/stream/api/nameplates/${anna}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    bodies.push(route.request().postDataJSON() as Body);
+    let release = () => {};
+    let answer = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    held.push({ release, answered: new Promise<void>((resolve) => (answer = resolve)) });
+    await gate;
+    const response = await route.fetch();
+    await route.fulfill({ response });
+    answer();
+  });
+
+  // Two saves within one round trip: the name, Tab to the role (save 1, held),
+  // the role, leave it (save 2 waits for save 1).
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${anna} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await annaName.fill("Fronta Anna Nová");
+  await page.keyboard.press("Tab");
+  await expect(annaRole).toBeFocused();
+  await annaRole.fill("pastorka");
+  await annaRole.blur();
+  await waits;
+  expect(bodies).toHaveLength(1);
+
+  // The phone locks before save 1 is back: save 2 must not wait for a page
+  // that may be frozen or killed. It goes out now.
+  await setPageHidden(page, true);
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies).toEqual([
+    { primaryText: "Fronta Anna Nová", secondaryText: "kazateľka" },
+    { primaryText: "Fronta Anna Nová", secondaryText: "pastorka" },
+  ]);
+  held[0].release();
+  await held[0].answered;
+  held[1].release();
+  await held[1].answered;
+  await expect
+    .poll(async () => (await listPlates(request)).find((p) => p.id === anna))
+    .toMatchObject({ primaryText: "Fronta Anna Nová", secondaryText: "pastorka" });
+  await setPageHidden(page, false);
+  await expect(annaRole).toHaveValue("pastorka");
+  await page.unrouteAll({ behavior: "wait" });
+  expect(bodies).toHaveLength(2);
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a save that fails on the network keeps the typed text, says so, and goes again on the next leave", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Sieť A", "1"]]);
+  // The first PATCH fails at the network (the Wi-Fi asleep), later ones pass.
+  const patches: string[] = [];
+  await page.route(`**/stream/api/nameplates/${a}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    patches.push((route.request().postDataJSON() as { primaryText: string }).primaryText);
+    if (patches.length === 1) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  const aName = row(page, a).locator(NAME);
+  await expect(aName).toHaveValue("Sieť A");
+  const toast = page.locator('[data-role="toast"]');
+
+  await aName.fill("Sieť A nová");
+  await aName.blur();
+  await expect(toast).toContainText(/^Uloženie zlyhalo: .*Text ostal v poli/);
+  await expect(toast).toHaveAttribute("data-visible", "true");
+  // The typed text stays in the field; the server still has the old one.
+  await expect(aName).toHaveValue("Sieť A nová");
+  expect(await savedText(request, a)).toBe("Sieť A");
+
+  // Leaving the field again sends it again, and it is saved.
+  await aName.focus();
+  await aName.blur();
+  await expect.poll(() => savedText(request, a)).toBe("Sieť A nová");
+  await expect(aName).toHaveValue("Sieť A nová");
+  expect(patches).toEqual(["Sieť A nová", "Sieť A nová"]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  // Chrome logs the one aborted fetch itself; nothing else may be logged.
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a save that fails while the page is hidden keeps the text and goes again once the page is back in view", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [c] = await seedPlates(request, [["Zámok C", "3"]]);
+  const patches: string[] = [];
+  await page.route(`**/stream/api/nameplates/${c}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    patches.push((route.request().postDataJSON() as { primaryText: string }).primaryText);
+    if (patches.length === 1) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  const cName = row(page, c).locator(NAME);
+  await expect(cName).toHaveValue("Zámok C");
+  const toast = page.locator('[data-role="toast"]');
+
+  // Typed, then the phone locks: the save goes, and fails (Wi-Fi asleep).
+  await cName.fill("Zámok C nová");
+  await setPageHidden(page, true);
+  await expect(toast).toContainText("Text ostal v poli");
+  await expect(cName).toHaveValue("Zámok C nová");
+  expect(await savedText(request, c)).toBe("Zámok C");
+
+  // Unlocked: the page is back in view and sends it again.
+  await setPageHidden(page, false);
+  await expect.poll(() => savedText(request, c)).toBe("Zámok C nová");
+  await expect(cName).toHaveValue("Zámok C nová");
+  expect(patches).toEqual(["Zámok C nová", "Zámok C nová"]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a save of a plate deleted meanwhile (404) says the plate was deleted", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b] = await seedPlates(request, [
+    ["Neskoro A", "1"],
+    ["Neskoro B", "2"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b]);
+  // The page's list reloads are held, so B's row is still on screen when
+  // its save reaches the server after another operator deleted B.
+  const heldLists: Array<() => void> = [];
+  let holdLists = true;
+  await page.route(`**/stream/api/outputs/${SLUG}/nameplates`, async (route) => {
+    if (route.request().method() === "GET" && holdLists) {
+      await new Promise<void>((resolve) => heldLists.push(resolve));
+    }
+    await route.continue();
+  });
+  const bName = row(page, b).locator(NAME);
+  await bName.fill("Neskoro B rozpísaná");
+  await deletePlate(request, b);
+  // The page heard the delete and asked for the list (held).
+  await expect.poll(() => heldLists.length).toBeGreaterThan(0);
+  await bName.blur();
+  const toast = page.locator('[data-role="toast"]');
+  await expect(toast).toHaveText(DELETED_TOAST);
+  await expect(toast).toHaveAttribute("data-visible", "true");
+
+  // The list comes back without B.
+  holdLists = false;
+  for (const release of heldLists) release();
+  await expect.poll(() => rowOrder(page)).toEqual([a]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(
+    consoleErrors,
+    /^\[error\] Failed to load resource: the server responded with a status of 404\b/,
+  );
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 leaving the window saves even where the page still reports the focus when the save decides", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Okno A", "1"]]);
+  const patches: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PATCH" && req.url().endsWith(`/stream/api/nameplates/${a}`)) {
+      patches.push((JSON.parse(req.postData() ?? "{}") as { primaryText: string }).primaryText);
+    }
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  const aName = row(page, a).locator(NAME);
+  await expect(aName).toHaveValue("Okno A");
+
+  // Safari / Firefox timing: the window loses the focus and the field gets
+  // its blur, but `document.hasFocus()` still says true when the page
+  // decides (Chrome already says false). No rows were moving: this is a
+  // window left, so it saves.
+  await aName.fill("Okno A nová");
+  await windowBlur(aName, true);
+  expect(await aName.evaluate((el) => document.activeElement === el && document.hasFocus())).toBe(
+    true,
+  );
+  await expect.poll(() => savedText(request, a)).toBe("Okno A nová");
+  expect(patches).toEqual(["Okno A nová"]);
+  await expect(aName).toHaveValue("Okno A nová");
+
+  expect(consoleErrors).toEqual([]);
+});
+
+test("#871 a name cleared to retype it is kept when the window loses the focus or the page hides; leaving the field still refuses it", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a] = await seedPlates(request, [["Prázdne A", "1"]]);
+  const patches: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PATCH" && req.url().endsWith(`/stream/api/nameplates/${a}`)) {
+      patches.push((JSON.parse(req.postData() ?? "{}") as { primaryText: string }).primaryText);
+    }
+  });
+  await openOperator(page, "/ui/operator/menovky");
+  const aName = row(page, a).locator(NAME);
+  const toast = page.locator('[data-role="toast"]');
+  await expect(aName).toHaveValue("Prázdne A");
+  const keptEmpty = () =>
+    page.waitForEvent("console", {
+      predicate: (msg) => msg.text().startsWith(`nameplates: plate ${a} name is empty; kept as typed`),
+      timeout: 10_000,
+    });
+
+  // The operator clears the name to retype it, then alt-tabs (OBS): no
+  // "Meno nesmie byť prázdne.", the field stays empty, nothing is sent.
+  await aName.fill("");
+  const keptOnBlur = keptEmpty();
+  await windowBlur(aName, false);
+  await keptOnBlur;
+  await expect(aName).toHaveValue("");
+  expect(await toast.getAttribute("data-visible")).toBe("false");
+  await restoreWindowFocus(page);
+
+  // ... or the phone locks: the same.
+  const keptOnHide = keptEmpty();
+  await setPageHidden(page, true);
+  await keptOnHide;
+  await expect(aName).toHaveValue("");
+  expect(await toast.getAttribute("data-visible")).toBe("false");
+  await setPageHidden(page, false);
+
+  // Back, the new name typed and Enter: saved.
+  await aName.fill("Prázdne A nová");
+  await aName.press("Enter");
+  await expect.poll(() => savedText(request, a)).toBe("Prázdne A nová");
+
+  // Leaving the field (a click elsewhere) with the name empty is refused,
+  // as before: the toast, and the field shows the saved name again.
+  await aName.fill("");
+  await aName.blur();
+  await expect(toast).toHaveText("Meno nesmie byť prázdne.");
+  await expect(aName).toHaveValue("Prázdne A nová");
+  expect(patches).toEqual(["Prázdne A nová"]);
 
   expect(consoleErrors).toEqual([]);
 });

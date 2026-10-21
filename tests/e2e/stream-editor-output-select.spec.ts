@@ -15,6 +15,9 @@
  *    and the editor agree.
  *  - #871: an output switch drops the previous output's plates and plate on
  *    air at once, while the new output's plate list is still on its way.
+ *  - #871: a plate text whose save failed on the network (kept in the field
+ *    for another try) is saved when the editor switches output, not dropped
+ *    with a "deleted" toast.
  *
  * Clean console is asserted last.
  */
@@ -243,4 +246,73 @@ test("#871 an output switch drops the previous output's plates at once, before t
   const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
   expect(deleted.ok()).toBeTruthy();
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#871 a plate text whose save failed is saved, not dropped, when the editor switches output", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const name = `SW_871_FAIL_${Date.now() % 100_000}`;
+  const created = await page.request.post(`${baseURL}/stream/api/outputs/stream/nameplates`, {
+    data: { primaryText: name, secondaryText: "hosť" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const plateId = (await created.json()).id as number;
+  const savedName = async () => {
+    const res = await page.request.get(`${baseURL}/stream/api/outputs/stream/nameplates`);
+    expect(res.ok()).toBeTruthy();
+    const plates = (await res.json()) as Array<{ id: number; primaryText: string }>;
+    return plates.find((p) => p.id === plateId)?.primaryText;
+  };
+
+  // The plate's first PATCH fails at the network (the Wi-Fi asleep), later
+  // ones pass.
+  let patches = 0;
+  const patchRoute = `**/stream/api/nameplates/${plateId}`;
+  await page.route(patchRoute, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    patches += 1;
+    if (patches === 1) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  const plateName = plateRow.locator('[data-role="stream-nameplate-name"]');
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+
+  // The save fails: the typed text stays in the field for another try.
+  await plateName.fill(`${name} nová`);
+  await plateName.blur();
+  await expect(page.locator('[data-role="toast"]')).toContainText("Text ostal v poli");
+  await expect(plateName).toHaveValue(`${name} nová`);
+
+  // Another output is picked before that try: the row leaves the list, and
+  // the plate (still there) gets the text instead of a "deleted" toast.
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await expect.poll(savedName).toBe(`${name} nová`);
+  expect(patches).toBe(2);
+  await expect(page.locator('[data-role="toast"]')).not.toContainText("zmazaná");
+  await page.unroute(patchRoute);
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  // Chrome logs the one aborted fetch itself; nothing else may be logged.
+  const aborted = /Failed to load resource: net::ERR_FAILED$/;
+  expect(errors.filter((line) => aborted.test(line))).toHaveLength(1);
+  expect(
+    errors.filter((line) => !aborted.test(line)),
+    `editor console: ${errors.join(" | ")}`,
+  ).toEqual([]);
 });
