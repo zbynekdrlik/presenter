@@ -70,4 +70,30 @@ function applyVariablesMessage(msg, variableDefinitions, instance) {
   return 1;
 }
 
-module.exports = { computeVariableBatch, applyVariablesMessage };
+/**
+ * Drop cached values of variables that are no longer defined (#870).
+ *
+ * The cache is the diff base of `applyVariablesMessage`. When a variable
+ * leaves the definitions (a slot past 11 after a plate was removed, a deleted
+ * plate's `nameplate_<id>_*`), its last value must go too: otherwise, when the
+ * variable is defined again later with the same value, the diff calls it
+ * "unchanged" and Companion — which dropped the value with the definition —
+ * is never sent it.
+ *
+ * @param {Map<string,string>} cache The plugin's variable value cache.
+ * @param {string[]} variableDefinitions The variable ids defined now.
+ * @returns {string[]} The ids whose cached value was dropped.
+ */
+function forgetUndefinedVariables(cache, variableDefinitions) {
+  const defined = new Set(variableDefinitions);
+  const dropped = [];
+  for (const name of [...cache.keys()]) {
+    if (!defined.has(name)) {
+      cache.delete(name);
+      dropped.push(name);
+    }
+  }
+  return dropped;
+}
+
+module.exports = { computeVariableBatch, applyVariablesMessage, forgetUndefinedVariables };

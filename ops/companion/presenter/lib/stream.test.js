@@ -25,6 +25,7 @@ const {
   NAMEPLATE_GRID_CATEGORY,
   nameplateSlotCount,
   parseSlot,
+  slotIdVariable,
   nameplateSlotChoices,
   isNameplateSlotActive,
   nameplateGridPresets,
@@ -498,13 +499,25 @@ describe("nameplate grid pure logic (#870)", () => {
     assert.deepEqual(grown[12], { id: "13", label: "Pozícia 13 — Osoba 13" });
   });
 
-  test("the slot action has slot + mode + output options", () => {
-    const opts = nameplateActionOptions("stream_nameplate_slot", plates);
+  test("slotIdVariable names the slot's plate-id variable", () => {
+    assert.equal(slotIdVariable("2"), "nameplate_slot_2_id");
+    assert.equal(slotIdVariable(11), "nameplate_slot_11_id");
+    assert.equal(slotIdVariable("0"), null);
+    assert.equal(slotIdVariable(""), null);
+  });
+
+  test("the slot action has slot + mode options and NO output", () => {
+    // Only the default output has slot labels: an output option would let a
+    // button show `stream`'s slot N and fire another output's slot N.
+    const opts = nameplateActionOptions("stream_nameplate_slot", plates, [
+      { id: "stream", label: "stream" },
+      { id: "moderator", label: "Moderátor" },
+    ]);
     assert.deepEqual(
       opts.map((o) => o.id),
-      ["slot", "mode", "output"],
+      ["slot", "mode"],
     );
-    const [slot, mode, output] = opts;
+    const [slot, mode] = opts;
     assert.equal(slot.type, "dropdown");
     assert.equal(slot.allowCustom, true, "a stored slot number always passes");
     assert.equal(slot.default, "1");
@@ -515,15 +528,14 @@ describe("nameplate grid pure logic (#870)", () => {
       mode.choices.map((c) => c.id),
       ["toggle", "show"],
     );
-    assert.equal(output.id, "output");
-    assert.equal(output.default, DEFAULT_OUTPUT);
   });
 
-  test("buildNameplateInvocation sends {slot, mode, output}, mode toggle by default", () => {
+  test("buildNameplateInvocation sends {slot, mode, output: stream}, mode toggle by default", () => {
     assert.deepEqual(buildNameplateInvocation("stream_nameplate_slot", { slot: "2" }), {
       command: "stream_nameplate_slot",
       payload: { slot: 2, mode: "toggle", output: "stream" },
     });
+    // A stored output option (a hand-made button) never redirects a slot.
     assert.deepEqual(
       buildNameplateInvocation("stream_nameplate_slot", {
         slot: "11",
@@ -532,13 +544,40 @@ describe("nameplate grid pure logic (#870)", () => {
       }),
       {
         command: "stream_nameplate_slot",
-        payload: { slot: 11, mode: "show", output: "moderator" },
+        payload: { slot: 11, mode: "show", output: "stream" },
       },
     );
     // A number (a preset option) works too; an unknown mode falls back to toggle.
     assert.deepEqual(
       buildNameplateInvocation("stream_nameplate_slot", { slot: 3, mode: "hide" }).payload,
       { slot: 3, mode: "toggle", output: "stream" },
+    );
+  });
+
+  test("the slot payload carries expect_id = the label's plate id, omitted when empty", () => {
+    const invoke = (slotPlateId) =>
+      buildNameplateInvocation("stream_nameplate_slot", { slot: "2" }, { slotPlateId }).payload;
+    assert.deepEqual(invoke("4"), { slot: 2, mode: "toggle", output: "stream", expect_id: 4 });
+    assert.deepEqual(invoke(" 17 "), {
+      slot: 2,
+      mode: "toggle",
+      output: "stream",
+      expect_id: 17,
+    });
+    // An empty slot / no cached value / junk → no check (today's behaviour).
+    for (const empty of ["", undefined, null, "-", "abc", "0"]) {
+      const payload = invoke(empty);
+      assert.equal("expect_id" in payload, false, `slotPlateId ${JSON.stringify(empty)}`);
+    }
+    // No context at all (an older caller).
+    assert.equal(
+      "expect_id" in buildNameplateInvocation("stream_nameplate_slot", { slot: "2" }).payload,
+      false,
+    );
+    // Only the slot command carries it.
+    assert.deepEqual(
+      buildNameplateInvocation("stream_nameplate_show", { plate: "3" }, { slotPlateId: "4" }),
+      { command: "stream_nameplate_show", payload: { id: 3, output: "stream" } },
     );
   });
 
@@ -626,7 +665,7 @@ describe("nameplate grid pure logic (#870)", () => {
       assert.equal(preset.steps[0].down.length, 1);
       const action = preset.steps[0].down[0];
       assert.equal(action.actionId, "stream_nameplate_slot");
-      assert.deepEqual(action.options, { slot: String(n), mode: "toggle", output: DEFAULT_OUTPUT });
+      assert.deepEqual(action.options, { slot: String(n), mode: "toggle" });
       assert.equal(preset.feedbacks.length, 1);
       assert.equal(preset.feedbacks[0].feedbackId, "stream_nameplate_slot_active");
       assert.deepEqual(preset.feedbacks[0].options, { slot: String(n) });

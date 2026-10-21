@@ -1,10 +1,12 @@
 // #870: the nameplate GRID through the REAL `index.js` adapter (stubbed host,
 // `lib/test-support.js`). A slot is a position in Presenter's plate list; the
 // server fills the slot label variables and resolves the press from that one
-// list. Covered here: the slot action is registered and sends exactly the
-// slot the button names, the slot feedback lights from the variables the
-// server sends, the slot variables are accepted (also past 11 once the list
-// has grown), and the grid presets come first, song first.
+// list. Covered here: the slot action is registered (no output option) and
+// sends exactly the slot the button names, always for `stream`, with the plate
+// id its label shows (`expect_id`); the slot feedback lights from the
+// variables the server sends; the slot variables are accepted (also past 11
+// once the list has grown) and a removed slot's cached value is forgotten; the
+// grid presets come first, song first.
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const { WS_OPEN, loadPresenterModule } = require("./test-support");
@@ -44,13 +46,13 @@ function press(instance, actionId, options) {
 }
 
 describe("index.js adapter — nameplate grid (#870)", () => {
-  test("the slot action is registered with slot / mode / output options", () => {
+  test("the slot action is registered with slot / mode options, no output", () => {
     const instance = instanceWith(PLATES);
     const action = instance.actionDefinitions.stream_nameplate_slot;
     assert.ok(action, "stream_nameplate_slot action registered");
     assert.deepEqual(
       action.options.map((o) => o.id),
-      ["slot", "mode", "output"],
+      ["slot", "mode"],
     );
     const slot = action.options[0];
     assert.equal(slot.allowCustom, true);
@@ -75,8 +77,40 @@ describe("index.js adapter — nameplate grid (#870)", () => {
       press(instance, "stream_nameplate_slot", { slot: "5", mode: "show" })[0].payload,
       { slot: 5, mode: "show", output: "stream" },
     );
+    // A stored output (a hand-configured button) never redirects a slot.
+    assert.equal(
+      press(instance, "stream_nameplate_slot", { slot: "1", output: "moderator" })[0].payload
+        .output,
+      "stream",
+    );
     assert.deepEqual(press(instance, "stream_nameplate_slot", { slot: "0" }), []);
     assert.deepEqual(press(instance, "stream_nameplate_slot", { slot: "" }), []);
+  });
+
+  test("a press carries the plate id the slot's label shows; an empty slot sends none", () => {
+    const instance = instanceWith(PLATES);
+    instance._handleMessage(
+      variablesMessage({
+        nameplate_slot_1_name: "Ján Novák",
+        nameplate_slot_1_id: "9",
+        nameplate_slot_2_name: "Eva Malá",
+        nameplate_slot_2_id: "4",
+        nameplate_slot_3_name: "",
+        nameplate_slot_3_id: "",
+      }),
+    );
+    assert.deepEqual(press(instance, "stream_nameplate_slot", { slot: "2" })[0].payload, {
+      slot: 2,
+      mode: "toggle",
+      output: "stream",
+      expect_id: 4,
+    });
+    const empty = press(instance, "stream_nameplate_slot", { slot: "3" })[0].payload;
+    assert.equal("expect_id" in empty, false);
+
+    // The label moves (a reorder in Presenter) → the press follows the label.
+    instance._handleMessage(variablesMessage({ nameplate_slot_2_id: "9" }));
+    assert.equal(press(instance, "stream_nameplate_slot", { slot: "2" })[0].payload.expect_id, 9);
   });
 
   test("every grid preset's action, pressed, fires its own slot", () => {
@@ -152,6 +186,30 @@ describe("index.js adapter — nameplate grid (#870)", () => {
     instance._handleMessage(variablesMessage({ nameplate_slot_12_name: "Osoba 12" }));
     assert.equal(instance.variables.get("nameplate_slot_12_name"), "Osoba 12");
     assert.equal(instance.actionDefinitions.stream_nameplate_slot.options[0].choices.length, 12);
+  });
+
+  test("a slot that leaves the list forgets its cached value", () => {
+    const twelve = Array.from({ length: 12 }, (_, i) => ({
+      id: 300 + i,
+      name: `Osoba ${i + 1}`,
+      role: "",
+    }));
+    const instance = instanceWith(twelve);
+    const sent = [];
+    instance.setVariableValues = (batch) => sent.push({ ...batch });
+    instance._handleMessage(variablesMessage({ nameplate_slot_12_name: "Osoba 12" }));
+    assert.equal(instance.variables.get("nameplate_slot_12_name"), "Osoba 12");
+
+    // A plate is removed: slot 12 is no longer defined, and its value goes.
+    instance._handleMessage(nameplatesMessage(twelve.slice(0, 11)));
+    assert.equal(instance.variables.has("nameplate_slot_12_name"), false);
+
+    // Re-added with the SAME text: Companion is sent the value again.
+    instance._handleMessage(nameplatesMessage(twelve));
+    const before = sent.length;
+    instance._handleMessage(variablesMessage({ nameplate_slot_12_name: "Osoba 12" }));
+    assert.equal(sent.length, before + 1, "not diffed away as unchanged");
+    assert.deepEqual(sent[before], { nameplate_slot_12_name: "Osoba 12" });
   });
 
   test("presets: the grid first (song, then slots 1..11), then the per-plate presets", () => {

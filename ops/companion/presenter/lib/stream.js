@@ -300,7 +300,10 @@ function nameplateChoices(plates, includeSong) {
 // plate its label shows — a rename or reorder in Presenter updates the label,
 // and a new person fills the next slot without touching Companion. Slots
 // 1..11 always exist (the 4×3 grid = the song + 11 people); more plates add
-// more slots.
+// more slots. Only the default output has slot variables, so the slot action
+// has no output option and always addresses `stream`. A press also carries the
+// plate id the button's label shows (`expect_id`), so the server refuses it
+// when the slot changed in the moment before the new label arrived.
 // --------------------------------------------------------------------------- //
 
 // Slots that always exist — mirrors the server's NAMEPLATE_MIN_SLOTS.
@@ -321,20 +324,43 @@ function nameplateSlotCount(plates) {
 }
 
 /**
+ * Parse a whole number >= 1 from a string (trimmed) or a number, or `null` for
+ * anything else (0, negative, fractional, empty, non-numeric).
+ *
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+function parsePositiveInteger(value) {
+  let text = "";
+  if (typeof value === "number") text = String(value);
+  else if (typeof value === "string") text = value.trim();
+  if (!/^[0-9]+$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
+}
+
+/**
  * Parse a slot option value (a dropdown string id, a typed custom value or a
- * number) into a whole number >= 1, or `null` for anything else (0, negative,
- * fractional, empty, non-numeric).
+ * number) into a slot number >= 1, or `null` for anything else.
  *
  * @param {unknown} value
  * @returns {number | null}
  */
 function parseSlot(value) {
-  let text = "";
-  if (typeof value === "number") text = String(value);
-  else if (typeof value === "string") text = value.trim();
-  if (!/^[0-9]+$/.test(text)) return null;
-  const slot = Number(text);
-  return Number.isSafeInteger(slot) && slot >= 1 ? slot : null;
+  return parsePositiveInteger(value);
+}
+
+/**
+ * The name of the variable holding the plate id of slot `slot`
+ * (`nameplate_slot_<n>_id`), or `null` for an invalid slot. The button's label
+ * and feedback come from the same slot variables.
+ *
+ * @param {unknown} slot
+ * @returns {string | null}
+ */
+function slotIdVariable(slot) {
+  const n = parseSlot(slot);
+  return n === null ? null : `nameplate_slot_${n}_id`;
 }
 
 /**
@@ -391,9 +417,9 @@ const SLOT_MODE_CHOICES = [
  * @returns {boolean}
  */
 function isNameplateSlotActive(variables, slot) {
-  const n = parseSlot(slot);
-  if (n === null || !variables || typeof variables.get !== "function") return false;
-  const slotId = variables.get(`nameplate_slot_${n}_id`);
+  const variable = slotIdVariable(slot);
+  if (variable === null || !variables || typeof variables.get !== "function") return false;
+  const slotId = variables.get(variable);
   const id = typeof slotId === "string" ? slotId.trim() : "";
   if (id === "") return false;
   return isNameplateActive(variables.get("nameplate_active_id"), id);
@@ -402,7 +428,8 @@ function isNameplateSlotActive(variables, slot) {
 /**
  * Companion action option fields for a nameplate command. Show/toggle get a
  * plate dropdown (incl. song) + an output dropdown; song/hide get only output;
- * the #870 grid slot gets a slot dropdown + a mode + an output dropdown.
+ * the #870 grid slot gets a slot dropdown + a mode, and NO output: only the
+ * default output has slot labels, so a slot button always addresses it.
  *
  * @param {string} commandId
  * @param {unknown} plates The current plate list.
@@ -421,7 +448,6 @@ function nameplateActionOptions(commandId, plates, outputChoices) {
         choices: SLOT_MODE_CHOICES,
         allowCustom: false,
       },
-      outputOption(outputChoices),
     ];
   }
   if (
@@ -445,15 +471,19 @@ function nameplateActionOptions(commandId, plates, outputChoices) {
 
 /**
  * Resolve a nameplate action's options into the wire `{command, payload}` to
- * send, or `{error}` when a required plate is not chosen. A show/toggle whose
- * plate is the song entry maps to the song command / a `{song:true}` toggle.
- * Never throws.
+ * send, or `{error}` when a required plate / slot is not chosen. A show/toggle
+ * whose plate is the song entry maps to the song command / a `{song:true}`
+ * toggle. The #870 slot always addresses the default output and carries
+ * `expect_id` = `context.slotPlateId` (the slot's `nameplate_slot_<n>_id` value
+ * the caller read from its variable cache) when that is a plate id; an empty
+ * value omits it. Never throws.
  *
  * @param {string} commandId The action id.
- * @param {object} [options] Companion action options (`plate`, `output`).
+ * @param {object} [options] Companion action options (`plate`, `slot`, `mode`, `output`).
+ * @param {{slotPlateId?: unknown}} [context] Values the caller read for this press.
  * @returns {{command: string, payload: object} | {error: string}}
  */
-function buildNameplateInvocation(commandId, options) {
+function buildNameplateInvocation(commandId, options, context) {
   if (!isNameplateCommand(commandId)) {
     return { error: `not a nameplate command: ${commandId}` };
   }
@@ -472,7 +502,10 @@ function buildNameplateInvocation(commandId, options) {
       return { error: `${commandId}: choose a slot (a position 1 or higher)` };
     }
     const mode = opts.mode === "show" ? "show" : "toggle";
-    return { command: commandId, payload: { slot, mode, output } };
+    const payload = { slot, mode, output: DEFAULT_OUTPUT };
+    const expectId = parsePositiveInteger(context && context.slotPlateId);
+    if (expectId !== null) payload.expect_id = expectId;
+    return { command: commandId, payload };
   }
 
   // show / toggle: read the plate dropdown value.
@@ -534,16 +567,6 @@ function nameplateVariableIds(plates) {
   return ids;
 }
 
-/**
- * Preset definitions for the plate list: one button per person plate plus the
- * song button. Button text is the plate's variables (so renaming a plate in the
- * editor updates the button); the down action toggles the plate; the active
- * feedback lights it while on air. Shape = `CompanionButtonPresetDefinition`
- * (@companion-module/base ^1.13).
- *
- * @param {unknown} plates The current plate list.
- * @returns {Object<string, object>}
- */
 // One nameplate button preset: two-line text from the name + role variables,
 // one down action, one green "on air" feedback.
 function nameplateButtonPreset(category, label, nameVar, roleVar, action, feedback) {
@@ -577,6 +600,16 @@ function songPreset(category, label) {
   );
 }
 
+/**
+ * Preset definitions for the plate list: one button per person plate plus the
+ * song button. Button text is the plate's variables (so renaming a plate in the
+ * editor updates the button); the down action toggles the plate; the active
+ * feedback lights it while on air. Shape = `CompanionButtonPresetDefinition`
+ * (@companion-module/base ^1.13).
+ *
+ * @param {unknown} plates The current plate list.
+ * @returns {Object<string, object>}
+ */
 function nameplatePresets(plates) {
   const presets = {};
   const preset = (target, nameVar, roleVar, label) =>
@@ -627,7 +660,7 @@ function nameplateGridPresets() {
       `nameplate_slot_${n}_role`,
       {
         actionId: "stream_nameplate_slot",
-        options: { slot, mode: "toggle", output: DEFAULT_OUTPUT },
+        options: { slot, mode: "toggle" },
       },
       { feedbackId: "stream_nameplate_slot_active", options: { slot } },
     );
@@ -660,6 +693,7 @@ module.exports = {
   NAMEPLATE_GRID_CATEGORY,
   nameplateSlotCount,
   parseSlot,
+  slotIdVariable,
   nameplateSlotChoices,
   nameplateSlotOption,
   isNameplateSlotActive,

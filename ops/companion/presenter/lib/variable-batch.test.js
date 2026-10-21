@@ -6,6 +6,7 @@ const path = require("path");
 const {
   computeVariableBatch,
   applyVariablesMessage,
+  forgetUndefinedVariables,
 } = require("./variable-batch");
 
 const indexSource = fs.readFileSync(
@@ -222,6 +223,34 @@ describe("applyVariablesMessage (behavior, #265)", () => {
       song_name: "Hymn",
     });
     assert.equal(instance.variables.has("unknown_extra"), false);
+  });
+});
+
+describe("forgetUndefinedVariables (#870)", () => {
+  test("drops the cached values of variables no longer defined", () => {
+    const cache = new Map([
+      ["song_name", "Hymn"],
+      ["nameplate_slot_12_name", "Osoba 12"],
+      ["nameplate_7_name", "Eva"],
+    ]);
+    const dropped = forgetUndefinedVariables(cache, ["song_name", "band_name"]);
+    assert.deepEqual(dropped.sort(), ["nameplate_7_name", "nameplate_slot_12_name"]);
+    assert.deepEqual([...cache.entries()], [["song_name", "Hymn"]]);
+  });
+
+  test("a value forgotten with its definition is sent again once redefined", () => {
+    const instance = makeStub();
+    const ids = ["nameplate_slot_12_name"];
+    applyVariablesMessage({ values: [{ name: ids[0], value: "Osoba 12" }] }, ids, instance);
+    // The slot leaves the definitions, then comes back with the SAME value.
+    forgetUndefinedVariables(instance.variables, []);
+    const calls = applyVariablesMessage(
+      { values: [{ name: ids[0], value: "Osoba 12" }] },
+      ids,
+      instance,
+    );
+    assert.equal(calls, 1, "not diffed away as unchanged");
+    assert.deepEqual(instance.setVariableValuesCalls[1], { nameplate_slot_12_name: "Osoba 12" });
   });
 });
 
