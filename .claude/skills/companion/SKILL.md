@@ -98,11 +98,12 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   already logs (`case "error"`) → graceful degrade, no crash. Payload builders must
   never throw.
 - **Nameplate grid buttons address a SLOT (position in the plate list), not a plate
-  id (#870).** `stream_nameplate_slot {slot, mode?, output?}` + label variables
-  `nameplate_slot_<n>_name/_role/_id` + feedback `stream_nameplate_slot_active` + presets
-  "Menovky — mriežka" (song, then slots 1..11). The server resolves label and press
-  from one list, so they cannot diverge; details in `.claude/rules/stream-graphics.md`
-  (#779 section).
+  id (#870).** `stream_nameplate_slot {slot, mode?, expect_id?}` (always the `stream`
+  output; no output option) + label variables `nameplate_slot_<n>_name/_role/_id` +
+  feedback `stream_nameplate_slot_active` + presets "Menovky — mriežka" (song, then slots
+  1..11). The server resolves label and press from one list, and refuses a press whose
+  `expect_id` (the label's plate id, from the module cache) no longer matches the slot;
+  details in `.claude/rules/stream-graphics.md` (#779 section).
 - **Profile: `ops/companion/generated/` is gitignored.** Edit + commit the SOURCE
   blueprint `ops/companion/presenter-companion-profile.json`; run
   `node ops/companion/generate-profile.mjs` only to VERIFY it still renders (the

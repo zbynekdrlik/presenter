@@ -506,8 +506,11 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - A refusal is a toast and the output stays (`refusal_message(ManageMode::Delete, …)`; the
   create/rename-only 409 / 422 texts are guarded out). A 404 (another operator was first) is the
   same toast, but the output IS gone, so it is dropped from the bar like a success.
-- The server's `delete_output` broadcasts NOTHING, so a second editor on the deleted output only
-  finds out at its next list reload / failed request.
+- The server's `delete_output` broadcasts NOTHING for an editor-deletable output, so a second
+  editor on the deleted output only finds out at its next list reload / failed request. (#870:
+  deleting `stream`, which the UI blocks, publishes `StreamNameplatesChanged` for Companion's slot
+  labels. Never widen that to every output: the editor would refetch the deleted output's plate
+  list and log a 404 that the real-404 E2E below counts.)
 - E2E (`stream-editor-outputs.spec.ts`): a real-UI delete (confirmation text, Zrušiť, Escape,
   Zmazať → gone from the bar and `/stream/api/outputs/{slug}/def` 404, editor on the first
   remaining output, survives a reload), `stream` disabled with the tooltip and the button follows
