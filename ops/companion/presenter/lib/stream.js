@@ -475,8 +475,9 @@ function nameplateActionOptions(commandId, plates, outputChoices) {
  * whose plate is the song entry maps to the song command / a `{song:true}`
  * toggle. The #870 slot always addresses the default output and carries
  * `expect_id` = `context.slotPlateId` (the slot's `nameplate_slot_<n>_id` value
- * the caller read from its variable cache) when that is a plate id; an empty
- * value omits it. Never throws.
+ * the caller read from its variable cache) when that is a plate id, or
+ * `expect_empty: true` when that value is "" (the label shows an empty slot);
+ * an unknown value (no cache yet, junk) sends neither. Never throws.
  *
  * @param {string} commandId The action id.
  * @param {object} [options] Companion action options (`plate`, `slot`, `mode`, `output`).
@@ -503,8 +504,15 @@ function buildNameplateInvocation(commandId, options, context) {
     }
     const mode = opts.mode === "show" ? "show" : "toggle";
     const payload = { slot, mode, output: DEFAULT_OUTPUT };
-    const expectId = parsePositiveInteger(context && context.slotPlateId);
-    if (expectId !== null) payload.expect_id = expectId;
+    const shown = context ? context.slotPlateId : undefined;
+    const expectId = parsePositiveInteger(shown);
+    if (expectId !== null) {
+      payload.expect_id = expectId;
+    } else if (typeof shown === "string" && shown.trim() === "") {
+      // The label shows an EMPTY slot: a plate that filled it before the new
+      // label arrived must not fire.
+      payload.expect_empty = true;
+    }
     return { command: commandId, payload };
   }
 

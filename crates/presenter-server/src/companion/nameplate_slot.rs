@@ -12,8 +12,11 @@
 //! * The label reaches Companion through a push (`StreamNameplatesChanged`),
 //!   while the press reads the list live. The module sends the plate id its
 //!   label shows (`expect_id`); when slot N now holds another plate, or none,
-//!   the press is refused ("press again") and nothing goes on air. Without
-//!   `expect_id` (an older button, an empty module cache) the slot just fires.
+//!   the press is refused ("press again") and nothing goes on air. A button
+//!   whose label shows an EMPTY slot sends `expect_empty` instead: when a plate
+//!   filled the slot before the new label arrived, the press is refused the
+//!   same way. Without either (an older button, an empty module cache) the
+//!   slot just fires.
 
 use super::nameplates::DEFAULT_OUTPUT;
 use super::stream::{activation_error, resolve_output};
@@ -42,11 +45,14 @@ pub(super) struct SlotPress {
     pub(super) slot: usize,
     pub(super) mode: SlotMode,
     /// The plate id the button's label showed (`nameplate_slot_<n>_id`), when
-    /// the module had one. `None` = no check.
+    /// the module had one. `None` = no id check.
     pub(super) expect_id: Option<i64>,
+    /// The button's label showed an EMPTY slot (`nameplate_slot_<n>_id` = ""):
+    /// a plate found there now is refused. Never set together with `expect_id`.
+    pub(super) expect_empty: bool,
 }
 
-/// Wire payload `{slot, mode?, expect_id?, output?}`. A missing, negative or
+/// Wire payload `{slot, mode?, expect_id?, expect_empty?, output?}`. A missing, negative or
 /// non-integer slot fails to deserialize; slot 0 is refused in
 /// [`parse_slot_press`].
 #[derive(Debug, Deserialize)]
@@ -57,6 +63,8 @@ struct SlotPayload {
     mode: SlotMode,
     #[serde(default)]
     expect_id: Option<i64>,
+    #[serde(default)]
+    expect_empty: bool,
     #[serde(default)]
     output: Option<String>,
 }
@@ -70,11 +78,17 @@ pub(super) fn parse_slot_press(name: &str, payload: Value) -> Result<SlotPress, 
     if data.slot == 0 {
         return Err(format!("{name}: slot must be 1 or higher"));
     }
+    if data.expect_empty && data.expect_id.is_some() {
+        return Err(format!(
+            "{name}: expect_id and expect_empty exclude each other"
+        ));
+    }
     Ok(SlotPress {
         output: resolve_output(data.output),
         slot: data.slot,
         mode: data.mode,
         expect_id: data.expect_id,
+        expect_empty: data.expect_empty,
     })
 }
 
@@ -117,8 +131,9 @@ pub(super) async fn fire_slot_press(state: &AppState, press: SlotPress) -> Resul
 
 /// Resolve a press to the plate in its slot now. Refused, with one log line
 /// each: an output other than [`DEFAULT_OUTPUT`], an unreadable plate list, a
-/// slot that no longer holds the plate its label showed (`expect_id`), and an
-/// empty slot.
+/// slot that no longer holds the plate its label showed (`expect_id`) or that a
+/// plate filled since its label showed it empty (`expect_empty`), and an empty
+/// slot.
 async fn resolve_slot_plate(state: &AppState, press: &SlotPress) -> Result<Nameplate, String> {
     let (output, slot) = (press.output.as_str(), press.slot);
     if output != DEFAULT_OUTPUT {
@@ -147,6 +162,16 @@ async fn resolve_slot_plate(state: &AppState, press: &SlotPress) -> Result<Namep
         .checked_sub(1)
         .and_then(|index| plates.get(index).cloned());
     match (current, press.expect_id) {
+        (Some(plate), None) if press.expect_empty => {
+            info!(
+                slot,
+                output,
+                found_id = plate.id,
+                found_name = ?plate.primary_text,
+                "companion nameplate slot refused: a plate filled the slot since its empty label"
+            );
+            Err(slot_changed(slot))
+        }
         (Some(plate), Some(expected)) if plate.id != expected => {
             info!(
                 slot,

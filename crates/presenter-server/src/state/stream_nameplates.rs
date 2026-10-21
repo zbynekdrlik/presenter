@@ -178,9 +178,15 @@ impl AppState {
         });
     }
 
-    /// Drop an output's cached plate show-state (delete-output path).
+    /// Drop an output's cached plate show-state (delete-output path). A plate
+    /// that was on air is announced as hidden, so Companion's
+    /// `nameplate_active_*` variables and every lit plate button clear too.
     pub(crate) async fn stream_nameplate_evict(&self, slug: &str) {
+        let was_on_air = self.nameplates.active(slug).await.is_some();
         self.nameplates.evict(slug).await;
+        if was_on_air {
+            self.publish_nameplate(slug, None);
+        }
     }
 
     // ---- internals --------------------------------------------------------
