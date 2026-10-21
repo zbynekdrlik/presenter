@@ -107,6 +107,9 @@ describe("index.js adapter — nameplate grid (#870)", () => {
     });
     const empty = press(instance, "stream_nameplate_slot", { slot: "3" })[0].payload;
     assert.equal("expect_id" in empty, false);
+    // The label shows slot 3 empty → the press says so, and the server refuses
+    // a plate that filled it before the new label arrived.
+    assert.equal(empty.expect_empty, true);
 
     // The label moves (a reorder in Presenter) → the press follows the label.
     instance._handleMessage(variablesMessage({ nameplate_slot_2_id: "9" }));

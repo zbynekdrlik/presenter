@@ -564,10 +564,19 @@ describe("nameplate grid pure logic (#870)", () => {
       output: "stream",
       expect_id: 17,
     });
-    // An empty slot / no cached value / junk → no check (today's behaviour).
-    for (const empty of ["", undefined, null, "-", "abc", "0"]) {
-      const payload = invoke(empty);
-      assert.equal("expect_id" in payload, false, `slotPlateId ${JSON.stringify(empty)}`);
+    // A label showing an EMPTY slot ("") → expect_empty, never an id.
+    assert.deepEqual(invoke(""), { slot: 2, mode: "toggle", output: "stream", expect_empty: true });
+    assert.deepEqual(invoke("  "), {
+      slot: 2,
+      mode: "toggle",
+      output: "stream",
+      expect_empty: true,
+    });
+    // No cached value / junk → no check at all (today's behaviour).
+    for (const unknown of [undefined, null, "-", "abc", "0"]) {
+      const payload = invoke(unknown);
+      assert.equal("expect_id" in payload, false, `slotPlateId ${JSON.stringify(unknown)}`);
+      assert.equal("expect_empty" in payload, false, `slotPlateId ${JSON.stringify(unknown)}`);
     }
     // No context at all (an older caller).
     assert.equal(

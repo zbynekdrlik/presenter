@@ -186,6 +186,7 @@ fn slot_command_parses_with_toggle_stream_and_no_check_defaults() {
             slot: 2,
             mode: SlotMode::Toggle,
             expect_id: None,
+            expect_empty: false,
         }
     );
     // Parsing keeps whatever output was named (trimmed); the PRESS refuses
@@ -199,6 +200,18 @@ fn slot_command_parses_with_toggle_stream_and_no_check_defaults() {
             slot: 11,
             mode: SlotMode::Show,
             expect_id: Some(7),
+            expect_empty: false,
+        }
+    );
+    // A label showing an EMPTY slot sends `expect_empty` instead of an id.
+    assert_eq!(
+        parsed_press(json!({ "slot": 3, "expect_empty": true })),
+        SlotPress {
+            output: STREAM.to_string(),
+            slot: 3,
+            mode: SlotMode::Toggle,
+            expect_id: None,
+            expect_empty: true,
         }
     );
 }
@@ -213,6 +226,14 @@ fn slot_command_refuses_a_bad_slot_or_payload() {
         ("string slot", json!({ "slot": "2" })),
         ("unknown mode", json!({ "slot": 1, "mode": "hide" })),
         ("string expect_id", json!({ "slot": 1, "expect_id": "7" })),
+        (
+            "string expect_empty",
+            json!({ "slot": 1, "expect_empty": "yes" }),
+        ),
+        (
+            "expect_id with expect_empty",
+            json!({ "slot": 1, "expect_id": 7, "expect_empty": true }),
+        ),
         ("unknown field", json!({ "slot": 1, "id": 4 })),
     ];
     for (label, payload) in cases {
@@ -327,6 +348,41 @@ async fn slot_press_whose_labelled_plate_left_the_slot_is_refused() {
 }
 
 #[tokio::test]
+async fn slot_press_whose_empty_label_was_filled_is_refused() {
+    let (state, _ids) = stream_with_plates(&["Anna", "Boris"]).await;
+    // The button still shows slot 3 as empty, but Cyril was just added there.
+    let cyril = add_plates(&state, STREAM, &["Cyril"]).await;
+
+    let message = expect_error(
+        &state,
+        "stream_nameplate_slot",
+        json!({ "slot": 3, "expect_empty": true }),
+    )
+    .await;
+    assert!(
+        message.contains("nameplate slot 3 changed — press again"),
+        "unexpected: {message}"
+    );
+    assert!(state.stream_nameplate_active(STREAM).await.is_none());
+    // A slot that is still empty keeps the plain "empty slot" refusal.
+    let message = expect_error(
+        &state,
+        "stream_nameplate_slot",
+        json!({ "slot": 4, "expect_empty": true }),
+    )
+    .await;
+    assert!(message.contains("slot 4 is empty"), "unexpected: {message}");
+    // The ids stay usable: slot 3 with Cyril's id fires him.
+    expect_ack(
+        &state,
+        "stream_nameplate_slot",
+        json!({ "slot": 3, "expect_id": cyril[0] }),
+    )
+    .await;
+    assert_eq!(on_air_id(&state, STREAM).await, Some(cyril[0]));
+}
+
+#[tokio::test]
 async fn empty_slot_press_is_refused_and_puts_nothing_on_air() {
     let (state, _ids) = stream_with_plates(&["Anna", "Boris"]).await;
 
@@ -409,6 +465,28 @@ async fn deleting_the_stream_output_announces_its_plate_list_change() {
     // Companion tracks only `stream`; another output's delete stays silent, so
     // an editor still showing it never refetches a 404 plate list (#855 E2E).
     assert_eq!(changed, vec![STREAM.to_string()]);
+}
+
+#[tokio::test]
+async fn deleting_the_stream_output_with_a_plate_on_air_announces_it_hidden() {
+    let (state, ids) = stream_with_plates(&["Anna"]).await;
+    expect_ack(&state, "stream_nameplate_slot", json!({ "slot": 1 })).await;
+    assert_eq!(on_air_id(&state, STREAM).await, Some(ids[0]));
+    let mut rx = state.live_hub().subscribe();
+
+    assert_eq!(
+        delete_output_via_api(&state, STREAM).await,
+        StatusCode::NO_CONTENT
+    );
+
+    let mut hidden = false;
+    while let Ok(event) = rx.try_recv() {
+        if let LiveEvent::StreamNameplate { output, active } = event {
+            hidden |= output == STREAM && active.is_none();
+        }
+    }
+    assert!(hidden, "the on-air plate must be announced hidden");
+    assert!(state.stream_nameplate_active(STREAM).await.is_none());
 }
 
 // ---- The real `/companion/ws` session --------------------------------------
