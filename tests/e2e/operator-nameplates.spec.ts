@@ -900,14 +900,27 @@ test("#871 every save is a keepalive request, so a reload right after typing kee
   expect(await keepaliveFlags()).toEqual([true]);
 
   // Half-typed in B, then the page is reloaded (a closed tab is the same):
-  // the save made as the page goes away still reaches the server.
+  // the save made as the page goes away still reaches the server. The new
+  // page's list read waits until the server has that save: it could arrive
+  // first, and the page would then show the old text with no refresh to
+  // follow (its socket may connect after the save's change event).
   const bName = row(page, b).locator(NAME);
   await bName.fill("Kľúč B pred obnovením");
+  let serverHasIt = () => {};
+  const saved = new Promise<void>((resolve) => (serverHasIt = resolve));
+  const listRoute = `**/stream/api/outputs/${SLUG}/nameplates`;
+  await page.route(listRoute, async (route) => {
+    if (route.request().method() === "GET") await saved;
+    // A read of the page being unloaded is gone by now; nothing to answer.
+    await route.continue().catch(() => {});
+  });
   await page.reload();
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await expect.poll(() => savedText(request, b)).toBe("Kľúč B pred obnovením");
+  serverHasIt();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await expect(row(page, b).locator(NAME)).toHaveValue("Kľúč B pred obnovením");
   await expect(row(page, a).locator(NAME)).toHaveValue("Kľúč A uložená");
+  await page.unroute(listRoute);
 
   expect(consoleErrors).toEqual([]);
 });

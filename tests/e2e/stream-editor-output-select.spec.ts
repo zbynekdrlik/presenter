@@ -303,7 +303,10 @@ test("#871 a plate text whose save failed is saved, not dropped, when the editor
   await expect(plateRow).toHaveCount(0);
   await expect.poll(savedName).toBe(`${name} nová`);
   expect(patches).toBe(2);
-  await expect(page.locator('[data-role="toast"]')).not.toContainText("zmazaná");
+  // Read ONCE, now that the switch has decided: a retrying negative check
+  // keeps retrying until a wrong toast is replaced or hidden.
+  const toastText = await page.locator('[data-role="toast"]').textContent();
+  expect(toastText ?? "", "no deleted-plate toast").not.toContain("zmazaná");
   await page.unroute(patchRoute);
 
   const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
