@@ -463,7 +463,7 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
 - `slug_from_name` pulls the NFD tables of `unicode-normalization` into the WASM bundle: +50.8 KB
   (0.9 % of 5.6 MB, measured dev vs prod 2026-10-12). Accepted; a hand-written fold table would
   save that if the bundle size ever matters.
-- `components/stream_editor/mod.rs` is at ~739 production lines (800 = warning; #855 moved the
+- `components/stream_editor/mod.rs` is at ~728 production lines (800 = warning; #855 moved the
   output list / switch methods to `output_switch.rs`). Move something into a sibling module (the
   #742 split pattern) BEFORE it nears 800 again.
 - **Live check on SNV/PP: never press „Vytvoriť" with a fresh name.** The duplicate refusal
@@ -503,7 +503,7 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   the delete itself, a 404 on it (`drop_output`, no second question), and the `reload_outputs`
   fallback (#827). `switch_output` stays the guarded path for operator choices.
 - `reload_outputs`, `switch_output` and `enter_output` live in `output_switch.rs` (split out of
-  `mod.rs` in #855, #742 pattern: `enter_output` is `pub(super)`). `mod.rs` is ~739 production lines.
+  `mod.rs` in #855, #742 pattern: `enter_output` is `pub(super)`). `mod.rs` is ~728 production lines.
 - A refusal is a toast and the output stays (`refusal_message(ManageMode::Delete, …)`; the
   create/rename-only 409 / 422 texts are guarded out). A 404 (another operator was first) is the
   same toast, but the output IS gone, so it is dropped from the bar like a success.
