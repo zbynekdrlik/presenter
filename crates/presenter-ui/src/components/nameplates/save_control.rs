@@ -110,6 +110,15 @@ impl SaveOutcome {
         }
     }
 
+    /// Whether an answer with this outcome is toasted. `held` = a row holds
+    /// the plate's text, `idle` = the answer left nothing of the plate. A
+    /// failure that left the plate idle has nothing to report: a save sent
+    /// beside it (a hidden page) was answered saved, so the newest texts
+    /// are confirmed.
+    pub fn is_reported(self, held: bool, idle: bool) -> bool {
+        !(self == Self::Failed && held && idle)
+    }
+
     /// The toast for a save that came back with `error` (`self` is
     /// [`Self::of_error`] of it); `left` = where its typed text is now.
     pub fn message(self, error: &ApiError, left: TextLeft) -> String {

@@ -237,8 +237,10 @@ impl NameplateStore {
         };
         if let Some(e) = &error {
             leptos::logging::log!("nameplates: plate {id} save not done ({outcome:?}): {e}");
-            let left = TextLeft::of(held, step.not_shown);
-            self.notify(outcome.message(e, left), "error");
+            if outcome.is_reported(held, step.idle) {
+                let left = TextLeft::of(held, step.not_shown);
+                self.notify(outcome.message(e, left), "error");
+            }
         }
         let all_saved = outcome == SaveOutcome::Saved && step.idle;
         self.run(id, step);
