@@ -23,6 +23,7 @@ use presenter_core::{
     ActiveNameplate, LiveEvent, Nameplate, StageDisplaySnapshot, StreamElementProps,
     StreamOutputDef,
 };
+pub use save_queue::SaveOutcome;
 use save_queue::SaveQueue;
 use serde::Serialize;
 
@@ -117,10 +118,27 @@ struct OrderSync {
 }
 
 /// A plate save waiting in the [`SaveQueue`]: the texts to PATCH and what
-/// to run once the save is done (the row drops its drafts).
+/// to run once the save is done (the row settles its drafts).
 struct PlateSave {
     req: NameplateTextReq,
-    done: Box<dyn FnOnce(bool)>,
+    done: Box<dyn FnOnce(SaveOutcome)>,
+}
+
+/// A plate save whose PATCH is on its way (started by [`start_save`]).
+struct SentSave {
+    fetch: Result<js_sys::Promise, crate::api::ApiError>,
+    done: Box<dyn FnOnce(SaveOutcome)>,
+}
+
+/// Start the PATCH of a plate save: a keepalive fetch, already handed to the
+/// browser when this returns, so a page reloaded or closed right after (a
+/// save made as the page goes away) still sends it (#871 review).
+fn start_save(id: i64, save: PlateSave) -> SentSave {
+    let PlateSave { req, done } = save;
+    SentSave {
+        fetch: crate::api::start_patch_keepalive(&nameplate_path(id), &req),
+        done,
+    }
 }
 
 /// One output's plates, the plate on air and the live song, plus every plate
@@ -303,23 +321,28 @@ impl NameplateStore {
     }
 
     /// Save a plate's texts. The saved plate goes into the local list at once
-    /// (before the refetch), then `done(saved)` runs, so a row can drop its
-    /// draft without its old text flashing back. A refused save (an empty
-    /// name, a server error) calls `done(false)` and toasts.
+    /// (before the refetch), then `done(SaveOutcome::Saved)` runs, so a row
+    /// can drop its draft without its old text flashing back. An empty name
+    /// is refused here (`Refused`, with a toast); how a sent save can end is
+    /// [`SaveOutcome`] (a failed one toasts too).
     ///
     /// One save per plate is on its way at a time ([`SaveQueue`], #871
     /// review): a save made meanwhile waits and goes next (a newer one
     /// replaces it), so the server never applies an older text last. The list
-    /// is refetched once nothing of the plate is left to send.
+    /// is refetched once nothing of the plate is left to send. `urgent` (the
+    /// page is being hidden or closed) sends a save that would wait at once
+    /// instead ([`Self::flush_save`]).
     pub fn update(
         self,
         id: i64,
         primary: String,
         secondary: String,
-        done: impl FnOnce(bool) + 'static,
+        urgent: bool,
+        done: impl FnOnce(SaveOutcome) + 'static,
     ) {
         let Some(req) = self.text_req(primary, secondary) else {
-            done(false);
+            leptos::logging::log!("nameplates: plate {id} save refused: the name is empty");
+            done(SaveOutcome::Refused);
             return;
         };
         let save = PlateSave {
@@ -331,26 +354,57 @@ impl NameplateStore {
             .try_update_value(|queue| queue.offer(id, save))
             .flatten()
         else {
-            leptos::logging::log!("nameplates: plate {id} save waits for the one on its way");
+            if !urgent || !self.flush_save(id) {
+                leptos::logging::log!("nameplates: plate {id} save waits for the one on its way");
+            }
             return;
         };
+        let sent = start_save(id, first);
+        leptos::logging::log!("nameplates: plate {id} save sent");
         leptos::task::spawn_local(async move {
-            let mut next = Some(first);
-            while let Some(save) = next {
-                self.send_save(id, save).await;
-                next = self
-                    .saves
-                    .try_update_value(|queue| queue.finish(id))
-                    .flatten();
+            self.finish_save(id, sent).await;
+            while let Some(save) = self
+                .saves
+                .try_update_value(|queue| queue.finish(id))
+                .flatten()
+            {
+                self.finish_save(id, start_save(id, save)).await;
             }
             self.reload_list();
         });
     }
 
-    /// PATCH one save of plate `id` and report it to its row (`done`).
-    async fn send_save(self, id: i64, save: PlateSave) {
-        let PlateSave { req, done } = save;
-        match crate::api::patch_json::<_, Nameplate>(&nameplate_path(id), &req).await {
+    /// The page is being hidden or closed: send the waiting save of plate
+    /// `id` NOW, beside the one on its way, instead of after it (#871
+    /// review). A hidden page may be frozen or closed before that one is
+    /// done, and the waiting save would never go out. The server keeps the
+    /// PATCH it applies last, and this one, sent last, carries the newest
+    /// texts. Returns whether a save was waiting.
+    pub fn flush_save(self, id: i64) -> bool {
+        let Some(save) = self
+            .saves
+            .try_update_value(|queue| queue.take_waiting(id))
+            .flatten()
+        else {
+            return false;
+        };
+        let sent = start_save(id, save);
+        leptos::logging::log!(
+            "nameplates: plate {id} waiting save sent now: the page is being hidden or closed"
+        );
+        leptos::task::spawn_local(async move {
+            self.finish_save(id, sent).await;
+            self.reload_list();
+        });
+        true
+    }
+
+    /// Wait for a started save of plate `id` and report it to its row
+    /// (`done`). A save that did not go through toasts why
+    /// ([`SaveOutcome::message`]).
+    async fn finish_save(self, id: i64, sent: SentSave) {
+        let SentSave { fetch, done } = sent;
+        match crate::api::finish_json::<Nameplate>(fetch).await {
             Ok(saved) => {
                 self.next_gen();
                 self.plates.update(|list| {
@@ -358,11 +412,13 @@ impl NameplateStore {
                         *plate = saved;
                     }
                 });
-                done(true);
+                done(SaveOutcome::Saved);
             }
             Err(e) => {
-                done(false);
-                self.notify(format!("Uloženie zlyhalo: {e}"), "error");
+                let outcome = SaveOutcome::of_error(&e);
+                leptos::logging::log!("nameplates: plate {id} save not done ({outcome:?}): {e}");
+                self.notify(outcome.message(&e), "error");
+                done(outcome);
             }
         }
     }
