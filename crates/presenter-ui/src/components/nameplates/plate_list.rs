@@ -8,6 +8,7 @@
 //! `stream-nameplate-add` form. #871 adds the drag handle
 //! (`stream-nameplate-drag`). [`RowOptions`] carries the per-page extras.
 
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use presenter_core::{ActiveNameplate, NameplateSource};
 use wasm_bindgen::JsCast;
@@ -17,7 +18,7 @@ use super::drag::{capture, slot_under_pointer, PlateDrag, PRIMARY_BUTTON};
 use super::focus::{field_blur, page_hidden, rows_moving, Blur};
 use super::numbering::{beyond_grid, button_title, person_button, SONG_BUTTON};
 use super::order::drop_marker;
-use super::save_queue::DELETED_UNSAVED;
+use super::save_queue::{retry_delay_ms, TextLeft, DELETED_UNSAVED};
 use super::{song_line, NameplateStore, SaveOutcome};
 use crate::utils::dom_attr::bool_attr;
 
@@ -179,7 +180,7 @@ impl PlateText {
     }
 }
 
-/// Why a row saves (#871 review).
+/// Why a row saves its drafts (#871 review).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Why {
     /// The operator left the field inside the page (Tab, a click elsewhere,
@@ -187,13 +188,11 @@ enum Why {
     FieldLeft,
     /// The focus went away without the operator leaving the field (the
     /// window lost it: alt-tab, OBS, Companion, another tab): an empty name
-    /// waits, the operator is retyping it.
+    /// is kept as typed, the operator is retyping it.
     FocusAway,
     /// The page went hidden or is being closed (`pagehide`): as `FocusAway`,
     /// and a save that would wait for the one on its way goes out NOW.
     PageHidden,
-    /// The page is back in view after a save that failed: as `FocusAway`.
-    PageBack,
 }
 
 impl Why {
@@ -203,15 +202,14 @@ impl Why {
             Self::FieldLeft => "the field was left",
             Self::FocusAway => "the focus went away",
             Self::PageHidden => "the page went hidden",
-            Self::PageBack => "the page is back in view",
         }
     }
 }
 
 /// How one row saves its two texts (#871): on leaving a field, when the
 /// window loses the focus, when the page goes hidden or is closed, again
-/// after a failed save, and what becomes of text typed and not saved when the
-/// row leaves the list.
+/// after a failed save, what Zobraziť waits for, and what becomes of text
+/// typed and not saved when the row leaves the list.
 #[derive(Clone, Copy)]
 struct RowSave {
     store: NameplateStore,
@@ -220,13 +218,21 @@ struct RowSave {
     role: PlateText,
     /// The output the row was listed for (the editor can switch outputs).
     slug: StoredValue<String>,
-    /// The texts of this row's save that is on its way. The same texts are
-    /// never sent twice: leaving the window blurs the field, and a phone also
-    /// hides the page right after.
+    /// The texts of the row's newest save, while it is on its way (or waits
+    /// for an older one). The same texts are never sent twice: leaving the
+    /// window blurs the field, and a phone also hides the page right after.
     sending: StoredValue<Option<(String, String)>>,
-    /// The row's last save failed (network, server fault): its drafts stay,
-    /// and the page coming back into view sends them again.
-    retry: StoredValue<bool>,
+    /// The texts of the row's newest save, which failed (a network error, a
+    /// server fault, an expired login). They stay in the fields, the row is
+    /// marked „neuložené", and they are sent again: after a pause
+    /// ([`retry_delay_ms`]), when the network or the page comes back, on
+    /// Zobraziť.
+    failed: RwSignal<Option<(String, String)>>,
+    /// Failed tries in a row (the pause before the next retry).
+    failures: StoredValue<u32>,
+    /// The ticket of a Zobraziť waiting for the row's save
+    /// ([`NameplateStore::defer_show`]).
+    show_after: StoredValue<Option<u64>>,
 }
 
 impl RowSave {
@@ -238,7 +244,9 @@ impl RowSave {
             role,
             slug: StoredValue::new(store.output_slug.get_untracked()),
             sending: StoredValue::new(None),
-            retry: StoredValue::new(false),
+            failed: RwSignal::new(None),
+            failures: StoredValue::new(0),
+            show_after: StoredValue::new(None),
         }
     }
 
@@ -254,25 +262,33 @@ impl RowSave {
             .with_value(|sending| sending.as_ref() == Some(texts))
     }
 
-    /// Save the row's texts. One save carries both values, so committing the
-    /// role never sends a stale name. Each branch logs its decision.
+    /// Save the row's drafts. One save carries both values, so committing
+    /// the role never sends a stale name. Each branch logs its decision.
     fn commit(self, why: Why) {
         let id = self.id;
         let Some(texts) = self.unsaved() else {
-            // Nothing changed (typed and typed back): just drop the drafts.
+            // Nothing changed (typed and typed back): drop the drafts, and a
+            // failed text the operator gave up.
             self.name.draft.set(None);
             self.role.draft.set(None);
+            self.forget_failed();
             return;
         };
-        if why != Why::FieldLeft && texts.0.trim().is_empty() {
-            // #871 review: the operator cleared the name to retype it and
-            // alt-tabbed or locked the phone. Not a refusal: the draft stays.
+        // #871 review: the operator cleared the name to retype it and
+        // alt-tabbed or locked the phone. Not a refusal: the name stays as
+        // typed, and a role typed in the row goes with the SAVED name.
+        let name_kept = why != Why::FieldLeft && texts.0.trim().is_empty();
+        let texts = if !name_kept {
+            texts
+        } else if self.role.is_dirty() {
+            (self.name.saved.get_untracked(), texts.1)
+        } else {
             leptos::logging::log!(
                 "nameplates: plate {id} name is empty; kept as typed, not saved ({})",
                 why.reason()
             );
             return;
-        }
+        };
         if self.is_sending(&texts) {
             if why == Why::PageHidden && self.store.flush_save(id) {
                 return;
@@ -283,43 +299,159 @@ impl RowSave {
             );
             return;
         }
+        self.send(texts, why == Why::PageHidden);
+        if name_kept {
+            leptos::logging::log!(
+                "nameplates: plate {id} name is empty; kept as typed, the role sent with the saved name ({})",
+                why.reason()
+            );
+        }
+    }
+
+    /// Send `texts` as the row's newest save (`urgent`: the page is being
+    /// hidden or closed). Texts other than the failed ones replace them.
+    fn send(self, texts: (String, String), urgent: bool) {
+        if self
+            .failed
+            .with_untracked(|failed| failed.as_ref() != Some(&texts))
+        {
+            self.forget_failed();
+        }
         self.sending.set_value(Some(texts.clone()));
         let (primary, secondary) = texts.clone();
-        let urgent = why == Why::PageHidden;
         self.store
-            .update(id, primary, secondary, urgent, move |outcome| {
-                self.settle(&texts, outcome);
+            .update(self.id, primary, secondary, urgent, move |outcome| {
+                self.settle(&texts, outcome)
             });
     }
 
-    /// A save of `texts` ended. Writes only (no signal read): the row may be
-    /// gone by now, and a write to a disposed signal does nothing.
-    fn settle(self, texts: &(String, String), outcome: SaveOutcome) {
-        self.sending.update_value(|on_its_way| {
-            if on_its_way.as_ref() == Some(texts) {
-                *on_its_way = None;
+    /// The failed text is given up or replaced: the mark goes, and the retry
+    /// pauses start again.
+    fn forget_failed(self) {
+        if self.failed.with_untracked(Option::is_some) {
+            self.failed.set(None);
+        }
+        self.failures.set_value(0);
+    }
+
+    /// Send the texts of the row's failed save again (`trigger`: the retry
+    /// pause ran out, the network or the page is back, Zobraziť). Nothing
+    /// when the row is gone, nothing failed, or that save is on its way.
+    fn retry(self, trigger: &'static str) {
+        if self.failed.is_disposed() {
+            return;
+        }
+        let id = self.id;
+        let Some(texts) = self.failed.get_untracked() else {
+            return;
+        };
+        if self.is_sending(&texts) {
+            leptos::logging::log!("nameplates: plate {id} failed save is on its way ({trigger})");
+            return;
+        }
+        self.send(texts, false);
+        leptos::logging::log!("nameplates: plate {id} failed save sent again ({trigger})");
+    }
+
+    /// A save of `texts` ended; returns where its typed text is now (for the
+    /// toast of a failed save). The row may be gone by then (its `done` runs
+    /// when the answer comes): the first, `try_` read says so, and then
+    /// nothing else of the row is touched (a read of a disposed signal
+    /// panics). All of a row's signals are disposed together.
+    fn settle(self, texts: &(String, String), outcome: SaveOutcome) -> TextLeft {
+        let gone = outcome == SaveOutcome::Gone;
+        let Some(newest) = self.sending.try_update_value(|sending| {
+            let newest = sending.as_ref() == Some(texts);
+            if newest || gone {
+                *sending = None;
             }
-        });
+            newest
+        }) else {
+            // The row left the list: no field holds its text any more.
+            return TextLeft::Nowhere;
+        };
         match outcome {
             SaveOutcome::Saved | SaveOutcome::Refused => {
-                self.retry.set_value(false);
                 self.name.settle(&texts.0);
                 self.role.settle(&texts.1);
+                if newest {
+                    self.forget_failed();
+                    self.show_once_saved();
+                }
+                TextLeft::InField
             }
             SaveOutcome::Gone => {
                 // The store has said the plate was deleted; nothing is left
                 // to save, so leaving the list says nothing more.
-                self.retry.set_value(false);
                 self.name.draft.set(None);
                 self.role.draft.set(None);
+                self.forget_failed();
+                self.show_after.set_value(None);
+                TextLeft::InField
             }
-            SaveOutcome::Failed => {
-                // #871 review: a network error or a server fault keeps the
-                // typed text; the next save (leaving the field, Enter, the
-                // page back in view) sends it again.
-                self.retry.set_value(true);
-            }
+            SaveOutcome::Failed if newest => self.keep_failed(texts.clone()),
+            // A newer save of the row carries the text.
+            SaveOutcome::Failed => TextLeft::InField,
         }
+    }
+
+    /// The row's newest save failed: keep its texts for another try, marked
+    /// „neuložené", retried after a pause; a Zobraziť waiting for it does
+    /// not put the plate on air.
+    fn keep_failed(self, texts: (String, String)) -> TextLeft {
+        let id = self.id;
+        self.failed.set(Some(texts));
+        let failures = self
+            .failures
+            .try_update_value(|failures| {
+                *failures += 1;
+                *failures
+            })
+            .unwrap_or(0);
+        if let Some(delay) = retry_delay_ms(failures) {
+            leptos::logging::log!("nameplates: plate {id} failed save retried in {delay} ms");
+            leptos::task::spawn_local(async move {
+                TimeoutFuture::new(delay).await;
+                self.retry("the retry pause ran out");
+            });
+        }
+        match self.show_after.try_update_value(Option::take).flatten() {
+            Some(ticket) if self.store.show_is_current(ticket) => TextLeft::InFieldNotShown,
+            _ => TextLeft::InField,
+        }
+    }
+
+    /// The row's newest save went through: a Zobraziť waiting for it puts
+    /// the plate on air now, unless another show or hide was asked for
+    /// since.
+    fn show_once_saved(self) {
+        let Some(ticket) = self.show_after.try_update_value(Option::take).flatten() else {
+            return;
+        };
+        let id = self.id;
+        if self.store.show_is_current(ticket) {
+            leptos::logging::log!("nameplates: plate {id} saved; shown now");
+            self.store.show_person(id);
+        } else {
+            leptos::logging::log!(
+                "nameplates: plate {id} saved; not shown, another show or hide came since"
+            );
+        }
+    }
+
+    /// Zobraziť (#871 review). The server puts on air the texts it HAS, so
+    /// while the row's save is on its way, or failed (sent again now), the
+    /// plate goes on air once that save is through; a failed one says the
+    /// plate was not shown. Otherwise it goes on air at once.
+    fn show(self) {
+        let id = self.id;
+        if self.sending.with_value(Option::is_none) && self.failed.with_untracked(Option::is_none) {
+            self.store.show_person(id);
+            return;
+        }
+        self.show_after.set_value(Some(self.store.defer_show()));
+        leptos::logging::log!("nameplates: plate {id} goes on air once its save is through");
+        self.retry("Zobraziť was pressed");
     }
 
     /// A row field lost the focus: save the row, unless the field was only
@@ -362,18 +494,18 @@ impl RowSave {
     fn page_changed(self, leaving: bool) {
         if leaving {
             self.commit(Why::PageHidden);
-        } else if self.retry.get_value() && self.unsaved().is_some() {
-            self.commit(Why::PageBack);
+        } else {
+            self.retry("the page is back in view");
         }
     }
 
     /// The row left the list with typed text that no save carries (runs in
     /// `on_cleanup`, before the row's signals are disposed). Its plate was
     /// deleted elsewhere: say so, instead of dropping it silently. Or the
-    /// editor switched to another output after a save that failed (the
-    /// drafts were kept for another try): the plate still exists, so the
-    /// text is sent now (the save's `done` then only writes to the disposed
-    /// row, which does nothing).
+    /// editor switched to another output (only kept drafts of a failed save
+    /// get here: the select click blurs a field first): the plate still
+    /// exists and the PATCH is id-scoped, so the text is sent now (`commit`
+    /// logs its decision; the save's `done` then finds the row gone).
     fn report_lost(self) {
         let Some(texts) = self.unsaved() else {
             return;
@@ -381,15 +513,11 @@ impl RowSave {
         if self.is_sending(&texts) {
             return;
         }
-        let id = self.id;
         if self.store.output_slug.get_untracked() != self.slug.get_value() {
-            leptos::logging::log!(
-                "nameplates: plate {id} left the list with unsaved text (another output); saving it"
-            );
             self.commit(Why::FocusAway);
             return;
         }
-        leptos::logging::log!("nameplates: plate {id} deleted with unsaved text");
+        leptos::logging::log!("nameplates: plate {} deleted with unsaved text", self.id);
         self.store.notify(DELETED_UNSAVED.to_string(), "error");
     }
 }
@@ -419,14 +547,17 @@ fn NameplateRow(
     options: RowOptions,
     drag: RwSignal<Option<PlateDrag>>,
 ) -> impl IntoView {
+    // A row's saved text. #871 review: it KEEPS its last value once the plate
+    // is missing from the list (an output switch clears the list, a delete
+    // elsewhere), so a save made as the row leaves still sends the field the
+    // operator did not type in, never "".
     let field = move |pick: fn(&presenter_core::Nameplate) -> String| {
-        Memo::new(move |_| {
-            store.plates.with(|list| {
-                list.iter()
-                    .find(|p| p.id == id)
-                    .map(pick)
-                    .unwrap_or_default()
-            })
+        Memo::new(move |previous: Option<&String>| {
+            store
+                .plates
+                .with(|list| list.iter().find(|p| p.id == id).map(pick))
+                .or_else(|| previous.cloned())
+                .unwrap_or_default()
         })
     };
     let name = PlateText::new(field(|p| p.primary_text.clone()));
@@ -434,19 +565,25 @@ fn NameplateRow(
     let save = RowSave::new(store, id, name, role);
     // A hidden page may be frozen or killed (a phone), and a reload or a
     // closed tab fires `pagehide` (Safari may skip `visibilitychange` then),
-    // so both save what is typed; back in view, a failed save goes again. A
-    // row whose plate was deleted elsewhere reports text it could not save.
+    // so both save what is typed; back in view or back online, a failed save
+    // goes again. A row whose plate was deleted elsewhere reports text it
+    // could not save.
     let page_hides = window_event_listener_untyped("visibilitychange", move |_| {
         save.page_changed(page_hidden());
     });
     let page_closes = window_event_listener_untyped("pagehide", move |_| {
         save.page_changed(true);
     });
+    let network_back = window_event_listener_untyped("online", move |_| {
+        save.retry("the network is back");
+    });
     on_cleanup(move || {
         page_hides.remove();
         page_closes.remove();
+        network_back.remove();
         save.report_lost();
     });
+    let unsaved = move || save.failed.with(Option::is_some);
     let is_active = move || {
         matches!(
             store.active.get(),
@@ -535,6 +672,7 @@ fn NameplateRow(
             data-beyond-grid=move || options.numbered.then(|| bool_attr(beyond()))
             data-dragging=move || bool_attr(dragging())
             data-drop=marker
+            data-unsaved=move || bool_attr(unsaved())
         >
             <button
                 type="button"
@@ -571,10 +709,16 @@ fn NameplateRow(
                     on:input=move |ev| role.draft.set(Some(event_target_value(&ev)))
                     on:keydown=blur_on_enter
                     on:blur=move |ev| save.commit_on_leave(event_target(&ev)) />
+                <Show when=unsaved>
+                    <span class="nameplates__unsaved" data-role="stream-nameplate-unsaved"
+                        title="Text sa neuložil. Uloží sa znova sám, alebo keď pole opustíte.">
+                        "neuložené"
+                    </span>
+                </Show>
             </div>
             <div class="nameplates__actions">
                 <button type="button" class="nameplates__btn" data-role="stream-nameplate-show"
-                    on:click=move |_| store.show_person(id)>"Zobraziť"</button>
+                    on:click=move |_| save.show()>"Zobraziť"</button>
                 {options.preview.map(move |preview| view! {
                     <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-preview"
                         on:click=move |_| preview(NameplateSource::Person, Some(id), name.value(), role.value())>"Prehrať"</button>

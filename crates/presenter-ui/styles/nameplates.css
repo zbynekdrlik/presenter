@@ -71,6 +71,23 @@
   box-shadow: 0 0 0 1px #22c55e inset;
 }
 
+/* A row whose last save failed (#871 review): marked until its text is saved
+ * (the toast is gone after 3.5 s). After the on-air rule, so it wins the
+ * border; the label says it in words. */
+.nameplates__row[data-unsaved="true"] {
+  border-color: #f59e0b;
+}
+
+.nameplates__unsaved {
+  align-self: flex-start;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .nameplates__texts {
   display: flex;
   flex-direction: column;
