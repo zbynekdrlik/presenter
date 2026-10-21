@@ -37,6 +37,10 @@
  *       active scene + overlays re-render after the OBS source reconnects).
  *   C — two simultaneous output-page contexts (multi-OBS) converge on the same
  *       companion command.
+ *   D — #870 nameplate grid: a `stream_nameplate_slot` press fires the plate in
+ *       that slot of the `stream` plate list, the `nameplate_slot_<n>_*`
+ *       variables follow a reorder, and a press still carrying the old label's
+ *       plate id (`expect_id`) is refused with nothing changed on air.
  *
  * The bundled OFL font families (Inter / Oswald / Bebas Neue, #717) are used
  * deliberately in the element styles: if a bundled `@font-face` path is wrong
@@ -449,6 +453,46 @@ const verseSecondary = (page: Page, id: number) =>
     `[data-role="stream-element-verse"][data-element-id="${id}"] [data-role="stream-verse-secondary-text"]`,
   );
 
+// #870 lower-third plate (the live layer, not one still animating out).
+const plateLayers = (page: Page) => page.locator('[data-role="stream-lower-third-plate"]');
+const livePlatePrimary = (page: Page) =>
+  page.locator(
+    '[data-role="stream-lower-third-plate"]:not(.stream-lower-third__plate--leaving) [data-role="stream-lower-third-primary"]',
+  );
+
+async function createPlate(
+  api: APIRequestContext,
+  primaryText: string,
+  secondaryText: string,
+): Promise<number> {
+  const resp = await api.post(`${baseURL}/stream/api/outputs/${SLUG}/nameplates`, {
+    data: { primaryText, secondaryText },
+  });
+  expect(resp.ok(), `create plate ${primaryText} -> ${resp.status()}`).toBeTruthy();
+  return (await resp.json()).id as number;
+}
+
+/** Reorder the `stream` plates so `first` lead the list (the rest keep order). */
+async function orderPlates(api: APIRequestContext, first: number[]): Promise<void> {
+  const list = await api.get(`${baseURL}/stream/api/outputs/${SLUG}/nameplates`);
+  expect(list.ok(), `list plates -> ${list.status()}`).toBeTruthy();
+  const ids = ((await list.json()) as Array<{ id: number }>).map((plate) => plate.id);
+  const order = [...first, ...ids.filter((id) => !first.includes(id))];
+  const resp = await api.put(`${baseURL}/stream/api/outputs/${SLUG}/nameplates/order`, {
+    data: { ids: order },
+  });
+  expect(resp.status(), "reorder plates").toBe(204);
+}
+
+/** The plate on air in `stream` (`GET .../nameplates/active`), or null. */
+async function activePlate(
+  api: APIRequestContext,
+): Promise<{ nameplateId?: number; primary?: string } | null> {
+  const resp = await api.get(`${baseURL}/stream/api/outputs/${SLUG}/nameplates/active`);
+  expect(resp.ok(), `active plate -> ${resp.status()}`).toBeTruthy();
+  return (await resp.json()) as { nameplateId?: number; primary?: string } | null;
+}
+
 /** Wait for the output page's WS to report connected + a fresh def refetch. */
 async function waitForReconnect(
   page: Page,
@@ -766,5 +810,105 @@ test.describe("Stream graphics — companion full journey", () => {
 
     await ctxA.close();
     await ctxB.close();
+  });
+
+  test("#870 a grid slot fires the plate its label shows and follows a reorder", async ({
+    page,
+    request,
+  }) => {
+    const consoleErrors: string[] = [];
+    attachConsoleErrorCollector(page, consoleErrors);
+    const n = Date.now() % 100_000;
+
+    // A lower third on its own overlay, so the OBS output shows what is on air.
+    const sceneName = `Menovky 870 ${n}`;
+    const scene = await createScene(request, sceneName, "overlay");
+    await addElement(request, scene, {
+      kind: "lower_third",
+      frame: { xPct: 6, yPct: 74, wPct: 46, hPct: 14 },
+      bar_color: "#0f172a",
+      bar_opacity: 0.85,
+      accent_color: "#38bdf8",
+      accent_width_pct: 2.5,
+      primary_style: textStyle("Inter", 5, { align: "left" }),
+      secondary_style: textStyle("Inter", 3.5, { align: "left", weight: 400 }),
+      padding_pct: 3,
+      animation: "slide_left",
+      in_ms: 200,
+      out_ms: 150,
+      auto_hide_s: 0,
+    });
+
+    const sock = createCompanionSocket(wsURL);
+    await sock.handshake();
+    await sock.expectAck("stream_overlay_on", { scene: sceneName });
+    await gotoStream(page);
+    await expect(plateLayers(page)).toHaveCount(0);
+
+    // Two people; whatever else the list holds, they lead it: slot 1 = Anna,
+    // slot 2 = Boris.
+    const anna = await createPlate(request, `Anna Slotová ${n}`, "kazateľka");
+    const boris = await createPlate(request, `Boris Slotový ${n}`, "vedúci chvál");
+    await orderPlates(request, [anna, boris]);
+
+    // Slot 2's label (pushed live to Companion) is Boris.
+    await expect
+      .poll(() => sock.vars.get("nameplate_slot_2_name"), { timeout: 5_000 })
+      .toBe(`Boris Slotový ${n}`);
+    expect(sock.vars.get("nameplate_slot_2_id")).toBe(String(boris));
+
+    // Press slot 2 the way the module does: with the plate id its label shows.
+    await sock.expectAck("stream_nameplate_slot", {
+      slot: 2,
+      mode: "toggle",
+      expect_id: Number(sock.vars.get("nameplate_slot_2_id")),
+    });
+    expect(await activePlate(request)).toMatchObject({
+      nameplateId: boris,
+      primary: `Boris Slotový ${n}`,
+    });
+    await expect(livePlatePrimary(page)).toHaveText(`Boris Slotový ${n}`, { timeout: 5_000 });
+    await expect
+      .poll(() => sock.vars.get("nameplate_active_id"), { timeout: 5_000 })
+      .toBe(String(boris));
+
+    // Reorder in Presenter: slot 2's label follows the list.
+    await orderPlates(request, [boris, anna]);
+    await expect
+      .poll(() => sock.vars.get("nameplate_slot_2_name"), { timeout: 5_000 })
+      .toBe(`Anna Slotová ${n}`);
+    expect(sock.vars.get("nameplate_slot_2_id")).toBe(String(anna));
+
+    // A press still carrying the OLD label's plate id is refused; nothing changes.
+    const stale = await sock.sendCommand("stream_nameplate_slot", {
+      slot: 2,
+      mode: "toggle",
+      expect_id: boris,
+    });
+    expect(stale.type, JSON.stringify(stale)).toBe("error");
+    expect(String(stale.message)).toContain("nameplate slot 2 changed");
+    expect((await activePlate(request))?.nameplateId).toBe(boris);
+
+    // The press with the current label fires Anna.
+    await sock.expectAck("stream_nameplate_slot", {
+      slot: 2,
+      mode: "toggle",
+      expect_id: Number(sock.vars.get("nameplate_slot_2_id")),
+    });
+    expect(await activePlate(request)).toMatchObject({
+      nameplateId: anna,
+      primary: `Anna Slotová ${n}`,
+    });
+    await expect(livePlatePrimary(page)).toHaveText(`Anna Slotová ${n}`, { timeout: 5_000 });
+
+    // Leave the output as found: plate hidden, overlay off.
+    await sock.expectAck("stream_nameplate_hide");
+    await expect(plateLayers(page)).toHaveCount(0, { timeout: 5_000 });
+    await sock.expectAck("stream_overlay_off", { scene: sceneName });
+
+    expect(sock.errors).toHaveLength(0);
+    sock.socket.close();
+    // Zero console errors AND warnings — asserted last.
+    expect(consoleErrors).toEqual([]);
   });
 });
