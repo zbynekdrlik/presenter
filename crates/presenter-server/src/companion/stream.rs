@@ -13,7 +13,7 @@
 //! | `stream_scene_clear` | `{ output? }` — base → none (transparent) |
 //! | `stream_overlay_on`/`_off`/`_toggle` | `{ scene, output? }` |
 //! | `stream_clear` | `{ output? }` — base clear + ALL overlays off |
-//! | `stream_nameplate_slot` | `{ slot, mode?, expect_id?, output? }` — #870 grid slot, `stream` only |
+//! | `stream_nameplate_slot` | `{ slot, mode?, expect_id?, expect_empty?, output? }` — #870 grid slot, `stream` only |
 //!
 //! Execution goes through the [`AppState`] show-state methods (never the
 //! repository directly) so every activation publishes [`LiveEvent::StreamState`]

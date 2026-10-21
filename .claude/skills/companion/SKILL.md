@@ -98,7 +98,7 @@ worse (no network-level WS coalescing). PR #214 (April 2026) added 39 variables 
   already logs (`case "error"`) → graceful degrade, no crash. Payload builders must
   never throw.
 - **Nameplate grid buttons address a SLOT (position in the plate list), not a plate
-  id (#870).** `stream_nameplate_slot {slot, mode?, expect_id?}` (always the `stream`
+  id (#870).** `stream_nameplate_slot {slot, mode?, expect_id?, expect_empty?}` (always the `stream`
   output; no output option) + label variables `nameplate_slot_<n>_name/_role/_id` +
   feedback `stream_nameplate_slot_active` + presets "Menovky — mriežka" (song, then slots
   1..11). The server resolves label and press from one list, and refuses a press whose
