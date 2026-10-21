@@ -1,5 +1,6 @@
 use crate::state::AppState;
 mod catalog;
+mod nameplate_slot;
 mod nameplates;
 mod protocol;
 mod stream;
@@ -27,6 +28,9 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{broadcast::error::RecvError, Mutex};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+// The one output whose plate list (and #870 slot labels) Companion tracks.
+pub(crate) use nameplates::DEFAULT_OUTPUT as NAMEPLATE_OUTPUT;
 
 const COMPANION_SERVER_NAME: &str = "presenter";
 const COMPANION_PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -70,9 +74,11 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
         return;
     }
 
-    // The variables, the #779 lower-third plate LIST (plate dropdown, per-plate
-    // variable definitions, presets) and the #814 catalog (layout / scene /
-    // overlay / output dropdowns).
+    // After the welcome, in this order: the #779 lower-third plate LIST (plate
+    // dropdown, per-plate + #870 slot variable definitions, presets), then the
+    // variables (the module drops a value it has no definition for yet, so the
+    // list must come first), then the #814 catalog (layout / scene / overlay /
+    // output dropdowns).
     if let Err(err) = send_snapshot(&sender, &variables).await {
         warn!(?err, "failed to send initial companion snapshot");
         return;

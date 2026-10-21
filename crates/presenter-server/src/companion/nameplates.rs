@@ -20,7 +20,8 @@ use crate::state::AppState;
 use serde::Serialize;
 
 /// Output whose nameplates this v1 module tracks (the seeded default output).
-pub(super) const DEFAULT_OUTPUT: &str = "stream";
+/// Re-exported as `companion::NAMEPLATE_OUTPUT` for the output-delete handler.
+pub(crate) const DEFAULT_OUTPUT: &str = "stream";
 
 /// Placeholder for an idle `nameplate_active_*` variable.
 const PLACEHOLDER: &str = "-";
