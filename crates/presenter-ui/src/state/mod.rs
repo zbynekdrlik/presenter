@@ -194,15 +194,25 @@ impl AppContext {
     }
 
     pub fn show_toast(&self, msg: &str, variant: &str) {
-        let toast = self.toast_message;
-        let toast_variant = self.toast_variant;
-        toast_variant.set(variant.to_string());
-        toast.set(Some(msg.to_string()));
-        gloo_timers::callback::Timeout::new(3_500, move || {
-            toast.set(None);
-        })
-        .forget();
+        show_toast_on(self.toast_message, self.toast_variant, msg, variant);
     }
+}
+
+/// [`AppContext::show_toast`] for code that holds only the two toast signals:
+/// a `Send + Sync` callback (the operator's Menovky view, #871) cannot capture
+/// the whole context.
+pub fn show_toast_on(
+    toast: RwSignal<Option<String>>,
+    toast_variant: RwSignal<String>,
+    msg: &str,
+    variant: &str,
+) {
+    toast_variant.set(variant.to_string());
+    toast.set(Some(msg.to_string()));
+    gloo_timers::callback::Timeout::new(3_500, move || {
+        toast.set(None);
+    })
+    .forget();
 }
 
 impl Default for AppContext {

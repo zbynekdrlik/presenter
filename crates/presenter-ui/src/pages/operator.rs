@@ -6,6 +6,7 @@ use wasm_bindgen::JsCast;
 use crate::components::header::Header;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
+use crate::components::nameplates::operator_view::OperatorNameplates;
 use crate::components::playlist_list::PlaylistList;
 use crate::components::playlist_modal::PlaylistModals;
 use crate::components::presentation_list::PresentationList;
@@ -235,6 +236,10 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
             </section>
             <section class="operator__panel operator__panel--ai" data-view-panel="ai">
                 <AiPage />
+            </section>
+            // #871: the `stream` plates in Stream Deck grid order.
+            <section class="operator__panel operator__panel--menovky" data-view-panel="menovky">
+                <OperatorNameplates last_event=last_event ws_state=ws_state />
             </section>
             <section class="operator__panel operator__panel--settings" data-view-panel="settings">
                 <SettingsPage embedded=true />

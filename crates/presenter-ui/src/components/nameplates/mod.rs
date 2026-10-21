@@ -11,6 +11,7 @@
 //! the plate logic, the REST paths or the request bodies anywhere else.
 
 pub mod numbering;
+pub mod operator_view;
 pub mod plate_list;
 
 use leptos::prelude::*;

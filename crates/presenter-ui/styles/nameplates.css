@@ -136,3 +136,82 @@
   border: 1px dashed #64748b;
   color: #cbd5e1;
 }
+
+/* ── The operator's Menovky view (#871) ── */
+
+.operator__panel--menovky {
+  overflow-y: auto;
+}
+
+.nameplates-view {
+  max-width: 56rem;
+  margin: 0 auto;
+  color: var(--operator-text, #f8fafc);
+}
+
+.nameplates-view__title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.nameplates-view__help {
+  margin: 0.35rem 0 0.75rem;
+  color: #cbd5e1;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.nameplates-view__hint {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #a16207;
+  border-radius: 6px;
+  background: rgba(161, 98, 7, 0.15);
+  color: #fde68a;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.nameplates-view__hint a {
+  color: #fde68a;
+  text-decoration: underline;
+}
+
+.nameplates-view__note {
+  margin: 0 0 0.75rem;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Operated by touch too (#850 phone use): every control at least 44 px, and
+ * 16 px inputs so a phone does not zoom in on focus. */
+.nameplates-view .nameplates__btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+}
+
+.nameplates-view .nameplates__texts input,
+.nameplates-view .nameplates__add input {
+  min-height: 44px;
+  font-size: 1rem;
+}
+
+.nameplates-view .nameplates__button {
+  min-width: 44px;
+  height: 44px;
+  font-size: 1.1rem;
+}
+
+@media (max-width: 480px) {
+  .operator__panel--menovky {
+    padding: 1rem;
+  }
+
+  .nameplates-view .nameplates__texts {
+    min-width: 0;
+    flex-basis: 10rem;
+  }
+}

@@ -1612,7 +1612,8 @@ body.operator:not([data-view="worship"]) [data-view-panel="worship"] {
 
 body.operator[data-view="bible"] [data-view-panel="bible"],
 body.operator[data-view="timers"] [data-view-panel="timers"],
-body.operator[data-view="ai"] [data-view-panel="ai"] {
+body.operator[data-view="ai"] [data-view-panel="ai"],
+body.operator[data-view="menovky"] [data-view-panel="menovky"] {
   display: block;
 }
 
