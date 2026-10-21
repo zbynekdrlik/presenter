@@ -444,6 +444,27 @@ fn an_answer_for_an_unknown_save_changes_nothing() {
     assert!(control.is_busy(7));
 }
 
+#[test]
+fn an_older_save_failing_after_the_save_beside_it_was_saved_reports_nothing() {
+    // Review finding: the page hid, the newest texts went beside the older
+    // save and were saved first; the older one then failed. Nothing is
+    // unsaved, so no "Text ostal v poli" toast.
+    let mut control = SaveControl::default();
+    let older = patch(&control.commit(1, t("A", "r"), old(), false).1);
+    let newer = patch(&control.commit(1, t("B", "r"), old(), true).1);
+    control.finish(1, newer.token, Saved, true);
+    let step = control
+        .finish(1, older.token, Failed, true)
+        .unwrap_or_default();
+    assert!(step.idle && step.patch.is_none() && step.retry_in.is_none());
+    assert!(!control.is_unsaved(1));
+    assert!(!Failed.is_reported(true, step.idle));
+    // A failure that leaves the text unsaved, or whose field is gone, is.
+    assert!(Failed.is_reported(true, false));
+    assert!(Failed.is_reported(false, true));
+    assert!(Gone.is_reported(true, true));
+}
+
 // ---- Outcomes and toasts --------------------------------------------------
 
 fn status(code: u16) -> ApiError {
