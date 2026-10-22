@@ -46,7 +46,7 @@ impl PlateText {
     /// while the plate is busy (`NameplateStore::pending_texts`).
     pub(super) fn new(saved: Memo<String>, pending: Memo<Option<String>>) -> Self {
         let draft = RwSignal::new(None::<String>);
-        let base = Memo::new(move |_| pending.get().unwrap_or_else(|| saved.get()));
+        let base = Memo::new(move |_| base_text(pending.get(), saved.get()));
         let shown = Memo::new(move |_| draft.get().unwrap_or_else(|| base.get()));
         Self {
             saved,
@@ -76,6 +76,14 @@ impl PlateText {
             done
         });
     }
+}
+
+/// The text a field with no draft stands on ([`PlateText`]'s base): the
+/// plate's newest committed text while a save of it is pending (`pending`,
+/// even an empty one), else the text the plate list has (`saved`), which
+/// can be OLDER than a commit still waiting.
+fn base_text(pending: Option<String>, saved: String) -> String {
+    pending.unwrap_or(saved)
 }
 
 /// Why a row commits its drafts.
@@ -315,5 +323,33 @@ impl RowSave {
             self.store.notify(DELETED_UNSAVED.to_string(), "error");
         }
         self.store.drop_saves(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_field_with_no_draft_stands_on_the_pending_text_not_the_older_listed_one() {
+        // A row rebuilt while a save of its plate waits: the list still has
+        // the server's older name, the controller the newest committed one.
+        assert_eq!(
+            base_text(Some("Nová".to_string()), "Starý".to_string()),
+            "Nová"
+        );
+    }
+
+    #[test]
+    fn a_pending_empty_text_wins_over_the_listed_one() {
+        // A role cleared and committed, its save still pending: the field
+        // shows it empty, so a later commit of the row does not put the
+        // listed role back.
+        assert_eq!(base_text(Some(String::new()), "pastor".to_string()), "");
+    }
+
+    #[test]
+    fn a_field_with_no_draft_stands_on_the_listed_text_when_nothing_is_pending() {
+        assert_eq!(base_text(None, "Starý".to_string()), "Starý");
     }
 }

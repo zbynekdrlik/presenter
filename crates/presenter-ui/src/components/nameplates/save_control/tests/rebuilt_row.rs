@@ -1,15 +1,20 @@
-//! A row rebuilt while a save of its plate waits (#871 review): the row
-//! stands on the controller's newest committed texts (`desired`, carried to
-//! it in its `PlateSave`), never on the plate list's possibly older ones.
+//! The controller side of a row rebuilt while a save of its plate waits
+//! (#871 review): what the rebuilt row relies on. While the plate is busy,
+//! `desired` is the newest committed texts (the row reads them through its
+//! `PlateSave` and stands on them, `row_save::base_text`, tested there);
+//! once idle it is `None`, so the row stands on the list again. And a
+//! failed save of such a row, which has no drafts to commit, is sent by a
+//! retry.
 
 use super::*;
 
 #[test]
-fn a_rebuilt_row_stands_on_the_waiting_texts_so_a_role_typed_there_keeps_the_newer_name() {
-    // Review finding: save 1 (a new name) on its way, the editor switched
-    // output and back, so the plate's row was rebuilt while the list still
-    // had the server's OLDER name. Typing only the role there committed
-    // that older name with it, and it replaced the newer one waiting here.
+fn desired_is_the_newest_committed_texts_while_busy_and_none_once_idle() {
+    // Controller contract, not the row: save 1 (a new name) on its way, the
+    // editor switched output and back, so the plate's row was rebuilt while
+    // the list still had the server's OLDER texts. While busy, `desired`
+    // holds the newest committed texts (what the rebuilt row stands on);
+    // a commit built on them keeps the newer name; idle, it is `None`.
     let mut control = SaveControl::default();
     let first = patch(&control.commit(1, t("Nová", "starý"), old(), false).1);
     // The old row leaves with the same texts (the editor output switch).
@@ -17,11 +22,10 @@ fn a_rebuilt_row_stands_on_the_waiting_texts_so_a_role_typed_there_keeps_the_new
         control.commit(1, t("Nová", "starý"), old(), false).0,
         Commit::OnItsWay
     );
-    // The rebuilt row: the list still says `old()`, but the plate is busy,
-    // so the row stands on its newest committed texts.
+    // Busy: the newest committed texts, not the listed `old()`.
     let base = control.desired(1);
     assert_eq!(base, Some(t("Nová", "starý")), "not the listed {:?}", old());
-    // Only the role is typed and left: the commit carries the base name.
+    // A commit built on them (only the role typed): it keeps the newer name.
     let (name, _) = base.unwrap_or_else(old);
     let (commit, _) = control.commit(1, (name, "kazateľ".to_string()), old(), false);
     assert_eq!(commit, Commit::Waits);
