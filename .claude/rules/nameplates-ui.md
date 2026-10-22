@@ -64,9 +64,11 @@ paths:
   a reorder or a delete elsewhere, so the number is a `Memo` over the list by id (#496 rule),
   never captured in `children`.
 - **Half-typed text is never overwritten** (`PlateText` in `row_save.rs`): each field shows
-  its DRAFT (set on `input`) else the saved text, both `Memo`s. tachys re-writes a `String`
-  `prop:value` on every run with no comparison, so a plain closure over the whole list would
-  wipe typing on ANY list refresh. Never commit on `change` as well as `blur`.
+  its DRAFT (set on `input`) else its BASE text (the saved text, or the plate's newest
+  committed text while a save is pending: see "stands on" below), all `Memo`s. tachys
+  re-writes a `String` `prop:value` on every run with no comparison, so a plain closure over
+  the whole list would wipe typing on ANY list refresh. Never commit on `change` as well as
+  `blur`.
 - **The saved-text `Memo` KEEPS its last value when the plate is missing from the list**
   (`Memo::new(|previous| … .or_else(|| previous.cloned()))`). The editor's output switch
   `clear()`s the list BEFORE the rows' `on_cleanup` runs; reading `""` there wiped the role
@@ -115,6 +117,20 @@ paths:
     another; `Settle::Gone` (404) drops both. A draft typed on since (≠ the settled text,
     compared trimmed) stays. Commits of the saved texts on an idle plate send nothing and
     settle the drafts (`Commit::Unchanged`, no list reload).
+  - **A field with no draft stands on the controller's `desired` while the plate is busy,
+    never the list** (`PlateText::base`). `PlateSave.desired` = `SaveControl::desired(id)`
+    (set by `update_view` after every step, `None` when idle); the row reads it through
+    `store.pending_texts(id)` (tracked). `base` = that field's pending text, else `saved`
+    (the list's, kept once the plate leaves the list); `shown` = draft else base, and
+    `PlateText::value()` (what a commit sends) = draft else base. Why: the list can be
+    OLDER than a commit still waiting. A row rebuilt by an editor output switch there and
+    back while a save was on its way stood on the list, so a role typed there committed
+    the list's older name with it and the newer name was silently put back (#871 review).
+    `saved` stays the list's text: an idle plate's commit compares with it, and `leave`'s
+    deleted-plate check compares the row's texts with it. Going idle, `finish_save` puts
+    the saved answer into the list BEFORE `run` clears `desired`, so the field does not
+    flicker. Drafts, the settle rule, „neuložené" and focus are unaffected (a draft wins
+    over any base change; no new commit path, so no extra PATCH).
 - **An empty name is handled in the row, before anything is sent.** Leaving the field
   (`Why::FieldLeft`: Tab, a click, Enter, Zobraziť) toasts „Meno nesmie byť prázdne." and
   the old name stays (the newest committed one while the plate is busy, kept as the draft;
@@ -240,9 +256,9 @@ paths:
 - Picking a view in the phone menu closes the menu (`set_view` resets `mobile_nav_open`);
   before #871 the overlay stayed open over the picked view.
 - Sizes after the save consolidation (production lines, 800 = warning): `mod.rs` ~460,
-  `plate_list.rs` ~390, `save_control.rs` ~620, `row_save.rs` ~290, `saving.rs` ~330;
+  `plate_list.rs` ~400, `save_control.rs` ~620, `row_save.rs` ~300, `saving.rs` ~340;
   `save_control/tests.rs` ~780 (exempt as `tests.rs`, but next to 800: new controller
-  tests go in a sibling test module before it grows much more).
+  tests go in a submodule under `save_control/tests/`, like `rebuilt_row.rs`).
 
 ## E2E
 - `tests/e2e/operator-nameplates.spec.ts`: tab order + URL, add / rename (`fill` + `blur`) /
@@ -334,7 +350,13 @@ paths:
   sends the waiting texts, logged `sent now beside …` exactly once (that log tells it from
   the held save's 15 s timeout retry, which sends the same texts; no `save not done` line
   may appear), then the repair. Page logs there are read from a `logs` array with
-  `expect.poll`, so the old code fails on the count, not on a `waitForEvent` timeout.
+  `expect.poll`, so the old code fails on the count, not on a `waitForEvent` timeout. The
+  rebuilt row shows the WAITING texts (asserted), not the list's. And the base case: name
+  saved (held), output switched there and back, only the role typed in the rebuilt row
+  and left (settle `save waits …`), the held save released (settle `saved; nothing left
+  to send`): REST must hold BOTH the newer name and the new role, and the second PATCH
+  carries both (the old code sent the older name back with the role). Controller side:
+  `save_control/tests/rebuilt_row.rs` (a submodule of `tests.rs`, which is at ~780 lines).
 - **Releasing the next held save waits until the page HANDLED the previous answer**
   (`savedWhileAnotherIsOut(page, id)` in both specs = `waitForEvent` on the page's
   `saved; a save of the plate is still on its way`, set up before the release). `held[n]
