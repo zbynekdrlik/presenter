@@ -92,14 +92,31 @@ impl NameplateStore {
             .plates
             .try_with_untracked(|list| list.iter().map(|p| p.id).collect())
             .unwrap_or_default();
+        self.send_waiting_where(|id| listed.contains(&id), "its row has left the list");
+    }
+
+    /// The page is being hidden or closed and row `id` has no drafts: a
+    /// save of its plate that an EARLIER row left waiting (an editor output
+    /// switch took that row while a save was on its way, and switching back
+    /// rebuilt the row with no drafts) goes now, beside it. The list's
+    /// [`Self::send_waiting`] skips a listed plate. Once sent, the plate has
+    /// its desired texts on their way, so the next ask (hidden, then
+    /// `pagehide`) sends nothing more.
+    pub fn send_waiting_of(self, id: i64) {
+        self.send_waiting_where(|other| other != id, "its row was rebuilt");
+    }
+
+    /// Send, beside the save on its way, every waiting save of a plate no
+    /// row will commit (`has_row` false for it); `why` for the log.
+    fn send_waiting_where(self, has_row: impl Fn(i64) -> bool, why: &'static str) {
         let steps = self
             .saves
-            .try_update_value(|control| control.send_waiting(|id| listed.contains(&id)))
+            .try_update_value(|control| control.send_waiting(has_row))
             .unwrap_or_default();
         for (id, step) in steps {
             self.run(id, step);
             leptos::logging::log!(
-                "nameplates: plate {id} save sent now beside the one on its way (the page went hidden; its row has left the list)"
+                "nameplates: plate {id} save sent now beside the one on its way (the page went hidden; {why})"
             );
         }
     }

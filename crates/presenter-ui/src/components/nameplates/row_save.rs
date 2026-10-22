@@ -165,9 +165,15 @@ impl RowSave {
     /// the role never sends a stale name. An empty name is handled here,
     /// before anything is sent: leaving the field refuses it (a toast, the
     /// old name stays); otherwise the operator is retyping it, so it stays
-    /// as typed and a role typed in the row goes with the newest name.
+    /// as typed and a role typed in the row goes with the newest name. A
+    /// row with no drafts on a hidden page still sends what an EARLIER row
+    /// of the plate left waiting ([`NameplateStore::send_waiting_of`]: an
+    /// editor output switch there and back while a save was on its way).
     pub(super) fn commit(self, why: Why) {
         if !self.has_drafts() {
+            if why == Why::PageHidden {
+                self.store.send_waiting_of(self.id);
+            }
             return;
         }
         let id = self.id;
@@ -261,9 +267,10 @@ impl RowSave {
     /// id-scoped, so the drafts are committed and the store carries on
     /// without the row (a commit waiting behind the save on its way goes at
     /// once if the page hides: `NameplateStore::send_waiting`, from the
-    /// list's own listeners). Otherwise the plate was deleted elsewhere: typed
-    /// text the server does not have is reported, and the plate's saves are
-    /// forgotten (they could only be answered 404).
+    /// list's own listeners, or `send_waiting_of`, from the plate's next row
+    /// when the editor switched back). Otherwise the plate was deleted
+    /// elsewhere: typed text the server does not have is reported, and the
+    /// plate's saves are forgotten (they could only be answered 404).
     pub(super) fn leave(self) {
         let id = self.id;
         if self.store.output_slug.get_untracked() != self.slug.get_value() {
