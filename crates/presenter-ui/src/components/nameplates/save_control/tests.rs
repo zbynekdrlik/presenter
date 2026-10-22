@@ -478,10 +478,10 @@ fn an_older_save_failing_after_the_newer_one_saved_sends_the_newest_once_more_th
     assert!(!step.show && !step.not_shown && !step.idle);
     assert!(step.retry_in.is_none());
     assert!(!Failed.is_reported(true, step.on_its_way));
-    // A failure that waits for a retry, or whose field is gone, is
-    // reported; so are a gone plate and a refused text.
+    // A failure with nothing on its way after it (it waits for a retry, or
+    // its field is gone) is reported; so are a gone plate and a refused
+    // text.
     assert!(Failed.is_reported(true, false));
-    assert!(Failed.is_reported(false, true));
     assert!(Gone.is_reported(true, true));
     assert!(Refused.is_reported(true, true));
     let step = control
@@ -584,6 +584,57 @@ fn a_save_whose_row_left_goes_at_once_beside_the_one_on_its_way_when_the_page_hi
         .finish(1, beside.token, Saved, false)
         .unwrap_or_default();
     assert!(step.idle && step.patch.is_none());
+    assert!(!control.is_busy(1));
+}
+
+/// Plate 1's row has left the list (an editor output switch) while save 1
+/// was on its way; its commit waits, and the page hiding sends it beside
+/// save 1 (save 2). Returns (save 1, save 2).
+fn rowless_save_sent_beside(control: &mut SaveControl) -> (Patch, Patch) {
+    let first = patch(&control.commit(1, t("A", "r"), old(), false).1);
+    control.commit(1, t("A", "pastor"), old(), false);
+    let sent = control.send_waiting(|_| false);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    (first, patch(&sent[0].1))
+}
+
+#[test]
+fn a_failure_whose_row_left_waits_for_the_save_sent_beside_it_and_a_saved_answer_ends_it() {
+    // Review finding: save 1 failing with no row gave up at once. It toasted
+    // „skúste ju zadať znova" and dropped save 2, which the server may well
+    // have saved: the operator was told to retype text the server has.
+    let mut control = SaveControl::default();
+    let (first, beside) = rowless_save_sent_beside(&mut control);
+    let step = control
+        .finish(1, first.token, Failed, false)
+        .unwrap_or_default();
+    assert!(step.on_its_way, "save 2 decides: {step:?}");
+    assert!(!Failed.is_reported(false, step.on_its_way));
+    assert!(!step.idle && step.patch.is_none() && step.retry_in.is_none());
+    assert!(control.is_busy(1));
+    let step = control
+        .finish(1, beside.token, Saved, false)
+        .unwrap_or_default();
+    assert!(step.idle && step.patch.is_none(), "{step:?}");
+    assert!(!step.not_shown);
+    assert!(!control.is_busy(1));
+}
+
+#[test]
+fn a_failure_whose_row_left_gives_up_once_the_save_sent_beside_it_fails_too() {
+    let mut control = SaveControl::default();
+    let (first, beside) = rowless_save_sent_beside(&mut control);
+    control.finish(1, first.token, Failed, false);
+    let step = control
+        .finish(1, beside.token, Failed, false)
+        .unwrap_or_default();
+    // Nothing is on its way and no field holds the text: the give-up toast.
+    assert!(
+        step.idle && !step.on_its_way && step.retry_in.is_none(),
+        "{step:?}"
+    );
+    assert!(Failed.is_reported(false, step.on_its_way));
+    assert_eq!(TextLeft::of(false, step.not_shown), TextLeft::Nowhere);
     assert!(!control.is_busy(1));
 }
 
