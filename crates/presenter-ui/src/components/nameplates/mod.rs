@@ -202,11 +202,20 @@ impl NameplateStore {
 
     /// Forget the listed output's plates and plate on air at once (the editor's
     /// output switch), so the previous output's rows never show while the new
-    /// output's list loads. An in-flight list response is dropped too.
+    /// output's list loads. An in-flight list response is dropped too, and so
+    /// is a Zobraziť still waiting for its plate's save: shown later, it would
+    /// go on air on the NEW output (#871 review).
     pub fn clear(self) {
         self.next_gen();
+        self.drop_waiting_shows();
         self.plates.set(Vec::new());
         self.active.set(None);
+    }
+
+    /// Every Zobraziť still waiting for its plate's save is stale now (this
+    /// page showed or hid a plate, or the editor switched output).
+    fn drop_waiting_shows(self) {
+        let _ = self.saves.try_update_value(SaveControl::note_show);
     }
 
     /// Re-fetch the plate list (mount, after an own write, on a
@@ -432,10 +441,7 @@ impl NameplateStore {
 
     /// PUT the show-state and apply the returned plate on air.
     fn set_active(self, req: SetActiveReq) {
-        // A Zobraziť still waiting for its plate's save is stale now.
-        self.saves.update_value(|control| {
-            control.note_show();
-        });
+        self.drop_waiting_shows();
         let slug = self.output_slug.get_untracked();
         leptos::task::spawn_local(async move {
             let path = nameplates_active_path(&slug);

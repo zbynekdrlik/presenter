@@ -259,7 +259,9 @@ impl RowSave {
     /// signals are disposed). An editor output switch (the store's slug is
     /// not the row's any more): the plate still exists and the PATCH is
     /// id-scoped, so the drafts are committed and the store carries on
-    /// without the row. Otherwise the plate was deleted elsewhere: typed
+    /// without the row (a commit waiting behind the save on its way goes at
+    /// once if the page hides: `NameplateStore::send_waiting`, from the
+    /// list's own listeners). Otherwise the plate was deleted elsewhere: typed
     /// text the server does not have is reported, and the plate's saves are
     /// forgotten (they could only be answered 404).
     pub(super) fn leave(self) {

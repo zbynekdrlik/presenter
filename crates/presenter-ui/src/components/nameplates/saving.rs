@@ -79,6 +79,24 @@ impl NameplateStore {
         }
     }
 
+    /// The page is being hidden or closed (`visibilitychange` → hidden,
+    /// `pagehide`): a save waiting behind the one on its way whose row has
+    /// left the list (an editor output switch) goes now, beside it. No row
+    /// would send it, and the page may never run again. A listed plate's
+    /// row commits urgently itself.
+    pub fn send_waiting(self) {
+        let steps = self
+            .saves
+            .try_update_value(|control| control.send_waiting(|id| self.is_listed(id)))
+            .unwrap_or_default();
+        for (id, step) in steps {
+            self.run(id, step);
+            leptos::logging::log!(
+                "nameplates: plate {id} save sent now beside the one on its way (the page went hidden; its row has left the list)"
+            );
+        }
+    }
+
     /// Send every failed save again (`trigger`: the network or the page is
     /// back).
     pub fn retry_failed(self, trigger: &'static str) {
@@ -160,12 +178,30 @@ impl NameplateStore {
         }
         self.update_view(id, settled);
         if show {
-            leptos::logging::log!("nameplates: plate {id} saved; shown now");
-            self.show_person(id);
+            // The plate list is the current output's: a plate no longer in
+            // it belongs to an output the editor left (`show_person` would
+            // put it on air on the output shown NOW; the server does not
+            // check which output owns a plate).
+            if self.is_listed(id) {
+                leptos::logging::log!("nameplates: plate {id} saved; shown now");
+                self.show_person(id);
+            } else {
+                leptos::logging::log!(
+                    "nameplates: plate {id} saved; not shown, its output is no longer listed"
+                );
+            }
         }
         if idle {
             self.reload_list();
         }
+    }
+
+    /// Whether plate `id` is in the list the page shows (the current
+    /// output's): a row holds its typed text.
+    fn is_listed(self, id: i64) -> bool {
+        self.plates
+            .try_with_untracked(|list| list.iter().any(|p| p.id == id))
+            .unwrap_or(false)
     }
 
     /// Bring row `id`'s [`PlateSave`] up to date (notifies only on a change).
@@ -203,8 +239,25 @@ impl NameplateStore {
 
     /// The PATCH `token` of plate `id` answered. A saved plate goes into
     /// the local list at once (before the refetch); a save that did not go
-    /// through toasts why, with where its typed text is now.
+    /// through toasts why, with where its typed text is now. The answer of
+    /// a forgotten save changes nothing: bumping the list generation for it
+    /// would drop the list reload its plate's end started (a 404).
     fn finish_save(self, id: i64, token: u64, result: Result<Nameplate, ApiError>) {
+        let outcome = result
+            .as_ref()
+            .err()
+            .map_or(SaveOutcome::Saved, SaveOutcome::of_error);
+        let held = self.is_listed(id);
+        let Some(step) = self
+            .saves
+            .try_update_value(|control| control.finish(id, token, outcome, held))
+            .flatten()
+        else {
+            leptos::logging::log!(
+                "nameplates: plate {id} answer of a forgotten save ({outcome:?})"
+            );
+            return;
+        };
         let error = match result {
             Ok(saved) => {
                 self.next_gen();
@@ -217,29 +270,16 @@ impl NameplateStore {
             }
             Err(e) => Some(e),
         };
-        let outcome = error
-            .as_ref()
-            .map_or(SaveOutcome::Saved, SaveOutcome::of_error);
-        // A row holds the typed text while the plate is in the list it shows.
-        let held = self
-            .plates
-            .try_with_untracked(|list| list.iter().any(|p| p.id == id))
-            .unwrap_or(false);
-        let Some(step) = self
-            .saves
-            .try_update_value(|control| control.finish(id, token, outcome, held))
-            .flatten()
-        else {
-            leptos::logging::log!(
-                "nameplates: plate {id} answer of a forgotten save ({outcome:?})"
-            );
-            return;
-        };
         if let Some(e) = &error {
             leptos::logging::log!("nameplates: plate {id} save not done ({outcome:?}): {e}");
-            if outcome.is_reported(held, step.idle) {
+            if outcome.is_reported(held, step.on_its_way) {
                 let left = TextLeft::of(held, step.not_shown);
-                self.notify(outcome.message(e, left), "error");
+                let timer = step.retry_in.is_some();
+                self.notify(outcome.message(e, left, timer), "error");
+            } else {
+                leptos::logging::log!(
+                    "nameplates: plate {id} failure not reported; a save of the plate is on its way"
+                );
             }
         }
         let all_saved = outcome == SaveOutcome::Saved && step.idle;

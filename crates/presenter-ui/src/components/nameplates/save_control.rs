@@ -26,9 +26,16 @@
 //!   once. A retry sends the desired texts, never half-typed text (that is a
 //!   row's draft, not committed yet). A failure whose text no field holds any
 //!   more (its row left the list) gives up.
+//! - **A failed save may have been applied** (a lost answer, the 15 s abort
+//!   after the server wrote it, an unreadable 2xx body). Unless it carried
+//!   the confirmed texts, the confirmed texts are unknown after it, so the
+//!   desired texts go again once nothing else is on its way (the PATCH is
+//!   idempotent). A failure answered while a PATCH of the plate is still on
+//!   its way, or starts now, is not reported: that PATCH's answer decides.
 //! - **Zobraziť on a busy plate** waits for a ticket: it goes on air once the
 //!   plate is idle with its desired texts confirmed, unless the page showed
-//!   or hid a plate since. A failed or deleted end drops it.
+//!   or hid a plate, or switched output, since. A failed or deleted end
+//!   drops it.
 
 use std::collections::HashMap;
 
@@ -111,17 +118,20 @@ impl SaveOutcome {
     }
 
     /// Whether an answer with this outcome is toasted. `held` = a row holds
-    /// the plate's text, `idle` = the answer left nothing of the plate. A
-    /// failure that left the plate idle has nothing to report: a save sent
-    /// beside it (a hidden page) was answered saved, so the newest texts
-    /// are confirmed.
-    pub fn is_reported(self, held: bool, idle: bool) -> bool {
-        !(self == Self::Failed && held && idle)
+    /// the plate's text, `on_its_way` = a PATCH of the plate is on its way
+    /// after the answer ([`Step::on_its_way`]). A failure answered while one
+    /// is has nothing to report yet: that PATCH's answer decides (a save
+    /// sent beside it as the page hid, or the desired texts sent again), and
+    /// reports a failure of its own.
+    pub fn is_reported(self, held: bool, on_its_way: bool) -> bool {
+        !(self == Self::Failed && held && on_its_way)
     }
 
     /// The toast for a save that came back with `error` (`self` is
-    /// [`Self::of_error`] of it); `left` = where its typed text is now.
-    pub fn message(self, error: &ApiError, left: TextLeft) -> String {
+    /// [`Self::of_error`] of it); `left` = where its typed text is now,
+    /// `timer` = a retry timer is armed (from the 4th failure in a row none
+    /// is, so the toast does not promise one).
+    pub fn message(self, error: &ApiError, left: TextLeft, timer: bool) -> String {
         match (self, left) {
             (Self::Gone, TextLeft::InFieldNotShown) => format!("{NOT_SHOWN}{DELETED_UNSAVED}"),
             (Self::Gone, _) => DELETED_UNSAVED.to_string(),
@@ -137,10 +147,11 @@ impl SaveOutcome {
                 } else {
                     ""
                 };
+                let soon = if timer { "sám o chvíľu, " } else { "" };
                 format!(
                     "{not_shown}Uloženie zlyhalo: {error}.{login} Text ostal v poli ako \
-                     neuložený — uloží sa znova sám o chvíľu, po návrate na stránku alebo \
-                     keď pole opustíte."
+                     neuložený — uloží sa znova {soon}po obnovení siete alebo návrate na \
+                     stránku, po stlačení Zobraziť alebo keď pole opustíte."
                 )
             }
             (Self::Saved | Self::Refused, _) => format!("Uloženie zlyhalo: {error}"),
@@ -221,6 +232,10 @@ pub struct Step {
     pub not_shown: bool,
     /// An answer left nothing of the plate: the list may be reloaded.
     pub idle: bool,
+    /// Set by an answer: a PATCH of the plate is on its way after it (still
+    /// out, or started now). Its answer decides, so a failure answered now
+    /// is not reported ([`SaveOutcome::is_reported`]).
+    pub on_its_way: bool,
 }
 
 /// A failure streak: failures in a row, and the number of the newest one
@@ -237,7 +252,9 @@ struct Slot {
     in_flight: Vec<Patch>,
     /// The texts the server has as far as the page knows: the newest save
     /// answered as saved, else the saved texts when the plate got busy.
-    confirmed: Texts,
+    /// `None` after a failed save of other texts: that one may have been
+    /// applied, so what the server holds is unknown.
+    confirmed: Option<Texts>,
     failure: Option<Failure>,
     /// The ticket of a waiting Zobraziť.
     show: Option<u64>,
@@ -287,6 +304,31 @@ impl SaveControl {
             .collect();
         ids.sort_unstable();
         ids
+    }
+
+    /// The page is being hidden or closed: every plate whose desired texts
+    /// wait behind a PATCH on its way, and that no row on the page will
+    /// commit urgently (`has_row` false: its row left the list, an editor
+    /// output switch), sends them now beside it, as an urgent commit does.
+    /// One step per plate sent, in id order.
+    pub fn send_waiting(&mut self, has_row: impl Fn(i64) -> bool) -> Vec<(i64, Step)> {
+        let mut ids: Vec<i64> = self
+            .slots
+            .iter()
+            .filter(|(id, slot)| {
+                !has_row(**id)
+                    && !slot.in_flight.is_empty()
+                    && slot
+                        .in_flight
+                        .iter()
+                        .all(|patch| patch.texts != slot.desired)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .map(|id| (id, Step::with_patch(self.send(id))))
+            .collect()
     }
 
     /// The operator committed `texts` for plate `id`. `saved` = the texts
@@ -343,11 +385,16 @@ impl SaveControl {
                 return Some(self.refused(id, sent.texts));
             }
             SaveOutcome::Saved => {
-                slot.confirmed = sent.texts.clone();
+                slot.confirmed = Some(sent.texts.clone());
                 slot.failure = None;
             }
             SaveOutcome::Refused => slot.failure = None,
             SaveOutcome::Failed => {
+                // It may have been applied all the same: unless it carried
+                // the confirmed texts, what the server holds is unknown.
+                if slot.confirmed.as_ref() != Some(&sent.texts) {
+                    slot.confirmed = None;
+                }
                 let count = slot.failure.as_ref().map_or(0, |f| f.count) + 1;
                 let epoch = self.next();
                 if let Some(slot) = self.slots.get_mut(&id) {
@@ -357,7 +404,10 @@ impl SaveControl {
         }
         let slot = self.slots.get_mut(&id)?;
         if !slot.in_flight.is_empty() {
-            let mut step = Step::default();
+            let mut step = Step {
+                on_its_way: true,
+                ..Step::default()
+            };
             if outcome == SaveOutcome::Saved {
                 step.settled = self.settled_fields(id);
             }
@@ -367,6 +417,7 @@ impl SaveControl {
             return Some(Self::wait_for_retry(slot));
         }
         let mut step = self.advance(id);
+        step.on_its_way = step.patch.is_some();
         if outcome == SaveOutcome::Saved && step.settled.is_none() {
             step.settled = self.settled_fields(id);
         }
@@ -429,14 +480,14 @@ impl SaveControl {
     }
 
     /// Nothing of plate `id` is on its way: send its desired texts, or, when
-    /// the server has them, the plate is idle (its entry goes, its fields
-    /// are settled, a current waiting Zobraziť goes on air).
+    /// the server is known to have them, the plate is idle (its entry goes,
+    /// its fields are settled, a current waiting Zobraziť goes on air). A
+    /// plate with no entry has nothing to do.
     fn advance(&mut self, id: i64) -> Step {
-        let confirmed = self
-            .slots
-            .get(&id)
-            .is_some_and(|slot| slot.confirmed == slot.desired);
-        if !confirmed {
+        let Some(slot) = self.slots.get(&id) else {
+            return Step::default();
+        };
+        if slot.confirmed.as_ref() != Some(&slot.desired) {
             return Step::with_patch(self.send(id));
         }
         let Some(slot) = self.slots.remove(&id) else {
@@ -450,21 +501,20 @@ impl SaveControl {
         }
     }
 
-    /// Start a PATCH of plate `id`'s desired texts.
-    fn send(&mut self, id: i64) -> Patch {
+    /// Start a PATCH of plate `id`'s desired texts; `None` for a plate with
+    /// no entry (never a PATCH with empty texts).
+    fn send(&mut self, id: i64) -> Option<Patch> {
+        if !self.slots.contains_key(&id) {
+            return None;
+        }
         let token = self.next();
-        let Some(slot) = self.slots.get_mut(&id) else {
-            return Patch {
-                token,
-                texts: Texts::default(),
-            };
-        };
+        let slot = self.slots.get_mut(&id)?;
         let patch = Patch {
             token,
             texts: slot.desired.clone(),
         };
         slot.in_flight.push(patch.clone());
-        patch
+        Some(patch)
     }
 
     /// The failed save waits for a retry: a timer when the streak allows
@@ -513,10 +563,11 @@ impl SaveControl {
     }
 
     /// The fields of busy plate `id` whose text is final: confirmed as the
-    /// desired text, and no save on its way carries another.
+    /// desired text, and no save on its way carries another. None while the
+    /// server's texts are unknown.
     fn settled_fields(&mut self, id: i64) -> Option<(u64, Settle)> {
         let slot = self.slots.get(&id)?;
-        let confirmed = &slot.confirmed;
+        let confirmed = slot.confirmed.as_ref()?;
         let name = (confirmed.0 == slot.desired.0
             && slot.in_flight.iter().all(|p| p.texts.0 == confirmed.0))
         .then(|| confirmed.0.clone());
@@ -545,7 +596,7 @@ impl Slot {
         Self {
             desired,
             in_flight: Vec::new(),
-            confirmed: saved,
+            confirmed: Some(saved),
             failure: None,
             show: None,
         }
@@ -553,9 +604,9 @@ impl Slot {
 }
 
 impl Step {
-    fn with_patch(patch: Patch) -> Self {
+    fn with_patch(patch: Option<Patch>) -> Self {
         Self {
-            patch: Some(patch),
+            patch,
             ..Self::default()
         }
     }

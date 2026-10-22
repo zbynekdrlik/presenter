@@ -95,22 +95,30 @@ pub fn NameplateSongRow(store: NameplateStore, options: RowOptions) -> impl Into
 
 /// The person plates in list order, keyed by plate id (a reorder moves rows).
 /// Owns the one drag in progress, so every row can show the drop line, and
-/// the list's retry triggers: back online or back in view, every failed
-/// save goes again (a phone fires `visibilitychange` on unlock before its
-/// Wi-Fi is back, so that try alone often fails; the timers follow).
+/// the list's save triggers: back online or back in view, every failed save
+/// goes again (a phone fires `visibilitychange` on unlock before its Wi-Fi
+/// is back, so that try alone often fails; the timers follow). Hidden or
+/// closed, a save waiting whose row has left the list (an editor output
+/// switch) goes at once: no row is left to send it (#871 review).
 #[component]
 pub fn NameplateRows(store: NameplateStore, options: RowOptions) -> impl IntoView {
     let network_back = window_event_listener_untyped("online", move |_| {
         store.retry_failed("the network is back");
     });
-    let page_back = window_event_listener_untyped("visibilitychange", move |_| {
-        if !page_hidden() {
+    let page_shown = window_event_listener_untyped("visibilitychange", move |_| {
+        if page_hidden() {
+            store.send_waiting();
+        } else {
             store.retry_failed("the page is back in view");
         }
     });
+    let page_closes = window_event_listener_untyped("pagehide", move |_| {
+        store.send_waiting();
+    });
     on_cleanup(move || {
         network_back.remove();
-        page_back.remove();
+        page_shown.remove();
+        page_closes.remove();
     });
     let drag = RwSignal::new(None::<PlateDrag>);
     // #871 review: a plate deleted elsewhere while it is dragged ends its
@@ -326,7 +334,7 @@ fn NameplateRow(
                     on:blur=move |ev| save.commit_on_leave(event_target(&ev)) />
                 <Show when=unsaved>
                     <span class="nameplates__unsaved" data-role="stream-nameplate-unsaved"
-                        title="Text sa neuložil. Uloží sa znova sám, alebo keď pole opustíte.">
+                        title="Text sa neuložil. Uloží sa znova po obnovení siete alebo návrate na stránku, po stlačení Zobraziť alebo keď pole opustíte.">
                         "neuložené"
                     </span>
                 </Show>
