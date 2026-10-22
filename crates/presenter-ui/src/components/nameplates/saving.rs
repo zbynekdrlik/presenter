@@ -175,9 +175,11 @@ impl NameplateStore {
         }
     }
 
-    /// Zobraziť on plate `id` (its row committed its drafts first): on air
-    /// now when nothing of the plate is busy, else once its newest texts
-    /// are saved (a failed save goes again now).
+    /// Zobraziť on plate `id`: on air now when nothing of the plate is busy,
+    /// else once its newest texts are saved. The row commits first
+    /// (`RowSave::show`), and that commit already sends a failed save again
+    /// (drafts through `save`, none through `retry_of`), so this only takes
+    /// the ticket.
     pub fn show_saved(self, id: i64) {
         let Some((now, step)) = self.saves.try_update_value(|control| control.show(id)) else {
             return;
@@ -187,13 +189,7 @@ impl NameplateStore {
             return;
         }
         leptos::logging::log!("nameplates: plate {id} goes on air once its save is through");
-        let sent = step.patch.is_some();
         self.run(id, step);
-        if sent {
-            leptos::logging::log!(
-                "nameplates: plate {id} failed save sent again (Zobraziť was pressed)"
-            );
-        }
     }
 
     /// Forget plate `id`'s saves: its row left a list that no longer has
