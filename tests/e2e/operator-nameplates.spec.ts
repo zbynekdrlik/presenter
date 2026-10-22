@@ -890,7 +890,8 @@ type HeldPatch = {
   /** Let it reach the server, then drop its answer (a lost connection): the
    *  server has applied it, the page sees a network error. */
   lose: () => void;
-  /** Resolves once its answer (or the error) was handed to the page. */
+  /** Resolves once its answer (or the error) was handed to the page. The
+   *  page HANDLES it a few awaits later: see [`savedWhileAnotherIsOut`]. */
   answered: Promise<void>;
 };
 
@@ -924,6 +925,20 @@ async function holdPatches(page: Page, id: number): Promise<{ bodies: PatchBody[
     answer();
   });
   return { bodies, held };
+}
+
+/** Resolves once the page has HANDLED a saved answer of plate `id` while
+ *  another save of the plate is still on its way (the page's log line).
+ *  `answered` only says the network delivered an answer; the page handles
+ *  it two awaits later, so on a CPU-starved runner the answer of the next
+ *  save released could be handled first, and the test would go down
+ *  another path. Set it up before the release, await it before the next. */
+function savedWhileAnotherIsOut(page: Page, id: number) {
+  return page.waitForEvent("console", {
+    predicate: (msg) =>
+      msg.text() === `nameplates: plate ${id} saved; a save of the plate is still on its way`,
+    timeout: 10_000,
+  });
 }
 
 /** Fail the first `failures` PATCHes of plate `id` at the network (the
@@ -1067,8 +1082,12 @@ test("#871 a save waiting for the one on its way goes out at once when the page 
     { primaryText: "Fronta Anna Nová", secondaryText: "kazateľka" },
     { primaryText: "Fronta Anna Nová", secondaryText: "pastorka" },
   ]);
+  // Save 1's answer handled first, as it came (save 2 handled first would
+  // leave the older role last and send the newest once more).
+  const firstHandled = savedWhileAnotherIsOut(page, anna);
   held[0].release();
   await held[0].answered;
+  await firstHandled;
   held[1].release();
   await held[1].answered;
   await expect
@@ -1629,9 +1648,13 @@ test("#871 when an older save of a plate is answered after the newer one, the ne
 
   // The newer save reaches the server first, the older one after it: the
   // server now holds the OLDER role ("sent last" is not "applied last").
+  // The page must have handled the newer answer before the older one comes
+  // (handled the other way round, nothing is repaired: an accepted risk).
+  const newerHandled = savedWhileAnotherIsOut(page, anna);
   held[1].release();
   await held[1].answered;
   await expect.poll(async () => (await savedPlate())?.secondaryText).toBe("pastorka");
+  await newerHandled;
   held[0].release();
   await held[0].answered;
   await expect.poll(async () => (await savedPlate())?.secondaryText).toBe("kazateľka");
@@ -1685,9 +1708,12 @@ test("#871 an older save whose answer is lost after the newer one was saved: the
 
   // Save 2 is saved. Save 1 then reaches the server too, but its answer is
   // lost (a dropped connection): the page sees a failed save, while the
-  // server now holds the OLDER role.
+  // server now holds the OLDER role. The page must have handled save 2's
+  // answer before that failure comes (the other way round is not repaired).
+  const newerHandled = savedWhileAnotherIsOut(page, anna);
   held[1].release();
   await held[1].answered;
+  await newerHandled;
   held[0].lose();
   await held[0].answered;
   expect((await savedPlate())?.secondaryText).toBe("kazateľka");
@@ -2081,9 +2107,12 @@ test("#871 Zobraziť while the page repairs an older save answered last waits fo
   await setPageHidden(page, false);
 
   // The newer save is answered first, the older one last: the server holds
-  // the OLDER role now, and the page sends the newest texts once more.
+  // the OLDER role now, and the page sends the newest texts once more (the
+  // page must have handled the newer answer before the older one comes).
+  const newerHandled = savedWhileAnotherIsOut(page, anna);
   held[1].release();
   await held[1].answered;
+  await newerHandled;
   held[0].release();
   await held[0].answered;
   await expect.poll(() => bodies.length).toBe(3);
@@ -2259,8 +2288,11 @@ test("#871 a name cleared while its new text is still saving: the role goes with
   await expect.poll(() => bodies.length).toBe(2);
   expect(bodies[1]).toEqual({ primaryText: "Najnovšie A nová", secondaryText: "nová rola" });
 
+  // Save 1's answer handled first, as it came.
+  const firstHandled = savedWhileAnotherIsOut(page, a);
   held[0].release();
   await held[0].answered;
+  await firstHandled;
   held[1].release();
   await held[1].answered;
   await expect

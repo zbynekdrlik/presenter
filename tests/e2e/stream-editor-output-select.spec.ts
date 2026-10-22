@@ -517,6 +517,19 @@ async function holdFirstPatch(
   return { bodies, releaseFirst };
 }
 
+/** Resolves once the page has HANDLED a saved answer of plate `id` while
+ *  another save of the plate is still on its way (the page's log line). A
+ *  `waitForResponse` only says the network delivered the answer; the page
+ *  handles it two awaits later, so on a CPU-starved runner the held save's
+ *  answer could be handled first. Set it up before the save is answered. */
+function savedWhileAnotherIsOut(page: Page, id: number) {
+  return page.waitForEvent("console", {
+    predicate: (msg) =>
+      msg.text() === `nameplates: plate ${id} saved; a save of the plate is still on its way`,
+    timeout: 10_000,
+  });
+}
+
 test("#871 a Zobraziť waiting for its save is dropped when the editor switches output, never shown on the new one", async ({
   page,
 }) => {
@@ -629,14 +642,11 @@ test("#871 a save left waiting when the editor switches output goes at once when
   // The page hides (the laptop lid closes, the tab is closed): no row is
   // left to send the texts, so the list sends them now, beside the save on
   // its way.
-  const besideAnswered = page.waitForResponse(
-    (res) =>
-      res.request().method() === "PATCH" && res.url().endsWith(`/stream/api/nameplates/${plateId}`),
-  );
+  const besideHandled = savedWhileAnotherIsOut(page, plateId);
   await setPageHidden(page, true);
   await expect.poll(() => bodies.length).toBe(2);
   expect(bodies[1]).toEqual(newest);
-  await besideAnswered;
+  await besideHandled;
 
   // The held save reaches the server last, so the page sends the newest
   // texts once more, and the server ends on them.

@@ -290,9 +290,17 @@ impl NameplateStore {
             }
         }
         let all_saved = outcome == SaveOutcome::Saved && step.idle;
+        // Saved while an earlier PATCH of the plate is still out (its answer
+        // decides next). Logged: the page handles an answer a few awaits
+        // after the network delivered it, so only this says it was handled.
+        let still_out = outcome == SaveOutcome::Saved && step.on_its_way && step.patch.is_none();
         self.run(id, step);
         if all_saved {
             leptos::logging::log!("nameplates: plate {id} saved; nothing left to send");
+        } else if still_out {
+            leptos::logging::log!(
+                "nameplates: plate {id} saved; a save of the plate is still on its way"
+            );
         }
     }
 }
