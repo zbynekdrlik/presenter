@@ -34,7 +34,8 @@
  *    an older save answered after the newer one makes the page send the
  *    newer texts once more, and so does an older save whose answer is lost
  *    after the newer one was saved (no failure toast); a 404 drops the save
- *    waiting behind it;
+ *    waiting behind it, and a late saved answer of that plate's save does
+ *    not cancel the list reload the 404 started;
  *  - a name cleared to retype it does not hold back a role typed in the same
  *    row when the page hides, and that role goes with the NEWEST name;
  *  - one controller per list owns the saves: a commit while a save is on its
@@ -1769,6 +1770,101 @@ test("#871 a save of a deleted plate (404) drops the save waiting behind it: one
   holdLists = false;
   for (const release of heldLists) release();
   await expect.poll(() => rowOrder(page)).toEqual([a]);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const lines = splitConsole(
+    consoleErrors,
+    /^\[error\] Failed to load resource: the server responded with a status of 404\b/,
+  );
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
+});
+
+test("#871 a late saved answer of a deleted plate's save does not cancel the list reload the 404 started", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [a, b] = await seedPlates(request, [
+    ["Neskoro A", "1"],
+    ["Neskoro B", "2"],
+  ]);
+  await openOperator(page, "/ui/operator/menovky");
+  await expect.poll(() => rowOrder(page)).toEqual([a, b]);
+  // The page's list reloads are held, so B's row stays until the test lets
+  // them go.
+  const heldLists: Array<() => void> = [];
+  let holdLists = true;
+  await page.route(`**/stream/api/outputs/${SLUG}/nameplates`, async (route) => {
+    if (route.request().method() === "GET" && holdLists) {
+      await new Promise<void>((resolve) => heldLists.push(resolve));
+    }
+    await route.continue();
+  });
+  // B's first PATCH is held at the network; the second reaches the server at
+  // once, but its answer is held.
+  const bodies: PatchBody[] = [];
+  let sendFirst = () => {};
+  const firstGate = new Promise<void>((resolve) => (sendFirst = resolve));
+  let answerSecond = () => {};
+  const secondGate = new Promise<void>((resolve) => (answerSecond = resolve));
+  let secondApplied = () => {};
+  const applied = new Promise<void>((resolve) => (secondApplied = resolve));
+  await page.route(`**/stream/api/nameplates/${b}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const n = bodies.push(route.request().postDataJSON() as PatchBody);
+    if (n === 1) {
+      await firstGate;
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    secondApplied();
+    await secondGate;
+    await route.fulfill({ response });
+  });
+  const bName = row(page, b).locator(NAME);
+  const bRole = row(page, b).locator(ROLE);
+
+  // Save 1 (the name, Tab) is held; save 2 (the role) waits, and the phone
+  // locks: save 2 goes beside it and the server applies it.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${b} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await bName.fill("Neskoro B nová");
+  await page.keyboard.press("Tab");
+  await expect(bRole).toBeFocused();
+  await bRole.fill("nová rola");
+  await bRole.blur();
+  await waits;
+  await setPageHidden(page, true);
+  await applied;
+  await setPageHidden(page, false);
+
+  // Another operator deletes B; save 1 then reaches the server: 404. The page
+  // forgets B's saves and reloads the list (held).
+  await deletePlate(request, b);
+  sendFirst();
+  await expect(page.locator('[data-role="toast"]')).toHaveText(DELETED_TOAST);
+  // Save 2's answer (saved, before the delete) comes last: an answer of a
+  // forgotten save.
+  const forgotten = page.waitForEvent("console", {
+    predicate: (msg) => msg.text().startsWith(`nameplates: plate ${b} answer of a forgotten save`),
+    timeout: 10_000,
+  });
+  answerSecond();
+  await forgotten;
+
+  // The list reloads come back: the newest one must still apply, so B goes.
+  holdLists = false;
+  for (const release of heldLists) release();
+  await expect.poll(() => rowOrder(page)).toEqual([a]);
+  expect(bodies).toHaveLength(2);
   await page.unrouteAll({ behavior: "wait" });
 
   const lines = splitConsole(
