@@ -85,9 +85,11 @@ impl NameplateStore {
     /// would send it, and the page may never run again. A listed plate's
     /// row commits urgently itself.
     pub fn send_waiting(self) {
-        // Read BEFORE the controller update: `try_update_value` runs under
-        // the reactive arena's write lock, and a signal read inside it
-        // would take that lock again (a panic in the WASM build).
+        // Read BEFORE the controller update and hand it in as plain data,
+        // so the closure stays pure. (A signal read inside it would be safe:
+        // the closure runs under the `saves` value's own lock, not the
+        // arena's. Re-entering `saves` itself there is what breaks: the
+        // nested call finds it locked and is silently dropped, ui skill.)
         let listed: Vec<i64> = self
             .plates
             .try_with_untracked(|list| list.iter().map(|p| p.id).collect())

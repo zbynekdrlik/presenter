@@ -97,9 +97,12 @@ paths:
     sends, beside the PATCH on its way, every plate whose `desired` waits and that is not in
     the shown list (log `… (the page went hidden; its row has left the list)`). Listed
     plates are left to their rows' own urgent commit, so nothing goes twice. The shown ids
-    are read BEFORE `saves.try_update_value`: never read a signal (or another
-    `StoredValue`) inside that closure (ui skill: reactive_graph 0.1.8 runs it under the
-    arena's write lock).
+    are read BEFORE `saves.try_update_value` and handed in as plain data, so the closure
+    stays pure (style). The real hazard is re-entering `saves` itself inside one of its
+    own closures (ui skill: reactive_graph 0.1.8 runs the closure under the value's own
+    lock, so a nested `try_*` on the same `StoredValue` silently returns `None` and the
+    update is dropped, and `with_value` / `get_value` panic with a misleading "disposed";
+    other signals and StoredValues are safe to read there).
   - **A row drops a draft only when the store SETTLES that text** (`PlateSave.settled`, a
     numbered `Settle`, applied once per number by an `Effect` in `RowSave`): a field is
     settled when the confirmed text is the desired one and no PATCH on its way carries
