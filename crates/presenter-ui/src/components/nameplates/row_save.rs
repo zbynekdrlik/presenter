@@ -182,14 +182,11 @@ impl RowSave {
     /// before anything is sent: leaving the field refuses it (a toast, the
     /// old name stays); otherwise the operator is retyping it, so it stays
     /// as typed and a role typed in the row goes with the newest name. A
-    /// row with no drafts on a hidden page still sends what an EARLIER row
-    /// of the plate left waiting ([`NameplateStore::send_waiting_of`]: an
-    /// editor output switch there and back while a save was on its way).
+    /// row with nothing to commit still lets its plate's saves go on
+    /// ([`Self::nothing_to_commit`]).
     pub(super) fn commit(self, why: Why) {
         if !self.has_drafts() {
-            if why == Why::PageHidden {
-                self.store.send_waiting_of(self.id);
-            }
+            self.nothing_to_commit(why);
             return;
         }
         let id = self.id;
@@ -220,6 +217,7 @@ impl RowSave {
                         "nameplates: plate {id} name is empty; kept as typed, not saved ({})",
                         why.reason()
                     );
+                    self.nothing_to_commit(why);
                     return;
                 }
             }
@@ -234,6 +232,25 @@ impl RowSave {
                 why.reason()
             );
         }
+    }
+
+    /// The row has nothing to commit (no drafts, or only a name being
+    /// retyped, kept as typed), yet its plate may still hold texts that no
+    /// commit of this row will carry: a row rebuilt by an editor output
+    /// switch there and back stands on the texts an EARLIER row left in the
+    /// store (#871 review). On a hidden page, texts waiting behind the save
+    /// on its way go now, beside it ([`NameplateStore::send_waiting_of`]);
+    /// the list's own hidden handler skips a listed plate. And a save that
+    /// failed with nothing on its way goes again now
+    /// ([`NameplateStore::retry_of`]), as a commit would send it: its toast
+    /// promises a save once the field is left. Each call does nothing in
+    /// the other's case (a save on its way, or not), and once one sends,
+    /// the texts are on their way, so hidden then `pagehide` send once.
+    fn nothing_to_commit(self, why: Why) {
+        if why == Why::PageHidden {
+            self.store.send_waiting_of(self.id);
+        }
+        self.store.retry_of(self.id, why.reason());
     }
 
     /// Zobraziť. A phone may not blur the field on a button tap (iOS

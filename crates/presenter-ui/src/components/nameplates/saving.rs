@@ -110,13 +110,14 @@ impl NameplateStore {
         self.send_waiting_where(|id| listed.contains(&id), "its row has left the list");
     }
 
-    /// The page is being hidden or closed and row `id` has no drafts: a
-    /// save of its plate that an EARLIER row left waiting (an editor output
-    /// switch took that row while a save was on its way, and switching back
-    /// rebuilt the row with no drafts) goes now, beside it. The list's
-    /// [`Self::send_waiting`] skips a listed plate. Once sent, the plate has
-    /// its desired texts on their way, so the next ask (hidden, then
-    /// `pagehide`) sends nothing more.
+    /// The page is being hidden or closed and row `id` has nothing to commit
+    /// (no drafts, or only a name being retyped): a save of its plate that
+    /// an EARLIER row left waiting (an editor output switch took that row
+    /// while a save was on its way, and switching back rebuilt the row with
+    /// no drafts) goes now, beside it. The list's [`Self::send_waiting`]
+    /// skips a listed plate. Once sent, the plate has its desired texts on
+    /// their way, so the next ask (hidden, then `pagehide`) sends nothing
+    /// more.
     pub fn send_waiting_of(self, id: i64) {
         self.send_waiting_where(|other| other != id, "its row was rebuilt");
     }
@@ -144,8 +145,17 @@ impl NameplateStore {
             .try_with_value(SaveControl::failed)
             .unwrap_or_default();
         for id in ids {
-            self.retry_with(id, trigger, |control| control.retry(id));
+            self.retry_of(id, trigger);
         }
+    }
+
+    /// Send plate `id`'s failed save again (`trigger` for the log). Nothing
+    /// unless it failed with nothing of the plate on its way. Its row calls
+    /// it when it has nothing to commit itself (a row rebuilt by an editor
+    /// output switch stands on the texts an earlier row left here), so
+    /// leaving the field, the window or the page retries as a commit would.
+    pub fn retry_of(self, id: i64, trigger: &'static str) {
+        self.retry_with(id, trigger, |control| control.retry(id));
     }
 
     /// Run a retry of plate `id` the controller allows (`retry`), and log it.
