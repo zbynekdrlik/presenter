@@ -32,7 +32,9 @@
  *    the page's own retry timer);
  *  - a save sent beside another as the page hid keeps the next save waiting;
  *    an older save answered after the newer one makes the page send the
- *    newer texts once more; a 404 drops the save waiting behind it;
+ *    newer texts once more, and so does an older save whose answer is lost
+ *    after the newer one was saved (no failure toast); a 404 drops the save
+ *    waiting behind it;
  *  - a name cleared to retype it does not hold back a role typed in the same
  *    row when the page hides, and that role goes with the NEWEST name;
  *  - one controller per list owns the saves: a commit while a save is on its
@@ -880,15 +882,23 @@ const UNSAVED = '[data-role="stream-nameplate-unsaved"]';
 
 type PatchBody = { primaryText: string; secondaryText: string };
 
+/** One PATCH held at the network by [`holdPatches`]. */
+type HeldPatch = {
+  /** Let it through and hand its answer to the page. */
+  release: () => void;
+  /** Let it reach the server, then drop its answer (a lost connection): the
+   *  server has applied it, the page sees a network error. */
+  lose: () => void;
+  /** Resolves once its answer (or the error) was handed to the page. */
+  answered: Promise<void>;
+};
+
 /** Hold every PATCH of plate `id` at the network, in the order they come (a
- *  slow phone network), until the test lets it go: `held[n].release()`;
- *  `held[n].answered` resolves once its answer was handed to the page. */
-async function holdPatches(
-  page: Page,
-  id: number,
-): Promise<{ bodies: PatchBody[]; held: Array<{ release: () => void; answered: Promise<void> }> }> {
+ *  slow phone network), until the test lets it go: `held[n].release()` or
+ *  `held[n].lose()`. */
+async function holdPatches(page: Page, id: number): Promise<{ bodies: PatchBody[]; held: HeldPatch[] }> {
   const bodies: PatchBody[] = [];
-  const held: Array<{ release: () => void; answered: Promise<void> }> = [];
+  const held: HeldPatch[] = [];
   await page.route(`**/stream/api/nameplates/${id}`, async (route) => {
     if (route.request().method() !== "PATCH") {
       await route.continue();
@@ -896,12 +906,20 @@ async function holdPatches(
     }
     bodies.push(route.request().postDataJSON() as PatchBody);
     let release = () => {};
+    let lose = () => {};
     let answer = () => {};
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    held.push({ release, answered: new Promise<void>((resolve) => (answer = resolve)) });
-    await gate;
+    const gate = new Promise<"answer" | "lose">((resolve) => {
+      release = () => resolve("answer");
+      lose = () => resolve("lose");
+    });
+    held.push({ release, lose, answered: new Promise<void>((resolve) => (answer = resolve)) });
+    const how = await gate;
     const response = await route.fetch();
-    await route.fulfill({ response });
+    if (how === "lose") {
+      await route.abort();
+    } else {
+      await route.fulfill({ response });
+    }
     answer();
   });
   return { bodies, held };
@@ -1631,6 +1649,69 @@ test("#871 when an older save of a plate is answered after the newer one, the ne
   expect(bodies).toHaveLength(3);
 
   expect(consoleErrors).toEqual([]);
+});
+
+test("#871 an older save whose answer is lost after the newer one was saved: the newer texts go once more, with no failure toast", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsole(page);
+  await resetPlates(request);
+  const [anna] = await seedPlates(request, [["Strata Anna", "kazateľka"]]);
+  await openOperator(page, "/ui/operator/menovky");
+  const annaRow = row(page, anna);
+  const annaName = annaRow.locator(NAME);
+  const annaRole = annaRow.locator(ROLE);
+  await expect(annaName).toHaveValue("Strata Anna");
+  const { bodies, held } = await holdPatches(page, anna);
+  const savedPlate = async () => (await listPlates(request)).find((p) => p.id === anna);
+
+  // Save 1 (the name, Tab) is held, save 2 (the role) waits, and the phone
+  // locks: save 2 goes at once beside save 1.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${anna} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await annaName.fill("Strata Anna Nová");
+  await page.keyboard.press("Tab");
+  await expect(annaRole).toBeFocused();
+  await annaRole.fill("pastorka");
+  await annaRole.blur();
+  await waits;
+  await setPageHidden(page, true);
+  await expect.poll(() => bodies.length).toBe(2);
+  await setPageHidden(page, false);
+
+  // Save 2 is saved. Save 1 then reaches the server too, but its answer is
+  // lost (a dropped connection): the page sees a failed save, while the
+  // server now holds the OLDER role.
+  held[1].release();
+  await held[1].answered;
+  held[0].lose();
+  await held[0].answered;
+  expect((await savedPlate())?.secondaryText).toBe("kazateľka");
+
+  // A failed save may have been applied, so the page sends the newest texts
+  // once more, and the server ends on them.
+  await expect.poll(() => bodies.length).toBe(3);
+  expect(bodies[2]).toEqual({ primaryText: "Strata Anna Nová", secondaryText: "pastorka" });
+  held[2].release();
+  await held[2].answered;
+  await expect
+    .poll(savedPlate)
+    .toMatchObject({ primaryText: "Strata Anna Nová", secondaryText: "pastorka" });
+  await expect(annaRow).toHaveAttribute("data-unsaved", "false");
+  await expect(annaRole).toHaveValue("pastorka");
+  // Nothing typed was lost, so no failure toast. Read ONCE, now that the
+  // page has dealt with every answer (a toast stays 3.5 s).
+  expect(await page.locator('[data-role="toast"]').getAttribute("data-visible")).toBe("false");
+  await page.unrouteAll({ behavior: "wait" });
+  expect(bodies).toHaveLength(3);
+
+  // Chrome logs the one dropped answer itself; nothing else may be logged.
+  const lines = splitConsole(consoleErrors, NETWORK_FAILED);
+  expect(lines.expected).toHaveLength(1);
+  expect(lines.other).toEqual([]);
 });
 
 test("#871 a save of a deleted plate (404) drops the save waiting behind it: one toast, no second request", async ({

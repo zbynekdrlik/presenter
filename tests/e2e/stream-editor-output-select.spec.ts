@@ -21,6 +21,10 @@
  *  - #871: a save still on its way when the editor switches output goes
  *    once, with the role it had; if it then fails, the toast says to type
  *    the change again (its field is gone).
+ *  - #871: a Zobraziť waiting for its save is dropped by an output switch,
+ *    never put on air on the output the editor shows now.
+ *  - #871: a save left waiting by an output switch (its row is gone) goes at
+ *    once when the page hides, beside the save on its way.
  *
  * Clean console is asserted last.
  */
@@ -476,4 +480,175 @@ test("#871 a save that fails after the editor switched output says to type the c
     errors.filter((line) => !aborted.test(line)),
     `editor console: ${errors.join(" | ")}`,
   ).toEqual([]);
+});
+
+/** Make the page hidden (the laptop lid closes, another app or tab) or
+ *  visible again, as the browser does: `visibilityState` + a bubbling
+ *  `visibilitychange`, so a window listener hears it. */
+async function setPageHidden(page: Page, hidden: boolean): Promise<void> {
+  await page.evaluate((hide) => {
+    if (hide) {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    } else {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+  }, hidden);
+}
+
+/** Record every PATCH of plate `id` and hold the FIRST one at the network
+ *  until `releaseFirst()`; later ones go through at once. */
+async function holdFirstPatch(
+  page: Page,
+  id: number,
+): Promise<{ bodies: PatchBody[]; releaseFirst: () => void }> {
+  const bodies: PatchBody[] = [];
+  let releaseFirst = () => {};
+  const gate = new Promise<void>((resolve) => (releaseFirst = resolve));
+  await page.route(`**/stream/api/nameplates/${id}`, async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    const n = bodies.push(route.request().postDataJSON() as PatchBody);
+    if (n === 1) await gate;
+    await route.continue();
+  });
+  return { bodies, releaseFirst };
+}
+
+test("#871 a Zobraziť waiting for its save is dropped when the editor switches output, never shown on the new one", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const otherActive = `${baseURL}/stream/api/outputs/${other}/nameplates/active`;
+  const otherList = `${baseURL}/stream/api/outputs/${other}/nameplates`;
+  const cleared = await page.request.put(otherActive, { data: { source: null } });
+  expect(cleared.status()).toBe(200);
+  const name = `SW_871_SHOW_${Date.now() % 100_000}`;
+  const plateId = await createStreamPlate(page, name, "hosť");
+  const { bodies, releaseFirst } = await holdFirstPatch(page, plateId);
+  // Every show / hide the page asks for on the other output.
+  const otherPuts: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "PUT" && req.url() === otherActive) otherPuts.push(req.postData() ?? "");
+  });
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  const plateName = plateRow.locator('[data-role="stream-nameplate-name"]');
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+
+  // The new name is saved (that PATCH held at the network), and Zobraziť is
+  // pressed meanwhile: it waits for the save.
+  await plateName.fill(`${name} nová`);
+  await plateName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  const waitsForSave = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${plateId} goes on air once its save is through`,
+    timeout: 10_000,
+  });
+  await plateRow.locator('[data-role="stream-nameplate-show"]').click();
+  await waitsForSave;
+
+  // The editor switches output before the save is back.
+  const listed = page.waitForResponse(
+    (res) => res.url() === otherList && res.request().method() === "GET",
+  );
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await listed;
+
+  // The save is back. Once the plate is idle the page reloads the list; a
+  // show of the plate would be asked for before that reload, on the output
+  // the editor shows NOW (the server does not check which output owns it).
+  const decided = new Promise<"show" | "reload">((resolve) => {
+    page.on("request", (req) => {
+      if (req.method() === "PUT" && req.url() === otherActive) resolve("show");
+      if (req.method() === "GET" && req.url() === otherList) resolve("reload");
+    });
+  });
+  releaseFirst();
+  expect(await decided, "the waiting Zobraziť is dropped").toBe("reload");
+  await expect
+    .poll(() => savedPlate(page, plateId))
+    .toMatchObject({ primaryText: `${name} nová`, secondaryText: "hosť" });
+  // Read once, now that the page has dealt with the answer.
+  const active = await page.request.get(otherActive);
+  expect(await active.json()).toBeNull();
+  expect(otherPuts).toEqual([]);
+  expect(bodies).toHaveLength(1);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#871 a save left waiting when the editor switches output goes at once when the page hides", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const name = `SW_871_HIDE_${Date.now() % 100_000}`;
+  const plateId = await createStreamPlate(page, name, "hosť");
+  const { bodies, releaseFirst } = await holdFirstPatch(page, plateId);
+  const newest = { primaryText: `${name} nová`, secondaryText: "pastor" };
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  const plateName = plateRow.locator('[data-role="stream-nameplate-name"]');
+  const plateRole = plateRow.locator('[data-role="stream-nameplate-role"]');
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+
+  // The new name is saved (that PATCH held at the network); the role is
+  // typed.
+  await plateName.fill(newest.primaryText);
+  await plateName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  await plateRole.fill(newest.secondaryText);
+
+  // The editor switches output: the row leaves and hands both texts to the
+  // store, where they wait for the save on its way.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${plateId} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await waits;
+  expect(bodies).toHaveLength(1);
+
+  // The page hides (the laptop lid closes, the tab is closed): no row is
+  // left to send the texts, so the list sends them now, beside the save on
+  // its way.
+  const besideAnswered = page.waitForResponse(
+    (res) =>
+      res.request().method() === "PATCH" && res.url().endsWith(`/stream/api/nameplates/${plateId}`),
+  );
+  await setPageHidden(page, true);
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies[1]).toEqual(newest);
+  await besideAnswered;
+
+  // The held save reaches the server last, so the page sends the newest
+  // texts once more, and the server ends on them.
+  releaseFirst();
+  await expect.poll(() => bodies.length).toBe(3);
+  expect(bodies[2]).toEqual(newest);
+  await expect.poll(() => savedPlate(page, plateId)).toMatchObject(newest);
+  await setPageHidden(page, false);
+  await page.unrouteAll({ behavior: "wait" });
+  expect(bodies).toHaveLength(3);
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

@@ -465,6 +465,97 @@ fn an_older_save_failing_after_the_save_beside_it_was_saved_reports_nothing() {
     assert!(Gone.is_reported(true, true));
 }
 
+#[test]
+fn typed_back_while_its_save_was_on_its_way_and_that_save_failing_sends_the_texts_once_more() {
+    // Review finding: B on its way, typed back to A (the confirmed texts),
+    // then B fails. A failed PATCH may have been applied all the same (a
+    // lost answer, the 15 s abort after the server wrote it), so the server
+    // may hold B: A goes once more. The failure is not toasted: A's own
+    // answer reports.
+    let mut control = SaveControl::default();
+    let a = patch(&control.commit(1, t("A", "r"), old(), false).1);
+    control.finish(1, a.token, Saved, true);
+    let b = patch(&control.commit(1, t("B", "r"), t("A", "r"), false).1);
+    assert_eq!(
+        control.commit(1, t("A", "r"), t("A", "r"), false).0,
+        Commit::Waits
+    );
+    let step = control.finish(1, b.token, Failed, true).unwrap_or_default();
+    let again = patch(&step);
+    assert_eq!(again.texts, t("A", "r"));
+    assert!(step.on_its_way);
+    assert!(!Failed.is_reported(true, step.on_its_way));
+    let step = control
+        .finish(1, again.token, Saved, true)
+        .unwrap_or_default();
+    assert!(step.idle && step.patch.is_none(), "sent once");
+    assert_eq!(settled(&step), both("A", "r"));
+    assert!(!control.is_unsaved(1));
+}
+
+#[test]
+fn an_older_save_failing_while_the_save_beside_it_is_still_on_its_way_reports_nothing() {
+    // The answer of the save still on its way decides the plate (and
+    // reports a failure of its own), so this failure is not toasted.
+    let mut control = SaveControl::default();
+    let older = patch(&control.commit(1, t("A", "r"), old(), false).1);
+    let newer = patch(&control.commit(1, t("B", "r"), old(), true).1);
+    let step = control
+        .finish(1, older.token, Failed, true)
+        .unwrap_or_default();
+    assert!(step.on_its_way);
+    assert!(step.patch.is_none() && step.retry_in.is_none() && !step.idle);
+    assert!(!Failed.is_reported(true, step.on_its_way));
+    let step = control
+        .finish(1, newer.token, Saved, true)
+        .unwrap_or_default();
+    assert!(step.idle && step.patch.is_none());
+    assert!(!control.is_unsaved(1));
+    assert!(!control.is_busy(1));
+}
+
+#[test]
+fn a_plate_with_no_entry_starts_no_patch() {
+    // Review finding: `send` / `advance` on a plate with no entry built a
+    // PATCH with an empty name and role.
+    let mut control = SaveControl::default();
+    assert_eq!(control.send(9), None);
+    assert_eq!(control.advance(9), Step::default());
+    assert!(!control.is_busy(9));
+}
+
+#[test]
+fn a_save_whose_row_left_goes_at_once_beside_the_one_on_its_way_when_the_page_hides() {
+    // Review finding: an editor output switch takes the row away while a
+    // PATCH is on its way; the row's commit waits behind it, and with no row
+    // left nothing sent it when the page hid (a closed tab lost it).
+    let mut control = SaveControl::default();
+    let first = patch(&control.commit(1, t("A", "r"), old(), false).1);
+    assert_eq!(
+        control.commit(1, t("A", "pastor"), old(), false).0,
+        Commit::Waits
+    );
+    // Plate 2: its newest texts are on their way already, nothing waits.
+    control.commit(2, t("B", "r"), old(), false);
+    // A plate with a row on the page: that row commits urgently itself.
+    assert!(control.send_waiting(|_| true).is_empty());
+    let sent = control.send_waiting(|id| id != 1);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let (id, step) = &sent[0];
+    assert_eq!(*id, 1);
+    let beside = patch(step);
+    assert_eq!(beside.texts, t("A", "pastor"));
+    // Sent once: the page hiding again sends nothing more.
+    assert!(control.send_waiting(|_| false).is_empty());
+    // Both answers back in order: the plate is idle on the newest texts.
+    control.finish(1, first.token, Saved, false);
+    let step = control
+        .finish(1, beside.token, Saved, false)
+        .unwrap_or_default();
+    assert!(step.idle && step.patch.is_none());
+    assert!(!control.is_busy(1));
+}
+
 // ---- Outcomes and toasts --------------------------------------------------
 
 fn status(code: u16) -> ApiError {
@@ -504,18 +595,18 @@ fn a_404_means_the_plate_was_deleted_elsewhere() {
         Gone
     );
     assert_eq!(
-        Gone.message(&status(404), TextLeft::InField),
+        Gone.message(&status(404), TextLeft::InField, true),
         "Menovka bola medzičasom zmazaná — zmena sa neuložila."
     );
     assert_eq!(
-        Gone.message(&status(404), TextLeft::InFieldNotShown),
+        Gone.message(&status(404), TextLeft::InFieldNotShown, true),
         "Menovka sa nezobrazila. Menovka bola medzičasom zmazaná — zmena sa neuložila."
     );
 }
 
 #[test]
 fn a_failed_save_says_the_text_stayed_and_a_refused_one_says_why() {
-    let failed = Failed.message(&status(503), TextLeft::InField);
+    let failed = Failed.message(&status(503), TextLeft::InField, true);
     assert!(
         failed.starts_with("Uloženie zlyhalo: HTTP 503: x"),
         "{failed}"
@@ -525,28 +616,50 @@ fn a_failed_save_says_the_text_stayed_and_a_refused_one_says_why() {
     assert!(failed.contains("uloží sa znova sám"), "{failed}");
     assert!(!failed.contains("Prihlásenie"), "{failed}");
     assert_eq!(
-        Refused.message(&status(422), TextLeft::InField),
+        Refused.message(&status(422), TextLeft::InField, true),
         "Uloženie zlyhalo: HTTP 422: x"
     );
 }
 
 #[test]
+fn a_failed_save_with_no_retry_timer_left_does_not_promise_one() {
+    // Review finding: from the 4th failure in a row no timer is armed, yet
+    // the toast said „uloží sa znova sám o chvíľu".
+    let timed = Failed.message(&status(503), TextLeft::InField, true);
+    assert!(timed.contains("uloží sa znova sám o chvíľu"), "{timed}");
+    let untimed = Failed.message(&status(503), TextLeft::InField, false);
+    assert!(untimed.contains("Text ostal v poli"), "{untimed}");
+    assert!(!untimed.contains("sám"), "{untimed}");
+    // The other ways it goes again are named either way.
+    for when in ["siete", "návrate na stránku", "Zobraziť", "pole opustíte"] {
+        assert!(timed.contains(when), "{when}: {timed}");
+        assert!(untimed.contains(when), "{when}: {untimed}");
+    }
+    let not_shown = Failed.message(&status(503), TextLeft::InFieldNotShown, false);
+    assert!(
+        not_shown.starts_with("Menovka sa nezobrazila. "),
+        "{not_shown}"
+    );
+    assert!(!not_shown.contains("sám"), "{not_shown}");
+}
+
+#[test]
 fn an_expired_login_says_to_log_in_again_without_losing_the_text() {
-    let message = Failed.message(&status(401), TextLeft::InField);
+    let message = Failed.message(&status(401), TextLeft::InField, true);
     assert!(message.contains("Prihlásenie mohlo vypršať"), "{message}");
     assert!(message.contains("Text ostal v poli"), "{message}");
 }
 
 #[test]
 fn a_failed_save_whose_field_is_gone_says_to_type_the_change_again() {
-    let message = Failed.message(&status(503), TextLeft::of(false, true));
+    let message = Failed.message(&status(503), TextLeft::of(false, true), true);
     assert!(message.starts_with(LOST_UNSAVED), "{message}");
     assert!(!message.contains("Text ostal v poli"), "{message}");
 }
 
 #[test]
 fn a_failed_save_a_zobrazit_waited_for_says_the_plate_was_not_shown() {
-    let message = Failed.message(&status(503), TextLeft::of(true, true));
+    let message = Failed.message(&status(503), TextLeft::of(true, true), true);
     assert!(
         message.starts_with("Menovka sa nezobrazila. Uloženie zlyhalo: HTTP 503: x"),
         "{message}"
