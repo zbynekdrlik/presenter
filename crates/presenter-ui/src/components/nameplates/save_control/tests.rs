@@ -587,6 +587,34 @@ fn a_save_whose_row_left_goes_at_once_beside_the_one_on_its_way_when_the_page_hi
     assert!(!control.is_busy(1));
 }
 
+#[test]
+fn a_rebuilt_row_sends_only_its_own_plates_waiting_save_and_only_once_when_the_page_hides() {
+    // Review finding: the editor switched A → B → A while save 1 was on its
+    // way. The plate is listed again, but its new row has no drafts while
+    // the old row's texts still wait here: the list's `send_waiting` skips
+    // a listed plate and the row had nothing to commit. The row now asks
+    // for its own plate only (`has_row` = every other plate).
+    let mut control = SaveControl::default();
+    control.commit(1, t("A", "r"), old(), false);
+    control.commit(1, t("A", "pastor"), old(), false);
+    // Plate 2 waits too: its own row (or the list) sends it, never plate 1's.
+    control.commit(2, t("B", "r"), old(), false);
+    control.commit(2, t("B", "hosť"), old(), false);
+    let sent = control.send_waiting(|other| other != 1);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, 1);
+    assert_eq!(patch(&sent[0].1).texts, t("A", "pastor"));
+    // Hidden, then `pagehide`: the row asks again, the list skips its listed
+    // plates. Plate 1 went once.
+    assert!(control.send_waiting(|other| other != 1).is_empty());
+    assert!(control.send_waiting(|_| true).is_empty());
+    assert_eq!(
+        control.desired(2),
+        Some(t("B", "hosť")),
+        "plate 2 still waits"
+    );
+}
+
 /// Plate 1's row has left the list (an editor output switch) while save 1
 /// was on its way; its commit waits, and the page hiding sends it beside
 /// save 1 (save 2). Returns (save 1, save 2).

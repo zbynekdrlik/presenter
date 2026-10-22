@@ -24,7 +24,9 @@
  *  - #871: a Zobraziť waiting for its save is dropped by an output switch,
  *    never put on air on the output the editor shows now.
  *  - #871: a save left waiting by an output switch (its row is gone) goes at
- *    once when the page hides, beside the save on its way.
+ *    once when the page hides, beside the save on its way; also after the
+ *    editor switched back (the plate's new row has no drafts), once, when
+ *    the tab closes (hidden, then `pagehide`).
  *
  * Clean console is asserted last.
  */
@@ -496,6 +498,16 @@ async function setPageHidden(page: Page, hidden: boolean): Promise<void> {
   }, hidden);
 }
 
+/** Close the tab as the browser does: the page goes hidden, then
+ *  `pagehide`, in ONE task, so no answer is handled between the two. */
+async function closePage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+    window.dispatchEvent(new Event("pagehide"));
+  });
+}
+
 /** Record every PATCH of plate `id` and hold the FIRST one at the network
  *  until `releaseFirst()`; later ones go through at once. */
 async function holdFirstPatch(
@@ -657,6 +669,93 @@ test("#871 a save left waiting when the editor switches output goes at once when
   await setPageHidden(page, false);
   await page.unrouteAll({ behavior: "wait" });
   expect(bodies).toHaveLength(3);
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#871 a save left waiting by an output switch goes when the tab closes, also once the editor is back on its output", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const name = `SW_871_BACK_${Date.now() % 100_000}`;
+  const plateId = await createStreamPlate(page, name, "hosť");
+  const { bodies, releaseFirst } = await holdFirstPatch(page, plateId);
+  const newest = { primaryText: `${name} nová`, secondaryText: "pastor" };
+  const logs: string[] = [];
+  page.on("console", (msg) => logs.push(msg.text()));
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  const plateName = plateRow.locator('[data-role="stream-nameplate-name"]');
+  const plateRole = plateRow.locator('[data-role="stream-nameplate-role"]');
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+
+  // The new name is saved (that PATCH held at the network); the role is
+  // typed.
+  await plateName.fill(newest.primaryText);
+  await plateName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+  await plateRole.fill(newest.secondaryText);
+
+  // The editor switches output: the row leaves and hands both texts to the
+  // store, where they wait for the save on its way.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${plateId} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await waits;
+
+  // ... and back before that save is answered: the plate is listed again,
+  // in a NEW row with no drafts (it shows the texts the server has), while
+  // the old row's texts still wait in the store.
+  await outputSelect(page).selectOption("stream");
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+  await expect(plateRole).toHaveValue("hosť");
+  expect(bodies).toHaveLength(1);
+
+  // The tab is closed: the waiting texts go now, beside the save on its way,
+  // once (the page hiding and `pagehide` both ask). The list skips a listed
+  // plate, so its row has to send them: its log line tells that send from
+  // the held save giving up after 15 s, which sends the same texts. (Page
+  // logs are read from `logs`: on code that sends nothing, the test fails on
+  // that count, not on a `waitForEvent` timing out.)
+  const sentBeside = `nameplates: plate ${plateId} save sent now beside the one on its way`;
+  await closePage(page);
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies[1]).toEqual(newest);
+  await expect.poll(() => logs.filter((line) => line.startsWith(sentBeside)).length).toBe(1);
+  const stillOut = `nameplates: plate ${plateId} saved; a save of the plate is still on its way`;
+  await expect.poll(() => logs.includes(stillOut)).toBe(true);
+
+  // The held save reaches the server last, so the page sends the newest
+  // texts once more, and the server ends on them.
+  const idle = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${plateId} saved; nothing left to send`,
+    timeout: 20_000,
+  });
+  releaseFirst();
+  await idle;
+  expect(bodies).toEqual([
+    { primaryText: newest.primaryText, secondaryText: "hosť" },
+    newest,
+    newest,
+  ]);
+  expect(await savedPlate(page, plateId)).toMatchObject(newest);
+  await expect(plateRole).toHaveValue(newest.secondaryText);
+  // Sent once, and no save of the plate failed (the held one never ran into
+  // its 15 s timeout).
+  expect(logs.filter((line) => line.startsWith(sentBeside))).toHaveLength(1);
+  expect(logs.filter((line) => line.startsWith(`nameplates: plate ${plateId} save not done`))).toEqual([]);
+  await setPageHidden(page, false);
+  await page.unrouteAll({ behavior: "wait" });
 
   const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
   expect(deleted.ok()).toBeTruthy();
