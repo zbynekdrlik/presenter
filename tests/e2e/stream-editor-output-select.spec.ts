@@ -717,11 +717,12 @@ test("#871 a save left waiting by an output switch goes when the tab closes, als
   await waits;
 
   // ... and back before that save is answered: the plate is listed again,
-  // in a NEW row with no drafts (it shows the texts the server has), while
-  // the old row's texts still wait in the store.
+  // in a NEW row with no drafts, while the old row's texts still wait in
+  // the store. The row stands on those waiting texts, not on the list's
+  // older ones (the server's).
   await outputSelect(page).selectOption("stream");
-  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
-  await expect(plateRole).toHaveValue("hosť");
+  await expect(plateName).toHaveValue(newest.primaryText, { timeout: 15_000 });
+  await expect(plateRole).toHaveValue(newest.secondaryText);
   expect(bodies).toHaveLength(1);
 
   // The tab is closed: the waiting texts go now, beside the save on its way,
