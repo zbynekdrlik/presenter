@@ -13,6 +13,7 @@
 //! | `stream_scene_clear` | `{ output? }` — base → none (transparent) |
 //! | `stream_overlay_on`/`_off`/`_toggle` | `{ scene, output? }` |
 //! | `stream_clear` | `{ output? }` — base clear + ALL overlays off |
+//! | `stream_nameplate_slot` | `{ slot, mode?, expect_id?, expect_empty?, output? }` — #870 grid slot, `stream` only |
 //!
 //! Execution goes through the [`AppState`] show-state methods (never the
 //! repository directly) so every activation publishes [`LiveEvent::StreamState`]
@@ -87,6 +88,10 @@ pub(super) enum StreamCommand {
     NameplateHide {
         output: String,
     },
+    // #870 nameplate grid: a 1-based POSITION in the plate list, resolved at
+    // press time against the SAME list the `nameplate_slot_<n>_*` label
+    // variables come from (`companion/nameplate_slot.rs`).
+    NameplateSlot(super::nameplate_slot::SlotPress),
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,7 +126,7 @@ struct NameplatePayload {
 
 /// Resolve the optional `output` slug: trim, and fall back to the default
 /// output when omitted or blank.
-fn resolve_output(output: Option<String>) -> String {
+pub(super) fn resolve_output(output: Option<String>) -> String {
     match output {
         Some(slug) if !slug.trim().is_empty() => slug.trim().to_string(),
         _ => DEFAULT_OUTPUT.to_string(),
@@ -197,6 +202,9 @@ pub(super) fn parse_stream_command(name: &str, payload: Value) -> Result<Compani
         "stream_nameplate_hide" => StreamCommand::NameplateHide {
             output: output_field(name, payload)?,
         },
+        "stream_nameplate_slot" => {
+            StreamCommand::NameplateSlot(super::nameplate_slot::parse_slot_press(name, payload)?)
+        }
         other => return Err(format!("unknown command: {other}")),
     };
     Ok(CompanionCommand::Stream(command))
@@ -225,7 +233,7 @@ fn nameplate_fields(name: &str, payload: Value) -> Result<NameplateFields, Strin
     })
 }
 
-fn activation_error(err: anyhow::Error) -> String {
+pub(super) fn activation_error(err: anyhow::Error) -> String {
     format!("stream command failed: {err}")
 }
 
@@ -315,6 +323,9 @@ pub(super) async fn execute_stream_command(
                 .stream_nameplate_hide(&output)
                 .await
                 .map_err(activation_error)?;
+        }
+        StreamCommand::NameplateSlot(press) => {
+            super::nameplate_slot::fire_slot_press(state, press).await?;
         }
     }
     Ok(())

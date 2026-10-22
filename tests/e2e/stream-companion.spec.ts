@@ -37,6 +37,10 @@
  *       active scene + overlays re-render after the OBS source reconnects).
  *   C — two simultaneous output-page contexts (multi-OBS) converge on the same
  *       companion command.
+ *   D — #870 nameplate grid: a `stream_nameplate_slot` press fires the plate in
+ *       that slot of the `stream` plate list, the `nameplate_slot_<n>_*`
+ *       variables follow a reorder, and a press still carrying the old label's
+ *       plate id (`expect_id`) is refused with nothing changed on air.
  *
  * The bundled OFL font families (Inter / Oswald / Bebas Neue, #717) are used
  * deliberately in the element styles: if a bundled `@font-face` path is wrong
@@ -57,7 +61,7 @@ import {
   type Browser,
   type Page,
 } from "@playwright/test";
-import WebSocket from "ws";
+import { createCompanionSocket, enableCompanionSocket } from "./companion-socket";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
@@ -70,107 +74,6 @@ import {
 
 const SLUG = "stream"; // the migration-seeded default output.
 const PNG_FIXTURE = path.join(REPO_ROOT, "tests", "e2e", "fixtures", "stream-1x1.png");
-
-// ── companion socket helper (mirrors companion-session.spec.ts) ────────────────
-
-type VarEntry = { name?: unknown; value?: unknown };
-type WsMsg = Record<string, unknown>;
-
-const HELLO_PAYLOAD = {
-  type: "hello",
-  client: "Playwright",
-  instanceName: "stream-companion-spec",
-};
-
-/** Open a companion WebSocket, expose handshake + send + variable helpers. */
-function createCompanionSocket(wsURL: string) {
-  const socket = new WebSocket(wsURL);
-  const errors: Error[] = [];
-  // Running, merged companion variable state — updated on EVERY `variables`
-  // frame (delta or full). `stream_scene` / `stream_overlays` land here after
-  // the async live-loop resolves them, so tests poll this map.
-  const vars = new Map<string, string>();
-
-  socket.on("message", (raw: WebSocket.RawData) => {
-    try {
-      const parsed = JSON.parse(raw.toString()) as WsMsg;
-      if (parsed.type === "variables" && Array.isArray(parsed.values)) {
-        for (const e of parsed.values as VarEntry[]) {
-          vars.set(String(e.name ?? ""), String(e.value ?? ""));
-        }
-      }
-    } catch (error) {
-      errors.push(error as Error);
-    }
-  });
-
-  const waitForMessage = (
-    predicate: (msg: WsMsg) => boolean,
-    timeoutMs = 5_000,
-  ) =>
-    new Promise<WsMsg>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("Timed out waiting for expected Companion message"));
-      }, timeoutMs);
-      const cleanup = () => {
-        clearTimeout(timeout);
-        socket.off("message", handleMessage);
-      };
-      const handleMessage = (raw: WebSocket.RawData) => {
-        try {
-          const parsed = JSON.parse(raw.toString()) as WsMsg;
-          if (predicate(parsed)) {
-            cleanup();
-            resolve(parsed);
-          }
-        } catch (error) {
-          cleanup();
-          reject(error as Error);
-        }
-      };
-      socket.on("message", handleMessage);
-    });
-
-  /** Connect, send hello, receive welcome + the initial variables frame. */
-  async function handshake() {
-    await new Promise<void>((resolve, reject) => {
-      socket.once("error", (err) => reject(err));
-      socket.once("open", () => {
-        socket.send(JSON.stringify(HELLO_PAYLOAD));
-        resolve();
-      });
-    });
-    await waitForMessage((msg) => msg.type === "welcome");
-    await waitForMessage((msg) => msg.type === "variables");
-  }
-
-  /** Send a stream command; resolve with its ack/error reply. */
-  async function sendCommand(
-    command: string,
-    payload: Record<string, unknown> = {},
-  ): Promise<WsMsg> {
-    socket.send(JSON.stringify({ type: "command", command, payload }));
-    return waitForMessage(
-      (msg) =>
-        (msg.type === "ack" && msg.command === command) || msg.type === "error",
-    );
-  }
-
-  /** Send a command and assert the server ACKed it (no error reply). */
-  async function expectAck(
-    command: string,
-    payload: Record<string, unknown> = {},
-  ): Promise<void> {
-    const reply = await sendCommand(command, payload);
-    expect(
-      reply.type,
-      `${command} ${JSON.stringify(payload)} -> ${JSON.stringify(reply)}`,
-    ).toBe("ack");
-  }
-
-  return { socket, errors, vars, handshake, waitForMessage, sendCommand, expectAck };
-}
 
 // ── module state ───────────────────────────────────────────────────────────────
 
@@ -449,6 +352,46 @@ const verseSecondary = (page: Page, id: number) =>
     `[data-role="stream-element-verse"][data-element-id="${id}"] [data-role="stream-verse-secondary-text"]`,
   );
 
+// #870 lower-third plate (the live layer, not one still animating out).
+const plateLayers = (page: Page) => page.locator('[data-role="stream-lower-third-plate"]');
+const livePlatePrimary = (page: Page) =>
+  page.locator(
+    '[data-role="stream-lower-third-plate"]:not(.stream-lower-third__plate--leaving) [data-role="stream-lower-third-primary"]',
+  );
+
+async function createPlate(
+  api: APIRequestContext,
+  primaryText: string,
+  secondaryText: string,
+): Promise<number> {
+  const resp = await api.post(`${baseURL}/stream/api/outputs/${SLUG}/nameplates`, {
+    data: { primaryText, secondaryText },
+  });
+  expect(resp.ok(), `create plate ${primaryText} -> ${resp.status()}`).toBeTruthy();
+  return (await resp.json()).id as number;
+}
+
+/** Reorder the `stream` plates so `first` lead the list (the rest keep order). */
+async function orderPlates(api: APIRequestContext, first: number[]): Promise<void> {
+  const list = await api.get(`${baseURL}/stream/api/outputs/${SLUG}/nameplates`);
+  expect(list.ok(), `list plates -> ${list.status()}`).toBeTruthy();
+  const ids = ((await list.json()) as Array<{ id: number }>).map((plate) => plate.id);
+  const order = [...first, ...ids.filter((id) => !first.includes(id))];
+  const resp = await api.put(`${baseURL}/stream/api/outputs/${SLUG}/nameplates/order`, {
+    data: { ids: order },
+  });
+  expect(resp.status(), "reorder plates").toBe(204);
+}
+
+/** The plate on air in `stream` (`GET .../nameplates/active`), or null. */
+async function activePlate(
+  api: APIRequestContext,
+): Promise<{ nameplateId?: number; primary?: string } | null> {
+  const resp = await api.get(`${baseURL}/stream/api/outputs/${SLUG}/nameplates/active`);
+  expect(resp.ok(), `active plate -> ${resp.status()}`).toBeTruthy();
+  return (await resp.json()) as { nameplateId?: number; primary?: string } | null;
+}
+
 /** Wait for the output page's WS to report connected + a fresh def refetch. */
 async function waitForReconnect(
   page: Page,
@@ -479,34 +422,9 @@ test.beforeAll(async ({}, testInfo) => {
   await refreshDevData(config.dbUrl);
   serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
 
-  // Enable the companion socket and discover its bound port (mirrors
-  // companion-session.spec.ts).
-  const desiredPort = config.port + 100;
-  const enable = await fetch(new URL("/settings/features", baseURL).toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ companionEnabled: true, companionPort: desiredPort }),
-  });
-  if (!enable.ok) {
-    throw new Error(`Failed to enable companion websocket (${enable.status})`);
-  }
-  const features = await fetch(new URL("/settings/features", baseURL).toString(), {
-    headers: { Accept: "application/json" },
-  });
-  if (!features.ok) {
-    throw new Error(`Failed to fetch feature flags (${features.status})`);
-  }
-  const payload = (await features.json()) as {
-    companionPort?: number;
-    companion_port?: number;
-  };
-  const base = new URL(baseURL);
-  const rawPortValue =
-    payload.companionPort ?? payload.companion_port ?? desiredPort;
-  const parsedPort = Number.parseInt(String(rawPortValue), 10);
-  const companionPort =
-    Number.isFinite(parsedPort) && parsedPort >= 1 ? parsedPort : desiredPort;
-  wsURL = `${base.protocol.replace("http", "ws")}//${base.hostname}:${companionPort}/companion/ws`;
+  // Enable the companion socket and discover its bound port
+  // (`companion-socket.ts`, mirrors companion-session.spec.ts).
+  wsURL = await enableCompanionSocket(baseURL, config.port + 100);
 
   // Build the user's scene/element setup once.
   const api = await playwrightRequest.newContext();
@@ -766,5 +684,105 @@ test.describe("Stream graphics — companion full journey", () => {
 
     await ctxA.close();
     await ctxB.close();
+  });
+
+  test("#870 a grid slot fires the plate its label shows and follows a reorder", async ({
+    page,
+    request,
+  }) => {
+    const consoleErrors: string[] = [];
+    attachConsoleErrorCollector(page, consoleErrors);
+    const n = Date.now() % 100_000;
+
+    // A lower third on its own overlay, so the OBS output shows what is on air.
+    const sceneName = `Menovky 870 ${n}`;
+    const scene = await createScene(request, sceneName, "overlay");
+    await addElement(request, scene, {
+      kind: "lower_third",
+      frame: { xPct: 6, yPct: 74, wPct: 46, hPct: 14 },
+      bar_color: "#0f172a",
+      bar_opacity: 0.85,
+      accent_color: "#38bdf8",
+      accent_width_pct: 2.5,
+      primary_style: textStyle("Inter", 5, { align: "left" }),
+      secondary_style: textStyle("Inter", 3.5, { align: "left", weight: 400 }),
+      padding_pct: 3,
+      animation: "slide_left",
+      in_ms: 200,
+      out_ms: 150,
+      auto_hide_s: 0,
+    });
+
+    const sock = createCompanionSocket(wsURL);
+    await sock.handshake();
+    await sock.expectAck("stream_overlay_on", { scene: sceneName });
+    await gotoStream(page);
+    await expect(plateLayers(page)).toHaveCount(0);
+
+    // Two people; whatever else the list holds, they lead it: slot 1 = Anna,
+    // slot 2 = Boris.
+    const anna = await createPlate(request, `Anna Slotová ${n}`, "kazateľka");
+    const boris = await createPlate(request, `Boris Slotový ${n}`, "vedúci chvál");
+    await orderPlates(request, [anna, boris]);
+
+    // Slot 2's label (pushed live to Companion) is Boris.
+    await expect
+      .poll(() => sock.vars.get("nameplate_slot_2_name"), { timeout: 5_000 })
+      .toBe(`Boris Slotový ${n}`);
+    expect(sock.vars.get("nameplate_slot_2_id")).toBe(String(boris));
+
+    // Press slot 2 the way the module does: with the plate id its label shows.
+    await sock.expectAck("stream_nameplate_slot", {
+      slot: 2,
+      mode: "toggle",
+      expect_id: Number(sock.vars.get("nameplate_slot_2_id")),
+    });
+    expect(await activePlate(request)).toMatchObject({
+      nameplateId: boris,
+      primary: `Boris Slotový ${n}`,
+    });
+    await expect(livePlatePrimary(page)).toHaveText(`Boris Slotový ${n}`, { timeout: 5_000 });
+    await expect
+      .poll(() => sock.vars.get("nameplate_active_id"), { timeout: 5_000 })
+      .toBe(String(boris));
+
+    // Reorder in Presenter: slot 2's label follows the list.
+    await orderPlates(request, [boris, anna]);
+    await expect
+      .poll(() => sock.vars.get("nameplate_slot_2_name"), { timeout: 5_000 })
+      .toBe(`Anna Slotová ${n}`);
+    expect(sock.vars.get("nameplate_slot_2_id")).toBe(String(anna));
+
+    // A press still carrying the OLD label's plate id is refused; nothing changes.
+    const stale = await sock.sendCommand("stream_nameplate_slot", {
+      slot: 2,
+      mode: "toggle",
+      expect_id: boris,
+    });
+    expect(stale.type, JSON.stringify(stale)).toBe("error");
+    expect(String(stale.message)).toContain("nameplate slot 2 changed");
+    expect((await activePlate(request))?.nameplateId).toBe(boris);
+
+    // The press with the current label fires Anna.
+    await sock.expectAck("stream_nameplate_slot", {
+      slot: 2,
+      mode: "toggle",
+      expect_id: Number(sock.vars.get("nameplate_slot_2_id")),
+    });
+    expect(await activePlate(request)).toMatchObject({
+      nameplateId: anna,
+      primary: `Anna Slotová ${n}`,
+    });
+    await expect(livePlatePrimary(page)).toHaveText(`Anna Slotová ${n}`, { timeout: 5_000 });
+
+    // Leave the output as found: plate hidden, overlay off.
+    await sock.expectAck("stream_nameplate_hide");
+    await expect(plateLayers(page)).toHaveCount(0, { timeout: 5_000 });
+    await sock.expectAck("stream_overlay_off", { scene: sceneName });
+
+    expect(sock.errors).toHaveLength(0);
+    sock.socket.close();
+    // Zero console errors AND warnings — asserted last.
+    expect(consoleErrors).toEqual([]);
   });
 });

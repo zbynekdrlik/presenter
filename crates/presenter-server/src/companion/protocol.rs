@@ -539,14 +539,18 @@ pub(super) async fn send_nameplates(
     .await
 }
 
-/// Send the full per-session snapshot — the variables, the #779 nameplate list
-/// and the #814 catalog — on connect and after a lag-recovery reset.
+/// Send the full per-session snapshot — the #779 nameplate list, the variables
+/// and the #814 catalog — on connect and after a lag-recovery reset. The list
+/// goes FIRST (#870): the module defines the per-plate and the slots-past-11
+/// variables from it and drops a value whose variable it has not defined yet,
+/// so a list sent after the variables left those labels blank until the next
+/// variables message.
 pub(super) async fn send_snapshot(
     sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
     state: &CompanionVariableState,
 ) -> Result<(), CompanionSessionError> {
-    send_variables(sender, state).await?;
     send_nameplates(sender, state).await?;
+    send_variables(sender, state).await?;
     send_catalog(sender, state).await
 }
 

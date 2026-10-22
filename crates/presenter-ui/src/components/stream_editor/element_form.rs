@@ -193,7 +193,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                     type="button"
                     class="stream-editor__btn stream-editor__btn--primary"
                     data-role="stream-prop-save"
-                    data-dirty=move || super::bool_attr(dirty())
+                    data-dirty=move || crate::utils::dom_attr::bool_attr(dirty())
                     on:click=move |_| {
                         if let Some(id) = ctx.draft_element_id.get_untracked() {
                             ctx.save_props(id, draft.get_untracked());

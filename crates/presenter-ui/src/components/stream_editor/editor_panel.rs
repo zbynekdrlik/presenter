@@ -92,7 +92,8 @@ fn AddElementButton(
 fn ElementRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     let kind = move || element_kind(ctx, id);
     let kind_label = move || kind_label_sk(&element_kind(ctx, id));
-    let selected_str = move || super::bool_attr(ctx.selected_element.get() == Some(id));
+    let selected_str =
+        move || crate::utils::dom_attr::bool_attr(ctx.selected_element.get() == Some(id));
     view! {
         <li
             class="stream-editor__element"

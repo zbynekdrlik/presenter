@@ -133,6 +133,32 @@ silent no-op, or the element that held focus may still be in the DOM.
   `.claude/rules/settings-ui.md` entry. E2E: a row deleted elsewhere while its own
   save is in flight still lands focus on "+ Add".
 
+## Never re-enter a `StoredValue` inside its own `update_value` / `with_value` closure (#871)
+
+In reactive_graph 0.1.8 the arena holds only a HANDLE to a `StoredValue`'s value (an
+`ArcStoredValue`, i.e. `Arc<RwLock<T>>`). `try_update_value` / `update_value` take the
+arena's READ lock just long enough to clone that handle (`ArenaItem::try_get_value`), then
+run the closure under the value's OWN write lock, taken with a non-blocking `try_write`
+(`UntrackedWriteGuard::try_new`); `try_with_value` / `with_value` / `get_value` do the same
+with `try_read`. So reading a signal or ANOTHER `StoredValue` inside the closure is safe.
+
+The real hazard is touching the SAME `StoredValue` inside its own closure (directly, or
+through a helper that does). The nested `try_*` finds the value locked and silently returns
+`None`: a nested `update_value` / `set_value` is DROPPED with no error, and a nested
+`with_value` / `get_value` inside an update panics with a misleading "you tried to access a
+reactive value ... but it has already been disposed". It compiles and passes host unit tests
+(a pure controller under test never sees the store), so only an E2E that reaches the path
+shows it. Style that rules it out: read what the closure needs FIRST and hand it plain data,
+so the closure stays pure and cannot reach back into its own value:
+
+```rust
+let listed: Vec<i64> = self.plates.try_with_untracked(|l| l.iter().map(|p| p.id).collect()).unwrap_or_default();
+self.saves.try_update_value(|control| control.send_waiting(|id| listed.contains(&id)));
+```
+
+A read nested in a read of the same value (`with_value` inside `with_value`) does get the
+lock, but keep those closures pure too.
+
 ## The toast `<div>` is ALWAYS mounted — assert visibility via `data-visible`, not DOM presence (#558 W1)
 
 `components/toast.rs` renders `<div data-role="toast" data-visible=… class:operator__toast--visible=…>`

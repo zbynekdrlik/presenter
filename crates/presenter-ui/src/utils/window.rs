@@ -15,6 +15,15 @@ pub fn document_body() -> Option<HtmlElement> {
     document().body()
 }
 
+/// Nothing has the focus: it fell back to `<body>` (the element holding it was
+/// removed or moved). Code that puts the focus back checks this first, so a
+/// field the operator clicked into meanwhile keeps it.
+pub fn focus_is_free() -> bool {
+    document()
+        .active_element()
+        .is_none_or(|el| el.tag_name() == "BODY")
+}
+
 /// Get the current pathname from the URL.
 pub fn current_pathname() -> String {
     window()

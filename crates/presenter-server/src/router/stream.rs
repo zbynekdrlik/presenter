@@ -228,6 +228,14 @@ pub(super) async fn delete_output(
     state.stream_evict_output(&slug).await;
     // #779: drop any cached nameplate show-state for the deleted output too.
     state.stream_nameplate_evict(&slug).await;
+    // #870: its plates went with it (FK cascade). Companion's plate list and
+    // slot labels track only one output: tell it to re-read (a failed read
+    // degrades to an empty list, so the slot labels clear). Other outputs get no
+    // event: an editor still showing a deleted output would refetch its plate
+    // list and log a 404 (the #855 real-404 E2E counts those console lines).
+    if slug == crate::companion::NAMEPLATE_OUTPUT {
+        state.stream_nameplates_changed(&slug);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

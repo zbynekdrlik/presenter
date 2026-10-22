@@ -87,8 +87,9 @@ fn BaseColumns(ctx: StreamEditorCtx) -> impl IntoView {
 #[component]
 fn BaseColumn(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     let is_active = move || ctx.active.get().active_scene_id == Some(id);
-    let active_str = move || super::bool_attr(is_active());
-    let selected_str = move || super::bool_attr(ctx.selected_scene.get() == Some(id));
+    let active_str = move || crate::utils::dom_attr::bool_attr(is_active());
+    let selected_str =
+        move || crate::utils::dom_attr::bool_attr(ctx.selected_scene.get() == Some(id));
     view! {
         <div
             class="stream-editor__scene stream-editor__scene--base"
@@ -118,8 +119,9 @@ fn BaseColumn(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
 #[component]
 fn OverlayChip(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     let is_active = move || ctx.active.get().active_overlay_ids.contains(&id);
-    let active_str = move || super::bool_attr(is_active());
-    let selected_str = move || super::bool_attr(ctx.selected_scene.get() == Some(id));
+    let active_str = move || crate::utils::dom_attr::bool_attr(is_active());
+    let selected_str =
+        move || crate::utils::dom_attr::bool_attr(ctx.selected_scene.get() == Some(id));
     view! {
         <div
             class="stream-editor__scene stream-editor__scene--overlay"

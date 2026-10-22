@@ -6,7 +6,10 @@ const {
 const WebSocket = require("ws");
 const { version: MODULE_VERSION } = require("./package.json");
 const { normaliseCountdownTarget } = require("./lib/time");
-const { applyVariablesMessage } = require("./lib/variable-batch");
+const {
+  applyVariablesMessage,
+  forgetUndefinedVariables,
+} = require("./lib/variable-batch");
 const {
   legacyPreachLimitSeconds,
   legacyLiveEnabled,
@@ -27,6 +30,10 @@ const {
   nameplateChoices,
   nameplateVariableIds,
   nameplatePresets,
+  nameplateSlotOption,
+  isNameplateSlotActive,
+  nameplateGridPresets,
+  slotIdVariable,
 } = require("./lib/stream");
 const {
   normaliseCatalog,
@@ -107,6 +114,10 @@ const COMMANDS = [
   { id: "stream_nameplate_song", label: "Stream: show song nameplate" },
   { id: "stream_nameplate_toggle", label: "Stream: toggle nameplate (menovka)" },
   { id: "stream_nameplate_hide", label: "Stream: hide nameplate" },
+  {
+    id: "stream_nameplate_slot",
+    label: "Stream: nameplate grid slot (menovka podľa pozície)",
+  },
 ];
 
 class PresenterInstance extends InstanceBase {
@@ -321,6 +332,10 @@ class PresenterInstance extends InstanceBase {
         // and the presets so a button can show + toggle each plate.
         this.nameplates = Array.isArray(msg.plates) ? msg.plates : [];
         this._setupVariables();
+        // #870: forget the values of variables that left the definitions
+        // (slots past 11, a deleted plate's), so a later identical value is
+        // sent again instead of being diffed away as "unchanged".
+        forgetUndefinedVariables(this.variables, this._variableIds());
         this._setupActions();
         this._setupFeedbacks();
         this._setupPresets();
@@ -376,11 +391,16 @@ class PresenterInstance extends InstanceBase {
     this.setVariableDefinitions(defs);
   }
 
-  // #779: presets — one button per person plate + the song button. Button text
+  // #870: the "Menovky — mriežka" grid first (song + slots 1..11; label and
+  // press both resolve the slot server-side from one plate list), then the
+  // #779 presets — one button per person plate + the song button. Button text
   // is the plate's variables, the down action toggles it, and the active
   // feedback lights it. Rebuilt whenever the plate list changes.
   _setupPresets() {
-    this.setPresetDefinitions(nameplatePresets(this.nameplates));
+    this.setPresetDefinitions({
+      ...nameplateGridPresets(),
+      ...nameplatePresets(this.nameplates),
+    });
   }
 
   _setupActions() {
@@ -621,6 +641,21 @@ class PresenterInstance extends InstanceBase {
         ),
     };
 
+    // #870: lit while the plate in grid slot N is on air — the slot's
+    // `nameplate_slot_<n>_id` is non-empty and equals `nameplate_active_id`
+    // (an empty slot never lights). The slot labels track the plate list.
+    feedbacks["stream_nameplate_slot_active"] = {
+      type: "boolean",
+      name: "Stream: nameplate grid slot on air (menovka podľa pozície)",
+      options: [nameplateSlotOption(this.nameplates)],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0x00aa00,
+      },
+      callback: (feedback) =>
+        isNameplateSlotActive(this.variables, feedback.options.slot),
+    };
+
     feedbacks["countdown_running"] = {
       type: "boolean",
       name: "Countdown running",
@@ -669,7 +704,15 @@ class PresenterInstance extends InstanceBase {
     // pure builder (which may remap show+song → stream_nameplate_song), so they
     // send directly here rather than through the shared envelope below.
     if (isNameplateCommand(command)) {
-      const invocation = buildNameplateInvocation(command, options);
+      // #870: a grid slot press carries the plate id its label shows NOW (the
+      // slot's `nameplate_slot_<n>_id` value, from the same cache the label
+      // and feedback come from); the server refuses the press if the slot
+      // changed before the new label arrived.
+      const slotVariable =
+        command === "stream_nameplate_slot" ? slotIdVariable(options.slot) : null;
+      const invocation = buildNameplateInvocation(command, options, {
+        slotPlateId: slotVariable ? this.variables.get(slotVariable) : undefined,
+      });
       if (invocation.error) {
         this.log("error", invocation.error);
         return;

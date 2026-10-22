@@ -142,7 +142,7 @@ pub fn CanvasOverlay(ctx: StreamEditorCtx) -> impl IntoView {
                 f.x_pct, f.y_pct, f.w_pct, f.h_pct
             )
         };
-        let selected_attr = move || super::bool_attr(selected());
+        let selected_attr = move || crate::utils::dom_attr::bool_attr(selected());
         let on_body_down = move |ev: PointerEvent| {
             if ev.button() != PRIMARY_BUTTON {
                 return;

@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-type ClientWs =
+pub(super) type ClientWs =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// A fully ISOLATED `AppState` over its own temp-file SQLite DB.
@@ -23,7 +23,7 @@ type ClientWs =
 /// (`.claude/rules/stream-graphics.md`), so a parallel test creating a stream
 /// output would change THIS test's catalog and race the "unchanged → no
 /// re-send" assertions. Keep the returned `TempDir` alive for the test.
-async fn isolated_state(companion_enabled: bool) -> (AppState, tempfile::TempDir) {
+pub(super) async fn isolated_state(companion_enabled: bool) -> (AppState, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp dir");
     let url = format!(
         "sqlite://{}?mode=rwc",
@@ -225,7 +225,7 @@ async fn refresh_catalog_resends_only_when_outputs_or_scenes_change() {
 }
 
 /// The next JSON text frame from the companion socket (non-text frames skipped).
-async fn next_frame(ws: &mut ClientWs) -> Value {
+pub(super) async fn next_frame(ws: &mut ClientWs) -> Value {
     loop {
         let frame = timeout(Duration::from_secs(10), ws.next())
             .await
