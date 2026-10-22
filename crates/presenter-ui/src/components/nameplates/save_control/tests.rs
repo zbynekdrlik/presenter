@@ -231,7 +231,11 @@ fn any_commit_sends_a_failed_save_again() {
 }
 
 #[test]
-fn typed_back_to_the_confirmed_texts_after_a_failure_needs_no_save() {
+fn typed_back_to_the_saved_texts_after_a_failure_is_sent_once_more() {
+    // Review finding: a failed save may have been applied all the same (a
+    // lost answer, the 15 s abort after the server wrote it, an unreadable
+    // 2xx body), so after B failed the server may hold B. Typed back to A,
+    // A is sent once more (the PATCH is idempotent), never left unsent.
     let mut control = SaveControl::default();
     let first = patch(&control.commit(1, t("A", "r"), old(), false).1);
     control.finish(1, first.token, Saved, true);
@@ -241,9 +245,13 @@ fn typed_back_to_the_confirmed_texts_after_a_failure_needs_no_save() {
     control.finish(1, second.token, Failed, true);
     assert!(control.is_unsaved(1));
     let (commit, step) = control.commit(1, t("A", "r"), t("A", "r"), false);
-    assert_eq!(commit, Commit::Unchanged);
-    assert_eq!(step.patch, None);
-    assert!(!step.idle, "no answer came: nothing to reload");
+    assert_eq!(commit, Commit::Sent);
+    let again = patch(&step);
+    assert_eq!(again.texts, t("A", "r"));
+    let step = control
+        .finish(1, again.token, Saved, true)
+        .unwrap_or_default();
+    assert!(step.idle && step.patch.is_none(), "sent once");
     assert_eq!(settled(&step), both("A", "r"));
     assert!(!control.is_unsaved(1));
     assert!(!control.is_busy(1));
@@ -445,24 +453,47 @@ fn an_answer_for_an_unknown_save_changes_nothing() {
 }
 
 #[test]
-fn an_older_save_failing_after_the_save_beside_it_was_saved_reports_nothing() {
-    // Review finding: the page hid, the newest texts went beside the older
-    // save and were saved first; the older one then failed. Nothing is
-    // unsaved, so no "Text ostal v poli" toast.
+fn an_older_save_failing_after_the_newer_one_saved_sends_the_newest_once_more_then_shows() {
+    // Review findings: the page hid, the newest texts went beside the older
+    // save and were saved first; the older one then failed. A failed PATCH
+    // may have been applied all the same (a lost answer, the 15 s abort
+    // after the server wrote it), so the server may hold the OLDER texts:
+    // the newest go once more, and a waiting Zobraziť goes on air only once
+    // they are saved again. The failure itself is not toasted (the newest
+    // texts are on their way; their answer reports).
     let mut control = SaveControl::default();
     let older = patch(&control.commit(1, t("A", "r"), old(), false).1);
     let newer = patch(&control.commit(1, t("B", "r"), old(), true).1);
-    control.finish(1, newer.token, Saved, true);
+    let (now, _) = control.show(1);
+    assert!(!now);
+    let step = control
+        .finish(1, newer.token, Saved, true)
+        .unwrap_or_default();
+    assert!(!step.show);
     let step = control
         .finish(1, older.token, Failed, true)
         .unwrap_or_default();
-    assert!(step.idle && step.patch.is_none() && step.retry_in.is_none());
-    assert!(!control.is_unsaved(1));
-    assert!(!Failed.is_reported(true, step.idle));
-    // A failure that leaves the text unsaved, or whose field is gone, is.
+    let again = patch(&step);
+    assert_eq!(again.texts, t("B", "r"));
+    assert!(!step.show && !step.not_shown && !step.idle);
+    assert!(step.retry_in.is_none());
+    assert!(!Failed.is_reported(true, step.on_its_way));
+    // A failure that waits for a retry, or whose field is gone, is
+    // reported; so are a gone plate and a refused text.
     assert!(Failed.is_reported(true, false));
     assert!(Failed.is_reported(false, true));
     assert!(Gone.is_reported(true, true));
+    assert!(Refused.is_reported(true, true));
+    let step = control
+        .finish(1, again.token, Saved, true)
+        .unwrap_or_default();
+    assert!(
+        step.show && step.idle,
+        "on air once the newest texts are saved"
+    );
+    assert_eq!(settled(&step), both("B", "r"));
+    assert!(!control.is_unsaved(1));
+    assert!(!control.is_busy(1));
 }
 
 #[test]
