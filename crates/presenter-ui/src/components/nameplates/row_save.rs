@@ -23,29 +23,44 @@ use super::{NameplateStore, PlateSave};
 /// notifies only when THIS plate's text changes), and while a draft exists the
 /// shown value stays the draft even when the saved text does change. A draft
 /// ends when the store settles its text, or on a commit of the saved texts.
+///
+/// #871 review: with no draft the field stands on its BASE text: the plate's
+/// newest committed text while a save of it is pending (the store's
+/// `desired`), else the saved text. The list can be OLDER than a commit
+/// still waiting (a row rebuilt by an editor output switch there and back
+/// while a save was on its way): standing on it, a role typed in the
+/// rebuilt row sent the older name back with it.
 #[derive(Clone, Copy)]
 pub(super) struct PlateText {
+    /// The text the plate list has (kept once the plate leaves it): what
+    /// the server has as far as the page knows.
     pub(super) saved: Memo<String>,
+    /// What the field shows with no draft and what a commit sends for it.
+    base: Memo<String>,
     pub(super) draft: RwSignal<Option<String>>,
     pub(super) shown: Memo<String>,
 }
 
 impl PlateText {
-    pub(super) fn new(saved: Memo<String>) -> Self {
+    /// `pending` = this field's text of the plate's newest committed texts
+    /// while the plate is busy (`NameplateStore::pending_texts`).
+    pub(super) fn new(saved: Memo<String>, pending: Memo<Option<String>>) -> Self {
         let draft = RwSignal::new(None::<String>);
-        let shown = Memo::new(move |_| draft.get().unwrap_or_else(|| saved.get()));
+        let base = Memo::new(move |_| pending.get().unwrap_or_else(|| saved.get()));
+        let shown = Memo::new(move |_| draft.get().unwrap_or_else(|| base.get()));
         Self {
             saved,
+            base,
             draft,
             shown,
         }
     }
 
-    /// The text a commit sends: the draft, else the saved text, trimmed.
+    /// The text a commit sends: the draft, else the base text, trimmed.
     pub(super) fn value(self) -> String {
         self.draft
             .get_untracked()
-            .unwrap_or_else(|| self.saved.get_untracked())
+            .unwrap_or_else(|| self.base.get_untracked())
             .trim()
             .to_string()
     }
@@ -153,7 +168,8 @@ impl RowSave {
             || self.role.draft.with_untracked(Option::is_some)
     }
 
-    /// The texts the row shows as saved.
+    /// The texts the plate list has for the row (what the server has as far
+    /// as the page knows; an idle plate's commit compares with them).
     fn saved(self) -> Texts {
         (
             self.name.saved.get_untracked(),

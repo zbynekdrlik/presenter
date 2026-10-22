@@ -18,6 +18,7 @@ use super::focus::page_hidden;
 use super::numbering::{beyond_grid, button_title, person_button, SONG_BUTTON};
 use super::order::drop_marker;
 use super::row_save::{PlateText, RowSave, Why};
+use super::save_control::Texts;
 use super::{song_line, NameplateStore};
 use crate::utils::dom_attr::bool_attr;
 
@@ -186,8 +187,15 @@ fn NameplateRow(
                 .unwrap_or_default()
         })
     };
-    let name = PlateText::new(field(|p| p.primary_text.clone()));
-    let role = PlateText::new(field(|p| p.secondary_text.clone()));
+    // While a save of the plate is pending, its newest committed text (the
+    // list can be older, e.g. in a row rebuilt by an output switch).
+    let pending =
+        move |pick: fn(Texts) -> String| Memo::new(move |_| store.pending_texts(id).map(pick));
+    let name = PlateText::new(field(|p| p.primary_text.clone()), pending(|(name, _)| name));
+    let role = PlateText::new(
+        field(|p| p.secondary_text.clone()),
+        pending(|(_, role)| role),
+    );
     let save = RowSave::new(store, id, name, role);
     // A hidden page may be frozen or killed (a phone), and a reload or a
     // closed tab fires `pagehide` (Safari may skip `visibilitychange` then),

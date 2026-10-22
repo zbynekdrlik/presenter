@@ -2,8 +2,8 @@
 //! answer, retry and Zobraziť to the ONE controller ([`SaveControl`],
 //! pure) and carries out what it asks for: a keepalive PATCH with a 15 s
 //! timeout, a retry timer, a toast, a show, a list reload, and the
-//! [`PlateSave`] each row reads (its „neuložené" marker and the texts it
-//! may stop holding as drafts).
+//! [`PlateSave`] each row reads (its „neuložené" marker, the texts it may
+//! stop holding as drafts, and the newest texts it stands on while busy).
 
 use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
@@ -24,6 +24,11 @@ pub struct PlateSave {
     pub unsaved: bool,
     /// The newest settle, numbered so a row applies each one once.
     pub settled: Option<(u64, Settle)>,
+    /// The plate's newest committed texts while it is busy (the
+    /// controller's `desired`), `None` when idle: what a field with no
+    /// draft shows and commits. The plate list can be OLDER while a save is
+    /// pending (a row rebuilt by an editor output switch there and back).
+    pub desired: Option<Texts>,
 }
 
 impl NameplateStore {
@@ -33,6 +38,14 @@ impl NameplateStore {
             .try_with(|views| views.get(&id).cloned())
             .flatten()
             .unwrap_or_default()
+    }
+
+    /// The newest texts committed for plate `id` while it is busy, as its
+    /// row reads them (tracked); `None` when idle.
+    pub fn pending_texts(self, id: i64) -> Option<Texts> {
+        self.save_views
+            .try_with(|views| views.get(&id).and_then(|view| view.desired.clone()))
+            .flatten()
     }
 
     /// Whether plate `id` has a save on its way, waiting or failed, or a
@@ -232,14 +245,15 @@ impl NameplateStore {
 
     /// Bring row `id`'s [`PlateSave`] up to date (notifies only on a change).
     fn update_view(self, id: i64, settled: Option<(u64, Settle)>) {
-        let unsaved = self
+        let (unsaved, desired) = self
             .saves
-            .try_with_value(|control| control.is_unsaved(id))
-            .unwrap_or(false);
+            .try_with_value(|control| (control.is_unsaved(id), control.desired(id)))
+            .unwrap_or((false, None));
         self.save_views.maybe_update(|views| {
             let view = views.entry(id).or_default();
             let before = view.clone();
             view.unsaved = unsaved;
+            view.desired = desired;
             if settled.is_some() {
                 view.settled = settled;
             }
