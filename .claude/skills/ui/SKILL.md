@@ -133,6 +133,25 @@ silent no-op, or the element that held focus may still be in the DOM.
   `.claude/rules/settings-ui.md` entry. E2E: a row deleted elsewhere while its own
   save is in flight still lands focus on "+ Add".
 
+## Never read a signal inside `StoredValue::try_update_value` / `update_value` (#871)
+
+In reactive_graph 0.1.8 a `StoredValue` keeps its value IN the global arena, and
+`try_update_value` / `update_value` run the closure while holding the arena's WRITE lock
+(`owner/storage.rs` `try_with_mut` → `Arena::try_with_mut`). Any signal or other
+`StoredValue` access inside that closure (`sig.try_with_untracked`, `.get_untracked()`, a
+helper that does one) takes the arena lock again: a crash in the WASM build (std's
+single-threaded `RwLock` aborts on a read while write-locked). It compiles and
+passes host unit tests (the controller under test is pure), so only an E2E that reaches the
+path shows it. Read what the closure needs FIRST, then hand it plain data:
+
+```rust
+let listed: Vec<i64> = self.plates.try_with_untracked(|l| l.iter().map(|p| p.id).collect()).unwrap_or_default();
+self.saves.try_update_value(|control| control.send_waiting(|id| listed.contains(&id)));
+```
+
+`try_with_value` holds the READ lock, so a nested read is tolerated, but keep those closures
+pure too.
+
 ## The toast `<div>` is ALWAYS mounted — assert visibility via `data-visible`, not DOM presence (#558 W1)
 
 `components/toast.rs` renders `<div data-role="toast" data-visible=… class:operator__toast--visible=…>`

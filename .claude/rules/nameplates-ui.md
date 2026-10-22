@@ -96,7 +96,10 @@ paths:
     per list and calls `store.send_waiting()` → `SaveControl::send_waiting(has_row)`, which
     sends, beside the PATCH on its way, every plate whose `desired` waits and that is not in
     the shown list (log `… (the page went hidden; its row has left the list)`). Listed
-    plates are left to their rows' own urgent commit, so nothing goes twice.
+    plates are left to their rows' own urgent commit, so nothing goes twice. The shown ids
+    are read BEFORE `saves.try_update_value`: never read a signal (or another
+    `StoredValue`) inside that closure (ui skill: reactive_graph 0.1.8 runs it under the
+    arena's write lock).
   - **A row drops a draft only when the store SETTLES that text** (`PlateSave.settled`, a
     numbered `Settle`, applied once per number by an `Effect` in `RowSave`): a field is
     settled when the confirmed text is the desired one and no PATCH on its way carries
