@@ -178,6 +178,30 @@ Pages match by number on both rigs (page 30 = SNV "strih-obs" / PP "STRIH 2ME").
   button's "Show/Hide on CG" hotkeys change whether `CG-presenter` is ACTIVE in program
   (`videoActive`), not its `sceneItemEnabled` inside "CG bridge".
 
+## Placing module presets on a live rig through the admin UI (#870, 2026-10-22)
+
+No Companion restart and no DB write: drop the module's presets onto the page in the web UI
+(`http://<host>:8000/buttons/<page>`), driven by Playwright. This is how the #870 nameplate
+grid went onto page 31 on SNV (Companion 5.1) and PP (5.0).
+- **Before:**
+  - Check the rig is idle: `journalctl -u companion --since '-60 min' | grep -c 'Presenter command'`.
+  - Take an ONLINE backup with Python's `sqlite3` `backup()` API from a `?mode=ro`
+    connection into `db.sqlite.bak-<what>-<ts>`, then run `pragma integrity_check` on the copy.
+    That is safe while Companion runs.
+- **Clicking a grid cell only SELECTS it.** The console logs `set selected`, the "Edit Button
+  p/r/c" tab opens, and nothing is pressed. Cells are `.button-grid-canvas .button-control`,
+  row-major, index = row × 8 + column on an 8 × 4 page. Close the "What's New" modal first.
+- **Delete:** select the cell, press "Clear button", then confirm "Clear" in the dialog headed
+  "Clear button p/r/c". Check the heading names the right cell before confirming.
+- **Drop a preset:** Presets tab → `<connection> …` → the category (a click TOGGLES it, so
+  check the preset buttons are visible).
+  - Playwright `dragTo` does NOT trigger Companion's HTML5 drag-and-drop.
+  - What works: `page.mouse.move` to the preset centre, `mouse.down()`, ~15 stepped
+    `mouse.move`s to the cell centre (30 ms apart), `mouse.up()`, then wait ~700 ms.
+  - A drop onto an OCCUPIED cell replaces it, with no dialog.
+- **After:** read the page back from the DB (`?mode=ro`: text / actions / feedbacks per cell),
+  confirm 0 `Presenter command` lines fired, and screenshot `.button-grid-canvas`.
+
 ## Module version pinning — connection must survive a deploy (#733)
 
 Companion stores each connection's module version as `moduleVersionId` in the `instances`
