@@ -27,6 +27,9 @@
  *    once when the page hides, beside the save on its way; also after the
  *    editor switched back (the plate's new row has no drafts), once, when
  *    the tab closes (hidden, then `pagehide`).
+ *  - #871: a row rebuilt by an output switch there and back while its save
+ *    is on its way stands on the newest texts, not the list's older ones: a
+ *    role typed there keeps the newer name.
  *
  * Clean console is asserted last.
  */
@@ -755,6 +758,75 @@ test("#871 a save left waiting by an output switch goes when the tab closes, als
   expect(logs.filter((line) => line.startsWith(sentBeside))).toHaveLength(1);
   expect(logs.filter((line) => line.startsWith(`nameplates: plate ${plateId} save not done`))).toEqual([]);
   await setPageHidden(page, false);
+  await page.unrouteAll({ behavior: "wait" });
+
+  const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);
+  expect(deleted.ok()).toBeTruthy();
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#871 a row rebuilt while its save is on its way stands on the newest texts: a role typed there keeps the newer name", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+  const other = (await listOutputs(page)).find((o) => o.slug !== "stream")?.slug as string;
+  expect(other, "a second output exists").toBeTruthy();
+  const name = `SW_871_BASE_${Date.now() % 100_000}`;
+  const plateId = await createStreamPlate(page, name, "hosť");
+  const { bodies, releaseFirst } = await holdFirstPatch(page, plateId);
+  const newer = `${name} nová`;
+
+  await page.goto(`${baseURL}/ui/stream?output=stream&tab=nameplates`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const plateRow = page.locator(`[data-role="stream-nameplate"][data-nameplate-id="${plateId}"]`);
+  const plateName = plateRow.locator('[data-role="stream-nameplate-name"]');
+  const plateRole = plateRow.locator('[data-role="stream-nameplate-role"]');
+  await expect(plateName).toHaveValue(name, { timeout: 15_000 });
+
+  // The new name is saved; that PATCH is held at the network.
+  await plateName.fill(newer);
+  await plateName.blur();
+  await expect.poll(() => bodies.length).toBe(1);
+
+  // The editor switches output and back before that save is answered: the
+  // plate's row is rebuilt, while the list still has the server's OLDER
+  // name.
+  await outputSelect(page).selectOption(other);
+  await expect(plateRow).toHaveCount(0);
+  await outputSelect(page).selectOption("stream");
+  await expect(plateRole).toHaveValue("hosť", { timeout: 15_000 });
+
+  // Only the role is typed in the rebuilt row, then left: its save waits
+  // for the held one.
+  const waits = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${plateId} save waits for the one on its way`,
+    timeout: 10_000,
+  });
+  await plateRole.fill("kazateľ");
+  await plateRole.blur();
+  await waits;
+  expect(bodies).toHaveLength(1);
+
+  // The held save is answered, the waiting one goes next: the server ends on
+  // BOTH the newer name and the new role (a row standing on the list sent
+  // the OLDER name back with the role).
+  const idle = page.waitForEvent("console", {
+    predicate: (msg) => msg.text() === `nameplates: plate ${plateId} saved; nothing left to send`,
+    timeout: 20_000,
+  });
+  releaseFirst();
+  await idle;
+  expect(await savedPlate(page, plateId)).toMatchObject({
+    primaryText: newer,
+    secondaryText: "kazateľ",
+  });
+  expect(bodies).toEqual([
+    { primaryText: newer, secondaryText: "hosť" },
+    { primaryText: newer, secondaryText: "kazateľ" },
+  ]);
+  await expect(plateName).toHaveValue(newer);
+  await expect(plateRole).toHaveValue("kazateľ");
   await page.unrouteAll({ behavior: "wait" });
 
   const deleted = await page.request.delete(`${baseURL}/stream/api/nameplates/${plateId}`);

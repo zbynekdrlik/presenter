@@ -5,6 +5,8 @@
 use super::SaveOutcome::{Failed, Gone, Refused, Saved};
 use super::*;
 
+mod rebuilt_row;
+
 fn t(name: &str, role: &str) -> Texts {
     (name.to_string(), role.to_string())
 }
