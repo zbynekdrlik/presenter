@@ -96,7 +96,13 @@ paths:
     per list and calls `store.send_waiting()` → `SaveControl::send_waiting(has_row)`, which
     sends, beside the PATCH on its way, every plate whose `desired` waits and that is not in
     the shown list (log `… (the page went hidden; its row has left the list)`). Listed
-    plates are left to their rows' own urgent commit, so nothing goes twice. The shown ids
+    plates are left to their rows' own urgent commit, so nothing goes twice. That includes a
+    plate whose row was REBUILT (the editor switched there and back while the save was on
+    its way: the new row has no drafts, the old row's texts wait in the controller):
+    `RowSave::commit(PageHidden)` with no drafts calls `store.send_waiting_of(id)` →
+    `send_waiting(|other| other != id)`, only that plate (log `… (the page went hidden; its
+    row was rebuilt)`). Once sent, its texts are on their way, so hidden then `pagehide`
+    send once (both `send_waiting*` go through `send_waiting_where`). The shown ids
     are read BEFORE `saves.try_update_value` and handed in as plain data, so the closure
     stays pure (style). The real hazard is re-entering `saves` itself inside one of its
     own closures (ui skill: reactive_graph 0.1.8 runs the closure under the value's own
@@ -134,7 +140,11 @@ paths:
   the toast promises none); prefix „Menovka sa nezobrazila. " when a waiting Zobraziť was
   dropped. A failure whose plate is no longer in the shown list (an editor output switch
   took the row) gives up with `LOST_UNSAVED` „Zmena menovky sa neuložila — skúste ju zadať
-  znova.".
+  znova.", but only once no other PATCH of the plate is on its way (`Failed if !held &&
+  slot.in_flight.is_empty()`): with a save sent beside it as the page hid still out, the
+  failure falls through to the on-its-way step, is not reported, and that save decides
+  (saved = idle, no toast; failed = the give-up toast). Before #871's last round it gave up
+  at once, dropped that save and told the operator to retype text the server had.
 - **A failed PATCH may have been applied** (a lost answer, the 15 s abort after the server
   wrote it, an unreadable 2xx body; #871 review). A Failed answer whose texts are not the
   `confirmed` ones sets `confirmed = None`, so once nothing else is on its way `desired` is
@@ -143,8 +153,10 @@ paths:
   waiting Zobraziť fires only after that; typed back to the saved texts after a failure is
   re-sent. A failure answered while a PATCH of the plate is on its way after it (still out,
   or started now: `Step::on_its_way`) is logged (`failure not reported; a save of the plate
-  is on its way`), not toasted (`SaveOutcome::is_reported`): that PATCH's answer decides and
-  reports. The row stays marked „neuložené" meanwhile. Accepted residual risk: an older
+  is on its way`), not toasted (`SaveOutcome::is_reported(on_its_way)`, whether or not a
+  row still holds the text): that PATCH's answer decides and reports. A saved answer while
+  an earlier PATCH of the plate is still out logs `saved; a save of the plate is still on
+  its way` (the E2E settle signal below). The row stays marked „neuložené" meanwhile. Accepted residual risk: an older
   failure answered BEFORE the newer save's saved answer is not repaired (the saved answer
   sets `confirmed` again), the same out-of-order risk as the urgent side save.
 - **Zobraziť** (`RowSave::show`) first commits the row's drafts (iOS Safari may not blur the
@@ -228,7 +240,9 @@ paths:
 - Picking a view in the phone menu closes the menu (`set_view` resets `mobile_nav_open`);
   before #871 the overlay stayed open over the picked view.
 - Sizes after the save consolidation (production lines, 800 = warning): `mod.rs` ~460,
-  `plate_list.rs` ~390, `save_control.rs` ~620, `row_save.rs` ~280, `saving.rs` ~290.
+  `plate_list.rs` ~390, `save_control.rs` ~620, `row_save.rs` ~290, `saving.rs` ~330;
+  `save_control/tests.rs` ~780 (exempt as `tests.rs`, but next to 800: new controller
+  tests go in a sibling test module before it grows much more).
 
 ## E2E
 - `tests/e2e/operator-nameplates.spec.ts`: tab order + URL, add / rename (`fill` + `blur`) /
@@ -314,7 +328,20 @@ paths:
   reload (the old code issued the PUT first), and that output's active stays null; a role
   typed, the output switched while the name's PATCH is held (`holdFirstPatch`), the page
   hidden: a second PATCH with both texts goes before the held one is released, then (held
-  one applied last) a third repairs the server.
+  one applied last) a third repairs the server. The same with the output switched there
+  AND BACK before the tab closes (`closePage` = hidden + `pagehide` dispatched in ONE
+  evaluate, as a real close: no answer is handled between them): the plate's rebuilt row
+  sends the waiting texts, logged `sent now beside …` exactly once (that log tells it from
+  the held save's 15 s timeout retry, which sends the same texts; no `save not done` line
+  may appear), then the repair. Page logs there are read from a `logs` array with
+  `expect.poll`, so the old code fails on the count, not on a `waitForEvent` timeout.
+- **Releasing the next held save waits until the page HANDLED the previous answer**
+  (`savedWhileAnotherIsOut(page, id)` in both specs = `waitForEvent` on the page's
+  `saved; a save of the plate is still on its way`, set up before the release). `held[n]
+  .answered` / `waitForResponse` only mean the network delivered it; the page handles it two
+  awaits later (`api::finish_json`), so on a CPU-starved runner the next released answer
+  could be handled first, down the documented not-repaired path (a timeout). Used by every
+  test that releases two held saves of one plate in a row (newer first or in order).
 - **A test that acts on a FAILED row acts from a MutationObserver** (`onUnsavedMark(page,
   id, "online" | "hide" | "show")`, installed BEFORE the action that fails the save): the
   observer fires the window `online` event, the page going hidden, or a click on Zobraziť
