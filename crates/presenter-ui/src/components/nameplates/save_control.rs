@@ -25,7 +25,8 @@
 //!   since. A commit made while the failed save was on its way is sent at
 //!   once. A retry sends the desired texts, never half-typed text (that is a
 //!   row's draft, not committed yet). A failure whose text no field holds any
-//!   more (its row left the list) gives up.
+//!   more (its row left the list) gives up once no other save of the plate
+//!   is on its way.
 //! - **A failed save may have been applied** (a lost answer, the 15 s abort
 //!   after the server wrote it, an unreadable 2xx body). Unless it carried
 //!   the confirmed texts, the confirmed texts are unknown after it, so the
@@ -117,14 +118,14 @@ impl SaveOutcome {
         }
     }
 
-    /// Whether an answer with this outcome is toasted. `held` = a row holds
-    /// the plate's text, `on_its_way` = a PATCH of the plate is on its way
-    /// after the answer ([`Step::on_its_way`]). A failure answered while one
-    /// is has nothing to report yet: that PATCH's answer decides (a save
-    /// sent beside it as the page hid, or the desired texts sent again), and
-    /// reports a failure of its own.
-    pub fn is_reported(self, held: bool, on_its_way: bool) -> bool {
-        !(self == Self::Failed && held && on_its_way)
+    /// Whether an answer with this outcome is toasted. `on_its_way` = a
+    /// PATCH of the plate is on its way after the answer
+    /// ([`Step::on_its_way`]). A failure answered while one is has nothing
+    /// to report yet, whether or not a row still holds the text: that
+    /// PATCH's answer decides (a save sent beside it as the page hid, or the
+    /// desired texts sent again), and reports a failure of its own.
+    pub fn is_reported(self, on_its_way: bool) -> bool {
+        !(self == Self::Failed && on_its_way)
     }
 
     /// The toast for a save that came back with `error` (`self` is
@@ -365,9 +366,11 @@ impl SaveControl {
     }
 
     /// The PATCH `token` of plate `id` came back with `outcome`; `held` =
-    /// a row still holds the plate's typed text. `None` = an answer for a
-    /// save the controller has forgotten (its plate was deleted, or its
-    /// failure gave up): nothing to report.
+    /// a row still holds the plate's typed text. A failure no row holds
+    /// gives up, unless another PATCH of the plate is still on its way (a
+    /// save sent beside it as the page hid): that one's answer decides.
+    /// `None` = an answer for a save the controller has forgotten (its
+    /// plate was deleted, or its failure gave up): nothing to report.
     pub fn finish(
         &mut self,
         id: i64,
@@ -380,7 +383,9 @@ impl SaveControl {
         let sent = slot.in_flight.remove(at);
         match outcome {
             SaveOutcome::Gone => return Some(self.forget(id, true)),
-            SaveOutcome::Failed if !held => return Some(self.forget(id, false)),
+            SaveOutcome::Failed if !held && slot.in_flight.is_empty() => {
+                return Some(self.forget(id, false));
+            }
             SaveOutcome::Refused if sent.texts == slot.desired => {
                 return Some(self.refused(id, sent.texts));
             }

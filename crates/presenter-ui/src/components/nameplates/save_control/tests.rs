@@ -477,13 +477,13 @@ fn an_older_save_failing_after_the_newer_one_saved_sends_the_newest_once_more_th
     assert_eq!(again.texts, t("B", "r"));
     assert!(!step.show && !step.not_shown && !step.idle);
     assert!(step.retry_in.is_none());
-    assert!(!Failed.is_reported(true, step.on_its_way));
+    assert!(!Failed.is_reported(step.on_its_way));
     // A failure with nothing on its way after it (it waits for a retry, or
     // its field is gone) is reported; so are a gone plate and a refused
     // text.
-    assert!(Failed.is_reported(true, false));
-    assert!(Gone.is_reported(true, true));
-    assert!(Refused.is_reported(true, true));
+    assert!(Failed.is_reported(false));
+    assert!(Gone.is_reported(true));
+    assert!(Refused.is_reported(true));
     let step = control
         .finish(1, again.token, Saved, true)
         .unwrap_or_default();
@@ -515,7 +515,7 @@ fn typed_back_while_its_save_was_on_its_way_and_that_save_failing_sends_the_text
     let again = patch(&step);
     assert_eq!(again.texts, t("A", "r"));
     assert!(step.on_its_way);
-    assert!(!Failed.is_reported(true, step.on_its_way));
+    assert!(!Failed.is_reported(step.on_its_way));
     let step = control
         .finish(1, again.token, Saved, true)
         .unwrap_or_default();
@@ -536,7 +536,7 @@ fn an_older_save_failing_while_the_save_beside_it_is_still_on_its_way_reports_no
         .unwrap_or_default();
     assert!(step.on_its_way);
     assert!(step.patch.is_none() && step.retry_in.is_none() && !step.idle);
-    assert!(!Failed.is_reported(true, step.on_its_way));
+    assert!(!Failed.is_reported(step.on_its_way));
     let step = control
         .finish(1, newer.token, Saved, true)
         .unwrap_or_default();
@@ -609,7 +609,7 @@ fn a_failure_whose_row_left_waits_for_the_save_sent_beside_it_and_a_saved_answer
         .finish(1, first.token, Failed, false)
         .unwrap_or_default();
     assert!(step.on_its_way, "save 2 decides: {step:?}");
-    assert!(!Failed.is_reported(false, step.on_its_way));
+    assert!(!Failed.is_reported(step.on_its_way));
     assert!(!step.idle && step.patch.is_none() && step.retry_in.is_none());
     assert!(control.is_busy(1));
     let step = control
@@ -633,7 +633,7 @@ fn a_failure_whose_row_left_gives_up_once_the_save_sent_beside_it_fails_too() {
         step.idle && !step.on_its_way && step.retry_in.is_none(),
         "{step:?}"
     );
-    assert!(Failed.is_reported(false, step.on_its_way));
+    assert!(Failed.is_reported(step.on_its_way));
     assert_eq!(TextLeft::of(false, step.not_shown), TextLeft::Nowhere);
     assert!(!control.is_busy(1));
 }
