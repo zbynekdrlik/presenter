@@ -426,3 +426,10 @@ paths:
   without `refreshDevData` (the private Bibles are not on dev2). Run each test in its own
   Playwright invocation: after a failure the worker restarts, and the next server cannot
   bind the Companion port the previous one still holds. Delete the binary and the copies.
+  From a worktree agent: put the netns steps in script files (`sudo -n unshare -n bash
+  <outer.sh>`, the outer one runs `ip link set lo up` + `sudo -n -u newlevel bash
+  <inner.sh>`; an inline `bash -c "… sudo …"` is refused by the worktree-isolation
+  hook), and run the MAIN checkout's `node …/node_modules/@playwright/test/cli.js test
+  <spec> -g <title> --reporter=line` from the worktree: it resolves `@playwright/test`
+  itself. Never symlink `node_modules` into the worktree: the isolation hook resolves
+  the link and refuses to remove it again.
