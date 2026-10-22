@@ -34,7 +34,8 @@ paths:
   `saving.rs` — the store's side (`impl NameplateStore`): runs every controller `Step` (a
   PATCH, a retry timer, a toast, a show, a list reload) and keeps `save_views`, the
   `PlateSave` each row reads (`unsaved`, `settled`). `row_save.rs` — the row's side:
-  `PlateText` (one field's draft), `Why`, `RowSave` (commit, Zobraziť, blur, leave).
+  `PlateText` (one field's draft, its base from the pure `base_text`), `Why`, `RowSave`
+  (commit, `nothing_to_commit`, Zobraziť, blur, leave).
 - `api/mod.rs::start_patch_keepalive` + `finish_json` — the plate PATCH as a `keepalive`
   fetch started before the call returns (the `ndi_video::dispatch_delete` pattern), aborted
   after `timeout_ms` (an `AbortController` + a timer: `AbortSignal.timeout()` is missing on
@@ -100,11 +101,24 @@ paths:
     the shown list (log `… (the page went hidden; its row has left the list)`). Listed
     plates are left to their rows' own urgent commit, so nothing goes twice. That includes a
     plate whose row was REBUILT (the editor switched there and back while the save was on
-    its way: the new row has no drafts, the old row's texts wait in the controller):
-    `RowSave::commit(PageHidden)` with no drafts calls `store.send_waiting_of(id)` →
+    its way: the new row has no drafts, the old row's texts wait in the controller).
+    **A row with nothing to commit** (no drafts, OR only a name being retyped: name draft
+    "", no role draft, `kept as typed, not saved`) calls `RowSave::nothing_to_commit(why)`,
+    never a bare `return`: on `PageHidden` `store.send_waiting_of(id)` →
     `send_waiting(|other| other != id)`, only that plate (log `… (the page went hidden; its
-    row was rebuilt)`). Once sent, its texts are on their way, so hidden then `pagehide`
-    send once (both `send_waiting*` go through `send_waiting_where`). The shown ids
+    row was rebuilt)`); for EVERY `why` `store.retry_of(id, why.reason())` →
+    `SaveControl::retry(id)`, a no-op unless the plate failed with nothing on its way (log
+    `failed save sent again (the page went hidden | the field was left | the focus went
+    away)`). The two are exclusive (a save on its way or not). Once one sends, its texts
+    are on their way, so hidden then `pagehide` send once (both `send_waiting*` go through
+    `send_waiting_where`; a second `retry` finds the PATCH on its way). The list-level
+    hidden / `pagehide` handler never retries (only `online` / visible do, via
+    `retry_failed` → `retry_of`), so nothing goes twice. Zobraziť on a draft-less failed
+    row therefore retries through its `commit(FieldLeft)` (logged „the field was left"),
+    and `show_saved` then only takes a ticket. Before #871's last round both early returns
+    skipped the store: a name retyped in a rebuilt row lost the waiting texts on a tab
+    close, and a rebuilt row's failed save waited for the timer (the toast's „keď pole
+    opustíte" was false for it). The shown ids
     are read BEFORE `saves.try_update_value` and handed in as plain data, so the closure
     stays pure (style). The real hazard is re-entering `saves` itself inside one of its
     own closures (ui skill: reactive_graph 0.1.8 runs the closure under the value's own
@@ -120,8 +134,10 @@ paths:
   - **A field with no draft stands on the controller's `desired` while the plate is busy,
     never the list** (`PlateText::base`). `PlateSave.desired` = `SaveControl::desired(id)`
     (set by `update_view` after every step, `None` when idle); the row reads it through
-    `store.pending_texts(id)` (tracked). `base` = that field's pending text, else `saved`
-    (the list's, kept once the plate leaves the list); `shown` = draft else base, and
+    `store.pending_texts(id)` (tracked). `base` = that field's pending text (even ""), else
+    `saved` (the list's, kept once the plate leaves the list): the pure
+    `row_save::base_text(pending, saved)`, unit-tested in `row_save.rs`; `shown` = draft
+    else base, and
     `PlateText::value()` (what a commit sends) = draft else base. Why: the list can be
     OLDER than a commit still waiting. A row rebuilt by an editor output switch there and
     back while a save was on its way stood on the list, so a role typed there committed
@@ -137,7 +153,8 @@ paths:
   else the saved one); a typed role still goes with it. `FocusAway` / `PageHidden` (the
   operator is retyping it) keep the empty name as typed: a typed role goes with the NEWEST
   name (`store.desired`, else saved; log `… the role sent with the newest name (…)`), else
-  nothing is sent (`… kept as typed, not saved (…)`).
+  the row commits nothing (`… kept as typed, not saved (…)`), but its plate's waiting or
+  failed save still goes (`nothing_to_commit`, above).
 - **A failed save keeps the desired texts and is retried** (`SaveOutcome::of_error`): a
   network error (Wi-Fi asleep, the 15 s abort), a server fault (5xx, 408, 429, an unreadable
   2xx body) or an expired login (401 / 403) is `Failed`; 404 is `Gone` (`DELETED_UNSAVED`,
@@ -148,8 +165,9 @@ paths:
   / 3 of a streak, then none; each timer is armed for ONE failure number and does nothing
   once a save, a commit or another failure came since), the window `online` event and
   `visibilitychange` → visible (both listened to ONCE per list, in `NameplateRows`),
-  Zobraziť, and any commit. A commit that came while the failed PATCH was on its way goes at
-  once. Toasts: „Uloženie zlyhalo: … Text ostal v poli ako neuložený — uloží sa znova sám o
+  Zobraziť, any commit, and a row with nothing to commit when its field, the window or the
+  page is left (`retry_of`, above). A commit that came while the failed PATCH was on its
+  way goes at once. Toasts: „Uloženie zlyhalo: … Text ostal v poli ako neuložený — uloží sa znova sám o
   chvíľu, po obnovení siete alebo návrate na stránku, po stlačení Zobraziť alebo keď pole
   opustíte." (+ the login hint for 401 / 403); „sám o chvíľu, " only while a retry timer is
   armed (`message(…, timer)` = `step.retry_in.is_some()`; none from the 4th failure on, so
@@ -256,7 +274,7 @@ paths:
 - Picking a view in the phone menu closes the menu (`set_view` resets `mobile_nav_open`);
   before #871 the overlay stayed open over the picked view.
 - Sizes after the save consolidation (production lines, 800 = warning): `mod.rs` ~460,
-  `plate_list.rs` ~400, `save_control.rs` ~620, `row_save.rs` ~300, `saving.rs` ~340;
+  `plate_list.rs` ~400, `save_control.rs` ~620, `row_save.rs` ~330, `saving.rs` ~350;
   `save_control/tests.rs` ~780 (exempt as `tests.rs`, but next to 800: new controller
   tests go in a submodule under `save_control/tests/`, like `rebuilt_row.rs`).
 
@@ -355,8 +373,21 @@ paths:
   saved (held), output switched there and back, only the role typed in the rebuilt row
   and left (settle `save waits …`), the held save released (settle `saved; nothing left
   to send`): REST must hold BOTH the newer name and the new role, and the second PATCH
-  carries both (the old code sent the older name back with the role). Controller side:
-  `save_control/tests/rebuilt_row.rs` (a submodule of `tests.rs`, which is at ~780 lines).
+  carries both (the old code sent the older name back with the role). A row with nothing
+  to commit: name saved (held), role typed, output switched there and back, the name
+  CLEARED in the rebuilt row (no role typed there), `closePage`: exactly one `sent now
+  beside … (the page went hidden; its row was rebuilt)` carrying the waiting texts, the
+  empty name kept; and (looped `close` | `leave`) name saved (held), switched there and
+  back, the held save aborted with the spec's own `onUnsavedMark(page, id, "close" |
+  "leave")` installed (closes the tab, or `focus()` + `blur()` on the name field, in the
+  observer pass): the only `failed save sent again` line carries THAT trigger, never `the
+  retry pause ran out` (the old code waited for the 2 s timer, so it fails on the line,
+  not a timeout). Controller side: `save_control/tests/rebuilt_row.rs` (a submodule of
+  `tests.rs`, which is at ~780 lines) = the CONTROLLER CONTRACT the rebuilt row relies on
+  (busy → `desired` = the newest committed texts, idle → `None`; a failed save with
+  nothing on its way is skipped by `send_waiting` and sent once by `retry`). Those pass on
+  any code that keeps the contract, so they are never a [red]; the row's base CHOICE is
+  `row_save::base_text`, unit-tested in `row_save.rs`.
 - **Releasing the next held save waits until the page HANDLED the previous answer**
   (`savedWhileAnotherIsOut(page, id)` in both specs = `waitForEvent` on the page's
   `saved; a save of the plate is still on its way`, set up before the release). `held[n]
