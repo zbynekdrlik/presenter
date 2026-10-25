@@ -127,11 +127,10 @@ parsers` or `presenter_server::android_stage`, know that it will NOT show up dur
 run** (module-wide demotion) — everywhere else in the codebase, including the rest of `state/*.rs`,
 is unaffected.
 
-## Running the harness on dev2 — CI builds it, dev2 only runs it (Tier-0)
+## Running the harness on dev2 from the CI-built binary
 
-dev2 is Tier-0 (CI-only builds, see project `CLAUDE.md`), but it's where the harness must RUN —
-against a local llama.cpp endpoint or a hosted OpenAI-compatible endpoint (OpenRouter). `ai_eval` is never built
-locally there. `.github/workflows/ai-eval-build.yml` (workflow_dispatch only — never wired into
+The harness RUNS on dev2 — against a local llama.cpp endpoint or a hosted OpenAI-compatible
+endpoint (OpenRouter). `.github/workflows/ai-eval-build.yml` (workflow_dispatch only — never wired into
 the push-triggered `dev`/`main` pipelines, since the whole point of the `ai-eval` feature gate is
 that normal CI never pays for it) compiles the release binary on a GitHub-hosted runner and
 publishes it as an artifact:
@@ -262,10 +261,6 @@ code):
   `lib.rs` does NOT allow): `RequestLog` needed an explicit `impl Default` (delegating to `new()`,
   not `#[derive]` — `VecDeque::with_capacity` ≠ derived default). If you add a feature-gated `pub fn
   new() -> Self` with no `Default`, add the `Default` impl in the same change.
-
-Local check for feature-gated compile-cleanliness (Tier-0 — clippy itself is hook-blocked locally):
-`cargo check --workspace --all-features --tests` (matches the feature set clippy now uses; the round
-CI is the only place clippy actually runs).
 
 ## Evaluating ADDITIONAL model families — drop-in tool-calling is NOT universal (#662, 2026-08-13)
 

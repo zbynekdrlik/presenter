@@ -1,9 +1,8 @@
 ---
 name: presenter-deploy
 description: >
-  Push-to-CI iterate workflow (Tier-0: CI builds/tests/deploys, only cheap checks run
-  locally) and the HOTFIX MODE local-build exception for presenter on dev2. Use when
-  pushing a change or deploying to dev.
+  Push-to-CI iterate workflow (CI builds/tests/deploys to dev) and HOTFIX MODE for
+  presenter on dev2. Use when pushing a change or deploying to dev.
 triggers:
   - local build
   - deploy to dev
@@ -13,24 +12,9 @@ triggers:
 
 # Presenter Deploy Skill
 
-## Push-to-CI Iterate (Tier-0 Machine)
+## Push-to-CI Iterate
 
-**#627: this section used to say "Tier-0" in its heading while its own numbered steps
-prescribed exactly the local build+deploy loop Tier-0 bans — `block-tier0-local-build.sh`
-fails step 2/3 immediately, by design.** This is the corrected, actually-runnable
-sequence.
-
-This project is Tier-0 (#592): heavy compilation (`cargo build`, `cargo build
---release`, `trunk build`, `wasm-pack build`, a test run that RUNS tests) happens ONLY
-on GitHub-hosted runners.
-
-> **#557 (2026-08-18) TIGHTENED Tier-0 to ZERO local cargo compilation** — `block-tier0-local-build.sh`
-> now hard-blocks EVERY compiling cargo shape locally, **including `cargo check` AND
-> `cargo clippy`** (they run the compiler frontend), narrow or whole-workspace. So the
-> `cargo check --workspace --tests` / `cargo clippy` lines below, and the
-> `cargo check --target wasm32-unknown-unknown` "one thing allowed locally" note further
-> down, are **STALE post-#557 — they are hook-blocked now.** The only pre-push checks that
-> actually run locally are the NON-compiling ones:
+Cheap pre-push checks:
 
 ```bash
 cargo fmt --all --check                                   # + (cd crates/presenter-ui && cargo fmt --all --check)
@@ -38,10 +22,7 @@ bash scripts/dev/count_prod_lines.sh <touched-file>       # file-size gate
 QC_TARGETS="<touched-file>" python3 scripts/dev/fn_length_check.py .   # fn-length gate
 ```
 
-`cargo check`, `cargo clippy`, and `cargo check --target wasm32-unknown-unknown` all now
-require CI (or a deliberate `# airuleset:build-ok` per-command override / Tier-1 / `/fast-iterate`).
-For a routine PR, push and let `pipeline.yml` run fmt/clippy/check/build/test/e2e — do NOT
-disarm the hook. `presenter-ui` is OUTSIDE the workspace (its own `Cargo.lock`, WASM target).
+`presenter-ui` is OUTSIDE the workspace (its own `Cargo.lock`, WASM target).
 
 CI (`pipeline.yml`, push to `dev`, ~38 min) then does the FULL loop for you: WASM build
 (`scripts/build-ui.sh` under nightly + `-Zbuild-std`), the server release build, E2E, and
@@ -53,8 +34,7 @@ which still lands its commit through these same CI gates retroactively.
 1. **Cheap checks** (above), then push to `dev`.
 2. **Monitor CI to a terminal state** (`ci-monitoring` global rule): `gh run list` /
    `gh run view <id> --json status,conclusion`. On failure: `gh run view <id>
-   --log-failed` — fix the root cause and push again, never re-run a local build to
-   "see if it passes" (it can't; the hook blocks it).
+   --log-failed` — fix the root cause and push again.
 3. **Verify the CI-deployed result** — the same binary CI just swapped in, not one you
    built by hand: `curl http://10.77.8.134:8080/healthz`, then open
    `http://10.77.8.134:8080/ui/operator` for a functional check.
@@ -139,11 +119,9 @@ per-profile `incremental = true` override slipping into either
 `.cargo/config.toml` before reaching for the purge — the setting, not the
 purge, is the actual fix; purging just reclaims space already spent.
 
-### WASM build mechanics — reference knowledge, NOT a local prescription (#465 resolved)
+### WASM build mechanics (#465 resolved)
 
-**`scripts/build-ui.sh` is what CI's build job runs** (and, if ever needed, HOTFIX MODE
-below) — it is not a routine local step under Tier-0. This is WHY it exists and what it
-avoids, kept here so a CI build-job failure is legible:
+**`scripts/build-ui.sh` is what CI's build job runs.** Why it exists and what it avoids:
 
 The #465 symptom (`failed to find the __wbindgen_externref_table_alloc function`) happens
 when you run a **plain `trunk build` on the stable toolchain**: rustc 1.82+ enables wasm
@@ -154,34 +132,28 @@ trunk build` with `crates/presenter-ui/.cargo/config.toml`'s `-Zbuild-std` +
 `RUSTFLAGS=-Ctarget-feature=-reference-types` does NOT help — the fix is the nightly +
 build-std-mvp path, not RUSTFLAGS.
 
-- A plain `cd crates/presenter-ui && trunk build` on stable WILL fail by design (and is
-  ALSO Tier-0 hook-blocked regardless of toolchain) — that is expected, not a bug.
-- **The one thing actually allowed locally:** a cheap Rust-only check, no wasm-bindgen, no
-  trunk: `cd crates/presenter-ui && cargo check --target wasm32-unknown-unknown` (+
-  `cargo clippy --target wasm32-unknown-unknown --all-targets -- -D warnings`).
+- A plain `cd crates/presenter-ui && trunk build` on stable WILL fail by design — that is
+  expected, not a bug.
+- A cheap Rust-only check, no wasm-bindgen, no trunk: `cd crates/presenter-ui && cargo
+  check --target wasm32-unknown-unknown` (+ `cargo clippy --target wasm32-unknown-unknown --all-targets -- -D warnings`).
   `presenter-ui` is OUTSIDE the workspace (own `Cargo.lock`, version `0.1.x`): `cargo
   <cmd> -p presenter-ui` from root fails — run from `crates/presenter-ui/`.
 
-## Playwright E2E — how CI runs them (#461, #627: no push-free local loop under Tier-0)
+## Playwright E2E — how CI runs them (#461)
 
-**There is no supported push-free local Playwright loop on this box** (the push-then-download
-loop with CI artifacts below IS supported). `startTestServer`
-needs a FRESH `presenter-server`/`presenter-importer` binary built WITH the E2E feature
-flags — building one is exactly the `cargo build --release` the Tier-0 hook blocks, and a
-stale/old binary tests stale/old code, which defeats the point. Default flow: push to
-`dev`, let CI's `e2e` job build + run the specs on the self-hosted runner, read `gh run
-view <id> --log-failed` on a red run rather than trying to reproduce it with a hand-built
-binary.
+`startTestServer` needs a FRESH `presenter-server`/`presenter-importer` binary built WITH the
+E2E feature flags — a stale/old binary tests stale/old code. Default flow: push to `dev`, let
+CI's `e2e` job build + run the specs on the self-hosted runner, read `gh run view <id>
+--log-failed` on a red run.
 
-### Local E2E with CI-built binaries (Tier-0-safe, #802)
+### Local E2E with CI-built binaries (#802)
 
 The E2E harness NEVER compiles: `startTestServer` / the synthetic NDI sender resolve
 binaries via `tests/e2e/prebuilt-binary.ts`, and `scripts/dev/refresh-dev-data.sh`
 (every spec's `beforeAll`) uses the prebuilt importer bins. A missing binary — or, for the
 importer, one OLDER than `crates/presenter-{importer,persistence,migration,core}` sources
-(#559) — FAILS with this recipe instead of the old silent `cargo run` fallback (which ran
-inside node/`.sh`, invisible to the Tier-0 hook). To run a spec locally against a commit CI
-already built:
+(#559) — FAILS with this recipe instead of the old silent `cargo run` fallback. To run a spec
+locally against a commit CI already built:
 
 ```bash
 gh run list -w pipeline.yml -b dev -L 5              # the run for your pushed commit
@@ -196,7 +168,7 @@ The artifact carries `presenter-server` (built with `mock-integrations,test-help
 the matching commit — the importer staleness check compares mtimes against your working
 tree's sources, and a binary from a different commit tests different code anyway. Free port
 8091 first (step 3 below). `PRESENTER_ALLOW_LOCAL_CARGO=1` re-enables the harness compile
-fallback — Tier-1/2 boxes only, never on this Tier-0 box. The guard
+fallback. The guard
 `scripts/ci/test_no_local_cargo_fallback.py` (quality job) fails CI if a new ungated
 `cargo run`/`cargo build` appears in `tests/e2e/`.
 
@@ -212,8 +184,7 @@ call in `scripts/dev/` or `scripts/ops/` must sit behind one of them — the gua
 scan (run/build/check/clippy/test/bench/doc/rustc/install/watch, quoted text + comments
 ignored) fails CI otherwise.
 
-**If HOTFIX MODE is active** (explicit user declaration only — see below) and a genuine
-local E2E run is warranted, the mechanics CI itself uses are:
+**Local build for an E2E run** — the mechanics CI itself uses:
 
 1. **Rebuild the server after ANY WASM change.** The server embeds `dist/` at
    compile time, so `bash scripts/build-ui.sh` ALONE is not enough — the running
@@ -233,8 +204,7 @@ local E2E run is warranted, the mechanics CI itself uses are:
    the fixed ports).
    `npx playwright test <spec> -g "<title>" --reporter=line --workers=1`
 
-**Spec-writing knowledge (applies wherever the spec runs — CI, same as any sanctioned
-local run):**
+**Spec-writing knowledge:**
 
 4. Stage specs seed via the HTTP API: `POST /stage/layout {code}`, `POST
    /playlists`, `PUT /playlists/{id}/entries`, `POST /stage/state {presentationId,
@@ -247,25 +217,19 @@ local run):**
    `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
    verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
 
-### Proving RED→GREEN — default is commit order + CI, not a local rebuild (#568/#569, #627)
+### Proving RED→GREEN (#568/#569, #627)
 
-**Default (every normal PR, this Tier-0 box):** `regression-test-first` requires RED
-before GREEN in COMMIT ORDER — commit the new failing test(s) first (source still
-unfixed), commit the fix second, push once, and let CI prove both states: the test file
-alone (checked out at the RED commit) would fail against the not-yet-fixed source, and
-CI's actual run at the final (GREEN) commit passes. This needs no local build at all.
-
-**If HOTFIX MODE is active** and a genuine local rebuild is already underway (per the
-Playwright section above), you can go one step further and PROVE the RED failure
-locally before committing: `git stash push -- <the fix files, NOT the new test
+`regression-test-first` requires RED before GREEN in COMMIT ORDER — commit the new failing
+test(s) first (source still unfixed), commit the fix second, push once; CI's run at the final
+(GREEN) commit passes. With a local build (per the Playwright section above) you can also
+PROVE the RED failure before committing: `git stash push -- <the fix files, NOT the new test
 files>` (leaves the new spec(s) staged/committed, reverts only the production code),
 rebuild WASM+server, run the new spec(s) and confirm they fail for the RIGHT reason,
 then `git stash pop`, rebuild again, and confirm green. Catches two real classes of
 mistakes cheaply: (1) a test that can't actually fail (a tautology, or testing the wrong
 thing) stays green even with the fix reverted; (2) a fix so complete you forgot to also
 verify the OLD behavior was real (confirms you're not just adding a passing assertion to
-already-working code). This is a HOTFIX-mode bonus, not something to reach for on a
-normal Tier-0 PR — it needs the same local build the Playwright section above gates.
+already-working code).
 
 ### GOTCHA — a stale/ambiguous `target/release/presenter-server` silently shadows your fresh fix (#558)
 

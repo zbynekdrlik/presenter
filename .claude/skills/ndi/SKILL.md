@@ -527,7 +527,7 @@ occurrence is self-explaining. The D2 root cause was found and fixed in #854 (ch
 **Editing the self-heal step (workflows):** the step embeds a bash heredoc with an inline
 `python3 -c '…'`. Inside a YAML `run: |` block scalar the python lines must be indented AT LEAST
 to the block base (10 spaces here) — a line at column 0 terminates the scalar and breaks YAML
-parsing (CI-invisible on Tier-0 until the run fails). After editing, validate locally:
+parsing. After editing, validate locally:
 `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/pipeline.yml'))"`, extract the
 remote heredoc body and `bash -n` it, and `python3 -c 'import ast; ast.parse(open(...).read())'`
 the embedded program. Keep the step non-blocking (bare-echo else-branch, `if…then break; fi`

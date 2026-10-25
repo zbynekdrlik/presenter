@@ -96,9 +96,6 @@ unit tests through `apply` = decide + commit). Two SNV tests (0 ppm) must stay e
   after the burst, every later frame Kept exactly one encoder period after its predecessor;
   then one frame 8 ms ahead of the cadence: PulledBack to clock + D, correction +8 ms.
 
-Simulate numeric bounds in Python with an exact port of the guard and the test xorshift before
-asserting them — Tier-0 has no local `cargo test`.
-
 ## Self-heal: never trigger rebuilds on `dropRatio30s`
 
 The backstop reads ONLY the pipeline-level lead (30 s window MINIMUM at the producer appsink, >=

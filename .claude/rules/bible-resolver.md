@@ -82,7 +82,4 @@ Jonah, Job …) are skipped by the generator.
 - Single-chapter books (OBA PHM 2JN 3JN JUD): a lone `n > 1` and `n-m` are verses, `1` is the book.
 - `counted()` lives here (`hint.rs`); presenter-ui's `state/bible_range.rs` imports it, so the
   Bible page hint and the resolver hints share one wording.
-- Rust tests run in CI only (Tier-0). When a rule or the corpus changes, check it first in a
-  throwaway Python twin of the Rust code that imports `gen_bible_book_names.py` for the table and
-  the fold (the A1b lane's twin scored 100/100 and matched every unit-test value), then port to
-  Rust. The structure fixtures are `GET /bible/books` snapshots of dev (= prod = PP).
+- The structure fixtures are `GET /bible/books` snapshots of dev (= prod = PP).

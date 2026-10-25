@@ -52,7 +52,7 @@ re-activating the already-active source (operator "zapnúť NDI") stuck the stag
   false-heal on tick 1 and drop the #500/#448 neutral "Connecting…" cover over a bare frameless
   `<video>`. Never re-assert unless a frame has actually presented (Cell `true`).
 
-**Testing pattern (Tier-0, presenter-ui is host-tested via `cargo test --lib` in the crate dir):**
+**Testing pattern (presenter-ui is host-tested via `cargo test --lib` in the crate dir):**
 keep the DECISION pure and clock-free (`ndi_activation_resets_gate`, `should_reassert_frames_live`)
 so it is host-unit-testable; the clock-reading wiring (`reassert_frames_live_if_desynced`, which
 calls `now_ms()`) is exercised only in WASM/E2E — the same pure-core / clock-wired split as

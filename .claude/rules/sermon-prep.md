@@ -45,7 +45,6 @@ paths:
   `default_sermon_title(date)` = "Kázeň D. M. YYYY" — computed from the SERVER's date (the
   `state::sermons::local_today` helper arrives in P3), never the phone's.
 - Tests are plain `#[test]` fns with inline `assert_eq!` (the quality job's assertion check reads
-  `#[test]` bodies; a helper-only body fails it). Check new expected strings in a throwaway
-  Python mirror first (Tier-0, no local `cargo test`), then port.
+  `#[test]` bodies; a helper-only body fails it).
 - After P1 merges: `/mutation-sweep` (`gh workflow run mutation-full.yml --ref main`); a survivor
   under `bible/sermon/` is P1 work, killed on `dev` with a test, never a follow-up ticket.
