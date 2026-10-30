@@ -90,4 +90,4 @@ top. If the StatusBar height ever changes, move the overlay's `bottom` with it.
 
 ## Song title on `api-ambient` (#867)
 
-`songName` (SongPlayer's `currentSong`, already `"<song> - <artist>"`) is one amber line in the free middle of the bottom status row, in every text mode, for as long as the snapshot carries it, so it stays through blank stretches where the lyric overlay fades away. It is a sibling of the overlay, never inside it. The `api` layout keeps its own song box.
+`songName` (SongPlayer's `currentSong`, already `"<song> - <artist>"`) is one amber line in the free middle of the bottom status row, in every text mode, for as long as the snapshot carries it, so it stays through blank stretches where the lyric overlay fades away. It is a sibling of the overlay, never inside it. The `api` layout keeps its own song box. Autofit measures the line box, never the ink, so its `line-height` stays above 1 (at 0.95 the Slovak accents of a short title were clipped). It is the one autofit box centred with flex: a single nowrap line overflows right and down as well, so `scrollWidth`/`scrollHeight` still see it; a multi-line lyric box must stay `display: block`.

@@ -344,6 +344,7 @@ test("api-ambient shows the song title in the status row for the whole song", as
   request,
 }) => {
   const SONG = "Jesus Be The Name - Chroma Worship";
+  const ACCENTED_SONG = "Úžasná milosť";
   const LONG_SONG =
     `${SONG} ${"and a very long live version ".repeat(4)}`.trim();
   const putStage = async (data: Record<string, string>) => {
@@ -385,9 +386,53 @@ test("api-ambient shows the song title in the status row for the whole song", as
   expect(connectionBox).not.toBeNull();
   expect(titleBox!.x).toBeGreaterThanOrEqual(clockBox!.x + clockBox!.width);
   expect(titleBox!.x + titleBox!.width).toBeLessThanOrEqual(connectionBox!.x);
+  expect(titleBox!.y).toBeGreaterThanOrEqual(clockBox!.y - 1);
+  expect(titleBox!.y + titleBox!.height).toBeLessThanOrEqual(
+    clockBox!.y + clockBox!.height + 1,
+  );
+
+  // The text is centred in the row, it does not hug the top edge.
+  const textRect = () =>
+    title.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const text = range.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      return {
+        textWidth: text.width,
+        boxWidth: box.width,
+        offCentre: Math.abs(
+          text.top + text.height / 2 - (box.top + box.height / 2),
+        ),
+      };
+    });
+  expect((await textRect()).offCentre).toBeLessThanOrEqual(2);
+
+  // A short title fits to the row height, the accents on its capitals stay
+  // inside the box. Baseline = text rect top + the font's ascent.
+  await putStage({ currentText: "", currentSong: ACCENTED_SONG });
+  await expect(title).toHaveText(ACCENTED_SONG, { timeout: 10_000 });
+  await expect
+    .poll(() =>
+      title.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const context2d = document.createElement("canvas").getContext("2d")!;
+        context2d.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const ink = context2d.measureText(el.textContent!.toUpperCase());
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const inkTop =
+          range.getBoundingClientRect().top +
+          ink.fontBoundingBoxAscent -
+          ink.actualBoundingBoxAscent;
+        return inkTop >= el.getBoundingClientRect().top;
+      }),
+    )
+    .toBe(true);
 
   // A blank stretch of the song: the lyrics fade away, the title stays.
   await putStage({ currentText: "", currentSong: SONG });
+  await expect(title).toHaveText(SONG, { timeout: 10_000 });
   await expect(lyrics).toHaveAttribute("data-visible", "false", {
     timeout: 10_000,
   });
@@ -406,6 +451,9 @@ test("api-ambient shows the song title in the status row for the whole song", as
       ),
     )
     .toBe(true);
+  // Fitted to the width, not shrunk to nothing.
+  const fitted = await textRect();
+  expect(fitted.textWidth).toBeGreaterThan(fitted.boxWidth * 0.8);
 
   // The song's end: no title at all.
   await putStage({ currentText: "", currentSong: "" });

@@ -87,7 +87,9 @@
 
 /* Song title (#867): one line in the free middle of the bottom status row,
    between the clock (ends at 17%) and the connection readout (starts at 74%).
-   Same amber as the song boxes of the other layouts. */
+   Same amber as the song boxes of the other layouts. The line box stays taller
+   than the caps so Slovak accents are not cut off: autofit measures the line
+   box, never the ink. */
 .stage-api-ambient__song {
     position: absolute;
     left: 18%;
@@ -97,8 +99,10 @@
     z-index: 1;
     overflow: hidden;
     white-space: nowrap;
-    text-align: center;
-    line-height: 0.95;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.2;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     font-weight: 600;
