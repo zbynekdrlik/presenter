@@ -99,8 +99,16 @@ test("phone: a finger that scrolls from a slide sends nothing; a tap sends exact
     const tapped = cards(page).nth(1);
     await tapped.scrollIntoViewIfNeeded();
     await tapped.tap();
-    await expect.poll(() => sends.length).toBe(1);
-    expect(sends[0].currentSlideId).toBe(await tapped.getAttribute("data-slide-id"));
+    await expect.poll(() => sends.length).toBeGreaterThan(0);
+
+    // The next send is the next card's: one tap sent exactly one slide.
+    const next = cards(page).nth(2);
+    await next.tap();
+    await expect.poll(() => sends.length).toBeGreaterThan(1);
+    expect(sends.map((s) => s.currentSlideId)).toEqual([
+      await tapped.getAttribute("data-slide-id"),
+      await next.getAttribute("data-slide-id"),
+    ]);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -126,6 +134,24 @@ test("desktop: a mouse still sends on press, and its click sends nothing more", 
     await expect.poll(() => sends.length).toBe(2);
     expect(sends[0].currentSlideId).toBe(await cards(page).nth(2).getAttribute("data-slide-id"));
     expect(sends[1].currentSlideId).toBe(await cards(page).nth(3).getAttribute("data-slide-id"));
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("phone: a slide card answers a quick tap and a long press without zoom or text selection", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openSong(browser, PHONE_390);
+  try {
+    const style = await cards(page)
+      .nth(0)
+      .evaluate((el) => {
+        const s = getComputedStyle(el);
+        return { touchAction: s.touchAction, userSelect: s.userSelect };
+      });
+    expect(style).toEqual({ touchAction: "manipulation", userSelect: "none" });
     expect(errors).toEqual([]);
   } finally {
     await context.close();

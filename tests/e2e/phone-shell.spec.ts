@@ -126,7 +126,12 @@ for (const [name, profile] of [
         await assertMinTapTarget(page.locator('[data-role="phone-tab"]'), 44);
         await assertMinTapTarget(page.locator('[data-role="mode-toggle"]'), 44);
         await assertMinTapTarget(page.locator('[data-role="stage-layout-select"]'), 44);
-        if (section.view !== "worship") {
+        if (section.view === "worship") {
+          await assertMinTapTarget(page.locator('[data-role="clear-slide"]'), 44);
+          await assertMinTapTarget(page.locator('[data-role="ableset-follow"]'), 44);
+        }
+        // Worship and, until the console replaces it, Bible keep a search row.
+        if (section.view !== "worship" && section.view !== "bible") {
           const header = await page.locator(".operator__header").boundingBox();
           expect(header?.height ?? 999, `${section.view} header height`).toBeLessThanOrEqual(56);
         }
@@ -137,6 +142,52 @@ for (const [name, profile] of [
     }
   });
 }
+
+test("a phone keeps Clear on Piesne and the verse search on Biblia", async ({ browser }) => {
+  const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator");
+  try {
+    const cleared = page.waitForRequest(
+      (req) => req.method() === "POST" && new URL(req.url()).pathname === "/stage/clear",
+    );
+    await page.locator('[data-role="clear-slide"]').tap();
+    await cleared;
+
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(page.locator('[data-role="global-search-query"]')).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("the page height follows the visible area, not the tallest viewport", async ({ browser }) => {
+  const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator");
+  try {
+    // A 100vh floor would keep the tab bar under a showing browser toolbar.
+    expect(await page.evaluate(() => getComputedStyle(document.body).minHeight)).toBe("0px");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("an open keyboard on a small portrait phone leaves the tab bar at the bottom", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await open(browser, PHONE_360, "/ui/operator/bible");
+  try {
+    // resizes-content: 360x640 with a 300 px keyboard is wider than tall.
+    await page.setViewportSize({ width: 360, height: 340 });
+    await expect(page.locator("body")).toHaveAttribute("data-shell", "phone");
+    await expect
+      .poll(async () => (await page.locator('[data-role="phone-tab-bar"]').boundingBox())?.width)
+      .toBe(360);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
 
 test("a landscape phone gets the left rail; a desktop window keeps the top nav", async ({
   browser,
