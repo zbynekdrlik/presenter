@@ -52,3 +52,14 @@ book change. Three traps:
   value); an emptied end box goes through `next_end_cleared_hint` (new only when
   the end was set). Likewise a re-commit of the same chapter must not reset the
   verses.
+
+
+## The verse console replaces these inputs on phones (#850 B2a)
+
+`BibleLiveTab` mounts `<BibleConsole/>` under the translation selects and wraps the old inputs
+(`BookFilter`, `BookList`, `ReferenceInputs`, `LoadButton`, `SelectionControls`) in
+`.bible__classic`, which the phone shell hides (`styles/bible_console.css`). The desktop keeps
+them — and the book filter's autofocus, which `wasm-bible-keyboard-nav.spec.ts` pins — until B2c
+removes them. When no stored name contains the filter text, `BibleState::filtered_books` falls
+back to `resolver::resolve_book_name` (`zid` → Hebrejom, #850 U1). `bible.rs` sits at 800
+production lines: every new console piece goes into `pages/bible_console/`.
