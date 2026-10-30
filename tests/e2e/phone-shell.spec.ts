@@ -154,7 +154,17 @@ test("a phone keeps Clear on Piesne and the verse search on Biblia", async ({ br
 
     await page.goto("/ui/operator/bible");
     await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-    await expect(page.locator('[data-role="global-search-query"]')).toBeVisible();
+    const field = page.locator('[data-role="global-search-query"]');
+    await expect(field).toBeVisible();
+
+    // The results open under the search row, across the phone's full width.
+    await field.fill("love");
+    const results = page.locator('[data-role="global-search-results"]');
+    await expect(results).toBeVisible();
+    const fieldBox = await field.boundingBox();
+    const resultsBox = await results.boundingBox();
+    expect(resultsBox!.y).toBeGreaterThanOrEqual(fieldBox!.y + fieldBox!.height);
+    expect(resultsBox!.width).toBeGreaterThanOrEqual(PHONE_390.viewport.width - 24);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
