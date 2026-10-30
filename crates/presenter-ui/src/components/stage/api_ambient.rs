@@ -12,6 +12,9 @@ use crate::ws::stage::StageWsState;
 /// here to whatever fits.
 const PRIMARY_MAX_FONT: f64 = 160.0;
 const SECONDARY_MAX_FONT: f64 = 90.0;
+/// Largest font of the song title in the status row (px); autofit shrinks it
+/// to the row height and, for a long title, to its width.
+const SONG_MAX_FONT: f64 = 120.0;
 
 /// Ambient API layout (`api-ambient`, #799): the stage display as an
 /// atmosphere surface. The active NDI source (CG song videos) always fills
@@ -21,7 +24,9 @@ const SECONDARY_MAX_FONT: f64 = 90.0;
 /// connection readout) stays exactly as on `ndi-fullscreen` (owner ruling on
 /// #799) and the overlay sits above it; no header chrome and no NDI status
 /// overlays — with no text the screen is the video (or black while no source
-/// is live) plus the status bar.
+/// is live) plus the status bar. The song title (`songName`, #867) sits in
+/// the free middle of that bottom row for as long as the snapshot carries it,
+/// so it stays through a song's blank stretches.
 #[component]
 pub fn ApiAmbient(
     ws_state: ReadSignal<StageWsState>,
@@ -64,14 +69,25 @@ pub fn ApiAmbient(
     let secondary_text = move || shown.with(|l| l.secondary.clone().unwrap_or_default());
     let has_secondary = move || shown.with(|l| l.secondary.is_some());
 
+    // Memo: a snapshot re-publish with the same title must not re-fit it.
+    let song_name = Memo::new(move |_| {
+        snapshot.with(|snap| {
+            snap.as_ref()
+                .and_then(|s| s.song_name.clone())
+                .unwrap_or_default()
+        })
+    });
+
     let primary_ref = NodeRef::<leptos::html::Div>::new();
     let secondary_ref = NodeRef::<leptos::html::Div>::new();
+    let song_ref = NodeRef::<leptos::html::Div>::new();
     // The primary box grows/shrinks when the secondary line hides/shows (a
     // both <-> original switch keeps the same primary text), so re-fit on
     // either change.
     let primary_fit_trigger = move || shown.with(|l| (l.primary.clone(), l.secondary.is_some()));
     autofit_effect(primary_ref, PRIMARY_MAX_FONT, primary_fit_trigger);
     autofit_effect(secondary_ref, SECONDARY_MAX_FONT, secondary_text);
+    autofit_effect(song_ref, SONG_MAX_FONT, move || song_name.get());
 
     view! {
         <div class="stage-api-ambient" data-layout="api-ambient">
@@ -106,6 +122,10 @@ pub fn ApiAmbient(
                 >
                     {secondary_text}
                 </div>
+            </div>
+
+            <div node_ref=song_ref class="stage-api-ambient__song" data-role="ambient-song">
+                {move || song_name.get()}
             </div>
 
             // Same status bar + flags as ndi-fullscreen (owner ruling, #799).

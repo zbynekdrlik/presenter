@@ -84,3 +84,25 @@
 .stage-api-ambient__lyrics[data-both="false"] .stage-api-ambient__secondary {
     display: none;
 }
+
+/* Song title (#867): one line in the free middle of the bottom status row,
+   between the clock (ends at 17%) and the connection readout (starts at 74%).
+   Same amber as the song boxes of the other layouts. */
+.stage-api-ambient__song {
+    position: absolute;
+    left: 18%;
+    right: 28%;
+    bottom: 0;
+    height: 7%;
+    z-index: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-align: center;
+    line-height: 0.95;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: #fbbf24;
+    text-shadow: 0 0.03em 0.18em rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}

@@ -87,3 +87,7 @@ boxes are the shared `stage.css` ones (bottom 7% of the container) — never res
 layout. The lyric overlay is anchored `bottom: calc(7% + 1vh)` (1vh gap above the bar top — an exact `7%` overlapped by 1px from sub-pixel rounding in CI) so
 it sits ABOVE the bar and never overlaps it; the E2E asserts overlay bottom <= clock/connection
 top. If the StatusBar height ever changes, move the overlay's `bottom` with it.
+
+## Song title on `api-ambient` (#867)
+
+`songName` (SongPlayer's `currentSong`, already `"<song> - <artist>"`) is one amber line in the free middle of the bottom status row, in every text mode, for as long as the snapshot carries it, so it stays through blank stretches where the lyric overlay fades away. It is a sibling of the overlay, never inside it. The `api` layout keeps its own song box.
