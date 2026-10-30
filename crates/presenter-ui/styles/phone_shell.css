@@ -11,9 +11,23 @@
   textarea {
     font-size: max(16px, 1em) !important;
   }
+  /* Touch sends on click: no double-tap zoom eating a quick second tap, no
+     text selection turning a slow press into no click at all. */
+  .operator__slide-card {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .operator__slide-card input,
+  .operator__slide-card textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 
 body.operator[data-shell="phone"] {
+  min-height: 0;
   height: 100vh;
   height: 100dvh;
 }
@@ -37,7 +51,7 @@ body.operator[data-shell="phone"] .operator__header-brand {
 body.operator[data-shell="phone"] .operator__version-badge,
 body.operator[data-shell="phone"] .operator__brand-nav,
 body.operator[data-shell="phone"] .operator__view-nav,
-body.operator[data-shell="phone"] .operator__stage-preview,
+body.operator[data-shell="phone"]:not([data-view="worship"]) .operator__stage-preview,
 body.operator[data-shell="phone"] .operator__stage-layout-label {
   display: none;
 }
@@ -60,6 +74,7 @@ body.operator[data-shell="phone"] .operator__header-right {
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
 }
 body.operator[data-shell="phone"] .operator__stage-layout select {
   min-height: 44px;
@@ -75,15 +90,43 @@ body.operator[data-shell="phone"] .operator__mode-toggle button {
   min-height: 44px;
   padding: 0 0.5rem;
 }
-/* Song search only where songs are: a full-width second header row. */
+/* Search on Piesne and Biblia (where the verse console will replace it):
+   a full-width header row. */
 body.operator[data-shell="phone"] .operator__search {
   order: 10;
-  flex: 1 1 100%;
+  flex: 1 1 240px;
   max-width: none;
   min-width: 0;
+  padding-block: 0;
 }
-body.operator[data-shell="phone"]:not([data-view="worship"]) .operator__search {
+body.operator[data-shell="phone"]:not([data-view="worship"]):not([data-view="bible"])
+  .operator__search {
   display: none;
+}
+/* Clear, Follow, Ableton and the stage counter have no other home on Piesne:
+   one row, after Live/Edit, wrapping below it only where it does not fit. */
+body.operator[data-shell="phone"] .operator__stage-preview {
+  order: 11;
+  flex: 0 1 auto;
+  gap: 8px;
+  max-width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+body.operator[data-shell="phone"] .operator__stage-preview-actions {
+  flex-direction: row;
+  gap: 8px;
+}
+body.operator[data-shell="phone"] .operator__stage-toggle,
+body.operator[data-shell="phone"] .operator__stage-monitor,
+body.operator[data-shell="phone"] .operator__clear-button {
+  position: static;
+  width: auto;
+  height: auto;
+  min-width: 44px;
+  min-height: 44px;
 }
 body.operator[data-shell="phone"] .operator__search [data-role="global-search-clear"] {
   min-width: 44px;
@@ -118,7 +161,8 @@ body.operator[data-shell="phone"] .operator__search [data-role="global-search-cl
   color: #ffffff;
   box-shadow: inset 0 2px 0 #3b82f6;
 }
-@media (orientation: landscape) {
+/* Width too: the keyboard on a small portrait phone makes it wider than tall. */
+@media (orientation: landscape) and (min-width: 560px) {
   body.operator[data-shell="phone"] {
     padding-left: calc(64px + env(safe-area-inset-left));
   }
@@ -149,7 +193,7 @@ body.operator[data-shell="phone"] .operator__toast {
   right: 12px;
   bottom: calc(68px + env(safe-area-inset-bottom));
 }
-@media (orientation: landscape) {
+@media (orientation: landscape) and (min-width: 560px) {
   body.operator[data-shell="phone"] .operator__version {
     bottom: 4px;
   }

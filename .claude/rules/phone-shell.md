@@ -34,6 +34,18 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 - **Touch never sends on press.** `slide_list.rs`: `pointerdown` triggers only for a mouse; touch
   and pen use `click`, cancelled when the pointer moved > 10 px (`moved_past_tap`). A scroll that
   starts on a card must send nothing (`worship-touch.spec.ts`, CDP `touchDrag`).
-- **No second app on a phone:** the stage-preview iframe mounts only on a desktop.
+- **No second app on a phone:** the stage-preview iframe mounts only on a desktop. Its sibling
+  controls stay: Clear, Follow, Ableton and the stage counter are the only way to reach them on
+  Piesne, so a phone keeps `.operator__stage-preview` there as a row in `header-right`.
+- **Height:** `operator.css` sets `min-height: 100vh`, which beats `100dvh` under a browser toolbar;
+  the phone shell resets it to 0. Playwright has no dynamic toolbar, so only the computed value is
+  testable.
+- **Rail = landscape AND ≥ 560 px.** `interactive-widget=resizes-content` makes a small portrait
+  phone wider than tall while the keyboard is open.
+- **Header search:** stays on Biblia until the verse console replaces it (spec B2c); it is the
+  only full-text verse search.
+- **Local CSS check without a WASM build:** on a deployed build delete every rule containing
+  `data-shell` through the CSSOM, then `addStyleTag` the new `phone_shell.css`. Injecting on top
+  alone leaves the old `display: none` rules winning.
 - **E2E:** profiles `PHONE_360` (360×740), `PHONE_390`, `PHONE_LANDSCAPE` in `support.ts`;
   `(pointer: coarse)` needs `hasTouch` (ui skill #569); tap with `.tap()`.
