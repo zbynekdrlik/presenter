@@ -7,6 +7,7 @@ use crate::components::header::Header;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
 use crate::components::nameplates::operator_view::OperatorNameplates;
+use crate::components::phone_tab_bar::PhoneTabBar;
 use crate::components::playlist_list::PlaylistList;
 use crate::components::playlist_modal::PlaylistModals;
 use crate::components::presentation_list::PresentationList;
@@ -40,25 +41,19 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
 
     // Set body attributes
     setup_body_attributes(&ctx);
+    // #850 §6.1: phone or desktop shell (`body[data-shell]`).
+    crate::state::phone_shell::install_phone_shell(ctx.phone_shell);
 
     // Reactive body attribute sync
     {
         let view = ctx.view;
         let mode = ctx.mode;
-        let mobile_nav_open = op.mobile_nav_open;
         let line_limit = op.line_limit;
         let slide_columns = op.slide_columns;
         Effect::new(move || {
             if let Some(body) = crate::utils::window::document_body() {
                 let _ = body.set_attribute("data-view", &view.get());
                 let _ = body.set_attribute("data-mode", &mode.get());
-
-                // Sync mobile nav class
-                if mobile_nav_open.get() {
-                    let _ = body.class_list().add_1("operator--mobile-nav-open");
-                } else {
-                    let _ = body.class_list().remove_1("operator--mobile-nav-open");
-                }
 
                 // Sync bible view class (used by bible.css for layout)
                 if view.get() == "bible" {
@@ -245,6 +240,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                 <SettingsPage embedded=true />
             </section>
         </main>
+        <PhoneTabBar />
         <Toast />
         <LibraryModals />
         <PlaylistModals />
@@ -341,6 +337,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let stage_layout_code = ctx.stage_layout_code;
     let stage_text_mode = ctx.stage_text_mode;
     let active_bible_broadcast = ctx.active_bible_broadcast;
+    let active_bible_slide = ctx.active_bible_slide;
     let bible_presentations_version = ctx.bible_presentations_version;
     let follow_ctx = ctx.clone();
 
@@ -367,7 +364,13 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 LiveEvent::StageLayout { code } => stage_layout_code.set(code),
                 LiveEvent::StageTextMode { mode } => stage_text_mode.set(mode),
                 LiveEvent::Bible { broadcast } => active_bible_broadcast.set(Some(broadcast)),
-                LiveEvent::BibleCleared => active_bible_broadcast.set(None),
+                // #850 B2a: published right AFTER `Bible`, so it is the event a
+                // coalesced burst keeps (B1d makes every event arrive).
+                LiveEvent::BibleSlide { output } => active_bible_slide.set(Some(output)),
+                LiveEvent::BibleCleared => {
+                    active_bible_broadcast.set(None);
+                    active_bible_slide.set(None);
+                }
                 LiveEvent::BibleSlidesChanged { .. } => {
                     bible_presentations_version.update(|v| *v += 1);
                 }
@@ -646,12 +649,8 @@ fn setup_popstate_listener(ctx: AppContext) {
     let handler =
         Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |_ev: web_sys::PopStateEvent| {
             // Derive view from the current URL pathname
-            let pathname = crate::utils::window::current_pathname();
-            let v = pathname
-                .strip_prefix("/ui/operator/")
-                .filter(|s| !s.is_empty())
-                .unwrap_or("worship")
-                .to_string();
+            let v =
+                crate::state::view_nav::view_from_path(&crate::utils::window::current_pathname());
             view.set(v.clone());
             crate::state::session::set("view", &v);
         });

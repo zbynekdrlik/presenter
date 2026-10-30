@@ -387,3 +387,31 @@ mod interactive_tag_tests {
         }
     }
 }
+
+/// A pointer that travelled more than this between press and click was a
+/// scroll or a drag, never a tap (#850 §6.5).
+const TAP_SLOP_PX: i32 = 10;
+
+/// Whether a press at `from` and a click at `to` are too far apart for a tap.
+pub(super) fn moved_past_tap(from: (i32, i32), to: (i32, i32)) -> bool {
+    let (dx, dy) = (
+        i64::from(to.0) - i64::from(from.0),
+        i64::from(to.1) - i64::from(from.1),
+    );
+    dx * dx + dy * dy > i64::from(TAP_SLOP_PX * TAP_SLOP_PX)
+}
+
+#[cfg(test)]
+mod tap_tests {
+    use super::moved_past_tap;
+
+    #[test]
+    fn up_to_ten_pixels_is_still_a_tap_and_more_is_a_scroll() {
+        assert!(!moved_past_tap((100, 100), (100, 100)));
+        assert!(!moved_past_tap((100, 100), (106, 108)));
+        assert!(!moved_past_tap((100, 100), (100, 110)));
+        assert!(moved_past_tap((100, 100), (100, 111)));
+        assert!(moved_past_tap((100, 100), (100, 40)));
+        assert!(moved_past_tap((0, 0), (-8, 8)));
+    }
+}

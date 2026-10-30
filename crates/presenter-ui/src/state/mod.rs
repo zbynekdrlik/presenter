@@ -1,18 +1,21 @@
 pub mod bible;
+pub mod bible_console;
 pub mod bible_range;
 pub mod interpreter;
 pub mod operator;
+pub mod phone_shell;
 pub mod session;
 pub mod slide_columns;
 pub mod song_load;
 pub mod stage;
 pub mod tablet;
+pub mod view_nav;
 
 use leptos::prelude::*;
 use presenter_core::{
-    BibleBroadcast, LibrarySummary, Playlist, Presentation, PresentationId, PresentationSummary,
-    SearchResult, Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot,
-    StageTextMode, TimersOverview,
+    BibleBroadcast, BibleSlideOutput, LibrarySummary, Playlist, Presentation, PresentationId,
+    PresentationSummary, SearchResult, Slide, StageClientSnapshot, StageDisplayLayout,
+    StageDisplaySnapshot, StageTextMode, TimersOverview,
 };
 
 use crate::api::bible::BibleSearchHit;
@@ -118,6 +121,8 @@ pub struct AppContext {
     pub search_results: RwSignal<Vec<SearchResult>>,
     pub search_loading: RwSignal<bool>,
     pub ws_connected: RwSignal<bool>,
+    /// #850 §6.1: the operator renders as a phone (`state::phone_shell`).
+    pub phone_shell: RwSignal<bool>,
     pub ableset_status: RwSignal<Option<AbleSetStatusSnapshot>>,
     pub slides_cache: RwSignal<HashMap<String, Vec<Slide>>>,
     pub presentation_index: RwSignal<HashMap<String, String>>,
@@ -128,6 +133,9 @@ pub struct AppContext {
     pub playlist_lookup: RwSignal<HashMap<String, Playlist>>,
     /// Active bible broadcast passage
     pub active_bible_broadcast: RwSignal<Option<BibleBroadcast>>,
+    /// #850 B2a: the slide on the wall right now (`BibleSlide` events, the
+    /// console's own shows, `GET /bible/active-slide`); the on-air strip.
+    pub active_bible_slide: RwSignal<Option<BibleSlideOutput>>,
     /// Loading state for libraries
     pub libraries_loading: RwSignal<bool>,
     /// Loading state for playlists
@@ -177,12 +185,14 @@ impl AppContext {
             search_results: RwSignal::new(Vec::new()),
             search_loading: RwSignal::new(false),
             ws_connected: RwSignal::new(false),
+            phone_shell: RwSignal::new(false),
             ableset_status: RwSignal::new(None),
             slides_cache: RwSignal::new(HashMap::new()),
             presentation_index: RwSignal::new(HashMap::new()),
             presentation_playlist_index: RwSignal::new(HashMap::new()),
             playlist_lookup: RwSignal::new(HashMap::new()),
             active_bible_broadcast: RwSignal::new(None),
+            active_bible_slide: RwSignal::new(None),
             libraries_loading: RwSignal::new(false),
             playlists_loading: RwSignal::new(false),
             bible_search_query: RwSignal::new(String::new()),

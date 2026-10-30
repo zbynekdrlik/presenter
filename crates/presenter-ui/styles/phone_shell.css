@@ -1,0 +1,227 @@
+/* Phone shell (#850 spec §6). `state/phone_shell.rs` sets body[data-shell]
+   from ONE media query (portrait ≤ 768 px, or a coarse pointer on a viewport
+   ≤ 500 px tall = a landscape phone); everything phone-only keys on it. */
+
+/* §6.4: iOS zooms into any field under 16 px. Every surface with a touch
+   pointer (tablet, stream editor, settings too). `!important` because the
+   fields' own class rules (0.85rem, 0.9rem …) are more specific. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em) !important;
+  }
+  /* Touch sends on click: no double-tap zoom eating a quick second tap, no
+     text selection turning a slow press into no click at all. */
+  .operator__slide-card {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .operator__slide-card input,
+  .operator__slide-card textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+body.operator[data-shell="phone"] {
+  min-height: 0;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ── Compact header: "Presenter" + connection dot | Stage Output, Live/Edit ── */
+body.operator[data-shell="phone"] .operator__header {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 12px;
+  min-height: 56px;
+  box-sizing: border-box;
+}
+body.operator[data-shell="phone"] .operator__header-left {
+  display: contents;
+}
+body.operator[data-shell="phone"] .operator__header-brand {
+  align-items: center;
+  flex: 0 0 auto;
+}
+body.operator[data-shell="phone"] .operator__version-badge,
+body.operator[data-shell="phone"] .operator__brand-nav,
+body.operator[data-shell="phone"] .operator__view-nav,
+body.operator[data-shell="phone"]:not([data-view="worship"]) .operator__stage-preview,
+body.operator[data-shell="phone"] .operator__stage-layout-label {
+  display: none;
+}
+.operator__ws-dot {
+  display: none;
+}
+body.operator[data-shell="phone"] .operator__ws-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+body.operator[data-shell="phone"] .operator__ws-dot[data-connected="true"] {
+  background: #22c55e;
+}
+body.operator[data-shell="phone"] .operator__header-right {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+body.operator[data-shell="phone"] .operator__stage-layout select {
+  min-height: 44px;
+  max-width: 7.5rem;
+}
+/* No frame around the buttons: 44 px buttons + 6 px padding = the 56 px header. */
+body.operator[data-shell="phone"] .operator__mode-toggle {
+  flex-direction: row;
+  padding: 0;
+}
+body.operator[data-shell="phone"] .operator__mode-toggle button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 0.5rem;
+}
+/* Search on Piesne and Biblia (where the verse console will replace it):
+   a full-width header row. */
+body.operator[data-shell="phone"] .operator__search {
+  order: 10;
+  flex: 1 1 240px;
+  max-width: none;
+  min-width: 0;
+  padding-block: 0;
+}
+body.operator[data-shell="phone"]:not([data-view="worship"]):not([data-view="bible"])
+  .operator__search {
+  display: none;
+}
+/* Results in the page flow under the header, whatever its height: the desktop
+   panel is fixed at a one-row header and half the window wide. */
+body.operator[data-shell="phone"] .operator__search-results {
+  position: static;
+  transform: none;
+  flex: none;
+  width: auto;
+  max-height: 40vh;
+  margin: 8px 12px 0;
+}
+/* Clear, Follow, Ableton and the stage counter have no other home on Piesne:
+   one row, after Live/Edit, wrapping below it only where it does not fit. */
+body.operator[data-shell="phone"] .operator__stage-preview {
+  order: 11;
+  flex: 0 1 auto;
+  gap: 8px;
+  max-width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+body.operator[data-shell="phone"] .operator__stage-preview-actions {
+  flex-direction: row;
+  gap: 8px;
+}
+body.operator[data-shell="phone"] .operator__stage-toggle,
+body.operator[data-shell="phone"] .operator__stage-monitor,
+body.operator[data-shell="phone"] .operator__clear-button {
+  position: static;
+  width: auto;
+  height: auto;
+  min-width: 44px;
+  min-height: 44px;
+}
+body.operator[data-shell="phone"] .operator__search [data-role="global-search-clear"] {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* ── Bottom tab bar (portrait) / left rail (landscape) ── */
+.phone-tabs {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  height: calc(56px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
+  background: #0b1222;
+  border-top: 1px solid #334155;
+  z-index: 50;
+}
+.phone-tabs__tab {
+  min-width: 44px;
+  min-height: 48px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.phone-tabs__tab[aria-current="page"] {
+  color: #ffffff;
+  box-shadow: inset 0 2px 0 #3b82f6;
+}
+/* Width too: the keyboard on a small portrait phone makes it wider than tall. */
+@media (orientation: landscape) and (min-width: 560px) {
+  body.operator[data-shell="phone"] {
+    padding-left: calc(64px + env(safe-area-inset-left));
+  }
+  .phone-tabs {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: calc(64px + env(safe-area-inset-left));
+    height: auto;
+    padding: 0 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
+    grid-template-columns: 1fr;
+    grid-auto-rows: 1fr;
+    border-top: none;
+    border-right: 1px solid #334155;
+  }
+  .phone-tabs__tab[aria-current="page"] {
+    box-shadow: inset 2px 0 0 #3b82f6;
+  }
+}
+
+/* The version and toasts stay readable above the tab bar. */
+body.operator[data-shell="phone"] .operator__version {
+  bottom: calc(60px + env(safe-area-inset-bottom));
+}
+body.operator[data-shell="phone"] .operator__toast {
+  left: 12px;
+  right: 12px;
+  bottom: calc(68px + env(safe-area-inset-bottom));
+}
+@media (orientation: landscape) and (min-width: 560px) {
+  body.operator[data-shell="phone"] .operator__version {
+    bottom: 4px;
+  }
+  body.operator[data-shell="phone"] .operator__toast {
+    left: calc(76px + env(safe-area-inset-left));
+    bottom: 12px;
+  }
+}
+
+/* ── Bible on a phone: one scrolling column, never a 153 px nested box ── */
+body.operator.operator--bible[data-shell="phone"] .operator__panel--bible {
+  display: block !important;
+  padding: 0;
+  overflow-y: auto;
+}
+body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible,
+body.operator.operator--bible[data-shell="phone"] .operator__slides-column {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}

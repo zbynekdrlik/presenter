@@ -657,6 +657,12 @@ export const PHONE_390 = {
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
 };
 
+/** Small Android phone, portrait (#850 S4; 360x740 is shorter than the spec's 360x800). */
+export const PHONE_360 = { ...PHONE_390, viewport: { width: 360, height: 740 } };
+
+/** A phone turned sideways (#850 S4): the phone shell via a coarse pointer. */
+export const PHONE_LANDSCAPE = { ...PHONE_390, viewport: { width: 844, height: 390 } };
+
 /** Landscape tablet, touch (#852 interpreter target, spec §8.2). */
 export const TABLET_1180 = {
   viewport: { width: 1180, height: 820 },

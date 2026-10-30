@@ -141,16 +141,35 @@ impl BibleState {
             return all;
         }
         let keys = self.book_keys.get();
-        all.into_iter()
+        let matched: Vec<BibleBookDto> = all
+            .iter()
             .enumerate()
             .filter(|(idx, _)| {
                 keys.get(*idx)
                     .map(|key| key.contains(&filter))
                     .unwrap_or(false)
             })
-            .map(|(_, book)| book)
-            .collect()
+            .map(|(_, book)| book.clone())
+            .collect();
+        if matched.is_empty() {
+            resolver_fallback(&filter_raw, all)
+        } else {
+            matched
+        }
     }
+}
+
+/// #850: when no stored name contains the typed text (`zid` → SEB's
+/// "Hebrejom"), the book the reference resolver reads it as. Bridges the old
+/// Find-book filter until the verse console replaces it (B2c).
+pub fn resolver_fallback(typed: &str, books: Vec<BibleBookDto>) -> Vec<BibleBookDto> {
+    let Some(candidate) = presenter_core::bible::resolver::resolve_book_name(typed) else {
+        return Vec::new();
+    };
+    books
+        .into_iter()
+        .filter(|book| book.code == candidate.code)
+        .collect()
 }
 
 impl Default for BibleState {
@@ -294,6 +313,24 @@ mod tests {
     fn slide_char_count_flags_only_a_count_over_the_limit() {
         assert_eq!(slide_char_count("abcd", 4), (4, false));
         assert_eq!(slide_char_count("abcde", 4), (5, true));
+    }
+
+    fn book(name: &str, code: &str, number: u16) -> BibleBookDto {
+        BibleBookDto {
+            book: name.to_string(),
+            code: code.to_string(),
+            number,
+            chapters: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_name_no_stored_book_contains_falls_back_to_the_resolver() {
+        let books = vec![book("Hebrejom", "HEB", 58), book("Jakub", "JAS", 59)];
+        let found = resolver_fallback("zid", books.clone());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, "HEB");
+        assert!(resolver_fallback("xyzw", books).is_empty());
     }
 
     #[test]

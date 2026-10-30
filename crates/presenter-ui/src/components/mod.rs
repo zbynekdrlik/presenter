@@ -6,6 +6,7 @@ pub mod library_list;
 pub mod library_modal;
 pub mod modal;
 pub mod nameplates;
+pub mod phone_tab_bar;
 pub mod playlist_list;
 pub mod playlist_modal;
 pub mod presentation_list;

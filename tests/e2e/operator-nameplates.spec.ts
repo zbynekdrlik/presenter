@@ -2531,12 +2531,9 @@ test("#871 on a 390 px phone the view fits, the menu closes on the pick and a fi
     ]);
     await openOperator(page);
 
-    // ≤768 px the views sit behind the menu button; picking one closes the menu.
-    await page.locator('[data-role="mobile-menu-toggle"]').tap();
-    await expect(page.locator("body")).toHaveClass(/operator--mobile-nav-open/);
-    await page.locator('[data-role="view-toggle"][data-view="menovky"]').tap();
+    // On a phone the views are the bottom tab bar (#850).
+    await page.locator('[data-role="phone-tab"][data-view="menovky"]').tap();
     await expect(page.locator("body")).toHaveAttribute("data-view", "menovky");
-    await expect(page.locator("body")).not.toHaveClass(/operator--mobile-nav-open/);
     await expect(view(page)).toBeVisible();
 
     // A plate added by touch.
