@@ -103,6 +103,16 @@ body.operator[data-shell="phone"]:not([data-view="worship"]):not([data-view="bib
   .operator__search {
   display: none;
 }
+/* Results in the page flow under the header, whatever its height: the desktop
+   panel is fixed at a one-row header and half the window wide. */
+body.operator[data-shell="phone"] .operator__search-results {
+  position: static;
+  transform: none;
+  flex: none;
+  width: auto;
+  max-height: 40vh;
+  margin: 8px 12px 0;
+}
 /* Clear, Follow, Ableton and the stage counter have no other home on Piesne:
    one row, after Live/Edit, wrapping below it only where it does not fit. */
 body.operator[data-shell="phone"] .operator__stage-preview {
