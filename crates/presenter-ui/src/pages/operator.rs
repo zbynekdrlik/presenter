@@ -337,6 +337,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let stage_layout_code = ctx.stage_layout_code;
     let stage_text_mode = ctx.stage_text_mode;
     let active_bible_broadcast = ctx.active_bible_broadcast;
+    let active_bible_slide = ctx.active_bible_slide;
     let bible_presentations_version = ctx.bible_presentations_version;
     let follow_ctx = ctx.clone();
 
@@ -363,7 +364,13 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 LiveEvent::StageLayout { code } => stage_layout_code.set(code),
                 LiveEvent::StageTextMode { mode } => stage_text_mode.set(mode),
                 LiveEvent::Bible { broadcast } => active_bible_broadcast.set(Some(broadcast)),
-                LiveEvent::BibleCleared => active_bible_broadcast.set(None),
+                // #850 B2a: published right AFTER `Bible`, so it is the event a
+                // coalesced burst keeps (B1d makes every event arrive).
+                LiveEvent::BibleSlide { output } => active_bible_slide.set(Some(output)),
+                LiveEvent::BibleCleared => {
+                    active_bible_broadcast.set(None);
+                    active_bible_slide.set(None);
+                }
                 LiveEvent::BibleSlidesChanged { .. } => {
                     bible_presentations_version.update(|v| *v += 1);
                 }
