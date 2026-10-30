@@ -5,6 +5,7 @@ use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
+use super::bible_console::BibleConsole;
 use super::bible_controls::SelectionControls;
 use super::bible_prepared::{BiblePreparedTab, BiblePresentationModal, BibleSettingsTab};
 use super::bible_reference::ReferenceInputs;
@@ -387,11 +388,16 @@ fn BibleLiveTab() -> impl IntoView {
             data-visible=move || if bible_tab.get() == "live" { "true" } else { "false" }
         >
             <TranslationSelectors />
-            <BookFilter />
-            <BookList />
-            <ReferenceInputs />
-            <LoadButton />
-            <SelectionControls />
+            <BibleConsole />
+            // The book / chapter / verse inputs: hidden in the phone shell
+            // (phone_shell.css), removed in B2c (#850).
+            <div class="bible__classic" data-role="bible-classic">
+                <BookFilter />
+                <BookList />
+                <ReferenceInputs />
+                <LoadButton />
+                <SelectionControls />
+            </div>
         </div>
     }
 }

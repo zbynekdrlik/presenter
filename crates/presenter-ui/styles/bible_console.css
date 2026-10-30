@@ -1,0 +1,109 @@
+/* The verse console (#850 B2a, spec §7.1; mockup bible-phone-and-study-v2).
+   Phone and desktop share it; every control is at least 44 px. */
+
+.console {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bible__classic {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* ── Field ── */
+.console-field {
+  position: relative;
+  display: flex;
+}
+.console-field__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0 52px 0 12px;
+  border: 1.5px solid #334155;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 16px;
+}
+.console-field__input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.console-field__clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+/* ── Rows, hint, status ── */
+.console-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.console-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #e2e8f0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.console-row[aria-pressed="true"] {
+  background: #1e3a8a;
+  outline: 1.5px solid #3b82f6;
+}
+.console-row__label {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.console-row__detail {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.console-hint,
+.console-status {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
+.console-hint {
+  background: #3a2a10;
+  color: #fcd9a0;
+}
+.console-status {
+  color: #94a3b8;
+}
+.console-status[data-role="console-preview-error"] {
+  color: #fca5a5;
+}
+.console-status[data-role="console-preview-warning"] {
+  color: #fcd9a0;
+}
+
+/* ── Phone shell: the console replaces the book / chapter / verse inputs ── */
+body.operator[data-shell="phone"] .bible__classic {
+  display: none;
+}
