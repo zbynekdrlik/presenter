@@ -134,21 +134,6 @@ body.operator {
   align-self: center;
 }
 
-.operator__hamburger {
-  display: none;
-  border: none;
-  background: transparent;
-  color: #ffffff;
-  font-size: 1.3rem;
-  cursor: pointer;
-  padding: 0.25rem 0.4rem;
-  border-radius: 6px;
-}
-
-.operator__hamburger:hover {
-  background: rgba(255, 255, 255, 0.12);
-}
-
 .operator__search {
   flex: 1;
   min-width: 120px;
@@ -1667,6 +1652,7 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 
 .operator__timer-actions {
   display: flex;
+  flex-wrap: wrap; /* #850 §6.4: the Preach card reached 474 px on a phone */
   gap: 1.5rem;
 }
 
@@ -2429,68 +2415,9 @@ body[data-slide-columns-dense="true"] .operator__slide-text {
 }
 
 /* ── Responsive: small tablet / large phone ── */
+/* The phone header, navigation and inputs live in phone_shell.css
+   (`body[data-shell="phone"]`, #850 B1a); only content layout stays here. */
 @media (max-width: 768px) {
-  /* Show hamburger, hide desktop nav + mode toggle */
-  .operator__hamburger {
-    display: inline-flex;
-  }
-  .operator__view-nav {
-    display: none;
-  }
-  .operator__header-right .operator__mode-toggle {
-    display: none;
-  }
-
-  /* Mobile nav overlay */
-  body.operator--mobile-nav-open .operator__view-nav {
-    display: flex;
-    flex-direction: column;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 100;
-    background: rgba(17, 24, 39, 0.97);
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 2rem;
-  }
-  body.operator--mobile-nav-open .operator__view-nav button {
-    font-size: 1.1rem;
-    padding: 0.75rem 1.5rem;
-  }
-  body.operator--mobile-nav-open
-    .operator__header-right
-    .operator__mode-toggle {
-    display: inline-flex;
-    position: fixed;
-    bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 101;
-  }
-
-  /* Compact header on mobile */
-  .operator__header {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-  }
-  .operator__search {
-    min-width: 0;
-    max-width: none;
-    flex: 1 1 100%;
-  }
-  .operator__stage-preview {
-    display: none;
-  }
-  .operator__stage-layout {
-    flex: 1 1 auto;
-  }
-
-  /* Main content adjustments */
   .operator__worship {
     flex-direction: column;
     gap: 0.75rem;

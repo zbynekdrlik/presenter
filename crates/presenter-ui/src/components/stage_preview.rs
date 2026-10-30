@@ -113,7 +113,9 @@ pub fn StagePreview() -> impl IntoView {
 
     // #700: the stage-display mirror iframe is worship-only; the bible tab
     // shows the pre-#460 verse preview instead.
-    let is_worship = move || ctx.view.get() == "worship";
+    // #850 §6.6: never on a phone — CSS hid it, but the mounted iframe still
+    // loaded the whole app (and its stage WS) a second time.
+    let is_worship = move || ctx.view.get() == "worship" && !ctx.phone_shell.get();
 
     view! {
         <div

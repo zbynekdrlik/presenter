@@ -9,6 +9,7 @@ use crate::components::stage_preview::StagePreview;
 use crate::components::stage_text_mode_picker::StageTextModePicker;
 use crate::components::surface_nav::SurfaceNav;
 use crate::state::operator::OperatorState;
+use crate::state::view_nav::{set_view, VIEWS};
 use crate::state::AppContext;
 
 /// #640: what a `/healthz` version-poll observation should do to this tab's
@@ -153,28 +154,6 @@ pub fn Header() -> impl IntoView {
         ctx.bible_searching.set(false);
     };
 
-    // View toggle — updates URL pathname so browser back/forward works
-    let set_view = move |view: &str| {
-        let v = view.to_string();
-        ctx.view.set(v.clone());
-        // #871: on a phone the view list is a full-screen overlay; picking a
-        // view closes it, or it would keep covering the view just picked.
-        op.mobile_nav_open.set(false);
-        crate::state::session::set("view", &v);
-        // Build URL path: "worship" → /ui/operator, others → /ui/operator/{view}
-        let url = if v == "worship" {
-            "/ui/operator".to_string()
-        } else {
-            format!("/ui/operator/{v}")
-        };
-        let window = crate::utils::window::window();
-        let state = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&state, &"view".into(), &v.clone().into());
-        let _ = window
-            .history()
-            .and_then(|h| h.push_state_with_url(&state, "", Some(&url)));
-    };
-
     // Mode toggle
     let set_mode = move |mode: &str| {
         let m = mode.to_string();
@@ -190,11 +169,6 @@ pub fn Header() -> impl IntoView {
         leptos::task::spawn_local(async move {
             let _ = crate::api::stage::set_layout(&code_clone).await;
         });
-    };
-
-    // Mobile menu toggle
-    let on_mobile_toggle = move |_| {
-        op.mobile_nav_open.update(|v| *v = !*v);
     };
 
     // #574: version-drift detection. An operator tab left open across a
@@ -306,6 +280,13 @@ pub fn Header() -> impl IntoView {
             <div class="operator__header-left">
                 <div class="operator__header-brand">
                     <h1>"Presenter"</h1>
+                    // #850 §6.3: the live connection at a glance (phone shell).
+                    <span
+                        class="operator__ws-dot"
+                        data-role="ws-dot"
+                        data-connected=move || if ctx.ws_connected.get() { "true" } else { "false" }
+                        title=move || if ctx.ws_connected.get() { "Pripojené" } else { "Nepripojené" }
+                    ></span>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
                     // #573: surface-nav pills + Resolume connection chips are
                     // one absolutely-positioned group (`.operator__brand-nav`)
@@ -352,29 +333,14 @@ pub fn Header() -> impl IntoView {
                 </form>
             </div>
             <nav class="operator__view-nav">
-                // #871: Menovky = the `stream` plates in Stream Deck grid order.
-                {["worship", "bible", "timers", "ai", "menovky", "settings"].into_iter().map(|v| {
-                    let view_name = v.to_string();
-                    let label = match v {
-                        "worship" => "Worship",
-                        "bible" => "Bible",
-                        "timers" => "Timers",
-                        "ai" => "AI",
-                        "menovky" => "Menovky",
-                        "settings" => "Settings",
-                        _ => v,
-                    };
-                    let vn = view_name.clone();
+                {VIEWS.into_iter().map(|(id, label)| {
                     view! {
                         <button
                             type="button"
                             data-role="view-toggle"
-                            data-view=view_name.clone()
-                            data-active=move || if ctx.view.get() == vn { "true" } else { "false" }
-                            on:click={
-                                let vn2 = view_name.clone();
-                                move |_| set_view(&vn2)
-                            }
+                            data-view=id
+                            data-active=move || if ctx.view.get() == id { "true" } else { "false" }
+                            on:click=move |_| set_view(ctx.view, id)
                         >
                             {label}
                         </button>
@@ -423,15 +389,6 @@ pub fn Header() -> impl IntoView {
                         }
                     }).collect_view()}
                 </div>
-                <button
-                    type="button"
-                    class="operator__hamburger"
-                    data-role="mobile-menu-toggle"
-                    aria-label="Menu"
-                    on:click=on_mobile_toggle
-                >
-                    "\u{2630}"
-                </button>
             </div>
         </header>
     }
