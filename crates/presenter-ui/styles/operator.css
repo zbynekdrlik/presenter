@@ -2282,6 +2282,15 @@ body[data-slide-columns-dense="true"] .operator__slide-text {
   cursor: pointer;
 }
 
+/* #850 §6.4: the slide toolbar under a finger (columns ±, add slide). */
+@media (pointer: coarse) {
+  .operator__slide-columns button,
+  .operator__slides-add-floating {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 .operator__slide-columns-value {
   min-width: 1.2rem;
   text-align: center;

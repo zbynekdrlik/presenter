@@ -14,7 +14,7 @@ use super::slide_list_scroll::{
     handle_wheel_event, scroll_slide_into_view, setup_scroll_on_song_shown,
 };
 use super::slide_list_utils::{
-    field_has_warning, format_multiline, is_interactive_tag, resolve_group_display,
+    field_has_warning, format_multiline, is_interactive_tag, moved_past_tap, resolve_group_display,
     slide_has_any_warning,
 };
 use super::slide_reorder::{handle_slide_drop, render_song_bubble};
@@ -349,6 +349,10 @@ pub fn SlideList() -> impl IntoView {
                         let pres_id_pointer = pres_id.clone();
                         let slide_id_pointer = slide_id.clone();
                         let next_slide_pointer = next_slide_id.clone();
+                        // #850 §6.5: where this card's pointer went down, so a
+                        // finger that scrolled is not taken for a tap.
+                        let down_at = std::rc::Rc::new(std::cell::Cell::new(None::<(i32, i32)>));
+                        let down_at_click = down_at.clone();
 
                         // Clone for class closure (is-loading check)
                         let slide_id_class = slide_id.clone();
@@ -433,8 +437,12 @@ pub fn SlideList() -> impl IntoView {
                                         op.focused_slide_id.set(Some(slide_id.clone()));
                                         crate::state::session::set("focusedSlideId", &slide_id);
 
+                                        // A finger that moved more than 10 px scrolled (#850).
+                                        let moved = down_at_click.take().is_some_and(|from| {
+                                            moved_past_tap(from, (ev.client_x(), ev.client_y()))
+                                        });
                                         // Only trigger in live mode
-                                        if is_live {
+                                        if is_live && !moved {
                                             // CRITICAL #3: Skip-click-trigger debounce check
                                             if let Some((skip_id, expires)) = op.skip_click_trigger.get_untracked() {
                                                 if skip_id == slide_id && js_sys::Date::now() < expires {
@@ -463,8 +471,10 @@ pub fn SlideList() -> impl IntoView {
                                             }
                                         }
 
-                                        // In live mode, set skip trigger and trigger immediately
-                                        if is_live {
+                                        down_at.set(Some((ev.client_x(), ev.client_y())));
+                                        // Only a mouse triggers on press; touch and pen wait
+                                        // for the click, which a scroll never produces (#850).
+                                        if is_live && ev.pointer_type() == "mouse" {
                                             let now = js_sys::Date::now();
                                             op.skip_click_trigger.set(Some((slide_id.clone(), now + 250.0)));
                                             trigger(pres_id.clone(), slide_id.clone(), next_slide.clone());
