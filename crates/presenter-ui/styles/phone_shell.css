@@ -65,8 +65,10 @@ body.operator[data-shell="phone"] .operator__stage-layout select {
   min-height: 44px;
   max-width: 7.5rem;
 }
+/* No frame around the buttons: 44 px buttons + 6 px padding = the 56 px header. */
 body.operator[data-shell="phone"] .operator__mode-toggle {
   flex-direction: row;
+  padding: 0;
 }
 body.operator[data-shell="phone"] .operator__mode-toggle button {
   min-width: 44px;
@@ -92,7 +94,7 @@ body.operator[data-shell="phone"] .operator__search [data-role="global-search-cl
 .phone-tabs {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   height: calc(56px + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   box-sizing: border-box;
@@ -103,6 +105,7 @@ body.operator[data-shell="phone"] .operator__search [data-role="global-search-cl
 .phone-tabs__tab {
   min-width: 44px;
   min-height: 48px;
+  padding: 0;
   border: none;
   background: transparent;
   color: #94a3b8;
