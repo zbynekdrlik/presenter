@@ -419,7 +419,7 @@ paths:
   `stream-editor-output-select.spec.ts` the switch clearing the old plates (list GET held)
   and a text whose save failed (first PATCH `route.abort()`ed) being saved with the role it
   had, not toasted as deleted, when the editor switches output.
-- RED proof on Tier-0: run the new spec against the CI build of the base commit
+- RED proof: run the new spec against the CI build of the base commit
   (`gh run download <run> -n build-artifacts`, `target/release/presenter-server` in the
   worktree) inside `sudo unshare -n` (the binary binds ports the deployed dev service
   holds), `PRESENTER_DB_URL=sqlite://<tmp>/red.db?mode=rwc` and a temp copy of the spec

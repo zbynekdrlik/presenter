@@ -884,12 +884,15 @@ mod tests {
     /// signal (an `io::Error` in the source chain).
     #[tokio::test]
     async fn a_connection_reset_mid_body_is_classified_as_a_transport_failure() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
+            // Answer only after the request arrived: a response that beats
+            // it fails the send with hyper's UnexpectedMessage instead.
+            let _ = socket.read(&mut [0u8; 1024]).await;
             // Promise 100 bytes, deliver 10, then drop the connection — the
             // client's body read must observe a genuine transport error.
             let _ = socket
@@ -931,12 +934,13 @@ mod tests {
     /// already fully received, never an OS-level connection failure).
     #[tokio::test]
     async fn a_response_decode_failure_is_never_classified_as_transport() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = socket.read(&mut [0u8; 1024]).await;
             let _ = socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nnot json!!!")
                 .await;

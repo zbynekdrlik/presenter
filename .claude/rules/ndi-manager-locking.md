@@ -108,7 +108,7 @@ any removed/orphaned pipeline OUTSIDE the lock).
   it runs after EVERY silent activation and MUST keep that source's streak). The server's
   `FakeNdiControl` mirrors these rules in its `silent_attempts` map; `Display` ignores `attempt`.
 
-## Testing the seam without libndi (Tier-0)
+## Testing the seam without libndi
 
 `NdiManager::try_new()` needs the NDI SDK → `None` on CI, so you cannot construct a manager
 in a CI test. Test the PURE seam instead: `wait_for_streaming` with a `watch::channel(PipelineState)`,
@@ -116,8 +116,7 @@ and `finalize_reservation` / `check_active_entry` / `retain_only_active` against
 `HashMap<String, ActiveSource>` built from `NdiPipeline::stopped_for_test()`
 (+ `set_state_for_test(&mut self)` BEFORE wrapping in `Arc`). The structural
 "lock released during the wait" property is verified by design + a fresh-context review, not
-by a libndi integration test — this crate cannot compile locally (Tier-0), so a careful
-adversarial review is the pre-CI safety net for borrow/`Send`/exhaustive-match correctness.
+by a libndi integration test.
 
 **Deterministic concurrency tests use a per-source START-GATE on `FakeNdiControl`, NOT sleeps
 (#745a).** `FakeNdiControl::gate_start(source_id)` parks that source's `start_pipeline` (after
@@ -144,10 +143,10 @@ owner)` after every promote AND every rebuild**, `None` only transiently during 
 - A FAILED rebuild (`Err`) exits the supervisor (`handle_dead_state` → `SupervisorStep::Exit`),
   never loops — retrying off the old watcher's unseen `Stopped` echo could re-attach the orphaned
   supervisor to a concurrently-promoted pipeline. The ticker re-drives per the DB.
-- **Tier-0 TRAP:** matching `StateCheckOutcome` with `if let StateCheckOutcome::Idempotent = …`
+- **TRAP:** matching `StateCheckOutcome` with `if let StateCheckOutcome::Idempotent = …`
   compiles UNCHANGED when the enum is later widened and SILENTLY DROPS the new variant's payload
-  (the carried handle) — no compiler backstop on this no-local-compile crate. ALWAYS a total
-  `match`, never `if let`, on this enum. (See the general Tier-0 `if let` trap in `quality-gates.md`.)
+  (the carried handle). ALWAYS a total `match`, never `if let`, on this enum. (See the general
+  `if let` trap in `quality-gates.md`.)
 
 Pre-existing activation concurrency edge cases: #745 fixed (a) reap-vs-DB ordering (an
 `AppState.activation_lock` serializing `activate_video_source`) + (c) the rebuilt-entry
@@ -210,7 +209,7 @@ lock-taking wrapper + a private `activate_video_source_locked` (assumes the lock
   NOT routed through this** — it runs during AppState construction before the router serves any
   request, so no concurrent operator deactivate is possible and the TOCTOU cannot occur there.
 
-## Tier-0 TOCTOU test technique: hold `activation_lock` in the test
+## TOCTOU test technique: hold `activation_lock` in the test
 
 A TOCTOU can only be shown with concurrency. The `FakeNdiControl` start-gate parks at
 `start_pipeline`, which is AFTER the read+lock — too late to expose a read-that-raced-the-lock.

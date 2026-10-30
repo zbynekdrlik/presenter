@@ -18,9 +18,9 @@ paths:
 
 The translation-switch effect (`selected_translation` change → `spawn_local(list_books)` → preserve-or-clear `selected_book`) is async; nothing in the DOM signalled *when it finished*, so E2E raced it. Fix pattern: the effect publishes a **settle marker as its LAST synchronous write** — `books_translation.set(Some(code))` after `books`/`selected_book` are set — exposed on the book-list container as `data-books-translation`. Leptos coalesces the block's synchronous signal writes into one render flush, so the render that first shows `data-books-translation == <newTrans>` already reflects the settled selection. Tests `await expect(bookList).toHaveAttribute("data-books-translation", target)` (a real async-completion gate, load-tolerant) then read the settled state — never a poll that guesses render timing. Per `no-timeout-band-aids.md` a bigger poll timeout cannot fix a predicate the preserved branch never satisfies.
 
-## Reproducing bible UI behaviour without a local build (Tier-0)
+## Reproducing bible UI behaviour on the live dev server
 
-Local cargo builds are banned here. Drive the live dev server instead: `http://10.77.8.134:8080/ui/operator/bible`, `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and SHARED across full translations (`eng-kjv`, `slk-seb`, `slk-roh` all carry `1CH`/`1JN`); the list is sorted by code (first book = `1CH`). Partial translations exist (`slk-mil` = 4 gospels only) — switching TO one whose books lack the selected code exercises the "cleared" path.
+Drive the live dev server: `http://10.77.8.134:8080/ui/operator/bible`, `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and SHARED across full translations (`eng-kjv`, `slk-seb`, `slk-roh` all carry `1CH`/`1JN`); the list is sorted by code (first book = `1CH`). Partial translations exist (`slk-mil` = 4 gospels only) — switching TO one whose books lack the selected code exercises the "cleared" path.
 
 ## Chapter / verse inputs bound to the selected book (#825)
 

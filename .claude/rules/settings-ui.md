@@ -273,7 +273,7 @@ by `CardItem::key`) with unit tests for this.
 - To find what sets a minimum width, set `width: min-content` on each card and
   compare. Overflow checks on a forced narrow width miss shrinkable content.
 
-## Checking layout on Tier-0 (no local WASM build)
+## Checking layout
 
 - For CSS, inject the candidate stylesheet into the LIVE dev page with your own
   isolated chromium (deploy skill), then measure. Delete only the rules whose
@@ -288,7 +288,7 @@ by `CardItem::key`) with unit tests for this.
   script starts the binary (`PRESENTER_PORT=18399`, throwaway
   `PRESENTER_DB_URL=sqlite://<tmp>/t.db?mode=rwc`) and then the node Playwright
   probe against `127.0.0.1:18399`. `unshare -rn` (an unprivileged user namespace)
-  is blocked on dev2. This is not a local build, so Tier-0 allows it.
+  is blocked on dev2.
 - For new markup, use a static HTML mock with the same classes and both
   stylesheets, screenshotted at 1600 px and 600 px.
 - The E2E layout guard (`settings-inline-edit.spec.ts`) checks that the Companion

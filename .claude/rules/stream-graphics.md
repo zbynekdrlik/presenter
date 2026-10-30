@@ -74,8 +74,7 @@ stream repo test.
 ## JSON test fixtures with hex colors break `r#"..."#`
 A raw-string fixture containing a color like `"#ffffff"` contains the sequence `"#`, which CLOSES an
 `r#"..."#` raw string early → a confusing `unknown prefix` parse error. Use `r##"..."##` for any
-JSON fixture that embeds a `#rrggbb`/`#rrggbbaa` value. Caught only by `cargo fmt` locally (Tier-0),
-so run `cargo fmt --all --check` before committing stream fixtures. (Building the fixtures with
+JSON fixture that embeds a `#rrggbb`/`#rrggbbaa` value. (Building the fixtures with
 `serde_json::json!({...})` instead of raw strings sidesteps this entirely — the `#` lives in a
 normal string literal — and is what the #707 router tests do.)
 
@@ -144,8 +143,7 @@ Verified live 2026-08-24 (#751). PATCH replaces props only — `z_order` is pres
 `STREAM_FRAME_POS_MIN_PCT..=MAX_PCT` (-200..=300) so an element can slide in / bleed off / move up
 past the top; `validate_frame_size` (w/h) stays `0 < v <= STREAM_FRAME_SIZE_MAX_PCT` (300). `validate_pct`
 (0..=100) is now ONLY for text `size_pct` — do not fold frame back into it. When you change a frame
-bound, a hardcoded boundary-value assertion lives in THREE places and Tier-0 (no local build) surfaces
-a miss only at CI: the core unit tests (`stream.rs` `#[cfg(test)]`), the server router test
+bound, a hardcoded boundary-value assertion lives in THREE places: the core unit tests (`stream.rs` `#[cfg(test)]`), the server router test
 (`crates/presenter-server/src/router/stream_tests.rs` — the `xPct` "invalid → 422" case), AND the
 editor E2E (`tests/e2e/stream-editor.spec.ts` — the `stream-frame-x` "invalid → inline 422" case).
 `#751` widened 100→300 and both the router test and the E2E asserted `xPct=150 → 422`, which silently
@@ -256,9 +254,7 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   (the child is `Fn`, may run on every mount, so clone). The reactive text closures (`main_text` etc.)
   ARE reusable in both the `<Show when=>` guard and the `{text}` child because they capture only the
   `Copy` `ctx.stage`/`ctx.bible` signal, so the closure is itself `Copy` (read the needed field via
-  `.with()`, never `.get()` the whole large snapshot). This whole crate is Tier-0 (no local
-  `cargo check`), so a move error only surfaces in the trunk build / `cargo test --lib` at CI — catch
-  it by reading.
+  `.with()`, never `.get()` the whole large snapshot).
 - **The 4000-char / overflow AC is satisfied by `.stream-element { overflow:hidden }`** (already in
   `stream_output.css`) plus per-line `white-space: pre-wrap; overflow-wrap: anywhere` — text wraps
   within the Frame and anything past the box is clipped; the container never grows past its Frame
@@ -296,7 +292,7 @@ sha256 (dedup), NOT DB blobs. The bytes layer is `state/stream_assets.rs` (`Asse
   Real #716 bug: `duration_ms` was passed as a plain `u32` baked into the inline style at creation, so
   `mark_leaving` re-pointing the outgoing base to the incoming scene's duration was a DEAD WRITE — the
   scene faded over its creation duration while its removal timeout used the new one → a pop when
-  per-scene overrides differ. Tier-0 hides this (no local build); catch it by reading + review.
+  per-scene overrides differ. Catch it by reading + review.
 - **Content fade = ONE layer machinery, `components/stream/transition.rs::Crossfade` (#716,
   generalised in #863), used by LYRICS and VERSE only.** (The countdown left it in #776: its digits
   swap in place in one text node.)
@@ -407,9 +403,9 @@ bundled as latin-subset `woff2` so the OBS output page renders identically OFFLI
   lyrics/verse=Inter, verse-reference=Bebas Neue) verifies the bundling end-to-end. Bebas Neue ships
   ONE weight (400); request weight 400 in a `TextStyle` to avoid synth-bold.
 
-## Adding a new element KIND (#753 added `color`) — every exhaustive-match site (Tier-0: no local compiler catches E0004)
+## Adding a new element KIND (#753 added `color`) — every exhaustive-match site
 
-A new `StreamElementProps` variant breaks these EXHAUSTIVE matches; grep `git grep -n 'StreamElementProps::' crates/` and fix ALL before pushing (CI's clippy job ~5 min in is the only thing that catches a miss):
+A new `StreamElementProps` variant breaks these EXHAUSTIVE matches:
 - core `stream.rs`: `kind_str()` + `validate_props()` arms. `validate_color` (private) accepts `#rrggbb` OR `#rrggbbaa` — the ONE canonical color validator; reuse it (a superset of a strict-6-digit spec), don't add a parallel one. `stream_elements.kind` is a FREE `text()` column (no CHECK) → a new kind needs **NO migration**.
 - output `components/stream/scene_render.rs`: the `match el.props` dispatch → add a new per-kind component (`components/stream/element_<kind>.rs` + a `pub mod` in `stream/mod.rs`). A static fill (no live content) mirrors `ElementImage`: an absolute `div.stream-element.stream-element--<kind>` with inline `left/top/width/height/…/z-index` from the `Frame` + `z_order`; `.stream-element` already gives `position:absolute; overflow:hidden`.
 - editor `components/stream_editor/props_access.rs`: the `|`-patterns in `read_frame`/`with_frame_mut` (EVERY kind has a `Frame`); and `read_transition`/`with_transition_mut` — a kind WITHOUT a `content_transition` joins the `Image { .. } | <New> { .. }` no-transition arm.

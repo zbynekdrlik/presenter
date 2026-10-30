@@ -50,8 +50,8 @@ server, so the badge and the split always agree.
   source (`bible_remote::structure_source`): for the NLT that is eng-kjv, so it
   never waits on an API request before going on air.
 - New `BibleUpdate` field? Grep every `BibleUpdate {` literal (`resolume/tests.rs`,
-  `bible_clear_tests.rs`, `legacy_bible_tests.rs`, `state/bible.rs`) — E0063 is
-  CI-only on this Tier-0 box. New legacy-path tests go to
+  `bible_clear_tests.rs`, `legacy_bible_tests.rs`, `state/bible.rs`). New legacy-path
+  tests go to
   `resolume/legacy_bible_tests.rs`, not the over-long `resolume/tests.rs` (#487);
   reuse `tests::setup_bible_driver` (`pub(super)`, the 16-clip Arena with every
   Bible lane clip) instead of copying the arena/driver helpers.

@@ -62,9 +62,7 @@ directive question entirely.
 `presenter-ui` is a workspace `exclude`, so CI's `cargo clippy --workspace` never
 lints it. It IS gated by: `cargo fmt --check` (run separately in
 `crates/presenter-ui`), the wasm `trunk build`, and host `cargo test --lib`. So a
-clippy-only nit won't red CI here, but a compile error or fmt drift will. Local
-(Tier-0): only `cargo fmt --manifest-path crates/presenter-ui/Cargo.toml -- --check`
-plus the size gates — never a local build.
+clippy-only nit won't red CI here, but a compile error or fmt drift will.
 
 ## `#[component]` fns are EXEMPT from the function-length gate
 `scripts/dev/fn_length_check.py` skips Leptos `#[component]` fns (view! DSL), so

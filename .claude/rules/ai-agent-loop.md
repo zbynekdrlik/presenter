@@ -24,7 +24,7 @@ rejects a legitimate composed form loops the agent on the composer's OWN output 
 rejects only genuine garbage; `validate_bible_slide` returns the canonical string and
 `create_bible_presentation` writes it back into the slide so Resolume gets one form.
 
-## Test the agent turn budget via `run_agent_with_guard`, NEVER env (Tier-0, parallel tests race)
+## Test the agent turn budget via `run_agent_with_guard`, NEVER env (parallel tests race)
 
 `PRESENTER_AI_TURN_BUDGET_SECS` drives the production budget, but `std::env::set_var` is
 process-global and the `#[tokio::test]` suite runs in parallel — a stray small budget makes OTHER

@@ -85,34 +85,13 @@ Fix by extracting the arm/loop body into a small helper (the same #687 fix patte
 lists** (e.g. `pub use android_stage_display::{ AndroidStageDisplay, DEFAULT_LAUNCH_PACKAGE, … };`),
 NOT a glob. So a new `pub fn`/`pub enum`/`pub const` you add inside a submodule is reachable as
 `crate::submodule::Name` but NOT as `presenter_core::Name` until you ADD it to that `pub use` list.
-A downstream `use presenter_core::Name;` then fails `E0432: no `Name` in the root` — surfaced only at
-CI's Clippy job ~5 min in (Tier-0, no local `cargo check`), costing a cycle (#734: `stage_app_install_action`
+A downstream `use presenter_core::Name;` then fails `E0432: no `Name` in the root` (#734: `stage_app_install_action`
 + `StageAppInstallAction` added to `android_stage_display.rs` but not re-exported). When you add a
 `pub` item to a core submodule that another crate imports, grep the re-export first:
 
 ```bash
 grep -n 'pub use <submodule>::' crates/presenter-core/src/lib.rs
 ```
-
-## Adding a field to a struct under Tier-0: grep EVERY construction site (E0063), not just the obvious ones
-
-`#[serde(default)]` on a new field makes the WIRE back-compatible, but a Rust struct LITERAL
-(`Foo { a, b }`) must still name every field — a missing one is a hard `E0063` compile error that
-Tier-0 (no local `cargo check`) surfaces ONLY at CI's Clippy job, ~5 min in, costing a whole cycle
-(#732: 4 missed `StageClientSnapshot { .. }` literals in `contract_tests.rs`, found only after CI).
-
-Before pushing a struct-field addition, grep the WHOLE tree for every literal AND the enum-variant it
-may be nested in — production code AND `#[cfg(test)]`/`tests/`:
-
-```bash
-grep -rn 'StructName {' crates/ tests/   # every construction site, incl. tests
-```
-
-Do NOT grep only for the type in an enum variant you happened to change — the same struct is often
-built directly in unrelated tests. Also watch `E0382` partial-move: `foo.field.expect(...)` MOVES a
-non-`Copy` `Option` field, so a later `&foo` (e.g. re-serialize) fails to borrow — use
-`foo.field.as_ref().expect(...)` when you still need `foo` afterward. Both are invisible to
-`cargo fmt` and the size/fn gates; only a compiler (CI) catches them, so the grep is the Tier-0 stand-in.
 
 ## Shared `dev` under a multi-worker fleet: concurrency cancels in-progress pipelines
 
@@ -131,7 +110,7 @@ the supervisor's integration decision once `dev` quiesces.
 Adding a variant (or a payload to an existing variant) of an enum is a compile-checked change
 ONLY at `match` sites — but an `if let SingleVariant = expr { … }` site COMPILES UNCHANGED and
 silently ignores every OTHER variant, so a newly-carried payload is dropped with no error and no
-warning. On Tier-0 (no local `cargo check`/`clippy`) nothing catches this until a behavioral test
+warning. Nothing catches this until a behavioral test
 fails — or worse, never, if the dropped payload only matters on a rare path. Real case #745:
 `StateCheckOutcome` grew from `Idempotent|Rebuild` to `Idempotent|RebuildDead(Option<JoinHandle>)|
 Vacant`; the two production consumers were `if let StateCheckOutcome::Idempotent = check_active_entry(..)`
@@ -146,17 +125,13 @@ git grep -nE '(if let|while let|matches!)\s+[A-Za-z0-9_]*::' crates/ | grep <Enu
 git grep -n '<EnumName>::' crates/ tests/   # every match/construct/consume site
 ```
 
-Same family as the struct-field E0063 grep above — a widening whose exhaustiveness the compiler
-would normally enforce is defeated by a non-exhaustive `if let`, and Tier-0 removes the local
-compiler that would otherwise flag the drop as a logic bug only much later.
-
 ## Re-pointing a caller ORPHANS a `pub(crate)` forward → `dead_code` fails `-D warnings` (#768)
 
 When you switch a handler from method A to a new method B (e.g. `/healthz` moved from
 `NdiManagerHandle::pipeline_snapshots` to `pipeline_health_snapshots`), the OLD forward method
 can lose its last caller and become dead code. A `pub(crate)` (or private) inherent method with
 no caller triggers `dead_code`, which `cargo clippy --workspace --all-targets -- -D warnings`
-(pipeline.yml) turns into a HARD FAIL — invisible on Tier-0 until CI ~5 min in. A `pub` method
+(pipeline.yml) turns into a HARD FAIL. A `pub` method
 on a `pub` lib struct is NOT flagged (it's public API), so only the crate-private / `pub(crate)`
 forwards bite. After re-pointing ANY caller, grep the old method for remaining callers and DELETE
 the forward if it's orphaned:
@@ -164,9 +139,6 @@ the forward if it's orphaned:
 ```bash
 grep -rn '\.old_method_name(' crates/    # every remaining call site (exclude the def + internal m./f. forwards)
 ```
-
-Same Tier-0 family as the E0063 / `if let` traps above — a change the compiler would normally
-flag is only caught at CI's clippy job, so the grep is the local stand-in.
 
 ## Over-cap FILE → split via a `foo.rs` + `foo/sub.rs` submodule (#742)
 
@@ -177,12 +149,12 @@ submodule: keep `foo.rs` and add `mod sub;` + `use sub::*;`, with the moved item
 tests { use super::*; }` resolve unchanged — a pure relocation with zero behavior change and
 no test edits (tests are cap-exempt, so leave them in the parent). `clippy::wildcard_imports`
 is already crate-allowed (presenter-server `lib.rs`, `#![allow(...)]`), so `use sub::*;` is
-fine. Two Tier-0 traps (no local compiler): (1) recompute the parent's top-level `use` block —
+fine. Two traps: (1) recompute the parent's top-level `use` block —
 imports only the MOVED code used (e.g. `OsString`, `async_trait`, `Output`, `Command`) become
 unused → `-D warnings`; move a test-only one INTO the `#[cfg(test)]` block. (2) a `super::CONST`
 back-reference from the submodule works because a child module sees ancestor-private items.
-Verify with `count_prod_lines.sh` (both files) + `fn_length_check.py` + `cargo fmt --all --check`;
-CI is the compile gate. Real case #742: `android_stage.rs` 992 → 620 by extracting
+Verify with `count_prod_lines.sh` (both files) + `fn_length_check.py` + `cargo fmt --all --check`.
+Real case #742: `android_stage.rs` 992 → 620 by extracting
 `android_stage/adb.rs` (397).
 
 ## `doc_lazy_continuation`: a wrapped `///` list item MUST indent its continuation lines (#761, #768)
@@ -191,14 +163,11 @@ Clippy under `-D warnings` fails on a `///` Markdown list item (`- …`, `* …`
 continuation line is not indented, and also on a prose line that happens to START with `+`/`-`/`*`
 after a wrap (reads as a new list item). Two CI cycles were lost this way (ai/mod.rs #761, health.rs
 #768). Rule: indent continuation lines of a doc list item by two extra spaces (`///   text`), never
-start a wrapped prose line with `+`, `-`, `*` or `N.`, and re-read every `///` block you wrote before
-pushing — rustfmt does not reflow doc comments and Tier-0 has no local clippy.
+start a wrapped prose line with `+`, `-`, `*` or `N.` — rustfmt does not reflow doc comments.
 
 Same family: a `///` Markdown blockquote (`> …`) must repeat `> ` on EVERY continuation line (clippy
 `doc quote line without > marker`), and a `for x in iter { if let Some(y) = x { … } }` loop fails
-`manual_flatten` — write `for y in iter.flatten()`. Both surfaced on #768 D3 (run 34769900594) — the
-third Tier-0 clippy cycle lost this weekend; re-read every `///` block and every `for … if let Some`
-before pushing.
+`manual_flatten` — write `for y in iter.flatten()`. Both surfaced on #768 D3 (run 34769900594).
 
 ## `fn_length_check.py` measures code only — generic fns included (#768, fixed 2026-10-14)
 
@@ -224,8 +193,7 @@ at CI ~min in, costing a whole cycle (#768 lane 2 lost one exactly this way). Be
 cd crates/presenter-ui && cargo fmt --check   # run `cargo fmt` first if it reports diffs
 ```
 
-Both `cargo fmt` and `cargo fmt --check` are allowed under Tier-0 (non-compiling). Run the root
-`cargo fmt --all --check` too — the two cover disjoint file sets.
+Run the root `cargo fmt --all --check` too — the two cover disjoint file sets.
 
 ## A new method on `presenter_ndi::NdiManager` used by a router handler needs its forward on the seam (#768)
 
@@ -235,40 +203,25 @@ returns `Option<&NdiManagerHandle>`). So a new `pub async fn` you add to `NdiMan
 from a handler needs a matching `pub(crate)` forward on `NdiManagerHandle` covering BOTH arms —
 `Real(m)` calls through; `#[cfg(test)] Fake(f)` returns a coherent stand-in (for a typed-error
 method, the same error variant the router maps, e.g. `NdiSessionError::SessionNotFound`). Without
-the forward you get `E0599: no method named <name> found for &NdiManagerHandle` at CI's Clippy job
-~min in (Tier-0, no local compile) — same failure family as the E0063 / orphaned-forward traps
-above. Grep the seam before pushing: `grep -n 'fn <name>' crates/presenter-server/src/state/ndi_control.rs`.
+the forward you get `E0599: no method named <name> found for &NdiManagerHandle`.
 
 ## `clippy.toml` pins `msrv = "1.85.0"` — a std API stabilised AFTER 1.85 fails `incompatible_msrv` (#778)
 
 CI builds with the latest stable toolchain, so a newer std method COMPILES — but clippy's
 `incompatible_msrv` (warn, in `clippy::all`) flags any API whose "stable since" is newer than the
-pinned msrv, and `-D warnings` turns that into a hard Clippy-job failure (Tier-0: invisible until CI).
+pinned msrv, and `-D warnings` turns that into a hard Clippy-job failure.
 Real case #778: `usize::is_multiple_of` (stable 1.87) in the font browser-check — caught only by
 review. Before using a recently added std method, check its `Stable since` on doc.rust-lang.org
 against 1.85; use the older spelling instead (`x % 4 != 0`). The reverse lint
 `manual_is_multiple_of` respects the msrv, so the `%` form stays clean. Do not raise the msrv
 inside a feature PR.
 
-## Tier-0: `quality-check.sh` is hook-blocked — run its non-compiling parts directly (#808)
+## E2E TypeScript type check from a worktree
 
-`scripts/dev/quality-check.sh` sources `lib/local-cargo.sh` and contains `cargo clippy`/`cargo
-check` (guarded, but the Tier-0 hook `block-tier0-local-build.sh` refuses the whole script). Run
-the parts that do not compile, one by one, on every touched file:
-
-```bash
-cargo fmt --all -- --check && (cd crates/presenter-ui && cargo fmt --check)
-QC_TARGETS="<newline-separated touched .rs files>" python3 scripts/dev/fn_length_check.py .
-bash scripts/dev/count_prod_lines.sh <file>
-bash scripts/dev/placeholder_check.sh . && bash scripts/dev/feature_router_check.sh .
-python3 scripts/dev/no_panic_check.py .   # section 10: QC_TARGETS scopes it like the fn-length gate
-```
-
-E2E TypeScript (CI job "TypeScript Type Check") also runs locally without compiling Rust. A
-`.claude/worktrees/agent-*` checkout has no `node_modules`; use the main checkout's:
+CI job "TypeScript Type Check" runs locally too. A `.claude/worktrees/agent-*` checkout has no `node_modules`; use the main checkout's:
 `node ../../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json` from the worktree root.
 
-## Dropping a dependency under Tier-0: refresh the lockfile with `cargo metadata --offline` (#832)
+## Dropping a dependency: refresh the lockfile with `cargo metadata --offline` (#832)
 
 When a change leaves a crate dependency unused (e.g. `gloo-storage` in `presenter-ui` after
 `state/session.rs` moved to `web_sys::Storage`), remove it from `Cargo.toml` in the same PR and
@@ -299,7 +252,7 @@ Near the cap, put the new tests in their own `<area>_tests.rs`: import the share
 `state/mod.rs` declares `mod ndi_control;` (not `pub(crate)`), so `FakeNdiControl`,
 `NdiManagerHandle` and `StartOutcome` are `pub(crate)` items inside a module only `state` and its
 descendants can name. A test in `router/tests.rs` that writes `use crate::state::ndi_control::…`
-fails `E0603: module ndi_control is private` — Tier-0 surfaces it only at CI's Clippy job. Put a
+fails `E0603: module ndi_control is private`. Put a
 Fake-backed test (e.g. a `/healthz` assertion that needs `set_snapshots_unreadable`) in
 `state/tests.rs` or a `state/*` test module (`use super::ndi_control::…`) and drive the router
 from there with `crate::router::build_router(state.clone())` — the existing validate-mode
@@ -337,6 +290,5 @@ a seeded self-test `scripts/dev/test_no_panic_check.py` run by the CI Quality jo
   "can't fail" fallback is the cue to use the infallible constructor
   (`SlideText::from_stored_unchecked("")`) instead.
 - **Changing a fn that returns `Response` to `Result<Response, AppError>`** (as `ndi_whep.rs`
-  `into_response` did) means every caller's `Ok(f(..))` tail becomes `f(..)`; grep the callers —
-  Tier-0 has no local compiler to flag the mismatch.
+  `into_response` did) means every caller's `Ok(f(..))` tail becomes `f(..)`.
 

@@ -172,9 +172,8 @@ sufficiently careful read-through can still miss one — #633's own salvaged pat
 `map_repository_not_found` after every OTHER call site in that file had been converted. This is
 the exact #608 failure class this ticket exists to close, recurring inside the fix itself. `grep -rn
 "map_repository_not_found\|map_repository_error"` catches leftover REFERENCES, but the
-authoritative check on a Tier-0 box (no local `cargo test`) is `cargo check --workspace --tests` —
-it fails loudly (`E0425: cannot find value ... in this scope`) on a dangling call to a function you
-just deleted, and it is allowed to run locally per this project's Tier-0 policy. Run it after any
+authoritative check is `cargo check --workspace --tests` — it fails loudly (`E0425: cannot find
+value ... in this scope`) on a dangling call to a function you just deleted. Run it after any
 multi-file deletion/rename sweep, before considering the sweep done.
 
 ## clippy `unused_must_use` on a discarded handler-call in a test (#588)

@@ -338,3 +338,127 @@ test("the classic api layout follows the text mode too", async ({
   expect(stageConsole).toEqual([]);
   expect(operatorConsole).toEqual([]);
 });
+
+test("api-ambient shows the song title in the status row for the whole song", async ({
+  context,
+  request,
+}) => {
+  const SONG = "Jesus Be The Name - Chroma Worship";
+  const ACCENTED_SONG = "Úžasná milosť";
+  const LONG_SONG =
+    `${SONG} ${"and a very long live version ".repeat(4)}`.trim();
+  const putStage = async (data: Record<string, string>) => {
+    const put = await request.put(url("/api/stage"), { data });
+    expect(put.status()).toBe(204);
+  };
+
+  await putStage({
+    currentText: EN_CURRENT,
+    currentTranslation: SK_CURRENT,
+    currentSong: SONG,
+  });
+
+  const operator = await context.newPage();
+  const operatorConsole = collectConsoleErrors(operator);
+  const layoutSelect = await openOperator(operator);
+  await layoutSelect.selectOption("api-ambient");
+
+  const stage = await context.newPage();
+  const stageConsole = collectConsoleErrors(stage);
+  await openStage(stage, "api-ambient");
+
+  const title = stage.locator('[data-role="ambient-song"]');
+  const lyrics = stage.locator('[data-role="ambient-lyrics"]');
+
+  // The title shows in every text mode, the one live on stage included.
+  for (const mode of ["translation", "original", "both"]) {
+    await selectTextMode(operator, mode);
+    await expect(title).toHaveText(SONG, { timeout: 10_000 });
+    await expect(title).toBeVisible();
+  }
+
+  // It sits on the bottom row without touching the clock or the connection.
+  const titleBox = await title.boundingBox();
+  const clockBox = await stage.locator(".stage__clock").boundingBox();
+  const connectionBox = await stage.locator(".stage__connection").boundingBox();
+  expect(titleBox).not.toBeNull();
+  expect(clockBox).not.toBeNull();
+  expect(connectionBox).not.toBeNull();
+  expect(titleBox!.x).toBeGreaterThanOrEqual(clockBox!.x + clockBox!.width);
+  expect(titleBox!.x + titleBox!.width).toBeLessThanOrEqual(connectionBox!.x);
+  expect(titleBox!.y).toBeGreaterThanOrEqual(clockBox!.y - 1);
+  expect(titleBox!.y + titleBox!.height).toBeLessThanOrEqual(
+    clockBox!.y + clockBox!.height + 1,
+  );
+
+  // The text is centred in the row, it does not hug the top edge.
+  const textRect = () =>
+    title.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const text = range.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      return {
+        textWidth: text.width,
+        boxWidth: box.width,
+        offCentre: Math.abs(
+          text.top + text.height / 2 - (box.top + box.height / 2),
+        ),
+      };
+    });
+  expect((await textRect()).offCentre).toBeLessThanOrEqual(2);
+
+  // A short title fits to the row height, the accents on its capitals stay
+  // inside the box. Baseline = text rect top + the font's ascent.
+  await putStage({ currentText: "", currentSong: ACCENTED_SONG });
+  await expect(title).toHaveText(ACCENTED_SONG, { timeout: 10_000 });
+  await expect
+    .poll(() =>
+      title.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const context2d = document.createElement("canvas").getContext("2d")!;
+        context2d.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const ink = context2d.measureText(el.textContent!.toUpperCase());
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const inkTop =
+          range.getBoundingClientRect().top +
+          ink.fontBoundingBoxAscent -
+          ink.actualBoundingBoxAscent;
+        return inkTop >= el.getBoundingClientRect().top;
+      }),
+    )
+    .toBe(true);
+
+  // A blank stretch of the song: the lyrics fade away, the title stays.
+  await putStage({ currentText: "", currentSong: SONG });
+  await expect(title).toHaveText(SONG, { timeout: 10_000 });
+  await expect(lyrics).toHaveAttribute("data-visible", "false", {
+    timeout: 10_000,
+  });
+  await expect(title).toHaveText(SONG);
+  await expect(title).toBeVisible();
+
+  // A long title shrinks to one fitted line instead of being cut off.
+  await putStage({ currentText: "", currentSong: LONG_SONG });
+  await expect(title).toHaveText(LONG_SONG, { timeout: 10_000 });
+  await expect
+    .poll(() =>
+      title.evaluate(
+        (el) =>
+          el.scrollWidth <= el.clientWidth &&
+          el.scrollHeight <= el.clientHeight,
+      ),
+    )
+    .toBe(true);
+  // Fitted to the width, not shrunk to nothing.
+  const fitted = await textRect();
+  expect(fitted.textWidth).toBeGreaterThan(fitted.boxWidth * 0.8);
+
+  // The song's end: no title at all.
+  await putStage({ currentText: "", currentSong: "" });
+  await expect(title).toHaveText("", { timeout: 10_000 });
+
+  expect(stageConsole).toEqual([]);
+  expect(operatorConsole).toEqual([]);
+});
