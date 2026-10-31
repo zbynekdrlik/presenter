@@ -59,7 +59,7 @@ paths:
 - **On-air strip = server truth:** `BibleSlide` / `BibleCleared`, the console's own show answer,
   `GET /bible/active-slide` on mount, on a reconnect and on `visibilitychange` → visible (a locked
   phone's socket may have missed the event). An answer is dropped when the signal changed while it
-  was on its way; the show's own answer never replaces a later `triggered_at`, and over an empty strip (maybe a clear) the server is asked. Visibility in E2E: `Object.defineProperty(document,
+  was on its way; the show's own answer never replaces a later `triggered_at`, and over an empty strip (maybe a clear) it is set and the server re-read. Visibility in E2E: `Object.defineProperty(document,
   "visibilityState", …)` + a dispatched `visibilitychange`.
 - **Phone layout:** the Live tab hides the slide grid; the sticky bar works only because every
   ancestor up to `.operator__panel--bible` has `overflow: visible` — a new `overflow` on the

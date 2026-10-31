@@ -327,13 +327,16 @@ fn show(c: Console, ctx: AppContext) {
         match api::trigger_slide(&request).await {
             Ok(resp) => {
                 // A verse sent while the answer travelled is the wall's truth;
-                // an empty strip may be a clear, so the server decides.
-                match ctx.active_bible_slide.get_untracked() {
-                    None => refresh_on_air(ctx.active_bible_slide),
-                    Some(on_air) if on_air.triggered_at <= resp.output.triggered_at => {
-                        ctx.active_bible_slide.set(Some(resp.output));
-                    }
-                    Some(_) => {}
+                // an empty strip may be a clear, so the server gets the last word.
+                let on_air = ctx.active_bible_slide.get_untracked();
+                if on_air
+                    .as_ref()
+                    .is_none_or(|now| now.triggered_at <= resp.output.triggered_at)
+                {
+                    ctx.active_bible_slide.set(Some(resp.output));
+                }
+                if on_air.is_none() {
+                    refresh_on_air(ctx.active_bible_slide);
                 }
                 c.show_error.set(None);
                 c.preview.update(|p| {
